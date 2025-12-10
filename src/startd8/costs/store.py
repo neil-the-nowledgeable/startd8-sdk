@@ -9,9 +9,10 @@ Uses SQLite for efficient querying and persistence of:
 
 import sqlite3
 import json
+import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any
-from datetime import datetime, timezone
+from typing import Optional, List, Dict, Any, Tuple
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
 from .models import CostRecord, Budget, CostSummary, CostPeriod
@@ -378,25 +379,129 @@ class CostStore:
         
         return total
     
+    def _parse_period_boundaries(self, period: str, period_key: str) -> Tuple[datetime, datetime]:
+        """
+        Parse period key and return (start_time, end_time) boundaries (UTC).
+        
+        Args:
+            period: "hourly" | "daily" | "weekly" | "monthly" | "total"
+            period_key: The key from _update_running_totals()
+            
+        Returns:
+            Tuple of (start_time, end_time) as UTC datetime objects
+            
+        Examples:
+            "hourly", "2025-12-10-14" → (2025-12-10 14:00:00 UTC, 2025-12-10 15:00:00 UTC)
+            "daily", "2025-12-10" → (2025-12-10 00:00:00 UTC, 2025-12-11 00:00:00 UTC)
+            "weekly", "2025-W49" → (2025-12-08 00:00:00 UTC, 2025-12-15 00:00:00 UTC)
+            "monthly", "2025-12" → (2025-12-01 00:00:00 UTC, 2026-01-01 00:00:00 UTC)
+            "total", "total" → (1970-01-01 UTC, 2099-12-31 UTC)
+        """
+        try:
+            if period == "hourly":
+                # Format: "2025-12-10-14" (YYYY-MM-DD-HH)
+                match = re.match(r"(\d{4})-(\d{2})-(\d{2})-(\d{2})", period_key)
+                if not match:
+                    raise ValueError(f"Invalid hourly period_key: {period_key}")
+                year, month, day, hour = map(int, match.groups())
+                start = datetime(year, month, day, hour, 0, 0, tzinfo=timezone.utc)
+                end = start + timedelta(hours=1)
+                return start, end
+            
+            elif period == "daily":
+                # Format: "2025-12-10" (YYYY-MM-DD)
+                match = re.match(r"(\d{4})-(\d{2})-(\d{2})", period_key)
+                if not match:
+                    raise ValueError(f"Invalid daily period_key: {period_key}")
+                year, month, day = map(int, match.groups())
+                start = datetime(year, month, day, 0, 0, 0, tzinfo=timezone.utc)
+                end = start + timedelta(days=1)
+                return start, end
+            
+            elif period == "weekly":
+                # Format: "2025-W49" (YYYY-Www, ISO 8601)
+                # ISO week: Monday = day 0, Sunday = day 6
+                match = re.match(r"(\d{4})-W(\d{2})", period_key)
+                if not match:
+                    raise ValueError(f"Invalid weekly period_key: {period_key}")
+                year, week = map(int, match.groups())
+                
+                # Find Monday of that ISO week
+                # Jan 4 is always in week 1, so use it as anchor
+                jan_4 = datetime(year, 1, 4, tzinfo=timezone.utc)
+                week_1_monday = jan_4 - timedelta(days=jan_4.weekday())
+                start = week_1_monday + timedelta(weeks=week - 1)
+                end = start + timedelta(days=7)
+                return start, end
+            
+            elif period == "monthly":
+                # Format: "2025-12" (YYYY-MM)
+                match = re.match(r"(\d{4})-(\d{2})", period_key)
+                if not match:
+                    raise ValueError(f"Invalid monthly period_key: {period_key}")
+                year, month = map(int, match.groups())
+                start = datetime(year, month, 1, 0, 0, 0, tzinfo=timezone.utc)
+                
+                # First day of next month
+                if month == 12:
+                    end = datetime(year + 1, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+                else:
+                    end = datetime(year, month + 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+                return start, end
+            
+            elif period == "total":
+                # All-time range
+                start = datetime(1970, 1, 1, tzinfo=timezone.utc)
+                end = datetime(2099, 12, 31, tzinfo=timezone.utc)
+                return start, end
+            
+            else:
+                raise ValueError(f"Unknown period type: {period}")
+        
+        except Exception as e:
+            logger.error(f"Error parsing period {period}:{period_key}: {e}")
+            raise
+    
     def get_total_for_period(self, period: str, period_key: str) -> float:
         """
-        Get total for a specific period key (used by CostTracker).
+        Get total cost for a specific period key (Issue #2: Period Totals).
+        
+        Handles all period types: hourly, daily, weekly, monthly, total.
         
         Args:
             period: Period type (hourly, daily, weekly, monthly, total)
-            period_key: Period identifier (e.g., "2025-12-09" for daily)
+            period_key: Period identifier
+                - hourly: "2025-12-10-14" (YYYY-MM-DD-HH)
+                - daily: "2025-12-10" (YYYY-MM-DD)
+                - weekly: "2025-W49" (YYYY-Www, ISO 8601)
+                - monthly: "2025-12" (YYYY-MM)
+                - total: "total"
             
         Returns:
-            Total cost
+            Total cost in USD for that period, 0.0 if period has no costs
         """
-        # This is a simplified implementation
-        # In production, you might want more sophisticated period handling
-        if period == "total":
-            return self.get_total()
+        try:
+            # Parse period boundaries
+            start_time, end_time = self._parse_period_boundaries(period, period_key)
+            
+            # Query costs within period boundaries
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                result = cursor.execute(
+                    """
+                    SELECT COALESCE(SUM(total_cost), 0.0) as total 
+                    FROM cost_records 
+                    WHERE timestamp >= ? AND timestamp < ?
+                    """,
+                    (start_time.isoformat(), end_time.isoformat())
+                ).fetchone()
+                
+                total = result["total"] if result and result["total"] is not None else 0.0
+                return float(total)
         
-        # For other periods, would need to parse period_key and create date range
-        # For now, return 0 and let the caller handle it
-        return 0.0
+        except Exception as e:
+            logger.error(f"Error querying period total for {period}:{period_key}: {e}")
+            return 0.0
     
     def save_budget(self, budget: Budget) -> None:
         """
