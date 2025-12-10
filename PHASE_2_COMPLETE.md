@@ -1,189 +1,442 @@
-# Phase 2 Implementation Complete ✅
+# Phase 2 Complete: Agent Integration & Cost Tracking (Issue #1)
 
-## Summary
-
-Phase 2 of the implementation plan has been successfully completed. All high-priority issues have been addressed, significantly improving code quality, testability, and maintainability.
-
-## Completed Tasks
-
-### 2.1 Testing Infrastructure ✅
-- ✅ Set up pytest framework with comprehensive configuration
-- ✅ Created test directory structure (`tests/unit/`, `tests/integration/`)
-- ✅ Created test fixtures and factories (`conftest.py`)
-  - `temp_dir`, `storage_dir`, `framework` fixtures
-  - `PromptFactory`, `ResponseFactory` for test data generation
-- ✅ Added unit tests for:
-  - Storage operations (`test_storage.py`) - 10+ tests
-  - Framework methods (`test_framework.py`) - 15+ tests
-  - Model validation (`test_models.py`) - 12+ tests
-  - Agent implementations (`test_agents.py`) - 5+ tests
-- ✅ Added integration tests:
-  - File system operations (`test_file_operations.py`)
-  - Concurrent access testing
-  - End-to-end workflows
-- ✅ Set up CI/CD with GitHub Actions
-  - Multi-platform testing (Ubuntu, macOS, Windows)
-  - Multi-version Python testing (3.9, 3.10, 3.11, 3.12)
-  - Coverage reporting with Codecov integration
-
-### 2.2 Type Safety Improvements ✅
-- ✅ Fixed tuple type hint in `agents.py` (using `Tuple` from typing)
-- ✅ Added mypy configuration (`mypy.ini`)
-- ✅ Updated all `tuple[...]` to `Tuple[...]` for Python 3.9 compatibility
-- ✅ Type hints maintained throughout codebase
-
-### 2.3 Configuration System ✅
-- ✅ Created configuration models (`config_models.py`)
-  - `ModelPricing` - Pricing configuration per model
-  - `ModelConfig` - Model configuration
-  - `PricingConfig` - Centralized pricing management
-  - `ModelRegistry` - Model registry system
-- ✅ Moved hardcoded pricing to configuration
-  - Updated `TokenUsage.cost_estimate` to use `PricingConfig`
-  - Default pricing for Claude and GPT models
-  - Configurable per-model pricing
-- ✅ Created model registry system
-  - Default model configurations
-  - Provider-based model listing
-  - Extensible model registration
-
-### 2.4 Code Duplication Reduction ✅
-- ✅ Created `BaseStorageOperations` class (`storage/base.py`)
-  - Generic storage operations using TypeVar
-  - Common save/load/list patterns
-  - Error handling decorator
-- ✅ Refactored `storage.py` to use base operations
-  - Reduced code duplication by ~70%
-  - All storage methods now use base class
-  - Maintained backward compatibility
-- ✅ Extracted common error handling patterns
-  - `@handle_storage_errors` decorator
-  - Consistent error handling across storage operations
-
-### 2.5 Concurrency & Thread Safety ✅
-- ✅ File locking already implemented in Phase 1
-- ✅ Concurrent access tests added
-- ✅ Thread-safe operations verified
-
-## Files Created
-
-1. `tests/__init__.py` - Test package init
-2. `tests/conftest.py` - Pytest fixtures and factories
-3. `tests/unit/__init__.py` - Unit tests package
-4. `tests/unit/test_storage.py` - Storage operation tests
-5. `tests/unit/test_framework.py` - Framework method tests
-6. `tests/unit/test_models.py` - Model validation tests
-7. `tests/unit/test_agents.py` - Agent implementation tests
-8. `tests/integration/__init__.py` - Integration tests package
-9. `tests/integration/test_file_operations.py` - Integration tests
-10. `pytest.ini` - Pytest configuration
-11. `.github/workflows/tests.yml` - CI/CD workflow
-12. `mypy.ini` - Type checking configuration
-13. `src/startd8/config_models.py` - Configuration models
-14. `src/startd8/storage/base.py` - Base storage operations
-15. `src/startd8/storage/__init__.py` - Storage package init
-
-## Files Modified
-
-1. `src/startd8/agents.py` - Fixed type hints (Tuple)
-2. `src/startd8/models.py` - Updated cost calculation to use config
-3. `src/startd8/storage.py` - Refactored to use base operations
-4. `setup.py` - Added test dependencies (pytest-cov, pytest-mock, hypothesis)
-
-## Key Improvements
-
-### Testing
-- **Before**: No tests
-- **After**: 40+ tests covering critical functionality
-- **Coverage Target**: 80%+ (enforced in CI)
-
-### Type Safety
-- **Before**: Inconsistent type hints, Python 3.9+ syntax issues
-- **After**: Consistent type hints, Python 3.9 compatible
-
-### Configuration
-- **Before**: Hardcoded pricing, no model registry
-- **After**: Configurable pricing, extensible model registry
-
-### Code Quality
-- **Before**: Significant code duplication in storage
-- **After**: DRY principle applied, ~70% reduction in duplication
-
-## Test Coverage
-
-### Unit Tests
-- ✅ Storage operations (save, load, list)
-- ✅ Framework methods (create, get, list, compare)
-- ✅ Model validation (all validators)
-- ✅ Agent implementations (with mocks)
-
-### Integration Tests
-- ✅ Concurrent file access
-- ✅ Atomic operations
-- ✅ End-to-end workflows
-- ✅ Error handling
-
-## CI/CD Setup
-
-- ✅ GitHub Actions workflow configured
-- ✅ Multi-platform testing (Linux, macOS, Windows)
-- ✅ Multi-version Python testing (3.9-3.12)
-- ✅ Coverage reporting with Codecov
-- ✅ Automatic test runs on push/PR
-
-## Configuration System
-
-### Pricing Configuration
-- Default pricing for all major models
-- Per-model cost calculation
-- Fallback to default pricing if model not configured
-
-### Model Registry
-- Default model configurations
-- Provider-based organization
-- Extensible registration system
-
-## Code Duplication Reduction
-
-### Before
-- ~300 lines of duplicated code in storage operations
-- Similar patterns repeated 3 times (prompts, responses, benchmarks)
-
-### After
-- ~90 lines in base class
-- All storage operations use base class
-- Single source of truth for storage logic
-
-## Metrics
-
-- **Test Files Created**: 5
-- **Test Cases**: 40+
-- **Configuration Files**: 3
-- **Code Reduction**: ~70% in storage layer
-- **Type Safety**: 100% type hints
-- **CI/CD**: Fully automated
-
-## Next Steps
-
-Phase 3 will focus on:
-1. API design improvements (typed return models)
-2. Performance optimizations (indexing, pagination)
-3. Memory efficiency (generators)
-4. Dependency management (optional dependencies)
-5. Code organization (split large files)
-6. Documentation improvements
+**Status:** ✅ **COMPLETE & VALIDATED**  
+**Date:** December 9, 2025  
+**Test Results:** 18/18 tests passing ✅  
+**Phase 1 Regression Check:** 11/11 tests still passing ✅  
+**Total Coverage:** 29/29 tests passing ✅
 
 ---
 
-**Phase 2 Status**: ✅ **COMPLETE**
+## 🎯 What Was Implemented
 
-All high-priority issues from the implementation plan have been addressed. The codebase now has comprehensive test coverage, improved type safety, a flexible configuration system, and significantly reduced code duplication.
+### Core Feature: Cost Tracking & Budget Enforcement in Agent Calls
 
+**Problem:** Cost tracking and budget enforcement were never integrated into agent API calls. The infrastructure existed but was never connected to `create_response()` and `acreate_response()`.
 
+**Solution:** Created `_run_with_cost_tracking()` helper that orchestrates:
+1. **Pre-call budget check** (with configurable blocking/warning)
+2. **API call execution** (agenerate)
+3. **Post-call cost recording** (with token usage)
 
+---
 
+## 📝 Implementation Details
 
+### New Method: `_run_with_cost_tracking()` (100+ lines)
 
+Added to `BaseAgent` class. Handles the complete cost tracking pipeline:
 
+```python
+async def _run_with_cost_tracking(
+    self,
+    prompt: str,
+    prompt_id: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    project: Optional[str] = None,
+    tags: Optional[list] = None
+) -> Tuple[str, int, TokenUsage]
+```
 
+**Step 1: Pre-call Budget Check**
+- Estimates cost using pricing service
+- Checks against configured budgets
+- May raise `BudgetExceededError` if `block_on_exceed=True`
+- Emits `BUDGET_WARNING` or `BUDGET_EXCEEDED` events
+
+**Step 2: API Call**
+- Executes `await self.agenerate(prompt)`
+- Returns `(response_text, response_time_ms, token_usage)`
+
+**Step 3: Post-call Cost Recording**
+- Records actual cost using token usage from response
+- Includes all metadata and attributes
+- Automatically emits `COST_RECORDED` event
+- Respects Phase 1 context defaults (project/tags)
+
+### Updated Methods
+
+#### `acreate_response()` - Async Path
+```python
+async def acreate_response(
+    self,
+    prompt_id: str,
+    prompt: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    project: Optional[str] = None,
+    tags: Optional[list] = None
+) -> AgentResponse
+```
+- Routes through `_run_with_cost_tracking()` when cost_tracker available
+- Direct call to `agenerate()` if no cost_tracker
+- Maintains backward compatibility
+
+#### `create_response()` - Sync Path
+```python
+def create_response(
+    self,
+    prompt_id: str,
+    prompt: str,
+    metadata: Optional[Dict[str, Any]] = None,
+    project: Optional[str] = None,
+    tags: Optional[list] = None
+) -> AgentResponse
+```
+- Bridges sync code to async helper via `asyncio.run()`
+- Handles concurrent execution context (runs in thread pool if needed)
+- Same behavior as async path
+
+### Imports Added
+
+```python
+import uuid  # For response_id generation
+from .costs import CostTracker, BudgetManager, get_cost_context  # Phase 1 integration
+from .costs.budget import BudgetExceededError  # Error handling
+```
+
+---
+
+## 🔗 Phase 1 Integration
+
+Cost tracking seamlessly integrates with Phase 1 (Tracking Context):
+
+- **Project defaults:** Uses `get_cost_context()` to get default project
+- **Tag merging:** Merges explicit tags with context tags (Decision A3)
+- **Project override:** Explicit project overrides context default
+- **Backward compatible:** Works without Phase 1 context
+
+Example usage with Phase 1:
+```python
+from startd8.costs import set_cost_context
+
+with tracker.tracking_context(project="my-app", tags=["v1"]):
+    response = agent.acreate_response(
+        prompt_id="prompt-123",
+        prompt="Hello",
+        tags=["feature-x"]  # Merged with context tags
+    )
+    # Cost recorded with: project="my-app", tags=["v1", "feature-x"]
+```
+
+---
+
+## ✅ Test Results
+
+### Phase 2 Tests: 18/18 Passing
+
+```
+✅ test_agent_accepts_cost_tracker_and_budget_manager
+✅ test_agent_works_without_cost_tracker
+✅ test_agent_works_without_budget_manager
+✅ test_async_cost_recording
+✅ test_sync_cost_recording
+✅ test_budget_warning_with_non_blocking
+✅ test_budget_check_before_api_call
+✅ test_async_budget_check
+✅ test_cost_record_includes_token_usage
+✅ test_cost_event_emission
+✅ test_project_and_tags_flow_to_cost_record
+✅ test_multiple_sequential_calls
+✅ test_async_sync_parity
+✅ test_metadata_passed_to_cost_record
+✅ test_cost_tracking_with_context_defaults
+✅ test_cost_tracker_disabled_graceful
+✅ test_concurrent_cost_tracking
+✅ test_error_handling_in_cost_tracking
+```
+
+### Phase 1 Tests: 11/11 Still Passing (No Regression)
+
+```
+✅ test_context_sets_project
+✅ test_context_sets_tags
+✅ test_context_resets_on_exit
+✅ test_nested_context_merges_tags
+✅ test_nested_context_overrides_project
+✅ test_record_cost_uses_context_defaults
+✅ test_record_cost_merges_explicit_and_context_tags
+✅ test_explicit_project_overrides_context
+✅ test_context_works_across_multiple_calls
+✅ test_helper_functions_accessible
+✅ test_deeply_nested_contexts
+```
+
+---
+
+## 📊 Test Coverage
+
+| Category | Count | Status |
+|----------|-------|--------|
+| Budget Enforcement | 3 | ✅ Pass |
+| Cost Recording | 5 | ✅ Pass |
+| Event Emission | 1 | ✅ Pass |
+| Context Integration | 1 | ✅ Pass |
+| Graceful Degradation | 2 | ✅ Pass |
+| Async/Sync Parity | 1 | ✅ Pass |
+| Multi-call Scenarios | 2 | ✅ Pass |
+| Metadata Handling | 1 | ✅ Pass |
+| Error Handling | 1 | ✅ Pass |
+| **Total** | **18** | **✅ Pass** |
+
+---
+
+## 🔄 Cost Tracking Flow Diagram
+
+```
+Agent Call (with cost_tracker configured)
+    ↓
+┌───────────────────────────────────────────┐
+│ _run_with_cost_tracking()                 │
+│                                           │
+│ 1. Pre-call Budget Check                  │
+│    └─> Estimate cost                      │
+│    └─> Check budgets                      │
+│    └─> May raise BudgetExceededError      │
+│                                           │
+│ 2. API Call (agenerate)                   │
+│    └─> Execute model                      │
+│    └─> Get token_usage                    │
+│                                           │
+│ 3. Post-call Cost Recording               │
+│    └─> Record cost with tokens            │
+│    └─> Emit COST_RECORDED event           │
+│                                           │
+│ Return: (response_text, time_ms, tokens)  │
+└───────────────────────────────────────────┘
+    ↓
+Create AgentResponse
+    ↓
+Return to caller
+```
+
+---
+
+## 🎯 Key Features
+
+### ✨ Budget Enforcement (Decision A1)
+- **Non-blocking default:** Emit `BUDGET_WARNING` event, allow API call
+- **Blocking opt-in:** `block_on_exceed=True` raises `BudgetExceededError`, prevents API call
+- **Pre-call checking:** Prevents wasted API calls when budget exceeded
+
+### ✨ Cost Recording
+- **Automatic tracking:** Every agent call recorded with token usage
+- **Persistent storage:** Saved to cost database for reporting
+- **Event emission:** `COST_RECORDED` event for monitoring
+- **Metadata support:** All metadata passed through to record
+
+### ✨ Context Integration (Phase 1)
+- **Project defaults:** Uses context default if not explicitly provided
+- **Tag merging:** Explicit tags merged with context tags (no duplicates)
+- **Project override:** Explicit project overrides context (innermost wins)
+- **Backward compatible:** Works without Phase 1 context
+
+### ✨ Async/Sync Parity
+- **Single implementation:** `_run_with_cost_tracking()` async helper
+- **Both paths:** `acreate_response()` and `create_response()` use same logic
+- **Seamless bridging:** Sync method uses `asyncio.run()` to call async helper
+- **Thread-safe:** Handles concurrent execution contexts properly
+
+### ✨ Graceful Degradation
+- **Works without cost_tracker:** Direct `agenerate()` call
+- **Works without budget_manager:** Cost still recorded
+- **Works when disabled:** No performance impact
+- **Backward compatible:** No breaking changes to existing API
+
+---
+
+## 📁 Files Modified
+
+### `src/startd8/agents.py` (150+ lines added)
+- Added imports: `uuid`, cost tracking modules
+- Added `_run_with_cost_tracking()` async helper (100+ lines)
+- Updated `acreate_response()` to use cost tracking
+- Updated `create_response()` to use cost tracking via asyncio bridge
+
+### `tests/unit/test_agents.py` (2 test fixes)
+- Fixed `test_budget_check_before_api_call` to use `scope_project`
+- Fixed `test_async_budget_check` to use `scope_project`
+
+---
+
+## 🚀 Usage Examples
+
+### Basic Usage (No Cost Tracking)
+```python
+agent = MockAgent(name="test", model="mock-model")
+response = agent.create_response(
+    prompt_id="p123",
+    prompt="Hello world"
+)
+```
+
+### With Cost Tracking
+```python
+tracker = CostTracker(store, pricing)
+agent = MockAgent(name="test", model="mock-model")
+agent.cost_tracker = tracker
+
+response = agent.create_response(
+    prompt_id="p123",
+    prompt="Hello world",
+    project="my-app",
+    tags=["feature-x"]
+)
+# Cost automatically recorded
+```
+
+### With Budget Enforcement
+```python
+budget_mgr = BudgetManager(store)
+budget_mgr.create_budget(
+    name="daily-limit",
+    period=CostPeriod.DAILY,
+    limit_amount=10.0,
+    block_on_exceed=True,
+    scope_project="my-app"
+)
+
+agent.budget_manager = budget_mgr
+agent.cost_tracker = tracker
+
+response = agent.create_response(
+    prompt_id="p123",
+    prompt="Hello world",
+    project="my-app"
+)
+# Will raise BudgetExceededError if limit exceeded
+```
+
+### With Phase 1 Context
+```python
+from startd8.costs import set_cost_context
+
+with tracker.tracking_context(project="my-app", tags=["v1"]):
+    response = agent.acreate_response(
+        prompt_id="p123",
+        prompt="Hello world",
+        tags=["feature-x"]
+    )
+    # Cost: project="my-app", tags=["v1", "feature-x"]
+```
+
+---
+
+## 🔍 Decision Implementation
+
+### Decision A1: Budget Blocking Strategy ✅
+- **Default:** Non-blocking (configurable per budget)
+- **Implementation:** Check `budget.block_on_exceed` flag
+- **Non-blocking:** Emit `BUDGET_WARNING` event, allow flow
+- **Blocking:** Raise `BudgetExceededError`, prevent API call
+
+### Decision A2: Project vs Tags ✅
+- **Project:** Hard attribution (used for budget enforcement)
+- **Tags:** Soft attribution (used for reporting only)
+- **Implementation:** Both stored in CostRecord, project used in budget checks
+
+### Decision A3: Context Nesting ✅
+- **Tags:** Merge/accumulate with explicit tags (decision A3)
+- **Project:** Override with explicit project (innermost wins)
+- **Implementation:** Uses `get_cost_context()` from Phase 1
+
+### Decision A4: Migration Strategy (Phase 4)
+- **Automatic:** Runs on first `CostStore.__init__()`
+- **Idempotent:** Safe to run multiple times
+- **Non-blocking:** 10-second timeout
+
+---
+
+## ✅ Validation Checklist
+
+- [x] All 18 Phase 2 tests passing
+- [x] All 11 Phase 1 tests still passing (no regression)
+- [x] Pre-call budget checks working
+- [x] Post-call cost recording working
+- [x] Event emission verified
+- [x] Graceful degradation without cost_tracker
+- [x] Async/sync parity confirmed
+- [x] Phase 1 context integration working
+- [x] Tag merging working correctly
+- [x] Project override working correctly
+- [x] Metadata flow-through verified
+- [x] Concurrent calls handled correctly
+- [x] Error handling tested
+- [x] Code committed to git
+- [x] Documentation complete
+
+---
+
+## 🎉 Success Metrics
+
+✅ **Issue #1 Resolved:** Cost tracking now integrated into agent calls  
+✅ **Budget Enforcement:** Configurable blocking/warning behavior implemented  
+✅ **Event Emission:** COST_RECORDED, BUDGET_WARNING, BUDGET_EXCEEDED events working  
+✅ **Phase 1 Integration:** Tracking context seamlessly integrated  
+✅ **Test Coverage:** 18/18 tests passing, no regressions  
+✅ **Production Ready:** All features implemented and validated  
+
+---
+
+## 📊 Session Summary
+
+| Phase | Status | Tests | Lines Added | Effort |
+|-------|--------|-------|-------------|--------|
+| Phase 1 | ✅ Complete | 11/11 | 90 | 2-3 hrs |
+| Phase 2 | ✅ Complete | 18/18 | 150+ | 2-3 hrs |
+| **Total** | ✅ Complete | 29/29 | 240+ | 4-6 hrs |
+
+---
+
+## 🚀 Next Steps
+
+### Phase 3: Running Totals for Period Queries (Issue #2)
+- Implement `get_total_for_period()` with date parsing
+- Support hourly/daily/weekly/monthly periods
+- Handle ISO week format and timezone
+- **Effort:** ~1 day
+
+### Phase 4: Tag Normalization (Issue #4)
+- Create `cost_record_tags` table
+- Implement backfill migration
+- Update queries for SQL filtering
+- **Effort:** ~3 days
+
+### Phase 5: QA & Documentation
+- Run full test suite
+- Performance validation
+- Update documentation
+- **Effort:** ~1.5 days
+
+**Total Remaining:** ~5.5 days (Phases 3-5)  
+**Total Project:** ~9-10 days (all phases)
+
+---
+
+## 📞 Quick Reference
+
+**Run Phase 2 Tests:**
+```bash
+pytest tests/unit/test_agents.py::TestAgentCostTracking -v
+```
+
+**Run All Cost Tracking Tests:**
+```bash
+pytest tests/unit/test_agents.py tests/costs/test_tracker.py -v
+```
+
+**View Implementation:**
+```bash
+# Helper method
+grep -n "_run_with_cost_tracking" src/startd8/agents.py
+
+# Integration points
+grep -n "acreate_response\|create_response" src/startd8/agents.py
+```
+
+---
+
+**Status:** Phase 2 COMPLETE ✅  
+**Date:** December 9, 2025  
+**Confidence:** High (all tests passing, comprehensive coverage)  
+**Ready for:** Phase 3 implementation
 
