@@ -69,7 +69,7 @@ class TestPeriodQueries:
     
     def test_weekly_period_query(self, store):
         """Test ISO week boundary parsing and querying"""
-        # Week 49 of 2025: Monday Dec 8 - Sunday Dec 14, 2025
+        # Week 50 of 2025: Monday Dec 8 - Sunday Dec 14, 2025
         dates = [
             datetime(2025, 12, 8, 12, 0, 0, tzinfo=timezone.utc),   # Monday
             datetime(2025, 12, 10, 12, 0, 0, tzinfo=timezone.utc),  # Wednesday
@@ -80,12 +80,12 @@ class TestPeriodQueries:
             record = self._create_record(date, agent_name=f"test-{i}")
             store.save(record)
         
-        # Query week 49 should get all 3
-        total = store.get_total_for_period("weekly", "2025-W49")
+        # Query week 50 should get all 3
+        total = store.get_total_for_period("weekly", "2025-W50")
         assert total == 0.0075  # 3 * 0.0025
         
-        # Query week 48 should get none
-        total = store.get_total_for_period("weekly", "2025-W48")
+        # Query week 49 should get none
+        total = store.get_total_for_period("weekly", "2025-W49")
         assert total == 0.0
     
     def test_monthly_period_query(self, store):

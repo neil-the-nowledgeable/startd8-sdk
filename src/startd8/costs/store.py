@@ -419,18 +419,16 @@ class CostStore:
                 return start, end
             
             elif period == "weekly":
-                # Format: "2025-W49" (YYYY-Www, ISO 8601)
-                # ISO week: Monday = day 0, Sunday = day 6
+                # Format: "2025-W50" (YYYY-Www, ISO 8601)
+                # ISO week: Monday = day 1 through Sunday = day 7
                 match = re.match(r"(\d{4})-W(\d{2})", period_key)
                 if not match:
                     raise ValueError(f"Invalid weekly period_key: {period_key}")
                 year, week = map(int, match.groups())
                 
-                # Find Monday of that ISO week
-                # Jan 4 is always in week 1, so use it as anchor
-                jan_4 = datetime(year, 1, 4, tzinfo=timezone.utc)
-                week_1_monday = jan_4 - timedelta(days=jan_4.weekday())
-                start = week_1_monday + timedelta(weeks=week - 1)
+                # Use Python's datetime.fromisocalendar() for correct ISO week handling
+                # Day 1 = Monday, Day 7 = Sunday
+                start = datetime.fromisocalendar(year, week, 1).replace(tzinfo=timezone.utc)
                 end = start + timedelta(days=7)
                 return start, end
             
