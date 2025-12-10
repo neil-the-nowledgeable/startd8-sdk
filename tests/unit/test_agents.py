@@ -499,6 +499,89 @@ class TestAgentCostTracking:
                 prompt_id="test-123",
                 prompt="Test prompt"
             )
+    
+    def test_response_id_linkage_sync(self, cost_tracker):
+        """
+        Regression test for Issue 1: Response ID Linkage
+        
+        Verifies that the same response_id is used in both:
+        1. The cost record stored in the cost tracker
+        2. The AgentResponse object returned to the caller
+        
+        This ensures analytics and auditing can correlate cost records with responses.
+        """
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        # Make a call
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt"
+        )
+        
+        # Get the recorded cost
+        records = cost_tracker.store.query()
+        assert len(records) > 0, "No cost records found"
+        cost_record = records[-1]  # Get the latest record
+        
+        # Verify response_id matches between AgentResponse and cost record
+        assert response.id == cost_record.response_id, \
+            f"Response ID mismatch: response.id={response.id} vs cost_record.response_id={cost_record.response_id}"
+    
+    @pytest.mark.asyncio
+    async def test_response_id_linkage_async(self, cost_tracker):
+        """
+        Regression test for Issue 1: Response ID Linkage (async version)
+        
+        Verifies that the same response_id is used in both:
+        1. The cost record stored in the cost tracker
+        2. The AgentResponse object returned to the caller
+        
+        This ensures analytics and auditing can correlate cost records with responses.
+        """
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        # Make a call
+        response = await agent.acreate_response(
+            prompt_id="test-async-123",
+            prompt="Test async prompt"
+        )
+        
+        # Get the recorded cost
+        records = cost_tracker.store.query()
+        assert len(records) > 0, "No cost records found"
+        cost_record = records[-1]  # Get the latest record
+        
+        # Verify response_id matches between AgentResponse and cost record
+        assert response.id == cost_record.response_id, \
+            f"Response ID mismatch: response.id={response.id} vs cost_record.response_id={cost_record.response_id}"
+    
+    def test_response_id_uniqueness_across_calls(self, cost_tracker):
+        """
+        Verify that each call generates a unique response_id
+        """
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        # Make multiple calls
+        response_ids = []
+        for i in range(5):
+            response = agent.create_response(
+                prompt_id=f"test-{i}",
+                prompt=f"Test prompt {i}"
+            )
+            response_ids.append(response.id)
+        
+        # All response IDs should be unique
+        assert len(response_ids) == len(set(response_ids)), \
+            "Response IDs should be unique across different calls"
+        
+        # Each response ID should match its corresponding cost record
+        records = cost_tracker.store.query()
+        for i, cost_record in enumerate(records):
+            assert response_ids[i] == cost_record.response_id, \
+                f"Call {i}: Response ID mismatch"
 
 
 

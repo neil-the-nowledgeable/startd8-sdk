@@ -108,6 +108,7 @@ class BaseAgent(ABC):
         self,
         prompt: str,
         prompt_id: str,
+        response_id: str,
         metadata: Optional[Dict[str, Any]] = None,
         project: Optional[str] = None,
         tags: Optional[list] = None
@@ -123,6 +124,7 @@ class BaseAgent(ABC):
         Args:
             prompt: The prompt text
             prompt_id: ID of the prompt (for cost record)
+            response_id: ID of the response (unique identifier linking cost record to response)
             metadata: Optional metadata to include in cost record
             project: Optional project identifier (overrides context default)
             tags: Optional tags (merged with context tags)
@@ -181,7 +183,7 @@ class BaseAgent(ABC):
                 tags=effective_tags,
                 project=effective_project,
                 prompt_id=prompt_id,
-                response_id=f"response-{uuid.uuid4().hex[:12]}",
+                response_id=response_id,
                 metadata=metadata or {}
             )
             # COST_RECORDED event is emitted automatically by record_cost()
@@ -214,11 +216,15 @@ class BaseAgent(ABC):
         Raises:
             BudgetExceededError: If budget check fails with block_on_exceed=True
         """
+        # Generate response_id once at the start to ensure cost record and response use the same ID
+        response_id = f"response-{uuid.uuid4().hex[:12]}"
+        
         # Use cost tracking helper if cost_tracker is available
         if self.cost_tracker and _COSTS_AVAILABLE:
             response_text, response_time_ms, token_usage = await self._run_with_cost_tracking(
                 prompt=prompt,
                 prompt_id=prompt_id,
+                response_id=response_id,
                 metadata=metadata,
                 project=project,
                 tags=tags
@@ -228,7 +234,7 @@ class BaseAgent(ABC):
             response_text, response_time_ms, token_usage = await self.agenerate(prompt)
         
         return AgentResponse(
-            id=f"response-{uuid.uuid4().hex[:12]}",
+            id=response_id,
             prompt_id=prompt_id,
             agent_name=self.name,
             model=self.model,
@@ -265,6 +271,9 @@ class BaseAgent(ABC):
         Raises:
             BudgetExceededError: If budget check fails with block_on_exceed=True
         """
+        # Generate response_id once at the start to ensure cost record and response use the same ID
+        response_id = f"response-{uuid.uuid4().hex[:12]}"
+        
         # Use cost tracking helper via asyncio bridge if cost_tracker is available
         if self.cost_tracker and _COSTS_AVAILABLE:
             try:
@@ -277,6 +286,7 @@ class BaseAgent(ABC):
                             self._run_with_cost_tracking(
                                 prompt=prompt,
                                 prompt_id=prompt_id,
+                                response_id=response_id,
                                 metadata=metadata,
                                 project=project,
                                 tags=tags
@@ -290,6 +300,7 @@ class BaseAgent(ABC):
                     self._run_with_cost_tracking(
                         prompt=prompt,
                         prompt_id=prompt_id,
+                        response_id=response_id,
                         metadata=metadata,
                         project=project,
                         tags=tags
@@ -300,7 +311,7 @@ class BaseAgent(ABC):
             response_text, response_time_ms, token_usage = self.generate(prompt)
         
         return AgentResponse(
-            id=f"response-{uuid.uuid4().hex[:12]}",
+            id=response_id,
             prompt_id=prompt_id,
             agent_name=self.name,
             model=self.model,
