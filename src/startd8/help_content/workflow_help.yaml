@@ -1,0 +1,361 @@
+# Workflow-Specific Help Configuration
+# Intro panels, step-by-step guidance, and examples for all workflows
+
+workflows:
+  create_prompt:
+    title: "Create New Prompt"
+    icon: "✍️"
+    description: "Create a new prompt (question or task) to send to AI agents"
+    what_it_does: |
+      A prompt is a clear, specific question or task you want AI agents to respond to.
+      It gets stored with a version number and tags for easy reference and comparison.
+    how_it_works: |
+      1️⃣  Enter your prompt text (question or task)
+      2️⃣  Add optional tags for organization
+      3️⃣  Prompt is saved with a unique ID
+      4️⃣  Then you can distribute it to agents
+    use_cases: |
+      • Code generation and implementation
+      • Document analysis and writing
+      • Problem solving and brainstorming
+      • Creative content generation
+    requirements: |
+      No prerequisites - you can create a prompt anytime
+    tips: |
+      • Be specific and clear about what you want
+      • Include context or constraints if needed
+      • Use tags to organize prompts by topic
+      • You can edit or delete prompts later
+    steps: 3
+    step_names:
+      - "Enter Prompt Text"
+      - "Add Optional Tags"
+      - "Confirm and Save"
+
+  prompt_builder:
+    title: "Prompt Builder"
+    icon: "📝"
+    description: "Build structured prompts from reusable templates"
+    what_it_does: |
+      Templates provide a structured format for creating consistent, high-quality prompts.
+      Each template has variables you fill in step-by-step.
+    how_it_works: |
+      1️⃣  Select a template (design_document, project_plan, code_review, etc.)
+      2️⃣  Fill in template variables step-by-step
+      3️⃣  Auto-fill from project context if available
+      4️⃣  Preview the generated prompt
+      5️⃣  Save and immediately distribute to agents
+    use_cases: |
+      • Consistent document generation
+      • Code review specifications
+      • Project planning templates
+      • Design document creation
+    requirements: |
+      Templates are built-in, no additional setup needed
+    tips: |
+      • Use templates for consistent results
+      • Templates learn from context (if available)
+      • You can preview before saving
+      • Great for repeating the same task type
+    steps: 5
+    step_names:
+      - "Select Template"
+      - "Fill Variables"
+      - "Auto-fill Context"
+      - "Preview"
+      - "Save and Distribute"
+
+  enhance_prompt_file:
+    title: "Enhance Prompt File"
+    icon: "📄"
+    description: "Improve and refine a prompt stored in a file"
+    what_it_does: |
+      Load a prompt from a text file, send it to agents for enhancement,
+      and get back improved versions with different styles.
+    how_it_works: |
+      1️⃣  Select a prompt file to load
+      2️⃣  Choose enhancement style (concise, detailed, creative, etc.)
+      3️⃣  Select agents to process the enhancement
+      4️⃣  View enhanced versions side-by-side
+      5️⃣  Save the best version
+    use_cases: |
+      • Improving written prompts for clarity
+      • Getting multiple style variations
+      • Refining existing prompts
+      • Collaborative prompt engineering
+    requirements: |
+      A text file containing your prompt (UTF-8 format)
+    tips: |
+      • Try different styles to find best version
+      • Compare agent outputs to see different approaches
+      • Save enhanced versions for future use
+    steps: 5
+    step_names:
+      - "Select Prompt File"
+      - "Choose Enhancement Style"
+      - "Select Agents"
+      - "View Results"
+      - "Save Best Version"
+
+  document_updater:
+    title: "Document Updater"
+    icon: "📋"
+    description: "Update and improve documents with agent collaboration"
+    what_it_does: |
+      Load a document, describe desired updates, and have agents
+      apply improvements while preserving structure.
+    how_it_works: |
+      1️⃣  Load a document file
+      2️⃣  Describe updates needed
+      3️⃣  Select update agent
+      4️⃣  Review updated document
+      5️⃣  Save updated version
+    use_cases: |
+      • Keeping documentation current
+      • Improving document quality
+      • Batch document improvements
+      • Version control of documents
+    requirements: |
+      A text document file to update
+    tips: |
+      • Be clear about what changes you want
+      • Review changes before saving
+      • Keep backups of original documents
+    steps: 5
+    step_names:
+      - "Load Document"
+      - "Describe Updates"
+      - "Select Agent"
+      - "Review Changes"
+      - "Save Updated"
+
+  enhancement_chain:
+    title: "Document Enhancement Chain"
+    icon: "🔗"
+    description: "Chain multiple agents to progressively improve a document"
+    what_it_does: |
+      Pass a document through a sequence of agents, each refining
+      the output from the previous one. Great for progressive improvement.
+    how_it_works: |
+      1️⃣  Start with initial content or document
+      2️⃣  Choose agents in sequence (drafter → editor → finalizer)
+      3️⃣  Each agent refines previous output
+      4️⃣  See the progression through each stage
+      5️⃣  Get final polished result
+    use_cases: |
+      • Progressive document improvement
+      • Multi-stage content refinement
+      • Quality control workflows
+      • Complex document creation
+    requirements: |
+      Initial content (text) - can be pasted or from file
+    tips: |
+      • Order matters - put careful reviewers later
+      • Each agent sees previous output
+      • Good for quality-focused work
+      • Results show progression
+    steps: 5
+    step_names:
+      - "Input Content"
+      - "Select Agents"
+      - "Run Chain"
+      - "Review Progression"
+      - "Save Final"
+
+  design_pipeline:
+    title: "Design Pipeline"
+    icon: "🚀"
+    description: "Draft → Review → Polish workflow for design documents"
+    what_it_does: |
+      Three-stage workflow: Create draft → Get review feedback → Polish final.
+      Perfect for design documents and specifications.
+    how_it_works: |
+      1️⃣  Create initial design/specification
+      2️⃣  Send to review agent for feedback
+      3️⃣  Polish based on feedback
+      4️⃣  Get final polished document
+    use_cases: |
+      • Design document creation
+      • Specification writing
+      • Architecture documentation
+      • Product planning documents
+    requirements: |
+      Description of what to design
+    tips: |
+      • Draft agents should be creative
+      • Review agents should be critical
+      • Polish agents should refine writing
+      • Good for structured design work
+    steps: 4
+    step_names:
+      - "Describe Design"
+      - "Draft Design"
+      - "Review Draft"
+      - "Polish Final"
+
+  iterative_workflow:
+    title: "Iterative Dev Workflow"
+    icon: "🔄"
+    description: "Automated dev-review-fix loop with quality control"
+    what_it_does: |
+      Developer creates → Reviewer checks → Loop until approved.
+      Automated quality control with two agents.
+    how_it_works: |
+      1️⃣  Describe task or requirements
+      2️⃣  Select Developer agent (implements)
+      3️⃣  Select Reviewer agent (checks quality)
+      4️⃣  Workflow loops until reviewer approves
+      5️⃣  Get final approved result
+    use_cases: |
+      • Code generation with quality checks
+      • Implementation with automated review
+      • Creating production-ready code
+      • Ensuring code meets specifications
+    requirements: |
+      Clear task description, two agents with different strengths
+    tips: |
+      • Choose focused agents for better results
+      • Developer should be thorough
+      • Reviewer should be critical
+      • Great for code generation
+    steps: 5
+    step_names:
+      - "Describe Task"
+      - "Select Developer"
+      - "Select Reviewer"
+      - "Run Iterations"
+      - "Get Final Result"
+
+  job_queue:
+    title: "Job Queue"
+    icon: "📥"
+    description: "Monitor folder and automatically process job files"
+    what_it_does: |
+      Watch a folder for job files, automatically process them,
+      and save results. Perfect for batch operations.
+    how_it_works: |
+      1️⃣  Configure input and output folders
+      2️⃣  Create job files in input folder
+      3️⃣  Queue watches and processes automatically
+      4️⃣  Results saved to output folder
+      5️⃣  Monitor progress in background
+    use_cases: |
+      • Batch processing of multiple tasks
+      • Overnight processing of queue
+      • Automated workflow processing
+      • Scheduled batch operations
+    requirements: |
+      Input/output folder paths, job queue configuration
+    tips: |
+      • Run in background while working on other things
+      • Job files must follow required JSON format
+      • Check output folder for completed results
+      • Great for automation
+    steps: 4
+    step_names:
+      - "Configure Folders"
+      - "Create Job Files"
+      - "Start Queue"
+      - "Monitor Results"
+
+# Workflow examples - 3-5 real-world examples per workflow
+examples:
+  create_prompt:
+    - title: "Code Implementation"
+      task: "Implement a Python function to validate email addresses using regex"
+      why: "Specific task with clear requirements"
+      use_case: "Creating utility functions"
+    - title: "Document Analysis"
+      task: "Review this design document and suggest improvements for clarity"
+      why: "Clear task with defined evaluation criteria"
+      use_case: "Design review and feedback"
+    - title: "Creative Writing"
+      task: "Write a compelling product description for a new note-taking app"
+      why: "Creative task with clear output format"
+      use_case: "Marketing content generation"
+
+  prompt_builder:
+    - title: "Code Review Template"
+      description: "Use the code_review template to generate consistent code review prompts"
+      why: "Templates ensure consistent structure and coverage"
+      use_case: "Automated code review process"
+    - title: "Design Document"
+      description: "Use design_document template with project context"
+      why: "Templates auto-fill from context for efficiency"
+      use_case: "Specification documentation"
+
+  enhance_prompt_file:
+    - title: "Refine Task Description"
+      task: "Load task.txt, enhance for clarity"
+      why: "Improving existing prompts saves time"
+      use_case: "Iterative prompt engineering"
+
+  document_updater:
+    - title: "Update README"
+      task: "Add new feature documentation to README.md"
+      why: "Keep docs current with code changes"
+      use_case: "Documentation maintenance"
+
+  enhancement_chain:
+    - title: "Improve Blog Post"
+      task: "Draft → Edit for clarity → Polish for publication"
+      why: "Each stage builds on previous work"
+      use_case: "Content publishing workflow"
+    - title: "Design Specification"
+      task: "Draft design → Get technical review → Polish for approval"
+      why: "Progressive refinement with expertise at each stage"
+      use_case: "Architecture documentation"
+
+  design_pipeline:
+    - title: "API Specification"
+      task: "Design REST API for user management"
+      why: "Structured design process ensures coverage"
+      use_case: "API design and documentation"
+    - title: "System Architecture"
+      task: "Design scalable microservices architecture"
+      why: "Feedback improves final design"
+      use_case: "Architecture planning"
+
+  iterative_workflow:
+    - title: "Implement Function"
+      task: "Implement a function to parse JSON with error handling"
+      agents: "Dev: Claude, Review: GPT-4"
+      why: "Quality control through automated review"
+      use_case: "Production code generation"
+    - title: "Fix Bugs"
+      task: "Fix performance issues in query optimizer"
+      agents: "Dev: GPT-4, Review: Claude"
+      why: "Ensures fixes are correct before deploying"
+      use_case: "Bug fixing with validation"
+    - title: "Add Feature"
+      task: "Add user authentication to existing app"
+      agents: "Dev: Claude, Review: GPT-4"
+      why: "New features benefit from review"
+      use_case: "Feature development"
+
+  job_queue:
+    - title: "Batch Document Processing"
+      task: "Process 100 documents overnight"
+      why: "Queue handles automation"
+      use_case: "Overnight batch jobs"
+    - title: "Scheduled Code Reviews"
+      task: "Review all new pull requests automatically"
+      why: "Automation scales code review"
+      use_case: "CI/CD integration"
+
+# Step-by-step guidance templates
+step_guidance:
+  default: |
+    [bold cyan]Step {step} of {total}: {name}[/bold cyan]
+    [dim]{description}[/dim]
+
+# Integration points for menus
+integration_points:
+  create_prompt: true
+  prompt_builder: true
+  enhance_prompt_file: true
+  document_updater: true
+  enhancement_chain: true
+  design_pipeline: true
+  iterative_workflow: true
+  job_queue: true

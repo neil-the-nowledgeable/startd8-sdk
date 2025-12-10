@@ -1,0 +1,110 @@
+# Code Review Template
+# Request a thorough code review
+
+id: code_review
+name: Code Review Prompt
+description: Request a comprehensive code review with specific focus areas
+category: development
+version: 1.0.0
+
+variables:
+  - name: FILE_PATH
+    description: Path to the file or directory to review
+    required: true
+    input_type: path
+    order: 1
+  
+  - name: REVIEW_FOCUS
+    description: Primary focus area for the review
+    input_type: select
+    options: 
+      - "General Quality"
+      - "Performance"
+      - "Security"
+      - "Maintainability"
+      - "Testing Coverage"
+      - "API Design"
+    default: "General Quality"
+    order: 2
+  
+  - name: LANGUAGE
+    description: Programming language of the code
+    input_type: select
+    options: [Python, TypeScript, JavaScript, Go, Rust, Java, Other]
+    default: Python
+    order: 3
+  
+  - name: CONTEXT
+    description: Additional context about the code (optional)
+    required: false
+    input_type: multiline
+    default: ""
+    order: 4
+
+content: |
+  ## Task: Code Review
+
+  ### Code Location
+  Review the code at: {{FILE_PATH}}
+  
+  Language: {{LANGUAGE}}
+  Primary Focus: {{REVIEW_FOCUS}}
+
+  {{CONTEXT|default=""}}
+
+  ---
+
+  ### Review Checklist
+
+  Please analyze the code and provide feedback on:
+
+  #### 1. Code Quality
+  - [ ] Naming conventions (variables, functions, classes)
+  - [ ] Code organization and structure
+  - [ ] Comments and documentation
+  - [ ] DRY principle adherence
+  - [ ] Single responsibility principle
+
+  #### 2. {{REVIEW_FOCUS}} (Primary Focus)
+  - Detailed analysis of the focus area
+  - Specific recommendations
+  - Code examples for improvements
+
+  #### 3. Potential Issues
+  - Bugs or logic errors
+  - Edge cases not handled
+  - Error handling gaps
+  - Type safety concerns
+
+  #### 4. Best Practices
+  - Language-specific idioms
+  - Framework conventions
+  - Industry standards
+
+  #### 5. Suggestions
+  - Refactoring opportunities
+  - Performance improvements
+  - Testability improvements
+
+  ---
+
+  ### Output Format
+
+  For each issue found:
+  ```
+  **Issue**: [Brief description]
+  **Location**: [File:Line or function name]
+  **Severity**: [Critical/Major/Minor/Suggestion]
+  **Current Code**:
+  [code snippet]
+  **Suggested Fix**:
+  [improved code snippet]
+  **Rationale**: [Why this change improves the code]
+  ```
+
+  ### Summary
+  End with:
+  - Overall code quality score (1-10)
+  - Top 3 priorities to address
+  - Positive aspects worth keeping
+

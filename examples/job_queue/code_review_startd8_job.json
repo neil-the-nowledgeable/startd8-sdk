@@ -1,0 +1,22 @@
+{
+  "prompt": {
+    "content": "Review the following Python code for potential issues, suggest improvements, and rate its overall quality:\n\n```python\ndef process_data(data):\n    result = []\n    for i in range(len(data)):\n        if data[i] != None:\n            result.append(data[i] * 2)\n    return result\n```\n\nProvide specific recommendations for:\n1. Code style and PEP 8 compliance\n2. Performance optimizations\n3. Error handling\n4. Documentation",
+    "version": "1.0.0",
+    "tags": ["code-review", "python", "best-practices"],
+    "metadata": {
+      "language": "python",
+      "review_type": "comprehensive"
+    }
+  },
+  "agents": [],
+  "priority": 2,
+  "metadata": {
+    "source": "example",
+    "category": "code-review"
+  }
+}
+
+
+
+
+

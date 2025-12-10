@@ -1,0 +1,156 @@
+# Design Document Template
+# Generates comprehensive design documents for software features
+
+id: design_document
+name: Design Document Prompt
+description: Generate a comprehensive design document for a software feature
+category: documentation
+version: 1.0.0
+
+variables:
+  - name: PATH
+    description: Path to the project or feature directory
+    required: true
+    input_type: path
+    order: 1
+  
+  - name: FEATURE_NAME
+    description: Name of the feature being designed
+    required: true
+    input_type: text
+    order: 2
+  
+  - name: PRIORITY
+    description: Priority level of the feature
+    input_type: select
+    options: [High, Medium, Low]
+    default: Medium
+    order: 3
+  
+  - name: ESTIMATED_EFFORT
+    description: Estimated implementation effort
+    input_type: text
+    default: "2-4 hours"
+    order: 4
+  
+  - name: TARGET_LANGUAGE
+    description: Primary programming language
+    input_type: select
+    options: [TypeScript, Python, Go, Rust, Java, Other]
+    default: TypeScript
+    order: 5
+
+content: |
+  ## Task: Create Feature Design Documents
+
+  ### Context
+  Review the project requirements at {{PATH}} to understand the feature scope.
+
+  ### Output Requirements
+  Create a separate .md file for each feature with the following structure:
+
+  ---
+
+  #### Required Sections (in this order):
+
+  1. **Header**
+     - Feature name, author/agent name, date, status, priority
+     - Estimated effort (hours)
+
+  2. **User Stories** (2-4 stories)
+     - "As a [role], I want [goal] so that [benefit]"
+     - Cover: end user, competitive player, developer perspectives
+
+  3. **Requirements**
+     - Functional requirements (numbered, with ✅ checkboxes)
+     - Non-functional requirements (performance, accessibility, browser support)
+     - **Critical business logic** - explicitly state any restrictions or guards
+       (e.g., "High scores only count for games starting at Level 1")
+
+  4. **Data Structure**
+     - {{TARGET_LANGUAGE}} interface with inline comments
+     - Include ALL fields needed for business logic
+     - Explain why each field exists
+
+  5. **Configuration**
+     - Create a config file approach (e.g., `featureConfig.ts`)
+     - Expose constants for future extensibility
+     - Support analytics hooks where applicable
+
+  6. **Implementation**
+     - Custom hook with full {{TARGET_LANGUAGE}} code
+     - Include validation logic for loaded data
+     - Handle error cases gracefully
+     - Use appropriate performance optimization patterns
+
+  7. **UI/UX Design**
+     - Component code examples
+     - **Accessibility requirements:**
+       - `aria-live` regions for dynamic content
+       - Contrast ratio ≥ 4.5:1
+       - Screen reader considerations
+     - **UX enhancements:**
+       - Delta/difference displays where applicable
+       - Animations for key moments (e.g., pulse on achievement)
+       - Empty state messaging
+     - CSS with responsive design (`clamp()`, rem units)
+
+  8. **Integration**
+     - How this feature integrates with existing code
+     - Code example showing integration points
+     - State management approach
+
+  9. **Testing Plan**
+     - Unit test examples (actual code, not just descriptions)
+     - Manual test scenarios (numbered, specific steps)
+     - Edge cases list (minimum 6 cases)
+     - Accessibility test cases
+
+  10. **Definition of Done** (checklist format)
+      - [ ] Core functionality works
+      - [ ] Edge cases handled
+      - [ ] Accessibility verified
+      - [ ] Cross-browser tested
+      - [ ] Performance verified
+      - [ ] Documentation complete
+
+  11. **Files to Create/Modify**
+      - List with (NEW) or (MODIFY) tags
+      - Brief description of changes
+
+  12. **Notes Section**
+      - Explain "why" decisions were made
+      - Rationale for technical choices
+      - Future enhancement possibilities
+
+  13. **Out of Scope**
+      - Explicitly list what is NOT included
+      - Prevent scope creep
+
+  ---
+
+  ### Quality Standards
+
+  - **Code must be copy-paste ready** - full implementations, not pseudocode
+  - **Validate all loaded data** - type checking, corruption handling
+  - **Include versioned storage keys** if using browser storage
+  - **Handle skip/cancel flows** where user input is optional
+
+  ### Critical Requirements Checklist
+  Before finalizing, verify the design includes:
+  - [ ] All business logic guards explicitly stated
+  - [ ] Data validation on load
+  - [ ] Error handling with graceful degradation
+  - [ ] Accessibility (aria-live, contrast)
+  - [ ] Configuration abstraction
+  - [ ] Unit test code examples
+  - [ ] Definition of Done checklist
+
+  ---
+
+  ### Output Format
+  - One .md file per feature
+  - Filename: `FEATURE_X_[NAME]_DESIGN.md`
+  - Include agent/model name in header
+  - Target length: 300-500 lines per feature
+

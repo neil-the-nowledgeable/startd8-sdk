@@ -1,0 +1,152 @@
+# Help Topics Configuration
+# Lean help content (3-5 sentences per topic) for Phase 1
+# Organized by topic with navigation and related topics
+
+topics:
+  getting_started:
+    title: "Getting Started with startd8"
+    icon: "🚀"
+    content: |
+      startd8 helps you interact with multiple AI agents and compare their responses.
+      Follow these steps: (1) Create a prompt with your question/task, (2) Distribute it to agents, (3) Compare their responses.
+      Start with Mock agents to learn the interface without API costs.
+      Once ready, set up API keys to use real agents like Claude and GPT-4.
+      Most workflows auto-save results to .startd8/ folder for easy reference.
+    order: 1
+
+  workflow_overview:
+    title: "Workflow Overview"
+    icon: "📋"
+    content: |
+      The basic workflow has three steps:
+      1️⃣ Create Prompt - Enter your question or task for the AI agents
+      2️⃣ Distribute - Choose which agent(s) to run your prompt on
+      3️⃣ View Results - Compare responses, metrics, and choose the best answer
+      Advanced workflows (Iterative Dev, Enhancement Chain, Design Pipeline, Job Queue) automate multi-step processes.
+      Start with the basic workflow, then explore advanced features as you get comfortable.
+    order: 2
+
+  prompt_creation:
+    title: "Creating & Managing Prompts"
+    icon: "✍️"
+    content: |
+      Prompts are questions or tasks you want AI agents to respond to.
+      Be specific and clear: "Explain recursion in programming" is better than "tell me about coding".
+      Use the Prompt Builder to create structured prompts from reusable templates.
+      You can create multiple prompts and compare how different agents respond to each.
+      Prompts are stored in .startd8/ folder and you can view them anytime from "📋 List All Prompts".
+    order: 3
+
+  agents:
+    title: "Working with Agents"
+    icon: "🤖"
+    content: |
+      Agents are AI models you can interact with. startd8 comes with built-in agents: Claude, GPT-4, and Mock (for testing).
+      Mock agents are perfect for learning - they respond instantly without using API costs.
+      You can create custom agents for specific models or settings via "Manage Agents".
+      Different agents excel at different tasks: Claude for creative/detailed content, GPT-4 for analysis/reasoning.
+      Test agents anytime with "🔬 Test Agent Connections" to verify they're working.
+    order: 4
+
+  api_keys:
+    title: "API Key Management"
+    icon: "🔑"
+    content: |
+      API keys authenticate you with Claude and OpenAI services.
+      Manage keys directly in the TUI via "🔑 Manage API Keys" - no terminal needed!
+      Keys are stored securely in .startd8/api_keys.json and load automatically on startup.
+      Environment variables take priority over stored keys if both exist.
+      You can set, update, or remove keys anytime without restarting startd8.
+    order: 5
+
+  advanced_features:
+    title: "Advanced Features"
+    icon: "⚡"
+    content: |
+      [bold]🔄 Iterative Dev Workflow[/bold] - Automates dev-review-fix loop with two agents for high-quality code generation.
+      [bold]🔗 Enhancement Chain[/bold] - Chain multiple agents to progressively refine a document or output.
+      [bold]🚀 Design Pipeline[/bold] - Draft → Review → Polish workflow for design documents and specifications.
+      [bold]📁 File-Based Input[/bold] - Load task descriptions from files instead of typing them manually.
+      [bold]📥 Job Queue[/bold] - Monitor a folder and automatically process job files for batch operations.
+    order: 6
+
+  file_input:
+    title: "File-Based Input"
+    icon: "📁"
+    content: |
+      Load task descriptions from files instead of typing them in the TUI.
+      Perfect for complex, detailed tasks that are easier to write in your editor.
+      Available in workflows like Iterative Dev - choose "📁 Load from file" when prompted.
+      Supports plain text files (.txt, .md) in UTF-8 format.
+      No binary files (images, PDFs) - text files only.
+    order: 7
+
+  troubleshooting:
+    title: "Troubleshooting & FAQs"
+    icon: "🆘"
+    content: |
+      [bold]No agents available:[/bold] Check API keys in "🔑 Manage API Keys" or use Mock agents for testing.
+      [bold]"Create prompt first":[/bold] You must create a prompt before distributing or viewing results - that's the first workflow step.
+      [bold]Slow responses:[/bold] Some agents are slower than others. Claude is thorough, GPT-4 is balanced, Mock is instant.
+      [bold]File not found:[/bold] Check the file path is correct and the file exists in the expected location.
+      For other issues, check that you have valid API keys and a working internet connection.
+    order: 8
+
+  tips_best_practices:
+    title: "Tips & Best Practices"
+    icon: "💡"
+    content: |
+      Always start with Mock agents to learn workflows without API costs.
+      Use Prompt Builder templates for consistent, high-quality prompts.
+      Compare multiple agents on the same prompt to find the best fit for your task type.
+      Enable output folders to organize results by agent - easier to track and review.
+      Check "🔬 Test Agent Connections" occasionally to ensure all agents are still working.
+    order: 9
+
+  keyboard_shortcuts:
+    title: "Keyboard Shortcuts"
+    icon: "⌨️"
+    content: |
+      [bold]↑/↓ Arrow Keys[/bold] - Navigate menu options
+      [bold]Enter[/bold] - Select highlighted option
+      [bold]Ctrl+C[/bold] - Cancel current operation or go back
+      [bold]Ctrl+C twice[/bold] - Exit startd8 from main menu
+      [bold]q[/bold] - Quick exit in some screens (if available)
+    order: 10
+
+# Related topics help users navigate to relevant content
+related_topics:
+  getting_started:
+    - workflow_overview
+    - agents
+    - api_keys
+  workflow_overview:
+    - prompt_creation
+    - agents
+    - advanced_features
+  prompt_creation:
+    - workflow_overview
+    - tips_best_practices
+    - file_input
+  agents:
+    - api_keys
+    - tips_best_practices
+    - troubleshooting
+  api_keys:
+    - agents
+    - troubleshooting
+  advanced_features:
+    - workflow_overview
+    - file_input
+    - tips_best_practices
+  file_input:
+    - advanced_features
+    - prompt_creation
+  troubleshooting:
+    - api_keys
+    - agents
+    - getting_started
+  tips_best_practices:
+    - prompt_creation
+    - agents
+    - advanced_features

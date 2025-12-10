@@ -1,0 +1,110 @@
+# Contextual Help Configuration
+# Context-specific help for menus and screens
+# Lean content (3-5 sentences) for Phase 1
+
+contexts:
+  main_menu:
+    title: "Main Menu Help"
+    icon: "🏠"
+    description: "This is startd8's main navigation hub where you access all features."
+    usage: |
+      [bold]📋 WORKFLOW[/bold] - Create prompts and distribute them to agents
+      [bold]📊 MANAGE[/bold] - View history, statistics, and past results
+      [bold]🤖 AGENTS[/bold] - Configure agents and API keys
+      [bold]❓ HELP[/bold] - Access help, guides, and tutorials
+    tips: |
+      • Dimmed/grey options need prerequisites (e.g., create a prompt first)
+      • Numbers (1️⃣, 2️⃣, 3️⃣) show the basic workflow order
+      • Start with Mock agents to learn without API costs
+    order: 1
+
+  agent_selection:
+    title: "Agent Selection Help"
+    icon: "🤖"
+    description: "Choose which AI agent(s) to run your prompt on."
+    usage: |
+      [bold]Individual Agent[/bold] - Run on one specific agent to test
+      [bold]ALL AVAILABLE[/bold] - Run on all configured agents at once
+      [bold]ONLY UNDISTRIBUTED[/bold] - Run only on agents not yet used for this prompt
+    tips: |
+      • Claude excels at: Creative content, detailed code, nuanced responses
+      • GPT-4 excels at: Analysis, reasoning, structured output, facts
+      • Mock agents: Instant responses, perfect for testing workflows
+      • Compare agents to find the best fit for your task type
+    order: 2
+
+  prompt_creation:
+    title: "Prompt Creation Help"
+    icon: "✍️"
+    description: "Enter your question or task that you want AI agents to respond to."
+    usage: |
+      Be specific and clear about what you want. Avoid vague requests.
+      Include context if needed: "Explain recursion in Python with examples"
+      You can create multiple prompts and compare responses.
+    tips: |
+      • Specific prompts get better answers than vague ones
+      • Include examples or constraints to guide the agent
+      • Use Prompt Builder for structured, templated prompts
+      • You can edit prompts after creating them
+    order: 3
+
+  iterative_workflow:
+    title: "Iterative Dev Workflow Help"
+    icon: "🔄"
+    description: "Automates a dev-review-fix loop: Developer creates → Reviewer checks → Repeat."
+    usage: |
+      1. Describe your task or requirements
+      2. Choose a Developer agent to implement
+      3. Choose a Reviewer agent to check quality
+      4. The workflow repeats until reviewer approves
+    tips: |
+      • Great for code generation with quality control
+      • Dev agent should be fast, Reviewer should be thorough
+      • You can load tasks from files instead of typing
+      • Results are saved automatically to .startd8/iterative/
+    order: 4
+
+  enhancement_chain:
+    title: "Enhancement Chain Help"
+    icon: "🔗"
+    description: "Chain multiple agents to progressively improve a document or output."
+    usage: |
+      1. Provide initial content to improve
+      2. Choose agents to apply in sequence
+      3. Each agent refines the output from the previous one
+      4. Get the final polished result
+    tips: |
+      • Perfect for iterative document improvement
+      • Order matters - more conservative agents should go early
+      • Each agent sees the previous agent's output
+      • Results show the progression through each stage
+    order: 5
+
+  job_queue:
+    title: "Job Queue Help"
+    icon: "📥"
+    description: "Monitor a folder for job files and process them automatically."
+    usage: |
+      1. Configure the input and output folders
+      2. Create job files in the input folder
+      3. Job Queue automatically detects and processes them
+      4. Results appear in the output folder
+    tips: |
+      • Perfect for batch processing and automation
+      • Run this in the background while you work on other things
+      • Job files must follow the correct format (JSON)
+      • Check output folder for completed results
+    order: 6
+
+# Help availability matrix - which contexts should have help
+available_in:
+  main_menu: true
+  agent_selection: true
+  prompt_creation: true
+  iterative_workflow: true
+  enhancement_chain: true
+  job_queue: true
+  # Phase 2+ additions:
+  # design_pipeline: true
+  # prompt_builder: true
+  # document_updater: true

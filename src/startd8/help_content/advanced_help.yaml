@@ -1,0 +1,671 @@
+# Advanced Help Configuration - Phase 3
+# Includes: FAQ, Tips & Tricks, Keyboard Shortcuts, Troubleshooting
+
+# ═══════════════════════════════════════════════════════════════════════════
+# FREQUENTLY ASKED QUESTIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+faq:
+  getting_started:
+    title: "Getting Started"
+    icon: "🚀"
+    questions:
+      - id: "q1"
+        question: "How do I get started with startd8?"
+        answer: |
+          1. Set up API keys (Main menu → 🔑 Manage API Keys)
+          2. Test agents (Main menu → 🔬 Test Agent Connections)
+          3. Create your first prompt (Main menu → 1️⃣ Create New Prompt)
+          4. Run with an agent (Main menu → 2️⃣ Distribute)
+          5. View results (Main menu → 3️⃣ View Results)
+          
+          Or try Mock agents first to learn without API costs!
+
+      - id: "q2"
+        question: "What API keys do I need?"
+        answer: |
+          You need API keys from the AI services you want to use:
+          
+          • Claude: Get ANTHROPIC_API_KEY from claude.ai
+          • OpenAI: Get OPENAI_API_KEY from openai.com
+          • Other providers: Get their specific API keys
+          
+          Set them in Main menu → 🔑 Manage API Keys
+          You can also use environment variables instead.
+
+      - id: "q3"
+        question: "Can I use startd8 without API keys?"
+        answer: |
+          Yes! Use Mock agents to test and learn without costs.
+          
+          Mock agents respond instantly with example outputs,
+          perfect for exploring workflows and features.
+          
+          Upgrade to real agents (Claude, GPT-4) when ready.
+
+  api_keys:
+    title: "API Keys & Authentication"
+    icon: "🔑"
+    questions:
+      - id: "q4"
+        question: "Invalid API key - what should I check?"
+        answer: |
+          If you get "Invalid API key" errors:
+          
+          1. Check the key is copied correctly (no extra spaces)
+          2. Verify it's the right key for the service
+          3. Confirm the key hasn't been revoked/expired
+          4. Try regenerating a new key on the provider's site
+          5. Check network connection to the API server
+
+      - id: "q5"
+        question: "No API key found - where to fix it?"
+        answer: |
+          If you get "No API key found" errors:
+          
+          1. Go to Main menu → 🔑 Manage API Keys
+          2. Add the key for the agent you're trying to use
+          3. Check environment variables (they take priority)
+          4. Use `echo $ANTHROPIC_API_KEY` to verify
+
+      - id: "q6"
+        question: "Can I use environment variables for keys?"
+        answer: |
+          Yes! Environment variables take priority over stored keys.
+          
+          Set them in your shell:
+            export ANTHROPIC_API_KEY=your-key-here
+            export OPENAI_API_KEY=your-key-here
+          
+          Or set them in .bashrc/.zshrc for persistence.
+
+  agents:
+    title: "Agent Configuration"
+    icon: "🤖"
+    questions:
+      - id: "q7"
+        question: "Agent not available - what does it mean?"
+        answer: |
+          This error means the agent can't be reached. Check:
+          
+          1. Is the API key set correctly?
+          2. Do you have internet connection?
+          3. Is the API service down (check their status page)?
+          4. Is the model name correct and available?
+          5. Do you have API quota remaining?
+
+      - id: "q8"
+        question: "How do I create a custom agent?"
+        answer: |
+          1. Main menu → 🤖 Manage Agents
+          2. Choose "Add New Agent"
+          3. Enter agent name (e.g., "claude-opus")
+          4. Choose agent type (Claude, OpenAI, etc.)
+          5. Enter the specific model name
+          6. Optional: Set custom settings
+          7. Save and use in workflows
+
+      - id: "q9"
+        question: "Which agent is best for my task?"
+        answer: |
+          Claude (Sonnet): Great for creative writing, code, detailed responses
+          GPT-4: Excellent for analysis, reasoning, structured output
+          GPT-3.5: Fast and cost-effective for simpler tasks
+          Mock: Free and instant, perfect for testing
+          
+          Tip: Try multiple agents on same task to compare!
+
+  prompts:
+    title: "Prompt Creation"
+    icon: "✍️"
+    questions:
+      - id: "q10"
+        question: "How do I write a good prompt?"
+        answer: |
+          Tips for better prompts:
+          
+          1. Be specific about what you want
+          2. Include context or background information
+          3. Set constraints or requirements
+          4. Ask for a specific format (code, bullet points, etc.)
+          5. Provide examples if helpful
+          
+          Example:
+            "Write a Python function to validate email addresses
+             using regex. Include error handling and docstring."
+
+      - id: "q11"
+        question: "Can I edit prompts after creating them?"
+        answer: |
+          Currently, prompts are stored as-is after creation.
+          
+          To modify a prompt:
+          1. Create a new version with changes
+          2. Tag it clearly (v2, revised, etc.)
+          
+          All prompt versions are kept, so you can reference them later.
+
+      - id: "q12"
+        question: "What's the difference between Prompt Builder and creating prompts?"
+        answer: |
+          Create Prompt: Free-form text, quick and easy
+          
+          Prompt Builder: Template-based, structured, consistent
+          
+          Use Create Prompt for one-off tasks.
+          Use Prompt Builder for repeated task types.
+
+  workflows:
+    title: "Workflows"
+    icon: "🔄"
+    questions:
+      - id: "q13"
+        question: "What's the Iterative Dev Workflow best for?"
+        answer: |
+          Perfect for code generation with quality control:
+          
+          1. Developer agent implements your task
+          2. Reviewer agent checks the code
+          3. If issues found, developer fixes them
+          4. Repeat until reviewer approves
+          
+          Great for: production code, critical features, learning
+
+      - id: "q14"
+        question: "How does the Enhancement Chain work?"
+        answer: |
+          Chains agents to progressively improve content:
+          
+          1. Original document
+          2. First agent enhances it
+          3. Second agent refines the result
+          4. Final agent polishes it
+          
+          Example: Draft → Edit → Proofread → Polish
+
+      - id: "q15"
+        question: "Can I use Job Queue for automation?"
+        answer: |
+          Yes! Job Queue is perfect for automation:
+          
+          1. Create job files in input folder
+          2. Job Queue watches and processes them
+          3. Results saved to output folder
+          4. Run in background while you work
+          
+          Great for: overnight batches, scheduled tasks, CI/CD
+
+  files:
+    title: "File Operations"
+    icon: "📁"
+    questions:
+      - id: "q16"
+        question: "File not found - how to fix?"
+        answer: |
+          If you get "File not found" error:
+          
+          1. Check the file path is correct
+          2. Verify file exists in that location
+          3. Check file permissions (readable)
+          4. Try absolute path instead of relative
+          5. Check file isn't in ignored folders
+
+      - id: "q17"
+        question: "Which file formats are supported?"
+        answer: |
+          For task files: Plain text (UTF-8)
+            .txt, .md, .py, .js, .json, etc.
+          
+          For documents: Text files
+            .txt, .md, .rst, .org, etc.
+          
+          Not supported: Binary, images, PDFs
+          
+          Always save in UTF-8 encoding.
+
+      - id: "q18"
+        question: "How do I load tasks from files?"
+        answer: |
+          1. Create a text file with your task
+          2. In Iterative Workflow, choose "📁 Load from file"
+          3. Enter the file path
+          4. Review the preview
+          5. Confirm to proceed
+          
+          Great for: complex tasks, reusable descriptions
+
+  troubleshooting:
+    title: "Troubleshooting"
+    icon: "🆘"
+    questions:
+      - id: "q19"
+        question: "TUI is slow or unresponsive?"
+        answer: |
+          Try these fixes:
+          
+          1. Wait for current operation to complete
+          2. Reduce number of agents running
+          3. Check system resources (CPU, memory)
+          4. Try with Mock agents first
+          5. Check network connection
+          6. Restart the TUI
+
+      - id: "q20"
+        question: "Got permission error - what to do?"
+        answer: |
+          If you get permission errors:
+          
+          1. Check file/folder permissions
+          2. Ensure you have read/write access
+          3. Try with different directory
+          4. Check output folder settings
+          5. Run with appropriate privileges
+
+  performance:
+    title: "Performance & Optimization"
+    icon: "⚡"
+    questions:
+      - id: "q21"
+        question: "How can I make tasks faster?"
+        answer: |
+          Speed optimization tips:
+          
+          1. Use faster agents (GPT-3.5 vs GPT-4)
+          2. Simplify your prompts
+          3. Run in parallel workflows
+          4. Use Job Queue for batch processing
+          5. Test with Mock agents first
+
+      - id: "q22"
+        question: "How to reduce API costs?"
+        answer: |
+          Cost optimization tips:
+          
+          1. Use GPT-3.5 instead of GPT-4 (when suitable)
+          2. Test with Mock agents first
+          3. Compare agent outputs to find best fit
+          4. Use specific models (sonnet vs opus)
+          5. Batch similar tasks together
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TIPS & TRICKS
+# ═══════════════════════════════════════════════════════════════════════════
+
+tips:
+  productivity:
+    title: "Productivity Tips"
+    category: "productivity"
+    tips:
+      - id: "tip1"
+        title: "Use Prompt Builder for Consistency"
+        content: |
+          Prompt Builder templates ensure consistent structure.
+          Create once, use many times. Saves time and improves quality.
+
+      - id: "tip2"
+        title: "Test with Mock Agents First"
+        content: |
+          Always test workflows with Mock agents before using real ones.
+          Instant responses, zero cost, same workflow structure.
+
+      - id: "tip3"
+        title: "Load Tasks from Files"
+        content: |
+          For complex tasks, load from files instead of typing.
+          Edit in your favorite editor, reuse across runs.
+
+      - id: "tip4"
+        title: "Use Job Queue for Batch Work"
+        content: |
+          Process multiple tasks overnight with Job Queue.
+          Drop job files in folder, results in output folder.
+
+      - id: "tip5"
+        title: "Compare Agents Systematically"
+        content: |
+          Run same prompt on different agents to find best.
+          Claude for creative, GPT-4 for analysis, GPT-3.5 for speed.
+
+  agent_tips:
+    title: "Agent Selection Tips"
+    category: "agents"
+    tips:
+      - id: "tip6"
+        title: "Claude Excels at Creative Content"
+        content: |
+          Claude is great for: creative writing, detailed code, nuanced responses.
+          Best for: content generation, complex problem solving.
+
+      - id: "tip7"
+        title: "GPT-4 Best for Analysis"
+        content: |
+          GPT-4 is great for: reasoning, analysis, structured output.
+          Best for: data analysis, decision support, fact checking.
+
+      - id: "tip8"
+        title: "Use Different Agents in Iterative Workflow"
+        content: |
+          Pair different agents for best results.
+          Example: Claude for dev, GPT-4 for review (different strengths).
+
+      - id: "tip9"
+        title: "Mix Models for Workflows"
+        content: |
+          Don't use same agent twice. Use specialized agents.
+          Enhancement Chain: Drafter → Editor → Proofreader.
+
+  prompt_tips:
+    title: "Prompt Writing Tips"
+    category: "prompts"
+    tips:
+      - id: "tip10"
+        title: "Include Examples in Prompts"
+        content: |
+          Good prompts include examples of expected output.
+          "Format response as: name, age, role" is clearer than just "list people".
+
+      - id: "tip11"
+        title: "Be Specific About Format"
+        content: |
+          Tell agents exactly what format you want.
+          JSON? Bullet points? Code blocks? Table?
+          Specific = better output.
+
+      - id: "tip12"
+        title: "Add Context for Better Responses"
+        content: |
+          More context = better responses.
+          Include background, constraints, and requirements.
+          "Make it concise" vs "in 100 words or less".
+
+      - id: "tip13"
+        title: "Use Tags to Organize"
+        content: |
+          Tag prompts when creating them (code, design, writing, etc.).
+          Makes finding and comparing prompts easier.
+
+  features:
+    title: "Feature Discovery"
+    category: "features"
+    tips:
+      - id: "tip14"
+        title: "Use Output Folders to Organize Results"
+        content: |
+          Enable output folders (Main menu → 📁) to organize by agent.
+          Makes finding past results much easier.
+
+      - id: "tip15"
+        title: "Compare Prompt Responses Side-by-Side"
+        content: |
+          Main menu → 🔍 Compare lets you view agent responses together.
+          Great for picking the best output.
+
+      - id: "tip16"
+        title: "Explore Statistics"
+        content: |
+          Main menu → 📈 View Statistics shows your usage patterns.
+          Helps optimize which agents to use.
+
+      - id: "tip17"
+        title: "Use Enhance Prompt File Workflow"
+        content: |
+          Transform existing prompts with different styles.
+          Makes old prompts fresh and usable in new contexts.
+
+  best_practices:
+    title: "Best Practices"
+    category: "practices"
+    tips:
+      - id: "tip18"
+        title: "Start Simple, Then Iterate"
+        content: |
+          Begin with simple prompts, refine based on results.
+          Iterative improvement beats complex first-try prompts.
+
+      - id: "tip19"
+        title: "Establish Workflow Patterns"
+        content: |
+          Find workflows that work for you and reuse them.
+          Design Pipeline for documents, Iterative for code, etc.
+
+      - id: "tip20"
+        title: "Keep Your Results Organized"
+        content: |
+          Use output folders and prompt tags consistently.
+          Future you will appreciate organized past results.
+
+# ═══════════════════════════════════════════════════════════════════════════
+# KEYBOARD SHORTCUTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+shortcuts:
+  navigation:
+    title: "Navigation"
+    icon: "⬆️⬇️"
+    shortcuts:
+      - action: "Navigate menus"
+        keys: ["↑", "↓"]
+        context: "All menus and lists"
+
+      - action: "Select option"
+        keys: ["Enter"]
+        context: "All menus"
+
+      - action: "Type response"
+        keys: ["Start typing"]
+        context: "Text input fields"
+
+      - action: "Confirm entry"
+        keys: ["Enter"]
+        context: "Text fields"
+
+  actions:
+    title: "Common Actions"
+    icon: "⚙️"
+    shortcuts:
+      - action: "Cancel / Go back"
+        keys: ["Ctrl+C"]
+        context: "Any menu or operation"
+
+      - action: "Exit TUI completely"
+        keys: ["Ctrl+C", "Ctrl+C"]
+        context: "Main menu (press twice)"
+
+      - action: "Quit current input"
+        keys: ["Ctrl+C"]
+        context: "Text input"
+
+      - action: "Clear line"
+        keys: ["Ctrl+U"]
+        context: "Text input"
+
+  special:
+    title: "Special Features"
+    icon: "✨"
+    shortcuts:
+      - action: "Copy selected text"
+        keys: ["Mouse select", "Cmd+C / Ctrl+C"]
+        context: "Terminal output"
+
+      - action: "Paste from clipboard"
+        keys: ["Cmd+V / Ctrl+V"]
+        context: "Text input fields"
+
+      - action: "Move cursor to start"
+        keys: ["Ctrl+A"]
+        context: "Text input"
+
+      - action: "Move cursor to end"
+        keys: ["Ctrl+E"]
+        context: "Text input"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TROUBLESHOOTING GUIDE
+# ═══════════════════════════════════════════════════════════════════════════
+
+troubleshooting:
+  api_issues:
+    title: "API Key / Authentication Issues"
+    icon: "🔑"
+    problems:
+      - issue: "Invalid API key error"
+        solutions:
+          - "Check key is copied correctly (no extra spaces/newlines)"
+          - "Verify you have the right key (Claude key vs OpenAI key)"
+          - "Confirm key hasn't been revoked or expired"
+          - "Try regenerating a new key on the provider's website"
+          - "Use Main menu → 🔑 Manage API Keys to verify"
+
+      - issue: "No API key found"
+        solutions:
+          - "Go to Main menu → 🔑 Manage API Keys"
+          - "Add the key for the agent you want to use"
+          - "Check environment variables (they override stored keys)"
+          - "Verify API_KEY_ENV variable is set correctly"
+
+      - issue: "API key rejected"
+        solutions:
+          - "API key might be invalid or expired"
+          - "Check API service status page"
+          - "Regenerate a fresh key"
+          - "Check you're using right service (not mixing Claude and OpenAI keys)"
+
+  agent_issues:
+    title: "Agent Connection Problems"
+    icon: "🤖"
+    problems:
+      - issue: "Agent not available"
+        solutions:
+          - "Check if API key is set for that agent"
+          - "Test agent connection: Main menu → 🔬 Test Agent Connections"
+          - "Check internet connection"
+          - "Verify API service is up (check their status page)"
+
+      - issue: "Agent timeout / slow response"
+        solutions:
+          - "API services can be slow during peak hours"
+          - "Try a different agent"
+          - "Simplify your prompt"
+          - "Check network connection"
+          - "Try again in a few moments"
+
+      - issue: "Model not available / outdated"
+        solutions:
+          - "Check model name is correct (e.g., claude-3-5-sonnet)"
+          - "API providers retire old models"
+          - "Create new agent with current model name"
+          - "Check API provider's documentation for available models"
+
+  file_issues:
+    title: "File or Storage Issues"
+    icon: "📁"
+    problems:
+      - issue: "File not found"
+        solutions:
+          - "Check file path is correct (absolute or relative)"
+          - "Verify file exists in that location"
+          - "Check file isn't in ignored directories"
+          - "Try using absolute path instead of relative"
+          - "Check file permissions (must be readable)"
+
+      - issue: "Permission denied"
+        solutions:
+          - "Check you have read/write permission for the file/folder"
+          - "Try selecting a different directory"
+          - "Check output folder settings"
+          - "Run TUI from a directory you have access to"
+
+      - issue: "Encoding error with file"
+        solutions:
+          - "Files must be UTF-8 encoded"
+          - "Convert file to UTF-8 in your editor"
+          - "Try resaving the file"
+          - "Use plain text editors (not Word docs)"
+
+  workflow_issues:
+    title: "Workflow Not Working"
+    icon: "🔄"
+    problems:
+      - issue: "Workflow stuck or hanging"
+        solutions:
+          - "Press Ctrl+C to cancel"
+          - "Test with Mock agent first"
+          - "Check internet connection"
+          - "Try smaller/simpler task"
+          - "Restart the TUI"
+
+      - issue: "Unexpected results from workflow"
+        solutions:
+          - "Refine your prompt to be more specific"
+          - "Try different agent (Claude vs GPT-4)"
+          - "Include more context in your prompt"
+          - "Try a simpler task first"
+
+      - issue: "Cannot save workflow results"
+        solutions:
+          - "Check output folder permissions"
+          - "Verify output folder exists"
+          - "Check disk space available"
+          - "Try enabling/disabling output folders: Main menu → 📁"
+
+  performance_issues:
+    title: "Performance / Speed Issues"
+    icon: "⚡"
+    problems:
+      - issue: "TUI is slow"
+        solutions:
+          - "Wait for current operation to complete"
+          - "Use faster agents (GPT-3.5 instead of GPT-4)"
+          - "Try with Mock agents (instant response)"
+          - "Close other applications to free memory"
+          - "Check system CPU/memory usage"
+
+      - issue: "Workflow takes too long"
+        solutions:
+          - "Use faster model (cost trade-off)"
+          - "Simplify your prompt"
+          - "Use Mock agent for testing first"
+          - "Check if agent is actually processing (not stuck)"
+
+  other_issues:
+    title: "Other Issues"
+    icon: "❓"
+    problems:
+      - issue: "Cannot create agent"
+        solutions:
+          - "Check agent name doesn't already exist"
+          - "Verify model name is correct"
+          - "Ensure you have required permissions"
+          - "Try simpler name (no special characters)"
+
+      - issue: "Settings not saving"
+        solutions:
+          - "Check write permissions in .startd8 folder"
+          - "Verify disk space is available"
+          - "Settings save to ~/.startd8/ directory"
+          - "Try restarting the TUI"
+
+      - issue: "Terminal display issues"
+        solutions:
+          - "Try resizing terminal window"
+          - "Ensure terminal supports color output"
+          - "Try different terminal (iTerm, alacritty, etc.)"
+          - "Check terminal font supports emoji"
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CONFIGURATION
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Map categories for quick navigation
+category_map:
+  faq: ["getting_started", "api_keys", "agents", "prompts", "workflows", "files", "troubleshooting", "performance"]
+  tips: ["productivity", "agent_tips", "prompt_tips", "features", "best_practices"]
+  shortcuts: ["navigation", "actions", "special"]
+  troubleshooting: ["api_issues", "agent_issues", "file_issues", "workflow_issues", "performance_issues", "other_issues"]
+
+# Help sections available in main help menu
+available_sections:
+  faq: true
+  tips: true
+  shortcuts: true
+  troubleshooting: true

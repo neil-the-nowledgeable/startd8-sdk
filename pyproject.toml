@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "startd8"
+version = "0.2.0"
+description = "Python SDK for StartDate (startd8) Agent Framework - Multi-LLM benchmarking and prompt management"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "StartDate Contributors", email = "contributors@startdate.dev"}
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Environment :: Console",
+]
+dependencies = [
+    "rich>=13.0.0",
+    "pydantic>=2.0.0",
+    "typer>=0.9.0",
+    "httpx>=0.25.0",
+    "questionary>=2.0.0",
+    "pyyaml>=6.0.0",
+]
+
+[project.optional-dependencies]
+anthropic = ["anthropic>=0.18.0"]
+openai = ["openai>=1.0.0"]
+all = [
+    "anthropic>=0.18.0",
+    "openai>=1.0.0",
+]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.0.0",
+    "pytest-mock>=3.10.0",
+    "black>=23.0.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
+    "hypothesis>=6.0.0",
+]
+
+[project.scripts]
+startd8 = "startd8.cli:app"
+startdate = "startd8.cli:app"
+
+[project.entry-points."startd8.providers"]
+anthropic = "startd8.providers.anthropic:AnthropicProvider"
+openai = "startd8.providers.openai:OpenAIProvider"
+ollama = "startd8.providers.openai:OllamaProvider"
+mock = "startd8.providers.mock:MockProvider"
+gemini = "startd8.providers.gemini:GeminiProvider"
+
+[project.urls]
+Homepage = "https://github.com/startdate/startd8"
+Repository = "https://github.com/startdate/startd8"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+startd8 = ["prompt_builder/templates/*.yaml"]
+
+
+
+

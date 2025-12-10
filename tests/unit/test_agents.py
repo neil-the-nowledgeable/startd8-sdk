@@ -249,7 +249,8 @@ class TestAgentCostTracking:
             name="test-budget",
             period=CostPeriod.DAILY,
             limit_amount=0.001,  # Very small budget
-            block_on_exceed=True  # Blocking
+            block_on_exceed=True,  # Blocking
+            scope_project="test-project"  # Scope to specific project
         )
         
         agent = MockAgent(name="test-agent", model="mock-model")
@@ -260,7 +261,8 @@ class TestAgentCostTracking:
         with pytest.raises(BudgetExceededError):
             agent.create_response(
                 prompt_id="test-123",
-                prompt="Test prompt"
+                prompt="Test prompt",
+                project="test-project"  # Match the budget scope
             )
     
     @pytest.mark.asyncio
@@ -271,7 +273,8 @@ class TestAgentCostTracking:
             name="test-budget",
             period=CostPeriod.DAILY,
             limit_amount=0.001,  # Very small budget
-            block_on_exceed=True  # Blocking
+            block_on_exceed=True,  # Blocking
+            scope_project="test-project"  # Scope to specific project
         )
         
         agent = MockAgent(name="test-agent", model="mock-model")
@@ -282,7 +285,8 @@ class TestAgentCostTracking:
         with pytest.raises(BudgetExceededError):
             await agent.acreate_response(
                 prompt_id="test-123",
-                prompt="Test prompt"
+                prompt="Test prompt",
+                project="test-project"  # Match the budget scope
             )
     
     def test_cost_record_includes_token_usage(self, cost_tracker):

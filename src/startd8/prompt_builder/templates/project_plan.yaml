@@ -1,0 +1,100 @@
+# Project Plan Template
+# Generate a high-level project plan
+
+id: project_plan
+name: Project Plan Prompt
+description: Generate a high-level project plan with timeline and milestones
+category: planning
+version: 1.0.0
+
+variables:
+  - name: PROJECT_NAME
+    description: Name of the project
+    required: true
+    input_type: text
+    order: 1
+  
+  - name: PROJECT_PATH
+    description: Path to the project directory (optional)
+    required: false
+    input_type: path
+    order: 2
+  
+  - name: TIMELINE
+    description: Expected timeline for the project
+    input_type: select
+    options: ["1 week", "2 weeks", "1 month", "3 months", "6 months"]
+    default: "2 weeks"
+    order: 3
+  
+  - name: TEAM_SIZE
+    description: Number of people working on the project
+    input_type: select
+    options: ["Solo (1)", "Small (2-3)", "Medium (4-6)", "Large (7+)"]
+    default: "Solo (1)"
+    order: 4
+  
+  - name: PROJECT_DESCRIPTION
+    description: Brief description of what the project does
+    required: false
+    input_type: multiline
+    default: ""
+    order: 5
+
+content: |
+  ## Task: Create Project Plan for {{PROJECT_NAME}}
+
+  ### Context
+  {{PROJECT_PATH|default="Review the project requirements"}}
+  
+  {{PROJECT_DESCRIPTION|default=""}}
+
+  ### Output Requirements
+  Create a project plan document with the following sections:
+
+  ---
+
+  #### Required Sections:
+
+  1. **Executive Summary**
+     - Project overview in 2-3 sentences
+     - Key objectives
+     - Expected outcomes
+
+  2. **Goals & Objectives**
+     - Primary goal
+     - Secondary goals (2-3)
+     - Success metrics
+
+  3. **Scope**
+     - What's included
+     - What's explicitly excluded
+     - Assumptions
+
+  4. **Timeline: {{TIMELINE}}**
+     - Phase breakdown
+     - Key milestones with dates
+     - Dependencies between phases
+
+  5. **Resources**
+     - Team size: {{TEAM_SIZE}}
+     - Required skills
+     - Tools and technologies
+
+  6. **Risks & Mitigations**
+     - Top 3-5 risks
+     - Mitigation strategies
+     - Contingency plans
+
+  7. **Success Criteria**
+     - Definition of "done"
+     - Acceptance criteria
+     - Quality gates
+
+  ---
+
+  ### Output Format
+  - Markdown document
+  - Use tables for timeline visualization
+  - Include Mermaid diagrams for dependencies if appropriate
+

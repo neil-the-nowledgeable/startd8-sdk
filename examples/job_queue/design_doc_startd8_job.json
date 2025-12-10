@@ -1,0 +1,23 @@
+{
+  "prompt": {
+    "content": "Create a technical design document for a REST API authentication system that supports:\n\n1. JWT-based authentication\n2. OAuth 2.0 integration\n3. API key management\n4. Rate limiting per user/key\n\nInclude:\n- Architecture overview\n- Database schema\n- API endpoints\n- Security considerations\n- Implementation phases",
+    "version": "1.0.0",
+    "tags": ["design", "api", "security", "architecture"],
+    "metadata": {
+      "document_type": "technical_design",
+      "complexity": "high"
+    }
+  },
+  "agents": ["claude", "gpt4"],
+  "priority": 5,
+  "metadata": {
+    "source": "example",
+    "category": "design-document",
+    "deadline": "2024-01-15"
+  }
+}
+
+
+
+
+

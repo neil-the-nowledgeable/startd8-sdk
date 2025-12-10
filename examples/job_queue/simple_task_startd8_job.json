@@ -1,0 +1,18 @@
+{
+  "prompt": {
+    "content": "Write a Python function that calculates the fibonacci sequence up to n terms. Include docstrings and type hints.",
+    "version": "1.0.0",
+    "tags": ["coding", "python", "algorithms"]
+  },
+  "agents": ["mock"],
+  "priority": 1,
+  "metadata": {
+    "source": "example",
+    "category": "code-generation"
+  }
+}
+
+
+
+
+

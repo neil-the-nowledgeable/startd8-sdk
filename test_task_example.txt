@@ -1,0 +1,31 @@
+Implement a comprehensive user authentication system with the following requirements:
+
+1. User Registration
+   - Email validation with proper regex
+   - Password strength requirements (min 8 chars, uppercase, lowercase, number, special char)
+   - Hash passwords using bcrypt
+   - Store user data in PostgreSQL database
+
+2. Login Functionality
+   - Authenticate with email and password
+   - Generate JWT tokens for session management
+   - Implement refresh token mechanism
+   - Add rate limiting to prevent brute force attacks
+
+3. Password Reset
+   - Email-based password reset flow
+   - Generate secure reset tokens with expiration
+   - Validate reset tokens before allowing password change
+
+4. Security Features
+   - Implement CSRF protection
+   - Add session timeout (30 minutes)
+   - Log failed login attempts
+   - Implement account lockout after 5 failed attempts
+
+5. Testing
+   - Unit tests for all authentication functions
+   - Integration tests for the full auth flow
+   - Security tests for common vulnerabilities
+
+Please use Flask as the web framework and SQLAlchemy for database operations.

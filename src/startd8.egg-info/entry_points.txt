@@ -1,0 +1,3 @@
+[console_scripts]
+startd8 = startd8.cli:app
+startdate = startd8.cli:app
