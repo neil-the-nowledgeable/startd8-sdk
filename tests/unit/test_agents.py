@@ -1,0 +1,502 @@
+"""
+Unit tests for agent implementations
+"""
+
+import pytest
+import asyncio
+from pathlib import Path
+import tempfile
+from unittest.mock import Mock, MagicMock, patch
+
+from startd8.agents import MockAgent, BaseAgent
+from startd8.models import TokenUsage
+from startd8.exceptions import APIError
+from startd8.costs.tracker import CostTracker
+from startd8.costs.store import CostStore
+from startd8.costs.pricing import PricingService
+from startd8.costs.budget import BudgetManager, BudgetExceededError
+from startd8.costs.models import CostPeriod
+from startd8.events import EventBus, EventType
+
+
+class TestMockAgent:
+    """Test MockAgent implementation"""
+    
+    def test_mock_agent_initialization(self):
+        """Test creating a mock agent"""
+        agent = MockAgent(name="test-mock", model="test-model")
+        assert agent.name == "test-mock"
+        assert agent.model == "test-model"
+    
+    def test_mock_agent_generate(self):
+        """Test mock agent generation"""
+        agent = MockAgent()
+        response_text, response_time_ms, token_usage = agent.generate("Test prompt")
+        
+        assert isinstance(response_text, str)
+        assert response_time_ms > 0
+        assert isinstance(token_usage, TokenUsage)
+        assert token_usage.total > 0
+    
+    def test_mock_agent_create_response(self):
+        """Test creating a response object"""
+        agent = MockAgent()
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt"
+        )
+        
+        assert response.prompt_id == "test-123"
+        assert response.agent_name == agent.name
+        assert response.model == agent.model
+        assert len(response.response) > 0
+
+
+class TestBaseAgent:
+    """Test BaseAgent abstract class"""
+    
+    def test_base_agent_cannot_be_instantiated(self):
+        """Test that BaseAgent cannot be instantiated directly"""
+        with pytest.raises(TypeError):
+            BaseAgent(name="test", model="test")
+    
+    def test_base_agent_requires_agenerate_implementation(self):
+        """Test that subclasses must implement agenerate"""
+        class IncompleteAgent(BaseAgent):
+            pass
+        
+        with pytest.raises(TypeError):
+            IncompleteAgent(name="test", model="test")
+
+
+class TestAsyncAgents:
+    """Test async agent functionality"""
+    
+    @pytest.mark.asyncio
+    async def test_mock_agent_agenerate(self):
+        """Test async generation with mock agent"""
+        agent = MockAgent()
+        response_text, response_time_ms, token_usage = await agent.agenerate("Test prompt")
+        
+        assert isinstance(response_text, str)
+        assert response_time_ms > 0
+        assert isinstance(token_usage, TokenUsage)
+        assert token_usage.total > 0
+    
+    @pytest.mark.asyncio
+    async def test_mock_agent_acreate_response(self):
+        """Test async response creation"""
+        agent = MockAgent()
+        response = await agent.acreate_response(
+            prompt_id="test-async-123",
+            prompt="Test async prompt"
+        )
+        
+        assert response.prompt_id == "test-async-123"
+        assert response.agent_name == agent.name
+        assert response.model == agent.model
+        assert len(response.response) > 0
+    
+    @pytest.mark.asyncio
+    async def test_parallel_agent_calls(self):
+        """Test running multiple agents in parallel"""
+        agents = [MockAgent(name=f"agent-{i}") for i in range(3)]
+        
+        # Run all agents in parallel
+        tasks = [agent.agenerate("Test prompt") for agent in agents]
+        results = await asyncio.gather(*tasks)
+        
+        assert len(results) == 3
+        for response_text, response_time_ms, token_usage in results:
+            assert isinstance(response_text, str)
+            assert response_time_ms > 0
+            assert isinstance(token_usage, TokenUsage)
+    
+    def test_sync_wrapper_calls_async(self):
+        """Test that sync generate method properly wraps async"""
+        agent = MockAgent()
+        response_text, response_time_ms, token_usage = agent.generate("Test prompt")
+        
+        assert isinstance(response_text, str)
+        assert response_time_ms > 0
+        assert isinstance(token_usage, TokenUsage)
+
+
+class TestAgentCostTracking:
+    """Test agent integration with cost tracking and budget enforcement (Phase 2 - Issue #1)"""
+    
+    @pytest.fixture
+    def store(self):
+        """Create a temporary cost store"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield CostStore(Path(tmpdir) / "test_costs.db")
+    
+    @pytest.fixture
+    def pricing(self):
+        """Create a pricing service"""
+        return PricingService()
+    
+    @pytest.fixture
+    def cost_tracker(self, store, pricing):
+        """Create a cost tracker"""
+        return CostTracker(store, pricing, enabled=True)
+    
+    @pytest.fixture
+    def budget_manager(self, store):
+        """Create a budget manager"""
+        return BudgetManager(store=store)
+    
+    @pytest.fixture
+    def agent_with_tracking(self, cost_tracker, budget_manager):
+        """Create a mock agent with cost tracking"""
+        return MockAgent(
+            name="tracked-agent",
+            model="mock-model"
+        )
+    
+    def test_agent_accepts_cost_tracker_and_budget_manager(self, cost_tracker, budget_manager):
+        """Test that agent can be initialized with cost tracker and budget manager"""
+        agent = MockAgent(name="test", model="test-model")
+        agent.cost_tracker = cost_tracker
+        agent.budget_manager = budget_manager
+        
+        assert agent.cost_tracker is cost_tracker
+        assert agent.budget_manager is budget_manager
+    
+    def test_agent_works_without_cost_tracker(self):
+        """Test that agent works gracefully when cost_tracker is None"""
+        agent = MockAgent(name="test", model="test-model")
+        
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt"
+        )
+        
+        assert response.prompt_id == "test-123"
+        assert len(response.response) > 0
+    
+    def test_agent_works_without_budget_manager(self, cost_tracker):
+        """Test that agent works and records cost without budget_manager"""
+        agent = MockAgent(name="test", model="test-model")
+        agent.cost_tracker = cost_tracker
+        
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt"
+        )
+        
+        assert response.prompt_id == "test-123"
+        assert len(response.response) > 0
+    
+    @pytest.mark.asyncio
+    async def test_async_cost_recording(self, cost_tracker):
+        """Test that async response creation records cost"""
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        response = await agent.acreate_response(
+            prompt_id="test-123",
+            prompt="Test prompt"
+        )
+        
+        assert response.prompt_id == "test-123"
+        assert response.token_usage is not None
+        assert response.token_usage.input > 0
+        assert response.token_usage.output > 0
+    
+    def test_sync_cost_recording(self, cost_tracker):
+        """Test that sync response creation records cost"""
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt"
+        )
+        
+        assert response.prompt_id == "test-123"
+        assert response.token_usage is not None
+        assert response.token_usage.input > 0
+        assert response.token_usage.output > 0
+    
+    def test_budget_warning_with_non_blocking(self, cost_tracker, budget_manager):
+        """Test that non-blocking budget warning allows flow to continue"""
+        # Create a budget that will be exceeded
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=0.001,  # Very small budget
+            block_on_exceed=False  # Non-blocking (default)
+        )
+        
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        agent.budget_manager = budget_manager
+        
+        # Should not raise an exception (non-blocking)
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt"
+        )
+        
+        assert response is not None
+        assert len(response.response) > 0
+    
+    def test_budget_check_before_api_call(self, cost_tracker, budget_manager):
+        """Test that budget check happens before API call"""
+        # Create a budget that will be exceeded
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=0.001,  # Very small budget
+            block_on_exceed=True  # Blocking
+        )
+        
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        agent.budget_manager = budget_manager
+        
+        # Should raise BudgetExceededError before making the call
+        with pytest.raises(BudgetExceededError):
+            agent.create_response(
+                prompt_id="test-123",
+                prompt="Test prompt"
+            )
+    
+    @pytest.mark.asyncio
+    async def test_async_budget_check(self, cost_tracker, budget_manager):
+        """Test that async path also respects budget enforcement"""
+        # Create a budget that will be exceeded
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=0.001,  # Very small budget
+            block_on_exceed=True  # Blocking
+        )
+        
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        agent.budget_manager = budget_manager
+        
+        # Should raise BudgetExceededError
+        with pytest.raises(BudgetExceededError):
+            await agent.acreate_response(
+                prompt_id="test-123",
+                prompt="Test prompt"
+            )
+    
+    def test_cost_record_includes_token_usage(self, cost_tracker):
+        """Test that recorded cost includes token usage from response"""
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt"
+        )
+        
+        # Cost should be recorded with token usage
+        assert response.token_usage is not None
+        assert response.token_usage.input > 0
+        assert response.token_usage.output > 0
+        
+        # Verify it was actually recorded in the store
+        records = cost_tracker.store.query()
+        assert len(records) > 0
+    
+    def test_cost_event_emission(self, cost_tracker):
+        """Test that COST_RECORDED event is emitted"""
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        # Track emitted events
+        events_received = []
+        
+        def event_handler(event):
+            events_received.append(event)
+        
+        EventBus.subscribe(EventType.COST_RECORDED, event_handler)
+        
+        try:
+            response = agent.create_response(
+                prompt_id="test-123",
+                prompt="Test prompt"
+            )
+            
+            # Should have emitted COST_RECORDED event
+            assert len(events_received) > 0
+            cost_event = events_received[0]
+            assert cost_event.type == EventType.COST_RECORDED
+        finally:
+            EventBus.unsubscribe(EventType.COST_RECORDED, event_handler)
+    
+    def test_project_and_tags_flow_to_cost_record(self, cost_tracker):
+        """Test that project and tags are applied to cost record"""
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt",
+            metadata={"project": "my-project", "tags": ["v1", "feature-x"]}
+        )
+        
+        # Verify cost was recorded with metadata
+        records = cost_tracker.store.query()
+        assert len(records) > 0
+    
+    def test_multiple_sequential_calls(self, cost_tracker):
+        """Test that context persists and costs are recorded for multiple calls"""
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        # Make multiple calls
+        response1 = agent.create_response(
+            prompt_id="test-1",
+            prompt="First prompt"
+        )
+        
+        response2 = agent.create_response(
+            prompt_id="test-2",
+            prompt="Second prompt"
+        )
+        
+        # Both should be recorded
+        records = cost_tracker.store.query()
+        assert len(records) >= 2
+    
+    @pytest.mark.asyncio
+    async def test_async_sync_parity(self, cost_tracker):
+        """Test that async and sync paths produce identical behavior"""
+        # Create two identical agents
+        agent_sync = MockAgent(name="sync-agent", model="mock-model")
+        agent_sync.cost_tracker = cost_tracker
+        
+        agent_async = MockAgent(name="async-agent", model="mock-model")
+        agent_async.cost_tracker = cost_tracker
+        
+        # Make sync call
+        response_sync = agent_sync.create_response(
+            prompt_id="sync-test",
+            prompt="Test prompt"
+        )
+        
+        # Make async call
+        response_async = await agent_async.acreate_response(
+            prompt_id="async-test",
+            prompt="Test prompt"
+        )
+        
+        # Both should have recorded costs
+        records = cost_tracker.store.query()
+        assert len(records) >= 2
+        
+        # Token usage should be similar (same model, same prompt)
+        assert response_sync.token_usage.total > 0
+        assert response_async.token_usage.total > 0
+    
+    def test_metadata_passed_to_cost_record(self, cost_tracker):
+        """Test that metadata is passed through to cost record"""
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        metadata = {
+            "custom_field": "custom_value",
+            "request_id": "req-123"
+        }
+        
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt",
+            metadata=metadata
+        )
+        
+        # Verify metadata was recorded
+        records = cost_tracker.store.query()
+        assert len(records) > 0
+        assert records[0].metadata is not None
+    
+    @pytest.mark.asyncio
+    async def test_cost_tracking_with_context_defaults(self, cost_tracker):
+        """Test that cost tracking respects context defaults from Issue #3"""
+        from startd8.costs import set_cost_context, get_cost_context, clear_cost_context
+        
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        try:
+            # Set context defaults
+            set_cost_context(project="context-project", tags=["context-tag"])
+            
+            # Make a call
+            response = await agent.acreate_response(
+                prompt_id="test-123",
+                prompt="Test prompt"
+            )
+            
+            # Cost should be recorded
+            assert response is not None
+            records = cost_tracker.store.query()
+            assert len(records) > 0
+            
+        finally:
+            clear_cost_context()
+    
+    def test_cost_tracker_disabled_graceful(self):
+        """Test that agent works when cost tracking is disabled"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            store = CostStore(Path(tmpdir) / "test_costs.db")
+            pricing = PricingService()
+            cost_tracker = CostTracker(store, pricing, enabled=False)
+            
+            agent = MockAgent(name="test-agent", model="mock-model")
+            agent.cost_tracker = cost_tracker
+            
+            # Should not raise an error
+            response = agent.create_response(
+                prompt_id="test-123",
+                prompt="Test prompt"
+            )
+            
+            assert response is not None
+    
+    def test_concurrent_cost_tracking(self, cost_tracker):
+        """Test that concurrent calls are tracked correctly"""
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        # Make multiple concurrent-ish calls
+        responses = []
+        for i in range(3):
+            response = agent.create_response(
+                prompt_id=f"test-{i}",
+                prompt=f"Test prompt {i}"
+            )
+            responses.append(response)
+        
+        # All should be recorded
+        records = cost_tracker.store.query()
+        assert len(records) >= 3
+    
+    @pytest.mark.asyncio
+    async def test_error_handling_in_cost_tracking(self, cost_tracker):
+        """Test that errors in API call don't break cost tracking"""
+        # Create a mock agent that raises an error
+        class ErrorAgent(BaseAgent):
+            async def agenerate(self, prompt: str):
+                raise RuntimeError("Simulated API error")
+        
+        agent = ErrorAgent(name="error-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        
+        # Should raise the error, but not crash the cost tracking system
+        with pytest.raises(RuntimeError):
+            await agent.acreate_response(
+                prompt_id="test-123",
+                prompt="Test prompt"
+            )
+
+
+
+
+
