@@ -141,6 +141,28 @@ class CostStore:
                 )
             """)
             
+            # Normalized tags table (Phase 4: Tag Normalization)
+            # Junction table for cost_records and tags (many-to-many)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS cost_record_tags (
+                    cost_record_id TEXT NOT NULL,
+                    tag TEXT NOT NULL,
+                    PRIMARY KEY (cost_record_id, tag),
+                    FOREIGN KEY (cost_record_id) REFERENCES cost_records(id) ON DELETE CASCADE
+                )
+            """)
+            
+            # Create indexes for fast lookups
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_cost_record_tags_tag 
+                ON cost_record_tags(tag)
+            """)
+            
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_cost_record_tags_record 
+                ON cost_record_tags(cost_record_id)
+            """)
+            
             # Events table (for critical events only)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS events (
@@ -178,15 +200,69 @@ class CostStore:
             
             conn.commit()
     
+    def migrate_tags_to_normalized_table(self) -> int:
+        """
+        Migrate tags from cost_records.tags JSON to cost_record_tags table.
+        
+        This is an idempotent operation - safe to run multiple times.
+        Already-migrated records are skipped using INSERT OR IGNORE.
+        
+        Returns:
+            Number of tag records inserted
+            
+        Example:
+            store = CostStore(Path("~/.startd8/costs.db"))
+            count = store.migrate_tags_to_normalized_table()
+            logger.info(f"Migrated {count} tag entries")
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            migrated_count = 0
+            
+            # Get all cost records with non-empty tags
+            records = cursor.execute(
+                "SELECT id, tags FROM cost_records WHERE tags IS NOT NULL AND tags != '[]'"
+            ).fetchall()
+            
+            logger.info(f"Starting tag migration for {len(records)} records")
+            
+            for record in records:
+                record_id = record["id"]
+                tags_json = record["tags"]
+                
+                try:
+                    # Parse JSON tags
+                    tags = json.loads(tags_json) if tags_json else []
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Invalid JSON tags for record {record_id}: {tags_json}. Error: {e}")
+                    continue
+                
+                # Insert each tag (duplicates ignored due to PRIMARY KEY)
+                for tag in tags:
+                    try:
+                        cursor.execute(
+                            "INSERT OR IGNORE INTO cost_record_tags (cost_record_id, tag) VALUES (?, ?)",
+                            (record_id, tag)
+                        )
+                        migrated_count += 1
+                    except Exception as e:
+                        logger.error(f"Error inserting tag '{tag}' for record {record_id}: {e}")
+            
+            conn.commit()
+            logger.info(f"Migration completed: {migrated_count} tag entries migrated")
+            return migrated_count
+    
     def save(self, record: CostRecord) -> None:
         """
-        Save a cost record.
+        Save a cost record and its tags to normalized table (Phase 4).
         
         Args:
             record: CostRecord to save
         """
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            
+            # Save cost record
             cursor.execute("""
                 INSERT OR REPLACE INTO cost_records (
                     id, timestamp, agent_name, model, provider,
@@ -216,6 +292,24 @@ class CostStore:
                 record.correlation_id,
                 json.dumps(record.metadata)
             ))
+            
+            # Phase 4: Save tags to normalized table
+            # First, clean up old tags for this record
+            cursor.execute(
+                "DELETE FROM cost_record_tags WHERE cost_record_id = ?",
+                (record.id,)
+            )
+            
+            # Then insert new tags
+            for tag in record.tags:
+                try:
+                    cursor.execute(
+                        "INSERT INTO cost_record_tags (cost_record_id, tag) VALUES (?, ?)",
+                        (record.id, tag)
+                    )
+                except Exception as e:
+                    logger.error(f"Error saving tag '{tag}' for record {record.id}: {e}")
+            
             conn.commit()
     
     def query(
@@ -229,7 +323,7 @@ class CostStore:
         limit: Optional[int] = None
     ) -> List[CostRecord]:
         """
-        Query cost records with filters.
+        Query cost records with filters using SQL-based tag filtering (Phase 4).
         
         Args:
             start: Start time (inclusive)
@@ -237,7 +331,7 @@ class CostStore:
             project: Filter by project
             model: Filter by model
             agent: Filter by agent name
-            tags: Filter by tags (any match)
+            tags: Filter by tags (any match, uses SQL JOINs)
             limit: Maximum number of records to return
             
         Returns:
@@ -246,33 +340,45 @@ class CostStore:
         conditions = []
         params = []
         
+        # Base query with optional JOIN for tags
+        base_query = "SELECT DISTINCT cr.* FROM cost_records cr"
+        
+        # Add JOIN if filtering by tags
+        if tags:
+            base_query += " JOIN cost_record_tags crt ON cr.id = crt.cost_record_id"
+        
+        # Build WHERE conditions
         if start:
-            conditions.append("timestamp >= ?")
+            conditions.append("cr.timestamp >= ?")
             params.append(start.isoformat())
         
         if end:
-            conditions.append("timestamp < ?")
+            conditions.append("cr.timestamp < ?")
             params.append(end.isoformat())
         
         if project:
-            conditions.append("project = ?")
+            conditions.append("cr.project = ?")
             params.append(project)
         
         if model:
-            conditions.append("model = ?")
+            conditions.append("cr.model = ?")
             params.append(model)
         
         if agent:
-            conditions.append("agent_name = ?")
+            conditions.append("cr.agent_name = ?")
             params.append(agent)
         
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        # Add tag filtering to WHERE clause
+        if tags:
+            placeholders = ",".join("?" * len(tags))
+            conditions.append(f"crt.tag IN ({placeholders})")
+            params.extend(tags)
         
-        query = f"""
-            SELECT * FROM cost_records
-            WHERE {where_clause}
-            ORDER BY timestamp DESC
-        """
+        # Build final query
+        query = base_query
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY cr.timestamp DESC"
         
         if limit:
             query += f" LIMIT {limit}"
@@ -285,11 +391,6 @@ class CostStore:
         records = []
         for row in rows:
             record = self._row_to_cost_record(row)
-            
-            # Filter by tags if specified
-            if tags and not any(t in record.tags for t in tags):
-                continue
-            
             records.append(record)
         
         return records
@@ -327,14 +428,14 @@ class CostStore:
         tags: Optional[List[str]] = None
     ) -> float:
         """
-        Get total cost for a time period with filters.
+        Get total cost for a time period with filters using SQL JOINs (Phase 4).
         
         Args:
             start: Start time (inclusive)
             end: End time (exclusive)
             project: Filter by project
             model: Filter by model
-            tags: Filter by tags (any match)
+            tags: Filter by tags (any match, uses SQL JOINs)
             
         Returns:
             Total cost in USD
@@ -342,40 +443,46 @@ class CostStore:
         conditions = []
         params = []
         
+        # Base query with optional JOIN for tags
+        base_query = "SELECT COALESCE(SUM(cr.total_cost), 0.0) as total FROM cost_records cr"
+        
+        # Add JOIN if filtering by tags
+        if tags:
+            base_query += " JOIN cost_record_tags crt ON cr.id = crt.cost_record_id"
+        
+        # Build WHERE conditions
         if start:
-            conditions.append("timestamp >= ?")
+            conditions.append("cr.timestamp >= ?")
             params.append(start.isoformat())
         
         if end:
-            conditions.append("timestamp < ?")
+            conditions.append("cr.timestamp < ?")
             params.append(end.isoformat())
         
         if project:
-            conditions.append("project = ?")
+            conditions.append("cr.project = ?")
             params.append(project)
         
         if model:
-            conditions.append("model = ?")
+            conditions.append("cr.model = ?")
             params.append(model)
         
-        where_clause = " AND ".join(conditions) if conditions else "1=1"
+        # Add tag filtering to WHERE clause
+        if tags:
+            placeholders = ",".join("?" * len(tags))
+            conditions.append(f"crt.tag IN ({placeholders})")
+            params.extend(tags)
         
-        query = f"""
-            SELECT SUM(total_cost) as total
-            FROM cost_records
-            WHERE {where_clause}
-        """
+        # Build final query
+        query = base_query
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
         
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(query, params)
             row = cursor.fetchone()
-            total = row["total"] if row["total"] is not None else 0.0
-        
-        # If tags filter is specified, need to fetch records and filter
-        if tags:
-            records = self.query(start=start, end=end, project=project, model=model, tags=tags)
-            total = sum(r.total_cost for r in records)
+            total = row["total"] if row and row["total"] is not None else 0.0
         
         return total
     
