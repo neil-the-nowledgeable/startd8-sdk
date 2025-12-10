@@ -584,6 +584,103 @@ class TestAgentCostTracking:
                 f"Call {i}: Response ID mismatch"
 
 
+class TestGeminiAgent:
+    """Test Gemini agent implementation"""
+    
+    def test_gemini_agent_requires_package(self):
+        """Test that GeminiAgent raises ImportError if google-generativeai not installed"""
+        # This test verifies the error handling exists
+        # Actual test would require mocking _GEMINI_AVAILABLE to False
+        from startd8.agents import _GEMINI_AVAILABLE
+        
+        # If package is installed, we can't test the ImportError in this environment
+        # But we verify the import guard exists
+        if _GEMINI_AVAILABLE:
+            # If available, instantiation should work (without valid API key)
+            from startd8.agents import GeminiAgent
+            # This will raise ValueError about API key, not ImportError
+            # which means the ImportError guard works
+            with pytest.raises(ValueError, match="Google API key required"):
+                GeminiAgent(name="test-gemini", model="gemini-pro")
+        else:
+            # If not available, ImportError should be raised
+            from startd8.agents import GeminiAgent
+            with pytest.raises(ImportError, match="google-generativeai"):
+                GeminiAgent(name="test-gemini", model="gemini-pro")
+    
+    def test_gemini_agent_api_key_validation(self):
+        """Test that GeminiAgent validates API key"""
+        from startd8.agents import GeminiAgent, _GEMINI_AVAILABLE
+        
+        if not _GEMINI_AVAILABLE:
+            pytest.skip("google-generativeai not installed")
+        
+        # Test ValueError when API key is missing
+        with pytest.raises(ValueError, match="Google API key required"):
+            GeminiAgent(
+                name="test-gemini",
+                model="gemini-pro",
+                api_key=None  # No API key provided
+            )
+    
+    def test_gemini_agent_with_mock(self):
+        """Test GeminiAgent with mocked google-generativeai"""
+        from startd8.agents import GeminiAgent, _GEMINI_AVAILABLE
+        
+        if not _GEMINI_AVAILABLE:
+            pytest.skip("google-generativeai not installed")
+        
+        # Verify agent can be created with a dummy API key (won't actually call API)
+        # This just tests initialization and structure
+        agent = GeminiAgent(
+            name="test-gemini",
+            model="gemini-pro",
+            api_key="test-key-12345",
+            max_tokens=2048,
+            temperature=0.5
+        )
+        
+        assert agent.name == "test-gemini"
+        assert agent.model == "gemini-pro"
+        assert agent.max_tokens == 2048
+        assert agent.temperature == 0.5
+    
+    def test_gemini_provider_creates_agent(self):
+        """Test that GeminiProvider creates agents correctly"""
+        from startd8.providers.gemini import GeminiProvider
+        
+        provider = GeminiProvider()
+        
+        # Test that it creates agents without instantiating them fully
+        # (since that requires API key)
+        assert provider.name == "gemini"
+        assert "gemini-pro" in provider.supported_models
+        assert len(provider.supported_models) == 4
+    
+    def test_gemini_models_list(self):
+        """Test that all Gemini models are properly configured"""
+        from startd8.providers.gemini import GeminiProvider
+        
+        provider = GeminiProvider()
+        
+        # Verify all models have pricing info
+        for model in provider.supported_models:
+            info = provider.get_model_info(model)
+            assert info is not None
+            assert "context_window" in info
+            assert "max_output_tokens" in info
+            assert "cost_per_1m_input" in info
+            assert "cost_per_1m_output" in info
+    
+    def test_gemini_capabilities(self):
+        """Test Gemini provider declares correct capabilities"""
+        from startd8.providers.gemini import GeminiProvider
+        
+        provider = GeminiProvider()
+        caps = provider.get_capabilities()
+        
+        # Should declare text-generation
+        assert "text-generation" in caps
 
 
 

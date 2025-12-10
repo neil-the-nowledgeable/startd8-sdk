@@ -78,12 +78,13 @@ class GeminiProvider:
             name: Optional agent name (defaults to model-based name)
             **config: Configuration options
                 - api_key: Google API key (or use GOOGLE_API_KEY env var)
+                - max_tokens: Maximum tokens to generate (default: 4096)
+                - temperature: Sampling temperature (default: 0.7)
                 - cost_tracker: Optional cost tracker instance
                 - budget_manager: Optional budget manager instance
         
-        Note:
-            Full Gemini implementation requires google-generativeai package.
-            Install with: pip install google-generativeai
+        Returns:
+            Configured GeminiAgent instance
         """
         if model not in self.MODELS:
             raise ValueError(
@@ -100,10 +101,16 @@ class GeminiProvider:
             else:
                 name = model
         
+        from ..agents import GeminiAgent
+        
         return GeminiAgent(
             name=name,
             model=model,
-            api_key=config.get('api_key')
+            api_key=config.get('api_key'),
+            max_tokens=config.get('max_tokens', 4096),
+            temperature=config.get('temperature', 0.7),
+            cost_tracker=config.get('cost_tracker'),
+            budget_manager=config.get('budget_manager')
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:

@@ -2,11 +2,15 @@
 Agent implementations for different LLM providers
 """
 
+import os
 import time
 import asyncio
 import uuid
+import logging
 from abc import ABC, abstractmethod
 from typing import Optional, Dict, Any, Tuple
+
+logger = logging.getLogger(__name__)
 
 # Optional dependencies - import with clear error messages
 try:
@@ -26,6 +30,16 @@ except ImportError:
     _OPENAI_AVAILABLE = False
 else:
     _OPENAI_AVAILABLE = True
+
+try:
+    import google.generativeai as genai
+    from google.generativeai.types import GenerationConfig
+except ImportError:
+    genai = None
+    GenerationConfig = None
+    _GEMINI_AVAILABLE = False
+else:
+    _GEMINI_AVAILABLE = True
 
 from .models import TokenUsage, AgentResponse
 
@@ -445,31 +459,131 @@ class GPT4Agent(BaseAgent):
 
 
 class GeminiAgent(BaseAgent):
-    """Google Gemini agent (placeholder - requires google-generativeai)"""
+    """Google Gemini agent with async support"""
     
     def __init__(
         self,
         name: str = "gemini",
         model: str = "gemini-pro",
-        api_key: Optional[str] = None
+        api_key: Optional[str] = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        cost_tracker: Optional['CostTracker'] = None,
+        budget_manager: Optional['BudgetManager'] = None
     ):
         """
         Initialize Gemini agent
         
         Args:
             name: Agent identifier
-            model: Gemini model to use
-            api_key: Google API key
+            model: Gemini model to use (e.g., 'gemini-pro', 'gemini-1.5-pro')
+            api_key: Google API key (uses GOOGLE_API_KEY env var if not provided)
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature (0.0 to 2.0)
+            cost_tracker: Optional cost tracker for recording costs
+            budget_manager: Optional budget manager for enforcing limits
+            
+        Raises:
+            ImportError: If google-generativeai package is not installed
+            ValueError: If API key is not provided and not in environment
         """
-        super().__init__(name, model)
-        self.api_key = api_key
+        super().__init__(name, model, cost_tracker, budget_manager)
+        
+        if not _GEMINI_AVAILABLE:
+            raise ImportError(
+                "google-generativeai package not installed. "
+                "Install with: pip install startd8[gemini] or pip install google-generativeai"
+            )
+        
+        # Get API key from parameter or environment
+        if api_key is None:
+            api_key = os.getenv('GOOGLE_API_KEY')
+        
+        if not api_key:
+            raise ValueError(
+                "Google API key required. "
+                "Set GOOGLE_API_KEY environment variable or pass api_key parameter."
+            )
+        
+        # Configure the API
+        genai.configure(api_key=api_key)
+        
+        # Create the model instance with generation config
+        generation_config = GenerationConfig(
+            max_output_tokens=max_tokens,
+            temperature=temperature,
+        )
+        
+        self.model_instance = genai.GenerativeModel(
+            model_name=self.model,
+            generation_config=generation_config
+        )
+        
+        self.max_tokens = max_tokens
+        self.temperature = temperature
     
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
-        """Generate response using Gemini"""
-        raise NotImplementedError(
-            "Gemini agent requires google-generativeai package. "
-            "Install with: pip install google-generativeai"
+        """
+        Generate response using Gemini async API
+        
+        Args:
+            prompt: The prompt text
+            
+        Returns:
+            Tuple of (response_text, response_time_ms, token_usage)
+            
+        Raises:
+            RuntimeError: If Gemini API call fails
+        """
+        start_time = time.time()
+        
+        try:
+            # google-generativeai doesn't have native async,
+            # but we can use asyncio to run it in thread pool
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self.model_instance.generate_content(prompt)
+            )
+        except Exception as e:
+            raise RuntimeError(f"Gemini API call failed: {e}") from e
+        
+        end_time = time.time()
+        response_time_ms = int((end_time - start_time) * 1000)
+        
+        # Extract response text
+        if not response.text:
+            raise RuntimeError(
+                f"Gemini returned empty response. "
+                f"Finish reason: {response.finish_reason}"
+            )
+        
+        response_text = response.text
+        
+        # Google Gemini doesn't provide token counts in standard API response,
+        # so we need to use the countTokens method
+        try:
+            # Count input tokens
+            input_count_response = self.model_instance.count_tokens(prompt)
+            input_tokens = input_count_response.total_tokens
+            
+            # Count output tokens (response text)
+            output_count_response = self.model_instance.count_tokens(response_text)
+            output_tokens = output_count_response.total_tokens
+        except Exception as e:
+            # If token counting fails, provide reasonable estimates
+            # ~1.3 tokens per word as rough estimate
+            input_tokens = max(1, int(len(prompt.split()) / 1.3))
+            output_tokens = max(1, int(len(response_text.split()) / 1.3))
+            logger.warning(f"Failed to count tokens, using estimate: {e}")
+        
+        token_usage = TokenUsage(
+            input=int(input_tokens),
+            output=int(output_tokens),
+            total=int(input_tokens + output_tokens)
         )
+        
+        return response_text, response_time_ms, token_usage
 
 
 class OpenAICompatibleAgent(BaseAgent):

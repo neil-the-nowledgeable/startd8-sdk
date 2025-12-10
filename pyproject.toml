@@ -36,9 +36,11 @@ dependencies = [
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.18.0"]
 openai = ["openai>=1.0.0"]
+gemini = ["google-generativeai>=0.3.0"]
 all = [
     "anthropic>=0.18.0",
     "openai>=1.0.0",
+    "google-generativeai>=0.3.0",
 ]
 dev = [
     "pytest>=7.0.0",
