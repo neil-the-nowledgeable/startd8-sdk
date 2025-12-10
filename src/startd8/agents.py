@@ -47,12 +47,14 @@ from .models import TokenUsage, AgentResponse
 try:
     from .costs import CostTracker, BudgetManager, get_cost_context
     from .costs.budget import BudgetExceededError
+    from .costs.pricing import PricingService
     _COSTS_AVAILABLE = True
 except ImportError:
     CostTracker = None
     BudgetManager = None
     get_cost_context = None
     BudgetExceededError = None
+    PricingService = None
     _COSTS_AVAILABLE = False
 
 
@@ -150,7 +152,9 @@ class BaseAgent(ABC):
             BudgetExceededError: If budget check fails with block_on_exceed=True
         """
         # STEP 1: Pre-call budget check
-        if self.cost_tracker and self.budget_manager and _COSTS_AVAILABLE:
+        # Note: Budget enforcement works independently from cost tracking
+        # We only need budget_manager, not cost_tracker
+        if self.budget_manager and _COSTS_AVAILABLE:
             # Get context defaults (Phase 1 integration)
             context = get_cost_context() if get_cost_context else {}
             
@@ -158,7 +162,13 @@ class BaseAgent(ABC):
             effective_project = project or context.get("project")
             
             # Estimate cost from pricing service
-            estimated_cost = self.cost_tracker.pricing.estimate_cost(
+            # Use cost_tracker's pricing if available, otherwise create a new PricingService
+            if self.cost_tracker:
+                pricing = self.cost_tracker.pricing
+            else:
+                pricing = PricingService()
+            
+            estimated_cost = pricing.estimate_cost(
                 model=self.model,
                 prompt_chars=len(prompt),
                 expected_output_chars=500  # Conservative estimate

@@ -683,4 +683,174 @@ class TestGeminiAgent:
         assert "text-generation" in caps
 
 
+class TestBudgetCostTrackerCoupling:
+    """Test that budget enforcement works independently from cost tracking (Issue 3)"""
+    
+    @pytest.fixture
+    def store(self):
+        """Create a temporary cost store"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            yield CostStore(Path(tmpdir) / "test_costs.db")
+    
+    @pytest.fixture
+    def pricing(self):
+        """Create a pricing service"""
+        return PricingService()
+    
+    @pytest.fixture
+    def budget_manager(self, store):
+        """Create a budget manager"""
+        return BudgetManager(store=store)
+    
+    def test_budget_check_without_cost_tracker(self, budget_manager):
+        """Test that budget enforcement works WITHOUT cost_tracker (Issue 3 fix)"""
+        # Create a budget
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=100.0,  # High limit
+            block_on_exceed=False,
+            scope_project="test-project"
+        )
+        
+        # Create agent with ONLY budget_manager, NO cost_tracker
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.budget_manager = budget_manager
+        agent.cost_tracker = None  # Explicitly no cost tracker
+        
+        # This should work without errors (budget check should still run)
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt",
+            project="test-project"
+        )
+        
+        assert response is not None
+        assert len(response.response) > 0
+    
+    def test_budget_enforcement_without_cost_tracker(self, budget_manager):
+        """Test that budget blocking works WITHOUT cost_tracker (Issue 3 fix)"""
+        # Create a very restrictive budget
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=0.0001,  # Very small limit
+            block_on_exceed=True,  # BLOCK on exceed
+            scope_project="test-project"
+        )
+        
+        # Create agent with ONLY budget_manager, NO cost_tracker
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.budget_manager = budget_manager
+        agent.cost_tracker = None  # Explicitly no cost tracker
+        
+        # This should raise BudgetExceededError because budget is exceeded
+        # The budget check should work WITHOUT cost_tracker
+        with pytest.raises(BudgetExceededError):
+            agent.create_response(
+                prompt_id="test-123",
+                prompt="Test prompt",
+                project="test-project"
+            )
+    
+    def test_budget_with_cost_tracker_and_budget_manager(self, budget_manager, store, pricing):
+        """Test that budget works when BOTH cost_tracker AND budget_manager are configured"""
+        cost_tracker = CostTracker(store, pricing, enabled=True)
+        
+        # Create a restrictive budget
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=0.0001,  # Very small
+            block_on_exceed=True,
+            scope_project="test-project"
+        )
+        
+        # Create agent with BOTH cost_tracker AND budget_manager
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.cost_tracker = cost_tracker
+        agent.budget_manager = budget_manager
+        
+        # Should raise BudgetExceededError
+        with pytest.raises(BudgetExceededError):
+            agent.create_response(
+                prompt_id="test-123",
+                prompt="Test prompt",
+                project="test-project"
+            )
+    
+    def test_budget_uses_pricing_service_without_cost_tracker(self, budget_manager):
+        """Test that budget uses PricingService when cost_tracker not available"""
+        # This test verifies the fix: budget check uses PricingService independently
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=100.0,  # High limit so it doesn't exceed
+            block_on_exceed=False,
+            scope_project="test-project"
+        )
+        
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.budget_manager = budget_manager
+        agent.cost_tracker = None
+        
+        # Should work fine - budget check uses standalone PricingService
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt",
+            project="test-project"
+        )
+        
+        assert response is not None
+    
+    @pytest.mark.asyncio
+    async def test_async_budget_without_cost_tracker(self, budget_manager):
+        """Test that async budget check works without cost_tracker (Issue 3 fix)"""
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=0.0001,  # Very small
+            block_on_exceed=True,
+            scope_project="test-project"
+        )
+        
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.budget_manager = budget_manager
+        agent.cost_tracker = None  # NO cost tracker
+        
+        # Async path should also enforce budget without cost_tracker
+        with pytest.raises(BudgetExceededError):
+            await agent.acreate_response(
+                prompt_id="test-123",
+                prompt="Test prompt",
+                project="test-project"
+            )
+    
+    def test_budget_ignores_missing_project(self, budget_manager):
+        """Test that budget check safely handles missing project"""
+        # Budget requires a project scope
+        budget = budget_manager.create_budget(
+            name="test-budget",
+            period=CostPeriod.DAILY,
+            limit_amount=0.0001,
+            block_on_exceed=True,
+            scope_project="required-project"
+        )
+        
+        agent = MockAgent(name="test-agent", model="mock-model")
+        agent.budget_manager = budget_manager
+        agent.cost_tracker = None
+        
+        # Without matching project, budget shouldn't block
+        # (budget check only runs if effective_project is provided)
+        response = agent.create_response(
+            prompt_id="test-123",
+            prompt="Test prompt",
+            project="different-project"  # Different project
+        )
+        
+        # Should succeed because budget scope doesn't match
+        assert response is not None
+
+
 
