@@ -405,91 +405,88 @@ class TestMCPGatewayInputValidation:
     """Tests for gateway input validation."""
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_empty_skill_id_raises(self, mock_anthropic):
+    async def test_empty_skill_id_raises(self):
         """Test that empty skill_id raises ValueError."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        with pytest.raises(ValueError, match="skill_id must be a non-empty string"):
-            await gateway.execute_skill(skill_id="", prompt="test")
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                with pytest.raises(ValueError, match="skill_id must be a non-empty string"):
+                    await gateway.execute_skill(skill_id="", prompt="test")
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_none_skill_id_raises(self, mock_anthropic):
+    async def test_none_skill_id_raises(self):
         """Test that None skill_id raises ValueError."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        with pytest.raises(ValueError, match="skill_id must be a non-empty string"):
-            await gateway.execute_skill(skill_id=None, prompt="test")
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                with pytest.raises(ValueError, match="skill_id must be a non-empty string"):
+                    await gateway.execute_skill(skill_id=None, prompt="test")
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_skill_id_too_long_raises(self, mock_anthropic):
+    async def test_skill_id_too_long_raises(self):
         """Test that skill_id > 256 chars raises ValueError."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        long_skill_id = "a" * 257
-        with pytest.raises(ValueError, match="skill_id exceeds maximum length"):
-            await gateway.execute_skill(skill_id=long_skill_id, prompt="test")
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                
+                long_skill_id = "a" * 257
+                with pytest.raises(ValueError, match="skill_id exceeds maximum length"):
+                    await gateway.execute_skill(skill_id=long_skill_id, prompt="test")
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_empty_prompt_raises(self, mock_anthropic):
+    async def test_empty_prompt_raises(self):
         """Test that empty prompt raises ValueError."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        with pytest.raises(ValueError, match="prompt must be a non-empty string"):
-            await gateway.execute_skill(skill_id="skill-test", prompt="")
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                with pytest.raises(ValueError, match="prompt must be a non-empty string"):
+                    await gateway.execute_skill(skill_id="skill-test", prompt="")
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_prompt_too_large_raises(self, mock_anthropic):
+    async def test_prompt_too_large_raises(self):
         """Test that prompt > 1MB raises ValueError."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        large_prompt = "a" * (1_000_001)
-        with pytest.raises(ValueError, match="prompt exceeds maximum length"):
-            await gateway.execute_skill(skill_id="skill-test", prompt=large_prompt)
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                
+                large_prompt = "a" * (1_000_001)
+                with pytest.raises(ValueError, match="prompt exceeds maximum length"):
+                    await gateway.execute_skill(skill_id="skill-test", prompt=large_prompt)
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_invalid_max_tokens_raises(self, mock_anthropic):
+    async def test_invalid_max_tokens_raises(self):
         """Test that invalid max_tokens raises ValueError."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        with pytest.raises(ValueError, match="max_tokens must be between"):
-            await gateway.execute_skill(
-                skill_id="skill-test",
-                prompt="test",
-                max_tokens=0
-            )
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                
+                with pytest.raises(ValueError, match="max_tokens must be between"):
+                    await gateway.execute_skill(
+                        skill_id="skill-test",
+                        prompt="test",
+                        max_tokens=0
+                    )
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_invalid_timeout_raises(self, mock_anthropic):
+    async def test_invalid_timeout_raises(self):
         """Test that invalid timeout raises ValueError."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        with pytest.raises(ValueError, match="timeout_ms must be between"):
-            await gateway.execute_skill(
-                skill_id="skill-test",
-                prompt="test",
-                timeout_ms=0
-            )
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                
+                with pytest.raises(ValueError, match="timeout_ms must be between"):
+                    await gateway.execute_skill(
+                        skill_id="skill-test",
+                        prompt="test",
+                        timeout_ms=0
+                    )
 
 
 # =============================================================================
@@ -891,126 +888,107 @@ class TestMCPGatewayExecution:
     """Tests for gateway skill execution."""
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_successful_execution(self, mock_anthropic_class, mock_anthropic_response):
+    async def test_successful_execution(self, mock_anthropic_response):
         """Test successful skill execution."""
-        mock_client = AsyncMock()
-        mock_anthropic_class.return_value = mock_client
-        mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
-        
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        result = await gateway.execute_skill(
-            skill_id="skill-test",
-            prompt="Test prompt"
-        )
-        
-        assert result is not None
-        assert result.skill_id == "skill-test"
-        assert result.token_usage.input == 100
-        assert result.token_usage.output == 200
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic') as mock_anthropic_class:
+                mock_client = AsyncMock()
+                mock_anthropic_class.return_value = mock_client
+                mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
+
+                await gateway.initialize()
+
+                result = await gateway.execute_skill(
+                    skill_id="skill-test",
+                    prompt="Test prompt"
+                )
+
+                assert result is not None
+                assert result.skill_id == "skill-test"
+                assert result.token_usage.input == 100
+                assert result.token_usage.output == 200
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_execution_with_cache_hit(self, mock_anthropic_class, mock_anthropic_response):
+    async def test_execution_with_cache_hit(self, mock_anthropic_response):
         """Test that cache hit returns cached result."""
-        mock_client = AsyncMock()
-        mock_anthropic_class.return_value = mock_client
-        mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
-        
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        # First call - cache miss
-        result1 = await gateway.execute_skill(
-            skill_id="skill-test",
-            prompt="Test prompt"
-        )
-        
-        # Second call - should be cache hit
-        result2 = await gateway.execute_skill(
-            skill_id="skill-test",
-            prompt="Test prompt"
-        )
-        
-        assert result2.cache_hit is True
-        # API should only be called once
-        assert mock_client.messages.create.call_count == 1
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic') as mock_anthropic_class:
+                mock_client = AsyncMock()
+                mock_anthropic_class.return_value = mock_client
+                mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
+
+                await gateway.initialize()
+
+                await gateway.execute_skill(skill_id="skill-test", prompt="Test prompt")
+                result2 = await gateway.execute_skill(skill_id="skill-test", prompt="Test prompt")
+
+                assert result2.cache_hit is True
+                assert mock_client.messages.create.call_count == 1
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_execution_cache_disabled(self, mock_anthropic_class, mock_anthropic_response):
+    async def test_execution_cache_disabled(self, mock_anthropic_response):
         """Test execution with cache disabled."""
-        mock_client = AsyncMock()
-        mock_anthropic_class.return_value = mock_client
-        mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
-        
         config = MCPGatewayConfig(cache=CacheConfig(enabled=False))
         gateway = MCPGateway(config)
-        await gateway.initialize()
-        
-        # First call
-        await gateway.execute_skill(skill_id="skill-test", prompt="Test prompt")
-        
-        # Second call - should also call API (no caching)
-        await gateway.execute_skill(skill_id="skill-test", prompt="Test prompt")
-        
-        assert mock_client.messages.create.call_count == 2
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic') as mock_anthropic_class:
+                mock_client = AsyncMock()
+                mock_anthropic_class.return_value = mock_client
+                mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
+
+                await gateway.initialize()
+
+                await gateway.execute_skill(skill_id="skill-test", prompt="Test prompt")
+                await gateway.execute_skill(skill_id="skill-test", prompt="Test prompt")
+
+                assert mock_client.messages.create.call_count == 2
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_execution_use_cache_false(self, mock_anthropic_class, mock_anthropic_response):
+    async def test_execution_use_cache_false(self, mock_anthropic_response):
         """Test execution with use_cache=False bypasses cache."""
-        mock_client = AsyncMock()
-        mock_anthropic_class.return_value = mock_client
-        mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
-        
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        # First call with caching
-        await gateway.execute_skill(skill_id="skill-test", prompt="Test prompt")
-        
-        # Second call with use_cache=False
-        result = await gateway.execute_skill(
-            skill_id="skill-test",
-            prompt="Test prompt",
-            use_cache=False
-        )
-        
-        assert result.cache_hit is False
-        assert mock_client.messages.create.call_count == 2
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic') as mock_anthropic_class:
+                mock_client = AsyncMock()
+                mock_anthropic_class.return_value = mock_client
+                mock_client.messages.create = AsyncMock(return_value=mock_anthropic_response)
+
+                await gateway.initialize()
+
+                await gateway.execute_skill(skill_id="skill-test", prompt="Test prompt")
+                result = await gateway.execute_skill(
+                    skill_id="skill-test",
+                    prompt="Test prompt",
+                    use_cache=False
+                )
+
+                assert result.cache_hit is False
+                assert mock_client.messages.create.call_count == 2
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_execution_records_circuit_failure(self, mock_anthropic_class):
+    async def test_execution_records_circuit_failure(self):
         """Test that execution failures are recorded by circuit breaker."""
-        mock_client = AsyncMock()
-        mock_anthropic_class.return_value = mock_client
-        mock_client.messages.create = AsyncMock(side_effect=Exception("API Error"))
-        
         config = MCPGatewayConfig(
             circuit_breaker=CircuitBreakerConfig(failure_threshold=2)
         )
         gateway = MCPGateway(config)
-        await gateway.initialize()
-        
-        # First failure
-        with pytest.raises(RuntimeError):
-            await gateway.execute_skill(skill_id="skill-test", prompt="Test")
-        
-        # Second failure - should open circuit
-        with pytest.raises(RuntimeError):
-            await gateway.execute_skill(skill_id="skill-test", prompt="Test")
-        
-        # Circuit should now be open
-        assert gateway.get_circuit_state("skill-test") == "open"
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic') as mock_anthropic_class:
+                mock_client = AsyncMock()
+                mock_anthropic_class.return_value = mock_client
+                mock_client.messages.create = AsyncMock(side_effect=Exception("API Error"))
+
+                await gateway.initialize()
+
+                with pytest.raises(RuntimeError):
+                    await gateway.execute_skill(skill_id="skill-test", prompt="Test")
+
+                with pytest.raises(RuntimeError):
+                    await gateway.execute_skill(skill_id="skill-test", prompt="Test")
+
+                assert gateway.get_circuit_state("skill-test") == "open"
 
 
 # =============================================================================
@@ -1021,47 +999,45 @@ class TestMCPGatewayInfo:
     """Tests for gateway info and statistics."""
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_list_skills(self, mock_anthropic):
+    async def test_list_skills(self):
         """Test listing available skills."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        skills = await gateway.list_skills()
-        
-        # Should have discovered default skills
-        assert len(skills) > 0
-        assert all('skill_id' in s for s in skills)
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                
+                skills = await gateway.list_skills()
+                
+                assert len(skills) > 0
+                assert all('skill_id' in s for s in skills)
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_get_skill_info(self, mock_anthropic):
+    async def test_get_skill_info(self):
         """Test getting skill info."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        # Get info for a discovered skill
-        skills = await gateway.list_skills()
-        if skills:
-            info = await gateway.get_skill_info(skills[0]['skill_id'])
-            
-            assert info is not None
-            assert 'skill_id' in info
-            assert 'circuit_state' in info
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                
+                skills = await gateway.list_skills()
+                if skills:
+                    info = await gateway.get_skill_info(skills[0]['skill_id'])
+                    
+                    assert info is not None
+                    assert 'skill_id' in info
+                    assert 'circuit_state' in info
     
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
-    @patch('startd8.mcp.gateway.AsyncAnthropic')
-    async def test_get_skill_info_not_found(self, mock_anthropic):
+    async def test_get_skill_info_not_found(self):
         """Test getting info for non-existent skill."""
         gateway = MCPGateway()
-        await gateway.initialize()
-        
-        info = await gateway.get_skill_info("skill-nonexistent")
-        
-        assert info is None
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
+                
+                info = await gateway.get_skill_info("skill-nonexistent")
+                
+                assert info is None
     
     def test_get_circuit_state(self):
         """Test getting circuit state for skill."""
@@ -1090,21 +1066,21 @@ class TestGatewayTypedErrors:
     """Tests for typed gateway exceptions."""
 
     @pytest.mark.asyncio
-    @patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'})
     async def test_rate_limit_error_raises_typed(self):
         """Gateway translates rate-limit runtime error to typed exception."""
         gateway = MCPGateway()
-        await gateway.initialize()
+        with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
+            await gateway.initialize()
 
-        async def fail_acquire(*_, **__):
-            raise RuntimeError("Rate limit exceeded. Would need to wait 1.0s")
+            async def fail_acquire(*_, **__):
+                raise RuntimeError("Rate limit exceeded. Would need to wait 1.0s")
 
-        gateway._global_rate_limiter.acquire = fail_acquire  # type: ignore
+            gateway._global_rate_limiter.acquire = fail_acquire  # type: ignore
 
-        with pytest.raises(GatewayRateLimitExceededError):
-            await gateway.execute_skill("skill-react-game-enhancer", "prompt")
+            with pytest.raises(GatewayRateLimitExceededError):
+                await gateway.execute_skill("skill-react-game-enhancer", "prompt")
 
-        await gateway.shutdown()
+            await gateway.shutdown()
 
 
 class TestRateLimiterAndCacheStats:
