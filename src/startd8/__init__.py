@@ -84,8 +84,17 @@ from .costs import (
     CostPeriod,
     BudgetExceededError,
 )
+from .skills import (
+    SkillAgent,
+    SkillAgentConfig,
+    CircuitState,
+    SkillMetrics,
+    create_game_enhancer_agent,
+    create_html5_game_designer_agent,
+    create_code_reviewer_agent,
+)
 
-__version__ = "0.3.0"  # Bumped for cost tracking feature
+__version__ = "0.4.0"  # Bumped for skills module
 __all__ = [
     "AgentFramework",
     "Prompt",
@@ -150,5 +159,13 @@ __all__ = [
     "CostOptimization",
     "CostPeriod",
     "BudgetExceededError",
+    # Skills (MCP Integration)
+    "SkillAgent",
+    "SkillAgentConfig",
+    "CircuitState",
+    "SkillMetrics",
+    "create_game_enhancer_agent",
+    "create_html5_game_designer_agent",
+    "create_code_reviewer_agent",
 ]
 
