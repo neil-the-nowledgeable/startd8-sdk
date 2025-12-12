@@ -9,7 +9,7 @@ __pycache__/
 venv/
 env/
 ENV/
-.venv
+.venv/
 
 # IDE
 .vscode/
@@ -28,11 +28,16 @@ Thumbs.db
 htmlcov/
 *.cover
 .hypothesis/
+coverage.xml
 
 # Distribution / packaging
 dist/
 build/
 *.egg-info/
+
+# Type checker / linter caches
+.mypy_cache/
+.ruff_cache/
 
 # Environment variables
 .env
@@ -45,3 +50,6 @@ logs/
 # Temporary files
 *.tmp
 *.bak
+
+# Local scratch
+backup/
