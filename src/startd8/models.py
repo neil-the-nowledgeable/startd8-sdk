@@ -177,6 +177,13 @@ class ResponseComparison(BaseModel):
     )
     message: Optional[str] = Field(default=None, description="Optional message")
 
+    # Backwards compatibility: older callers treated comparisons as dicts.
+    def __getitem__(self, key: str) -> Any:
+        return getattr(self, key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return getattr(self, key, default)
+
 
 class BenchmarkReport(BaseModel):
     """Detailed benchmark report"""
@@ -244,6 +251,10 @@ class AgentConfig(BaseModel):
         if not v or not v.strip():
             raise ValueError("Agent name cannot be empty")
         return v.strip()
+
+
+# Backwards-compatible alias used by tests/docs
+EnhancementAgentConfig = AgentConfig
 
 
 class DocumentEnhancementConfig(BaseModel):

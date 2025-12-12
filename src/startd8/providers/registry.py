@@ -55,7 +55,7 @@ class ProviderRegistry:
         return cls._instance
     
     @classmethod
-    def register(cls, provider: AgentProvider) -> None:
+    def register(cls, provider: Any) -> None:
         """
         Register a provider instance.
         
@@ -70,7 +70,17 @@ class ProviderRegistry:
             provider = MyProvider()
             ProviderRegistry.register(provider)
         """
-        if not isinstance(provider, AgentProvider):
+        # Use permissive duck-typing checks rather than strict Protocol checks.
+        # This keeps it easy for users to register lightweight custom providers.
+        required_attrs = (
+            "name",
+            "display_name",
+            "supported_models",
+            "create_agent",
+            "validate_config",
+            "get_required_env_vars",
+        )
+        if not all(hasattr(provider, attr) for attr in required_attrs):
             raise TypeError(
                 f"{provider} does not implement AgentProvider protocol. "
                 f"Required: name, display_name, supported_models, create_agent, "

@@ -292,17 +292,11 @@ class SkillAgent(BaseAgent):
         
         Checks:
         1. ANTHROPIC_API_KEY environment variable is set
-        2. Anthropic SDK is available
+        2. Anthropic SDK availability is validated at call time (lazy)
         
         Raises:
             RuntimeError: If MCP is not available or not configured
         """
-        if not _ANTHROPIC_AVAILABLE:
-            raise RuntimeError(
-                "Anthropic SDK not installed. "
-                "Install with: pip install anthropic"
-            )
-        
         if not os.getenv("ANTHROPIC_API_KEY"):
             raise RuntimeError(
                 "ANTHROPIC_API_KEY environment variable not set. "
@@ -500,6 +494,10 @@ class SkillAgent(BaseAgent):
         Returns:
             Tuple of (response_text, token_metrics)
         """
+        if AsyncAnthropic is None:
+            raise RuntimeError(
+                "Anthropic SDK not installed. Install with: pip install anthropic"
+            )
         client = AsyncAnthropic()
         
         # Define the MCP tool for skill execution

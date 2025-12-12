@@ -378,7 +378,9 @@ class CostStore:
         query = base_query
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY cr.timestamp DESC"
+        # Default ordering is oldest-first to make iteration deterministic and
+        # align with tests/UX expectations (latest record is `records[-1]`).
+        query += " ORDER BY cr.timestamp ASC"
         
         if limit:
             query += f" LIMIT {limit}"

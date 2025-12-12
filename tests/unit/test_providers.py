@@ -128,9 +128,9 @@ class TestAnthropicProvider:
     def test_validate_config_without_api_key(self):
         """Test config validation without API key"""
         provider = AnthropicProvider()
-        
-        with pytest.raises(ConfigurationError, match="API key required"):
-            provider.validate_config({})
+        with patch.dict('os.environ', {}, clear=True):
+            with pytest.raises(ConfigurationError, match="API key required"):
+                provider.validate_config({})
     
     def test_validate_config_with_api_key(self):
         """Test config validation with API key in config"""

@@ -5,7 +5,7 @@ Unit tests for AgentFramework
 import pytest
 
 from startd8 import AgentFramework
-from startd8.models import TokenUsage
+from startd8.models import Prompt, TokenUsage
 from startd8.exceptions import ValidationError
 from startd8.agents import MockAgent
 

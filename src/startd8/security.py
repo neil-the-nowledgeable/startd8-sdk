@@ -14,12 +14,12 @@ from typing import Optional, Union, Dict, Any
 try:
     from cryptography.fernet import Fernet
     from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     HAS_CRYPTOGRAPHY = True
 except ImportError:
     HAS_CRYPTOGRAPHY = False
     Fernet = None
-    PBKDF2 = None
+    PBKDF2HMAC = None
     hashes = None
 
 from .exceptions import ValidationError, ConfigurationError
@@ -158,7 +158,7 @@ class KeyEncryption:
         Returns:
             32-byte encryption key
         """
-        kdf = PBKDF2(
+        kdf = PBKDF2HMAC(
             algorithm=hashes.SHA256(),
             length=32,
             salt=salt,
@@ -245,7 +245,7 @@ class KeyEncryption:
         except json.JSONDecodeError as e:
             raise ConfigurationError("Invalid encrypted data format") from e
         except Exception as e:
-            if "Invalid" in str(e) or "token" in str(e).lower():
+            if type(e).__name__ == "InvalidToken" or "Invalid" in str(e) or "token" in str(e).lower():
                 raise ConfigurationError("Decryption failed: incorrect password") from e
             raise ConfigurationError(f"Decryption failed: {e}") from e
     

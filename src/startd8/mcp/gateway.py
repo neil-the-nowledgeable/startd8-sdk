@@ -239,21 +239,25 @@ class MCPGateway:
         async with self._lock:
             if self._initialized:
                 return
-            
-            if not _ANTHROPIC_AVAILABLE:
-                raise RuntimeError(
-                    "Anthropic SDK not installed. Install with: pip install anthropic"
-                )
-            
+
+            # Validate security prerequisites first for clearer error messages,
+            # even when optional SDKs are not installed.
+            self._ensure_auth_ready()
+            self._ensure_signing_ready()
+
+            # Validate Anthropic auth configuration.
             if not os.getenv("ANTHROPIC_API_KEY"):
                 raise RuntimeError(
                     "ANTHROPIC_API_KEY environment variable not set. "
                     "Required for skill execution via MCP."
                 )
 
-            # Validate security prerequisites (Phase 3 scaffolding)
-            self._ensure_auth_ready()
-            self._ensure_signing_ready()
+            # Allow tests to patch AsyncAnthropic even if the import isn't installed.
+            if AsyncAnthropic is None:
+                raise RuntimeError(
+                    "Anthropic SDK not installed. Install with: pip install anthropic"
+                )
+
             await self._init_observability()
             
             # Create client

@@ -206,7 +206,7 @@ class TestHelpSystemGracefulFailure:
             assert validation["help_topics_loaded"] is False
 
     @patch('startd8.tui_help_system.HAS_YAML', False)
-    def test_missing_yaml_library_graceful(self, mock_has_yaml):
+    def test_missing_yaml_library_graceful(self):
         """Test graceful handling when YAML library is not available"""
         help_system = HelpSystem()
         # Should not crash, will fail gracefully

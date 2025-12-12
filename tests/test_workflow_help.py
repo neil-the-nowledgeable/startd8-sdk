@@ -238,7 +238,7 @@ class TestWorkflowHelperGracefulFailure:
             assert validation["workflows_loaded"] is False
 
     @patch('startd8.tui_workflow_help.HAS_YAML', False)
-    def test_missing_yaml_library_graceful(self, mock_has_yaml):
+    def test_missing_yaml_library_graceful(self):
         """Test graceful handling when YAML library is not available"""
         helper = WorkflowHelper()
         # Should not crash, will fail gracefully

@@ -27,7 +27,11 @@ def handle_storage_errors(func):
             return func(*args, **kwargs)
         except FileOperationError as e:
             logger.error(f"File operation error in {func.__name__}: {e}", exc_info=True)
-            raise StorageError(f"Storage operation failed: {e}", original_error=e) from e
+            # Preserve the more specific error type for callers/tests.
+            raise
+        except StorageError as e:
+            logger.error(f"Storage error in {func.__name__}: {e}", exc_info=True)
+            raise
         except Exception as e:
             logger.error(f"Unexpected error in {func.__name__}: {e}", exc_info=True)
             raise StorageError(f"Unexpected storage error: {e}", original_error=e) from e

@@ -17,6 +17,7 @@ Example:
 """
 
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Final
 from dataclasses import dataclass, field
@@ -328,10 +329,15 @@ class WorkflowHelper:
         ))
         
         # Wait for user to continue
-        if HAS_QUESTIONARY:
-            questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
-        else:
-            input("\nPress Enter to continue...")
+        if not sys.stdin.isatty():
+            return
+        try:
+            if HAS_QUESTIONARY:
+                questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
+            else:
+                input("\nPress Enter to continue...")
+        except EOFError:
+            return
 
     def show_step_guidance(self, workflow_key: str, step: int, step_description: str) -> None:
         """
@@ -393,6 +399,8 @@ class WorkflowHelper:
         self.console.print(Panel(table, title="📚 Examples", border_style="cyan", padding=(1, 2)))
         
         # Let user view details
+        if not sys.stdin.isatty():
+            return
         if HAS_QUESTIONARY:
             show_details = questionary.confirm(
                 "View example details?",
@@ -404,6 +412,8 @@ class WorkflowHelper:
 
     def _show_example_details(self, workflow_key: str, examples_list: List[WorkflowExample]) -> None:
         """Show detailed view of examples."""
+        if not sys.stdin.isatty():
+            return
         while True:
             example_titles = [f"{ex.title}" for ex in examples_list]
             example_titles.append(BACK_OPTION)
@@ -441,8 +451,13 @@ class WorkflowHelper:
                         padding=(1, 2)
                     ))
                     
+                    if not sys.stdin.isatty():
+                        break
                     if HAS_QUESTIONARY:
-                        questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
+                        try:
+                            questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
+                        except EOFError:
+                            pass
                     break
 
     def get_workflow_list(self) -> List[str]:

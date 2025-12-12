@@ -1070,7 +1070,8 @@ class TestGatewayTypedErrors:
         """Gateway translates rate-limit runtime error to typed exception."""
         gateway = MCPGateway()
         with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            await gateway.initialize()
+            with patch('startd8.mcp.gateway.AsyncAnthropic'):
+                await gateway.initialize()
 
             async def fail_acquire(*_, **__):
                 raise RuntimeError("Rate limit exceeded. Would need to wait 1.0s")

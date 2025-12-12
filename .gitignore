@@ -53,3 +53,6 @@ logs/
 
 # Local scratch
 backup/
+
+# Generated outputs
+enhanced_documents/

@@ -12,6 +12,18 @@ from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Backward compatibility shim
+# ---------------------------------------------------------------------------
+# Older integrations imported AgentRegistry from `startd8.agents`, but the
+# concrete implementation now lives in `startd8.job_queue`.
+#
+# IMPORTANT: This must be a lazy import to avoid circular imports:
+# - `startd8.job_queue` imports agent classes from `startd8.agents`.
+def AgentRegistry(*args, **kwargs):  # type: ignore
+    from .job_queue import AgentRegistry as _AgentRegistry
+    return _AgentRegistry(*args, **kwargs)
+
 # Optional dependencies - import with clear error messages
 try:
     from anthropic import Anthropic, AsyncAnthropic
@@ -243,8 +255,9 @@ class BaseAgent(ABC):
         # Generate response_id once at the start to ensure cost record and response use the same ID
         response_id = f"response-{uuid.uuid4().hex[:12]}"
         
-        # Use cost tracking helper if cost_tracker is available
-        if self.cost_tracker and _COSTS_AVAILABLE:
+        # Use cost/budget helper if either is configured.
+        # Budget enforcement must work even when cost_tracker is not present.
+        if _COSTS_AVAILABLE and (self.cost_tracker or self.budget_manager):
             response_text, response_time_ms, token_usage = await self._run_with_cost_tracking(
                 prompt=prompt,
                 prompt_id=prompt_id,
@@ -298,8 +311,9 @@ class BaseAgent(ABC):
         # Generate response_id once at the start to ensure cost record and response use the same ID
         response_id = f"response-{uuid.uuid4().hex[:12]}"
         
-        # Use cost tracking helper via asyncio bridge if cost_tracker is available
-        if self.cost_tracker and _COSTS_AVAILABLE:
+        # Use cost/budget helper via asyncio bridge if either is configured.
+        # Budget enforcement must work even when cost_tracker is not present.
+        if _COSTS_AVAILABLE and (self.cost_tracker or self.budget_manager):
             try:
                 loop = asyncio.get_running_loop()
                 # If we're already in an async context, we need to run in a new thread

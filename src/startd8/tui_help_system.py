@@ -17,6 +17,7 @@ Example:
 """
 
 import logging
+import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Final
 from dataclasses import dataclass, field
@@ -374,10 +375,16 @@ class HelpSystem:
         ))
         
         # Wait for user to continue
-        if HAS_QUESTIONARY:
-            questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
-        else:
-            input("\nPress Enter to continue...")
+        if not sys.stdin.isatty():
+            return
+        try:
+            if HAS_QUESTIONARY:
+                questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
+            else:
+                input("\nPress Enter to continue...")
+        except EOFError:
+            # Non-interactive environment (e.g. tests/CI)
+            return
 
     def show_main_help(self) -> None:
         """
@@ -430,10 +437,16 @@ class HelpSystem:
         ))
         
         # Wait for user to continue
-        if HAS_QUESTIONARY:
-            questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
-        else:
-            input("\nPress Enter to continue...")
+        if not sys.stdin.isatty():
+            return
+        try:
+            if HAS_QUESTIONARY:
+                questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
+            else:
+                input("\nPress Enter to continue...")
+        except EOFError:
+            # Non-interactive environment (e.g. tests/CI)
+            return
 
     def get_help_topics_list(self) -> List[str]:
         """

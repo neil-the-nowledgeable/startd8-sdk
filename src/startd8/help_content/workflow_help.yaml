@@ -276,11 +276,11 @@ examples:
 
   prompt_builder:
     - title: "Code Review Template"
-      description: "Use the code_review template to generate consistent code review prompts"
+      task: "Use the code_review template to generate a consistent code review prompt for a given PR/change"
       why: "Templates ensure consistent structure and coverage"
       use_case: "Automated code review process"
     - title: "Design Document"
-      description: "Use design_document template with project context"
+      task: "Use the design_document template (with project context) to draft a design spec"
       why: "Templates auto-fill from context for efficiency"
       use_case: "Specification documentation"
 

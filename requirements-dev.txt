@@ -4,6 +4,8 @@
 pytest>=7.0.0
 pytest-asyncio>=0.21.0
 pytest-cov>=4.1.0
+pytest-mock>=3.10.0
+hypothesis>=6.0.0
 
 # Code quality
 black>=23.0.0
@@ -13,4 +15,7 @@ isort>=5.12.0
 
 # Type stubs
 types-requests
+
+# Security
+cryptography>=42.0.0
 
