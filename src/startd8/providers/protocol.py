@@ -162,9 +162,13 @@ class AgentProvider(Protocol):
         """
         return False
     
-    def get_capabilities(self) -> List[str]:
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
         """
-        Get list of provider capabilities (optional).
+        Get list of capabilities (optional).
+
+        If `model` is provided, returns capabilities specific to that model.
+        If `model` is None, returns provider-level capabilities (often a union
+        across supported models).
         
         Returns:
             List of capability identifiers

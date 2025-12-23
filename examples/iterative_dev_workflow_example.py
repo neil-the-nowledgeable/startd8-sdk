@@ -11,7 +11,7 @@ from pathlib import Path
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-from startd8.agents import ClaudeAgent, GPT4Agent, MockAgent
+from startd8.providers import ProviderRegistry
 from startd8.iterative_workflow import IterativeDevWorkflow, save_workflow_result
 from rich.console import Console
 from rich.panel import Panel
@@ -54,14 +54,20 @@ def example_1_simple_function():
     console.print(Panel(
         "[bold cyan]Example 1: Simple Function Implementation[/bold cyan]\n\n"
         "Task: Implement a function to validate email addresses\n"
-        "Dev Agent: Claude\n"
-        "Review Agent: GPT-4",
+        "Dev Agent: anthropic:claude-3-5-sonnet-20241022\n"
+        "Review Agent: openai:gpt-4-turbo-preview",
         border_style="cyan"
     ))
     
     # Initialize agents
-    dev_agent = ClaudeAgent()
-    review_agent = GPT4Agent()
+    ProviderRegistry.discover()
+    anthropic = ProviderRegistry.get_provider("anthropic")
+    openai = ProviderRegistry.get_provider("openai")
+    anthropic.validate_config({})
+    openai.validate_config({})
+
+    dev_agent = anthropic.create_agent("claude-3-5-sonnet-20241022", name="developer")
+    review_agent = openai.create_agent("gpt-4-turbo-preview", name="reviewer")
     
     # Create workflow
     workflow = IterativeDevWorkflow(
@@ -106,8 +112,14 @@ def example_2_bug_fix():
         border_style="cyan"
     ))
     
-    dev_agent = ClaudeAgent()
-    review_agent = GPT4Agent()
+    ProviderRegistry.discover()
+    anthropic = ProviderRegistry.get_provider("anthropic")
+    openai = ProviderRegistry.get_provider("openai")
+    anthropic.validate_config({})
+    openai.validate_config({})
+
+    dev_agent = anthropic.create_agent("claude-3-5-sonnet-20241022", name="developer")
+    review_agent = openai.create_agent("gpt-4-turbo-preview", name="reviewer")
     
     workflow = IterativeDevWorkflow(
         developer_agent=dev_agent,
@@ -149,8 +161,10 @@ def example_3_mock_agents():
     ))
     
     # Use mock agents - no API keys required!
-    dev_agent = MockAgent(agent_name="mock-dev")
-    review_agent = MockAgent(agent_name="mock-reviewer")
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+    dev_agent = mock.create_agent("mock-model", name="mock-dev")
+    review_agent = mock.create_agent("mock-model", name="mock-reviewer")
     
     workflow = IterativeDevWorkflow(
         developer_agent=dev_agent,
@@ -220,8 +234,14 @@ SUGGESTIONS:
 REVIEW:
 [Detailed security analysis]"""
 
-    dev_agent = ClaudeAgent()
-    review_agent = GPT4Agent()
+    ProviderRegistry.discover()
+    anthropic = ProviderRegistry.get_provider("anthropic")
+    openai = ProviderRegistry.get_provider("openai")
+    anthropic.validate_config({})
+    openai.validate_config({})
+
+    dev_agent = anthropic.create_agent("claude-3-5-sonnet-20241022", name="developer")
+    review_agent = openai.create_agent("gpt-4-turbo-preview", name="reviewer")
     
     workflow = IterativeDevWorkflow(
         developer_agent=dev_agent,

@@ -8,7 +8,7 @@
       "complexity": "high"
     }
   },
-  "agents": ["claude", "gpt4"],
+  "agents": ["anthropic:claude-3-5-sonnet-20241022", "openai:gpt-4-turbo-preview"],
   "priority": 5,
   "metadata": {
     "source": "example",

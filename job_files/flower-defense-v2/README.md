@@ -44,7 +44,7 @@ from pathlib import Path
 config = JobQueueConfig(
     watch_folder=Path("job_files/flower-defense-v2"),
     poll_interval_seconds=5.0,
-    default_agents=["claude"]
+    default_agents=["mock:mock-model"]
 )
 
 # Create queue

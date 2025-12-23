@@ -56,3 +56,13 @@ backup/
 
 # Generated outputs
 enhanced_documents/
+
+# ---------------------------------------------------------------------------
+# startd8 project data (Decision 28B)
+# - Keep prompts versioned in git
+# - Ignore generated artifacts (responses/benchmarks/queue/etc.)
+# ---------------------------------------------------------------------------
+/.startd8/*
+!/.startd8/prompts/
+!/.startd8/prompts/**
+/.startd8/prompts/.*.lock

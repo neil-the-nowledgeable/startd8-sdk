@@ -4,16 +4,20 @@ OpenAI GPT provider implementation
 
 from typing import List, Dict, Any, Optional
 import os
+import logging
+from pathlib import Path
 
 from ..agents import GPT4Agent, OpenAICompatibleAgent
 from ..exceptions import ConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIProvider:
     """Provider for OpenAI GPT models"""
     
-    # Official OpenAI models
-    MODELS = [
+    # Official OpenAI models (hardcoded baseline)
+    HARDCODED_MODELS = [
         "gpt-4",
         "gpt-4-turbo-preview",
         "gpt-4-turbo",
@@ -23,6 +27,28 @@ class OpenAIProvider:
         "gpt-3.5-turbo-16k",
         "gpt-3.5-turbo-1106",
     ]
+    
+    @classmethod
+    def _get_models(cls) -> List[str]:
+        """Get merged list of hardcoded and discovered models"""
+        try:
+            from ..model_discovery import ModelDiscoveryService
+            # Use default config dir
+            discovery = ModelDiscoveryService()
+            return discovery.merge_models('openai', cls.HARDCODED_MODELS)
+        except Exception as e:
+            logger.debug(f"Failed to load discovered models: {e}")
+            return cls.HARDCODED_MODELS.copy()
+    
+    @classmethod
+    def _get_models_instance(cls) -> List[str]:
+        """Get models for an instance"""
+        return cls._get_models()
+    
+    @property
+    def MODELS(self) -> List[str]:
+        """Dynamic models list that includes discovered models"""
+        return self._get_models_instance()
     
     # Model metadata
     MODEL_INFO = {
@@ -75,6 +101,15 @@ class OpenAIProvider:
     def supported_models(self) -> List[str]:
         return self.MODELS.copy()
     
+    def is_model_new(self, model: str) -> bool:
+        """Check if a model is newly discovered (not in hardcoded list)"""
+        try:
+            from ..model_discovery import ModelDiscoveryService
+            discovery = ModelDiscoveryService()
+            return discovery.is_model_new('openai', model, self.HARDCODED_MODELS)
+        except Exception:
+            return False
+    
     def create_agent(
         self, 
         model: str, 
@@ -93,10 +128,13 @@ class OpenAIProvider:
                 - cost_tracker: Optional cost tracker instance
                 - budget_manager: Optional budget manager instance
         """
-        if model not in self.MODELS:
-            raise ValueError(
-                f"Model {model} not supported by OpenAI provider. "
-                f"Available models: {', '.join(self.MODELS)}"
+        # Decision 37A: be permissive about model IDs.
+        # Keep a curated list for suggestions, but allow unknown models so users
+        # can use newly released IDs without waiting for an SDK update.
+        if model not in self.supported_models:
+            logger.warning(
+                f"OpenAIProvider: model '{model}' not in supported_models list; "
+                f"continuing anyway."
             )
         
         # Generate a friendly name if not provided
@@ -154,7 +192,7 @@ class OpenAIProvider:
         """OpenAI supports streaming responses"""
         return True
     
-    def get_capabilities(self) -> List[str]:
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
         """Get OpenAI capabilities"""
         return [
             'text-generation',
@@ -234,5 +272,5 @@ class OllamaProvider:
     def supports_streaming(self) -> bool:
         return True
     
-    def get_capabilities(self) -> List[str]:
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
         return ['text-generation', 'local-execution']

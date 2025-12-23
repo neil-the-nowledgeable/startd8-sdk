@@ -8,14 +8,11 @@ import threading
 import asyncio
 import logging
 from contextlib import contextmanager
-from contextvars import ContextVar
 
 from .types import Event, EventType
+from ..context import correlation_id
 
 logger = logging.getLogger(__name__)
-
-# Context variable for correlation IDs
-correlation_id: ContextVar[Optional[str]] = ContextVar('correlation_id', default=None)
 
 # Type aliases for event handlers
 EventHandler = Callable[[Event], None]
@@ -148,12 +145,9 @@ class EventBus:
                         logger.error(f"Error persisting event: {e}", exc_info=True)
             
             # Get handlers for this event type
-            handlers = (
-                cls._listeners.get(event.type, []) + 
-                cls._global_listeners +
-                list(cls._wildcard_handlers)
-            )
-            handlers = list(set(handlers))  # Remove duplicates
+            handlers = cls._listeners.get(event.type, []) + cls._global_listeners
+            # Preserve subscription order while removing duplicates
+            handlers = list(dict.fromkeys(handlers))
         
         # Call handlers outside the lock to prevent deadlocks
         for handler in handlers:

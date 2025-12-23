@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="startd8",
-    version="0.2.0",
+    version="0.4.0",
     author="StartDate Contributors",
     author_email="contributors@startdate.dev",
     description="Python SDK for StartDate (startd8) Agent Framework - Multi-LLM benchmarking and prompt management",
@@ -14,6 +14,12 @@ setup(
     url="https://github.com/startdate/startd8",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
+    package_data={
+        "startd8": [
+            "prompt_builder/templates/*.yaml",
+            "help_content/*.yaml",
+        ],
+    },
     classifiers=[
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
@@ -60,7 +66,6 @@ setup(
     entry_points={
         "console_scripts": [
             "startd8=startd8.cli:app",
-            "startdate=startd8.cli:app",  # Keep alias for backwards compatibility
         ],
     },
 )

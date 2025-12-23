@@ -22,7 +22,7 @@
     }
   },
   "agents": [
-    "claude"
+    "anthropic:claude-3-5-sonnet-20241022"
   ],
   "priority": 8,
   "status": "pending",

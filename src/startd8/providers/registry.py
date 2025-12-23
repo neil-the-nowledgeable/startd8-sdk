@@ -182,6 +182,13 @@ class ProviderRegistry:
             logger.debug("Registered built-in OpenAI provider")
         except ImportError as e:
             logger.debug(f"OpenAI provider not available: {e}")
+
+        try:
+            from .openai import OllamaProvider
+            cls.register(OllamaProvider())
+            logger.debug("Registered built-in Ollama provider")
+        except ImportError as e:
+            logger.debug(f"Ollama provider not available: {e}")
         
         try:
             from .mock import MockProvider
@@ -189,6 +196,13 @@ class ProviderRegistry:
             logger.debug("Registered built-in Mock provider")
         except ImportError as e:
             logger.debug(f"Mock provider not available: {e}")
+
+        try:
+            from .gemini import GeminiProvider
+            cls.register(GeminiProvider())
+            logger.debug("Registered built-in Gemini provider")
+        except ImportError as e:
+            logger.debug(f"Gemini provider not available: {e}")
     
     @classmethod
     def get_provider(cls, name: str) -> Optional[AgentProvider]:
@@ -314,7 +328,11 @@ class ProviderRegistry:
             ) from e
     
     @classmethod
-    def get_provider_info(cls, provider_name: str) -> Optional[Dict[str, Any]]:
+    def get_provider_info(
+        cls,
+        provider_name: str,
+        model: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
         """
         Get information about a provider.
         
@@ -337,14 +355,25 @@ class ProviderRegistry:
         if provider is None:
             return None
         
-        return {
+        # Capabilities are optionally model-specific. Prefer passing model when available.
+        try:
+            capabilities = provider.get_capabilities(model)  # type: ignore[arg-type]
+        except TypeError:
+            capabilities = provider.get_capabilities()
+
+        info: Dict[str, Any] = {
             'name': provider.name,
             'display_name': provider.display_name,
             'models': provider.supported_models,
             'env_vars': provider.get_required_env_vars(),
-            'capabilities': provider.get_capabilities(),
+            'capabilities': capabilities,
             'streaming': provider.supports_streaming()
         }
+
+        if model:
+            info["model"] = model
+
+        return info
     
     @classmethod
     def clear(cls) -> None:

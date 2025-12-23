@@ -4,22 +4,48 @@ Anthropic Claude provider implementation
 
 from typing import List, Dict, Any, Optional
 import os
+import logging
+from pathlib import Path
 
 from ..agents import ClaudeAgent
 from ..exceptions import ConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 class AnthropicProvider:
     """Provider for Anthropic Claude models"""
     
-    # Official Claude models
-    MODELS = [
+    # Official Claude models (hardcoded baseline)
+    HARDCODED_MODELS = [
         "claude-3-opus-20240229",
         "claude-3-sonnet-20240229", 
         "claude-3-haiku-20240307",
         "claude-3-5-sonnet-20241022",
         "claude-3-5-haiku-20241022",
     ]
+    
+    @classmethod
+    def _get_models(cls) -> List[str]:
+        """Get merged list of hardcoded and discovered models"""
+        try:
+            from ..model_discovery import ModelDiscoveryService
+            # Use default config dir
+            discovery = ModelDiscoveryService()
+            return discovery.merge_models('anthropic', cls.HARDCODED_MODELS)
+        except Exception as e:
+            logger.debug(f"Failed to load discovered models: {e}")
+            return cls.HARDCODED_MODELS.copy()
+    
+    @classmethod
+    def _get_models_instance(cls) -> List[str]:
+        """Get models for an instance"""
+        return cls._get_models()
+    
+    @property
+    def MODELS(self) -> List[str]:
+        """Dynamic models list that includes discovered models"""
+        return self._get_models_instance()
     
     # Model metadata for cost tracking and limits
     MODEL_INFO = {
@@ -72,6 +98,15 @@ class AnthropicProvider:
     def supported_models(self) -> List[str]:
         return self.MODELS.copy()
     
+    def is_model_new(self, model: str) -> bool:
+        """Check if a model is newly discovered (not in hardcoded list)"""
+        try:
+            from ..model_discovery import ModelDiscoveryService
+            discovery = ModelDiscoveryService()
+            return discovery.is_model_new('anthropic', model, self.HARDCODED_MODELS)
+        except Exception:
+            return False
+    
     def create_agent(
         self, 
         model: str, 
@@ -90,10 +125,13 @@ class AnthropicProvider:
                 - cost_tracker: Optional cost tracker instance
                 - budget_manager: Optional budget manager instance
         """
-        if model not in self.MODELS:
-            raise ValueError(
-                f"Model {model} not supported by Anthropic provider. "
-                f"Available models: {', '.join(self.MODELS)}"
+        # Decision 37A: be permissive about model IDs.
+        # Keep a curated list for suggestions, but allow unknown models so users
+        # can use newly released IDs without waiting for an SDK update.
+        if model not in self.supported_models:
+            logger.warning(
+                f"AnthropicProvider: model '{model}' not in supported_models list; "
+                f"continuing anyway."
             )
         
         # Generate a friendly name if not provided
@@ -155,7 +193,7 @@ class AnthropicProvider:
         """Claude supports streaming responses"""
         return True
     
-    def get_capabilities(self) -> List[str]:
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
         """Get Claude capabilities"""
         return [
             'text-generation',

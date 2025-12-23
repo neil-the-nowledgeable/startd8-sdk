@@ -67,8 +67,8 @@ def main():
     
     # Use pre-built template
     planner_impl = WorkflowTemplates.planner_implementer(
-        planner_agent=MockAgent(name="planner", model="gpt-4-planner"),
-        implementer_agent=MockAgent(name="implementer", model="gpt-4-mini")
+        planner_agent=MockAgent(name="planner", model="mock-planner"),
+        implementer_agent=MockAgent(name="implementer", model="mock-implementer")
     )
     planner_impl.framework = framework
     
@@ -92,8 +92,8 @@ def main():
     
     # Config A: Fast models
     fast_pipeline = WorkflowTemplates.planner_implementer(
-        MockAgent(name="fast-planner", model="gpt-4-mini"),
-        MockAgent(name="fast-impl", model="gpt-4-mini")
+        MockAgent(name="fast-planner", model="mock-fast"),
+        MockAgent(name="fast-impl", model="mock-fast")
     )
     fast_pipeline.framework = framework
     result_fast = fast_pipeline.run("Design API endpoints")
@@ -101,8 +101,8 @@ def main():
     
     # Config B: Quality models
     quality_pipeline = WorkflowTemplates.planner_implementer(
-        MockAgent(name="quality-planner", model="gpt-4"),
-        MockAgent(name="quality-impl", model="claude-3-5")
+        MockAgent(name="quality-planner", model="mock-quality"),
+        MockAgent(name="quality-impl", model="mock-quality")
     )
     quality_pipeline.framework = framework
     result_quality = quality_pipeline.run("Design API endpoints")
@@ -142,9 +142,9 @@ def main():
     )
     
     planners = [
-        MockAgent(name="planner-a", model="gpt-4"),
-        MockAgent(name="planner-b", model="claude-3-5"),
-        MockAgent(name="planner-c", model="gpt-4-mini"),
+        MockAgent(name="planner-a", model="mock-quality"),
+        MockAgent(name="planner-b", model="mock-quality"),
+        MockAgent(name="planner-c", model="mock-fast"),
     ]
     
     for planner in planners:
@@ -164,7 +164,7 @@ def main():
     
     prod_pipeline = WorkflowTemplates.planner_implementer(
         planner_agent=best_planner,
-        implementer_agent=MockAgent(name="implementer", model="gpt-4-mini")
+        implementer_agent=MockAgent(name="implementer", model="mock-implementer")
     )
     prod_pipeline.framework = framework
     

@@ -8,14 +8,14 @@ This folder contains example job files and scripts for the startd8 job queue fea
 
 ```bash
 # Configure a watch folder for jobs
-startd8 queue configure --folder ~/startd8-jobs --agent mock
+startd8 queue configure --folder ~/startd8-jobs --agent mock:mock-model
 ```
 
 ### 2. Add Jobs
 
 **Using CLI:**
 ```bash
-startd8 queue add "Write a hello world program in Python" --agent mock --priority 1
+startd8 queue add "Write a hello world program in Python" --agent mock:mock-model --priority 1
 ```
 
 **Using job files:**
@@ -61,7 +61,7 @@ A high-priority task for creating a technical design document, configured to use
     "tags": ["tag1", "tag2"],
     "metadata": {}
   },
-  "agents": ["claude", "gpt4"],
+  "agents": ["anthropic:claude-3-5-sonnet-20241022", "openai:gpt-4-turbo-preview"],
   "priority": 0,
   "metadata": {}
 }
@@ -75,7 +75,7 @@ A high-priority task for creating a technical design document, configured to use
 | `prompt.version` | No | Semantic version (default: "1.0.0") |
 | `prompt.tags` | No | Tags for categorization |
 | `prompt.metadata` | No | Additional prompt metadata |
-| `agents` | No | List of agent names (empty = use defaults) |
+| `agents` | No | List of agent specs (`provider:model`) (empty = use defaults) |
 | `priority` | No | Processing priority (higher = first, default: 0) |
 | `metadata` | No | Additional job metadata |
 
@@ -94,7 +94,7 @@ from startd8 import JobQueue, JobQueueConfig, create_job_file
 # Create config
 config = JobQueueConfig(
     watch_folder=Path("~/startd8-jobs"),
-    default_agents=["mock"]
+    default_agents=["mock:mock-model"]
 )
 
 # Create queue
@@ -104,7 +104,7 @@ queue = JobQueue(config)
 create_job_file(
     output_path=Path("~/startd8-jobs/my_task"),
     content="Your prompt here",
-    agents=["mock"]
+    agents=["mock:mock-model"]
 )
 
 # Process

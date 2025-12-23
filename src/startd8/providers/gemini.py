@@ -4,21 +4,55 @@ Google Gemini provider implementation
 
 from typing import List, Dict, Any, Optional
 import os
+import logging
 
 from ..agents import GeminiAgent
 from ..exceptions import ConfigurationError
+
+logger = logging.getLogger(__name__)
 
 
 class GeminiProvider:
     """Provider for Google Gemini models"""
     
-    # Official Gemini models
-    MODELS = [
-        "gemini-pro",
-        "gemini-pro-vision",
-        "gemini-1.5-pro",
-        "gemini-1.5-flash",
+    # Official Gemini models (hardcoded baseline)
+    # Note: gemini-pro and gemini-pro-vision (1.0) are deprecated
+    # Default to gemini-1.5-flash for best compatibility
+    HARDCODED_MODELS = [
+        "gemini-1.5-flash",      # Recommended default (fast, cost-effective)
+        "gemini-1.5-pro",        # Best for complex tasks
+        "gemini-2.0-flash-exp",  # Latest experimental model
+        "gemini-pro",            # Deprecated - will map to gemini-1.5-flash
+        "gemini-pro-vision",     # Deprecated - will map to gemini-1.5-flash
     ]
+    
+    @classmethod
+    def _get_models(cls) -> List[str]:
+        """Get merged list of hardcoded and discovered models"""
+        try:
+            from ..model_discovery import ModelDiscoveryService
+            # Use default config dir
+            discovery = ModelDiscoveryService()
+            return discovery.merge_models('gemini', cls.HARDCODED_MODELS)
+        except Exception as e:
+            logger.debug(f"Failed to load discovered models: {e}")
+            return cls.HARDCODED_MODELS.copy()
+    
+    @classmethod
+    def _get_models_instance(cls) -> List[str]:
+        """Get models for an instance"""
+        return cls._get_models()
+    
+    @property
+    def MODELS(self) -> List[str]:
+        """Dynamic models list that includes discovered models"""
+        return self._get_models_instance()
+    
+    # Model name mapping for deprecated models
+    MODEL_MAPPING = {
+        "gemini-pro": "gemini-1.5-flash",           # Deprecated April 2025
+        "gemini-pro-vision": "gemini-1.5-flash",   # Deprecated June 2024
+    }
     
     # Model metadata
     MODEL_INFO = {
@@ -64,6 +98,15 @@ class GeminiProvider:
     def supported_models(self) -> List[str]:
         return self.MODELS.copy()
     
+    def is_model_new(self, model: str) -> bool:
+        """Check if a model is newly discovered (not in hardcoded list)"""
+        try:
+            from ..model_discovery import ModelDiscoveryService
+            discovery = ModelDiscoveryService()
+            return discovery.is_model_new('gemini', model, self.HARDCODED_MODELS)
+        except Exception:
+            return False
+    
     def create_agent(
         self, 
         model: str, 
@@ -85,11 +128,28 @@ class GeminiProvider:
         
         Returns:
             Configured GeminiAgent instance
+        
+        Raises:
+            ImportError: If google-genai package is not installed
         """
-        if model not in self.MODELS:
-            raise ValueError(
-                f"Model {model} not supported by Gemini provider. "
-                f"Available models: {', '.join(self.MODELS)}"
+        # Map deprecated models to supported ones
+        original_model = model
+        if model in self.MODEL_MAPPING:
+            mapped_model = self.MODEL_MAPPING[model]
+            logger.warning(
+                f"GeminiProvider: Model '{model}' is deprecated. "
+                f"Mapping to '{mapped_model}'. "
+                f"Please update your configuration to use '{mapped_model}' directly."
+            )
+            model = mapped_model
+        
+        # Decision 37A: be permissive about model IDs.
+        # Keep a curated list for suggestions, but allow unknown models so users
+        # can use newly released IDs without waiting for an SDK update.
+        if model not in self.supported_models:
+            logger.warning(
+                f"GeminiProvider: model '{model}' not in supported_models list; "
+                f"continuing anyway."
             )
         
         # Generate a friendly name if not provided
@@ -103,15 +163,41 @@ class GeminiProvider:
         
         from ..agents import GeminiAgent
         
-        return GeminiAgent(
-            name=name,
-            model=model,
-            api_key=config.get('api_key'),
-            max_tokens=config.get('max_tokens', 4096),
-            temperature=config.get('temperature', 0.7),
-            cost_tracker=config.get('cost_tracker'),
-            budget_manager=config.get('budget_manager')
-        )
+        try:
+            return GeminiAgent(
+                name=name,
+                model=model,  # Use mapped model, not original
+                api_key=config.get('api_key'),
+                max_tokens=config.get('max_tokens', 4096),
+                temperature=config.get('temperature', 0.7),
+                cost_tracker=config.get('cost_tracker'),
+                budget_manager=config.get('budget_manager')
+            )
+        except ImportError as e:
+            # Provide helpful installation instructions
+            import sys
+            python_exe = sys.executable
+            error_msg = str(e)
+            
+            # Check if running from pipx
+            if 'pipx' in python_exe or '.local/pipx' in python_exe:
+                error_msg += (
+                    f"\n\n[Installation Help]\n"
+                    f"You're running startd8 from pipx. To install google-genai:\n"
+                    f"  pipx inject startd8 google-genai\n\n"
+                    f"Or install with extras:\n"
+                    f"  pipx install startd8[gemini]\n"
+                )
+            else:
+                error_msg += (
+                    f"\n\n[Installation Help]\n"
+                    f"Install the package using:\n"
+                    f"  {python_exe} -m pip install google-genai\n\n"
+                    f"Or install startd8 with Gemini support:\n"
+                    f"  {python_exe} -m pip install 'startd8[gemini]'\n"
+                )
+            
+            raise ImportError(error_msg) from e
     
     def validate_config(self, config: Dict[str, Any]) -> bool:
         """
@@ -142,16 +228,30 @@ class GeminiProvider:
         """Gemini supports streaming responses"""
         return True
     
-    def get_capabilities(self) -> List[str]:
-        """Get Gemini capabilities"""
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
+        """
+        Get Gemini capabilities.
+
+        Capabilities are model-dependent (e.g., vision and ultra-long-context).
+        If `model` is None, returns a provider-level union across supported models.
+        """
         caps = ['text-generation', 'function-calling']
-        
-        # Add vision for vision models
-        if 'vision' in self.name or '1.5' in self.name:
+
+        model_lower = (model or "").lower().strip()
+
+        # Provider-level union (when model not specified)
+        if not model_lower:
+            models = [m.lower() for m in self.MODELS]
+            if any(("vision" in m) or ("1.5" in m) for m in models):
+                caps.append('vision')
+            if any("1.5" in m for m in models):
+                caps.append('ultra-long-context')  # 1M tokens!
+            return caps
+
+        # Model-specific capabilities
+        if ("vision" in model_lower) or ("1.5" in model_lower):
             caps.append('vision')
-        
-        # Gemini 1.5 has huge context
-        if '1.5' in self.name:
+        if "1.5" in model_lower:
             caps.append('ultra-long-context')  # 1M tokens!
-        
+
         return caps

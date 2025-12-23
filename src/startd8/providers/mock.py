@@ -92,5 +92,5 @@ class MockProvider:
     def supports_streaming(self) -> bool:
         return False
     
-    def get_capabilities(self) -> List[str]:
+    def get_capabilities(self, model: Optional[str] = None) -> List[str]:
         return ['text-generation', 'testing']

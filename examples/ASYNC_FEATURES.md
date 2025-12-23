@@ -6,16 +6,16 @@ This guide covers the async features introduced in Week 1 of the architecture im
 
 ```python
 import asyncio
-from startd8.agents import ClaudeAgent
-from startd8.orchestration import Pipeline
+from startd8.providers import ProviderRegistry
 
 async def main():
-    # Create an async-capable agent
-    agent = ClaudeAgent()
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+    agent = mock.create_agent("mock-model")
     
     # Use async/await for non-blocking calls
-    response = await agent.agenerate("Hello!")
-    print(response)
+    text, elapsed_ms, usage = await agent.agenerate("Hello!")
+    print(text)
 
 asyncio.run(main())
 ```
@@ -34,15 +34,18 @@ python async_features_demo.py
 All agents now support async operations:
 
 ```python
-from startd8.agents import ClaudeAgent, GPT4Agent, MockAgent
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+mock = ProviderRegistry.get_provider("mock")
 
 # Create agents
-claude = ClaudeAgent()
-gpt4 = GPT4Agent()
+agent_a = mock.create_agent("mock-model", name="agent-a")
+agent_b = mock.create_agent("mock-model", name="agent-b")
 
 # Async calls
-response1 = await claude.agenerate("Prompt 1")
-response2 = await gpt4.agenerate("Prompt 2")
+response1 = await agent_a.agenerate("Prompt 1")
+response2 = await agent_b.agenerate("Prompt 2")
 ```
 
 **Benefits:**
@@ -57,7 +60,15 @@ Run multiple agents simultaneously:
 ```python
 import asyncio
 
-agents = [ClaudeAgent(), GPT4Agent(), MockAgent()]
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+mock = ProviderRegistry.get_provider("mock")
+agents = [
+    mock.create_agent("mock-model", name="agent-a"),
+    mock.create_agent("mock-model", name="agent-b"),
+    mock.create_agent("mock-model", name="agent-c"),
+]
 prompt = "Explain async programming"
 
 # Run all agents in parallel
@@ -118,7 +129,7 @@ result = await pipeline.arun("Design a feature")
 
 ```python
 # Run multiple agents on same input
-agents = [claude, gpt4, gemini]
+agents = [agent_a, agent_b, agent_c]
 results = await pipeline.arun_parallel_agents("Test prompt", agents)
 ```
 
@@ -130,7 +141,7 @@ Compare agents efficiently:
 from startd8.benchmark import BenchmarkRunner
 
 runner = BenchmarkRunner(framework)
-agents = [claude_agent, gpt4_agent, gemini_agent]
+agents = [agent_a, agent_b, agent_c]
 
 # Run benchmark in parallel
 result = await runner.arun_benchmark(
@@ -209,8 +220,12 @@ print(MetricsHandler.get_metrics())
 **Before:**
 ```python
 def run_comparison():
-    agent1 = ClaudeAgent()
-    agent2 = GPT4Agent()
+    from startd8.providers import ProviderRegistry
+
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+    agent1 = mock.create_agent("mock-model", name="agent-1")
+    agent2 = mock.create_agent("mock-model", name="agent-2")
     
     r1 = agent1.generate("Test")
     r2 = agent2.generate("Test")
@@ -221,8 +236,13 @@ def run_comparison():
 **After:**
 ```python
 async def run_comparison():
-    agent1 = ClaudeAgent()
-    agent2 = GPT4Agent()
+    import asyncio
+    from startd8.providers import ProviderRegistry
+
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+    agent1 = mock.create_agent("mock-model", name="agent-1")
+    agent2 = mock.create_agent("mock-model", name="agent-2")
     
     # Run in parallel!
     results = await asyncio.gather(
@@ -239,7 +259,11 @@ All sync methods still work:
 
 ```python
 # Still supported!
-agent = ClaudeAgent()
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+mock = ProviderRegistry.get_provider("mock")
+agent = mock.create_agent("mock-model")
 response = agent.generate("Hello")  # Sync wrapper
 ```
 

@@ -411,7 +411,8 @@ class SkillAgent(BaseAgent):
             token_usage = TokenUsage(
                 input=tokens.get("input", 0),
                 output=tokens.get("output", 0),
-                total=tokens.get("input", 0) + tokens.get("output", 0)
+                total=tokens.get("input", 0) + tokens.get("output", 0),
+                model_name=self.model,
             )
             
             # Record success

@@ -122,7 +122,7 @@ def read_feature_plan(feature_num: int) -> str:
 
 def create_job_file_content(
     feature_num: int,
-    agent: str = "claude"
+    agent: str = "mock:mock-model"
 ) -> Dict[str, Any]:
     """Create job file content for a feature"""
     
@@ -240,7 +240,7 @@ def save_job_file(job_data: Dict[str, Any], output_dir: Path) -> Path:
 def generate_feature_jobs(
     feature_nums: List[int],
     output_dir: Path = DEFAULT_OUTPUT_DIR,
-    agent: str = "claude"
+    agent: str = "mock:mock-model"
 ) -> List[Path]:
     """Generate job files for specified features"""
     
@@ -330,7 +330,7 @@ from pathlib import Path
 config = JobQueueConfig(
     watch_folder=Path("{output_dir}"),
     poll_interval_seconds=5.0,
-    default_agents=["claude"]
+    default_agents=["mock:mock-model"]
 )
 
 # Create queue
@@ -411,7 +411,7 @@ Examples:
   python scripts/generate_feature_jobs.py --features 1 2 3
   
   # Use different agent
-  python scripts/generate_feature_jobs.py --all --agent gpt4
+  python scripts/generate_feature_jobs.py --all --agent openai:gpt-4-turbo-preview
   
   # Custom output directory
   python scripts/generate_feature_jobs.py --all --output ~/my-jobs
@@ -439,8 +439,8 @@ Examples:
     
     parser.add_argument(
         '--agent',
-        default='claude',
-        help='Agent to use (default: claude)'
+        default='mock:mock-model',
+        help='Agent spec to use (default: mock:mock-model)'
     )
     
     parser.add_argument(
