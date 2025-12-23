@@ -30,7 +30,16 @@ class CostAnalytics:
         # Get optimization recommendations
         recommendations = analytics.get_optimizations()
         for rec in recommendations:
-            print(f"{rec.title}: Save ${rec.potential_savings:.2f}/month")
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(
+                f"Cost optimization recommendation: {rec.title}",
+                extra={
+                    "recommendation": rec.title,
+                    "potential_savings": rec.potential_savings,
+                    "period": "month"
+                }
+            )
     """
     
     def __init__(self, store: CostStore, pricing: PricingService):

@@ -49,7 +49,17 @@ class BudgetManager:
         
         # Get status
         status = manager.get_budget_status(budget.id)
-        print(f"Used: {status.percentage_used:.1%}")
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            f"Budget status: {status.percentage_used:.1%} used",
+            extra={
+                "budget_id": status.budget_id,
+                "percentage_used": status.percentage_used,
+                "amount_used": status.amount_used,
+                "amount_limit": status.amount_limit
+            }
+        )
     """
     
     def __init__(self, store: CostStore):

@@ -15,12 +15,14 @@ from .agents import BaseAgent
 from .benchmark import BenchmarkRunner, ComparisonReport
 from .providers import ProviderRegistry
 from .exceptions import ConfigurationError
+from .logging_config import get_logger
 
 app = typer.Typer(
     name="startd8",
     help="StartDate (startd8) Agent Framework CLI - Multi-LLM benchmarking and development tools"
 )
 console = Console()
+logger = get_logger(__name__)
 
 # Global framework instance
 _framework: Optional[AgentFramework] = None
@@ -127,6 +129,15 @@ def init(
     console.print(f"   - Prompts: {framework.storage.prompts_dir}")
     console.print(f"   - Responses: {framework.storage.responses_dir}")
     console.print(f"   - Benchmarks: {framework.storage.benchmarks_dir}")
+    logger.info(
+        "Framework initialized",
+        extra={
+            "storage_dir": str(storage_dir),
+            "prompts_dir": str(framework.storage.prompts_dir),
+            "responses_dir": str(framework.storage.responses_dir),
+            "benchmarks_dir": str(framework.storage.benchmarks_dir)
+        }
+    )
 
 
 @app.command()
@@ -165,6 +176,7 @@ def list_prompts(
     
     if not prompts:
         console.print("No prompts found.", style="yellow")
+        logger.info("No prompts found", extra={"tags": tags, "storage_dir": str(storage_dir) if storage_dir else None})
         return
     
     table = Table(title=f"Prompts ({len(prompts)} total)")
@@ -292,6 +304,7 @@ def compare(
     
     if comparison_dict['total_responses'] == 0:
         console.print("No responses found for this prompt.", style="yellow")
+        logger.info("No responses found for comparison", extra={"prompt_id": prompt_id})
         return
     
     # Show comparison table
@@ -329,6 +342,7 @@ def compare(
         report_gen = ComparisonReport(framework)
         report_gen.generate_markdown_report(prompt_id, output)
         console.print(f"\n✅ Markdown report saved to: {output}", style="green")
+        logger.info("Benchmark report saved", extra={"output_file": str(output), "prompt_id": prompt_id})
 
 
 @app.command()
@@ -377,6 +391,7 @@ def show_response(
     
     if not response:
         console.print(f"❌ Response {response_id} not found", style="red")
+        logger.warning(f"Response not found: {response_id}", extra={"response_id": response_id})
         raise typer.Exit(1)
     
     cost_line = (
@@ -471,6 +486,7 @@ def pipeline(
     framework = get_framework(storage_dir)
     
     console.print(f"🔗 Running {workflow} pipeline...\n", style="cyan")
+    logger.info(f"Running pipeline workflow: {workflow}", extra={"workflow": workflow, "prompt_length": len(prompt_text)})
     
     # Resolve step agents (default: mock for all steps)
     if not agents:
@@ -500,6 +516,11 @@ def pipeline(
             improver = _resolve_agent(step_specs[1], name="improver")
         except Exception as e:
             console.print(f"[red]❌ Failed to create pipeline agents: {e}[/red]")
+            logger.error(
+                "Failed to create code-review agents",
+                exc_info=True,
+                extra={"workflow": workflow, "agent_specs": step_specs, "error": str(e)}
+            )
             raise typer.Exit(1)
         pipe = WorkflowTemplates.code_review(
             reviewer,
@@ -533,6 +554,18 @@ def pipeline(
     table.add_row("Total Cost", f"${result.total_cost:.4f}")
     table.add_row("Pipeline ID", result.pipeline_id)
     console.print(table)
+    
+    # Log pipeline completion
+    logger.info(
+        "Pipeline completed",
+        extra={
+            "workflow": workflow,
+            "pipeline_id": result.pipeline_id,
+            "total_time_ms": result.total_time_ms,
+            "total_tokens": result.total_tokens,
+            "total_cost": result.total_cost
+        }
+    )
     
     # Save if requested
     if output:
@@ -850,6 +883,14 @@ def queue_run(
         
         success = sum(1 for r in results if r.status == JobStatus.COMPLETED)
         console.print(f"\n[green]✓ Completed {success}/{len(results)} jobs[/green]")
+        logger.info(
+            "Batch job processing completed",
+            extra={
+                "total_jobs": len(results),
+                "successful": success,
+                "failed": len(results) - success
+            }
+        )
 
 
 @queue_app.command("watch")
@@ -875,10 +916,12 @@ def queue_watch(
     
     def on_job_start(job):
         console.print(f"[cyan]▶ Starting job {job.job_id}[/cyan]")
+        logger.info(f"Starting job: {job.job_id}", extra={"job_id": job.job_id})
     
     def on_job_complete(job, result):
         status_color = "green" if result.status == JobStatus.COMPLETED else "red"
-        console.print(f"[{status_color}]✓ Completed job {job.job_id}[/{status_color}]")
+            console.print(f"[{status_color}]✓ Completed job {job.job_id}[/{status_color}]")
+            logger.info(f"Job completed: {job.job_id}", extra={"job_id": job.job_id, "status": "completed"})
     
     def on_job_error(job, error):
         console.print(f"[red]✗ Job {job.job_id} failed: {error}[/red]")
@@ -893,6 +936,7 @@ def queue_watch(
         queue.run_watch()
     except KeyboardInterrupt:
         console.print("\n[yellow]Watch stopped.[/yellow]")
+        logger.info("Job queue watcher stopped")
 
 
 @queue_app.command("add")
@@ -962,6 +1006,14 @@ def queue_configure(
     console.print(f"[green]✓ Queue configured![/green]")
     console.print(f"[dim]Watch folder: {watch_path}[/dim]")
     console.print(f"[dim]Config saved to: {config_path}[/dim]")
+    logger.info(
+        "Queue configured",
+        extra={
+            "watch_folder": str(watch_path),
+            "config_path": str(config_path),
+            "poll_interval": config.poll_interval_seconds
+        }
+    )
 
 
 @queue_app.command("list")
@@ -986,6 +1038,7 @@ def queue_list(
     
     if not jobs:
         console.print("[dim]No jobs found.[/dim]")
+        logger.info("No jobs found in queue", extra={"status": status.value if status else "all"})
         return
     
     table = Table(title=f"Jobs ({len(jobs)} total)")
@@ -1036,6 +1089,7 @@ def queue_clear(
     
     count = queue.clear_completed()
     console.print(f"[green]✓ Cleared {count} status file(s)[/green]")
+    logger.info("Cleared completed job status files", extra={"count": count})
 
 
 if __name__ == "__main__":

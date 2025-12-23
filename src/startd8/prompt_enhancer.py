@@ -19,6 +19,9 @@ except ImportError:
 
 from .config import get_config_manager
 from .models import TokenUsage
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class EnhancementStrategy(str, Enum):
@@ -408,7 +411,11 @@ class PromptEnhancer:
                     results.append(result)
                 except Exception as e:
                     # Log but continue with other files
-                    print(f"Error enhancing {input_file}: {e}")
+                    logger.error(
+                        f"Error enhancing file: {input_file}",
+                        exc_info=True,
+                        extra={"input_file": str(input_file), "error": str(e)}
+                    )
         
         return results
 

@@ -279,7 +279,17 @@ class APIKeyManager:
             
             return True
             
-        except Exception:
+        except (OSError, PermissionError, ValueError) as e:
+            # Log specific file operation errors
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.debug(f"Failed to export keys: {e}", exc_info=True)
+            return False
+        except Exception as e:
+            # Log unexpected errors
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.warning(f"Unexpected error exporting keys: {e}", exc_info=True)
             return False
     
     def import_keys(self, input_path: Path, password: str, overwrite: bool = False) -> Dict[str, Any]:
@@ -591,11 +601,32 @@ class CustomAgentManager:
                             **{k: v for k, v in agent_config.items() 
                                if k not in ['type', 'provider', 'name', 'model', 'api_key', 'max_tokens', 'temperature']}
                         )
+                except (ImportError, AttributeError, ValueError) as e:
+                    # Log specific provider registry errors
+                    from .logging_config import get_logger
+                    logger = get_logger(__name__)
+                    logger.debug(
+                        f"Failed to create agent via ProviderRegistry: {e}",
+                        exc_info=True,
+                        extra={
+                            "operation": "create_agent_via_provider",
+                            "provider": provider_name,
+                            "model": model
+                        }
+                    )
                 except Exception as e:
-                    # Log error but fall through to manual creation
-                    import logging
-                    logger = logging.getLogger(__name__)
-                    logger.warning(f"Failed to create agent via ProviderRegistry: {e}")
+                    # Log unexpected errors but fall through to manual creation
+                    from .logging_config import get_logger
+                    logger = get_logger(__name__)
+                    logger.warning(
+                        f"Unexpected error creating agent via ProviderRegistry: {e}",
+                        exc_info=True,
+                        extra={
+                            "operation": "create_agent_via_provider",
+                            "provider": provider_name,
+                            "model": model
+                        }
+                    )
             
             # Fallback to manual creation if ProviderRegistry fails
             if provider_name == 'openai' or (model and 'gpt' in model.lower()):
@@ -692,7 +723,17 @@ class AgentConfigTester:
         try:
             agent = GPT4Agent()
             result['working'] = True
+        except (ImportError, AttributeError) as e:
+            # Log import/attribute errors
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.debug(f"GPT-4 agent initialization failed (import/attribute): {e}", exc_info=True, extra={"operation": "test_gpt4"})
+            result['error'] = f"Initialization error: {e}"
         except Exception as e:
+            # Log unexpected errors
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.warning(f"GPT-4 agent test failed: {e}", exc_info=True, extra={"operation": "test_gpt4"})
             result['error'] = str(e)
         
         return result
@@ -2589,6 +2630,35 @@ class ImprovedTUI:
             self.console.print("[yellow]No document text provided.[/yellow]")
             questionary.press_any_key_to_continue().ask()
             return
+        
+        # 1.5. Show document preview and allow editing
+        self.console.print("\n[bold]Document Preview[/bold]\n")
+        preview_text = document_text[:500] + ("..." if len(document_text) > 500 else "")
+        self.console.print(Panel(
+            preview_text,
+            title=f"Document Content ({len(document_text)} characters)",
+            border_style="cyan"
+        ))
+        
+        edit_document = questionary.confirm(
+            "\nWould you like to edit the document before proceeding?",
+            default=False,
+            style=custom_style
+        ).ask()
+        
+        if edit_document:
+            edited_text = questionary.text(
+                "Edit the design document:",
+                default=document_text,
+                multiline=True,
+                style=custom_style
+            ).ask()
+            
+            if edited_text and edited_text.strip():
+                document_text = edited_text
+                self.console.print("[green]✓ Document updated[/green]\n")
+            else:
+                self.console.print("[yellow]No changes made, using original document.[/yellow]\n")
         
         # Ensure agent status is up to date
         self.agent_status = AgentConfigTester.test_all()
@@ -5484,6 +5554,7 @@ class ImprovedTUI:
                     "📋 View Pending Jobs",
                     "▶️  Process Queue (run all pending)",
                     "⏭️  Process Single Job",
+                    "🔄 Send Job to Workflow",
                     "📜 View Completed Jobs",
                     "🧹 Clear Completed",
                     questionary.Separator("───"),
@@ -5509,6 +5580,8 @@ class ImprovedTUI:
                 self._process_queue()
             elif "Process Single" in action:
                 self._process_single_job()
+            elif "Send Job to Workflow" in action:
+                self._send_job_to_workflow()
             elif "View Completed" in action:
                 self._view_completed_jobs()
             elif "Clear Completed" in action:
@@ -5785,6 +5858,595 @@ class ImprovedTUI:
             self.console.print(f"[red]Error: {result.error}[/red]")
         
         questionary.press_any_key_to_continue("\nPress any key...").ask()
+    
+    def _send_job_to_workflow(self):
+        """Send a job from the queue to a workflow"""
+        self.show_header("Send Job to Workflow")
+        
+        queue = self._get_job_queue()
+        if not queue:
+            self.console.print("[yellow]Queue not configured.[/yellow]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        pending = queue.get_pending_jobs()
+        
+        if not pending:
+            self.console.print("[dim]No pending jobs to send to workflow.[/dim]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # 1. Select job
+        self.console.print("[bold]Select Job to Send to Workflow[/bold]\n")
+        choices = []
+        for job in pending[:20]:
+            preview = job.prompt.content[:50] + "..." if len(job.prompt.content) > 50 else job.prompt.content
+            preview = preview.replace("\n", " ").replace("\r", "")
+            choices.append(f"{job.job_id[:12]}... | {preview}")
+        
+        choices.append("← Cancel")
+        
+        selection = questionary.select(
+            "Select job:",
+            choices=choices,
+            style=custom_style
+        ).ask()
+        
+        if not selection or "Cancel" in selection:
+            return
+        
+        # Find selected job
+        job_id_prefix = selection.split(" | ")[0].replace("...", "")
+        selected_job = None
+        for job in pending:
+            if job.job_id.startswith(job_id_prefix):
+                selected_job = job
+                break
+        
+        if not selected_job:
+            self.console.print("[red]Job not found.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Show job preview
+        self.console.print(f"\n[bold]Selected Job:[/bold] {selected_job.job_id}\n")
+        self.console.print(Panel(
+            selected_job.prompt.content[:500] + ("..." if len(selected_job.prompt.content) > 500 else ""),
+            title="Job Content Preview",
+            border_style="cyan"
+        ))
+        
+        # 2. Select workflow
+        self.console.print("\n[bold]Select Workflow[/bold]\n")
+        workflow_choices = [
+            "✨ Design Polish Pipeline (Polish → Suggest Updates → Final Polish)",
+            "🔍 Critical Review Workflow (Multi-Agent Analysis)",
+            "🔗 Document Enhancement Chain (Sequential Multi-Agent)",
+            "🔄 Iterative Dev Workflow (Dev → Review → Fix)",
+            "🚀 Design Pipeline (Draft → Review → Polish)",
+            "← Cancel"
+        ]
+        
+        workflow_selection = questionary.select(
+            "Select workflow to run with this job:",
+            choices=workflow_choices,
+            style=custom_style
+        ).ask()
+        
+        if not workflow_selection or "Cancel" in workflow_selection:
+            return
+        
+        # 3. Run workflow with job content
+        job_content = selected_job.prompt.content
+        
+        try:
+            if "Design Polish Pipeline" in workflow_selection:
+                self._run_design_polish_pipeline_from_job(selected_job, job_content)
+            elif "Critical Review Workflow" in workflow_selection:
+                self._run_critical_review_from_job(selected_job, job_content)
+            elif "Document Enhancement Chain" in workflow_selection:
+                self._run_enhancement_chain_from_job(selected_job, job_content)
+            elif "Iterative Dev Workflow" in workflow_selection:
+                self._run_iterative_workflow_from_job(selected_job, job_content)
+            elif "Design Pipeline" in workflow_selection:
+                self._run_design_pipeline_from_job(selected_job, job_content)
+            else:
+                self.console.print("[red]Unknown workflow selected.[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+                
+        except Exception as e:
+            self.console.print(f"\n[red]Error running workflow: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            questionary.press_any_key_to_continue().ask()
+    
+    def _run_design_polish_pipeline_from_job(self, job, content: str):
+        """Run Design Polish Pipeline with job content"""
+        self.show_header("Design Polish Pipeline (from Job)")
+        
+        # Show job content preview first
+        self.console.print("[bold]Job Content Preview[/bold]\n")
+        preview_text = content[:500] + ("..." if len(content) > 500 else "")
+        self.console.print(Panel(
+            preview_text,
+            title=f"Job {job.job_id[:12]} - Content ({len(content)} characters)",
+            border_style="cyan"
+        ))
+        
+        # Option to edit content before proceeding
+        edit_content = questionary.confirm(
+            "\nWould you like to edit the content before proceeding?",
+            default=False,
+            style=custom_style
+        ).ask()
+        
+        if edit_content:
+            edited_content = questionary.text(
+                "Edit the content:",
+                default=content,
+                multiline=True,
+                style=custom_style
+            ).ask()
+            
+            if edited_content and edited_content.strip():
+                content = edited_content
+                self.console.print("[green]✓ Content updated[/green]\n")
+            else:
+                self.console.print("[yellow]No changes made, using original content.[/yellow]\n")
+        
+        self.console.print("[cyan]Selecting agents for pipeline...[/cyan]\n")
+        
+        # Get agents for the pipeline
+        ready_agents = self._get_ready_agents_for_selection()
+        if len(ready_agents) < 3:
+            self.console.print("[red]Need at least 3 agents for Design Polish Pipeline.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Select agents
+        agent_choices = [f"{a['icon']} {a['name']} ({a['model']})" for a in ready_agents]
+        
+        polisher_choice = questionary.select(
+            "Select polisher agent:",
+            choices=agent_choices,
+            style=custom_style
+        ).ask()
+        
+        updater_choice = questionary.select(
+            "Select updater agent:",
+            choices=agent_choices,
+            style=custom_style
+        ).ask()
+        
+        final_polisher_choice = questionary.select(
+            "Select final polisher agent:",
+            choices=agent_choices,
+            style=custom_style
+        ).ask()
+        
+        # Extract agent names
+        polisher_name = polisher_choice.split(" (")[0].split(" ", 1)[1] if " " in polisher_choice.split(" (")[0] else polisher_choice.split(" (")[0]
+        updater_name = updater_choice.split(" (")[0].split(" ", 1)[1] if " " in updater_choice.split(" (")[0] else updater_choice.split(" (")[0]
+        final_polisher_name = final_polisher_choice.split(" (")[0].split(" ", 1)[1] if " " in final_polisher_choice.split(" (")[0] else final_polisher_choice.split(" (")[0]
+        
+        # Create agents
+        polisher = self._create_agent_from_name(polisher_name, ready_agents)
+        updater = self._create_agent_from_name(updater_name, ready_agents)
+        final_polisher = self._create_agent_from_name(final_polisher_name, ready_agents)
+        
+        if not all([polisher, updater, final_polisher]):
+            self.console.print("[red]Failed to create agents.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Run pipeline
+        try:
+            from datetime import datetime, timezone
+            from .orchestration import WorkflowTemplates
+            pipeline = WorkflowTemplates.design_polish_chain(polisher, updater, final_polisher)
+            pipeline.framework = self.framework
+            
+            result = pipeline.run(content)
+            
+            # Save result
+            output_dir = Path.cwd() / "workflow_results"
+            output_dir.mkdir(exist_ok=True)
+            output_file = output_dir / f"job_{job.job_id[:12]}_design_polish_{result.pipeline_id[:8]}.md"
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(f"# Design Polish Pipeline Result\n\n")
+                f.write(f"**Job ID:** {job.job_id}\n")
+                f.write(f"**Pipeline ID:** {result.pipeline_id}\n")
+                f.write(f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
+                f.write("---\n\n")
+                f.write(result.final_output)
+                f.write("\n\n---\n\n")
+                f.write("## Pipeline Steps\n\n")
+                for step in result.steps:
+                    f.write(f"### {step['step_name']} ({step['agent']})\n\n")
+                    f.write(f"{step['output']}\n\n")
+            
+            self.console.print(f"\n[green]✓ Pipeline completed successfully![/green]")
+            self.console.print(f"[green]✓ Saved to: {output_file}[/green]")
+            self.console.print(f"\n[dim]Total cost: ${result.total_cost:.4f}[/dim]")
+            self.console.print(f"[dim]Total time: {result.total_time_ms}ms[/dim]")
+            
+        except Exception as e:
+            self.console.print(f"\n[red]Pipeline failed: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        
+        questionary.press_any_key_to_continue().ask()
+    
+    def _run_critical_review_from_job(self, job, content: str):
+        """Run Critical Review Workflow with job content as a document"""
+        self.show_header("Critical Review Workflow (from Job)")
+        
+        self.console.print("[cyan]Running Critical Review Workflow with job content...[/cyan]\n")
+        
+        # Get agents
+        ready_agents = self._get_ready_agents_for_selection()
+        if not ready_agents:
+            self.console.print("[red]No ready agents available.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Select agents
+        agent_choices = [f"{a['icon']} {a['name']} ({a['model']})" for a in ready_agents]
+        
+        self.console.print("[dim]💡 Use SPACE to select/deselect agents, ENTER to confirm[/dim]\n")
+        selected_agents = None
+        while True:
+            selected_agents = questionary.checkbox(
+                "Select agents for critical review:",
+                choices=agent_choices,
+                style=custom_style,
+                instruction="(Press SPACE to select, ENTER to confirm)"
+            ).ask()
+            
+            if selected_agents is None:
+                return
+            
+            if selected_agents and len(selected_agents) > 0:
+                break
+            
+            self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
+            retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+            if not retry:
+                return
+        
+        # Extract agent info
+        selected_agent_infos = []
+        for agent_choice in selected_agents:
+            name_part = agent_choice.split(" (")[0].strip()
+            parts = name_part.split()
+            if len(parts) > 1:
+                agent_name = " ".join(parts[1:])
+            else:
+                agent_name = name_part
+            
+            for agent in ready_agents:
+                if agent['name'] == agent_name:
+                    selected_agent_infos.append(agent)
+                    break
+        
+        # Output directory
+        output_dir = Path.cwd() / "critical_reviews"
+        output_dir.mkdir(exist_ok=True)
+        
+        # Review prompt template
+        review_prompt_template = """You are an expert technical reviewer and software architect. Your task is to critically review the following design document.
+
+# Design Document
+
+{document_content}
+
+# Review Requirements
+
+Please provide a comprehensive critical review that includes:
+
+## 1. What is Good
+Identify and highlight the strengths of this design document. What aspects are well thought out, clear, or innovative?
+
+## 2. What is Bad
+Identify weaknesses, gaps, ambiguities, or problematic aspects of the design. Be specific and constructive.
+
+## 3. What Needs More or Less Of
+- What areas need more detail, explanation, or coverage?
+- What areas are too verbose or could be condensed?
+- What topics are missing entirely?
+
+## 4. Suggestions for Improvement
+Provide specific, actionable suggestions for how to improve the design document. Include:
+- Structural improvements
+- Content additions or modifications
+- Clarity enhancements
+- Technical recommendations
+
+Please be thorough, constructive, and specific in your analysis."""
+        
+        self.console.print(f"\n[cyan]Generating reviews with {len(selected_agent_infos)} agent(s)...[/cyan]\n")
+        
+        all_results = []
+        
+        try:
+            for agent_info in selected_agent_infos:
+                agent_name = agent_info.get('name', 'Unknown')
+                agent_model = agent_info.get('model', 'unknown')
+                
+                agent_instance = self._create_agent_from_name(agent_name, ready_agents)
+                if not agent_instance:
+                    all_results.append({
+                        'agent': agent_name,
+                        'success': False,
+                        'error': 'Failed to create agent'
+                    })
+                    continue
+                
+                # Generate review
+                review_prompt = review_prompt_template.format(document_content=content)
+                response_tuple = agent_instance.generate(review_prompt)
+                
+                # Extract response
+                if isinstance(response_tuple, tuple) and len(response_tuple) >= 1:
+                    review_text = response_tuple[0]
+                else:
+                    review_text = str(response_tuple)
+                
+                # Save review
+                safe_agent_name = agent_name.replace(" ", "_").replace("/", "_")
+                output_filename = f"job_{job.job_id[:12]}_review_{safe_agent_name}.md"
+                output_path = output_dir / output_filename
+                
+                from datetime import datetime, timezone
+                with open(output_path, 'w', encoding='utf-8') as f:
+                    f.write(f"# Critical Review: Job {job.job_id[:12]}\n\n")
+                    f.write(f"**Reviewed by:** {agent_name} ({agent_model})\n")
+                    f.write(f"**Job ID:** {job.job_id}\n")
+                    f.write(f"**Review Date:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
+                    f.write("---\n\n")
+                    f.write(review_text)
+                
+                all_results.append({
+                    'agent': agent_name,
+                    'output_path': output_path,
+                    'success': True
+                })
+            
+            # Show results
+            self.console.print("\n[bold cyan]Review Complete![/bold cyan]\n")
+            for result in all_results:
+                if result['success']:
+                    self.console.print(f"[green]✓[/green] {result['agent']}: {result['output_path'].name}")
+                else:
+                    self.console.print(f"[red]✗[/red] {result['agent']}: {result.get('error', 'Unknown error')}")
+            
+            self.console.print(f"\n[cyan]Output directory:[/cyan] {output_dir}")
+            
+        except Exception as e:
+            self.console.print(f"\n[red]Error: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        
+        questionary.press_any_key_to_continue().ask()
+    
+    def _run_enhancement_chain_from_job(self, job, content: str):
+        """Run Document Enhancement Chain with job content"""
+        self.show_header("Document Enhancement Chain (from Job)")
+        
+        self.console.print("[cyan]Running Document Enhancement Chain with job content...[/cyan]\n")
+        
+        # Use the existing document enhancement chain menu but with job content
+        # We'll create a temporary file or pass content directly
+        from .document_enhancement import DocumentEnhancementChain
+        
+        ready_agents = self._get_ready_agents_for_selection()
+        if not ready_agents:
+            self.console.print("[red]No ready agents available.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Select agents for the chain
+        agent_choices = [f"{a['icon']} {a['name']} ({a['model']})" for a in ready_agents]
+        
+        self.console.print("[dim]💡 Use SPACE to select/deselect agents, ENTER to confirm[/dim]\n")
+        selected_agents = None
+        while True:
+            selected_agents = questionary.checkbox(
+                "Select agents for enhancement chain (in order):",
+                choices=agent_choices,
+                style=custom_style,
+                instruction="(Press SPACE to select, ENTER to confirm)"
+            ).ask()
+            
+            if selected_agents is None:
+                return
+            
+            if selected_agents and len(selected_agents) > 0:
+                break
+            
+            self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
+            retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+            if not retry:
+                return
+        
+        # Create agents
+        chain_agents = []
+        for agent_choice in selected_agents:
+            name_part = agent_choice.split(" (")[0].strip()
+            parts = name_part.split()
+            if len(parts) > 1:
+                agent_name = " ".join(parts[1:])
+            else:
+                agent_name = name_part
+            
+            agent = self._create_agent_from_name(agent_name, ready_agents)
+            if agent:
+                chain_agents.append(agent)
+        
+        if not chain_agents:
+            self.console.print("[red]Failed to create agents.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Run enhancement chain
+        try:
+            from datetime import datetime, timezone
+            config = DocumentEnhancementConfig(
+                agents=[EnhancementAgentConfig(name=a.name, model=a.model) for a in chain_agents],
+                error_handling=ErrorHandling.CONTINUE_ON_ERROR
+            )
+            
+            chain = DocumentEnhancementChain(config, self.framework)
+            result = chain.run(content)
+            
+            # Save result
+            output_dir = Path.cwd() / "workflow_results"
+            output_dir.mkdir(exist_ok=True)
+            output_file = output_dir / f"job_{job.job_id[:12]}_enhancement_chain.md"
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(f"# Document Enhancement Chain Result\n\n")
+                f.write(f"**Job ID:** {job.job_id}\n")
+                f.write(f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
+                f.write("---\n\n")
+                f.write(result.final_output)
+                f.write("\n\n---\n\n")
+                f.write("## Enhancement Steps\n\n")
+                for i, step in enumerate(result.steps, 1):
+                    f.write(f"### Step {i}: {step.get('agent_name', 'Unknown')}\n\n")
+                    f.write(f"{step.get('output', '')}\n\n")
+            
+            self.console.print(f"\n[green]✓ Enhancement chain completed![/green]")
+            self.console.print(f"[green]✓ Saved to: {output_file}[/green]")
+            
+        except Exception as e:
+            self.console.print(f"\n[red]Enhancement chain failed: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        
+        questionary.press_any_key_to_continue().ask()
+    
+    def _run_iterative_workflow_from_job(self, job, content: str):
+        """Run Iterative Dev Workflow with job content"""
+        self.show_header("Iterative Dev Workflow (from Job)")
+        
+        self.console.print("[yellow]Iterative Dev Workflow requires interactive input.[/yellow]")
+        self.console.print("[yellow]This workflow is best run directly from the menu.[/yellow]\n")
+        
+        use_as_prompt = questionary.confirm(
+            "Use job content as the initial prompt for iterative workflow?",
+            default=True,
+            style=custom_style
+        ).ask()
+        
+        if not use_as_prompt:
+            return
+        
+        # Store the job content as current prompt and run iterative workflow
+        # This is a simplified approach - the full iterative workflow has more steps
+        self.console.print("\n[cyan]Note: Full iterative workflow requires multiple interactive steps.[/cyan]")
+        self.console.print("[cyan]Consider using the Iterative Dev Workflow menu option directly.[/cyan]\n")
+        
+        questionary.press_any_key_to_continue().ask()
+    
+    def _run_design_pipeline_from_job(self, job, content: str):
+        """Run Design Pipeline with job content"""
+        self.show_header("Design Pipeline (from Job)")
+        
+        self.console.print("[cyan]Running Design Pipeline with job content...[/cyan]\n")
+        
+        ready_agents = self._get_ready_agents_for_selection()
+        if len(ready_agents) < 3:
+            self.console.print("[red]Need at least 3 agents for Design Pipeline.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Select agents
+        agent_choices = [f"{a['icon']} {a['name']} ({a['model']})" for a in ready_agents]
+        
+        drafter_choice = questionary.select("Select drafter agent:", choices=agent_choices, style=custom_style).ask()
+        reviewer_choice = questionary.select("Select reviewer agent:", choices=agent_choices, style=custom_style).ask()
+        final_reviewer_choice = questionary.select("Select final reviewer agent:", choices=agent_choices, style=custom_style).ask()
+        
+        # Extract and create agents
+        drafter_name = drafter_choice.split(" (")[0].split(" ", 1)[1] if " " in drafter_choice.split(" (")[0] else drafter_choice.split(" (")[0]
+        reviewer_name = reviewer_choice.split(" (")[0].split(" ", 1)[1] if " " in reviewer_choice.split(" (")[0] else reviewer_choice.split(" (")[0]
+        final_reviewer_name = final_reviewer_choice.split(" (")[0].split(" ", 1)[1] if " " in final_reviewer_choice.split(" (")[0] else final_reviewer_choice.split(" (")[0]
+        
+        drafter = self._create_agent_from_name(drafter_name, ready_agents)
+        reviewer = self._create_agent_from_name(reviewer_name, ready_agents)
+        final_reviewer = self._create_agent_from_name(final_reviewer_name, ready_agents)
+        
+        if not all([drafter, reviewer, final_reviewer]):
+            self.console.print("[red]Failed to create agents.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Run pipeline
+        try:
+            from datetime import datetime, timezone
+            from .orchestration import WorkflowTemplates
+            pipeline = WorkflowTemplates.design_review_chain(drafter, reviewer, final_reviewer)
+            pipeline.framework = self.framework
+            
+            result = pipeline.run(content)
+            
+            # Save result
+            output_dir = Path.cwd() / "workflow_results"
+            output_dir.mkdir(exist_ok=True)
+            output_file = output_dir / f"job_{job.job_id[:12]}_design_pipeline_{result.pipeline_id[:8]}.md"
+            
+            with open(output_file, 'w', encoding='utf-8') as f:
+                f.write(f"# Design Pipeline Result\n\n")
+                f.write(f"**Job ID:** {job.job_id}\n")
+                f.write(f"**Pipeline ID:** {result.pipeline_id}\n")
+                f.write(f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
+                f.write("---\n\n")
+                f.write(result.final_output)
+                f.write("\n\n---\n\n")
+                f.write("## Pipeline Steps\n\n")
+                for step in result.steps:
+                    f.write(f"### {step['step_name']} ({step['agent']})\n\n")
+                    f.write(f"{step['output']}\n\n")
+            
+            self.console.print(f"\n[green]✓ Pipeline completed successfully![/green]")
+            self.console.print(f"[green]✓ Saved to: {output_file}[/green]")
+            self.console.print(f"\n[dim]Total cost: ${result.total_cost:.4f}[/dim]")
+            self.console.print(f"[dim]Total time: {result.total_time_ms}ms[/dim]")
+            
+        except Exception as e:
+            self.console.print(f"\n[red]Pipeline failed: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        
+        questionary.press_any_key_to_continue().ask()
+    
+    def _create_agent_from_name(self, agent_name: str, ready_agents: List[Dict]) -> Optional[BaseAgent]:
+        """Helper to create an agent instance from name"""
+        for agent_info in ready_agents:
+            if agent_info.get('name') == agent_name:
+                if agent_info.get('type') == 'builtin':
+                    builtin_type = agent_info.get('builtin_type')
+                    if builtin_type == 'mock':
+                        return MockAgent(name="mock", model="mock-model")
+                    elif builtin_type == 'claude':
+                        return ClaudeAgent()
+                    elif builtin_type == 'gpt4':
+                        return GPT4Agent()
+                else:
+                    custom_config = agent_info.get('custom_config')
+                    if not custom_config:
+                        custom_agents = self.agent_manager.list_agents()
+                        for custom_agent in custom_agents:
+                            if custom_agent.get('name') == agent_name:
+                                custom_config = custom_agent
+                                break
+                    
+                    if custom_config:
+                        return self.agent_manager.create_agent_instance(custom_config)
+        return None
     
     def _clear_completed_jobs(self):
         """Clear completed job status files"""

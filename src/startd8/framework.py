@@ -11,7 +11,7 @@ import uuid
 
 from .models import (
     Prompt, AgentResponse, Benchmark, TokenUsage, BenchmarkStatus,
-    ResponseComparison, BenchmarkReport, PaginatedResult
+    ResponseComparison, BenchmarkReport, PaginatedResult, ResponseMetadata
 )
 from .storage import StorageBackend, FileSystemStorage
 from .logging_config import get_logger
@@ -183,7 +183,7 @@ class AgentFramework:
         response: str,
         response_time_ms: int,
         token_usage: Optional[TokenUsage] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional['ResponseMetadata'] = None,
         response_id: Optional[str] = None,
         timestamp: Optional[datetime] = None,
     ) -> AgentResponse:

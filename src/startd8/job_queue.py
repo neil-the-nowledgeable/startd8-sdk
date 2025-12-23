@@ -117,9 +117,25 @@ class AgentRegistry:
                             f"Creating agent from provider {provider.name} for model {model}"
                         )
                         return provider.create_agent(model)
+                    except (ValueError, KeyError, AttributeError) as e:
+                        logger.debug(
+                            f"Failed to create agent for spec '{raw}': {e}",
+                            exc_info=True,
+                            extra={
+                                "operation": "create_agent_from_spec",
+                                "spec": raw,
+                                "error_type": type(e).__name__
+                            }
+                        )
                     except Exception as e:
                         logger.warning(
-                            f"Failed to create agent for spec '{raw}': {e}"
+                            f"Unexpected error creating agent for spec '{raw}': {e}",
+                            exc_info=True,
+                            extra={
+                                "operation": "create_agent_from_spec",
+                                "spec": raw,
+                                "error_type": type(e).__name__
+                            }
                         )
         
         # Try to find a provider that supports this as a model
@@ -129,8 +145,26 @@ class AgentRegistry:
                 logger.debug(f"Creating agent from provider {provider.name} for model {raw}")
                 provider.validate_config({})
                 return provider.create_agent(raw)
+            except (ImportError, AttributeError, ValueError) as e:
+                logger.debug(
+                    f"Failed to create agent for model {raw}: {e}",
+                    exc_info=True,
+                    extra={
+                        "operation": "create_agent_from_model",
+                        "model": raw,
+                        "error_type": type(e).__name__
+                    }
+                )
             except Exception as e:
-                logger.warning(f"Failed to create agent for model {raw}: {e}")
+                logger.warning(
+                    f"Unexpected error creating agent for model {raw}: {e}",
+                    exc_info=True,
+                    extra={
+                        "operation": "create_agent_from_model",
+                        "model": raw,
+                        "error_type": type(e).__name__
+                    }
+                )
         
         # Try provider name as fallback (e.g., "anthropic" -> provider's default model)
         provider = ProviderRegistry.get_provider(name_lower)

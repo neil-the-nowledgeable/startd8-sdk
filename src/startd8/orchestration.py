@@ -90,7 +90,7 @@ class Pipeline:
         name: str,
         agent: BaseAgent,
         transform: Optional[Callable[[str], str]] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None  # Can contain arbitrary fields, filtered when passed to agent
     ) -> 'Pipeline':
         """
         Add a step to the pipeline
@@ -184,11 +184,14 @@ class Pipeline:
                 step_input = step.transform(current_input) if step.transform else current_input
                 
                 # Run agent asynchronously (with cost/budget enforcement if configured)
-                step_metadata = {
+                # Build step metadata compatible with ResponseMetadata TypedDict
+                valid_metadata_fields = set(ResponseMetadata.__annotations__.keys())
+                step_metadata: ResponseMetadata = {
                     "pipeline_id": pipeline_id,
                     "step_number": i + 1,
-                    "step_name": step.name,
-                    **step.metadata
+                    "agent_name": step.agent.name,
+                    "model": step.agent.model,
+                    **{k: v for k, v in step.metadata.items() if k in valid_metadata_fields}
                 }
                 agent_response = await step.agent.acreate_response(
                     prompt_id=tracking_prompt_id,
@@ -285,17 +288,45 @@ class Pipeline:
             return result
             
         except Exception as e:
+            # Import specific exception types for better error handling
+            from .exceptions import AgentError, APIError, ConfigurationError
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            
+            # Log error with pipeline context
+            logger.error(
+                f"Pipeline '{self.name}' failed: {e}",
+                exc_info=True,
+                extra={
+                    "pipeline_id": pipeline_id,
+                    "pipeline_name": self.name,
+                    "error_type": type(e).__name__,
+                    "steps": [s.name for s in self.steps]
+                }
+            )
+            
             # Emit pipeline error event
             EventBus.emit(Event(
                 type=EventType.PIPELINE_ERROR,
                 source="Pipeline",
                 data={
                     "pipeline_id": pipeline_id,
-                    "error": str(e)
+                    "error": str(e),
+                    "error_type": type(e).__name__
                 },
                 correlation_id=pipeline_id
             ))
-            raise
+            
+            # Re-raise specific exceptions as-is
+            if isinstance(e, (AgentError, APIError, ConfigurationError)):
+                raise
+            
+            # Wrap unexpected errors
+            raise AgentError(
+                f"Pipeline '{self.name}' failed: {e}",
+                agent_name=getattr(e, 'agent_name', None),
+                original_error=e
+            ) from e
     
     def run(self, initial_input: str, store: bool = True) -> PipelineResult:
         """

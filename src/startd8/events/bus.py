@@ -34,7 +34,14 @@ class EventBus:
         # Subscribe to events
         @EventBus.on(EventType.AGENT_CALL_COMPLETE)
         def log_agent_call(event: Event):
-            print(f"Agent {event.data['agent_name']} completed in {event.data['response_time_ms']}ms")
+            logger.info(
+                f"Agent {event.data['agent_name']} completed",
+                extra={
+                    "agent_name": event.data.get('agent_name'),
+                    "response_time_ms": event.data.get('response_time_ms'),
+                    "event_type": event.type.name
+                }
+            )
         
         # Or subscribe programmatically
         EventBus.subscribe(EventType.JOB_COMPLETE, my_handler)
@@ -202,7 +209,10 @@ class EventBus:
         Example:
             @EventBus.on(EventType.AGENT_CALL_COMPLETE)
             def handle_completion(event: Event):
-                print(f"Completed: {event.data}")
+                logger.debug(
+                    "Event completed",
+                    extra={"event_type": event.type.name, "event_data": event.data}
+                )
         """
         def decorator(func: EventHandler) -> EventHandler:
             cls.subscribe(event_type, func)

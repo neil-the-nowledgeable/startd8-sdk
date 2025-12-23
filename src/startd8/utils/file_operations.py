@@ -78,25 +78,42 @@ def atomic_write(
                 if file_path.exists():
                     file_path.unlink()
             temp_path.replace(file_path)
-        except Exception as e:
+        except (OSError, PermissionError) as e:
             # Clean up temp file if rename fails
             try:
                 temp_path.unlink()
-            except:
-                pass
+            except (OSError, FileNotFoundError):
+                pass  # Temp file may not exist or already deleted
             raise FileOperationError(
                 f"Failed to atomically write file: {e}",
                 file_path=str(file_path),
                 original_error=e
             )
     
-    except Exception as e:
+    except (OSError, PermissionError, IOError) as e:
         # Restore backup if write failed
         if backup_path and backup_path.exists():
             try:
                 shutil.copy2(backup_path, file_path)
-            except:
+            except (OSError, PermissionError, shutil.Error):
+                pass  # Best effort restore - already logged above
+        raise FileOperationError(
+            f"Failed to write file: {e}",
+            file_path=str(file_path),
+            original_error=e
+        ) from e
+    except Exception as e:
+        # Catch-all for unexpected errors
+        if backup_path and backup_path.exists():
+            try:
+                shutil.copy2(backup_path, file_path)
+            except Exception:
                 pass  # Best effort restore
+        raise FileOperationError(
+            f"Unexpected error writing file: {e}",
+            file_path=str(file_path),
+            original_error=e
+        ) from e
         
         raise FileOperationError(
             f"Failed to write file: {e}",

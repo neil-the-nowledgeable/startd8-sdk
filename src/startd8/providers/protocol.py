@@ -114,7 +114,13 @@ class AgentProvider(Protocol):
             try:
                 provider.validate_config({"api_key": "sk-..."})
             except ConfigurationError as e:
-                print(f"Invalid config: {e}")
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(
+                    f"Invalid config: {e}",
+                    exc_info=True,
+                    extra={"provider": self.name if hasattr(self, 'name') else 'unknown', "error": str(e)}
+                )
         """
         ...
     

@@ -92,23 +92,88 @@ class MetricsHandler:
 
 
 class ConsoleProgressHandler:
-    """Handler that prints progress to console"""
+    """Handler that prints progress to console and logs events"""
     
     @staticmethod
     def handle(event: Event) -> None:
-        """Print event progress to console"""
+        """Print event progress to console and log to logger"""
         if event.type == EventType.AGENT_CALL_START:
-            print(f"🤖 Calling {event.data.get('agent_name')} ({event.data.get('model')})...")
+            agent_name = event.data.get('agent_name', 'Unknown')
+            model = event.data.get('model', 'Unknown')
+            message = f"🤖 Calling {agent_name} ({model})..."
+            print(message)
+            logger.info(
+                f"Agent call started: {agent_name}",
+                extra={
+                    "event_type": event.type.name,
+                    "agent_name": agent_name,
+                    "model": model,
+                    "correlation_id": event.correlation_id
+                }
+            )
         elif event.type == EventType.AGENT_CALL_COMPLETE:
-            print(f"✅ {event.data.get('agent_name')} completed in {event.data.get('response_time_ms')}ms")
+            agent_name = event.data.get('agent_name', 'Unknown')
+            response_time_ms = event.data.get('response_time_ms', 0)
+            message = f"✅ {agent_name} completed in {response_time_ms}ms"
+            print(message)
+            logger.info(
+                f"Agent call completed: {agent_name}",
+                extra={
+                    "event_type": event.type.name,
+                    "agent_name": agent_name,
+                    "response_time_ms": response_time_ms,
+                    "correlation_id": event.correlation_id
+                }
+            )
         elif event.type == EventType.AGENT_CALL_ERROR:
-            print(f"❌ {event.data.get('agent_name')} failed: {event.data.get('error')}")
+            agent_name = event.data.get('agent_name', 'Unknown')
+            error = event.data.get('error', 'Unknown error')
+            message = f"❌ {agent_name} failed: {error}"
+            print(message)
+            logger.error(
+                f"Agent call failed: {agent_name}",
+                extra={
+                    "event_type": event.type.name,
+                    "agent_name": agent_name,
+                    "error": error,
+                    "correlation_id": event.correlation_id
+                }
+            )
         elif event.type == EventType.PIPELINE_START:
-            print(f"🚀 Pipeline started")
+            message = "🚀 Pipeline started"
+            print(message)
+            logger.info(
+                "Pipeline started",
+                extra={
+                    "event_type": event.type.name,
+                    "correlation_id": event.correlation_id,
+                    **event.data
+                }
+            )
         elif event.type == EventType.PIPELINE_COMPLETE:
-            print(f"✨ Pipeline completed successfully")
+            message = "✨ Pipeline completed successfully"
+            print(message)
+            logger.info(
+                "Pipeline completed successfully",
+                extra={
+                    "event_type": event.type.name,
+                    "correlation_id": event.correlation_id,
+                    **event.data
+                }
+            )
         elif event.type == EventType.PIPELINE_ERROR:
-            print(f"💥 Pipeline failed: {event.data.get('error')}")
+            error = event.data.get('error', 'Unknown error')
+            message = f"💥 Pipeline failed: {error}"
+            print(message)
+            logger.error(
+                "Pipeline failed",
+                extra={
+                    "event_type": event.type.name,
+                    "error": error,
+                    "correlation_id": event.correlation_id,
+                    **event.data
+                }
+            )
     
     @classmethod
     def register(cls):
