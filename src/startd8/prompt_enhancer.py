@@ -325,13 +325,14 @@ class PromptEnhancer:
             metadata_header = self._build_metadata_header(result, input_path)
             output_content = metadata_header + output_content
         
-        # Write enhanced content
+        # Write enhanced content with versioning to avoid overwriting
+        from .utils.file_operations import save_text_file_with_versioning
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(output_content, encoding="utf-8")
+        saved_path = save_text_file_with_versioning(output_path, output_content)
         
-        # Add file paths to metadata
+        # Add file paths to metadata (use actual saved path)
         result.metadata["input_file"] = str(input_path)
-        result.metadata["output_file"] = str(output_path)
+        result.metadata["output_file"] = str(saved_path)
         
         return result
     

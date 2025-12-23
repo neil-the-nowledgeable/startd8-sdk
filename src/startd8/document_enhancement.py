@@ -18,8 +18,8 @@ from .models import (
     EnhancementStepResult,
     AgentConfig,
     ErrorHandling,
-    TokenUsage
 )
+from .utils.file_operations import save_text_file_with_versioning
 from .agents import BaseAgent
 
 
@@ -343,10 +343,10 @@ class DocumentEnhancementChain:
         
         output_file = step_dir / f"enhanced_{step_number}.md"
         
-        with open(output_file, 'w', encoding='utf-8') as f:
-            f.write(document_content)
+        # Use versioned save to avoid overwriting intermediate results
+        saved_path = save_text_file_with_versioning(output_file, document_content)
         
-        return output_file
+        return saved_path
     
     def _create_output_directory(self) -> Path:
         """
@@ -589,8 +589,7 @@ class DocumentEnhancementChain:
         
         # Save final document
         final_output_path = output_dir / "enhanced_final.md"
-        with open(final_output_path, 'w', encoding='utf-8') as f:
-            f.write(current_document)
+        final_output_path = save_text_file_with_versioning(final_output_path, current_document)
         
         # Determine overall success
         overall_success = all(step.success for step in self.results)

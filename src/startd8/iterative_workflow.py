@@ -18,6 +18,7 @@ import uuid
 
 from .agents import BaseAgent
 from .models import TokenUsage
+from .utils.file_operations import save_text_file_with_versioning
 from .logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -645,8 +646,9 @@ def save_workflow_result(result: IterativeWorkflowResult, output_dir: Path) -> P
         ]
     }
     
-    with open(filepath, 'w') as f:
-        json.dump(data, f, indent=2)
+    # Use versioned save to avoid overwriting workflow results
+    json_content = json.dumps(data, indent=2)
+    saved_path = save_text_file_with_versioning(filepath, json_content)
     
-    logger.info(f"Saved workflow result to {filepath}")
-    return filepath
+    logger.info(f"Saved workflow result to {saved_path}")
+    return saved_path

@@ -41,9 +41,11 @@ from .paths import default_config_dir, default_data_dir
 from .models import (
     DocumentEnhancementConfig,
     AgentConfig as EnhancementAgentConfig,
-    ErrorHandling
+    ErrorHandling,
+    AgentResponse
 )
 from .exceptions import AgentError, APIError, ConfigurationError
+from .utils.file_operations import save_text_file_with_versioning
 
 # Prompt Builder imports (lazy loaded to avoid circular imports)
 _prompt_builder_loaded = False
@@ -2519,18 +2521,18 @@ class ImprovedTUI:
                 ).ask()
                 
                 if filename:
-                    with open(filename, 'w') as f:
-                        f.write(f"# Design Pipeline Result\n\n")
-                        f.write(f"**Task:** {prompt_text}\n\n")
-                        f.write("---\n\n")
-                        f.write(result.final_output)
-                        f.write("\n\n---\n")
-                        f.write("## Pipeline Steps\n")
-                        for step in result.steps:
-                            f.write(f"### {step['step_name']} ({step['agent']})\n")
-                            f.write(f"{step['output']}\n\n")
+                    content = f"# Design Pipeline Result\n\n"
+                    content += f"**Task:** {prompt_text}\n\n"
+                    content += "---\n\n"
+                    content += result.final_output
+                    content += "\n\n---\n"
+                    content += "## Pipeline Steps\n"
+                    for step in result.steps:
+                        content += f"### {step['step_name']} ({step['agent']})\n"
+                        content += f"{step['output']}\n\n"
                     
-                    self.console.print(f"[green]Saved to {filename}[/green]")
+                    saved_path = save_text_file_with_versioning(Path(filename), content)
+                    self.console.print(f"[green]Saved to {saved_path}[/green]")
         except (AgentError, APIError, ConfigurationError) as e:
             # Log user-friendly errors properly for error analysis workflow
             from .logging_config import get_logger
@@ -2834,17 +2836,17 @@ class ImprovedTUI:
                 
                 # Write the file
                 try:
-                    with open(output_path, 'w', encoding='utf-8') as f:
-                        f.write(f"# Design Polish Pipeline Result\n\n")
-                        f.write("---\n\n")
-                        f.write(result.final_output)
-                        f.write("\n\n---\n")
-                        f.write("## Pipeline Steps\n")
-                        for step in result.steps:
-                            f.write(f"### {step['step_name']} ({step['agent']})\n")
-                            f.write(f"{step['output']}\n\n")
+                    content = f"# Design Polish Pipeline Result\n\n"
+                    content += "---\n\n"
+                    content += result.final_output
+                    content += "\n\n---\n"
+                    content += "## Pipeline Steps\n"
+                    for step in result.steps:
+                        content += f"### {step['step_name']} ({step['agent']})\n"
+                        content += f"{step['output']}\n\n"
                     
-                    self.console.print(f"[green]✓ Saved to {output_path}[/green]")
+                    saved_path = save_text_file_with_versioning(output_path, content)
+                    self.console.print(f"[green]✓ Saved to {saved_path}[/green]")
                     if original_doc_path:
                         self.console.print(f"[dim]Original: {original_doc_path}[/dim]")
                         self.console.print(f"[dim]Polished: {output_path}[/dim]")
@@ -6054,21 +6056,21 @@ class ImprovedTUI:
             output_dir.mkdir(exist_ok=True)
             output_file = output_dir / f"job_{job.job_id[:12]}_design_polish_{result.pipeline_id[:8]}.md"
             
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(f"# Design Polish Pipeline Result\n\n")
-                f.write(f"**Job ID:** {job.job_id}\n")
-                f.write(f"**Pipeline ID:** {result.pipeline_id}\n")
-                f.write(f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
-                f.write("---\n\n")
-                f.write(result.final_output)
-                f.write("\n\n---\n\n")
-                f.write("## Pipeline Steps\n\n")
-                for step in result.steps:
-                    f.write(f"### {step['step_name']} ({step['agent']})\n\n")
-                    f.write(f"{step['output']}\n\n")
+            content = f"# Design Polish Pipeline Result\n\n"
+            content += f"**Job ID:** {job.job_id}\n"
+            content += f"**Pipeline ID:** {result.pipeline_id}\n"
+            content += f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+            content += "---\n\n"
+            content += result.final_output
+            content += "\n\n---\n\n"
+            content += "## Pipeline Steps\n\n"
+            for step in result.steps:
+                content += f"### {step['step_name']} ({step['agent']})\n\n"
+                content += f"{step['output']}\n\n"
             
+            saved_path = save_text_file_with_versioning(output_file, content)
             self.console.print(f"\n[green]✓ Pipeline completed successfully![/green]")
-            self.console.print(f"[green]✓ Saved to: {output_file}[/green]")
+            self.console.print(f"[green]✓ Saved to: {saved_path}[/green]")
             self.console.print(f"\n[dim]Total cost: ${result.total_cost:.4f}[/dim]")
             self.console.print(f"[dim]Total time: {result.total_time_ms}ms[/dim]")
             
@@ -6306,20 +6308,20 @@ Please be thorough, constructive, and specific in your analysis."""
             output_dir.mkdir(exist_ok=True)
             output_file = output_dir / f"job_{job.job_id[:12]}_enhancement_chain.md"
             
-            with open(output_file, 'w', encoding='utf-8') as f:
-                f.write(f"# Document Enhancement Chain Result\n\n")
-                f.write(f"**Job ID:** {job.job_id}\n")
-                f.write(f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
-                f.write("---\n\n")
-                f.write(result.final_output)
-                f.write("\n\n---\n\n")
-                f.write("## Enhancement Steps\n\n")
-                for i, step in enumerate(result.steps, 1):
-                    f.write(f"### Step {i}: {step.get('agent_name', 'Unknown')}\n\n")
-                    f.write(f"{step.get('output', '')}\n\n")
+            content = f"# Document Enhancement Chain Result\n\n"
+            content += f"**Job ID:** {job.job_id}\n"
+            content += f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+            content += "---\n\n"
+            content += result.final_output
+            content += "\n\n---\n\n"
+            content += "## Enhancement Steps\n\n"
+            for i, step in enumerate(result.steps, 1):
+                content += f"### Step {i}: {step.get('agent_name', 'Unknown')}\n\n"
+                content += f"{step.get('output', '')}\n\n"
             
+            saved_path = save_text_file_with_versioning(output_file, content)
             self.console.print(f"\n[green]✓ Enhancement chain completed![/green]")
-            self.console.print(f"[green]✓ Saved to: {output_file}[/green]")
+            self.console.print(f"[green]✓ Saved to: {saved_path}[/green]")
             
         except Exception as e:
             self.console.print(f"\n[red]Enhancement chain failed: {e}[/red]")
@@ -8557,13 +8559,15 @@ Please be thorough, constructive, and specific in your analysis."""
                             
                             # Write review file
                             from datetime import datetime, timezone
-                            with open(output_path, 'w', encoding='utf-8') as f:
-                                f.write(f"# Critical Review: {doc_file.name}\n\n")
-                                f.write(f"**Reviewed by:** {agent_name} ({agent_model})\n")
-                                f.write(f"**Original Document:** {doc_file}\n")
-                                f.write(f"**Review Date:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
-                                f.write("---\n\n")
-                                f.write(review_text)
+                            content = f"# Critical Review: {doc_file.name}\n\n"
+                            content += f"**Reviewed by:** {agent_name} ({agent_model})\n"
+                            content += f"**Original Document:** {doc_file}\n"
+                            content += f"**Review Date:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+                            content += "---\n\n"
+                            content += review_text
+                            
+                            saved_path = save_text_file_with_versioning(output_path, content)
+                            output_path = saved_path  # Update output_path to actual saved path
                             
                             all_results.append({
                                 'document': doc_file.name,
@@ -8992,24 +8996,23 @@ Please be thorough, constructive, and specific in your analysis."""
                     if not filename_path.is_absolute():
                         filename_path = default_dir / filename_path
                     
-                    with open(filename_path, 'w', encoding='utf-8') as f:
-                        f.write(f"# Agent Configuration Error Analysis Report\n\n")
-                        f.write(f"**Pipeline ID:** {result.pipeline_id}\n")
-                        f.write(f"**Agent:** {analyzer.name} ({analyzer.model})\n\n")
-                        f.write("---\n\n")
-                        f.write("## Configuration Errors\n\n")
-                        f.write(error_info_str)
-                        f.write("\n\n---\n\n")
-                        f.write("## Analysis Result\n\n")
-                        f.write(result.final_output)
-                        f.write("\n\n---\n\n")
-                        f.write("## Pipeline Steps\n\n")
-                        for step in result.steps:
-                            f.write(f"### {step['step_name']} ({step['agent']})\n\n")
-                            f.write(f"{step['output']}\n\n")
+                    content = f"# Agent Configuration Error Analysis Report\n\n"
+                    content += f"**Pipeline ID:** {result.pipeline_id}\n"
+                    content += f"**Agent:** {analyzer.name} ({analyzer.model})\n\n"
+                    content += "---\n\n"
+                    content += "## Configuration Errors\n\n"
+                    content += error_info_str
+                    content += "\n\n---\n\n"
+                    content += "## Analysis Result\n\n"
+                    content += result.final_output
+                    content += "\n\n---\n\n"
+                    content += "## Pipeline Steps\n\n"
+                    for step in result.steps:
+                        content += f"### {step['step_name']} ({step['agent']})\n\n"
+                        content += f"{step['output']}\n\n"
                     
-                    saved_path = str(filename_path)
-                    self.console.print(f"[green]✓ Saved to {filename_path}[/green]")
+                    saved_path = save_text_file_with_versioning(filename_path, content)
+                    self.console.print(f"[green]✓ Saved to {saved_path}[/green]")
             
             # Option to create queue prompt
             if saved_path:
