@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from .models import TokenUsage, AgentResponse
 from .agents import BaseAgent
 from .events import EventBus, EventType, Event
+from .exceptions import AgentError, APIError, ConfigurationError
 
 
 @dataclass
@@ -287,15 +288,30 @@ class Pipeline:
             
             return result
             
-        except Exception as e:
-            # Import specific exception types for better error handling
-            from .exceptions import AgentError, APIError, ConfigurationError
+        except (AgentError, APIError, ConfigurationError) as e:
+            # Known pipeline errors - log with context and re-raise
             from .logging_config import get_logger
             logger = get_logger(__name__)
             
-            # Log error with pipeline context
             logger.error(
                 f"Pipeline '{self.name}' failed: {e}",
+                exc_info=True,
+                extra={
+                    "pipeline_id": pipeline_id,
+                    "pipeline_name": self.name,
+                    "error_type": type(e).__name__,
+                    "pipeline_error": str(e)
+                }
+            )
+            # Re-raise known exceptions to allow caller to handle
+            raise
+        except Exception as e:
+            # Unexpected errors during pipeline execution
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            
+            logger.error(
+                f"Unexpected error in pipeline '{self.name}': {e}",
                 exc_info=True,
                 extra={
                     "pipeline_id": pipeline_id,
@@ -317,13 +333,9 @@ class Pipeline:
                 correlation_id=pipeline_id
             ))
             
-            # Re-raise specific exceptions as-is
-            if isinstance(e, (AgentError, APIError, ConfigurationError)):
-                raise
-            
-            # Wrap unexpected errors
+            # Wrap unexpected errors in AgentError for consistency
             raise AgentError(
-                f"Pipeline '{self.name}' failed: {e}",
+                f"Unexpected error in pipeline '{self.name}': {e}",
                 agent_name=getattr(e, 'agent_name', None),
                 original_error=e
             ) from e

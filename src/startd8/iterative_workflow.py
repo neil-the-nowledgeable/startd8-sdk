@@ -20,6 +20,7 @@ from .agents import BaseAgent
 from .models import TokenUsage
 from .utils.file_operations import save_text_file_with_versioning
 from .logging_config import get_logger
+from .exceptions import APIError, AgentError, ConfigurationError
 
 logger = get_logger(__name__)
 
@@ -278,10 +279,25 @@ REVIEW:
                 )
                 try:
                     dev_response = self.developer_agent.generate(dev_prompt)
-                except Exception as e:
-                    from .exceptions import APIError, AgentError
+                except (APIError, AgentError) as e:
+                    # Known agent/API errors - log and handle gracefully
                     logger.error(
                         f"Developer agent failed in iteration {iteration_num}: {e}",
+                        exc_info=True,
+                        extra={
+                            "iteration": iteration_num,
+                            "workflow_id": result.workflow_id,
+                            "agent_name": self.developer_agent.agent_name,
+                            "error_type": type(e).__name__,
+                            "agent_error": str(e)
+                        }
+                    )
+                    # Re-raise to be handled by outer exception handler
+                    raise
+                except Exception as e:
+                    # Unexpected errors during developer agent execution
+                    logger.error(
+                        f"Unexpected error in developer agent iteration {iteration_num}: {e}",
                         exc_info=True,
                         extra={
                             "iteration": iteration_num,
@@ -387,11 +403,39 @@ REVIEW:
                         logger.warning(f"Workflow reached max iterations ({self.max_iterations})")
                         break
                     
+            except (APIError, AgentError, ConfigurationError) as e:
+                # Known workflow errors - log with context and re-raise
+                logger.error(
+                    f"Workflow error in iteration {iteration_num}: {e}",
+                    exc_info=True,
+                    extra={
+                        "iteration": iteration_num,
+                        "workflow_id": result.workflow_id,
+                        "task": task_description[:100] if task_description else None,
+                        "error_type": type(e).__name__,
+                        "workflow_error": str(e)
+                    }
+                )
+                # Re-raise to allow caller to handle
+                raise
             except Exception as e:
-                # Import specific exception types for better error handling
-                from .exceptions import APIError, AgentError, ConfigurationError
-                
-                # Log error with full workflow context
+                # Unexpected errors during workflow execution
+                logger.error(
+                    f"Unexpected error in workflow iteration {iteration_num}: {e}",
+                    exc_info=True,
+                    extra={
+                        "iteration": iteration_num,
+                        "workflow_id": result.workflow_id,
+                        "task": task_description[:100] if task_description else None,
+                        "error_type": type(e).__name__
+                    }
+                )
+                # Wrap unexpected errors in AgentError for consistency
+                raise AgentError(
+                    f"Unexpected error in iterative workflow: {e}",
+                    agent_name=None,
+                    original_error=e
+                ) from e
                 logger.error(
                     f"Error in iteration {iteration_num}: {e}",
                     exc_info=True,

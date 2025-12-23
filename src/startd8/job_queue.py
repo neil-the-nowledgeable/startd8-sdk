@@ -21,6 +21,7 @@ from .agents import BaseAgent
 from .providers import ProviderRegistry
 from .logging_config import get_logger
 from .utils.file_operations import atomic_write_json
+from .exceptions import AgentError, APIError, ConfigurationError, ValidationError
 
 logger = get_logger(__name__)
 
@@ -176,8 +177,28 @@ class AgentRegistry:
                 )
                 provider.validate_config({})
                 return provider.create_agent(default_model)
+            except (ValueError, TypeError, ConfigurationError, AgentError) as e:
+                # Provider config or agent creation failed
+                logger.warning(
+                    f"Failed to create default agent for provider {name}: {e}",
+                    exc_info=True,
+                    extra={
+                        "provider": name,
+                        "operation": "create_default_agent",
+                        "error_type": type(e).__name__
+                    }
+                )
             except Exception as e:
-                logger.warning(f"Failed to create default agent for provider {name}: {e}")
+                # Unexpected errors
+                logger.warning(
+                    f"Unexpected error creating default agent for provider {name}: {e}",
+                    exc_info=True,
+                    extra={
+                        "provider": name,
+                        "operation": "create_default_agent",
+                        "error_type": type(e).__name__
+                    }
+                )
         
         logger.warning(f"No agent found for: {name}")
         return None
@@ -204,7 +225,28 @@ class AgentRegistry:
 
             try:
                 provider.validate_config({})
-            except Exception:
+            except (ValueError, TypeError, ConfigurationError) as e:
+                # Provider config validation failed - skip this provider
+                logger.debug(
+                    f"Provider {name} config validation failed: {e}",
+                    extra={
+                        "provider": name,
+                        "operation": "validate_provider_config",
+                        "error_type": type(e).__name__
+                    }
+                )
+                continue
+            except Exception as e:
+                # Unexpected errors during validation
+                logger.debug(
+                    f"Unexpected error validating provider {name}: {e}",
+                    exc_info=True,
+                    extra={
+                        "provider": name,
+                        "operation": "validate_provider_config",
+                        "error_type": type(e).__name__
+                    }
+                )
                 continue
 
             models = list(provider.supported_models or [])
@@ -216,7 +258,28 @@ class AgentRegistry:
             try:
                 if hasattr(provider, "get_capabilities"):
                     caps = list(provider.get_capabilities())  # type: ignore[attr-defined]
-            except Exception:
+            except (AttributeError, TypeError) as e:
+                # Provider doesn't support capabilities or returned wrong type
+                logger.debug(
+                    f"Provider {name} capabilities unavailable: {e}",
+                    extra={
+                        "provider": name,
+                        "operation": "get_provider_capabilities",
+                        "error_type": type(e).__name__
+                    }
+                )
+                caps = []
+            except Exception as e:
+                # Unexpected errors getting capabilities
+                logger.debug(
+                    f"Unexpected error getting capabilities for provider {name}: {e}",
+                    exc_info=True,
+                    extra={
+                        "provider": name,
+                        "operation": "get_provider_capabilities",
+                        "error_type": type(e).__name__
+                    }
+                )
                 caps = []
 
             caps_lower = {c.lower() for c in caps}
@@ -232,7 +295,30 @@ class AgentRegistry:
                     # Construct (do not execute) an agent to ensure optional deps exist.
                     provider.create_agent(model)
                     return f"{provider.name}:{model}"
-                except Exception:
+                except (ValueError, TypeError, ConfigurationError, AgentError) as e:
+                    # Agent creation failed for this model - try next model
+                    logger.debug(
+                        f"Failed to create agent {provider.name}:{model}: {e}",
+                        extra={
+                            "provider": provider.name,
+                            "model": model,
+                            "operation": "test_agent_creation",
+                            "error_type": type(e).__name__
+                        }
+                    )
+                    continue
+                except Exception as e:
+                    # Unexpected errors during agent creation test
+                    logger.debug(
+                        f"Unexpected error creating test agent {provider.name}:{model}: {e}",
+                        exc_info=True,
+                        extra={
+                            "provider": provider.name,
+                            "model": model,
+                            "operation": "test_agent_creation",
+                            "error_type": type(e).__name__
+                        }
+                    )
                     continue
 
         return None
@@ -349,8 +435,29 @@ class JobQueue:
                     status = self._load_status(status_path)
                     if status.status in (JobStatus.COMPLETED, JobStatus.PROCESSING):
                         continue
-                except Exception:
-                    pass  # If status file is corrupt, treat as pending
+                except (json.JSONDecodeError, ValueError, KeyError) as e:
+                    # Status file is corrupt or invalid - treat as pending
+                    logger.debug(
+                        f"Invalid status file {status_path}, treating job as pending: {e}",
+                        extra={
+                            "status_file": str(status_path),
+                            "operation": "load_job_status",
+                            "error_type": type(e).__name__
+                        }
+                    )
+                    pass  # Treat as pending
+                except Exception as e:
+                    # Unexpected errors reading status file
+                    logger.debug(
+                        f"Unexpected error reading status file {status_path}: {e}",
+                        exc_info=True,
+                        extra={
+                            "status_file": str(status_path),
+                            "operation": "load_job_status",
+                            "error_type": type(e).__name__
+                        }
+                    )
+                    pass  # Treat as pending
             
             job_files.append(path)
         
@@ -393,8 +500,21 @@ class JobQueue:
         try:
             job = JobFile(**data)
             return job
+        except (ValueError, TypeError, KeyError) as e:
+            # Specific validation errors - these are expected for invalid data
+            raise JobValidationError(f"Invalid job file {path}: {e}") from e
         except Exception as e:
-            raise JobValidationError(f"Invalid job file {path}: {e}")
+            # Unexpected errors during validation
+            logger.error(
+                f"Unexpected error validating job file {path}: {e}",
+                exc_info=True,
+                extra={
+                    "job_file": str(path),
+                    "operation": "validate_job_file",
+                    "error_type": type(e).__name__
+                }
+            )
+            raise JobValidationError(f"Invalid job file {path}: {e}") from e
     
     def list_jobs(self, include_completed: bool = False) -> List[JobFile]:
         """
@@ -424,8 +544,39 @@ class JobQueue:
                 
                 if include_completed or job.status not in (JobStatus.COMPLETED, JobStatus.FAILED):
                     jobs.append(job)
+            except (JobValidationError, json.JSONDecodeError, ValueError) as e:
+                # Job file is invalid or corrupt
+                logger.warning(
+                    f"Failed to load job {path} (validation error): {e}",
+                    exc_info=True,
+                    extra={
+                        "job_file": str(path),
+                        "operation": "list_jobs",
+                        "error_type": type(e).__name__
+                    }
+                )
+            except (OSError, PermissionError) as e:
+                # File system errors reading job file
+                logger.warning(
+                    f"Failed to load job {path} (file system error): {e}",
+                    exc_info=True,
+                    extra={
+                        "job_file": str(path),
+                        "operation": "list_jobs",
+                        "error_type": type(e).__name__
+                    }
+                )
             except Exception as e:
-                logger.warning(f"Failed to load job {path}: {e}")
+                # Unexpected errors loading job
+                logger.warning(
+                    f"Unexpected error loading job {path}: {e}",
+                    exc_info=True,
+                    extra={
+                        "job_file": str(path),
+                        "operation": "list_jobs",
+                        "error_type": type(e).__name__
+                    }
+                )
         
         # Sort by priority (descending) then created_at (ascending)
         jobs.sort(key=lambda j: (-j.priority, j.created_at))
@@ -487,10 +638,28 @@ class JobQueue:
         
         # Notify callback
         if self._on_job_start:
-            try:
-                self._on_job_start(job)
-            except Exception as e:
-                logger.warning(f"on_job_start callback failed: {e}")
+                try:
+                    self._on_job_start(job)
+                except (AttributeError, TypeError) as e:
+                    logger.warning(
+                        f"on_job_start callback failed (callback error): {e}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "operation": "on_job_start_callback",
+                            "error_type": type(e).__name__
+                        }
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"on_job_start callback failed: {e}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "operation": "on_job_start_callback",
+                            "error_type": type(e).__name__
+                        }
+                    )
         
         try:
             # Create prompt from job spec
@@ -548,8 +717,32 @@ class JobQueue:
                     result.agents_run.append(agent_name)
                     logger.info(f"Agent {agent_name} completed for job {job.job_id}")
                     
+                except (AgentError, APIError) as e:
+                    # Known agent/API errors - log with context but continue with other agents
+                    logger.error(
+                        f"Agent {agent_name} failed: {e}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "agent_name": agent_name,
+                            "operation": "agent_execution",
+                            "error_type": type(e).__name__,
+                            "agent_error": str(e)
+                        }
+                    )
+                    # Continue with other agents
                 except Exception as e:
-                    logger.error(f"Agent {agent_name} failed: {e}")
+                    # Unexpected errors during agent execution
+                    logger.error(
+                        f"Unexpected error running agent {agent_name} for job {job.job_id}: {e}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "agent_name": agent_name,
+                            "operation": "agent_execution",
+                            "error_type": type(e).__name__
+                        }
+                    )
                     # Continue with other agents
             
             # Mark as completed
@@ -560,11 +753,39 @@ class JobQueue:
             if self._on_job_complete:
                 try:
                     self._on_job_complete(job, result)
+                except (AttributeError, TypeError) as e:
+                    logger.warning(
+                        f"on_job_complete callback failed (callback error): {e}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "operation": "on_job_complete_callback",
+                            "error_type": type(e).__name__
+                        }
+                    )
                 except Exception as e:
-                    logger.warning(f"on_job_complete callback failed: {e}")
+                    logger.warning(
+                        f"on_job_complete callback failed: {e}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "operation": "on_job_complete_callback",
+                            "error_type": type(e).__name__
+                        }
+                    )
             
-        except Exception as e:
-            logger.error(f"Job {job.job_id} failed: {e}")
+        except (JobProcessingError, JobValidationError) as e:
+            # Known job processing errors
+            logger.error(
+                f"Job {job.job_id} failed: {e}",
+                exc_info=True,
+                extra={
+                    "job_id": job.job_id,
+                    "operation": "job_processing",
+                    "error_type": type(e).__name__,
+                    "job_error": str(e)
+                }
+            )
             result.status = JobStatus.FAILED
             result.error = str(e)
             result.completed_at = datetime.now(timezone.utc)
@@ -574,7 +795,44 @@ class JobQueue:
                 try:
                     self._on_job_error(job, e)
                 except Exception as ce:
-                    logger.warning(f"on_job_error callback failed: {ce}")
+                    logger.warning(
+                        f"on_job_error callback failed: {ce}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "operation": "on_job_error_callback",
+                            "error_type": type(ce).__name__
+                        }
+                    )
+        except Exception as e:
+            # Unexpected errors during job processing
+            logger.error(
+                f"Unexpected error processing job {job.job_id}: {e}",
+                exc_info=True,
+                extra={
+                    "job_id": job.job_id,
+                    "operation": "job_processing",
+                    "error_type": type(e).__name__
+                }
+            )
+            result.status = JobStatus.FAILED
+            result.error = str(e)
+            result.completed_at = datetime.now(timezone.utc)
+            
+            # Notify callback
+            if self._on_job_error:
+                try:
+                    self._on_job_error(job, e)
+                except Exception as ce:
+                    logger.warning(
+                        f"on_job_error callback failed: {ce}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "operation": "on_job_error_callback",
+                            "error_type": type(ce).__name__
+                        }
+                    )
         
         finally:
             # Save final status
@@ -624,8 +882,28 @@ class JobQueue:
             if on_progress:
                 try:
                     on_progress(i, total, job, result)
+                except (AttributeError, TypeError) as e:
+                    logger.warning(
+                        f"on_progress callback failed (callback error): {e}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "operation": "on_progress_callback",
+                            "progress": f"{i}/{total}",
+                            "error_type": type(e).__name__
+                        }
+                    )
                 except Exception as e:
-                    logger.warning(f"on_progress callback failed: {e}")
+                    logger.warning(
+                        f"on_progress callback failed: {e}",
+                        exc_info=True,
+                        extra={
+                            "job_id": job.job_id,
+                            "operation": "on_progress_callback",
+                            "progress": f"{i}/{total}",
+                            "error_type": type(e).__name__
+                        }
+                    )
         
         return results
     
@@ -650,8 +928,29 @@ class JobQueue:
                 else:
                     # No jobs, wait before next scan
                     time.sleep(self.config.poll_interval_seconds)
+            except (OSError, PermissionError) as e:
+                # File system errors during queue scanning
+                logger.error(
+                    f"File system error during queue processing: {e}",
+                    exc_info=True,
+                    extra={
+                        "operation": "queue_watch",
+                        "error_type": type(e).__name__,
+                        "queue_dir": str(self.config.queue_dir)
+                    }
+                )
+                time.sleep(self.config.poll_interval_seconds)
             except Exception as e:
-                logger.error(f"Queue processing error: {e}")
+                # Unexpected errors during queue processing
+                logger.error(
+                    f"Unexpected error during queue processing: {e}",
+                    exc_info=True,
+                    extra={
+                        "operation": "queue_watch",
+                        "error_type": type(e).__name__,
+                        "queue_dir": str(self.config.queue_dir)
+                    }
+                )
                 time.sleep(self.config.poll_interval_seconds)
         
         self._running = False
@@ -742,8 +1041,29 @@ class JobQueue:
                 status_path.rename(status_dest)
             
             logger.info(f"Archived job {job.job_id}")
+        except (OSError, PermissionError, FileNotFoundError) as e:
+            # File system errors during archiving
+            logger.warning(
+                f"Failed to archive job {job.job_id} (file system error): {e}",
+                exc_info=True,
+                extra={
+                    "job_id": job.job_id,
+                    "operation": "archive_job",
+                    "error_type": type(e).__name__,
+                    "archive_dir": str(self.config.archive_dir) if self.config.archive_dir else None
+                }
+            )
         except Exception as e:
-            logger.warning(f"Failed to archive job {job.job_id}: {e}")
+            # Unexpected errors during archiving
+            logger.warning(
+                f"Failed to archive job {job.job_id}: {e}",
+                exc_info=True,
+                extra={
+                    "job_id": job.job_id,
+                    "operation": "archive_job",
+                    "error_type": type(e).__name__
+                }
+            )
 
 
 def create_job_file(
