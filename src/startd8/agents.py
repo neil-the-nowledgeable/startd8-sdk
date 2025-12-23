@@ -182,8 +182,14 @@ class BaseAgent(ABC):
             if 'Event loop is closed' not in str(e):
                 # Re-raise if it's a different RuntimeError
                 raise
-        except Exception:
+        except Exception as e:
             # Ignore other errors during destruction - event loop may be closed
+            # Log at debug level for troubleshooting
+            logger.debug(
+                f"Error during {self.__class__.__name__} destruction (ignored): {e}",
+                exc_info=False,
+                extra={"agent_name": self.name, "error_type": type(e).__name__}
+            )
             pass
     
     @abstractmethod
@@ -573,8 +579,14 @@ class ClaudeAgent(BaseAgent):
                             # Event loop is closed or doesn't exist
                             # httpx will cleanup on Python exit
                             pass
-            except Exception:
+            except Exception as e:
                 # Ignore all cleanup errors - event loop may be closed
+                # Log at debug level for troubleshooting
+                logger.debug(
+                    f"Error during {self.__class__.__name__} cleanup (ignored): {e}",
+                    exc_info=False,
+                    extra={"agent_name": self.name, "error_type": type(e).__name__}
+                )
                 pass
     
     async def acleanup(self):
@@ -604,8 +616,14 @@ class ClaudeAgent(BaseAgent):
                 # Event loop is closed - this is expected during shutdown
                 if 'Event loop is closed' not in str(e):
                     raise
-            except Exception:
+            except Exception as e:
                 # Ignore other cleanup errors
+                # Log at debug level for troubleshooting
+                logger.debug(
+                    f"Error during {self.__class__.__name__} cleanup (ignored): {e}",
+                    exc_info=False,
+                    extra={"agent_name": self.name, "error_type": type(e).__name__}
+                )
                 pass
     
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
@@ -620,7 +638,8 @@ class ClaudeAgent(BaseAgent):
                     {"role": "user", "content": prompt}
                 ]
             )
-        except Exception as e:
+        except (AnthropicAPIConnectionError, ConnectionError, OSError) as e:
+            # Specific connection/network errors
             from .logging_config import get_logger
             from .exceptions import APIError, AgentError
             
@@ -654,17 +673,23 @@ class ClaudeAgent(BaseAgent):
                         original_error=e
                     ) from e
             
-            logger.error(
-                f"API call failed for {self.name}: {e}",
-                exc_info=True,
-                extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
-            )
-            
-            raise APIError(
-                f"API call failed: {str(e)}",
-                provider=self.name,
-                original_error=e
-            ) from e
+                logger.error(
+                    f"API call failed for {self.name}: {e}",
+                    exc_info=True,
+                    extra={
+                        "agent_name": self.name,
+                        "model": self.model,
+                        "response_time_ms": response_time_ms,
+                        "error_type": type(e).__name__,
+                        "operation": "agenerate"
+                    }
+                )
+                
+                raise APIError(
+                    f"API call failed: {str(e)}",
+                    provider=self.name,
+                    original_error=e
+                ) from e
         
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
@@ -811,17 +836,23 @@ class GPT4Agent(BaseAgent):
                         original_error=e
                     ) from e
             
-            logger.error(
-                f"API call failed for {self.name}: {e}",
-                exc_info=True,
-                extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
-            )
-            
-            raise APIError(
-                f"API call failed: {str(e)}",
-                provider=self.name,
-                original_error=e
-            ) from e
+                logger.error(
+                    f"API call failed for {self.name}: {e}",
+                    exc_info=True,
+                    extra={
+                        "agent_name": self.name,
+                        "model": self.model,
+                        "response_time_ms": response_time_ms,
+                        "error_type": type(e).__name__,
+                        "operation": "agenerate"
+                    }
+                )
+                
+                raise APIError(
+                    f"API call failed: {str(e)}",
+                    provider=self.name,
+                    original_error=e
+                ) from e
         
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
@@ -973,7 +1004,34 @@ class GeminiAgent(BaseAgent):
                     config=generation_config
                 )
             )
+        except (ConnectionError, OSError) as e:
+            # Specific connection/network errors
+            from .logging_config import get_logger
+            from .exceptions import APIError
+            
+            logger = get_logger(__name__)
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+            
+            logger.error(
+                f"Connection error for {self.name}: {e}",
+                exc_info=True,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "response_time_ms": response_time_ms,
+                    "error_type": type(e).__name__,
+                    "operation": "agenerate"
+                }
+            )
+            
+            raise APIError(
+                f"API connection failed: {str(e)}",
+                provider=self.name,
+                original_error=e
+            ) from e
         except Exception as e:
+            # Other API errors - check for specific error types
             from .logging_config import get_logger
             from .exceptions import APIError, AgentError
             
@@ -1049,17 +1107,23 @@ class GeminiAgent(BaseAgent):
                     original_error=e
                 ) from e
             
-            logger.error(
-                f"API call failed for {self.name}: {e}",
-                exc_info=True,
-                extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
-            )
-            
-            raise APIError(
-                f"API call failed: {str(e)}",
-                provider=self.name,
-                original_error=e
-            ) from e
+                logger.error(
+                    f"API call failed for {self.name}: {e}",
+                    exc_info=True,
+                    extra={
+                        "agent_name": self.name,
+                        "model": self.model,
+                        "response_time_ms": response_time_ms,
+                        "error_type": type(e).__name__,
+                        "operation": "agenerate"
+                    }
+                )
+                
+                raise APIError(
+                    f"API call failed: {str(e)}",
+                    provider=self.name,
+                    original_error=e
+                ) from e
         
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
@@ -1087,13 +1151,38 @@ class GeminiAgent(BaseAgent):
                 input_tokens = max(1, int(len(prompt.split()) / 1.3))
                 output_tokens = max(1, int(len(response_text.split()) / 1.3))
                 total_tokens = input_tokens + output_tokens
-        except Exception as e:
-            # If token counting fails, provide reasonable estimates
+        except (AttributeError, KeyError, TypeError) as e:
+            # Expected errors when token usage metadata is missing or malformed
             # ~1.3 tokens per word as rough estimate
             input_tokens = max(1, int(len(prompt.split()) / 1.3))
             output_tokens = max(1, int(len(response_text.split()) / 1.3))
             total_tokens = input_tokens + output_tokens
-            logger.warning(f"Failed to extract token usage, using estimate: {e}")
+            logger.debug(
+                f"Token usage metadata unavailable, using estimate: {e}",
+                exc_info=False,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "error_type": type(e).__name__,
+                    "operation": "extract_token_usage"
+                }
+            )
+        except Exception as e:
+            # Unexpected errors during token counting
+            # ~1.3 tokens per word as rough estimate
+            input_tokens = max(1, int(len(prompt.split()) / 1.3))
+            output_tokens = max(1, int(len(response_text.split()) / 1.3))
+            total_tokens = input_tokens + output_tokens
+            logger.warning(
+                f"Failed to extract token usage, using estimate: {e}",
+                exc_info=True,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "error_type": type(e).__name__,
+                    "operation": "extract_token_usage"
+                }
+            )
         
         token_usage = TokenUsage(
             input=int(input_tokens),
@@ -1224,8 +1313,14 @@ class OpenAICompatibleAgent(BaseAgent):
                 if 'Event loop is closed' not in str(e):
                     # Re-raise if it's a different RuntimeError
                     raise
-            except Exception:
+            except Exception as e:
                 # Ignore all other cleanup errors
+                # Log at debug level for troubleshooting
+                logger.debug(
+                    f"Error during {self.__class__.__name__} cleanup (ignored): {e}",
+                    exc_info=False,
+                    extra={"agent_name": self.name, "error_type": type(e).__name__}
+                )
                 pass
     
     async def acleanup(self):
@@ -1241,8 +1336,14 @@ class OpenAICompatibleAgent(BaseAgent):
                         except RuntimeError as e:
                             if 'Event loop is closed' not in str(e):
                                 raise
-            except Exception:
+            except Exception as e:
                 # Ignore cleanup errors
+                # Log at debug level for troubleshooting
+                logger.debug(
+                    f"Error during {self.__class__.__name__} async cleanup (ignored): {e}",
+                    exc_info=False,
+                    extra={"agent_name": self.name, "error_type": type(e).__name__}
+                )
                 pass
     
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
