@@ -267,8 +267,30 @@ REVIEW:
                 )
                 iteration.dev_prompt = dev_prompt
                 
-                logger.debug(f"Sending task to developer agent: {self.developer_agent.agent_name}")
-                dev_response = self.developer_agent.generate(dev_prompt)
+                logger.debug(
+                    f"Sending task to developer agent: {self.developer_agent.agent_name}",
+                    extra={
+                        "iteration": iteration_num,
+                        "workflow_id": result.workflow_id,
+                        "task": task_description[:100] if task_description else None
+                    }
+                )
+                try:
+                    dev_response = self.developer_agent.generate(dev_prompt)
+                except Exception as e:
+                    from .exceptions import APIError, AgentError
+                    logger.error(
+                        f"Developer agent failed in iteration {iteration_num}: {e}",
+                        exc_info=True,
+                        extra={
+                            "iteration": iteration_num,
+                            "workflow_id": result.workflow_id,
+                            "agent_name": self.developer_agent.agent_name,
+                            "task": task_description[:100] if task_description else None
+                        }
+                    )
+                    # Re-raise to be caught by outer exception handler
+                    raise
                 
                 iteration.dev_response = dev_response.response
                 iteration.dev_agent_name = self.developer_agent.agent_name
@@ -286,8 +308,30 @@ REVIEW:
                 )
                 iteration.review_prompt = review_prompt
                 
-                logger.debug(f"Sending to reviewer agent: {self.reviewer_agent.agent_name}")
-                review_response = self.reviewer_agent.generate(review_prompt)
+                logger.debug(
+                    f"Sending to reviewer agent: {self.reviewer_agent.agent_name}",
+                    extra={
+                        "iteration": iteration_num,
+                        "workflow_id": result.workflow_id,
+                        "task": task_description[:100] if task_description else None
+                    }
+                )
+                try:
+                    review_response = self.reviewer_agent.generate(review_prompt)
+                except Exception as e:
+                    from .exceptions import APIError, AgentError
+                    logger.error(
+                        f"Reviewer agent failed in iteration {iteration_num}: {e}",
+                        exc_info=True,
+                        extra={
+                            "iteration": iteration_num,
+                            "workflow_id": result.workflow_id,
+                            "agent_name": self.reviewer_agent.agent_name,
+                            "task": task_description[:100] if task_description else None
+                        }
+                    )
+                    # Re-raise to be caught by outer exception handler
+                    raise
                 
                 iteration.review_response = review_response.response
                 iteration.review_agent_name = self.reviewer_agent.agent_name
@@ -343,13 +387,42 @@ REVIEW:
                         break
                     
             except Exception as e:
-                logger.error(f"Error in iteration {iteration_num}: {e}", exc_info=True)
+                # Import specific exception types for better error handling
+                from .exceptions import APIError, AgentError, ConfigurationError
+                
+                # Log error with full workflow context
+                logger.error(
+                    f"Error in iteration {iteration_num}: {e}",
+                    exc_info=True,
+                    extra={
+                        "iteration": iteration_num,
+                        "workflow_id": result.workflow_id,
+                        "task": task_description[:100] if task_description else None,
+                        "developer_agent": self.developer_agent.agent_name,
+                        "reviewer_agent": self.reviewer_agent.agent_name,
+                        "error_type": type(e).__name__
+                    }
+                )
+                
                 iteration.status = IterationStatus.FAILED
                 iteration.completed_at = datetime.now(timezone.utc)
                 result.iterations.append(iteration)
                 
                 result.status = WorkflowStatus.FAILED
                 result.successful = False
+                
+                # Re-raise specific exceptions to allow proper error handling upstream
+                # Generic exceptions are wrapped but still re-raised
+                if isinstance(e, (APIError, AgentError, ConfigurationError)):
+                    raise  # Re-raise specific exceptions
+                else:
+                    # Wrap unexpected errors in AgentError for consistency
+                    from .exceptions import AgentError
+                    raise AgentError(
+                        f"Unexpected error in iteration {iteration_num}: {e}",
+                        agent_name=self.developer_agent.agent_name,
+                        original_error=e
+                    ) from e
                 
                 if self.on_iteration_complete:
                     self.on_iteration_complete(iteration)

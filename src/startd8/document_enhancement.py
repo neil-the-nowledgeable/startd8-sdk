@@ -431,12 +431,34 @@ class DocumentEnhancementChain:
             )
             
         except Exception as e:
+            # Log error with full context for debugging
+            import logging
+            logger = logging.getLogger(__name__)
+            
+            model_name = "unknown"
+            if hasattr(agent_config, 'agent_instance') and hasattr(agent_config.agent_instance, 'model'):
+                model_name = agent_config.agent_instance.model
+            elif hasattr(agent, 'model'):
+                model_name = agent.model
+            
+            logger.error(
+                f"Agent step {step_number} failed: {e}",
+                exc_info=True,
+                extra={
+                    "step_number": step_number,
+                    "agent_name": agent_config.agent_name,
+                    "model": model_name,
+                    "operation": "document_enhancement",
+                    "document_length": len(document_content) if document_content else 0
+                }
+            )
+            
             # Create error result
             elapsed_ms = int((time.time() - start_time) * 1000)
             return EnhancementStepResult(
                 step_number=step_number,
                 agent_name=agent_config.agent_name,
-                model=agent.model if hasattr(agent_config.agent_instance, 'model') else "unknown",
+                model=model_name,
                 input_document=document_content,
                 output_document=document_content,  # Keep original on failure
                 response_time_ms=elapsed_ms,

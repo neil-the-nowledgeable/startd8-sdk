@@ -2,9 +2,10 @@
 Provider registry for managing agent providers
 """
 
-from typing import Dict, Optional, List, Type, Any
+from typing import Dict, Optional, List, Type, Any, ClassVar
 import logging
 import sys
+import threading
 
 from .protocol import AgentProvider
 from ..exceptions import ConfigurationError
@@ -16,8 +17,8 @@ class ProviderRegistry:
     """
     Central registry for agent providers.
     
-    Supports both programmatic registration and auto-discovery
-    via Python entry points.
+    Thread-safe singleton implementation supporting both programmatic 
+    registration and auto-discovery via Python entry points.
     
     Example entry_points configuration in pyproject.toml:
     
@@ -44,14 +45,18 @@ class ProviderRegistry:
         )
     """
     
-    _instance: Optional['ProviderRegistry'] = None
+    _instance: ClassVar[Optional['ProviderRegistry']] = None
+    _lock: ClassVar[threading.Lock] = threading.Lock()
     _providers: Dict[str, AgentProvider] = {}
     _discovered: bool = False
     
     def __new__(cls):
-        """Singleton pattern"""
+        """Thread-safe singleton pattern using double-check locking"""
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            with cls._lock:
+                # Double-check pattern to avoid race conditions
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
         return cls._instance
     
     @classmethod
@@ -88,19 +93,22 @@ class ProviderRegistry:
             )
         
         name = provider.name.lower()
-        if name in cls._providers:
-            logger.warning(f"Overwriting existing provider: {name}")
         
-        cls._providers[name] = provider
-        logger.info(
-            f"Registered provider: {name} ({provider.display_name}) "
-            f"with {len(provider.supported_models)} models"
-        )
+        # Thread-safe registration
+        with cls._lock:
+            if name in cls._providers:
+                logger.warning(f"Overwriting existing provider: {name}")
+            
+            cls._providers[name] = provider
+            logger.info(
+                f"Registered provider: {name} ({provider.display_name}) "
+                f"with {len(provider.supported_models)} models"
+            )
     
     @classmethod
     def discover(cls, force: bool = False) -> None:
         """
-        Auto-discover providers via entry points.
+        Auto-discover providers via entry points (thread-safe).
         
         Providers can be registered via setuptools entry points in pyproject.toml
         or setup.py. This method loads all registered providers.
@@ -112,9 +120,13 @@ class ProviderRegistry:
             [project.entry-points."startd8.providers"]
             anthropic = "startd8.providers.anthropic:AnthropicProvider"
         """
-        if cls._discovered and not force:
-            logger.debug("Providers already discovered, skipping")
-            return
+        # Thread-safe check
+        with cls._lock:
+        # Thread-safe check
+        with cls._lock:
+            if cls._discovered and not force:
+                logger.debug("Providers already discovered, skipping")
+                return
         
         discovered_count = 0
         
@@ -159,11 +171,15 @@ class ProviderRegistry:
         # Also register built-in providers
         cls._register_builtin_providers()
         
-        cls._discovered = True
+        # Thread-safe update of discovery flag
+        with cls._lock:
+            cls._discovered = True
+            provider_count = len(cls._providers)
+        
         logger.info(
             f"Provider discovery complete. "
             f"Discovered {discovered_count} external providers, "
-            f"total {len(cls._providers)} providers registered"
+            f"total {provider_count} providers registered"
         )
     
     @classmethod
@@ -236,7 +252,8 @@ class ProviderRegistry:
             # ['anthropic', 'openai', 'mock']
         """
         cls.discover()
-        return list(cls._providers.keys())
+        with cls._lock:
+            return list(cls._providers.keys())
     
     @classmethod
     def list_all_models(cls) -> Dict[str, List[str]]:
@@ -254,10 +271,11 @@ class ProviderRegistry:
             # }
         """
         cls.discover()
-        return {
-            name: provider.supported_models 
-            for name, provider in cls._providers.items()
-        }
+        with cls._lock:
+            return {
+                name: provider.supported_models 
+                for name, provider in cls._providers.items()
+            }
     
     @classmethod
     def find_provider_for_model(cls, model: str) -> Optional[AgentProvider]:
@@ -277,9 +295,10 @@ class ProviderRegistry:
         cls.discover()
         model_lower = model.lower()
         
-        for provider in cls._providers.values():
-            if model_lower in [m.lower() for m in provider.supported_models]:
-                return provider
+        with cls._lock:
+            for provider in cls._providers.values():
+                if model_lower in [m.lower() for m in provider.supported_models]:
+                    return provider
         
         return None
     
@@ -384,6 +403,7 @@ class ProviderRegistry:
             ProviderRegistry.clear()
             ProviderRegistry.register(MyTestProvider())
         """
-        cls._providers.clear()
-        cls._discovered = False
-        logger.debug("Cleared provider registry")
+        with cls._lock:
+            cls._providers.clear()
+            cls._discovered = False
+            logger.debug("Cleared provider registry")

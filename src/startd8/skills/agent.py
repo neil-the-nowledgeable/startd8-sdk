@@ -722,7 +722,4 @@ class SkillAgent(BaseAgent):
         self._last_failure_time = None
         self._half_open_requests = 0
     
-    @property
-    def agent_name(self) -> str:
-        """Alias for name property for compatibility with BaseAgent."""
-        return self.name
+    # Note: agent_name property is inherited from BaseAgent, no need to override
