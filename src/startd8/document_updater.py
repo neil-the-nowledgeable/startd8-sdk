@@ -11,11 +11,14 @@ This module provides a workflow for:
 
 import re
 import asyncio
+import logging
 from pathlib import Path
 from typing import Optional, Dict, List, Any, Tuple, Set
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 # Optional LangChain integration
 try:
@@ -201,10 +204,10 @@ class DocumentConsolidator:
         sections_not_found = []
         
         try:
-            print(f"[DEBUG] Consolidating Base: {self.config.base_path}")
+            logger.debug(f"Consolidating Base: {self.config.base_path}")
             # Step 1: Read base document
             if not self.config.base_path.exists():
-                print(f"[DEBUG] ERROR: Base file not found at {self.config.base_path}")
+                logger.error(f"Base file not found at {self.config.base_path}")
                 return ConsolidationResult(
                     success=False,
                     output_path=None,
@@ -228,9 +231,9 @@ class DocumentConsolidator:
             
             # Step 2: Extract and patch sections from each source
             for patch in self.config.patches:
-                print(f"[DEBUG] Patching from: {patch.source_path} ({patch.source_name})")
+                logger.debug(f"Patching from: {patch.source_path} ({patch.source_name})")
                 if not patch.source_path.exists():
-                    print(f"[DEBUG] Warning: Patch source not found: {patch.source_path}")
+                    logger.warning(f"Patch source not found: {patch.source_path}")
                     for section in patch.sections:
                         sections_not_found.append(f"{patch.source_name}:{section}")
                     continue
@@ -1147,7 +1150,7 @@ class SingleFolderProcessor:
     def scan_and_group(self):
         """Scan folder recursively and group files"""
         self.groups = {}
-        print(f"[DEBUG] Scanning {self.source_dir} for design documents...")
+        logger.debug(f"Scanning {self.source_dir} for design documents...")
         
         # Use rglob for recursive search
         count = 0
@@ -1158,7 +1161,7 @@ class SingleFolderProcessor:
             feature_id = self.extract_feature_id(filepath.name)
             author = self.detect_author(filepath)
             
-            print(f"[DEBUG] Found: {filepath.name} -> Feature: {feature_id}, Author: {author}")
+            logger.debug(f"Found: {filepath.name} -> Feature: {feature_id}, Author: {author}")
             
             if author == DesignDocAuthor.UNKNOWN:
                 continue
@@ -1169,8 +1172,8 @@ class SingleFolderProcessor:
             self.groups[feature_id][author] = filepath
             count += 1
             
-        print(f"[DEBUG] Total grouped files: {count}")
-        print(f"[DEBUG] Groups: {list(self.groups.keys())}")
+        logger.debug(f"Total grouped files: {count}")
+        logger.debug(f"Groups: {list(self.groups.keys())}")
             
     def process_all(self, on_progress: Optional[callable] = None) -> List[ConsolidationResult]:
         """Run consolidation on all groups"""

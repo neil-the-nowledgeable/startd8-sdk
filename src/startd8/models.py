@@ -3,7 +3,7 @@ Data models for StartDate Agent Framework
 """
 
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List, TYPE_CHECKING, TypedDict
 from pydantic import BaseModel, Field, field_validator, model_validator
 from enum import Enum
 from pathlib import Path
@@ -65,6 +65,36 @@ def _default_pricing_service():
     from .costs.pricing import PricingService
 
     return PricingService()
+
+
+# TypedDict definitions for better type safety
+class ResponseMetadata(TypedDict, total=False):
+    """Metadata for agent responses - specific fields for better type safety"""
+    project: str
+    tags: List[str]
+    user_id: str
+    request_id: str
+    pipeline_id: str
+    workflow_id: str
+    iteration: int
+    step_number: int
+    agent_name: str
+    model: str
+    cost_estimate: float
+    response_time_ms: int
+
+
+class PromptMetadata(TypedDict, total=False):
+    """Metadata for prompts - specific fields for better type safety"""
+    project: str
+    tags: List[str]
+    user_id: str
+    request_id: str
+    pipeline_id: str
+    workflow_id: str
+    source: str
+    template_id: str
+    version: str
 
 
 class Prompt(BaseModel):

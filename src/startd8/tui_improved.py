@@ -122,7 +122,13 @@ def _load_prompt_builder():
         return False
 
 
-console = Console()
+# Configure console with larger default styling
+console = Console(
+    width=None,  # Auto-detect terminal width
+    force_terminal=True,  # Force terminal output
+    legacy_windows=False,  # Use modern Windows terminal if available
+    # Note: Font size is controlled by terminal settings, but we use larger/bolder styling
+)
 
 
 class APIKeyManager:
@@ -983,16 +989,17 @@ class ImprovedTUI:
             return None
         
     def show_header(self, subtitle: Optional[str] = None):
-        """Show header with optional subtitle"""
+        """Show header with optional subtitle - using larger font styling"""
         self.console.clear()
-        self.console.print("═" * 80, style="cyan")
+        # Use larger, bolder styling for headers
+        self.console.print("═" * 80, style="bright_cyan bold")
         self.console.print(
             "  startd8 - Multi-LLM Benchmarking System  ".center(80),
-            style="bold cyan"
+            style="bold bright_cyan"
         )
         if subtitle:
-            self.console.print(subtitle.center(80), style="dim")
-        self.console.print("═" * 80, style="cyan")
+            self.console.print(subtitle.center(80), style="bold bright_cyan")
+        self.console.print("═" * 80, style="bright_cyan bold")
         self.console.print()
     
     def test_agent_connections(self):
@@ -2211,6 +2218,7 @@ class ImprovedTUI:
         choices.append("🔗 Document Enhancement Chain (Multi-Agent)")
         choices.append("🚀 Run Design Pipeline (Draft → Review → Polish)")
         choices.append("✨ Design Polish Pipeline (Polish → Suggest Updates → Final Polish)")
+        choices.append("🔍 Critical Review Workflow (Multi-Agent Analysis)")
         choices.append("🔄 Iterative Dev Workflow (Dev → Review → Fix)")
         choices.append("📥 Job Queue")
         
@@ -2241,6 +2249,7 @@ class ImprovedTUI:
         
         # System section
         choices.append(questionary.Separator("═══ SYSTEM ═══"))
+        choices.append("🧪 Test All Agents Readiness")
         choices.append("🔍 Analyze Last Error")
         choices.append("🔍 Analyze Agent Config Errors")
         choices.append("📁 Manage Output Folders")
@@ -2436,6 +2445,9 @@ class ImprovedTUI:
         self.console.print(f"  3. Final:   {final_reviewer.name}\n")
         
         try:
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            
             pipeline = WorkflowTemplates.design_review_chain(drafter, reviewer, final_reviewer)
             pipeline.framework = self.framework
             
@@ -2478,8 +2490,37 @@ class ImprovedTUI:
                             f.write(f"{step['output']}\n\n")
                     
                     self.console.print(f"[green]Saved to {filename}[/green]")
+        except (AgentError, APIError, ConfigurationError) as e:
+            # Log user-friendly errors properly for error analysis workflow
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.error(
+                f"Design pipeline failed: {e}",
+                exc_info=False,  # Don't log traceback for user-friendly errors
+                extra={
+                    "pipeline_name": "design_review_chain",
+                    "agent_name": getattr(e, 'agent_name', None),
+                    "error_type": type(e).__name__
+                }
+            )
+            self.console.print(f"\n[red]Design pipeline failed: {e}[/red]")
+            if hasattr(e, 'original_error') and e.original_error:
+                self.console.print(f"[dim]Original error: {e.original_error}[/dim]")
         except Exception as e:
-            self.console.print(f"\n[red]Pipeline failed: {e}[/red]")
+            # Log unexpected errors with full traceback for debugging
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.error(
+                f"Design pipeline failed: {e}",
+                exc_info=True,  # Log full traceback for unexpected errors
+                extra={
+                    "pipeline_name": "design_review_chain",
+                    "error_type": type(e).__name__
+                }
+            )
+            self.console.print(f"\n[red]Unexpected Error: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
         
         questionary.press_any_key_to_continue().ask()
 
@@ -2596,16 +2637,51 @@ class ImprovedTUI:
         if not final_polisher:
             return
         
+        # 2.5. Optional: Load polishing instructions from .md file
+        polishing_instructions = None
+        use_instructions_file = questionary.confirm(
+            "\nWould you like to use a .md file with polishing instructions for the first agent?",
+            default=False,
+            style=custom_style
+        ).ask()
+        
+        if use_instructions_file:
+            instructions_path = self._safe_path_input(
+                "Path to polishing instructions file (.md):",
+                only_directories=False,
+                style=custom_style
+            )
+            
+            if instructions_path:
+                instructions_file = Path(instructions_path).expanduser()
+                if not instructions_file.exists():
+                    self.console.print(f"[yellow]File not found: {instructions_file}[/yellow]")
+                    self.console.print("[yellow]Continuing without custom instructions...[/yellow]\n")
+                else:
+                    try:
+                        polishing_instructions = instructions_file.read_text(encoding='utf-8')
+                        self.console.print(f"[green]✓ Loaded polishing instructions from {instructions_file.name}[/green]\n")
+                    except Exception as e:
+                        self.console.print(f"[yellow]Error reading instructions file: {e}[/yellow]")
+                        self.console.print("[yellow]Continuing without custom instructions...[/yellow]\n")
+        
         # 3. Run Pipeline
         self.console.print(f"\n[cyan]Running Design Polish Pipeline...[/cyan]")
         self.console.print(f"  1. Polisher: {polisher.name}")
+        if polishing_instructions:
+            self.console.print(f"     [dim]Using custom polishing instructions[/dim]")
         self.console.print(f"  2. Updater: {updater.name}")
         self.console.print(f"  3. Final Polisher: {final_polisher.name}\n")
         
         try:
             from .exceptions import AgentError, APIError, ConfigurationError
             
-            pipeline = WorkflowTemplates.design_polish_chain(polisher, updater, final_polisher)
+            pipeline = WorkflowTemplates.design_polish_chain(
+                polisher, 
+                updater, 
+                final_polisher,
+                prompt_instructions=polishing_instructions
+            )
             pipeline.framework = self.framework
             
             with self.console.status("[bold green]Executing pipeline steps...[/bold green]") as status:
@@ -2706,10 +2782,33 @@ class ImprovedTUI:
                     self.console.print(f"[red]Error saving file: {e}[/red]")
                     questionary.press_any_key_to_continue().ask()
         except (AgentError, APIError, ConfigurationError) as e:
+            # Log user-friendly errors properly for error analysis workflow
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.error(
+                f"Design polish pipeline failed: {e}",
+                exc_info=False,  # Don't log traceback for user-friendly errors
+                extra={
+                    "pipeline_name": "design_polish_chain",
+                    "agent_name": getattr(e, 'agent_name', None),
+                    "error_type": type(e).__name__
+                }
+            )
             self.console.print(f"\n[red]Design polish pipeline failed: {e}[/red]")
             if hasattr(e, 'original_error') and e.original_error:
                 self.console.print(f"[dim]Original error: {e.original_error}[/dim]")
         except Exception as e:
+            # Log unexpected errors with full traceback for debugging
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.error(
+                f"Design polish pipeline failed: {e}",
+                exc_info=True,  # Log full traceback for unexpected errors
+                extra={
+                    "pipeline_name": "design_polish_chain",
+                    "error_type": type(e).__name__
+                }
+            )
             self.console.print(f"\n[red]Unexpected Error: {e}[/red]")
             import traceback
             self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
@@ -5844,10 +5943,14 @@ class ImprovedTUI:
                 self.step2_run_design_review_chain()
             elif "Design Polish Pipeline" in choice:
                 self.run_design_polish_pipeline()
+            elif "Critical Review Workflow" in choice:
+                self.critical_review_workflow()
             elif "Iterative" in choice:
                 self.iterative_workflow_menu()
             elif "Job Queue" in choice:
                 self.job_queue_menu()
+            elif "Test All Agents Readiness" in choice:
+                self.test_all_agents_readiness()
             elif "Analyze Last Error" in choice:
                 self.analyze_last_error_workflow()
             elif "Analyze Agent Config Errors" in choice:
@@ -6664,27 +6767,25 @@ class ImprovedTUI:
             border_style="cyan"
         ))
         
-        # Use text input with validation since path() might not support validate parameter well
-        doc_path = questionary.text(
+        # Use safe path input helper
+        doc_path_str = self._safe_path_input(
             "Select document:",
             default=default_dir,
+            only_directories=False,
             style=custom_style
-        ).ask()
-        if doc_path:
-            from pathlib import Path
-            path_obj = Path(doc_path).expanduser()
-            if not path_obj.is_file():
-                self.console.print("[red]Please select a file, not a directory[/red]")
-                return None
-            doc_path = str(path_obj)
+        )
         
-        if not doc_path:
+        if not doc_path_str:
             return None
         
-        doc_path = Path(doc_path)
+        doc_path = Path(doc_path_str).expanduser().resolve()
         
         if not doc_path.exists():
             self.console.print(f"[red]File not found: {doc_path}[/red]")
+            return None
+        
+        if not doc_path.is_file():
+            self.console.print("[red]Please select a file, not a directory[/red]")
             return None
         
         # Preview document
@@ -7030,10 +7131,39 @@ class ImprovedTUI:
             
             return result
             
+        except (AgentError, APIError, ConfigurationError) as e:
+            # Log user-friendly errors properly for error analysis workflow
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.error(
+                f"Document enhancement chain failed: {e}",
+                exc_info=False,  # Don't log traceback for user-friendly errors
+                extra={
+                    "pipeline_name": "document_enhancement_chain",
+                    "agent_name": getattr(e, 'agent_name', None),
+                    "error_type": type(e).__name__
+                }
+            )
+            self.console.print(f"\n[red]Document enhancement chain failed: {e}[/red]")
+            if hasattr(e, 'original_error') and e.original_error:
+                self.console.print(f"[dim]Original error: {e.original_error}[/dim]")
+            questionary.press_any_key_to_continue().ask()
+            return None
         except Exception as e:
-            self.console.print(f"\n[red]Error executing chain: {e}[/red]")
+            # Log unexpected errors with full traceback for debugging
+            from .logging_config import get_logger
+            logger = get_logger(__name__)
+            logger.error(
+                f"Document enhancement chain failed: {e}",
+                exc_info=True,  # Log full traceback for unexpected errors
+                extra={
+                    "pipeline_name": "document_enhancement_chain",
+                    "error_type": type(e).__name__
+                }
+            )
+            self.console.print(f"\n[red]Unexpected Error: {e}[/red]")
             import traceback
-            traceback.print_exc()
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
             questionary.press_any_key_to_continue().ask()
             return None
     
@@ -7175,6 +7305,677 @@ class ImprovedTUI:
                 border_style=status_color
             ))
             self.console.print()
+        
+        questionary.press_any_key_to_continue().ask()
+
+    def test_all_agents_readiness(self):
+        """Test all available agents by asking a simple question to verify readiness"""
+        self.show_header("Test All Agents Readiness")
+        
+        self.console.print(Panel(
+            "🧪 [bold cyan]Agent Readiness Test[/bold cyan]\n\n"
+            "This workflow tests all available agents by asking:\n"
+            "[bold]'What is the capital of France?'[/bold]\n\n"
+            "This verifies that each agent:\n"
+            "  • Can be instantiated\n"
+            "  • Can connect to its API\n"
+            "  • Can generate responses\n"
+            "  • Returns expected results",
+            border_style="cyan"
+        ))
+        
+        # Confirm before running
+        confirm = questionary.confirm(
+            "\nThis will test all available agents. Continue?",
+            default=True,
+            style=custom_style
+        ).ask()
+        
+        if not confirm:
+            return
+        
+        # Get all available agents
+        self.console.print("\n[cyan]Gathering available agents...[/cyan]\n")
+        
+        # Ensure agent status is up to date
+        if self.agent_status is None:
+            self.agent_status = AgentConfigTester.test_all()
+        
+        custom_agents = self.agent_manager.list_agents()
+        all_agents = self._build_unified_agent_list(custom_agents, set())
+        
+        # Filter to only Ready agents
+        ready_agents = [agent for agent in all_agents if agent.get('available', False)]
+        
+        if not ready_agents:
+            self.console.print("[red]No ready agents available to test.[/red]")
+            self.console.print("[yellow]Please configure at least one agent first.[/yellow]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        self.console.print(f"[green]Found {len(ready_agents)} agent(s) to test[/green]\n")
+        
+        # Test prompt
+        test_prompt = "What is the capital of France?"
+        expected_answer = "Paris"  # For validation
+        
+        # Results storage
+        results = []
+        
+        # Test each agent
+        with self.console.status("[bold green]Testing agents...[/bold green]") as status:
+            for idx, agent_info in enumerate(ready_agents, 1):
+                agent_name = agent_info.get('name', 'Unknown')
+                agent_model = agent_info.get('model', 'unknown')
+                agent_type = agent_info.get('type', 'unknown')
+                agent_icon = agent_info.get('icon', '🤖')
+                
+                status.update(f"[bold green]Testing {agent_name} ({idx}/{len(ready_agents)})...[/bold green]")
+                
+                result = {
+                    'name': agent_name,
+                    'model': agent_model,
+                    'type': agent_type,
+                    'icon': agent_icon,
+                    'success': False,
+                    'response': None,
+                    'response_time_ms': None,
+                    'error': None,
+                    'answer_correct': False
+                }
+                
+                try:
+                    # Create agent instance based on agent type
+                    agent_instance = None
+                    
+                    if agent_info.get('type') == 'builtin':
+                        # Handle built-in agents
+                        builtin_type = agent_info.get('builtin_type')
+                        try:
+                            if builtin_type == 'mock':
+                                agent_instance = MockAgent(name="mock", model="mock-model")
+                            elif builtin_type == 'claude':
+                                agent_instance = ClaudeAgent()
+                            elif builtin_type == 'gpt4':
+                                agent_instance = GPT4Agent()
+                            else:
+                                result['error'] = f"Unknown builtin type: {builtin_type}"
+                                results.append(result)
+                                continue
+                        except Exception as e:
+                            result['error'] = f"Failed to create builtin agent ({builtin_type}): {str(e)}"
+                            import traceback
+                            result['error_traceback'] = traceback.format_exc()
+                            results.append(result)
+                            continue
+                    else:
+                        # Handle custom agents - need to get the custom_config
+                        custom_config = agent_info.get('custom_config')
+                        if not custom_config:
+                            # Try to find in custom_agents list
+                            for custom_agent in custom_agents:
+                                if custom_agent.get('name') == agent_name:
+                                    custom_config = custom_agent
+                                    break
+                        
+                        if custom_config:
+                            try:
+                                agent_instance = self.agent_manager.create_agent_instance(custom_config)
+                            except Exception as e:
+                                result['error'] = f"Failed to create custom agent: {str(e)}"
+                                import traceback
+                                result['error_traceback'] = traceback.format_exc()
+                                results.append(result)
+                                continue
+                        else:
+                            result['error'] = f"Could not find custom_config for agent '{agent_name}'. Agent info keys: {list(agent_info.keys())}"
+                            results.append(result)
+                            continue
+                    
+                    if not agent_instance:
+                        result['error'] = "Agent instance creation returned None"
+                        results.append(result)
+                        continue
+                    
+                    # Generate response
+                    import time
+                    start_time = time.time()
+                    try:
+                        response_tuple = agent_instance.generate(test_prompt)
+                    except Exception as e:
+                        result['error'] = f"Failed to generate response: {str(e)}"
+                        import traceback
+                        result['error_traceback'] = traceback.format_exc()
+                        results.append(result)
+                        continue
+                    
+                    end_time = time.time()
+                    
+                    # Extract response text (generate returns tuple: (response_text, response_time_ms, token_usage))
+                    if isinstance(response_tuple, tuple) and len(response_tuple) >= 1:
+                        response_text = response_tuple[0]
+                        # Use agent's reported time if available, otherwise calculate our own
+                        if len(response_tuple) >= 2 and response_tuple[1]:
+                            result['response_time_ms'] = response_tuple[1]
+                        else:
+                            result['response_time_ms'] = int((end_time - start_time) * 1000)
+                    elif isinstance(response_tuple, str):
+                        # Sometimes generate might return just a string
+                        response_text = response_tuple
+                        result['response_time_ms'] = int((end_time - start_time) * 1000)
+                    else:
+                        response_text = str(response_tuple)
+                        result['response_time_ms'] = int((end_time - start_time) * 1000)
+                        result['error'] = f"Unexpected response format: {type(response_tuple)}"
+                    
+                    result['response'] = response_text
+                    result['success'] = True
+                    
+                    # Check if answer is correct (case-insensitive, check if "Paris" is in response)
+                    response_lower = response_text.lower()
+                    if 'paris' in response_lower:
+                        result['answer_correct'] = True
+                    
+                except Exception as e:
+                    result['error'] = f"Unexpected error: {str(e)}"
+                    result['success'] = False
+                    # Include traceback in detailed error for debugging
+                    import traceback
+                    result['error_traceback'] = traceback.format_exc()
+                
+                results.append(result)
+        
+        # Display results
+        self.console.print("\n[bold cyan]Test Results[/bold cyan]\n")
+        
+        # Summary table
+        summary_table = Table(title="Agent Readiness Test Summary", show_header=True)
+        summary_table.add_column("", justify="center", width=3)  # Icon
+        summary_table.add_column("Agent", style="bold cyan", width=25)
+        summary_table.add_column("Model", style="cyan", width=20)
+        summary_table.add_column("Status", justify="center", width=12)
+        summary_table.add_column("Time", justify="right", width=10)
+        summary_table.add_column("Answer", justify="center", width=10)
+        
+        passed_count = 0
+        failed_count = 0
+        
+        for result in results:
+            if result['success']:
+                status_text = "[green]✓ PASS[/green]"
+                passed_count += 1
+            else:
+                status_text = "[red]✗ FAIL[/red]"
+                failed_count += 1
+            
+            time_text = f"{result['response_time_ms']}ms" if result['response_time_ms'] else "N/A"
+            
+            if result['answer_correct']:
+                answer_text = "[green]✓ Correct[/green]"
+            elif result['success']:
+                answer_text = "[yellow]⚠ Wrong[/yellow]"
+            else:
+                answer_text = "[dim]N/A[/dim]"
+            
+            summary_table.add_row(
+                result['icon'],
+                result['name'],
+                result['model'],
+                status_text,
+                time_text,
+                answer_text
+            )
+        
+        self.console.print(summary_table)
+        
+        # Summary statistics
+        self.console.print(f"\n[bold]Summary:[/bold]")
+        self.console.print(f"  [green]Passed:[/green] {passed_count}/{len(results)}")
+        self.console.print(f"  [red]Failed:[/red] {failed_count}/{len(results)}")
+        
+        if passed_count > 0:
+            avg_time = sum(r['response_time_ms'] for r in results if r['response_time_ms']) / passed_count
+            self.console.print(f"  [cyan]Average Response Time:[/cyan] {int(avg_time)}ms")
+        
+        # Always show errors for failed agents
+        failed_results = [r for r in results if not r['success']]
+        if failed_results:
+            self.console.print(f"\n[yellow]⚠️  {len(failed_results)} agent(s) failed. Showing errors:[/yellow]\n")
+            for result in failed_results:
+                self.console.print(Panel(
+                    f"[bold]Agent:[/bold] {result['name']}\n"
+                    f"[bold]Model:[/bold] {result['model']}\n"
+                    f"[bold]Type:[/bold] {result['type']}\n"
+                    + (f"[bold]Error:[/bold] {result['error']}\n" if result['error'] else "[bold]Error:[/bold] Unknown error\n")
+                    + (f"\n[bold]Traceback:[/bold]\n{result.get('error_traceback', '')}\n" if result.get('error_traceback') else ""),
+                    title=f"✗ {result['name']} - FAILED",
+                    border_style="red"
+                ))
+                self.console.print()
+        
+        # Detailed results
+        show_details = questionary.confirm(
+            "\nShow detailed results for each agent?",
+            default=False,
+            style=custom_style
+        ).ask()
+        
+        if show_details:
+            self.console.print("\n[bold cyan]Detailed Results[/bold cyan]\n")
+            
+            for result in results:
+                status_color = "green" if result['success'] else "red"
+                status_icon = "✓" if result['success'] else "✗"
+                
+                panel_content = (
+                    f"[bold]Agent:[/bold] {result['name']}\n"
+                    f"[bold]Model:[/bold] {result['model']}\n"
+                    f"[bold]Type:[/bold] {result['type']}\n"
+                    f"[bold]Status:[/bold] {'[green]SUCCESS[/green]' if result['success'] else '[red]FAILED[/red]'}\n"
+                )
+                
+                if result['success']:
+                    panel_content += (
+                        (f"[bold]Response Time:[/bold] {result['response_time_ms']}ms\n" if result['response_time_ms'] else "")
+                        + (f"[bold]Answer Correct:[/bold] {'[green]Yes[/green]' if result['answer_correct'] else '[yellow]No[/yellow]'}\n")
+                        + (f"[bold]Response:[/bold]\n{result['response'][:500]}{'...' if len(result['response']) > 500 else ''}\n" if result['response'] else "")
+                    )
+                else:
+                    panel_content += (
+                        (f"[bold]Error:[/bold] {result['error']}\n" if result['error'] else "[bold]Error:[/bold] Unknown error\n")
+                        + (f"\n[bold]Traceback:[/bold]\n{result.get('error_traceback', '')}\n" if result.get('error_traceback') else "")
+                    )
+                
+                self.console.print(Panel(
+                    panel_content,
+                    title=f"{status_icon} {result['name']}",
+                    border_style=status_color
+                ))
+                self.console.print()
+        
+        questionary.press_any_key_to_continue().ask()
+
+    def critical_review_workflow(self):
+        """Critical Review Workflow - Multiple agents review design documents"""
+        self.show_header("Critical Review Workflow")
+        
+        self.console.print(Panel(
+            "🔍 [bold cyan]Critical Review Workflow[/bold cyan]\n\n"
+            "Multiple agents independently review design documents and create\n"
+            "detailed analysis reports.\n\n"
+            "Each agent will analyze:\n"
+            "  • What is good\n"
+            "  • What is bad\n"
+            "  • What needs more or less of\n"
+            "  • Suggestions for improvement\n\n"
+            "Each review is saved as a separate .md file.",
+            border_style="cyan"
+        ))
+        
+        # 1. Select input method (file or folder)
+        input_method = questionary.select(
+            "\nChoose input method:",
+            choices=[
+                "📄 Single design document",
+                "📁 Folder of design documents",
+                "← Cancel"
+            ],
+            style=custom_style
+        ).ask()
+        
+        if not input_method or "Cancel" in input_method:
+            return
+        
+        document_files = []
+        
+        if "Single" in input_method:
+            file_path = self._safe_path_input(
+                "Path to design document:",
+                only_directories=False,
+                style=custom_style
+            )
+            
+            if not file_path:
+                return
+            
+            doc_path = Path(file_path).expanduser()
+            if not doc_path.exists():
+                self.console.print(f"[red]File not found: {doc_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            
+            if not doc_path.is_file():
+                self.console.print(f"[red]Path is not a file: {doc_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            
+            document_files = [doc_path]
+        else:
+            # Folder of documents
+            folder_path = self._safe_path_input(
+                "Path to folder containing design documents:",
+                only_directories=True,
+                style=custom_style
+            )
+            
+            if not folder_path:
+                return
+            
+            folder = Path(folder_path).expanduser()
+            if not folder.exists():
+                self.console.print(f"[red]Folder not found: {folder}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            
+            if not folder.is_dir():
+                self.console.print(f"[red]Path is not a folder: {folder}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            
+            # Find all .md files in the folder
+            document_files = list(folder.rglob("*.md"))
+            
+            if not document_files:
+                self.console.print(f"[yellow]No .md files found in {folder}[/yellow]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            
+            # Filter out common non-design files
+            exclude_patterns = ["README", "CHANGELOG", "LICENSE", "index", "summary", "consolidated"]
+            document_files = [
+                f for f in document_files
+                if not any(pattern.lower() in f.name.lower() for pattern in exclude_patterns)
+            ]
+            
+            if not document_files:
+                self.console.print(f"[yellow]No design documents found (filtered out common files)[/yellow]")
+                questionary.press_any_key_to_continue().ask()
+                return
+        
+        self.console.print(f"\n[green]Found {len(document_files)} document(s) to review[/green]\n")
+        
+        # 2. Select agents for review
+        self.console.print("[bold]Select Agents for Critical Review[/bold]\n")
+        
+        ready_agents = self._get_ready_agents_for_selection()
+        if not ready_agents:
+            self.console.print("[red]No ready agents available. Please configure agents first.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Display ready agents table
+        agent_table = Table(title="Available Agents (Ready Status)", show_header=True)
+        agent_table.add_column("", justify="center", width=3)
+        agent_table.add_column("Agent", style="bold cyan")
+        agent_table.add_column("Model", style="cyan")
+        agent_table.add_column("Type", style="magenta")
+        
+        for agent in ready_agents:
+            agent_type = "Built-in" if agent['type'] == 'builtin' else "User added"
+            agent_table.add_row(
+                agent['icon'],
+                agent['name'],
+                agent['model'],
+                agent_type
+            )
+        
+        self.console.print(agent_table)
+        self.console.print()
+        
+        # Build agent choices
+        agent_choices = []
+        for agent in ready_agents:
+            agent_choices.append(f"{agent['icon']} {agent['name']} ({agent['model']})")
+        
+        self.console.print("[dim]💡 Use SPACE to select/deselect agents, ENTER to confirm[/dim]\n")
+        
+        selected_agents = None
+        while True:
+            selected_agents = questionary.checkbox(
+                "Select agents to perform critical review:",
+                choices=agent_choices,
+                style=custom_style,
+                instruction="(Press SPACE to select, ENTER to confirm)"
+            ).ask()
+            
+            if selected_agents is None:
+                self.console.print("[yellow]Cancelled.[/yellow]")
+                return
+            
+            if selected_agents and len(selected_agents) > 0:
+                break
+            
+            self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
+            retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+            if not retry:
+                return
+        
+        # Extract agent info from selections
+        selected_agent_infos = []
+        for agent_choice in selected_agents:
+            # Parse "Icon Name (model)" format
+            name_part = agent_choice.split(" (")[0].strip()
+            parts = name_part.split()
+            if len(parts) > 1:
+                agent_name = " ".join(parts[1:])
+            else:
+                agent_name = name_part
+            
+            # Find matching agent
+            for agent in ready_agents:
+                if agent['name'] == agent_name:
+                    selected_agent_infos.append(agent)
+                    break
+        
+        if not selected_agent_infos:
+            self.console.print("[red]Error: Could not match selected agents.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        self.console.print(f"\n[green]✓ Selected {len(selected_agent_infos)} agent(s)[/green]\n")
+        
+        # 3. Select output directory
+        output_dir = questionary.text(
+            "Output directory for review files:",
+            default=str(Path.cwd() / "critical_reviews"),
+            style=custom_style
+        ).ask()
+        
+        if not output_dir:
+            output_dir = Path.cwd() / "critical_reviews"
+        else:
+            output_dir = Path(output_dir).expanduser()
+        
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 4. Review prompt template
+        review_prompt_template = """You are an expert technical reviewer and software architect. Your task is to critically review the following design document.
+
+# Design Document
+
+{document_content}
+
+# Review Requirements
+
+Please provide a comprehensive critical review that includes:
+
+## 1. What is Good
+Identify and highlight the strengths of this design document. What aspects are well thought out, clear, or innovative?
+
+## 2. What is Bad
+Identify weaknesses, gaps, ambiguities, or problematic aspects of the design. Be specific and constructive.
+
+## 3. What Needs More or Less Of
+- What areas need more detail, explanation, or coverage?
+- What areas are too verbose or could be condensed?
+- What topics are missing entirely?
+
+## 4. Suggestions for Improvement
+Provide specific, actionable suggestions for how to improve the design document. Include:
+- Structural improvements
+- Content additions or modifications
+- Clarity enhancements
+- Technical recommendations
+
+Please be thorough, constructive, and specific in your analysis."""
+        
+        # 5. Process each document with each agent
+        self.console.print(f"\n[cyan]Starting critical reviews...[/cyan]\n")
+        self.console.print(f"  Documents: {len(document_files)}\n")
+        self.console.print(f"  Agents: {len(selected_agent_infos)}\n")
+        self.console.print(f"  Total reviews: {len(document_files) * len(selected_agent_infos)}\n")
+        
+        all_results = []
+        
+        try:
+            from .exceptions import AgentError, APIError, ConfigurationError
+            
+            with self.console.status("[bold green]Processing reviews...[/bold green]") as status:
+                for doc_idx, doc_file in enumerate(document_files, 1):
+                    status.update(f"[bold green]Processing document {doc_idx}/{len(document_files)}: {doc_file.name}...[/bold green]")
+                    
+                    try:
+                        document_content = doc_file.read_text(encoding='utf-8')
+                    except Exception as e:
+                        self.console.print(f"[red]Error reading {doc_file.name}: {e}[/red]")
+                        continue
+                    
+                    doc_stem = doc_file.stem
+                    doc_dir = doc_file.parent
+                    
+                    for agent_idx, agent_info in enumerate(selected_agent_infos, 1):
+                        agent_name = agent_info.get('name', 'Unknown')
+                        agent_model = agent_info.get('model', 'unknown')
+                        
+                        status.update(
+                            f"[bold green]Document {doc_idx}/{len(document_files)}, "
+                            f"Agent {agent_idx}/{len(selected_agent_infos)}: {agent_name}...[/bold green]"
+                        )
+                        
+                        # Create agent instance
+                        agent_instance = None
+                        try:
+                            if agent_info.get('type') == 'builtin':
+                                builtin_type = agent_info.get('builtin_type')
+                                if builtin_type == 'mock':
+                                    agent_instance = MockAgent(name="mock", model="mock-model")
+                                elif builtin_type == 'claude':
+                                    agent_instance = ClaudeAgent()
+                                elif builtin_type == 'gpt4':
+                                    agent_instance = GPT4Agent()
+                            else:
+                                custom_config = agent_info.get('custom_config')
+                                if not custom_config:
+                                    custom_agents = self.agent_manager.list_agents()
+                                    for custom_agent in custom_agents:
+                                        if custom_agent.get('name') == agent_name:
+                                            custom_config = custom_agent
+                                            break
+                                
+                                if custom_config:
+                                    agent_instance = self.agent_manager.create_agent_instance(custom_config)
+                            
+                            if not agent_instance:
+                                raise Exception(f"Failed to create agent instance for {agent_name}")
+                            
+                            # Generate review
+                            review_prompt = review_prompt_template.format(document_content=document_content)
+                            response_tuple = agent_instance.generate(review_prompt)
+                            
+                            # Extract response
+                            if isinstance(response_tuple, tuple) and len(response_tuple) >= 1:
+                                review_text = response_tuple[0]
+                            else:
+                                review_text = str(response_tuple)
+                            
+                            # Create output filename
+                            safe_agent_name = agent_name.replace(" ", "_").replace("/", "_")
+                            output_filename = f"{doc_stem}_review_{safe_agent_name}.md"
+                            output_path = output_dir / output_filename
+                            
+                            # Write review file
+                            from datetime import datetime, timezone
+                            with open(output_path, 'w', encoding='utf-8') as f:
+                                f.write(f"# Critical Review: {doc_file.name}\n\n")
+                                f.write(f"**Reviewed by:** {agent_name} ({agent_model})\n")
+                                f.write(f"**Original Document:** {doc_file}\n")
+                                f.write(f"**Review Date:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
+                                f.write("---\n\n")
+                                f.write(review_text)
+                            
+                            all_results.append({
+                                'document': doc_file.name,
+                                'agent': agent_name,
+                                'model': agent_model,
+                                'output_path': output_path,
+                                'success': True
+                            })
+                            
+                        except Exception as e:
+                            error_msg = str(e)
+                            all_results.append({
+                                'document': doc_file.name,
+                                'agent': agent_name,
+                                'model': agent_model,
+                                'error': error_msg,
+                                'success': False
+                            })
+            
+            # 6. Display results summary
+            self.console.print("\n[bold cyan]Review Complete![/bold cyan]\n")
+            
+            summary_table = Table(title="Review Results Summary", show_header=True)
+            summary_table.add_column("Document", style="cyan", width=30)
+            summary_table.add_column("Agent", style="bold cyan", width=25)
+            summary_table.add_column("Status", justify="center", width=12)
+            summary_table.add_column("Output File", style="green", width=40)
+            
+            successful_reviews = 0
+            failed_reviews = 0
+            
+            for result in all_results:
+                if result['success']:
+                    status_text = "[green]✓ SUCCESS[/green]"
+                    output_text = str(result['output_path'].name)
+                    successful_reviews += 1
+                else:
+                    status_text = "[red]✗ FAILED[/red]"
+                    output_text = f"[red]{result.get('error', 'Unknown error')[:35]}...[/red]"
+                    failed_reviews += 1
+                
+                summary_table.add_row(
+                    result['document'],
+                    result['agent'],
+                    status_text,
+                    output_text
+                )
+            
+            self.console.print(summary_table)
+            
+            self.console.print(f"\n[bold]Summary:[/bold]")
+            self.console.print(f"  [green]Successful reviews:[/green] {successful_reviews}/{len(all_results)}")
+            if failed_reviews > 0:
+                self.console.print(f"  [red]Failed reviews:[/red] {failed_reviews}/{len(all_results)}")
+            self.console.print(f"  [cyan]Output directory:[/cyan] {output_dir}")
+            
+            # Show failed reviews details if any
+            failed_results = [r for r in all_results if not r['success']]
+            if failed_results:
+                self.console.print(f"\n[yellow]⚠️  {len(failed_results)} review(s) failed:[/yellow]\n")
+                for result in failed_results:
+                    self.console.print(
+                        f"  • {result['document']} - {result['agent']}: "
+                        f"[red]{result.get('error', 'Unknown error')}[/red]"
+                    )
+            
+        except (AgentError, APIError, ConfigurationError) as e:
+            self.console.print(f"\n[red]Critical review workflow failed: {e}[/red]")
+            if hasattr(e, 'original_error') and e.original_error:
+                self.console.print(f"[dim]Original error: {e.original_error}[/dim]")
+        except Exception as e:
+            self.console.print(f"\n[red]Unexpected Error: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
         
         questionary.press_any_key_to_continue().ask()
 
@@ -7615,19 +8416,40 @@ Please review this error analysis and provide feedback or suggestions for resolu
         
         if not ready_agents:
             self.console.print("[red]No ready agents available for distribution.[/red]")
+            self.console.print("[yellow]Please configure at least one agent with Ready status first.[/yellow]")
             questionary.press_any_key_to_continue().ask()
             return
         
+        # Build agent choices list with proper formatting
         agent_choices = []
         for agent in ready_agents:
-            agent_choices.append(f"{agent['icon']} {agent['name']} ({agent['model']})")
+            # Ensure icon exists, default to empty string if not
+            icon = agent.get('icon', '')
+            name = agent.get('name', 'Unknown')
+            model = agent.get('model', 'unknown')
+            agent_choices.append(f"{icon} {name} ({model})")
+        
+        # Debug: Show how many agents are available
+        self.console.print(f"[dim]Found {len(agent_choices)} available agent(s) for selection[/dim]\n")
         
         # Add instruction text
         self.console.print("[dim]💡 Use SPACE to select/deselect agents, ENTER to confirm selection[/dim]\n")
         
+        # Show available agents count for debugging
+        if len(agent_choices) == 0:
+            self.console.print("[red]Error: No agent choices available. This should not happen.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
         # Loop until at least one agent is selected or user cancels
         selected_agents = None
+        retry_count = 0
         while True:
+            # Show helpful message on retry
+            if retry_count > 0:
+                self.console.print(f"\n[cyan]Retrying agent selection (attempt {retry_count + 1})...[/cyan]\n")
+                self.console.print(f"[dim]Available agents: {len(agent_choices)}[/dim]\n")
+            
             selected_agents = questionary.checkbox(
                 "Select agents to distribute this prompt to:",
                 choices=agent_choices,
@@ -7643,10 +8465,14 @@ Please review this error analysis and provide feedback or suggestions for resolu
             
             if selected_agents and len(selected_agents) > 0:
                 # At least one agent selected - break out of loop
+                self.console.print(f"[green]✓ Selected {len(selected_agents)} agent(s)[/green]\n")
                 break
             
             # No agents selected - ask user what to do
-            self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected to create a job.[/yellow]\n")
+            retry_count += 1
+            self.console.print(f"\n[yellow]⚠️  No agents selected. At least one agent must be selected to create a job.[/yellow]")
+            self.console.print(f"[dim]Available agents: {len(agent_choices)}[/dim]\n")
+            
             action = questionary.select(
                 "What would you like to do?",
                 choices=[
@@ -7657,7 +8483,7 @@ Please review this error analysis and provide feedback or suggestions for resolu
                 style=custom_style
             ).ask()
             
-            if "Cancel" in action:
+            if "Cancel" in action or action is None:
                 return
             # Otherwise, loop continues to retry selection
         
@@ -7669,8 +8495,12 @@ Please review this error analysis and provide feedback or suggestions for resolu
             style=custom_style
         ).ask()
         
-        # Create job file
-        _load_job_queue()
+        # Load job queue module and create job file
+        if not _load_job_queue():
+            self.console.print("[red]Job queue module not available. Cannot create job file.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
         if create_job_file:
             config = self._load_queue_config()
             if config:
@@ -7682,9 +8512,33 @@ Please review this error analysis and provide feedback or suggestions for resolu
             
             # Create job file
             job_name = f"error_analysis_{Path(saved_path).stem}"
+            
+            # Extract agent names from selected choices
+            # Format can be: "⭐ Name (model)", "🧪 Name (model)", "🤖 Name (model)", etc.
+            agent_names = []
+            for agent_choice in selected_agents:
+                # Remove model part first: "Icon Name (model)" -> "Icon Name"
+                name_part = agent_choice.split(" (")[0].strip()
+                # Remove any icon emoji (⭐, 🧪, 🤖, etc.) - split by space and take last part
+                # This handles: "⭐ Name", "🧪 Name", "🤖 Name", or just "Name"
+                parts = name_part.split()
+                if len(parts) > 1:
+                    # Has icon, take everything after first part
+                    agent_name = " ".join(parts[1:])
+                else:
+                    # No icon or just name
+                    agent_name = name_part
+                agent_names.append(agent_name.strip())
+            
+            if not agent_names:
+                self.console.print("[red]Error: Could not extract agent names from selection.[/red]")
+                self.console.print(f"[dim]Selected agents: {selected_agents}[/dim]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            
             job_file = create_job_file(
                 prompt_content=prompt_content,
-                agents=[agent.split(" (")[0].split("⭐ ")[-1] for agent in selected_agents],
+                agents=agent_names,
                 priority=priority,
                 output_folder=str(watch_folder / "output"),
                 job_name=job_name

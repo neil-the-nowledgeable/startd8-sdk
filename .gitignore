@@ -57,6 +57,10 @@ backup/
 # Generated outputs
 enhanced_documents/
 
+# Temporary test scripts
+test_pipeline_failure.py
+verify_pipeline_error_logging.py
+
 # ---------------------------------------------------------------------------
 # startd8 project data (Decision 28B)
 # - Keep prompts versioned in git

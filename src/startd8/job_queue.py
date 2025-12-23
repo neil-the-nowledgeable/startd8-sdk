@@ -20,6 +20,7 @@ from .framework import AgentFramework
 from .agents import BaseAgent
 from .providers import ProviderRegistry
 from .logging_config import get_logger
+from .utils.file_operations import atomic_write_json
 
 logger = get_logger(__name__)
 
@@ -678,13 +679,17 @@ class JobQueue:
         return JobResult(**data)
     
     def _save_status(self, job: JobFile, result: JobResult):
-        """Save status to file"""
+        """Save status to file (atomic write)"""
         if not job.file_path:
             return
         
         status_path = self._get_status_path(job.file_path)
-        with open(status_path, 'w') as f:
-            json.dump(result.model_dump(mode='json'), f, indent=2, default=str)
+        atomic_write_json(
+            status_path,
+            result.model_dump(mode='json'),
+            indent=2,
+            default=str
+        )
     
     def _archive_job(self, job: JobFile):
         """Move completed job to archive folder"""
@@ -747,8 +752,8 @@ def create_job_file(
         "metadata": metadata or {}
     }
     
-    with open(output_path, 'w') as f:
-        json.dump(job_data, f, indent=2)
+    # Use atomic write to prevent corruption
+    atomic_write_json(output_path, job_data, indent=2)
     
     return output_path
 
@@ -790,8 +795,8 @@ def save_queue_config(config: JobQueueConfig, config_path: Path):
     if data.get('archive_folder'):
         data['archive_folder'] = str(data['archive_folder'])
     
-    with open(config_path, 'w') as f:
-        json.dump(data, f, indent=2)
+    # Use atomic write to prevent corruption
+    atomic_write_json(config_path, data, indent=2)
 
 
 

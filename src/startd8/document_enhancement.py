@@ -662,6 +662,18 @@ class DocumentEnhancementChain:
                 )
         except Exception as e:
             # Don't fail the enhancement if framework storage fails
-            print(f"Warning: Failed to store enhancement in framework: {e}")
+            import logging
+            logger = logging.getLogger(__name__)
+            enhancement_id = None
+            if hasattr(result, 'enhancement_id'):
+                enhancement_id = result.enhancement_id
+            logger.warning(
+                f"Failed to store enhancement in framework: {e}",
+                exc_info=True,
+                extra={
+                    "operation": "store_enhancement_result",
+                    "enhancement_id": enhancement_id
+                }
+            )
 
 

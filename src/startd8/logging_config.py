@@ -171,16 +171,29 @@ def _ensure_default_log_file_handler():
     log_dir = config_dir / "logs"
     log_file = log_dir / "startd8.log"
     
-    # Create log directory if it doesn't exist
-    log_dir.mkdir(parents=True, exist_ok=True)
-    
-    # Set up file handler with JSON format (Loki-friendly)
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)  # Capture all levels in file
-    file_handler.setFormatter(JSONFormatter())
-    
-    # Add file handler to root logger
-    root_logger.addHandler(file_handler)
+    # Try to set up file handler, but handle permission errors gracefully
+    try:
+        # Create log directory if it doesn't exist
+        log_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Set up file handler with JSON format (Loki-friendly)
+        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        file_handler.setLevel(logging.DEBUG)  # Capture all levels in file
+        file_handler.setFormatter(JSONFormatter())
+        
+        # Add file handler to root logger
+        root_logger.addHandler(file_handler)
+    except (PermissionError, OSError) as e:
+        # Permission denied or other filesystem error - fall back to console-only logging
+        # This can happen in sandboxed environments or when user doesn't have write access
+        import warnings
+        warnings.warn(
+            f"Could not create log file at {log_file}: {e}. "
+            "Falling back to console-only logging.",
+            RuntimeWarning,
+            stacklevel=2
+        )
+        # Continue without file handler - console handler will still be set up below
     
     # Also ensure console handler exists for stderr/stdout
     has_console_handler = any(

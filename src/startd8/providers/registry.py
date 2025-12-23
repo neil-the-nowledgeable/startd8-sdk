@@ -122,8 +122,6 @@ class ProviderRegistry:
         """
         # Thread-safe check
         with cls._lock:
-        # Thread-safe check
-        with cls._lock:
             if cls._discovered and not force:
                 logger.debug("Providers already discovered, skipping")
                 return

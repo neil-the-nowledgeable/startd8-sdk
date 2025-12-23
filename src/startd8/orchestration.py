@@ -518,7 +518,7 @@ class WorkflowTemplates:
             polisher_agent: Agent for initial polish pass (e.g., Claude Sonnet)
             updater_agent: Agent to suggest updates/improvements (e.g., GPT-4)
             final_polisher_agent: Agent for final polish incorporating suggestions (e.g., Claude Opus)
-            prompt_instructions: Optional custom instructions from prompt file to incorporate into each step
+            prompt_instructions: Optional custom instructions from prompt file to use for the first agent (polisher) only
             
         Returns:
             Configured Pipeline
@@ -547,15 +547,15 @@ class WorkflowTemplates:
             "maintaining professional quality and completeness."
         )
         
-        # Incorporate prompt instructions if provided
+        # Incorporate prompt instructions if provided (only for the first agent/polisher)
         if prompt_instructions:
-            polish_instructions = f"{polish_base}\n\nAdditional Instructions:\n{prompt_instructions}"
-            updater_instructions = f"{updater_base}\n\nAdditional Instructions:\n{prompt_instructions}"
-            final_polish_instructions = f"{final_polish_base}\n\nAdditional Instructions:\n{prompt_instructions}"
+            polish_instructions = f"{polish_base}\n\n## Polishing Instructions\n\n{prompt_instructions}"
         else:
             polish_instructions = polish_base
-            updater_instructions = updater_base
-            final_polish_instructions = final_polish_base
+        
+        # Other steps use base instructions only
+        updater_instructions = updater_base
+        final_polish_instructions = final_polish_base
         
         pipeline.add_step(
             name="polish",

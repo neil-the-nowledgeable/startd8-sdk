@@ -16,6 +16,7 @@ from .models import (
 from .storage import StorageBackend, FileSystemStorage
 from .logging_config import get_logger
 from .exceptions import ValidationError
+from .utils.file_operations import atomic_write_json
 try:
     from .cache import SimpleCache
 except ImportError:
@@ -449,8 +450,8 @@ class AgentFramework:
         
         if output_file:
             output_file.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_file, 'w') as f:
-                json.dump(report.model_dump(), f, indent=2, default=str)
+            # Use atomic write to prevent corruption
+            atomic_write_json(output_file, report.model_dump(), indent=2, default=str)
         
         return report
 

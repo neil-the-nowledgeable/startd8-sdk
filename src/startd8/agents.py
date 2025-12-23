@@ -98,7 +98,7 @@ except ImportError as e:
     _GEMINI_AVAILABLE = False
     _GEMINI_IMPORT_ERROR = str(e)
 
-from .models import TokenUsage, AgentResponse
+from .models import TokenUsage, AgentResponse, ResponseMetadata
 
 # Import cost tracking (optional dependency within the same package)
 try:
@@ -238,7 +238,7 @@ class BaseAgent(ABC):
         prompt: str,
         prompt_id: str,
         response_id: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional['ResponseMetadata'] = None,
         project: Optional[str] = None,
         tags: Optional[list] = None,
         pipeline_id: Optional[str] = None,
@@ -337,7 +337,7 @@ class BaseAgent(ABC):
         self,
         prompt_id: str,
         prompt: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ResponseMetadata] = None,
         project: Optional[str] = None,
         tags: Optional[list] = None,
         pipeline_id: Optional[str] = None,
@@ -398,7 +398,7 @@ class BaseAgent(ABC):
         self,
         prompt_id: str,
         prompt: str,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[ResponseMetadata] = None,
         project: Optional[str] = None,
         tags: Optional[list] = None,
         pipeline_id: Optional[str] = None,
