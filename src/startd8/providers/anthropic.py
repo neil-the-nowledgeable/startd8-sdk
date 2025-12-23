@@ -18,11 +18,12 @@ class AnthropicProvider:
     
     # Official Claude models (hardcoded baseline)
     HARDCODED_MODELS = [
-        "claude-3-opus-20240229",
-        "claude-3-sonnet-20240229", 
-        "claude-3-haiku-20240307",
-        "claude-3-5-sonnet-20241022",
-        "claude-3-5-haiku-20241022",
+        "claude-sonnet-4-20250514",  # Claude Sonnet 4 (latest)
+        "claude-3-5-sonnet-20241022",  # Claude 3.5 Sonnet
+        "claude-3-opus-20240229",  # Claude 3 Opus
+        "claude-3-sonnet-20240229",  # Claude 3 Sonnet
+        "claude-3-haiku-20240307",  # Claude 3 Haiku
+        "claude-3-5-haiku-20241022",  # Claude 3.5 Haiku
     ]
     
     @classmethod
@@ -60,6 +61,13 @@ class AnthropicProvider:
     
     # Model metadata for cost tracking and limits
     MODEL_INFO = {
+        "claude-sonnet-4-20250514": {
+            "name": "Claude Sonnet 4",
+            "context_window": 200000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 3.00,
+            "cost_per_1m_output": 15.00,
+        },
         "claude-3-opus-20240229": {
             "name": "Claude 3 Opus",
             "context_window": 200000,

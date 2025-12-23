@@ -1278,6 +1278,7 @@ class ImprovedTUI:
                 ])
             
             choices.extend([
+                "🔄 Refresh Available Models",
                 "🔬 Test All Agents",
                 "← Back to Main Menu"
             ])
@@ -1297,6 +1298,8 @@ class ImprovedTUI:
                 self._edit_agent(custom_agents)
             elif "Delete" in action:
                 self._delete_agent(custom_agents)
+            elif "Refresh" in action:
+                self._refresh_available_models()
             elif "Test" in action:
                 self.test_agent_connections()
     
@@ -1405,6 +1408,147 @@ class ImprovedTUI:
         
         questionary.press_any_key_to_continue("\nPress any key to continue...").ask()
     
+    def _refresh_available_models(self):
+        """Refresh available models from provider APIs"""
+        self.show_header("Refresh Available Models")
+        
+        self.console.print(Panel(
+            "[bold]Refresh Available Models[/bold]\n\n"
+            "This will fetch the latest available models from provider APIs\n"
+            "and merge them with the hardcoded model lists.\n\n"
+            "Models are cached for 24 hours to reduce API calls.",
+            border_style="cyan"
+        ))
+        
+        # Get API keys
+        api_keys = {}
+        
+        anthropic_key = os.getenv('ANTHROPIC_API_KEY')
+        if anthropic_key:
+            api_keys['anthropic'] = anthropic_key
+        
+        openai_key = os.getenv('OPENAI_API_KEY')
+        if openai_key:
+            api_keys['openai'] = openai_key
+        
+        gemini_key = os.getenv('GOOGLE_API_KEY')
+        if gemini_key:
+            api_keys['gemini'] = gemini_key
+        
+        if not api_keys:
+            self.console.print("\n[yellow]⚠️ No API keys found in environment variables.[/yellow]")
+            self.console.print("[dim]Set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY to discover models.[/dim]\n")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Show which providers will be refreshed
+        providers_to_refresh = []
+        if 'anthropic' in api_keys:
+            providers_to_refresh.append("Anthropic Claude")
+        if 'openai' in api_keys:
+            providers_to_refresh.append("OpenAI GPT")
+        if 'gemini' in api_keys:
+            providers_to_refresh.append("Google Gemini")
+        
+        self.console.print(f"\n[cyan]Will refresh models for: {', '.join(providers_to_refresh)}[/cyan]\n")
+        
+        proceed = questionary.confirm(
+            "Proceed with model discovery?",
+            default=True,
+            style=custom_style
+        ).ask()
+        
+        if not proceed:
+            return
+        
+        # Discover models
+        try:
+            from .model_discovery import ModelDiscoveryService
+            
+            discovery = ModelDiscoveryService()
+            
+            with self.console.status("[bold green]Discovering models from APIs...[/bold green]") as status:
+                results = discovery.discover_all_models(api_keys)
+            
+            # Show results
+            self.console.print("\n[bold green]✓ Model Discovery Complete[/bold green]\n")
+            
+            if results:
+                summary_table = Table(title="Discovered Models", show_header=True)
+                summary_table.add_column("Provider", style="bold cyan")
+                summary_table.add_column("Models Found", justify="right", style="green")
+                summary_table.add_column("New Models", justify="right", style="yellow")
+                
+                for provider, models in results.items():
+                    provider_display = {
+                        'anthropic': 'Anthropic Claude',
+                        'openai': 'OpenAI GPT',
+                        'gemini': 'Google Gemini'
+                    }.get(provider, provider.title())
+                    
+                    # Count new models (not in hardcoded lists)
+                    if provider == 'anthropic':
+                        from .providers.anthropic import AnthropicProvider
+                        hardcoded = AnthropicProvider.HARDCODED_MODELS
+                    elif provider == 'openai':
+                        from .providers.openai import OpenAIProvider
+                        hardcoded = OpenAIProvider.HARDCODED_MODELS
+                    elif provider == 'gemini':
+                        from .providers.gemini import GeminiProvider
+                        hardcoded = GeminiProvider.HARDCODED_MODELS
+                    else:
+                        hardcoded = []
+                    
+                    new_models = [m for m in models if m not in hardcoded]
+                    
+                    summary_table.add_row(
+                        provider_display,
+                        str(len(models)),
+                        str(len(new_models))
+                    )
+                
+                self.console.print(summary_table)
+                
+                # Show new models if any
+                all_new_models = []
+                for provider, models in results.items():
+                    if provider == 'anthropic':
+                        from .providers.anthropic import AnthropicProvider
+                        hardcoded = AnthropicProvider.HARDCODED_MODELS
+                    elif provider == 'openai':
+                        from .providers.openai import OpenAIProvider
+                        hardcoded = OpenAIProvider.HARDCODED_MODELS
+                    elif provider == 'gemini':
+                        from .providers.gemini import GeminiProvider
+                        hardcoded = GeminiProvider.HARDCODED_MODELS
+                    else:
+                        hardcoded = []
+                    
+                    new_models = [m for m in models if m not in hardcoded]
+                    if new_models:
+                        all_new_models.extend([(provider, m) for m in new_models])
+                
+                if all_new_models:
+                    self.console.print("\n[bold yellow]New Models Discovered:[/bold yellow]\n")
+                    for provider, model in all_new_models:
+                        provider_display = {
+                            'anthropic': 'Anthropic',
+                            'openai': 'OpenAI',
+                            'gemini': 'Gemini'
+                        }.get(provider, provider.title())
+                        self.console.print(f"  [cyan]{provider_display}:[/cyan] {model}")
+                
+                self.console.print("\n[green]✓ Models have been cached and will be available when configuring agents.[/green]")
+            else:
+                self.console.print("[yellow]No models were discovered. Check your API keys and try again.[/yellow]")
+        
+        except Exception as e:
+            self.console.print(f"\n[red]Error discovering models: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        
+        questionary.press_any_key_to_continue().ask()
+    
     def _configure_builtin_agent(self, agent_type: str) -> Optional[Dict[str, Any]]:
         """Configure a built-in agent (Claude, GPT-4, Mock)"""
         type_info = CustomAgentManager.AGENT_TYPES.get(agent_type, {})
@@ -1429,10 +1573,52 @@ class ImprovedTUI:
         if not name:
             return None
         
-        # Select model
+        # Select model - include discovered models from providers
         if type_info.get('models'):
+            # Get discovered models from provider registry
+            discovered_models = []
+            try:
+                from .providers.registry import ProviderRegistry
+                
+                if agent_type == 'claude':
+                    provider = ProviderRegistry.get_provider('anthropic')
+                    if provider:
+                        discovered_models = provider.supported_models or []
+                elif agent_type == 'gpt4':
+                    provider = ProviderRegistry.get_provider('openai')
+                    if provider:
+                        discovered_models = provider.supported_models or []
+            except Exception:
+                # If provider registry fails, just use hardcoded models
+                discovered_models = []
+            
+            # Merge hardcoded and discovered models, removing duplicates
+            all_models = list(type_info['models'])
+            for discovered in discovered_models:
+                if discovered not in all_models:
+                    all_models.append(discovered)
+            
+            # Sort models: hardcoded first, then discovered
+            hardcoded_set = set(type_info['models'])
+            sorted_models = []
+            discovered_sorted = []
+            
+            for m in all_models:
+                if m in hardcoded_set:
+                    sorted_models.append(m)
+                else:
+                    discovered_sorted.append(m)
+            
+            # Add discovered models section if any
+            model_choices = sorted_models.copy()
+            if discovered_sorted:
+                model_choices.append(questionary.Separator("─── Discovered Models ───"))
+                model_choices.extend(discovered_sorted)
+            
             # Add option to enter custom model name
-            model_choices = type_info['models'] + ["✏️  Enter custom model name"]
+            model_choices.append(questionary.Separator("───────────────────────"))
+            model_choices.append("✏️  Enter custom model name")
+            
             model = questionary.select(
                 "Select model:",
                 choices=model_choices,
