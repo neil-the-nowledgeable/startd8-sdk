@@ -1,0 +1,94 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # User config directory logs (~/.startd8/logs)
+  - job_name: startd8-user-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: startd8
+          service: startd8-sdk
+          log_source: user_config
+          __path__: /logs-user/*.log
+    
+    # Parse JSON log entries
+    pipeline_stages:
+      # Parse the JSON log line and extract fields for labels/timestamp
+      # The original JSON line is preserved automatically (no output stage needed)
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            logger: logger
+            message: message
+            exception: exception
+            exception_type: exception_type
+            exception_message: exception_message
+            trace_id: trace_id
+            correlation_id: correlation_id
+            agent_name: agent_name
+            source: source
+      
+      # Extract labels from JSON fields (low cardinality only)
+      # These labels enable efficient filtering in Loki queries
+      - labels:
+          level:
+          logger:
+          exception_type:
+          agent_name:
+      
+      # Set timestamp from JSON field (ISO 8601 format)
+      - timestamp:
+          source: timestamp
+          format: RFC3339
+  
+  # Project data directory logs (./.startd8/logs)
+  - job_name: startd8-project-logs
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: startd8
+          service: startd8-sdk
+          log_source: project_data
+          __path__: /logs-project/*.log
+    
+    # Parse JSON log entries
+    pipeline_stages:
+      # Parse the JSON log line and extract fields for labels/timestamp
+      # The original JSON line is preserved automatically (no output stage needed)
+      - json:
+          expressions:
+            timestamp: timestamp
+            level: level
+            logger: logger
+            message: message
+            exception: exception
+            exception_type: exception_type
+            exception_message: exception_message
+            trace_id: trace_id
+            correlation_id: correlation_id
+            agent_name: agent_name
+            source: source
+      
+      # Extract labels from JSON fields (low cardinality only)
+      # These labels enable efficient filtering in Loki queries
+      - labels:
+          level:
+          logger:
+          exception_type:
+          agent_name:
+      
+      # Set timestamp from JSON field (ISO 8601 format)
+      - timestamp:
+          source: timestamp
+          format: RFC3339

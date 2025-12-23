@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  loki:
+    image: grafana/loki:latest
+    container_name: startd8-loki
+    ports:
+      - "3100:3100"
+    command: -config.file=/etc/loki/local-config.yaml
+    volumes:
+      - loki-data:/loki
+    networks:
+      - observability
+
+  promtail:
+    image: grafana/promtail:latest
+    container_name: startd8-promtail
+    volumes:
+      # Mount both log directories
+      # User config directory (~/.startd8/logs)
+      - ${HOME}/.startd8/logs:/logs-user:ro
+      # Project data directory (./.startd8/logs) - mount current directory
+      - ./.startd8/logs:/logs-project:ro
+      # Promtail configuration
+      - ./promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      # Positions file for tracking read position
+      - promtail-positions:/tmp
+    command: -config.file=/etc/promtail/promtail-config.yml
+    depends_on:
+      - loki
+    networks:
+      - observability
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: startd8-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+      - GF_SERVER_ROOT_URL=http://localhost:3000
+    volumes:
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - loki
+    networks:
+      - observability
+    restart: unless-stopped
+
+volumes:
+  loki-data:
+  promtail-positions:
+
+networks:
+  observability:
+    driver: bridge
