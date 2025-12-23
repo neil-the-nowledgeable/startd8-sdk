@@ -163,14 +163,39 @@ class BenchmarkRunner:
         Returns:
             Dictionary with benchmark results
         """
-        return asyncio.run(self.arun_benchmark(
-            prompt_content=prompt_content,
-            agents=agents,
-            benchmark_name=benchmark_name,
-            version=version,
-            tags=tags,
-            parallel=True
-        ))
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            return asyncio.run(self.arun_benchmark(
+                prompt_content=prompt_content,
+                agents=agents,
+                benchmark_name=benchmark_name,
+                version=version,
+                tags=tags,
+                parallel=True
+            ))
+
+        # Running inside an existing event loop (e.g. Jupyter/FastAPI).
+        # Bridge by running the coroutine in a new thread + event loop.
+        import concurrent.futures
+        import contextvars
+
+        ctx = contextvars.copy_context()
+
+        def _runner() -> Dict[str, Any]:
+            return asyncio.run(self.arun_benchmark(
+                prompt_content=prompt_content,
+                agents=agents,
+                benchmark_name=benchmark_name,
+                version=version,
+                tags=tags,
+                parallel=True
+            ))
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(ctx.run, _runner)
+            return future.result()
 
 
 class ComparisonReport:

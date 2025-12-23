@@ -159,6 +159,10 @@ class Pipeline:
             prompt_id = prompt.id
         else:
             prompt_id = None
+
+        # Always run through BaseAgent.(a)create_response() so budget/cost enforcement
+        # and response_id linkage are consistent, even when we aren't storing prompts.
+        tracking_prompt_id = prompt_id or f"prompt-{uuid.uuid4().hex[:12]}"
         
         try:
             # Execute each step
@@ -179,10 +183,23 @@ class Pipeline:
                 # Transform input if needed
                 step_input = step.transform(current_input) if step.transform else current_input
                 
-                # Run agent asynchronously
-                step_start = time.time()
-                response_text, response_time_ms, token_usage = await step.agent.agenerate(step_input)
-                step_end = time.time()
+                # Run agent asynchronously (with cost/budget enforcement if configured)
+                step_metadata = {
+                    "pipeline_id": pipeline_id,
+                    "step_number": i + 1,
+                    "step_name": step.name,
+                    **step.metadata
+                }
+                agent_response = await step.agent.acreate_response(
+                    prompt_id=tracking_prompt_id,
+                    prompt=step_input,
+                    metadata=step_metadata,
+                    tags=[self.name, "pipeline", step.name],
+                    pipeline_id=pipeline_id
+                )
+                response_text = agent_response.response
+                response_time_ms = agent_response.response_time_ms
+                token_usage = agent_response.token_usage
                 
                 # Track metrics
                 total_tokens += token_usage.total if token_usage else 0
@@ -231,7 +248,9 @@ class Pipeline:
                             "step_number": i + 1,
                             "step_name": step.name,
                             **step.metadata
-                        }
+                        },
+                        response_id=agent_response.id,
+                        timestamp=agent_response.timestamp,
                     )
                 
                 # Output becomes input for next step
@@ -289,7 +308,25 @@ class Pipeline:
         Returns:
             PipelineResult with all step details
         """
-        return asyncio.run(self.arun(initial_input, store))
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            return asyncio.run(self.arun(initial_input, store))
+
+        # Running inside an existing event loop (e.g. Jupyter/FastAPI).
+        # Bridge by running the coroutine in a new thread + event loop.
+        import concurrent.futures
+        import contextvars
+
+        ctx = contextvars.copy_context()
+
+        def _runner() -> PipelineResult:
+            return asyncio.run(self.arun(initial_input, store))
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(ctx.run, _runner)
+            return future.result()
     
     async def arun_parallel_agents(
         self, 
@@ -460,6 +497,175 @@ class WorkflowTemplates:
                 f"REVIEW FEEDBACK:\n{review_feedback}"
             ),
             metadata={"role": "final_reviewer", "task": "final_polish"}
+        )
+        
+        return pipeline
+    
+    @staticmethod
+    def design_polish_chain(
+        polisher_agent: BaseAgent,
+        updater_agent: BaseAgent,
+        final_polisher_agent: BaseAgent,
+        prompt_instructions: Optional[str] = None
+    ) -> Pipeline:
+        """
+        Design document polish chain: Polish → Suggest Updates → Final Polish
+        
+        Starts with an existing drafted design document and refines it through
+        three stages: initial polish, update suggestions, and final polish.
+        
+        Args:
+            polisher_agent: Agent for initial polish pass (e.g., Claude Sonnet)
+            updater_agent: Agent to suggest updates/improvements (e.g., GPT-4)
+            final_polisher_agent: Agent for final polish incorporating suggestions (e.g., Claude Opus)
+            prompt_instructions: Optional custom instructions from prompt file to incorporate into each step
+            
+        Returns:
+            Configured Pipeline
+        """
+        pipeline = Pipeline(name="design-polish-chain")
+        
+        # Base instructions for each step
+        polish_base = (
+            "Review and polish the following design document. Improve clarity, "
+            "structure, and professional presentation while maintaining all core content."
+        )
+        
+        updater_base = (
+            "Review the polished design document below and suggest specific updates, "
+            "improvements, or additions. Be constructive and specific about what should "
+            "be changed or added. Focus on:\n"
+            "- Missing sections or details\n"
+            "- Areas that need clarification\n"
+            "- Technical improvements\n"
+            "- Better organization or structure"
+        )
+        
+        final_polish_base = (
+            "Based on the update suggestions below, create a final polished version "
+            "of the design document. Incorporate the suggested improvements while "
+            "maintaining professional quality and completeness."
+        )
+        
+        # Incorporate prompt instructions if provided
+        if prompt_instructions:
+            polish_instructions = f"{polish_base}\n\nAdditional Instructions:\n{prompt_instructions}"
+            updater_instructions = f"{updater_base}\n\nAdditional Instructions:\n{prompt_instructions}"
+            final_polish_instructions = f"{final_polish_base}\n\nAdditional Instructions:\n{prompt_instructions}"
+        else:
+            polish_instructions = polish_base
+            updater_instructions = updater_base
+            final_polish_instructions = final_polish_base
+        
+        pipeline.add_step(
+            name="polish",
+            agent=polisher_agent,
+            transform=lambda document: (
+                f"{polish_instructions}\n\n"
+                f"DOCUMENT:\n{document}"
+            ),
+            metadata={"role": "polisher", "task": "initial_polish"}
+        )
+        
+        pipeline.add_step(
+            name="suggest_updates",
+            agent=updater_agent,
+            transform=lambda polished_doc: (
+                f"{updater_instructions}\n\n"
+                f"POLISHED DOCUMENT:\n{polished_doc}\n\n"
+                f"Provide your suggestions in a clear, actionable format."
+            ),
+            metadata={"role": "updater", "task": "suggest_updates"}
+        )
+        
+        pipeline.add_step(
+            name="final_polish",
+            agent=final_polisher_agent,
+            transform=lambda suggestions: (
+                f"{final_polish_instructions}\n\n"
+                f"UPDATE SUGGESTIONS:\n{suggestions}\n\n"
+                f"Provide the complete, final polished design document."
+            ),
+            metadata={"role": "final_polisher", "task": "final_polish"}
+        )
+        
+        return pipeline
+    
+    @staticmethod
+    def error_analysis_chain(analyzer_agent: BaseAgent) -> Pipeline:
+        """
+        Error analysis chain: Analyzes error and generates prompt with solution.
+        
+        Takes error information and uses an agent to:
+        1. Analyze and isolate the issue
+        2. Generate a prompt describing the understanding
+        3. Suggest a solution
+        
+        Args:
+            analyzer_agent: Agent for analyzing the error
+            
+        Returns:
+            Configured Pipeline
+        """
+        pipeline = Pipeline(name="error-analysis-chain")
+        
+        pipeline.add_step(
+            name="analyze_error",
+            agent=analyzer_agent,
+            transform=lambda error_text: (
+                f"Analyze the following error from a log file. Your task is to:\n\n"
+                f"1. Identify the root cause of the error\n"
+                f"2. Isolate the specific issue (what went wrong and why)\n"
+                f"3. Understand the context and impact\n"
+                f"4. Suggest a concrete solution to fix the issue\n\n"
+                f"ERROR INFORMATION:\n{error_text}\n\n"
+                f"Provide a comprehensive analysis that includes:\n"
+                f"- Clear identification of the root cause\n"
+                f"- Explanation of why this error occurred\n"
+                f"- Specific steps to resolve the issue\n"
+                f"- Prevention strategies if applicable"
+            ),
+            metadata={"role": "error_analyzer", "task": "analyze_and_suggest"}
+        )
+        
+        return pipeline
+
+    @staticmethod
+    def agent_config_error_analysis_chain(analyzer_agent: BaseAgent) -> Pipeline:
+        """
+        Agent configuration error analysis workflow
+        
+        Analyzes agent configuration errors to:
+        1. Identify the root cause of configuration failures
+        2. Understand what's wrong with the agent setup
+        3. Suggest specific fixes
+        
+        Args:
+            analyzer_agent: Agent for analyzing the configuration errors
+            
+        Returns:
+            Configured Pipeline
+        """
+        pipeline = Pipeline(name="agent-config-error-analysis-chain")
+        
+        pipeline.add_step(
+            name="analyze_config_error",
+            agent=analyzer_agent,
+            transform=lambda error_info: (
+                f"Analyze the following agent configuration error. Your task is to:\n\n"
+                f"1. Identify why the agent configuration is invalid or failing\n"
+                f"2. Determine what specific configuration issue is causing the problem\n"
+                f"3. Understand the relationship between the error and the agent configuration\n"
+                f"4. Provide specific, actionable steps to fix the configuration\n\n"
+                f"AGENT CONFIGURATION ERROR:\n{error_info}\n\n"
+                f"Provide a comprehensive analysis that includes:\n"
+                f"- Clear identification of the configuration problem\n"
+                f"- Explanation of why this configuration is invalid\n"
+                f"- Specific steps to correct the agent configuration\n"
+                f"- Verification steps to ensure the fix works\n"
+                f"- Prevention tips for avoiding similar issues in the future"
+            ),
+            metadata={"role": "config_error_analyzer", "task": "analyze_and_fix"}
         )
         
         return pipeline

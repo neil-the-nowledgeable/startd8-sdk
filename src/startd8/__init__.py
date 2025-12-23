@@ -8,6 +8,7 @@ and prompt version control in the StartDate project.
 Example Usage:
     ```python
     from startd8 import AgentFramework, Prompt
+    from startd8.providers import ProviderRegistry
     
     # Initialize framework
     framework = AgentFramework()
@@ -19,17 +20,41 @@ Example Usage:
         tags=["auth", "backend"]
     )
     
-    # Send to multiple agents
-    agents = ["claude", "gpt4", "gemini"]
-    for agent in agents:
-        response = framework.send_to_agent(prompt, agent)
-        framework.record_response(response)
+    # Send to multiple agents (provider:model specs)
+    ProviderRegistry.discover()
+    agent_specs = [
+        "anthropic:claude-3-5-sonnet-20241022",
+        "openai:gpt-4-turbo-preview",
+        "gemini:gemini-1.5-pro",
+    ]
+    for spec in agent_specs:
+        provider_name, model = spec.split(":", 1)
+        provider = ProviderRegistry.get_provider(provider_name)
+        if not provider:
+            raise RuntimeError(f"Unknown provider: {provider_name}")
+        provider.validate_config({})
+        agent = provider.create_agent(model)
+
+        agent_response = agent.create_response(prompt.id, prompt.content)
+        framework.record_response(
+            prompt_id=prompt.id,
+            agent_name=agent.name,
+            model=agent.model,
+            response=agent_response.response,
+            response_time_ms=agent_response.response_time_ms,
+            token_usage=agent_response.token_usage,
+            metadata=agent_response.metadata,
+            response_id=agent_response.id,
+            timestamp=agent_response.timestamp,
+        )
     
     # Compare responses
     comparison = framework.compare_responses(prompt.id)
     print(comparison.summary())
     ```
 """
+
+from typing import Optional
 
 from .framework import AgentFramework
 from .models import (
@@ -94,7 +119,68 @@ from .skills import (
     create_code_reviewer_agent,
 )
 
-__version__ = "0.4.0"  # Bumped for skills module
+def _read_version_from_pyproject() -> Optional[str]:
+    """Best-effort read of [project].version from a nearby pyproject.toml."""
+    from pathlib import Path
+    import re
+
+    start = Path(__file__).resolve().parent
+    pyproject: Optional[Path] = None
+
+    # Limit how far we walk up to avoid scanning the whole filesystem.
+    for parent in [start] + list(start.parents)[:6]:
+        candidate = parent / "pyproject.toml"
+        if candidate.is_file():
+            pyproject = candidate
+            break
+
+    if pyproject is None:
+        return None
+
+    try:
+        text = pyproject.read_text(encoding="utf-8")
+    except Exception:
+        return None
+
+    # Prefer tomllib when available (Python 3.11+), otherwise fall back to regex.
+    try:
+        import tomllib  # type: ignore[attr-defined]
+
+        data = tomllib.loads(text)
+        version = data.get("project", {}).get("version")
+        if isinstance(version, str) and version.strip():
+            return version.strip()
+    except Exception:
+        pass
+
+    # Minimal regex fallback for Python 3.9/3.10 without extra deps.
+    m = re.search(r"^\[project\]\s*$([\s\S]*?)(?=^\[|\Z)", text, flags=re.MULTILINE)
+    if not m:
+        return None
+    project_section = m.group(1)
+    m2 = re.search(r"^\s*version\s*=\s*[\"']([^\"']+)[\"']\s*$", project_section, flags=re.MULTILINE)
+    if not m2:
+        return None
+    return m2.group(1).strip() or None
+
+
+def _read_version_from_metadata() -> Optional[str]:
+    """Read installed distribution version (best-effort)."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version as _pkg_version
+    except Exception:  # pragma: no cover
+        return None
+
+    try:
+        return _pkg_version("startd8")
+    except PackageNotFoundError:
+        return None
+
+
+# Decision 29B: in a source checkout, prefer pyproject.toml version; fall back to
+# installed distribution metadata; then to a safe placeholder.
+__version__ = _read_version_from_pyproject() or _read_version_from_metadata() or "0.0.0"
+
 __all__ = [
     "AgentFramework",
     "Prompt",

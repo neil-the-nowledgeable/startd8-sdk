@@ -8,8 +8,11 @@ import os
 import base64
 import json
 import hashlib
+import re
 from pathlib import Path
-from typing import Optional, Union, Dict, Any
+from typing import Optional, Union, Dict, Any, List
+from urllib.parse import urlparse
+from ipaddress import ip_address, AddressValueError
 
 try:
     from cryptography.fernet import Fernet
@@ -39,14 +42,29 @@ def sanitize_path(file_path: Union[str, Path], base_dir: Optional[Path] = None) 
     Raises:
         ValidationError: If path is invalid or attempts directory traversal
     """
-    path = Path(file_path).resolve()
+    # CRITICAL FIX: Check original input FIRST, before resolve()
+    # After resolve(), '..' is normalized away, so we must check the original string
+    path_str = str(file_path)
     
-    # Check for directory traversal attempts
-    if '..' in str(path):
+    # Check for directory traversal attempts in original input
+    if '..' in path_str or path_str.startswith('/') and not path_str.startswith(str(Path.home())):
+        # Additional check: look for path components with '..'
+        path_parts = Path(path_str).parts
+        if '..' in path_parts:
+            raise ValidationError(
+                "Path contains directory traversal attempt (..)",
+                field="file_path",
+                value=path_str
+            )
+    
+    # Now resolve and check base directory
+    try:
+        path = Path(file_path).expanduser().resolve()
+    except (OSError, ValueError) as e:
         raise ValidationError(
-            "Path contains directory traversal attempt (..)",
+            f"Invalid path: {e}",
             field="file_path",
-            value=str(file_path)
+            value=path_str
         )
     
     # If base_dir is specified, ensure path is within it
@@ -58,7 +76,7 @@ def sanitize_path(file_path: Union[str, Path], base_dir: Optional[Path] = None) 
             raise ValidationError(
                 f"Path {path} is outside allowed directory {base_dir}",
                 field="file_path",
-                value=str(file_path)
+                value=path_str
             )
     
     return path
@@ -318,7 +336,7 @@ def load_encrypted_keys(file_path: Path, password: str) -> Dict[str, str]:
     Args:
         file_path: Path to encrypted file
         password: Decryption password
-        
+    
     Returns:
         Dictionary of API keys
     """
@@ -332,6 +350,370 @@ def load_encrypted_keys(file_path: Path, password: str) -> Dict[str, str]:
     package = encryptor.decrypt_api_keys(encrypted, password)
     
     return package['api_keys']
+
+
+# ============================================================================
+# Input Validation Functions
+# ============================================================================
+
+# Constants for validation
+MAX_PROMPT_LENGTH = 1_000_000  # 1MB limit
+MIN_MAX_TOKENS = 1
+MAX_MAX_TOKENS = 1_000_000  # Reasonable upper limit
+MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+MAX_MODEL_NAME_LENGTH = 100
+MAX_AGENT_NAME_LENGTH = 50
+
+
+def sanitize_model_name_for_agent_name(model_name: str) -> str:
+    """
+    Sanitize a model name for use in default agent names.
+    
+    Removes or replaces characters that are not allowed in agent names
+    (only letters, numbers, underscores, and hyphens are allowed).
+    
+    Args:
+        model_name: Model name to sanitize (e.g., "gpt-4.5", "claude-3-opus-20240229")
+    
+    Returns:
+        Sanitized model name safe for use in agent names
+    
+    Example:
+        >>> sanitize_model_name_for_agent_name("gpt-4.5")
+        'gpt-4-5'
+        >>> sanitize_model_name_for_agent_name("claude-3-opus-20240229")
+        'claude-3-opus-20240229'
+        >>> sanitize_model_name_for_agent_name("model:name/with.dots")
+        'model-name-with-dots'
+    """
+    if not model_name:
+        return "model"
+    
+    # Replace common problematic characters with hyphens
+    # This includes: dots, colons, slashes, spaces, and other special chars
+    sanitized = re.sub(r'[^a-zA-Z0-9_-]', '-', str(model_name))
+    
+    # Collapse multiple consecutive hyphens into a single hyphen
+    sanitized = re.sub(r'-+', '-', sanitized)
+    
+    # Remove leading/trailing hyphens
+    sanitized = sanitized.strip('-')
+    
+    # Ensure it's not empty after sanitization
+    if not sanitized:
+        sanitized = "model"
+    
+    # Truncate if too long (leave room for provider prefix)
+    if len(sanitized) > MAX_AGENT_NAME_LENGTH - 20:  # Reserve space for "provider-" prefix
+        sanitized = sanitized[:MAX_AGENT_NAME_LENGTH - 20]
+        sanitized = sanitized.rstrip('-')
+    
+    return sanitized
+
+ALLOWED_FILE_EXTENSIONS = {
+    '.txt', '.md', '.json', '.yaml', '.yml',
+    '.py', '.js', '.ts', '.jsx', '.tsx',
+    '.html', '.css', '.xml', '.csv', '.log',
+    '.cfg', '.ini', '.toml'
+}
+
+MODEL_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9._-]+$')
+AGENT_NAME_PATTERN = re.compile(r'^[a-zA-Z0-9_-]+$')
+ENV_VAR_NAME_PATTERN = re.compile(r'^[A-Z][A-Z0-9_]*$')
+
+
+def validate_api_endpoint(url: str, allow_localhost: bool = False) -> str:
+    """
+    Validate API endpoint URL to prevent SSRF attacks.
+    
+    Args:
+        url: URL to validate
+        allow_localhost: Whether to allow localhost URLs (default: False)
+    
+    Returns:
+        Validated URL string
+    
+    Raises:
+        ValidationError: If URL is invalid or poses security risk
+    """
+    if not url:
+        raise ValidationError("Base URL cannot be empty", field="base_url")
+    
+    # Parse URL
+    try:
+        parsed = urlparse(url)
+    except Exception as e:
+        raise ValidationError(f"Invalid URL format: {e}", field="base_url")
+    
+    # Must be http or https
+    if parsed.scheme not in ('http', 'https'):
+        raise ValidationError(
+            f"URL scheme must be http or https, got: {parsed.scheme}",
+            field="base_url"
+        )
+    
+    # Must have hostname
+    if not parsed.hostname:
+        raise ValidationError("URL must include a hostname", field="base_url")
+    
+    # Block localhost/internal IPs unless explicitly allowed
+    hostname = parsed.hostname.lower()
+    
+    if hostname in ('localhost', '127.0.0.1', '::1', '0.0.0.0'):
+        if not allow_localhost:
+            # Check environment variable as fallback
+            allow_localhost = os.getenv('STARTD8_ALLOW_LOCALHOST') == 'true'
+        
+        if not allow_localhost:
+            raise ValidationError(
+                "Localhost URLs are not allowed for security reasons. "
+                "Set STARTD8_ALLOW_LOCALHOST=true environment variable to allow.",
+                field="base_url"
+            )
+    
+    # Check for private/internal IPs
+    try:
+        ip = ip_address(hostname)
+        if ip.is_private or ip.is_loopback or ip.is_link_local:
+            if not allow_localhost and os.getenv('STARTD8_ALLOW_LOCALHOST') != 'true':
+                raise ValidationError(
+                    "Private/internal IP addresses are not allowed for security reasons",
+                    field="base_url"
+                )
+    except (ValueError, AddressValueError):
+        # Not an IP address, check hostname format
+        if not re.match(r'^[a-zA-Z0-9.-]+$', hostname):
+            raise ValidationError(
+                "Hostname contains invalid characters",
+                field="base_url"
+            )
+    
+    # Validate port if specified
+    if parsed.port is not None:
+        if parsed.port < 1 or parsed.port > 65535:
+            raise ValidationError(
+                f"Port must be between 1 and 65535, got: {parsed.port}",
+                field="base_url"
+            )
+    
+    return url
+
+
+def validate_max_tokens(value_str: str) -> int:
+    """
+    Validate and convert max_tokens input.
+    
+    Args:
+        value_str: String value to validate
+    
+    Returns:
+        Validated integer value
+    
+    Raises:
+        ValidationError: If value is invalid or out of bounds
+    """
+    if not value_str:
+        return 4096  # Default
+    
+    try:
+        value = int(value_str)
+    except ValueError:
+        raise ValidationError(
+            f"Max tokens must be a number, got: {value_str}",
+            field="max_tokens"
+        )
+    
+    if value < MIN_MAX_TOKENS:
+        raise ValidationError(
+            f"Max tokens must be at least {MIN_MAX_TOKENS}",
+            field="max_tokens"
+        )
+    
+    if value > MAX_MAX_TOKENS:
+        raise ValidationError(
+            f"Max tokens cannot exceed {MAX_MAX_TOKENS:,}",
+            field="max_tokens"
+        )
+    
+    return value
+
+
+def validate_model_name(name: str) -> str:
+    """
+    Validate model name format to prevent injection attacks.
+    
+    Args:
+        name: Model name to validate
+    
+    Returns:
+        Validated model name
+    
+    Raises:
+        ValidationError: If name is invalid
+    """
+    if not name:
+        raise ValidationError("Model name cannot be empty", field="model")
+    
+    if len(name) > MAX_MODEL_NAME_LENGTH:
+        raise ValidationError(
+            f"Model name too long (max {MAX_MODEL_NAME_LENGTH} chars)",
+            field="model"
+        )
+    
+    if not MODEL_NAME_PATTERN.match(name):
+        raise ValidationError(
+            "Model name can only contain letters, numbers, dots, underscores, and hyphens",
+            field="model"
+        )
+    
+    return name
+
+
+def validate_agent_name(name: str, existing_names: Optional[List[str]] = None) -> str:
+    """
+    Validate agent name format and check for conflicts.
+    
+    Args:
+        name: Agent name to validate
+        existing_names: Optional list of existing agent names to check against
+    
+    Returns:
+        Validated agent name
+    
+    Raises:
+        ValidationError: If name is invalid or conflicts with existing name
+    """
+    if not name:
+        raise ValidationError("Agent name cannot be empty", field="name")
+    
+    if len(name) > MAX_AGENT_NAME_LENGTH:
+        raise ValidationError(
+            f"Agent name too long (max {MAX_AGENT_NAME_LENGTH} chars)",
+            field="name"
+        )
+    
+    if not AGENT_NAME_PATTERN.match(name):
+        raise ValidationError(
+            "Agent name can only contain letters, numbers, underscores, and hyphens",
+            field="name"
+        )
+    
+    if existing_names and name in existing_names:
+        raise ValidationError(
+            f"Agent name '{name}' already exists",
+            field="name"
+        )
+    
+    return name
+
+
+def validate_file_extension(file_path: Path) -> None:
+    """
+    Validate file has allowed extension.
+    
+    Args:
+        file_path: Path to validate
+    
+    Raises:
+        ValidationError: If extension is not allowed
+    """
+    if file_path.suffix and file_path.suffix.lower() not in ALLOWED_FILE_EXTENSIONS:
+        raise ValidationError(
+            f"File extension '{file_path.suffix}' not allowed. "
+            f"Allowed extensions: {', '.join(sorted(ALLOWED_FILE_EXTENSIONS))}",
+            field="file_path"
+        )
+
+
+def validate_file_size(file_path: Path) -> None:
+    """
+    Validate file size is within limits.
+    
+    Args:
+        file_path: Path to validate
+    
+    Raises:
+        ValidationError: If file is too large
+    """
+    if not file_path.exists():
+        return  # Can't check size of non-existent file
+    
+    size = file_path.stat().st_size
+    if size > MAX_FILE_SIZE:
+        raise ValidationError(
+            f"File too large ({size:,} bytes, max {MAX_FILE_SIZE:,} bytes)",
+            field="file_path"
+        )
+
+
+def sanitize_prompt_content(content: str) -> str:
+    """
+    Sanitize prompt content to prevent encoding issues and injection.
+    
+    Args:
+        content: Prompt content to sanitize
+    
+    Returns:
+        Sanitized content
+    
+    Raises:
+        ValidationError: If content is invalid
+    """
+    if not content:
+        raise ValidationError("Prompt content cannot be empty", field="content")
+    
+    # Remove null bytes
+    content = content.replace('\x00', '')
+    
+    # Validate encoding
+    try:
+        content.encode('utf-8')
+    except UnicodeEncodeError as e:
+        raise ValidationError(
+            f"Prompt contains invalid UTF-8 characters: {e}",
+            field="content"
+        )
+    
+    # Validate length
+    if len(content) > MAX_PROMPT_LENGTH:
+        raise ValidationError(
+            f"Prompt content exceeds maximum length of {MAX_PROMPT_LENGTH:,} characters",
+            field="content"
+        )
+    
+    # Strip leading/trailing whitespace but preserve intentional formatting
+    content = content.strip()
+    
+    if not content:
+        raise ValidationError("Prompt content cannot be empty after sanitization", field="content")
+    
+    return content
+
+
+def validate_env_var_name(name: str) -> str:
+    """
+    Validate environment variable name format.
+    
+    Args:
+        name: Environment variable name to validate
+    
+    Returns:
+        Validated name
+    
+    Raises:
+        ValidationError: If name is invalid
+    """
+    if not name:
+        raise ValidationError("Environment variable name cannot be empty", field="api_key_env")
+    
+    if not ENV_VAR_NAME_PATTERN.match(name):
+        raise ValidationError(
+            "Environment variable name must be uppercase, start with a letter, "
+            "and contain only letters, numbers, and underscores",
+            field="api_key_env"
+        )
+    
+    return name
 
 
 

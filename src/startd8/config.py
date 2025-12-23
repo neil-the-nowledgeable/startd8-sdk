@@ -78,7 +78,8 @@ class ConfigManager:
             },
             "tui": {
                 "show_mock_agent": False,
-                "agents_per_page": 5
+                "show_mock_in_workflows": False,  # Show mock agents in workflow agent selection
+                "agents_per_page": 10
             }
         }
     

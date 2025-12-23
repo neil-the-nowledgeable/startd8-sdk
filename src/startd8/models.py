@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from enum import Enum
 from pathlib import Path
 import re
+from functools import lru_cache
 
 if TYPE_CHECKING:
     from .agents import BaseAgent
@@ -37,19 +38,33 @@ class TokenUsage(BaseModel):
     
     @property
     def cost_estimate(self) -> float:
-        """Estimate cost in USD using configured pricing"""
-        from .config_models import PricingConfig
-        
-        # Use default pricing config
-        pricing_config = PricingConfig.default()
-        
-        if self.model_name:
-            return pricing_config.calculate_cost(self.model_name, self.input, self.output)
-        else:
-            # Fallback to default Claude 3.5 Sonnet pricing
+        """
+        Estimate cost in USD using the SDK's PricingService.
+
+        This intentionally uses the same pricing source as the cost tracking
+        subsystem to avoid drift.
+        """
+        # If model_name is missing, fall back to a conservative default.
+        model = (self.model_name or "claude-3-5-sonnet-20241022").strip()
+
+        try:
+            return _default_pricing_service().calculate_total_cost(
+                model=model,
+                input_tokens=self.input,
+                output_tokens=self.output,
+            )
+        except Exception:
+            # Conservative fallback if pricing service isn't available.
             input_cost = (self.input / 1_000_000) * 3.0
             output_cost = (self.output / 1_000_000) * 15.0
             return input_cost + output_cost
+
+
+@lru_cache(maxsize=1)
+def _default_pricing_service():
+    from .costs.pricing import PricingService
+
+    return PricingService()
 
 
 class Prompt(BaseModel):
@@ -116,6 +131,18 @@ class AgentResponse(BaseModel):
         if v > 86_400_000:  # 24 hours in ms
             raise ValueError("Response time exceeds reasonable maximum (24 hours)")
         return v
+
+    @model_validator(mode='after')
+    def propagate_model_to_token_usage(self) -> 'AgentResponse':
+        """
+        Ensure TokenUsage knows the model for cost estimation.
+
+        Older stored responses may not include TokenUsage.model_name; setting it here
+        keeps cost estimates consistent without requiring data migrations.
+        """
+        if self.token_usage and not (self.token_usage.model_name and self.token_usage.model_name.strip()):
+            self.token_usage.model_name = self.model
+        return self
     
     @property
     def response_time_seconds(self) -> float:
@@ -236,8 +263,8 @@ class ErrorHandling(str, Enum):
 
 class AgentConfig(BaseModel):
     """Configuration for a single agent in the enhancement chain"""
-    agent_name: str = Field(description="Agent identifier (e.g., 'gpt4', 'claude')")
-    step_name: str = Field(description="Step name (e.g., 'gpt4-enhancement')")
+    agent_name: str = Field(description="Agent identifier (e.g., 'openai:gpt-4-turbo-preview')")
+    step_name: str = Field(description="Step name (e.g., 'openai:gpt-4-turbo-preview-enhancement')")
     order: int = Field(description="Position in chain (0-based)", ge=0)
     agent_instance: Any = Field(default=None, description="Agent instance (not serialized)")
     
@@ -264,6 +291,10 @@ class DocumentEnhancementConfig(BaseModel):
         default=None,
         description="Optional instructions for enhancement"
     )
+    prompt_file_path: Optional[Path] = Field(
+        default=None,
+        description="Optional path to a .md file containing the prompt template"
+    )
     agents: List[AgentConfig] = Field(
         default_factory=list,
         description="List of agents in order"
@@ -271,6 +302,10 @@ class DocumentEnhancementConfig(BaseModel):
     output_path: Optional[Path] = Field(
         default=None,
         description="Path for final output"
+    )
+    preferred_output_dir: Optional[Path] = Field(
+        default=None,
+        description="Preferred base directory for output files (if output_path not specified)"
     )
     save_intermediate: bool = Field(
         default=False,
@@ -293,6 +328,20 @@ class DocumentEnhancementConfig(BaseModel):
             raise ValueError(f"Source document does not exist: {v}")
         if not v.is_file():
             raise ValueError(f"Source document is not a file: {v}")
+        return v
+    
+    @field_validator('prompt_file_path')
+    @classmethod
+    def validate_prompt_file_path(cls, v: Optional[Path]) -> Optional[Path]:
+        """Validate prompt file path if provided"""
+        if v is None:
+            return v
+        if not v.exists():
+            raise ValueError(f"Prompt file does not exist: {v}")
+        if not v.is_file():
+            raise ValueError(f"Prompt file path is not a file: {v}")
+        if not v.suffix.lower() == '.md':
+            raise ValueError(f"Prompt file must be a .md file, got: {v.suffix}")
         return v
     
     @field_validator('agents')

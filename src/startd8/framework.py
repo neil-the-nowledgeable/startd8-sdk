@@ -182,7 +182,9 @@ class AgentFramework:
         response: str,
         response_time_ms: int,
         token_usage: Optional[TokenUsage] = None,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
+        response_id: Optional[str] = None,
+        timestamp: Optional[datetime] = None,
     ) -> AgentResponse:
         """
         Record an agent's response to a prompt
@@ -204,11 +206,12 @@ class AgentFramework:
         """
         try:
             agent_response = AgentResponse(
-                id=f"response-{uuid.uuid4().hex[:12]}",
+                id=response_id or f"response-{uuid.uuid4().hex[:12]}",
                 prompt_id=prompt_id,
                 agent_name=agent_name,
                 model=model,
                 response=response,
+                timestamp=timestamp or datetime.now(timezone.utc),
                 response_time_ms=response_time_ms,
                 token_usage=token_usage,
                 metadata=metadata or {}

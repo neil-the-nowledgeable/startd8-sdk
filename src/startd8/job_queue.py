@@ -17,7 +17,7 @@ from .models import (
     JobStatus, JobFile, JobQueueConfig, JobResult, PromptSpec
 )
 from .framework import AgentFramework
-from .agents import BaseAgent, MockAgent, ClaudeAgent, GPT4Agent, OpenAICompatibleAgent
+from .agents import BaseAgent
 from .providers import ProviderRegistry
 from .logging_config import get_logger
 
@@ -82,29 +82,56 @@ class AgentRegistry:
             # Get custom agent
             agent = registry.get_agent("my-custom-agent")
             
-            # Get agent by model name
-            agent = registry.get_agent("gpt-4")
+            # Get agent by provider:model spec
+            agent = registry.get_agent("openai:gpt-4-turbo-preview")
             
             # Get agent by provider name (uses default model)
-            agent = registry.get_agent("claude")
+            agent = registry.get_agent("anthropic")
         """
-        name_lower = name.lower()
+        if not name:
+            return None
+        
+        raw = name.strip()
+        if not raw:
+            return None
+        
+        name_lower = raw.lower()
         
         # Check custom agents first
         if name_lower in self._custom_agents:
             logger.debug(f"Found custom agent: {name}")
             return self._custom_agents[name_lower]
+
+        # Provider:model spec (preferred, unambiguous)
+        if ":" in raw:
+            provider_part, model_part = raw.split(":", 1)
+            provider_name = provider_part.strip().lower()
+            model = model_part.strip()
+            if provider_name and model:
+                provider = ProviderRegistry.get_provider(provider_name)
+                if provider:
+                    try:
+                        provider.validate_config({})
+                        logger.debug(
+                            f"Creating agent from provider {provider.name} for model {model}"
+                        )
+                        return provider.create_agent(model)
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to create agent for spec '{raw}': {e}"
+                        )
         
         # Try to find a provider that supports this as a model
-        provider = ProviderRegistry.find_provider_for_model(name_lower)
+        provider = ProviderRegistry.find_provider_for_model(raw)
         if provider:
             try:
-                logger.debug(f"Creating agent from provider {provider.name} for model {name}")
-                return provider.create_agent(name_lower)
+                logger.debug(f"Creating agent from provider {provider.name} for model {raw}")
+                provider.validate_config({})
+                return provider.create_agent(raw)
             except Exception as e:
-                logger.warning(f"Failed to create agent for model {name}: {e}")
+                logger.warning(f"Failed to create agent for model {raw}: {e}")
         
-        # Try provider name as fallback (e.g., "claude" -> default Claude model)
+        # Try provider name as fallback (e.g., "anthropic" -> provider's default model)
         provider = ProviderRegistry.get_provider(name_lower)
         if provider and provider.supported_models:
             try:
@@ -112,11 +139,67 @@ class AgentRegistry:
                 logger.debug(
                     f"Creating agent from provider {name} with default model {default_model}"
                 )
+                provider.validate_config({})
                 return provider.create_agent(default_model)
             except Exception as e:
                 logger.warning(f"Failed to create default agent for provider {name}: {e}")
         
         logger.warning(f"No agent found for: {name}")
+        return None
+
+    def get_default_agent_spec(self) -> Optional[str]:
+        """
+        Select a default agent spec from ProviderRegistry.
+
+        Preference order:
+        - Providers that require env vars (user explicitly configured keys) first
+        - Providers without 'testing' capability before those with it
+        - Stable tiebreaker by provider name
+
+        Returns:
+            A 'provider:model' spec string, or None if no providers are usable.
+        """
+        ProviderRegistry.discover()
+
+        candidates: List[tuple[tuple, Any]] = []
+        for provider_name in ProviderRegistry.list_providers():
+            provider = ProviderRegistry.get_provider(provider_name)
+            if not provider:
+                continue
+
+            try:
+                provider.validate_config({})
+            except Exception:
+                continue
+
+            models = list(provider.supported_models or [])
+            if not models:
+                continue
+
+            # Best-effort capability check (custom providers may not implement it).
+            caps: List[str] = []
+            try:
+                if hasattr(provider, "get_capabilities"):
+                    caps = list(provider.get_capabilities())  # type: ignore[attr-defined]
+            except Exception:
+                caps = []
+
+            caps_lower = {c.lower() for c in caps}
+            is_testing = "testing" in caps_lower
+            requires_env = bool(provider.get_required_env_vars())
+
+            priority = (0 if requires_env else 1, 1 if is_testing else 0, provider.name)
+            candidates.append((priority, provider))
+
+        for _, provider in sorted(candidates, key=lambda x: x[0]):
+            for model in (provider.supported_models or []):
+                try:
+                    # Construct (do not execute) an agent to ensure optional deps exist.
+                    provider.create_agent(model)
+                    return f"{provider.name}:{model}"
+                except Exception:
+                    continue
+
         return None
     
     def list_available(self) -> List[str]:
@@ -387,7 +470,13 @@ class JobQueue:
             # Determine which agents to use
             agent_names = job.agents if job.agents else self.config.default_agents
             if not agent_names:
-                agent_names = ['mock']  # Fallback to mock if nothing configured
+                default_spec = self.agent_registry.get_default_agent_spec()
+                if not default_spec:
+                    raise JobProcessingError(
+                        "No agents specified and no configured providers available. "
+                        "Set JobQueueConfig.default_agents or specify job.agents."
+                    )
+                agent_names = [default_spec]
             
             # Run each agent
             for agent_name in agent_names:
@@ -397,20 +486,27 @@ class JobQueue:
                     continue
                 
                 try:
-                    # Generate response
-                    response_text, response_time_ms, token_usage = agent.generate(
-                        job.prompt.content
+                    # Generate response via (a)create_response() so cost/budget enforcement
+                    # runs consistently and response_id can link to cost records.
+                    agent_response = agent.create_response(
+                        prompt_id=prompt.id,
+                        prompt=job.prompt.content,
+                        metadata={"job_id": job.job_id},
+                        tags=job.prompt.tags,
+                        job_id=job.job_id
                     )
-                    
-                    # Record response
+
+                    # Record response (preserve agent-generated response_id)
                     response = self.framework.record_response(
                         prompt_id=prompt.id,
                         agent_name=agent.name,
                         model=agent.model,
-                        response=response_text,
-                        response_time_ms=response_time_ms,
-                        token_usage=token_usage,
-                        metadata={'job_id': job.job_id}
+                        response=agent_response.response,
+                        response_time_ms=agent_response.response_time_ms,
+                        token_usage=agent_response.token_usage,
+                        metadata=agent_response.metadata,
+                        response_id=agent_response.id,
+                        timestamp=agent_response.timestamp,
                     )
                     
                     result.response_ids.append(response.id)

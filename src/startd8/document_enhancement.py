@@ -86,23 +86,29 @@ class DocumentEnhancementChain:
         ```python
         from startd8.document_enhancement import DocumentEnhancementChain
         from startd8.models import DocumentEnhancementConfig, AgentConfig
-        from startd8.agents import GPT4Agent, ClaudeAgent
+        from startd8.providers import ProviderRegistry
         from pathlib import Path
+
+        ProviderRegistry.discover()
+        openai = ProviderRegistry.get_provider("openai")
+        anthropic = ProviderRegistry.get_provider("anthropic")
+        openai.validate_config({})
+        anthropic.validate_config({})
         
         config = DocumentEnhancementConfig(
             source_document=Path("design.md"),
             enhancement_instructions="Add accessibility section",
             agents=[
                 AgentConfig(
-                    agent_name="gpt4",
-                    agent_instance=GPT4Agent(),
-                    step_name="gpt4-enhancement",
+                    agent_name="openai:gpt-4-turbo-preview",
+                    agent_instance=openai.create_agent("gpt-4-turbo-preview"),
+                    step_name="openai:gpt-4-turbo-preview-enhancement",
                     order=0
                 ),
                 AgentConfig(
-                    agent_name="claude",
-                    agent_instance=ClaudeAgent(),
-                    step_name="claude-refinement",
+                    agent_name="anthropic:claude-3-5-sonnet-20241022",
+                    agent_instance=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+                    step_name="anthropic:claude-3-5-sonnet-20241022-refinement",
                     order=1
                 )
             ],
@@ -157,6 +163,30 @@ class DocumentEnhancementChain:
         except Exception as e:
             raise InvalidDocumentError(f"Failed to load document {path}: {e}")
     
+    def _load_prompt_from_file(self, prompt_file_path: Path) -> str:
+        """
+        Load prompt template from a .md file.
+        
+        Args:
+            prompt_file_path: Path to the prompt file
+            
+        Returns:
+            Prompt content as string
+            
+        Raises:
+            InvalidDocumentError: If file cannot be read
+        """
+        try:
+            with open(prompt_file_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+            
+            if not content.strip():
+                raise InvalidDocumentError(f"Prompt file is empty: {prompt_file_path}")
+            
+            return content
+        except Exception as e:
+            raise InvalidDocumentError(f"Failed to load prompt file {prompt_file_path}: {e}")
+    
     def _build_prompt(
         self,
         document_content: str,
@@ -176,11 +206,46 @@ class DocumentEnhancementChain:
         Returns:
             Formatted prompt string
         """
+        # Check if prompt file is provided
+        if self.config.prompt_file_path:
+            try:
+                prompt_template = self._load_prompt_from_file(self.config.prompt_file_path)
+                # Replace placeholders in the template
+                # Support {document_content} and {instructions} placeholders
+                instructions_text = instructions if instructions else \
+                    "Review and enhance this document using your expertise. Improve clarity, completeness, and technical accuracy."
+                
+                # Use format() if template has placeholders, otherwise simple replace
+                try:
+                    # Try format() first (supports {document_content} and {instructions})
+                    prompt = prompt_template.format(
+                        document_content=document_content,
+                        instructions=instructions_text
+                    )
+                except (KeyError, ValueError):
+                    # Fall back to simple string replacement for custom placeholders
+                    prompt = prompt_template.replace('{document_content}', document_content)
+                    prompt = prompt.replace('{instructions}', instructions_text)
+                
+                # Add step context if not first step
+                if step_number > 0 and previous_agent:
+                    step_context = STEP_CONTEXT_TEMPLATE.format(
+                        previous_agent_name=previous_agent
+                    )
+                    prompt += step_context
+                
+                return prompt
+            except Exception as e:
+                # Fall back to default template if file loading fails
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.warning(f"Failed to load prompt file, using default template: {e}")
+        
         # Use provided instructions or default message
         instructions_text = instructions if instructions else \
             "Review and enhance this document using your expertise. Improve clarity, completeness, and technical accuracy."
         
-        # Build base prompt
+        # Build base prompt using default template
         prompt = ENHANCEMENT_PROMPT_TEMPLATE.format(
             document_content=document_content,
             instructions=instructions_text
@@ -268,7 +333,12 @@ class DocumentEnhancementChain:
         Returns:
             Path to saved file
         """
-        step_dir = base_dir / f"step{step_number}_{agent_name}"
+        # Sanitize agent_name for filesystem safety (models may contain '/', ':', etc.)
+        safe_agent = re.sub(r"[^a-zA-Z0-9._-]+", "-", (agent_name or "").strip())
+        safe_agent = safe_agent.strip("-._") or "agent"
+        safe_agent = safe_agent[:80]
+
+        step_dir = base_dir / f"step{step_number}_{safe_agent}"
         step_dir.mkdir(parents=True, exist_ok=True)
         
         output_file = step_dir / f"enhanced_{step_number}.md"
@@ -282,12 +352,22 @@ class DocumentEnhancementChain:
         """
         Create output directory with timestamp.
         
+        Uses preferred output directory from config if available,
+        otherwise falls back to config.output_path or default location.
+        
         Returns:
             Path to created directory
         """
+        # Priority: 1) config.output_path parent, 2) preferred_output_dir, 3) default
         if self.config.output_path and self.config.output_path.parent.exists():
             base_dir = self.config.output_path.parent
+        elif self.config.preferred_output_dir:
+            # Use preferred output directory from config
+            preferred_dir = Path(self.config.preferred_output_dir).expanduser().resolve()
+            preferred_dir.mkdir(parents=True, exist_ok=True)
+            base_dir = preferred_dir / "enhanced_documents"
         else:
+            # Default fallback
             base_dir = Path.cwd() / "enhanced_documents"
         
         # Create timestamp folder: YYYYMMDD_HHMM

@@ -257,7 +257,8 @@ class PromptEnhancer:
         token_usage = TokenUsage(
             input=response.usage.input_tokens,
             output=response.usage.output_tokens,
-            total=response.usage.input_tokens + response.usage.output_tokens
+            total=response.usage.input_tokens + response.usage.output_tokens,
+            model_name=self.model,
         )
         
         return EnhancementResult(

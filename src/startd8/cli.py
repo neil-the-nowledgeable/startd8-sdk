@@ -11,8 +11,10 @@ from rich.panel import Panel
 from rich import print as rprint
 
 from .framework import AgentFramework
-from .agents import ClaudeAgent, GPT4Agent, MockAgent
+from .agents import BaseAgent
 from .benchmark import BenchmarkRunner, ComparisonReport
+from .providers import ProviderRegistry
+from .exceptions import ConfigurationError
 
 app = typer.Typer(
     name="startd8",
@@ -30,6 +32,85 @@ def get_framework(storage_dir: Optional[Path] = None) -> AgentFramework:
     if _framework is None:
         _framework = AgentFramework(storage_dir)
     return _framework
+
+
+_AGENT_ALIASES = {
+    # Backwards-compatible CLI shorthands
+    # - "claude" used to mean "an Anthropic default model"
+    "claude": ("anthropic", None),
+    # - "gpt4" used to mean GPT-4 Turbo Preview by default in this repo
+    "gpt4": ("openai", "gpt-4-turbo-preview"),
+}
+
+
+def _available_providers_hint() -> str:
+    providers = ProviderRegistry.list_providers()
+    if not providers:
+        return "No providers discovered."
+    return "Available providers: " + ", ".join(sorted(providers))
+
+
+def _resolve_agent(spec: str, *, name: Optional[str] = None) -> BaseAgent:
+    """
+    Resolve an agent spec (provider name or model id) into a BaseAgent.
+
+    Supports:
+    - Provider name: "openai", "anthropic", "mock", "gemini", "ollama"
+    - Model id: "gpt-4", "claude-3-opus-20240229", "mock-model", ...
+    - Backwards-compatible aliases (legacy shorthands)
+    - "provider:model" form
+    """
+    ProviderRegistry.discover()
+
+    spec_raw = spec.strip()
+    spec_lower = spec_raw.lower()
+
+    # Back-compat aliases
+    if spec_lower in _AGENT_ALIASES:
+        provider_name, model_override = _AGENT_ALIASES[spec_lower]
+        provider = ProviderRegistry.get_provider(provider_name)
+        if not provider:
+            raise ConfigurationError(
+                f"Provider '{provider_name}' not available for alias '{spec_raw}'. "
+                f"{_available_providers_hint()}"
+            )
+        model = model_override or (provider.supported_models[0] if provider.supported_models else None)
+        if not model:
+            raise ConfigurationError(f"Provider '{provider.name}' has no supported models.")
+        provider.validate_config({})
+        return provider.create_agent(model, name=name)
+
+    # Explicit provider:model
+    if ":" in spec_lower:
+        provider_name, model = spec_lower.split(":", 1)
+        provider = ProviderRegistry.get_provider(provider_name)
+        if not provider:
+            raise ConfigurationError(
+                f"Unknown provider '{provider_name}' in '{spec_raw}'. { _available_providers_hint() }"
+            )
+        provider.validate_config({})
+        return provider.create_agent(model, name=name)
+
+    # Provider name
+    provider = ProviderRegistry.get_provider(spec_lower)
+    if provider:
+        model = provider.supported_models[0] if provider.supported_models else None
+        if not model:
+            raise ConfigurationError(f"Provider '{provider.name}' has no supported models.")
+        provider.validate_config({})
+        return provider.create_agent(model, name=name)
+
+    # Model id
+    provider = ProviderRegistry.find_provider_for_model(spec_lower)
+    if provider:
+        provider.validate_config({})
+        return provider.create_agent(spec_lower, name=name)
+
+    raise ConfigurationError(
+        f"Unknown agent/model '{spec_raw}'. "
+        f"Pass a provider name (e.g. 'openai') or a model id (e.g. 'gpt-4'). "
+        f"{_available_providers_hint()}"
+    )
 
 
 @app.command()
@@ -133,9 +214,12 @@ def run_benchmark(
     prompt_id: str = typer.Argument(..., help="Prompt ID to benchmark"),
     name: str = typer.Option(..., "--name", "-n", help="Benchmark name"),
     agents: List[str] = typer.Option(
-        ["mock"],
+        ["mock:mock-model"],
         "--agent", "-a",
-        help="Agents to test (mock, claude, gpt4)"
+        help=(
+            "Agents to test (provider:model; repeatable). Example: "
+            "--agent mock:mock-model --agent anthropic:claude-3-5-sonnet-20241022 --agent openai:gpt-4-turbo-preview"
+        )
     ),
     storage_dir: Optional[Path] = typer.Option(None, "--dir", "-d", help="Storage directory")
 ):
@@ -147,23 +231,23 @@ def run_benchmark(
         console.print(f"❌ Prompt {prompt_id} not found", style="red")
         raise typer.Exit(1)
     
-    # Initialize agents
-    agent_instances = []
-    for agent_name in agents:
-        if agent_name.lower() == "mock":
-            agent_instances.append(MockAgent())
-        elif agent_name.lower() == "claude":
-            try:
-                agent_instances.append(ClaudeAgent())
-            except Exception as e:
-                console.print(f"⚠️  Failed to initialize Claude agent: {e}", style="yellow")
-        elif agent_name.lower() == "gpt4":
-            try:
-                agent_instances.append(GPT4Agent())
-            except Exception as e:
-                console.print(f"⚠️  Failed to initialize GPT-4 agent: {e}", style="yellow")
-        else:
-            console.print(f"⚠️  Unknown agent: {agent_name}", style="yellow")
+    # Initialize agents via ProviderRegistry (provider name or model id)
+    agent_instances: List[BaseAgent] = []
+    for agent_spec in agents:
+        try:
+            agent_instances.append(_resolve_agent(agent_spec))
+        except ImportError as e:
+            console.print(
+                f"⚠️  Failed to initialize '{agent_spec}': {e}",
+                style="yellow",
+            )
+        except ConfigurationError as e:
+            console.print(
+                f"⚠️  Failed to initialize '{agent_spec}': {e}",
+                style="yellow",
+            )
+        except Exception as e:
+            console.print(f"⚠️  Failed to initialize '{agent_spec}': {e}", style="yellow")
     
     if not agent_instances:
         console.print("❌ No valid agents to run", style="red")
@@ -295,13 +379,19 @@ def show_response(
         console.print(f"❌ Response {response_id} not found", style="red")
         raise typer.Exit(1)
     
+    cost_line = (
+        f"[bold]Cost:[/bold] ${response.token_usage.cost_estimate:.4f}\n"
+        if response.token_usage
+        else ""
+    )
+
     console.print(Panel(
         f"[bold]ID:[/bold] {response.id}\n"
         f"[bold]Agent:[/bold] {response.agent_name}\n"
         f"[bold]Model:[/bold] {response.model}\n"
         f"[bold]Response Time:[/bold] {response.response_time_ms}ms\n"
         f"[bold]Tokens:[/bold] {response.token_usage.total if response.token_usage else 'N/A'}\n"
-        f"[bold]Cost:[/bold] ${response.token_usage.cost_estimate:.4f}" if response.token_usage else "" + "\n"
+        f"{cost_line}"
         f"[bold]Created:[/bold] {response.timestamp}\n\n"
         f"[bold]Response:[/bold]\n{response.response}",
         title=f"Response {response.id[:12]}..."
@@ -341,16 +431,11 @@ def stats(
 @app.command()
 def tui(
     storage_dir: Optional[Path] = typer.Option(None, "--dir", "-d", help="Storage directory"),
-    classic: bool = typer.Option(False, "--classic", help="Use classic TUI instead of improved")
 ):
-    """Launch interactive TUI mode (improved by default)"""
+    """Launch interactive TUI mode"""
     try:
-        if classic:
-            from .tui import run_tui
-            run_tui(storage_dir)
-        else:
-            from .tui_improved import run_improved_tui
-            run_improved_tui(storage_dir)
+        from .tui_improved import run_improved_tui
+        run_improved_tui(storage_dir)
     except ImportError as e:
         # Check if it's specifically questionary missing
         if "questionary" in str(e) and ("No module named" in str(e) or "cannot import" in str(e)):
@@ -372,27 +457,53 @@ def tui(
 def pipeline(
     prompt_text: str = typer.Argument(..., help="Prompt text"),
     workflow: str = typer.Option("planner-implementer", "--workflow", "-w", help="Workflow template"),
+    agents: Optional[List[str]] = typer.Option(
+        None,
+        "--agent", "-a",
+        help="Agents for pipeline steps (provider/model; repeatable). Provide 1 or 2 values.",
+    ),
     output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output file"),
     storage_dir: Optional[Path] = typer.Option(None, "--dir", "-d", help="Storage directory")
 ):
     """Run a sequential pipeline workflow"""
     from .orchestration import WorkflowTemplates, Pipeline
-    from .agents import MockAgent
     
     framework = get_framework(storage_dir)
     
     console.print(f"🔗 Running {workflow} pipeline...\n", style="cyan")
     
-    # Create pipeline with mock agents (real agents require API keys)
+    # Resolve step agents (default: mock for all steps)
+    if not agents:
+        step_specs = ["mock", "mock"]
+    elif len(agents) == 1:
+        step_specs = [agents[0], agents[0]]
+    elif len(agents) == 2:
+        step_specs = agents
+    else:
+        console.print("[red]❌ Provide at most 2 --agent values (1 uses the same agent for both steps).[/red]")
+        raise typer.Exit(1)
+
     if workflow == "planner-implementer":
+        try:
+            planner = _resolve_agent(step_specs[0], name="planner")
+            implementer = _resolve_agent(step_specs[1], name="implementer")
+        except Exception as e:
+            console.print(f"[red]❌ Failed to create pipeline agents: {e}[/red]")
+            raise typer.Exit(1)
         pipe = WorkflowTemplates.planner_implementer(
-            MockAgent(name="planner", model="mock-planner"),
-            MockAgent(name="implementer", model="mock-implementer")
+            planner,
+            implementer,
         )
     elif workflow == "code-review":
+        try:
+            reviewer = _resolve_agent(step_specs[0], name="reviewer")
+            improver = _resolve_agent(step_specs[1], name="improver")
+        except Exception as e:
+            console.print(f"[red]❌ Failed to create pipeline agents: {e}[/red]")
+            raise typer.Exit(1)
         pipe = WorkflowTemplates.code_review(
-            MockAgent(name="reviewer", model="mock-reviewer"),
-            MockAgent(name="improver", model="mock-improver")
+            reviewer,
+            improver,
         )
     else:
         console.print(f"❌ Unknown workflow: {workflow}", style="red")
@@ -566,6 +677,7 @@ def build_prompt(
         tags = [f"template:{result.template_id}", "prompt-builder"]
         prompt = framework.create_prompt(
             content=result.content,
+            version="1.0.0",
             tags=tags
         )
         console.print(f"[green]✅ Saved to framework with ID: {prompt.id[:12]}...[/green]")
@@ -642,7 +754,8 @@ app.add_typer(queue_app, name="queue")
 
 def _get_queue_config_path(storage_dir: Optional[Path] = None) -> Path:
     """Get path to queue config file"""
-    base = storage_dir or Path.home() / ".startd8"
+    # Decision C: queue is project-scoped (store config alongside project data).
+    base = storage_dir or Path.cwd() / ".startd8"
     return base / "queue" / "config.json"
 
 
