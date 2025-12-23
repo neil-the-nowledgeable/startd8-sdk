@@ -157,14 +157,39 @@ class ProviderRegistry:
                     provider = provider_class()
                     cls.register(provider)
                     discovered_count += 1
+                except (ImportError, AttributeError, TypeError) as e:
+                    logger.warning(
+                        f"Failed to load provider {ep.name} (import/attribute/type error): {e}",
+                        exc_info=True,
+                        extra={
+                            "entry_point": ep.name,
+                            "error_type": type(e).__name__,
+                            "operation": "load_provider"
+                        }
+                    )
                 except Exception as e:
                     logger.warning(
-                        f"Failed to load provider {ep.name}: {e}",
-                        exc_info=True
+                        f"Unexpected error loading provider {ep.name}: {e}",
+                        exc_info=True,
+                        extra={
+                            "entry_point": ep.name,
+                            "error_type": type(e).__name__,
+                            "operation": "load_provider"
+                        }
                     )
         
+        except (ImportError, AttributeError) as e:
+            logger.debug(
+                f"Entry point discovery failed (import/attribute error): {e}",
+                exc_info=True,
+                extra={"operation": "discover_providers", "error_type": type(e).__name__}
+            )
         except Exception as e:
-            logger.debug(f"Entry point discovery failed: {e}")
+            logger.warning(
+                f"Unexpected error during entry point discovery: {e}",
+                exc_info=True,
+                extra={"operation": "discover_providers", "error_type": type(e).__name__}
+            )
         
         # Also register built-in providers
         cls._register_builtin_providers()
@@ -339,7 +364,31 @@ class ProviderRegistry:
         
         try:
             return provider.create_agent(model, **config)
+        except (ValueError, TypeError, AttributeError) as e:
+            logger.error(
+                f"Failed to create agent from provider {provider_name} (validation/type error): {e}",
+                exc_info=True,
+                extra={
+                    "provider": provider_name,
+                    "model": model,
+                    "error_type": type(e).__name__,
+                    "operation": "create_agent"
+                }
+            )
+            raise ConfigurationError(
+                f"Failed to create agent from provider {provider_name}: {e}"
+            ) from e
         except Exception as e:
+            logger.error(
+                f"Unexpected error creating agent from provider {provider_name}: {e}",
+                exc_info=True,
+                extra={
+                    "provider": provider_name,
+                    "model": model,
+                    "error_type": type(e).__name__,
+                    "operation": "create_agent"
+                }
+            )
             raise ConfigurationError(
                 f"Failed to create agent from provider {provider_name}: {e}"
             ) from e

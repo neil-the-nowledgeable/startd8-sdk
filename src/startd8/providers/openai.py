@@ -36,8 +36,19 @@ class OpenAIProvider:
             # Use default config dir
             discovery = ModelDiscoveryService()
             return discovery.merge_models('openai', cls.HARDCODED_MODELS)
+        except (ImportError, AttributeError) as e:
+            logger.debug(
+                f"Failed to load discovered models (import/attribute error): {e}",
+                exc_info=True,
+                extra={"provider": "openai", "operation": "model_discovery"}
+            )
+            return cls.HARDCODED_MODELS.copy()
         except Exception as e:
-            logger.debug(f"Failed to load discovered models: {e}")
+            logger.warning(
+                f"Unexpected error loading discovered models: {e}",
+                exc_info=True,
+                extra={"provider": "openai", "operation": "model_discovery"}
+            )
             return cls.HARDCODED_MODELS.copy()
     
     @classmethod
@@ -107,7 +118,19 @@ class OpenAIProvider:
             from ..model_discovery import ModelDiscoveryService
             discovery = ModelDiscoveryService()
             return discovery.is_model_new('openai', model, self.HARDCODED_MODELS)
-        except Exception:
+        except (ImportError, AttributeError) as e:
+            logger.debug(
+                f"Failed to check if model is new (import/attribute error): {e}",
+                exc_info=True,
+                extra={"provider": "openai", "model": model, "operation": "is_model_new"}
+            )
+            return False
+        except Exception as e:
+            logger.warning(
+                f"Unexpected error checking if model is new: {e}",
+                exc_info=True,
+                extra={"provider": "openai", "model": model, "operation": "is_model_new"}
+            )
             return False
     
     def create_agent(

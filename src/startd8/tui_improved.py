@@ -1015,13 +1015,13 @@ class ImprovedTUI:
         if not self._tui_settings.get('agent_folders_enabled'):
             return None
         
-        base_dir = self._tui_settings.get('agent_folders_base_dir')
+        base_dir: Optional[str] = self._tui_settings.get('agent_folders_base_dir')
         if not base_dir:
             return None
         
-        base_path = Path(base_dir)
-        folder_name = agent_name.lower().replace(' ', '-')
-        agent_folder = base_path / folder_name
+        base_path: Path = Path(base_dir)
+        folder_name: str = agent_name.lower().replace(' ', '-')
+        agent_folder: Path = base_path / folder_name
         
         try:
             agent_folder.mkdir(parents=True, exist_ok=True)
@@ -3129,18 +3129,18 @@ class ImprovedTUI:
         table.add_column("Sent?", justify="center")
         
         for agent in agents:
-            icon = agent.get('icon', '🤖')
-            name = agent['name']
-            model = agent['model'][:25] + "..." if len(agent['model']) > 25 else agent['model']
-            agent_type = "Built-in" if agent['type'] == 'builtin' else "User added"
+            icon: str = agent.get('icon', '🤖')
+            name: str = agent['name']
+            model: str = agent['model'][:25] + "..." if len(agent['model']) > 25 else agent['model']
+            agent_type: str = "Built-in" if agent['type'] == 'builtin' else "User added"
             
             if agent['available']:
-                status = "[green]✓ Ready[/green]"
+                status: str = "[green]✓ Ready[/green]"
             else:
                 status = f"[red]✗ {agent.get('error', 'N/A')}[/red]"
             
             if agent['distributed']:
-                sent = "[green]✓ Yes[/green]"
+                sent: str = "[green]✓ Yes[/green]"
             else:
                 sent = "[dim]No[/dim]"
             
@@ -3152,7 +3152,7 @@ class ImprovedTUI:
     
     def _get_undistributed_agents(self, all_agents: List[Dict[str, Any]], custom_agents: List[Dict[str, Any]], distributed_agents: set) -> List[BaseAgent]:
         """Get only agents that haven't received this prompt yet"""
-        agents = []
+        agents: List[BaseAgent] = []
         
         for agent_info in all_agents:
             if agent_info['available'] and not agent_info['distributed']:
@@ -3182,11 +3182,11 @@ class ImprovedTUI:
     
     def _get_agent_from_unified_choice(self, choice: str, all_agents: List[Dict[str, Any]], custom_agents: List[Dict[str, Any]]) -> List[BaseAgent]:
         """Get agent from unified selection choice"""
-        agents = []
+        agents: List[BaseAgent] = []
         
         # Extract agent name from choice (format: "icon name (model)")
         # Try to parse the exact name from the choice string
-        agent_name = None
+        agent_name: Optional[str] = None
         if "⭐" in choice:
             # Custom agent format: "⭐ name (model)"
             try:
@@ -3377,12 +3377,12 @@ class ImprovedTUI:
         if self.agent_status is None:
             self.agent_status = AgentConfigTester.test_all()
         
-        custom_agents = self.agent_manager.list_agents()
-        all_agents = self._build_unified_agent_list(custom_agents, set())
+        custom_agents: List[Dict[str, Any]] = self.agent_manager.list_agents()
+        all_agents: List[Dict[str, Any]] = self._build_unified_agent_list(custom_agents, set())
         
         # Filter to only Ready agents (available == True)
         # This corresponds to agents with Status "Ready" in the agent status table
-        ready_agents = [agent for agent in all_agents if agent.get('available', False)]
+        ready_agents: List[Dict[str, Any]] = [agent for agent in all_agents if agent.get('available', False)]
         
         # Additional validation: actually try to create each agent to ensure it works
         validated_agents = []
@@ -3444,8 +3444,8 @@ class ImprovedTUI:
         if not ready_agents:
             self.console.print("[red]No agents with Ready status available.[/red]")
             # Check if there are custom agents that aren't ready
-            custom_agents = self.agent_manager.list_agents()
-            not_ready_custom = []
+            custom_agents: List[Dict[str, Any]] = self.agent_manager.list_agents()
+            not_ready_custom: List[Dict[str, Any]] = []
             for agent in custom_agents:
                 try:
                     instance = self.agent_manager.create_agent_instance(agent)
@@ -3496,16 +3496,16 @@ class ImprovedTUI:
             return None
         
         # Convert selection to BaseAgent instance
-        custom_agents = self.agent_manager.list_agents()
-        all_agents = self._build_unified_agent_list(custom_agents, set())
+        custom_agents: List[Dict[str, Any]] = self.agent_manager.list_agents()
+        all_agents: List[Dict[str, Any]] = self._build_unified_agent_list(custom_agents, set())
         
         # Try to create agent and capture any errors
         try:
-            agents = self._get_agent_from_unified_choice(selected, all_agents, custom_agents)
+            agents: List[BaseAgent] = self._get_agent_from_unified_choice(selected, all_agents, custom_agents)
             
             if not agents:
                 # Try to get more details about why it failed
-                agent_name = None
+                agent_name: Optional[str] = None
                 if "⭐" in selected:
                     try:
                         parts = selected.split("⭐ ", 1)
@@ -6423,12 +6423,12 @@ Please be thorough, constructive, and specific in your analysis."""
         
         questionary.press_any_key_to_continue().ask()
     
-    def _create_agent_from_name(self, agent_name: str, ready_agents: List[Dict]) -> Optional[BaseAgent]:
+    def _create_agent_from_name(self, agent_name: str, ready_agents: List[Dict[str, Any]]) -> Optional[BaseAgent]:
         """Helper to create an agent instance from name"""
         for agent_info in ready_agents:
             if agent_info.get('name') == agent_name:
                 if agent_info.get('type') == 'builtin':
-                    builtin_type = agent_info.get('builtin_type')
+                    builtin_type: Optional[str] = agent_info.get('builtin_type')
                     if builtin_type == 'mock':
                         return MockAgent(name="mock", model="mock-model")
                     elif builtin_type == 'claude':
@@ -6436,9 +6436,9 @@ Please be thorough, constructive, and specific in your analysis."""
                     elif builtin_type == 'gpt4':
                         return GPT4Agent()
                 else:
-                    custom_config = agent_info.get('custom_config')
+                    custom_config: Optional[Dict[str, Any]] = agent_info.get('custom_config')
                     if not custom_config:
-                        custom_agents = self.agent_manager.list_agents()
+                        custom_agents: List[Dict[str, Any]] = self.agent_manager.list_agents()
                         for custom_agent in custom_agents:
                             if custom_agent.get('name') == agent_name:
                                 custom_config = custom_agent
