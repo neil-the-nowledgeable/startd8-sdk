@@ -36,10 +36,12 @@ providers = ProviderRegistry.list_providers()
 # ['anthropic', 'openai', 'gemini', 'ollama', 'mock']
 
 # Create an agent from a provider
-agent = ProviderRegistry.create_agent(
-    provider_name="anthropic",
+provider = ProviderRegistry.get_provider("anthropic")
+provider.validate_config({"api_key": "your-api-key"})  # or set ANTHROPIC_API_KEY
+agent = provider.create_agent(
     model="claude-3-opus-20240229",
-    api_key="your-api-key"
+    name="anthropic:claude-3-opus-20240229",
+    api_key="your-api-key",
 )
 
 # Use the agent
@@ -53,11 +55,8 @@ from startd8.job_queue import AgentRegistry
 
 registry = AgentRegistry()
 
-# Get agent by model name
-agent = registry.get_agent("gpt-4")
-
-# Get agent by provider name (uses default model)
-agent = registry.get_agent("claude")
+# Get agent by explicit provider:model
+agent = registry.get_agent("openai:gpt-4-turbo-preview")
 
 # List all available
 available = registry.list_available()
@@ -465,9 +464,9 @@ print(f"Cost: ${tracker.get_total_cost():.4f}")
 from startd8.providers import ProviderRegistry
 agent = ProviderRegistry.create_agent("anthropic", "claude-3-opus-20240229")
 
-# ❌ Avoid - Hardcoded imports
-from startd8.agents import ClaudeAgent
-agent = ClaudeAgent(...)
+# ❌ Avoid - hardcoding provider wiring in your code
+from startd8.providers.anthropic import AnthropicProvider
+agent = AnthropicProvider().create_agent("claude-3-opus-20240229")
 ```
 
 ### 2. Handle Provider Availability

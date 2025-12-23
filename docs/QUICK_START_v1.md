@@ -1,6 +1,6 @@
 # Startd8 Quick Start Guide
 
-**Version:** 0.2.0  
+**Version:** 0.4.0  
 **Document Version:** v1  
 **Last Updated:** 2025-01-13
 
@@ -81,7 +81,8 @@ startd8 tui
 ### Basic Usage
 
 ```python
-from startd8 import AgentFramework, ClaudeAgent, MockAgent
+from startd8 import AgentFramework
+from startd8.providers import ProviderRegistry
 
 # Initialize
 framework = AgentFramework()
@@ -93,8 +94,10 @@ prompt = framework.create_prompt(
     tags=["auth", "jwt"]
 )
 
-# Get a response (using Mock for testing)
-agent = MockAgent()
+# Get a response (using Mock provider for testing)
+ProviderRegistry.discover()
+mock = ProviderRegistry.get_provider("mock")
+agent = mock.create_agent("mock-model")
 response = agent.create_response(
     prompt_id=prompt.id,
     prompt=prompt.content
@@ -110,7 +113,8 @@ print(f"Time: {response.response_time_ms}ms")
 ### Compare Multiple Agents
 
 ```python
-from startd8 import AgentFramework, ClaudeAgent, GPT4Agent
+from startd8 import AgentFramework
+from startd8.providers import ProviderRegistry
 
 framework = AgentFramework()
 
@@ -120,10 +124,16 @@ prompt = framework.create_prompt(
     version="1.0.0"
 )
 
-# Get responses from multiple agents
+# Get responses from multiple agents (provider:model)
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 agents = [
-    ClaudeAgent(),
-    GPT4Agent()
+    anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    openai.create_agent("gpt-4-turbo-preview"),
 ]
 
 for agent in agents:
@@ -140,13 +150,20 @@ print(f"Total tokens: {comparison['metrics']['total_tokens']}")
 ### Build a Pipeline
 
 ```python
-from startd8 import Pipeline, WorkflowTemplates, ClaudeAgent, GPT4Agent
+from startd8 import WorkflowTemplates
+from startd8.providers import ProviderRegistry
 
 # Use pre-built template
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 pipeline = WorkflowTemplates.design_review_chain(
-    drafter=ClaudeAgent(),
-    reviewer=GPT4Agent(),
-    final_reviewer=ClaudeAgent()
+    drafter_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
+    final_reviewer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022")
 )
 
 result = pipeline.run("Design a REST API for a todo app")
@@ -170,7 +187,7 @@ startd8 create-prompt "Write unit tests for user service" \
 startd8 list-prompts
 
 # Run benchmark with mock agent
-startd8 run-benchmark <prompt-id> --agent mock
+startd8 run-benchmark <prompt-id> --agent mock:mock-model
 ```
 
 ### Run Pipelines

@@ -1040,7 +1040,7 @@ def build_prompt(
 
 ### TUI Menu Integration
 
-Add to `main_menu()` in `tui_enhanced.py`:
+Add to `main_menu()` in `tui_improved.py`:
 
 ```python
 # Add to WORKFLOW section
@@ -1091,7 +1091,7 @@ elif "Prompt Builder" in choice:
 | File | Changes |
 |------|---------|
 | `src/startd8/cli.py` | Add `templates` and `build-prompt` commands |
-| `src/startd8/tui_enhanced.py` | Add Prompt Builder menu option |
+| `src/startd8/tui_improved.py` | Add Prompt Builder menu option |
 | `setup.py` | Add `pyyaml` dependency |
 | `requirements.txt` | Add `pyyaml` |
 

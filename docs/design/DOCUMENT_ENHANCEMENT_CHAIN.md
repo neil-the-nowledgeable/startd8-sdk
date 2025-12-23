@@ -68,9 +68,9 @@ class DocumentEnhancementConfig:
 @dataclass
 class AgentConfig:
     """Configuration for a single agent in the chain"""
-    agent_name: str  # e.g., "gpt4", "claude", "composer"
+    agent_name: str  # e.g., "openai:gpt-4-turbo-preview"
     agent_instance: BaseAgent
-    step_name: str  # e.g., "gpt4-enhancement", "composer-refinement"
+    step_name: str  # e.g., "openai:gpt-4-turbo-preview-enhancement"
     order: int  # Position in chain (0-based)
 
 @dataclass
@@ -457,9 +457,23 @@ class InvalidDocumentError(EnhancementError):
 ## Example Usage
 
 ```python
-from startd8.document_enhancement import DocumentEnhancementChain, DocumentEnhancementConfig, AgentConfig
-from startd8.agents import GPT4Agent, ClaudeAgent
+from startd8 import AgentFramework
+from startd8.document_enhancement import DocumentEnhancementChain
+from startd8.models import DocumentEnhancementConfig, AgentConfig
+from startd8.providers import ProviderRegistry
 from pathlib import Path
+
+# Optional: framework for saving prompts/responses
+framework = AgentFramework()
+
+# Configure agents (provider:model)
+ProviderRegistry.discover()
+openai = ProviderRegistry.get_provider("openai")
+anthropic = ProviderRegistry.get_provider("anthropic")
+if not openai or not anthropic:
+    raise RuntimeError("Required providers not available")
+openai.validate_config({})
+anthropic.validate_config({})
 
 # Configure
 config = DocumentEnhancementConfig(
@@ -467,15 +481,15 @@ config = DocumentEnhancementConfig(
     enhancement_instructions="Add accessibility section and improve CSS animations",
     agents=[
         AgentConfig(
-            agent_name="gpt4",
-            agent_instance=GPT4Agent(),
-            step_name="gpt4-enhancement",
+            agent_name="openai:gpt-4-turbo-preview",
+            agent_instance=openai.create_agent("gpt-4-turbo-preview"),
+            step_name="openai:gpt-4-turbo-preview-enhancement",
             order=0
         ),
         AgentConfig(
-            agent_name="composer",
-            agent_instance=ComposerAgent(),  # Assuming custom agent
-            step_name="composer-refinement",
+            agent_name="anthropic:claude-3-5-sonnet-20241022",
+            agent_instance=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+            step_name="anthropic:claude-3-5-sonnet-20241022-refinement",
             order=1
         )
     ],
@@ -486,8 +500,8 @@ config = DocumentEnhancementConfig(
 # Execute
 chain = DocumentEnhancementChain(config, framework)
 result = chain.run(
-    on_step_start=lambda step: print(f"Starting {step.agent_name}..."),
-    on_step_complete=lambda step, result: print(f"Completed {step.agent_name}"),
+    on_step_start=lambda step_num, total, agent_name: print(f"Starting {agent_name} ({step_num}/{total})..."),
+    on_step_complete=lambda step_num, total, agent_name, step_result: print(f"Completed {agent_name}"),
     on_progress=lambda current, total: print(f"Progress: {current}/{total}")
 )
 

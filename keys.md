@@ -1,0 +1,19 @@
+**Keys:**
+```
+CURSORAI_API_KEY=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
+    
+    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
+
+OPENAI_API_KEY=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
+
+    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
+
+
+Anthropic=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
+
+    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
+
+Google=AIzaSyAgimWpcc-M_avAvDFBZ0fHowGGHhcIRAE
+
+    AIzaSyAgimWpcc-M_avAvDFBZ0fHowGGHhcIRAE
+

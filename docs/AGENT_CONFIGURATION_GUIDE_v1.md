@@ -10,24 +10,24 @@ This guide covers how to configure and manage agents in Startd8. Agents are the 
 
 ## Agent Types
 
-### Built-in Agents
+### Built-in Providers (ProviderRegistry)
 
-Pre-configured agents that come with Startd8:
+Startd8 ships with built-in providers discovered via `ProviderRegistry`:
 
-| Agent | Provider | Default Model | API Key Env |
-|-------|----------|---------------|-------------|
-| Claude | Anthropic | claude-sonnet-4-20250514 | `ANTHROPIC_API_KEY` |
-| GPT-4 | OpenAI | gpt-4-turbo-preview | `OPENAI_API_KEY` |
-| Mock | Testing | mock-model | None required |
+| Provider | Example Model | API Key Env |
+|----------|---------------|-------------|
+| Anthropic (`anthropic`) | `claude-3-5-sonnet-20241022` | `ANTHROPIC_API_KEY` |
+| OpenAI (`openai`) | `gpt-4-turbo-preview` | `OPENAI_API_KEY` |
+| Google (`gemini`) | `gemini-1.5-pro` | `GOOGLE_API_KEY` |
+| Ollama (`ollama`) | `llama3` | (optional) |
+| Mock (`mock`) | `mock-model` | None required |
 
 ### User Added Agents
 
-Custom-configured agents that you create:
+Custom-configured agents that you create via the TUI:
 
-- Custom Claude configurations (different models)
-- Custom GPT-4 configurations
-- OpenAI-compatible providers (Cursor, Ollama, Groq, etc.)
-- Any OpenAI-compatible API endpoint
+- Provider-backed agent configs (`type: "provider"` with `provider` + `model`)
+- OpenAI-compatible custom endpoints (`type: "openai_compatible"` with `base_url` + `model`)
 
 ## Agent Status
 
@@ -46,19 +46,17 @@ Agents have one of three statuses:
 Set environment variables for API keys:
 
 ```bash
-# Claude / Anthropic
-export ANTHROPIC_API_KEY="sk-ant-api03-..."
+# Anthropic
+export ANTHROPIC_API_KEY="sk-ant-..."
 
-# GPT-4 / OpenAI
+# OpenAI
 export OPENAI_API_KEY="sk-..."
 
-# Cursor
-export CURSOR_API_KEY="..."
+# Google Gemini
+export GOOGLE_API_KEY="..."
 
-# Other providers
-export GROQ_API_KEY="..."
-export TOGETHER_API_KEY="..."
-export OPENROUTER_API_KEY="..."
+# Optional: custom OpenAI-compatible endpoint key
+export MY_CUSTOM_LLM_API_KEY="..."
 ```
 
 **Best Practice**: Add these to your shell profile (`~/.zshrc`, `~/.bashrc`, etc.)
@@ -82,17 +80,12 @@ Edit `~/.startd8/config.json` directly:
 {
   "api_keys": {
     "anthropic": null,
-    "openai": null
+    "openai": null,
+    "google": null
   },
-  "models": {
-    "claude": {
-      "default": "claude-sonnet-4-20250514",
-      "max_tokens": 4096
-    },
-    "gpt4": {
-      "default": "gpt-4-turbo-preview",
-      "max_tokens": 4096
-    }
+  "tui": {
+    "show_mock_agent": false,
+    "agents_per_page": 10
   }
 }
 ```
@@ -117,54 +110,33 @@ This allows you to:
 1. Launch TUI: `startd8 tui`
 2. Select **🤖 Manage Agents**
 3. Select **➕ Add New Agent**
-4. Choose provider category
+4. Choose agent type (provider-backed or OpenAI-compatible endpoint)
 5. Configure settings
 
 ### Configuration Options
 
-#### Claude Agent
+#### Provider-backed agent
 
 ```yaml
-Name: my-claude-opus
-Type: claude
-Model: claude-3-opus-20240229
+Name: my-anthropic-sonnet
+Type: provider
+Provider: anthropic
+Model: claude-3-5-sonnet-20241022
 Max Tokens: 8192
-API Key Env: ANTHROPIC_API_KEY
+Output Directory: /path/to/outputs/my-anthropic-sonnet
 ```
 
-#### GPT-4 Agent
+#### OpenAI-compatible custom endpoint
 
 ```yaml
-Name: my-gpt4
-Type: gpt4
-Model: gpt-4o
-Max Tokens: 4096
-API Key Env: OPENAI_API_KEY
-```
-
-#### OpenAI-Compatible Agent
-
-```yaml
-Name: my-ollama
+Name: my-custom-endpoint
 Type: openai_compatible
-Provider: ollama
-Base URL: http://localhost:11434/v1
-Model: llama3
+Base URL: https://example.com/v1
+Model: gpt-4o-mini
 Max Tokens: 4096
-API Key Env: null  # Ollama doesn't need an API key
+API Key Env: MY_CUSTOM_LLM_API_KEY
+Output Directory: /path/to/outputs/my-custom-endpoint
 ```
-
-### Provider Presets
-
-Quick configurations for popular providers:
-
-| Provider | Base URL | API Key Env |
-|----------|----------|-------------|
-| Cursor | https://api.cursor.sh/v1 | CURSOR_API_KEY |
-| Ollama | http://localhost:11434/v1 | None |
-| Groq | https://api.groq.com/openai/v1 | GROQ_API_KEY |
-| Together | https://api.together.xyz/v1 | TOGETHER_API_KEY |
-| OpenRouter | https://openrouter.ai/api/v1 | OPENROUTER_API_KEY |
 
 ## User Added Agent Configuration File
 
@@ -172,25 +144,26 @@ User added agents are stored in `~/.startd8/custom_agents.json`:
 
 ```json
 {
+  "schema_version": 2,
   "agents": [
     {
       "id": "agent-abc123",
-      "name": "my-claude-opus",
-      "type": "claude",
-      "model": "claude-3-opus-20240229",
+      "name": "my-anthropic-sonnet",
+      "type": "provider",
+      "provider": "anthropic",
+      "model": "claude-3-5-sonnet-20241022",
       "max_tokens": 8192,
-      "api_key_env": "ANTHROPIC_API_KEY",
-      "output_dir": "/path/to/outputs/my-claude-opus"
+      "output_dir": "/path/to/outputs/my-anthropic-sonnet"
     },
     {
       "id": "agent-def456",
-      "name": "my-ollama",
+      "name": "my-custom-endpoint",
       "type": "openai_compatible",
-      "provider": "ollama",
-      "base_url": "http://localhost:11434/v1",
-      "model": "llama3",
+      "base_url": "https://example.com/v1",
+      "model": "gpt-4o-mini",
       "max_tokens": 4096,
-      "api_key_env": null
+      "api_key_env": "MY_CUSTOM_LLM_API_KEY",
+      "output_dir": "/path/to/outputs/my-custom-endpoint"
     }
   ]
 }
@@ -213,13 +186,14 @@ ready_agents = tui._get_ready_agents_for_selection()
 # Each agent dict contains:
 # - name: Agent name
 # - model: Model being used
-# - type: 'builtin' or 'custom'
+# - type: 'provider' or 'custom'
+# - provider: Provider id (for provider-backed agents)
 # - icon: Display icon
 # - available: True (always, since filtered)
 # - error: None (no error for ready agents)
 
 # Select a single ready agent interactively
-agent = tui._select_ready_agent("Select an agent", "Claude")
+agent = tui._select_ready_agent("Select an agent", "Tip: use provider:model (e.g., openai:gpt-4-turbo-preview)")
 ```
 
 ### Integration Example
@@ -246,10 +220,10 @@ Each agent can have a dedicated output directory:
 
 ```
 ~/agent-outputs/
-├── claude/
+├── provider-anthropic/
 │   ├── response-001.md
 │   └── response-002.md
-├── gpt4/
+├── provider-openai/
 │   └── response-003.md
 └── my-custom-agent/
     └── response-004.md
@@ -327,5 +301,6 @@ for agent_id, status in results.items():
 4. **Version Control**: Don't commit API keys to version control
 5. **Mock First**: Test workflows with Mock agent before using real LLMs
 6. **Monitor Costs**: Track token usage and costs per agent
+
 
 

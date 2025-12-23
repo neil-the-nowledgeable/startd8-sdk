@@ -5,16 +5,25 @@
 ### **Step 1: Import**
 
 ```python
-from startd8.agents import ClaudeAgent, GPT4Agent
 from startd8.iterative_workflow import IterativeDevWorkflow
+from startd8.providers import ProviderRegistry
 ```
 
 ### **Step 2: Create Workflow**
 
 ```python
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+if not anthropic or not openai:
+    raise RuntimeError("Required providers not available")
+
+anthropic.validate_config({})
+openai.validate_config({})
+
 workflow = IterativeDevWorkflow(
-    developer_agent=ClaudeAgent(),  # Agent that codes
-    reviewer_agent=GPT4Agent(),      # Agent that reviews
+    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
     max_iterations=3                 # Maximum attempts
 )
 ```
@@ -89,7 +98,17 @@ def divide(a, b):
     return a / b  # Bug: No zero check!
 """
 
-workflow = IterativeDevWorkflow(claude, gpt4, max_iterations=3)
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+workflow = IterativeDevWorkflow(
+    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
+    max_iterations=3,
+)
 result = workflow.run(f"Fix this code:\n{buggy_code}")
 
 # Automatic: Reviewer finds bug → Dev fixes → Pass!
@@ -101,8 +120,15 @@ result = workflow.run(f"Fix this code:\n{buggy_code}")
 def show_progress(iteration):
     print(f"Iteration {iteration.iteration_number}: {iteration.status}")
 
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 workflow = IterativeDevWorkflow(
-    claude, gpt4, 
+    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
     max_iterations=3,
     on_iteration_complete=show_progress  # Add callback
 )
@@ -118,8 +144,15 @@ Check for security issues:
 - Authentication
 """
 
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 workflow = IterativeDevWorkflow(
-    claude, gpt4,
+    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
     review_prompt_template=security_review
 )
 ```
@@ -127,11 +160,15 @@ workflow = IterativeDevWorkflow(
 ### **Pattern 4: Mock (No API Keys)**
 
 ```python
-from startd8.agents import MockAgent
+from startd8.providers import ProviderRegistry
 
 # Perfect for testing!
+ProviderRegistry.discover()
+mock = ProviderRegistry.get_provider("mock")
+
 workflow = IterativeDevWorkflow(
-    MockAgent(), MockAgent(),
+    developer_agent=mock.create_agent("mock-model"),
+    reviewer_agent=mock.create_agent("mock-model"),
     max_iterations=2
 )
 
@@ -167,12 +204,18 @@ result.total_cost  # Estimated cost in USD
 ## **Full Example**
 
 ```python
-from startd8.agents import ClaudeAgent, GPT4Agent
 from startd8.iterative_workflow import IterativeDevWorkflow
+from startd8.providers import ProviderRegistry
 
 # Setup
-dev = ClaudeAgent()
-reviewer = GPT4Agent()
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+dev = anthropic.create_agent("claude-3-5-sonnet-20241022")
+reviewer = openai.create_agent("gpt-4-turbo-preview")
 
 workflow = IterativeDevWorkflow(
     developer_agent=dev,
@@ -223,7 +266,7 @@ Choose:
 
 ## **Tips**
 
-💡 **Use different agents** - Claude dev + GPT-4 review works great  
+💡 **Use different providers** - Anthropic dev + OpenAI review works great  
 💡 **Start with 3 iterations** - Adjust based on complexity  
 💡 **Add context** - Pass requirements, frameworks, examples  
 💡 **Monitor costs** - Check `result.total_cost` for large tasks  

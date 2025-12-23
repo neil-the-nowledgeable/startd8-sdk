@@ -56,21 +56,12 @@ When multiple pages exist:
 {
   "api_keys": {
     "anthropic": null,
-    "openai": null
-  },
-  "models": {
-    "claude": {
-      "default": "claude-3-opus-20240229",
-      "max_tokens": 4096
-    },
-    "gpt4": {
-      "default": "gpt-4-turbo-preview",
-      "max_tokens": 4096
-    }
+    "openai": null,
+    "google": null
   },
   "preferences": {
     "auto_save_results": true,
-    "default_agent": "claude",
+    "default_agent": "mock:mock-model",
     "show_cost_warnings": true
   },
   "tui": {

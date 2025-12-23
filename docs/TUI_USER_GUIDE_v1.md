@@ -76,7 +76,7 @@ The TUI is organized into four main sections:
 
 | Type | Description |
 |------|-------------|
-| **Built-in** | Pre-configured agents (Claude, GPT-4, Mock) |
+| **Built-in** | Provider-backed agents via `ProviderRegistry` (Anthropic, OpenAI, Gemini, Ollama, Mock) |
 | **User added** | Custom-configured agents you create |
 
 ### Agent Status
@@ -110,12 +110,11 @@ The TUI is organized into four main sections:
 #### Adding a New Agent
 
 1. Choose provider category:
-   - Built-in Providers (Claude, GPT-4/OpenAI, Mock)
-   - OpenAI-Compatible (Cursor, Ollama, Groq, Together, OpenRouter)
-   - Custom Endpoint
+   - Provider-backed agent (select provider + model)
+   - OpenAI-compatible custom endpoint
 
 2. Configure settings:
-   - **Name**: Unique identifier (e.g., "my-claude-opus")
+   - **Name**: Unique identifier (e.g., "my-anthropic-sonnet")
    - **Model**: Model to use
    - **Max Tokens**: Maximum response length
    - **Output Directory**: Where to save responses
@@ -188,9 +187,9 @@ Organize agent outputs into separate folders:
 
 ```
 outputs/
-├── claude/
-├── gpt4/
-├── mock/
+├── provider-anthropic/
+├── provider-openai/
+├── provider-mock/
 └── my-custom-agent/
 ```
 

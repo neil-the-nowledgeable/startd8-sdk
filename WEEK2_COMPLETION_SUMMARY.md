@@ -159,11 +159,11 @@ Updated `AgentRegistry` to use the new `ProviderRegistry`:
 ```python
 registry = AgentRegistry()
 
-# Get agent by model name
-agent = registry.get_agent("gpt-4")
+# Get agent by provider:model spec
+agent = registry.get_agent("openai:gpt-4-turbo-preview")
 
 # Get agent by provider (uses default model)
-agent = registry.get_agent("claude")
+agent = registry.get_agent("anthropic")
 
 # List providers
 providers = registry.list_providers()
@@ -382,11 +382,11 @@ from startd8.job_queue import AgentRegistry
 
 registry = AgentRegistry()
 
-# Get agent by model name
-agent = registry.get_agent("gpt-4")
+# Get agent by provider:model spec (preferred)
+agent = registry.get_agent("openai:gpt-4-turbo-preview")
 
-# Or by provider name
-agent = registry.get_agent("claude")
+# Or by provider name (uses default model)
+agent = registry.get_agent("anthropic")
 ```
 
 ### Example 3: Custom Provider
@@ -486,12 +486,7 @@ assert "my-provider" in ProviderRegistry.list_providers()
 ### For SDK Users
 
 **No changes required!** Existing code continues to work:
-
-```python
-# Still works!
-from startd8.agents import ClaudeAgent
-agent = ClaudeAgent()
-```
+If you were constructing provider-specific agents directly, that continues to work, but the recommended approach is to create agents through `ProviderRegistry`.
 
 **To use new features:**
 

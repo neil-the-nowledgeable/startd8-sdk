@@ -1045,13 +1045,15 @@ def _validate_task_description(self, task: str) -> None:
 # benchmarks/bench_iterative_workflow.py
 
 import time
-from startd8.agents import MockAgent
+from startd8.providers import ProviderRegistry
 from startd8.iterative_workflow import IterativeDevWorkflow
 
 def benchmark_basic_workflow():
     """Benchmark basic 3-iteration workflow"""
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
     workflow = IterativeDevWorkflow(
-        MockAgent(), MockAgent(),
+        mock.create_agent("mock-model"), mock.create_agent("mock-model"),
         max_iterations=3
     )
     
@@ -1065,10 +1067,15 @@ def benchmark_basic_workflow():
 
 def benchmark_with_real_agents():
     """Benchmark with real API calls"""
-    from startd8.agents import ClaudeAgent, GPT4Agent
+    ProviderRegistry.discover()
+    anthropic = ProviderRegistry.get_provider("anthropic")
+    openai = ProviderRegistry.get_provider("openai")
+    anthropic.validate_config({})
+    openai.validate_config({})
     
     workflow = IterativeDevWorkflow(
-        ClaudeAgent(), GPT4Agent(),
+        anthropic.create_agent("claude-3-5-sonnet-20241022"),
+        openai.create_agent("gpt-4-turbo-preview"),
         max_iterations=2
     )
     

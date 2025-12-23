@@ -212,9 +212,18 @@ Based on your clarifications:
 
 ```python
 from pathlib import Path
+from startd8 import AgentFramework
 from startd8.document_enhancement import DocumentEnhancementChain
 from startd8.models import DocumentEnhancementConfig, AgentConfig, ErrorHandling
-from startd8.agents import GPT4Agent, ClaudeAgent
+from startd8.providers import ProviderRegistry
+
+framework = AgentFramework()
+
+ProviderRegistry.discover()
+openai = ProviderRegistry.get_provider("openai")
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai.validate_config({})
+anthropic.validate_config({})
 
 # Configure
 config = DocumentEnhancementConfig(
@@ -222,15 +231,15 @@ config = DocumentEnhancementConfig(
     enhancement_instructions="Add accessibility section and examples",
     agents=[
         AgentConfig(
-            agent_name="gpt4",
-            agent_instance=GPT4Agent(),
-            step_name="gpt4-enhancement",
+            agent_name="openai:gpt-4-turbo-preview",
+            agent_instance=openai.create_agent("gpt-4-turbo-preview"),
+            step_name="openai:gpt-4-turbo-preview-enhancement",
             order=0
         ),
         AgentConfig(
-            agent_name="claude",
-            agent_instance=ClaudeAgent(),
-            step_name="claude-refinement",
+            agent_name="anthropic:claude-3-5-sonnet-20241022",
+            agent_instance=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+            step_name="anthropic:claude-3-5-sonnet-20241022-refinement",
             order=1
         )
     ],
@@ -256,9 +265,9 @@ print(f"Output: {result.output_path}")
 enhanced_documents/
 └── 20241206_1430/              # Timestamped run
     ├── enhanced_final.md       # Final enhanced document
-    ├── step1_gpt4/             # Intermediate results (if enabled)
+    ├── step1_openai-gpt-4-turbo-preview/             # Intermediate results (if enabled)
     │   └── enhanced_1.md
-    └── step2_claude/
+    └── step2_anthropic-claude-3-5-sonnet-20241022/
         └── enhanced_2.md
 ```
 

@@ -197,7 +197,7 @@ budget_manager.create_budget(
 
 # Budget for specific project AND model
 budget_manager.create_budget(
-    name="gpt4-project-a",
+    name="openai-gpt-4-project-a",
     period=CostPeriod.DAILY,
     limit_amount=30.00,
     scope_project="project-a",

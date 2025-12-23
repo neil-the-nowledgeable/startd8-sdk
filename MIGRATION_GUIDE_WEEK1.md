@@ -33,9 +33,11 @@ This guide helps you migrate existing StartD8 SDK code to take advantage of the 
 
 #### Before
 ```python
-from startd8.agents import ClaudeAgent
+from startd8.providers import ProviderRegistry
 
-agent = ClaudeAgent()
+ProviderRegistry.discover()
+mock = ProviderRegistry.get_provider("mock")
+agent = mock.create_agent("mock-model")
 response_text, time_ms, tokens = agent.generate("Hello")
 print(response_text)
 ```
@@ -43,10 +45,12 @@ print(response_text)
 #### After (Async)
 ```python
 import asyncio
-from startd8.agents import ClaudeAgent
+from startd8.providers import ProviderRegistry
 
 async def main():
-    agent = ClaudeAgent()
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+    agent = mock.create_agent("mock-model")
     response_text, time_ms, tokens = await agent.agenerate("Hello")
     print(response_text)
 
@@ -68,26 +72,36 @@ asyncio.run(main())
 #### Before
 ```python
 def compare_agents(prompt):
-    claude = ClaudeAgent()
-    gpt4 = GPT4Agent()
+    from startd8.providers import ProviderRegistry
+
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+    agent_a = mock.create_agent("mock-model", name="agent-a")
+    agent_b = mock.create_agent("mock-model", name="agent-b")
     
     # Sequential execution - slow!
-    result1 = claude.generate(prompt)
-    result2 = gpt4.generate(prompt)
+    result1 = agent_a.generate(prompt)
+    result2 = agent_b.generate(prompt)
     
     return [result1, result2]
 ```
 
 #### After (Parallel Async)
 ```python
+import asyncio
+
 async def compare_agents(prompt):
-    claude = ClaudeAgent()
-    gpt4 = GPT4Agent()
+    from startd8.providers import ProviderRegistry
+
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+    agent_a = mock.create_agent("mock-model", name="agent-a")
+    agent_b = mock.create_agent("mock-model", name="agent-b")
     
     # Parallel execution - fast!
     results = await asyncio.gather(
-        claude.agenerate(prompt),
-        gpt4.agenerate(prompt)
+        agent_a.agenerate(prompt),
+        agent_b.agenerate(prompt)
     )
     
     return results
@@ -401,32 +415,35 @@ Use this checklist to ensure you're getting maximum performance:
 ### Before (Sync, Sequential)
 
 ```python
-from startd8.agents import ClaudeAgent, GPT4Agent
+from startd8.providers import ProviderRegistry
 from startd8.orchestration import Pipeline
 from startd8.benchmark import BenchmarkRunner
 from startd8.framework import AgentFramework
 
 def main():
     # Setup
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+
     framework = AgentFramework()
-    claude = ClaudeAgent()
-    gpt4 = GPT4Agent()
+    agent_a = mock.create_agent("mock-model", name="agent-a")
+    agent_b = mock.create_agent("mock-model", name="agent-b")
     
     # Compare agents
-    r1 = claude.generate("Test")
-    r2 = gpt4.generate("Test")
+    r1 = agent_a.generate("Test")
+    r2 = agent_b.generate("Test")
     
     # Run pipeline
     pipeline = Pipeline()
-    pipeline.add_step("step1", claude)
-    pipeline.add_step("step2", gpt4)
+    pipeline.add_step("step1", agent_a)
+    pipeline.add_step("step2", agent_b)
     result = pipeline.run("Input")
     
     # Run benchmark
     runner = BenchmarkRunner(framework)
     benchmark = runner.run_benchmark(
         "Test prompt",
-        [claude, gpt4],
+        [agent_a, agent_b],
         "test-benchmark"
     )
     
@@ -440,7 +457,7 @@ if __name__ == "__main__":
 
 ```python
 import asyncio
-from startd8.agents import ClaudeAgent, GPT4Agent
+from startd8.providers import ProviderRegistry
 from startd8.orchestration import Pipeline
 from startd8.benchmark import BenchmarkRunner
 from startd8.framework import AgentFramework
@@ -448,9 +465,12 @@ from startd8.events import ConsoleProgressHandler, MetricsHandler
 
 async def main():
     # Setup
+    ProviderRegistry.discover()
+    mock = ProviderRegistry.get_provider("mock")
+
     framework = AgentFramework()
-    claude = ClaudeAgent()
-    gpt4 = GPT4Agent()
+    agent_a = mock.create_agent("mock-model", name="agent-a")
+    agent_b = mock.create_agent("mock-model", name="agent-b")
     
     # Enable monitoring
     ConsoleProgressHandler.register()
@@ -458,21 +478,21 @@ async def main():
     
     # Compare agents (in parallel!)
     results = await asyncio.gather(
-        claude.agenerate("Test"),
-        gpt4.agenerate("Test")
+        agent_a.agenerate("Test"),
+        agent_b.agenerate("Test")
     )
     
     # Run pipeline (async)
     pipeline = Pipeline()
-    pipeline.add_step("step1", claude)
-    pipeline.add_step("step2", gpt4)
+    pipeline.add_step("step1", agent_a)
+    pipeline.add_step("step2", agent_b)
     result = await pipeline.arun("Input")
     
     # Run benchmark (in parallel!)
     runner = BenchmarkRunner(framework)
     benchmark = await runner.arun_benchmark(
         "Test prompt",
-        [claude, gpt4],
+        [agent_a, agent_b],
         "test-benchmark",
         parallel=True
     )

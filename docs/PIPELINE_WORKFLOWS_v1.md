@@ -49,7 +49,14 @@ After execution, a pipeline returns:
 ### Manual Pipeline Creation
 
 ```python
-from startd8 import Pipeline, ClaudeAgent, GPT4Agent
+from startd8 import Pipeline
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
 
 # Create pipeline
 pipeline = Pipeline(name="design-implement")
@@ -57,12 +64,12 @@ pipeline = Pipeline(name="design-implement")
 # Add steps
 pipeline.add_step(
     name="designer",
-    agent=ClaudeAgent(name="designer", model="claude-3-opus-20240229")
+    agent=anthropic.create_agent("claude-3-opus-20240229", name="anthropic:claude-3-opus-20240229")
 )
 
 pipeline.add_step(
     name="implementer",
-    agent=GPT4Agent(name="implementer", model="gpt-4-turbo-preview"),
+    agent=openai.create_agent("gpt-4-turbo-preview", name="openai:gpt-4-turbo-preview"),
     transform=lambda design: f"Implement this design:\n\n{design}"
 )
 
@@ -83,11 +90,18 @@ Startd8 provides pre-built templates for common workflows:
 Two-step workflow: plan then implement.
 
 ```python
-from startd8 import WorkflowTemplates, ClaudeAgent, GPT4Agent
+from startd8 import WorkflowTemplates
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
 
 pipeline = WorkflowTemplates.planner_implementer(
-    planner=ClaudeAgent(),
-    implementer=GPT4Agent()
+    planner_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    implementer_agent=openai.create_agent("gpt-4-turbo-preview"),
 )
 
 result = pipeline.run("Create a REST API for user management")
@@ -98,9 +112,17 @@ result = pipeline.run("Create a REST API for user management")
 Two-step workflow: review then improve.
 
 ```python
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 pipeline = WorkflowTemplates.code_review(
-    reviewer=ClaudeAgent(),
-    improver=GPT4Agent()
+    reviewer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    improver_agent=openai.create_agent("gpt-4-turbo-preview"),
 )
 
 result = pipeline.run(code_to_review)
@@ -111,10 +133,18 @@ result = pipeline.run(code_to_review)
 Three-step workflow: draft → review → polish.
 
 ```python
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 pipeline = WorkflowTemplates.design_review_chain(
-    drafter=ClaudeAgent(model="claude-sonnet-4-20250514"),
-    reviewer=GPT4Agent(model="gpt-4o"),
-    final_reviewer=ComposerAgent()
+    drafter_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    reviewer_agent=openai.create_agent("gpt-4o"),
+    final_reviewer_agent=anthropic.create_agent("claude-3-opus-20240229")
 )
 
 result = pipeline.run("Design a feature for session management")
@@ -125,10 +155,19 @@ result = pipeline.run("Design a feature for session management")
 Transforms modify the output from one step before passing to the next:
 
 ```python
+# Assumes `pipeline` is a Pipeline instance.
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 # Simple transform - add context
 pipeline.add_step(
     name="implementer",
-    agent=GPT4Agent(),
+    agent=openai.create_agent("gpt-4-turbo-preview"),
     transform=lambda spec: f"Based on this specification:\n\n{spec}\n\nImplement the code."
 )
 
@@ -148,7 +187,7 @@ def extract_requirements(output):
 
 pipeline.add_step(
     name="validator",
-    agent=ClaudeAgent(),
+    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
     transform=extract_requirements
 )
 ```
@@ -202,9 +241,9 @@ comparison = PipelineComparison(framework)
 
 # Compare different agent combinations
 results = comparison.compare([
-    ("claude-claude", pipeline_claude_claude),
-    ("claude-gpt4", pipeline_claude_gpt4),
-    ("gpt4-gpt4", pipeline_gpt4_gpt4),
+    ("anthropic-anthropic", pipeline_anthropic_anthropic),
+    ("anthropic-openai", pipeline_anthropic_openai),
+    ("openai-openai", pipeline_openai_openai),
 ])
 
 # View comparison metrics
@@ -217,13 +256,19 @@ for name, result in results.items():
 ### Conditional Steps
 
 ```python
+from startd8.providers import ProviderRegistry
+
 def should_refine(output):
     # Check if output needs refinement
     return len(output) < 500 or 'TODO' in output
 
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+anthropic.validate_config({})
+
 pipeline.add_step(
     name="refiner",
-    agent=ClaudeAgent(),
+    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
     condition=should_refine  # Only runs if condition is True
 )
 ```
@@ -245,11 +290,18 @@ pipeline = Pipeline(
 ```python
 # Planned for future versions
 from startd8 import ParallelPipeline
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
 
 parallel = ParallelPipeline()
 parallel.add_parallel_steps([
-    ("claude", ClaudeAgent()),
-    ("gpt4", GPT4Agent()),
+    ("anthropic:claude-3-5-sonnet-20241022", anthropic.create_agent("claude-3-5-sonnet-20241022")),
+    ("openai:gpt-4-turbo-preview", openai.create_agent("gpt-4-turbo-preview")),
 ])
 parallel.add_merge_step(merge_function)
 ```
@@ -341,10 +393,18 @@ with open("pipeline_report.md", "w") as f:
 ### Feature Design
 
 ```python
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 pipeline = WorkflowTemplates.design_review_chain(
-    drafter=ClaudeAgent(model="claude-sonnet-4-20250514"),
-    reviewer=GPT4Agent(model="gpt-4o"),
-    final_reviewer=ClaudeAgent(model="claude-3-opus-20240229")
+    drafter_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    reviewer_agent=openai.create_agent("gpt-4o"),
+    final_reviewer_agent=anthropic.create_agent("claude-3-opus-20240229")
 )
 
 result = pipeline.run("""
@@ -358,17 +418,25 @@ Design a session management system for a multiplayer game:
 ### Code Generation
 
 ```python
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 pipeline = Pipeline(name="code-gen")
 
-pipeline.add_step(name="architect", agent=ClaudeAgent())
+pipeline.add_step(name="architect", agent=anthropic.create_agent("claude-3-5-sonnet-20241022"))
 pipeline.add_step(
     name="coder",
-    agent=GPT4Agent(),
+    agent=openai.create_agent("gpt-4-turbo-preview"),
     transform=lambda arch: f"Write code for:\n{arch}"
 )
 pipeline.add_step(
     name="reviewer",
-    agent=ClaudeAgent(),
+    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
     transform=lambda code: f"Review and fix:\n{code}"
 )
 
@@ -378,25 +446,34 @@ result = pipeline.run("Create a user authentication module")
 ### Documentation
 
 ```python
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 pipeline = Pipeline(name="docs")
 
 pipeline.add_step(
     name="outline",
-    agent=ClaudeAgent(),
+    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
     transform=lambda topic: f"Create outline for: {topic}"
 )
 pipeline.add_step(
     name="writer",
-    agent=GPT4Agent(),
+    agent=openai.create_agent("gpt-4-turbo-preview"),
     transform=lambda outline: f"Write documentation:\n{outline}"
 )
 pipeline.add_step(
     name="editor",
-    agent=ClaudeAgent(),
+    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
     transform=lambda doc: f"Edit for clarity:\n{doc}"
 )
 
 result = pipeline.run("REST API documentation for user service")
 ```
+
 
 

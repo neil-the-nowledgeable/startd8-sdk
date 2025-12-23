@@ -42,7 +42,7 @@ User Question (design_question.md):
                     ↓
     ┌───────────────┼───────────────┐
     ↓               ↓               ↓
-[Claude]       [GPT-4]        [Gemini]
+[Anthropic]    [OpenAI]       [Gemini]
 "Redis for     "PostgreSQL    "Hybrid: Redis
  speed..."      for ACID..."   for cache..."
     ↓               ↓               ↓
@@ -112,7 +112,7 @@ Step 2: Select Ready Agents
 ├─ Multi-select agents (checkboxes)
 ├─ Minimum 2 agents recommended
 ├─ Show agent models for context
-└─ Preview: "Getting perspectives from: Claude, GPT-4, Gemini"
+└─ Preview: "Getting perspectives from: Anthropic, OpenAI, Gemini"
 
 Step 3: Configure Discussion Mode
 ├─ Parallel Mode: All agents respond independently (faster)
@@ -128,7 +128,7 @@ Step 4: Configure Synthesis (Optional)
 
 Step 5: Execute Discussion
 ├─ Show progress for each agent
-├─ Display: "Asking Claude...", "Asking GPT-4..."
+├─ Display: "Asking Anthropic...", "Asking OpenAI..."
 ├─ Real-time response streaming (if supported)
 └─ Token usage and cost tracking
 
@@ -433,7 +433,7 @@ Should we use Redis or PostgreSQL for session storage?
 
 ---
 
-## Perspective 1: Claude (claude-sonnet-4-20250514)
+## Perspective 1: Anthropic (claude-sonnet-4-20250514)
 
 Redis excels for session storage due to its in-memory architecture...
 
@@ -444,7 +444,7 @@ Redis excels for session storage due to its in-memory architecture...
 
 ---
 
-## Perspective 2: GPT-4 (gpt-4o)
+## Perspective 2: OpenAI (gpt-4o)
 
 PostgreSQL offers advantages for session storage in certain contexts...
 

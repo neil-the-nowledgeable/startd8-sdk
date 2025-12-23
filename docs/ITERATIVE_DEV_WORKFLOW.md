@@ -23,12 +23,18 @@ This pattern is perfect for:
 ### Basic Usage
 
 ```python
-from startd8.agents import ClaudeAgent, GPT4Agent
 from startd8.iterative_workflow import IterativeDevWorkflow
+from startd8.providers import ProviderRegistry
 
 # Initialize agents
-developer = ClaudeAgent()
-reviewer = GPT4Agent()
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+developer = anthropic.create_agent("claude-3-5-sonnet-20241022", name="developer")
+reviewer = openai.create_agent("gpt-4-turbo-preview", name="reviewer")
 
 # Create workflow
 workflow = IterativeDevWorkflow(
@@ -55,7 +61,7 @@ else:
 ### From TUI
 
 ```bash
-startd8-tui
+startd8 tui
 ```
 
 Select: **`🔄 Iterative Dev Workflow (Dev → Review → Fix)`**
@@ -184,7 +190,7 @@ class IterativeDevWorkflow:
 ```
 
 **Parameters:**
-- `developer_agent`: Agent that implements tasks (e.g., Claude, GPT-4)
+- `developer_agent`: Agent that implements tasks (e.g., an Anthropic or OpenAI agent)
 - `reviewer_agent`: Agent that reviews code (different model recommended)
 - `max_iterations`: Maximum dev-review cycles (default: 3)
 - `dev_prompt_template`: Custom template for developer prompts
@@ -236,11 +242,17 @@ class ReviewFeedback:
 ### Example 1: Simple Function with Validation
 
 ```python
-from startd8.agents import ClaudeAgent, GPT4Agent
 from startd8.iterative_workflow import IterativeDevWorkflow
+from startd8.providers import ProviderRegistry
 
-dev = ClaudeAgent()
-reviewer = GPT4Agent()
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+dev = anthropic.create_agent("claude-3-5-sonnet-20241022")
+reviewer = openai.create_agent("gpt-4-turbo-preview")
 
 workflow = IterativeDevWorkflow(dev, reviewer, max_iterations=3)
 
@@ -320,9 +332,17 @@ REVIEW:
 [Detailed security analysis]
 """
 
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 workflow = IterativeDevWorkflow(
-    developer_agent=ClaudeAgent(),
-    reviewer_agent=GPT4Agent(),
+    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
     max_iterations=5,  # More iterations for security
     review_prompt_template=security_review_prompt
 )
@@ -359,9 +379,17 @@ def print_progress(iteration):
             for issue in iteration.feedback.issues:
                 print(f"  • {issue}")
 
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
 workflow = IterativeDevWorkflow(
-    developer_agent=ClaudeAgent(),
-    reviewer_agent=GPT4Agent(),
+    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
     max_iterations=3,
     on_iteration_complete=print_progress  # Add callback
 )
@@ -372,11 +400,13 @@ result = workflow.run("Implement a binary search function")
 ### Example 5: Using Mock Agents (No API Keys)
 
 ```python
-from startd8.agents import MockAgent
+from startd8.providers import ProviderRegistry
 
 # Perfect for testing without API costs!
-dev = MockAgent(agent_name="mock-dev")
-reviewer = MockAgent(agent_name="mock-reviewer")
+ProviderRegistry.discover()
+mock = ProviderRegistry.get_provider("mock")
+dev = mock.create_agent("mock-model", name="mock-dev")
+reviewer = mock.create_agent("mock-model", name="mock-reviewer")
 
 workflow = IterativeDevWorkflow(dev, reviewer, max_iterations=2)
 
@@ -460,16 +490,25 @@ result = workflow.run(task, context={
 **Why?** Different models have different strengths.
 
 ```python
-# Good: Diverse perspectives
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+# Good: Diverse perspectives (different providers/models)
 workflow = IterativeDevWorkflow(
-    developer_agent=ClaudeAgent(),  # Great at implementation
-    reviewer_agent=GPT4Agent()       # Great at finding issues
+    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
 )
 
-# Okay but less effective
+# Okay but less effective: same provider/model for both roles
+same = openai.create_agent("gpt-4-turbo-preview")
 workflow = IterativeDevWorkflow(
-    developer_agent=ClaudeAgent(),
-    reviewer_agent=ClaudeAgent()  # Same model
+    developer_agent=same,
+    reviewer_agent=same,
 )
 ```
 
@@ -598,11 +637,17 @@ with open(filepath) as f:
 1. Reduce max iterations
 2. Use smaller/cheaper models for initial iterations:
    ```python
-   # Cheap model for drafts
-   dev_agent = GPT4MiniAgent()  # Hypothetical cheaper model
+   from startd8.providers import ProviderRegistry
+
+   ProviderRegistry.discover()
+   openai = ProviderRegistry.get_provider("openai")
+   openai.validate_config({})
+
+   # Cheaper model for drafts
+   dev_agent = openai.create_agent("gpt-4o-mini")
    
-   # Expensive model only for final review
-   review_agent = GPT4Agent()
+   # Stronger model only for final review
+   review_agent = openai.create_agent("gpt-4-turbo-preview")
    ```
 
 3. Simplify prompts (remove verbose instructions)
@@ -610,7 +655,7 @@ with open(filepath) as f:
 ### Issue: Timeout or Slow Performance
 
 **Solutions:**
-1. Use faster models (Claude 3 Haiku, GPT-3.5)
+1. Use faster models (e.g., `claude-3-haiku-20240307`, `gpt-4o-mini`)
 2. Reduce task complexity
 3. Split into multiple smaller workflows
 
@@ -622,13 +667,21 @@ with open(filepath) as f:
 
 ```python
 # Stage 1: Functionality review
-func_reviewer = ClaudeAgent()
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+func_reviewer = anthropic.create_agent("claude-3-5-sonnet-20241022")
 func_workflow = IterativeDevWorkflow(dev, func_reviewer, max_iterations=3)
 result1 = func_workflow.run(task)
 
 if result1.successful:
     # Stage 2: Security review
-    sec_reviewer = GPT4Agent()  # Different model
+    sec_reviewer = openai.create_agent("gpt-4-turbo-preview")  # Different provider/model
     sec_workflow = IterativeDevWorkflow(
         dev,
         sec_reviewer,
@@ -710,13 +763,24 @@ for i, iteration in enumerate(result.iterations, 1):
 ### Comparing Workflows
 
 ```python
+from startd8.providers import ProviderRegistry
+
 results = []
 
-for agent_pair in [(claude, gpt4), (gpt4, claude), (claude, claude)]:
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+dev_agent = anthropic.create_agent("claude-3-5-sonnet-20241022", name="dev")
+review_agent = openai.create_agent("gpt-4-turbo-preview", name="review")
+
+for agent_pair in [(dev_agent, review_agent), (review_agent, dev_agent), (dev_agent, dev_agent)]:
     workflow = IterativeDevWorkflow(*agent_pair, max_iterations=3)
     result = workflow.run(task)
     results.append({
-        'pair': f"{agent_pair[0].agent_name} + {agent_pair[1].agent_name}",
+        'pair': f"{agent_pair[0].name} + {agent_pair[1].name}",
         'successful': result.successful,
         'iterations': result.total_iterations,
         'cost': result.total_cost
@@ -783,7 +847,7 @@ A: Not directly, but you can save `IterativeWorkflowResult` and create a new wor
 A: Regular distribution runs agents independently. Iterative workflow has agents collaborate with feedback loops.
 
 **Q: How much does this cost?**  
-A: Depends on models and iterations. Example: 3 iterations with Claude + GPT-4 on a 500-token task ≈ $0.10-0.50.
+A: Depends on models and iterations. Example: 3 iterations with an Anthropic dev agent and an OpenAI review agent on a ~500-token task ≈ $0.10-0.50.
 
 ---
 

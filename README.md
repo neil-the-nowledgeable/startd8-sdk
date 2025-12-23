@@ -1,12 +1,12 @@
 # StartDate SDK
 
-**Version 0.2.0**
+**Version 0.4.0**
 
 A comprehensive Python SDK for managing multi-LLM agent workflows, benchmarking, and prompt version control in the StartDate project.
 
 ## Features
 
-- 🤖 **Multi-Agent Support**: Built-in support for Claude, GPT-4, and Gemini
+- 🤖 **Multi-Agent Support**: Provider-based agents via `ProviderRegistry` (Anthropic, OpenAI, Gemini, Ollama, Mock)
 - 📝 **Prompt Version Control**: Track and manage prompts with semantic versioning
 - ⏱️ **Response Tracking**: Record responses with timing and token usage
 - 📊 **Benchmarking**: Compare multiple LLMs on the same prompts
@@ -64,33 +64,41 @@ pip install -e ".[dev]"
 ### Python API
 
 ```python
-from startdate import AgentFramework, ClaudeAgent, GPT4Agent
-from startdate.benchmark import BenchmarkRunner
+from startd8 import AgentFramework
+from startd8.benchmark import BenchmarkRunner
+from startd8.providers import ProviderRegistry
 
 # Initialize framework
 framework = AgentFramework()
 
-# Create a versioned prompt
-prompt = framework.create_prompt(
-    content="Implement a user authentication system with JWT tokens",
-    version="1.0.0",
-    tags=["auth", "backend", "security"]
-)
+# Prompt to benchmark
+prompt_text = "Implement a user authentication system with JWT tokens"
 
-# Set up agents
-claude = ClaudeAgent()
-gpt4 = GPT4Agent()
+# Set up agents (provider:model)
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+if not anthropic or not openai:
+    raise RuntimeError("Required providers not available")
+anthropic.validate_config({})
+openai.validate_config({})
+
+agents = [
+    anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    openai.create_agent("gpt-4-turbo-preview"),
+]
 
 # Run benchmark
 runner = BenchmarkRunner(framework)
 results = runner.run_benchmark(
-    prompt_content=prompt.content,
-    agents=[claude, gpt4],
-    benchmark_name="Auth System Comparison"
+    prompt_content=prompt_text,
+    agents=agents,
+    benchmark_name="Auth System Comparison",
+    tags=["auth", "backend", "security"],
 )
 
-# Compare responses
-comparison = framework.compare_responses(prompt.id)
+# Compare responses (also available as results["comparison"])
+comparison = results["comparison"]
 print(f"Average response time: {comparison['avg_response_time_ms']}ms")
 print(f"Total tokens used: {comparison['total_tokens']}")
 ```
@@ -99,29 +107,29 @@ print(f"Total tokens used: {comparison['total_tokens']}")
 
 ```bash
 # Initialize framework
-startdate init
+startd8 init
 
 # Create a prompt
-startdate create-prompt "Write a REST API for user registration" \
+startd8 create-prompt "Write a REST API for user registration" \
     --version 1.0.0 \
     --tag api --tag backend
 
 # List prompts
-startdate list-prompts
+startd8 list-prompts
 
 # Run a benchmark (using mock agents for testing)
-startdate run-benchmark <prompt-id> \
+startd8 run-benchmark <prompt-id> \
     --name "User Registration API" \
-    --agent mock
+    --agent mock:mock-model
 
 # Compare responses
-startdate compare <prompt-id>
+startd8 compare <prompt-id>
 
 # Generate markdown report
-startdate compare <prompt-id> --output report.md
+startd8 compare <prompt-id> --output report.md
 
 # Show statistics
-startdate stats
+startd8 stats
 ```
 
 ## Architecture
@@ -137,7 +145,7 @@ startdate stats
 ### Data Models
 
 ```python
-from startdate.models import (
+from startd8.models import (
     Prompt,           # Versioned prompt with tags and metadata
     AgentResponse,    # Agent response with timing and tokens
     Benchmark,        # Benchmark definition and status
@@ -152,18 +160,19 @@ from startdate.models import (
 
 ```bash
 # API Keys
-export ANTHROPIC_API_KEY="your-claude-api-key"
+export ANTHROPIC_API_KEY="your-anthropic-api-key"
 export OPENAI_API_KEY="your-openai-api-key"
 export GOOGLE_API_KEY="your-gemini-api-key"
 
 # Storage location
-export STARTDATE_DATA_DIR="$HOME/.startdate"
+# Python: pass `storage_dir` to AgentFramework
+# CLI: pass `--dir` to commands (e.g., `startd8 init --dir "$HOME/.startd8"`)
 ```
 
 ### Storage Structure
 
 ```
-.startdate/
+.startd8/
 ├── prompts/
 │   ├── prompt-abc123.json
 │   └── prompt-def456.json
@@ -179,11 +188,12 @@ export STARTDATE_DATA_DIR="$HOME/.startdate"
 ### Example 1: Compare Three Models
 
 ```python
-from startdate import AgentFramework, ClaudeAgent, GPT4Agent, MockAgent
+from startd8 import AgentFramework
+from startd8.providers import ProviderRegistry
 from pathlib import Path
 
 # Initialize
-framework = AgentFramework(Path("./.startdate"))
+framework = AgentFramework(Path("./.startd8"))
 
 # Create prompt
 prompt = framework.create_prompt(
@@ -192,12 +202,21 @@ prompt = framework.create_prompt(
     tags=["database", "design", "ecommerce"]
 )
 
-# Initialize agents
-agents = [
-    ClaudeAgent(name="claude-sonnet"),
-    GPT4Agent(name="gpt4-turbo"),
-    MockAgent(name="baseline")  # For testing
+# Initialize agents (provider:model)
+ProviderRegistry.discover()
+agent_specs = [
+    ("anthropic", "claude-3-5-sonnet-20241022", "anthropic-sonnet"),
+    ("openai", "gpt-4-turbo-preview", "openai-gpt-4-turbo-preview"),
+    ("mock", "mock-model", "baseline"),
 ]
+
+agents = []
+for provider_name, model, name in agent_specs:
+    provider = ProviderRegistry.get_provider(provider_name)
+    if not provider:
+        raise RuntimeError(f"Unknown provider: {provider_name}")
+    provider.validate_config({})
+    agents.append(provider.create_agent(model, name=name))
 
 # Get responses
 for agent in agents:
@@ -222,7 +241,7 @@ print("By Efficiency:", comparison['rankings']['by_token_efficiency'])
 ### Example 2: Track Development Across Branches
 
 ```python
-from startdate import AgentFramework
+from startd8 import AgentFramework
 import subprocess
 
 framework = AgentFramework()
@@ -234,19 +253,20 @@ prompt = framework.create_prompt(
     tags=["feature", "auth", "password-reset"]
 )
 
-# Assign to different model branches
-models = {
-    "claude": "feature/password-reset-claude",
-    "gpt4": "feature/password-reset-gpt4",
-    "gemini": "feature/password-reset-gemini"
+# Assign to different provider:model branches
+agent_specs = {
+    "anthropic:claude-3-5-sonnet-20241022": "feature/password-reset-anthropic-claude-3-5",
+    "openai:gpt-4-turbo-preview": "feature/password-reset-openai-gpt-4-turbo-preview",
+    "gemini:gemini-1.5-pro": "feature/password-reset-gemini-1-5-pro",
 }
 
-for model, branch in models.items():
+for spec, branch in agent_specs.items():
     # Create git branch
     subprocess.run(["git", "checkout", "-b", branch])
     
     # Record metadata
-    prompt.metadata[model] = {
+    safe_key = spec.replace(":", "_").replace("/", "_")
+    prompt.metadata[safe_key] = {
         "branch": branch,
         "status": "in_progress"
     }
@@ -257,8 +277,8 @@ framework.storage.save_prompt(prompt)
 ### Example 3: Generate Comparison Reports
 
 ```python
-from startdate import AgentFramework
-from startdate.benchmark import ComparisonReport
+from startd8 import AgentFramework
+from startd8.benchmark import ComparisonReport
 from pathlib import Path
 
 framework = AgentFramework()
@@ -286,13 +306,13 @@ print(f"Total cost: ${metrics.total_cost_estimate:.2f}")
 
 1. **Create Feature Prompt**
    ```bash
-   startdate create-prompt "Feature description" --tag feature-name
+   startd8 create-prompt "Feature description" --tag feature-name
    ```
 
 2. **Create Model Branches**
    ```bash
-   git checkout -b feature/name-claude
-   git checkout -b feature/name-gpt4
+   git checkout -b feature/name-anthropic
+   git checkout -b feature/name-openai
    git checkout -b feature/name-gemini
    ```
 
@@ -302,7 +322,7 @@ print(f"Total cost: ${metrics.total_cost_estimate:.2f}")
 
 4. **Compare Implementations**
    ```bash
-   startdate compare <prompt-id> --output comparison.md
+   startd8 compare <prompt-id> --output comparison.md
    ```
 
 5. **Review and Merge**
@@ -340,20 +360,17 @@ report = framework.export_benchmark_report(benchmark_id, output_file)
 ### Agents
 
 ```python
-# Claude
-agent = ClaudeAgent(
-    name="claude",
-    model="claude-3-5-sonnet-20241022",
-    api_key=None,  # Uses ANTHROPIC_API_KEY
-    max_tokens=4096
-)
+from startd8.providers import ProviderRegistry
 
-# GPT-4
-agent = GPT4Agent(
-    name="gpt4",
-    model="gpt-4-turbo-preview",
-    api_key=None,  # Uses OPENAI_API_KEY
-    max_tokens=4096
+ProviderRegistry.discover()
+
+# ProviderRegistry (preferred)
+anthropic = ProviderRegistry.get_provider("anthropic")
+anthropic.validate_config({})
+agent = anthropic.create_agent(
+    "claude-3-5-sonnet-20241022",
+    name="anthropic-sonnet",
+    max_tokens=4096,
 )
 
 # Generate response

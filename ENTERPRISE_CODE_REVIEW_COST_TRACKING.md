@@ -406,8 +406,8 @@ def record_cost(
         
     Example:
         record = tracker.record_cost(
-            agent_name="claude",
-            model="claude-3-5-sonnet",
+            agent_name="anthropic:claude-3-5-sonnet-20241022",
+            model="claude-3-5-sonnet-20241022",
             input_tokens=100,
             output_tokens=50,
             input_cost=0.001,

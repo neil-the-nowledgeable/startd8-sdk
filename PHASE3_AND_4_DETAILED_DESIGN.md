@@ -1433,14 +1433,14 @@ async def stream_to_callback(
     
     Args:
         streamer: ResponseStreamer instance
-        provider: "claude" or "openai"
+        provider: "anthropic" or "openai"
         client: API client
         model: Model name
         prompt: Prompt text
         on_chunk: Callback for each chunk
         on_complete: Callback when complete
     """
-    if provider == "claude":
+    if provider == "anthropic":
         stream = streamer.stream_claude(client, model, prompt)
     elif provider == "openai":
         stream = streamer.stream_openai(client, model, prompt)

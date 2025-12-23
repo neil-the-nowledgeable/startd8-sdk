@@ -6,7 +6,7 @@
 
 ## Overview
 
-The Startd8 SDK is a comprehensive Python framework for managing multi-LLM agent workflows, benchmarking, and prompt version control. It provides a unified interface for working with multiple AI providers (Claude, GPT-4, OpenAI-compatible endpoints) and includes tools for comparing, tracking, and managing AI-generated outputs.
+The Startd8 SDK is a comprehensive Python framework for managing multi-LLM agent workflows, benchmarking, and prompt version control. It provides a unified interface for working with multiple AI providers (Anthropic, OpenAI, OpenAI-compatible endpoints) and includes tools for comparing, tracking, and managing AI-generated outputs.
 
 ## Core Architecture
 
@@ -90,7 +90,7 @@ Abstract base class and implementations for LLM providers:
 | `MockAgent` | Testing | Simulated responses for testing |
 
 **Agent Status Types:**
-- **Built-in**: Pre-configured agents (Claude, GPT-4, Mock)
+- **Built-in**: Provider-backed agents via `ProviderRegistry` (Anthropic, OpenAI, Gemini, Ollama, Mock)
 - **User added**: Custom-configured agents created by users
 
 ### 3. Orchestration (`orchestration.py`)
@@ -98,13 +98,20 @@ Abstract base class and implementations for LLM providers:
 Multi-step pipeline workflows:
 
 ```python
-from startd8 import Pipeline, WorkflowTemplates
+from startd8 import WorkflowTemplates
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
 
 # Use pre-built template
 pipeline = WorkflowTemplates.design_review_chain(
-    drafter=claude_agent,
-    reviewer=gpt4_agent,
-    final_reviewer=composer_agent
+    drafter_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
+    final_reviewer_agent=anthropic.create_agent("claude-3-opus-20240229"),
 )
 
 result = pipeline.run("Design a feature for X")
@@ -273,5 +280,6 @@ setup_logging(level="DEBUG")
 3. **Web Interface**: REST API and web UI
 4. **Plugin System**: Third-party agent plugins
 5. **Streaming**: Streaming response support
+
 
 

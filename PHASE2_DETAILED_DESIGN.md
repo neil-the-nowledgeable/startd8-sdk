@@ -595,7 +595,11 @@ class AuditLogger:
     Example:
         audit = AuditLogger()
         audit.log_api_key_access("ANTHROPIC_API_KEY", "read")
-        audit.log_agent_invocation("claude", prompt_hash="abc123", tokens=1500)
+        audit.log_agent_invocation(
+            "anthropic:claude-3-5-sonnet-20241022",
+            prompt_hash="abc123",
+            tokens=1500,
+        )
     """
     
     def __init__(
@@ -1953,7 +1957,7 @@ class ClaudeAgent(BaseAgent):
     
     def __init__(
         self,
-        name: str = "claude",
+        name: str = "anthropic:claude-3-opus-20240229",
         model: str = "claude-3-opus-20240229",
         api_key: Optional[str] = None,
         max_tokens: int = 4096,

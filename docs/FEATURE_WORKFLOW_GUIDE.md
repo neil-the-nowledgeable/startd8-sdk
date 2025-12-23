@@ -49,7 +49,7 @@ from pathlib import Path
 framework = AgentFramework()
 config = JobQueueConfig(
     watch_folder=Path("~/my-jobs").expanduser(),
-    default_agents=["claude"]
+    default_agents=["mock:mock-model"]
 )
 
 # Process
@@ -136,7 +136,7 @@ Each job file contains:
       "game_repo": "/path/to/repo"
     }
   },
-  "agents": ["claude"],
+  "agents": ["anthropic:claude-3-5-sonnet-20241022"],
   "priority": 8,
   "status": "pending"
 }
@@ -279,11 +279,11 @@ python3 scripts/generate_feature_jobs.py --all
 Use different agents for different tasks:
 
 ```bash
-# Use GPT-4 instead of Claude
-python3 scripts/generate_feature_jobs.py --feature 1 --agent gpt4
+# Use an explicit provider:model spec
+python3 scripts/generate_feature_jobs.py --feature 1 --agent openai:gpt-4-turbo-preview
 
-# Use Composer
-python3 scripts/generate_feature_jobs.py --feature 1 --agent composer
+# Or another provider/model
+python3 scripts/generate_feature_jobs.py --feature 1 --agent anthropic:claude-3-5-sonnet-20241022
 ```
 
 ### Multiple Agents per Job
@@ -292,7 +292,7 @@ Edit the job file to use multiple agents:
 
 ```json
 {
-  "agents": ["claude", "gpt4"],
+  "agents": ["anthropic:claude-3-5-sonnet-20241022", "openai:gpt-4-turbo-preview"],
   ...
 }
 ```
@@ -440,17 +440,23 @@ python3 -m json.tool job_file.json
 
 **Check agent configuration:**
 ```python
-# Test agent directly
-agent = ClaudeAgent()
-response, time, tokens = agent.generate("Test prompt")
-print(response)
+from startd8.providers import ProviderRegistry
+
+# Validate provider config and test a call
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+anthropic.validate_config({})
+
+agent = anthropic.create_agent("claude-3-5-sonnet-20241022")
+response_text, time_ms, token_usage = agent.generate("Test prompt")
+print(response_text)
 ```
 
 **Check API keys:**
 ```bash
-echo $ANTHROPIC_API_KEY  # Claude
-echo $OPENAI_API_KEY     # GPT-4
-echo $CURSOR_API_KEY     # Composer
+echo $ANTHROPIC_API_KEY
+echo $OPENAI_API_KEY
+echo $GOOGLE_API_KEY
 ```
 
 ### Code Changes Not Applying

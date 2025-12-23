@@ -529,7 +529,7 @@ def run_multi_agent_review(
     Example:
         result = run_multi_agent_review(
             doc_path=Path("test_doc.md"),
-            agent_ids=["claude", "gpt4"],
+            agent_ids=["anthropic:claude-3-5-sonnet-20241022", "openai:gpt-4-turbo-preview"],
             question="Review this design for security issues",
             mode=ChatMode.PARALLEL
         )
@@ -901,7 +901,7 @@ Should we use Redis or PostgreSQL for session storage?
 
 ---
 
-## Perspective 1: Claude (claude-sonnet-4-20250514)
+## Perspective 1: Anthropic (claude-sonnet-4-20250514)
 
 **Verdict:** Minor suggestions
 
@@ -919,7 +919,7 @@ Redis excels for session storage due to its in-memory architecture. Sub-millisec
 
 ---
 
-## Perspective 2: GPT-4 (gpt-4o)
+## Perspective 2: OpenAI (gpt-4o)
 
 **Verdict:** Minor suggestions
 

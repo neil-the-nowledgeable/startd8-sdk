@@ -52,9 +52,21 @@ I've created a comprehensive **iterative development workflow** system that impl
 ### **The Loop**
 
 ```python
+from startd8.iterative_workflow import IterativeDevWorkflow
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+developer = anthropic.create_agent("claude-3-5-sonnet-20241022")
+reviewer = openai.create_agent("gpt-4-turbo-preview")
+
 workflow = IterativeDevWorkflow(
-    developer_agent=ClaudeAgent(),  # Implements code
-    reviewer_agent=GPT4Agent(),      # Reviews & finds issues
+    developer_agent=developer,       # Implements code
+    reviewer_agent=reviewer,         # Reviews & finds issues
     max_iterations=3                 # Up to 3 attempts
 )
 
@@ -62,9 +74,9 @@ task = "Implement email validation function"
 result = workflow.run(task)
 
 # Automatic loop:
-# Iteration 1: Claude implements → GPT-4 reviews → Issues found
-# Iteration 2: Claude fixes issues → GPT-4 reviews → Still has issues  
-# Iteration 3: Claude fixes again → GPT-4 reviews → PASSES!
+# Iteration 1: Dev implements → Review checks → Issues found
+# Iteration 2: Dev fixes issues → Review re-checks → Still has issues  
+# Iteration 3: Dev fixes again → Review re-checks → PASSES!
 
 print(f"Success: {result.successful}")
 print(f"Final code:\n{result.final_code}")
@@ -153,9 +165,20 @@ Check for:
 ...[detailed security checks]...
 """
 
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+dev_agent = anthropic.create_agent("claude-3-5-sonnet-20241022")
+review_agent = openai.create_agent("gpt-4-turbo-preview")
+
 workflow = IterativeDevWorkflow(
-    developer_agent=claude,
-    reviewer_agent=gpt4,
+    developer_agent=dev_agent,
+    reviewer_agent=review_agent,
     max_iterations=5,
     review_prompt_template=security_review,
     on_iteration_complete=lambda i: print(f"Completed iteration {i.iteration_number}")
@@ -169,12 +192,21 @@ workflow = IterativeDevWorkflow(
 ### **Example 1: Quick Start**
 
 ```python
-from startd8.agents import ClaudeAgent, GPT4Agent
 from startd8.iterative_workflow import IterativeDevWorkflow
+from startd8.providers import ProviderRegistry
+
+ProviderRegistry.discover()
+anthropic = ProviderRegistry.get_provider("anthropic")
+openai = ProviderRegistry.get_provider("openai")
+anthropic.validate_config({})
+openai.validate_config({})
+
+dev_agent = anthropic.create_agent("claude-3-5-sonnet-20241022")
+review_agent = openai.create_agent("gpt-4-turbo-preview")
 
 workflow = IterativeDevWorkflow(
-    developer_agent=ClaudeAgent(),
-    reviewer_agent=GPT4Agent(),
+    developer_agent=dev_agent,
+    reviewer_agent=review_agent,
     max_iterations=3
 )
 
@@ -215,8 +247,8 @@ Review for security vulnerabilities:
 ..."""
 
 workflow = IterativeDevWorkflow(
-    developer_agent=claude,
-    reviewer_agent=gpt4,
+    developer_agent=dev_agent,
+    reviewer_agent=review_agent,
     review_prompt_template=security_prompt
 )
 
@@ -233,8 +265,8 @@ def show_progress(iteration):
         print(f"  Issues: {len(iteration.feedback.issues)}")
 
 workflow = IterativeDevWorkflow(
-    developer_agent=claude,
-    reviewer_agent=gpt4,
+    developer_agent=dev_agent,
+    reviewer_agent=review_agent,
     on_iteration_complete=show_progress
 )
 
@@ -274,12 +306,14 @@ python examples/iterative_dev_workflow_example.py
 Or programmatically:
 
 ```python
-from startd8.agents import MockAgent
 from startd8.iterative_workflow import IterativeDevWorkflow
+from startd8.providers import ProviderRegistry
 
 # No API keys required!
-dev = MockAgent()
-reviewer = MockAgent()
+ProviderRegistry.discover()
+mock = ProviderRegistry.get_provider("mock")
+dev = mock.create_agent("mock-model")
+reviewer = mock.create_agent("mock-model")
 
 workflow = IterativeDevWorkflow(dev, reviewer, max_iterations=2)
 result = workflow.run("Implement a function")

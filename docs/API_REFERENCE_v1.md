@@ -1,6 +1,6 @@
 # Startd8 API Reference
 
-**Version:** 0.2.0  
+**Version:** 0.4.0  
 **Document Version:** v1  
 **Last Updated:** 2025-01-13
 
@@ -31,7 +31,8 @@ framework = AgentFramework(storage_dir: Optional[Path] = None)
 ```
 
 #### Parameters
-- `storage_dir`: Optional path to storage directory. Defaults to `~/.startd8`
+- `storage_dir`: Optional path to project data directory. Defaults to `./.startd8`  
+  (User-scoped config like API keys and TUI settings defaults to `~/.startd8`)
 
 #### Methods
 
@@ -40,7 +41,7 @@ framework = AgentFramework(storage_dir: Optional[Path] = None)
 ```python
 prompt = framework.create_prompt(
     content: str,
-    version: str = "1.0.0",
+    version: str,
     tags: List[str] = None,
     metadata: Dict[str, Any] = None
 ) -> Prompt
@@ -139,7 +140,7 @@ class BaseAgent(ABC):
 from startd8 import ClaudeAgent
 
 agent = ClaudeAgent(
-    name: str = "claude",
+    name: str = "anthropic:claude-3-opus-20240229",
     model: str = "claude-3-opus-20240229",
     api_key: Optional[str] = None,
     max_tokens: int = 4096
@@ -164,7 +165,7 @@ agent = ClaudeAgent(
 from startd8 import GPT4Agent
 
 agent = GPT4Agent(
-    name: str = "gpt4",
+    name: str = "openai:gpt-4-turbo-preview",
     model: str = "gpt-4-turbo-preview",
     api_key: Optional[str] = None,
     max_tokens: int = 4096
