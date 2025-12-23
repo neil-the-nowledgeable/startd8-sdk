@@ -27,31 +27,76 @@ def AgentRegistry(*args, **kwargs):  # type: ignore
 # Optional dependencies - import with clear error messages
 try:
     from anthropic import Anthropic, AsyncAnthropic
+    from anthropic import APIConnectionError as AnthropicAPIConnectionError
 except ImportError:
     Anthropic = None
     AsyncAnthropic = None
+    AnthropicAPIConnectionError = None
     _ANTHROPIC_AVAILABLE = False
 else:
     _ANTHROPIC_AVAILABLE = True
 
 try:
     from openai import OpenAI, AsyncOpenAI
+    from openai import APIConnectionError as OpenAIAPIConnectionError
 except ImportError:
     OpenAI = None
     AsyncOpenAI = None
+    OpenAIAPIConnectionError = None
     _OPENAI_AVAILABLE = False
 else:
     _OPENAI_AVAILABLE = True
 
+
+def is_completion_model(model: str) -> bool:
+    """
+    Check if a model is a completion model (not a chat model).
+    
+    Completion models use the /v1/completions endpoint, while chat models
+    use the /v1/chat/completions endpoint.
+    
+    Args:
+        model: Model identifier
+        
+    Returns:
+        True if model is a completion model, False if chat model
+    """
+    model_lower = model.lower()
+    
+    # Known completion models
+    completion_patterns = [
+        'text-davinci',  # text-davinci-003, text-davinci-002, etc.
+        'gpt-3.5-turbo-instruct',  # Completion variant of turbo
+        'text-curie',
+        'text-babbage',
+        'text-ada',
+    ]
+    
+    # Check if model matches any completion pattern
+    for pattern in completion_patterns:
+        if pattern in model_lower:
+            return True
+    
+    # Chat models typically start with these prefixes
+    chat_prefixes = ['gpt-', 'o1-', 'chatgpt-', 'claude-', 'gemini-']
+    for prefix in chat_prefixes:
+        if model_lower.startswith(prefix):
+            return False
+    
+    # If model doesn't match known patterns, assume it's a chat model
+    # (most modern models are chat models)
+    return False
+
 try:
-    import google.generativeai as genai
-    from google.generativeai.types import GenerationConfig
-except ImportError:
-    genai = None
-    GenerationConfig = None
-    _GEMINI_AVAILABLE = False
-else:
+    from google import genai
+    from google.genai import types as genai_types
     _GEMINI_AVAILABLE = True
+    _GEMINI_IMPORT_ERROR = None
+except ImportError as e:
+    genai = None
+    genai_types = None
+    _GEMINI_AVAILABLE = False
+    _GEMINI_IMPORT_ERROR = str(e)
 
 from .models import TokenUsage, AgentResponse
 
@@ -94,6 +139,53 @@ class BaseAgent(ABC):
         self.cost_tracker = cost_tracker
         self.budget_manager = budget_manager
     
+    @property
+    def agent_name(self) -> str:
+        """
+        Alias for name property for compatibility.
+
+        Some code expects agent.agent_name instead of agent.name.
+        This property provides backward compatibility.
+        """
+        return self.name
+    
+    def cleanup(self):
+        """
+        Cleanup resources synchronously.
+        
+        This should be called before the event loop closes to ensure
+        async clients are properly closed.
+        """
+        # Base implementation - subclasses should override if they have async clients
+        pass
+    
+    async def acleanup(self):
+        """
+        Cleanup resources asynchronously.
+        
+        Closes async clients and other async resources.
+        """
+        # Base implementation - subclasses should override if they have async clients
+        pass
+    
+    def __del__(self):
+        """
+        Destructor - attempts cleanup if event loop is still available.
+        
+        Suppresses RuntimeError when event loop is closed.
+        """
+        try:
+            # Try to cleanup if possible
+            self.cleanup()
+        except RuntimeError as e:
+            # Suppress "Event loop is closed" errors during destruction
+            if 'Event loop is closed' not in str(e):
+                # Re-raise if it's a different RuntimeError
+                raise
+        except Exception:
+            # Ignore other errors during destruction - event loop may be closed
+            pass
+    
     @abstractmethod
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
         """
@@ -122,15 +214,24 @@ class BaseAgent(ABC):
             Tuple of (response_text, response_time_ms, token_usage)
         """
         try:
-            loop = asyncio.get_running_loop()
-            # If we're already in an async context, we need to run in a new thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as pool:
-                future = pool.submit(lambda: asyncio.run(self.agenerate(prompt)))
-                return future.result()
+            asyncio.get_running_loop()
         except RuntimeError:
             # No running loop, safe to use asyncio.run
             return asyncio.run(self.agenerate(prompt))
+
+        # Running inside an existing event loop (e.g. Jupyter/FastAPI).
+        # Bridge by running the coroutine in a new thread + event loop.
+        import concurrent.futures
+        import contextvars
+
+        ctx = contextvars.copy_context()
+
+        def _runner() -> Tuple[str, int, TokenUsage]:
+            return asyncio.run(self.agenerate(prompt))
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(ctx.run, _runner)
+            return future.result()
     
     async def _run_with_cost_tracking(
         self,
@@ -139,7 +240,9 @@ class BaseAgent(ABC):
         response_id: str,
         metadata: Optional[Dict[str, Any]] = None,
         project: Optional[str] = None,
-        tags: Optional[list] = None
+        tags: Optional[list] = None,
+        pipeline_id: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> Tuple[str, int, TokenUsage]:
         """
         Execute API call with cost tracking and budget enforcement.
@@ -156,6 +259,8 @@ class BaseAgent(ABC):
             metadata: Optional metadata to include in cost record
             project: Optional project identifier (overrides context default)
             tags: Optional tags (merged with context tags)
+            pipeline_id: Optional pipeline ID for attribution
+            job_id: Optional job ID for attribution
         
         Returns:
             Tuple of (response_text, response_time_ms, token_usage)
@@ -220,6 +325,8 @@ class BaseAgent(ABC):
                 project=effective_project,
                 prompt_id=prompt_id,
                 response_id=response_id,
+                pipeline_id=pipeline_id,
+                job_id=job_id,
                 metadata=metadata or {}
             )
             # COST_RECORDED event is emitted automatically by record_cost()
@@ -232,7 +339,9 @@ class BaseAgent(ABC):
         prompt: str,
         metadata: Optional[Dict[str, Any]] = None,
         project: Optional[str] = None,
-        tags: Optional[list] = None
+        tags: Optional[list] = None,
+        pipeline_id: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> AgentResponse:
         """
         Async generate and create an AgentResponse object
@@ -245,6 +354,8 @@ class BaseAgent(ABC):
             metadata: Optional metadata
             project: Optional project identifier (overrides context default)
             tags: Optional tags (merged with context tags)
+            pipeline_id: Optional pipeline ID for attribution
+            job_id: Optional job ID for attribution
             
         Returns:
             AgentResponse object
@@ -264,7 +375,9 @@ class BaseAgent(ABC):
                 response_id=response_id,
                 metadata=metadata,
                 project=project,
-                tags=tags
+                tags=tags,
+                pipeline_id=pipeline_id,
+                job_id=job_id,
             )
         else:
             # Direct call without cost tracking
@@ -287,7 +400,9 @@ class BaseAgent(ABC):
         prompt: str,
         metadata: Optional[Dict[str, Any]] = None,
         project: Optional[str] = None,
-        tags: Optional[list] = None
+        tags: Optional[list] = None,
+        pipeline_id: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> AgentResponse:
         """
         Generate and create an AgentResponse object (sync wrapper)
@@ -301,6 +416,8 @@ class BaseAgent(ABC):
             metadata: Optional metadata
             project: Optional project identifier (overrides context default)
             tags: Optional tags (merged with context tags)
+            pipeline_id: Optional pipeline ID for attribution
+            job_id: Optional job ID for attribution
             
         Returns:
             AgentResponse object
@@ -315,23 +432,7 @@ class BaseAgent(ABC):
         # Budget enforcement must work even when cost_tracker is not present.
         if _COSTS_AVAILABLE and (self.cost_tracker or self.budget_manager):
             try:
-                loop = asyncio.get_running_loop()
-                # If we're already in an async context, we need to run in a new thread
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(
-                        lambda: asyncio.run(
-                            self._run_with_cost_tracking(
-                                prompt=prompt,
-                                prompt_id=prompt_id,
-                                response_id=response_id,
-                                metadata=metadata,
-                                project=project,
-                                tags=tags
-                            )
-                        )
-                    )
-                    response_text, response_time_ms, token_usage = future.result()
+                asyncio.get_running_loop()
             except RuntimeError:
                 # No running loop, safe to use asyncio.run directly
                 response_text, response_time_ms, token_usage = asyncio.run(
@@ -341,9 +442,36 @@ class BaseAgent(ABC):
                         response_id=response_id,
                         metadata=metadata,
                         project=project,
-                        tags=tags
+                        tags=tags,
+                        pipeline_id=pipeline_id,
+                        job_id=job_id,
                     )
                 )
+            else:
+                # Running inside an existing event loop (e.g. Jupyter/FastAPI).
+                # Bridge by running the coroutine in a new thread + event loop.
+                import concurrent.futures
+                import contextvars
+
+                ctx = contextvars.copy_context()
+
+                def _runner() -> Tuple[str, int, TokenUsage]:
+                    return asyncio.run(
+                        self._run_with_cost_tracking(
+                            prompt=prompt,
+                            prompt_id=prompt_id,
+                            response_id=response_id,
+                            metadata=metadata,
+                            project=project,
+                            tags=tags,
+                            pipeline_id=pipeline_id,
+                            job_id=job_id,
+                        )
+                    )
+
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(ctx.run, _runner)
+                    response_text, response_time_ms, token_usage = future.result()
         else:
             # Direct call without cost tracking
             response_text, response_time_ms, token_usage = self.generate(prompt)
@@ -394,18 +522,149 @@ class ClaudeAgent(BaseAgent):
         self.client = Anthropic(api_key=api_key)
         self.async_client = AsyncAnthropic(api_key=api_key)
         self.max_tokens = max_tokens
+        self._cleanup_registered = False
+        self._register_cleanup()
+    
+    def _register_cleanup(self):
+        """Register cleanup handler to run on exit"""
+        if not self._cleanup_registered:
+            import atexit
+            atexit.register(self.cleanup)
+            self._cleanup_registered = True
+    
+    def cleanup(self):
+        """
+        Cleanup async client resources.
+        
+        Handles cleanup gracefully even if event loop is closed.
+        """
+        if hasattr(self, 'async_client') and self.async_client:
+            try:
+                # Check if we can access the underlying httpx client
+                client = None
+                if hasattr(self.async_client, '_client'):
+                    client = self.async_client._client
+                elif hasattr(self.async_client, 'client'):
+                    client = self.async_client.client
+                
+                if client and hasattr(client, 'aclose'):
+                    # Try to close if event loop is available
+                    try:
+                        loop = asyncio.get_running_loop()
+                        if not loop.is_closed():
+                            # Schedule cleanup task
+                            try:
+                                asyncio.create_task(client.aclose())
+                            except RuntimeError:
+                                # Event loop closing, can't schedule tasks
+                                pass
+                    except RuntimeError:
+                        # No running loop - event loop may be closed
+                        # Try to get event loop, but handle closed case
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if not loop.is_closed():
+                                try:
+                                    loop.run_until_complete(client.aclose())
+                                except RuntimeError:
+                                    # Event loop is closing/closed
+                                    pass
+                        except RuntimeError:
+                            # Event loop is closed or doesn't exist
+                            # httpx will cleanup on Python exit
+                            pass
+            except Exception:
+                # Ignore all cleanup errors - event loop may be closed
+                pass
+    
+    async def acleanup(self):
+        """
+        Async cleanup - properly closes async client.
+        
+        Should be called before event loop closes.
+        """
+        if hasattr(self, 'async_client') and self.async_client:
+            try:
+                # Close the underlying httpx client if it exists
+                client = None
+                if hasattr(self.async_client, '_client'):
+                    client = self.async_client._client
+                elif hasattr(self.async_client, 'client'):
+                    client = self.async_client.client
+                
+                if client and hasattr(client, 'aclose'):
+                    try:
+                        await client.aclose()
+                    except RuntimeError as e:
+                        # Event loop is closed - this is expected during shutdown
+                        if 'Event loop is closed' not in str(e):
+                            # Re-raise if it's a different RuntimeError
+                            raise
+            except RuntimeError as e:
+                # Event loop is closed - this is expected during shutdown
+                if 'Event loop is closed' not in str(e):
+                    raise
+            except Exception:
+                # Ignore other cleanup errors
+                pass
     
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
         """Generate response using Claude async API"""
         start_time = time.time()
         
-        response = await self.async_client.messages.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
+        try:
+            response = await self.async_client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+        except Exception as e:
+            from .logging_config import get_logger
+            from .exceptions import APIError, AgentError
+            
+            logger = get_logger(__name__)
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+            
+            error_msg = str(e)
+            
+            # Check for DNS/connection errors specifically
+            if AnthropicAPIConnectionError and isinstance(e, AnthropicAPIConnectionError):
+                # Check for DNS resolution failures in error message or underlying exception
+                underlying_error = getattr(e, 'cause', None) or getattr(e, '__cause__', None)
+                underlying_msg = str(underlying_error) if underlying_error else ""
+                combined_msg = f"{error_msg} {underlying_msg}".lower()
+                
+                if any(term in combined_msg for term in ["nodename nor servname", "getaddrinfo", "not known", "name or service not known", "name resolution"]):
+                    dns_error_msg = (
+                        f"DNS resolution failed for Anthropic API endpoint. "
+                        f"The endpoint may be unreachable or there may be network connectivity issues. "
+                        f"Please check your network connection and API configuration for agent '{self.name}'."
+                    )
+                    logger.error(
+                        f"DNS resolution failed for {self.name}: {e}",
+                        exc_info=True,
+                        extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                    )
+                    raise AgentError(
+                        dns_error_msg,
+                        agent_name=self.name,
+                        original_error=e
+                    ) from e
+            
+            logger.error(
+                f"API call failed for {self.name}: {e}",
+                exc_info=True,
+                extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+            )
+            
+            raise APIError(
+                f"API call failed: {str(e)}",
+                provider=self.name,
+                original_error=e
+            ) from e
         
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
@@ -415,7 +674,8 @@ class ClaudeAgent(BaseAgent):
         token_usage = TokenUsage(
             input=response.usage.input_tokens,
             output=response.usage.output_tokens,
-            total=response.usage.input_tokens + response.usage.output_tokens
+            total=response.usage.input_tokens + response.usage.output_tokens,
+            model_name=self.model,
         )
         
         return response_text, response_time_ms, token_usage
@@ -460,13 +720,108 @@ class GPT4Agent(BaseAgent):
         """Generate response using GPT-4 async API"""
         start_time = time.time()
         
-        response = await self.async_client.chat.completions.create(
-            model=self.model,
-            max_tokens=self.max_tokens,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
-        )
+        try:
+            response = await self.async_client.chat.completions.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                messages=[
+                    {"role": "user", "content": prompt}
+                ]
+            )
+        except Exception as e:
+            from .logging_config import get_logger
+            from .exceptions import APIError, AgentError
+            
+            logger = get_logger(__name__)
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+            
+            error_msg = str(e)
+            error_msg_lower = error_msg.lower()
+            
+            # Check for completion model error (404 - not a chat model)
+            # Only raise this error if we're confident it's actually a completion model issue
+            # Check both the error message AND verify the model is actually a completion model
+            is_completion = is_completion_model(self.model)
+            if "404" in error_msg and is_completion and (
+                "not a chat model" in error_msg_lower or 
+                "v1/completions" in error_msg_lower or
+                "chat/completions endpoint" in error_msg_lower
+            ):
+                completion_error_msg = (
+                    f"Model '{self.model}' is a completion model, not a chat model. "
+                    f"Completion models (like text-davinci-003, gpt-3.5-turbo-instruct) "
+                    f"use the /v1/completions endpoint, which is not supported by this agent. "
+                    f"Please use a chat model (like gpt-4, gpt-3.5-turbo, gpt-4-turbo) instead."
+                )
+                # Log without exc_info=True to avoid printing traceback to console
+                # The original error is preserved in AgentError.original_error for debugging
+                logger.error(
+                    f"Completion model used with chat endpoint for {self.name}: {completion_error_msg} (Original: {e})",
+                    extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                )
+                raise AgentError(
+                    completion_error_msg,
+                    agent_name=self.name,
+                    original_error=e
+                ) from e
+            
+            # Check for model not found errors (404 but not a completion model)
+            if "404" in error_msg and not is_completion and (
+                "model" in error_msg_lower or "not found" in error_msg_lower
+            ):
+                model_error_msg = (
+                    f"Model '{self.model}' not found or not available. "
+                    f"Please verify the model name is correct and that you have access to it. "
+                    f"Common chat models include: gpt-4, gpt-4-turbo, gpt-3.5-turbo, gpt-4o"
+                )
+                # Log without exc_info=True to avoid printing traceback to console
+                # The original error is preserved in AgentError.original_error for debugging
+                logger.error(
+                    f"Model not found error for {self.name}: {model_error_msg} (Original: {e})",
+                    extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                )
+                raise AgentError(
+                    model_error_msg,
+                    agent_name=self.name,
+                    original_error=e
+                ) from e
+            
+            # Check for DNS/connection errors specifically
+            if OpenAIAPIConnectionError and isinstance(e, OpenAIAPIConnectionError):
+                # Check for DNS resolution failures in error message or underlying exception
+                underlying_error = getattr(e, 'cause', None) or getattr(e, '__cause__', None)
+                underlying_msg = str(underlying_error) if underlying_error else ""
+                combined_msg = f"{error_msg} {underlying_msg}".lower()
+                
+                if any(term in combined_msg for term in ["nodename nor servname", "getaddrinfo", "not known", "name or service not known", "name resolution"]):
+                    dns_error_msg = (
+                        f"DNS resolution failed for OpenAI API endpoint. "
+                        f"The endpoint may be unreachable or there may be network connectivity issues. "
+                        f"Please check your network connection and API configuration for agent '{self.name}'."
+                    )
+                    logger.error(
+                        f"DNS resolution failed for {self.name}: {e}",
+                        exc_info=True,
+                        extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                    )
+                    raise AgentError(
+                        dns_error_msg,
+                        agent_name=self.name,
+                        original_error=e
+                    ) from e
+            
+            logger.error(
+                f"API call failed for {self.name}: {e}",
+                exc_info=True,
+                extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+            )
+            
+            raise APIError(
+                f"API call failed: {str(e)}",
+                provider=self.name,
+                original_error=e
+            ) from e
         
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
@@ -476,7 +831,8 @@ class GPT4Agent(BaseAgent):
         token_usage = TokenUsage(
             input=response.usage.prompt_tokens,
             output=response.usage.completion_tokens,
-            total=response.usage.total_tokens
+            total=response.usage.total_tokens,
+            model_name=self.model,
         )
         
         return response_text, response_time_ms, token_usage
@@ -488,7 +844,7 @@ class GeminiAgent(BaseAgent):
     def __init__(
         self,
         name: str = "gemini",
-        model: str = "gemini-pro",
+        model: str = "gemini-1.5-flash",  # Updated default - gemini-pro is deprecated
         api_key: Optional[str] = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
@@ -508,16 +864,64 @@ class GeminiAgent(BaseAgent):
             budget_manager: Optional budget manager for enforcing limits
             
         Raises:
-            ImportError: If google-generativeai package is not installed
+            ImportError: If google-genai package is not installed
             ValueError: If API key is not provided and not in environment
         """
         super().__init__(name, model, cost_tracker, budget_manager)
         
         if not _GEMINI_AVAILABLE:
-            raise ImportError(
-                "google-generativeai package not installed. "
-                "Install with: pip install startd8[gemini] or pip install google-generativeai"
-            )
+            import sys
+            python_exe = sys.executable
+            
+            # Detect installation method
+            is_pipx = False
+            is_user_install = False
+            
+            # Check if running from pipx
+            if 'pipx' in python_exe or '.local/pipx' in python_exe:
+                is_pipx = True
+            # Check if installed in user site-packages
+            elif hasattr(sys, 'base_prefix') and sys.base_prefix != sys.prefix:
+                # Virtual environment
+                is_user_install = False
+            elif os.path.exists(os.path.expanduser('~/.local/bin/startd8')):
+                # Likely user install
+                is_user_install = True
+            
+            # Build helpful error message
+            if is_pipx:
+                error_msg = (
+                    "google-genai package not installed.\n\n"
+                    "[Installation Help]\n"
+                    "You're running startd8 from pipx. To install google-genai:\n\n"
+                    "  pipx inject startd8 google-genai\n\n"
+                    "Or reinstall startd8 with Gemini support:\n"
+                    "  pipx install --force 'startd8[gemini]'\n\n"
+                    f"Python executable: {python_exe}"
+                )
+            elif is_user_install:
+                error_msg = (
+                    "google-genai package not installed.\n\n"
+                    "[Installation Help]\n"
+                    "Install using:\n\n"
+                    f"  {python_exe} -m pip install --user google-genai\n\n"
+                    "Or install startd8 with Gemini support:\n"
+                    f"  {python_exe} -m pip install --user 'startd8[gemini]'\n\n"
+                    f"Python executable: {python_exe}"
+                )
+            else:
+                error_msg = (
+                    "google-genai package not installed.\n\n"
+                    "[Installation Help]\n"
+                    "Install using:\n\n"
+                    f"  {python_exe} -m pip install google-genai\n\n"
+                    "Or install startd8 with Gemini support:\n"
+                    f"  {python_exe} -m pip install 'startd8[gemini]'\n\n"
+                    f"Python executable: {python_exe}\n"
+                    f"Import error: {_GEMINI_IMPORT_ERROR or 'Module not found'}"
+                )
+            
+            raise ImportError(error_msg)
         
         # Get API key from parameter or environment
         if api_key is None:
@@ -529,19 +933,10 @@ class GeminiAgent(BaseAgent):
                 "Set GOOGLE_API_KEY environment variable or pass api_key parameter."
             )
         
-        # Configure the API
-        genai.configure(api_key=api_key)
-        
-        # Create the model instance with generation config
-        generation_config = GenerationConfig(
-            max_output_tokens=max_tokens,
-            temperature=temperature,
-        )
-        
-        self.model_instance = genai.GenerativeModel(
-            model_name=self.model,
-            generation_config=generation_config
-        )
+        # Create the client with API key
+        # New google.genai uses Client-based API
+        self.client = genai.Client(api_key=api_key)
+        self.model_name = self.model
         
         self.max_tokens = max_tokens
         self.temperature = temperature
@@ -562,49 +957,149 @@ class GeminiAgent(BaseAgent):
         start_time = time.time()
         
         try:
-            # google-generativeai doesn't have native async,
-            # but we can use asyncio to run it in thread pool
+            # google.genai Client API - run in executor for async compatibility
+            # Create generation config
+            generation_config = genai_types.GenerateContentConfig(
+                temperature=self.temperature,
+                max_output_tokens=self.max_tokens,
+            )
+            
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
                 None,
-                lambda: self.model_instance.generate_content(prompt)
+                lambda: self.client.models.generate_content(
+                    model=self.model_name,
+                    contents=prompt,
+                    config=generation_config
+                )
             )
         except Exception as e:
-            raise RuntimeError(f"Gemini API call failed: {e}") from e
+            from .logging_config import get_logger
+            from .exceptions import APIError, AgentError
+            
+            logger = get_logger(__name__)
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+            
+            error_msg = str(e)
+            error_msg_lower = error_msg.lower()
+            
+            # Check for deprecated model errors
+            if "not found" in error_msg_lower and ("v1beta" in error_msg_lower or "404" in error_msg_lower):
+                deprecated_models = {
+                    "gemini-pro": "gemini-1.5-flash",
+                    "gemini-pro-vision": "gemini-1.5-flash",
+                }
+                
+                if self.model in deprecated_models:
+                    suggested_model = deprecated_models[self.model]
+                    model_error_msg = (
+                        f"Model '{self.model}' is deprecated or not found. "
+                        f"Please update your configuration to use '{suggested_model}' instead. "
+                        f"The model '{self.model}' was deprecated by Google and is no longer available."
+                    )
+                    logger.error(
+                        f"Deprecated model error for {self.name}: {e}",
+                        exc_info=True,
+                        extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                    )
+                    raise AgentError(
+                        model_error_msg,
+                        agent_name=self.name,
+                        original_error=e
+                    ) from e
+                else:
+                    # Generic model not found error
+                    model_error_msg = (
+                        f"Model '{self.model}' not found or not supported. "
+                        f"Please verify the model name is correct. "
+                        f"Available models include: gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash-exp"
+                    )
+                    logger.error(
+                        f"Model not found error for {self.name}: {e}",
+                        exc_info=True,
+                        extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                    )
+                    raise AgentError(
+                        model_error_msg,
+                        agent_name=self.name,
+                        original_error=e
+                    ) from e
+            
+            # Check for DNS/connection errors (Google API uses similar error patterns)
+            # Google's API errors may wrap httpx/httpcore errors
+            underlying_error = getattr(e, 'cause', None) or getattr(e, '__cause__', None)
+            underlying_msg = str(underlying_error).lower() if underlying_error else ""
+            combined_msg = f"{error_msg_lower} {underlying_msg}"
+            
+            if any(term in combined_msg for term in ["nodename nor servname", "getaddrinfo", "not known", "name or service not known", "name resolution", "connection", "network"]):
+                dns_error_msg = (
+                    f"DNS resolution or network connection failed for Google Gemini API endpoint. "
+                    f"The endpoint may be unreachable or there may be network connectivity issues. "
+                    f"Please check your network connection and API configuration for agent '{self.name}'."
+                )
+                logger.error(
+                    f"DNS/connection error for {self.name}: {e}",
+                    exc_info=True,
+                    extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                )
+                raise AgentError(
+                    dns_error_msg,
+                    agent_name=self.name,
+                    original_error=e
+                ) from e
+            
+            logger.error(
+                f"API call failed for {self.name}: {e}",
+                exc_info=True,
+                extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+            )
+            
+            raise APIError(
+                f"API call failed: {str(e)}",
+                provider=self.name,
+                original_error=e
+            ) from e
         
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
         
         # Extract response text
-        if not response.text:
+        # New google.genai API structure
+        if not hasattr(response, 'text') or not response.text:
+            finish_reason = getattr(response, 'finish_reason', 'unknown')
             raise RuntimeError(
                 f"Gemini returned empty response. "
-                f"Finish reason: {response.finish_reason}"
+                f"Finish reason: {finish_reason}"
             )
         
         response_text = response.text
         
-        # Google Gemini doesn't provide token counts in standard API response,
-        # so we need to use the countTokens method
+        # New google.genai API provides usage_metadata directly
         try:
-            # Count input tokens
-            input_count_response = self.model_instance.count_tokens(prompt)
-            input_tokens = input_count_response.total_tokens
-            
-            # Count output tokens (response text)
-            output_count_response = self.model_instance.count_tokens(response_text)
-            output_tokens = output_count_response.total_tokens
+            if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                usage = response.usage_metadata
+                input_tokens = getattr(usage, 'prompt_token_count', 0)
+                output_tokens = getattr(usage, 'candidates_token_count', 0)
+                total_tokens = getattr(usage, 'total_token_count', input_tokens + output_tokens)
+            else:
+                # Fallback: estimate tokens if usage_metadata not available
+                input_tokens = max(1, int(len(prompt.split()) / 1.3))
+                output_tokens = max(1, int(len(response_text.split()) / 1.3))
+                total_tokens = input_tokens + output_tokens
         except Exception as e:
             # If token counting fails, provide reasonable estimates
             # ~1.3 tokens per word as rough estimate
             input_tokens = max(1, int(len(prompt.split()) / 1.3))
             output_tokens = max(1, int(len(response_text.split()) / 1.3))
-            logger.warning(f"Failed to count tokens, using estimate: {e}")
+            total_tokens = input_tokens + output_tokens
+            logger.warning(f"Failed to extract token usage, using estimate: {e}")
         
         token_usage = TokenUsage(
             input=int(input_tokens),
             output=int(output_tokens),
-            total=int(input_tokens + output_tokens)
+            total=int(total_tokens),
+            model_name=self.model,
         )
         
         return response_text, response_time_ms, token_usage
@@ -632,7 +1127,7 @@ class OpenAICompatibleAgent(BaseAgent):
             model: Model name to use
             api_key: API key (or use api_key_env to specify env var name)
             api_key_env: Environment variable name for API key
-            base_url: Base URL for the API (e.g., 'https://api.cursor.sh/v1')
+            base_url: Base URL for the API (e.g., 'https://api.openai.com/v1' or 'http://localhost:11434/v1' for Ollama)
             max_tokens: Maximum tokens to generate
             cost_tracker: Optional cost tracker for recording costs
             budget_manager: Optional budget manager for enforcing limits
@@ -670,6 +1165,85 @@ class OpenAICompatibleAgent(BaseAgent):
         self.max_tokens = max_tokens
         self.base_url = base_url
         self.api_key_env = api_key_env
+        self._cleanup_registered = False
+        self._register_cleanup()
+    
+    def _register_cleanup(self):
+        """Register cleanup handler to run on exit"""
+        if not self._cleanup_registered:
+            import atexit
+            atexit.register(self.cleanup)
+            self._cleanup_registered = True
+    
+    def cleanup(self):
+        """
+        Cleanup async client resources.
+        
+        Handles cleanup gracefully even if event loop is closed.
+        Suppresses RuntimeError when event loop is closed.
+        """
+        if hasattr(self, 'async_client') and self.async_client:
+            try:
+                # Check if we can access the underlying httpx client
+                client = None
+                if hasattr(self.async_client, '_client'):
+                    client = self.async_client._client
+                elif hasattr(self.async_client, 'client'):
+                    client = self.async_client.client
+                
+                if client and hasattr(client, 'aclose'):
+                    # Try to close if event loop is available
+                    try:
+                        loop = asyncio.get_running_loop()
+                        if not loop.is_closed():
+                            # Schedule cleanup task
+                            try:
+                                asyncio.create_task(client.aclose())
+                            except RuntimeError:
+                                # Event loop closing, can't schedule tasks
+                                pass
+                    except RuntimeError:
+                        # No running loop - event loop may be closed
+                        # Try to get event loop, but handle closed case gracefully
+                        try:
+                            loop = asyncio.get_event_loop()
+                            if not loop.is_closed():
+                                try:
+                                    loop.run_until_complete(client.aclose())
+                                except RuntimeError as e:
+                                    # Event loop is closing/closed - suppress error
+                                    if 'Event loop is closed' not in str(e):
+                                        # Only suppress the specific "Event loop is closed" error
+                                        pass
+                        except RuntimeError:
+                            # Event loop is closed or doesn't exist
+                            # httpx will cleanup on Python exit - suppress error
+                            pass
+            except RuntimeError as e:
+                # Suppress "Event loop is closed" errors during cleanup
+                if 'Event loop is closed' not in str(e):
+                    # Re-raise if it's a different RuntimeError
+                    raise
+            except Exception:
+                # Ignore all other cleanup errors
+                pass
+    
+    async def acleanup(self):
+        """Async cleanup - properly closes async client"""
+        if hasattr(self, 'async_client') and self.async_client:
+            try:
+                # Close the underlying httpx client if it exists
+                if hasattr(self.async_client, '_client'):
+                    client = self.async_client._client
+                    if hasattr(client, 'aclose'):
+                        try:
+                            await client.aclose()
+                        except RuntimeError as e:
+                            if 'Event loop is closed' not in str(e):
+                                raise
+            except Exception:
+                # Ignore cleanup errors
+                pass
     
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
         """Generate response using OpenAI-compatible API (async)"""
@@ -694,25 +1268,102 @@ class OpenAICompatibleAgent(BaseAgent):
                 token_usage = TokenUsage(
                     input=response.usage.prompt_tokens or 0,
                     output=response.usage.completion_tokens or 0,
-                    total=response.usage.total_tokens or 0
+                    total=response.usage.total_tokens or 0,
+                    model_name=self.model,
                 )
             else:
                 # Estimate tokens if not provided
                 token_usage = TokenUsage(
                     input=len(prompt.split()),
                     output=len(response_text.split()) if response_text else 0,
-                    total=len(prompt.split()) + (len(response_text.split()) if response_text else 0)
+                    total=len(prompt.split()) + (len(response_text.split()) if response_text else 0),
+                    model_name=self.model,
                 )
             
             return response_text, response_time_ms, token_usage
             
         except Exception as e:
             from .logging_config import get_logger
-            from .exceptions import APIError
+            from .exceptions import APIError, AgentError
             
             logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
+            
+            error_msg = str(e)
+            error_msg_lower = error_msg.lower()
+            
+            # Check for completion model error (404 - not a chat model)
+            # Only raise this error if we're confident it's actually a completion model issue
+            # Check both the error message AND verify the model is actually a completion model
+            is_completion = is_completion_model(self.model)
+            if "404" in error_msg and is_completion and (
+                "not a chat model" in error_msg_lower or 
+                "v1/completions" in error_msg_lower or
+                "chat/completions endpoint" in error_msg_lower
+            ):
+                completion_error_msg = (
+                    f"Model '{self.model}' is a completion model, not a chat model. "
+                    f"Completion models (like text-davinci-003, gpt-3.5-turbo-instruct) "
+                    f"use the /v1/completions endpoint, which is not supported by this agent. "
+                    f"Please use a chat model (like gpt-4, gpt-3.5-turbo, gpt-4-turbo) instead."
+                )
+                # Log without exc_info=True to avoid printing traceback to console
+                # The original error is preserved in AgentError.original_error for debugging
+                logger.error(
+                    f"Completion model used with chat endpoint for {self.name}: {completion_error_msg} (Original: {e})",
+                    extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                )
+                raise AgentError(
+                    completion_error_msg,
+                    agent_name=self.name,
+                    original_error=e
+                ) from e
+            
+            # Check for model not found errors (404 but not a completion model)
+            if "404" in error_msg and not is_completion and (
+                "model" in error_msg_lower or "not found" in error_msg_lower
+            ):
+                model_error_msg = (
+                    f"Model '{self.model}' not found or not available. "
+                    f"Please verify the model name is correct and that you have access to it. "
+                    f"Common chat models include: gpt-4, gpt-4-turbo, gpt-3.5-turbo, gpt-4o"
+                )
+                # Log without exc_info=True to avoid printing traceback to console
+                # The original error is preserved in AgentError.original_error for debugging
+                logger.error(
+                    f"Model not found error for {self.name}: {model_error_msg} (Original: {e})",
+                    extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
+                )
+                raise AgentError(
+                    model_error_msg,
+                    agent_name=self.name,
+                    original_error=e
+                ) from e
+            
+            # Check for DNS/connection errors specifically
+            if OpenAIAPIConnectionError and isinstance(e, OpenAIAPIConnectionError):
+                # Check for DNS resolution failures in error message or underlying exception
+                underlying_error = getattr(e, 'cause', None) or getattr(e, '__cause__', None)
+                underlying_msg = str(underlying_error) if underlying_error else ""
+                combined_msg = f"{error_msg} {underlying_msg}".lower()
+                
+                if any(term in combined_msg for term in ["nodename nor servname", "getaddrinfo", "not known", "name or service not known", "name resolution"]):
+                    dns_error_msg = (
+                        f"DNS resolution failed for endpoint '{self.base_url}'. "
+                        f"The endpoint may be unreachable, the URL may be incorrect, or the service may be deprecated. "
+                        f"Please verify the base_url configuration for agent '{self.name}'."
+                    )
+                    logger.error(
+                        f"DNS resolution failed for {self.name} ({self.base_url}): {e}",
+                        exc_info=True,
+                        extra={"agent_name": self.name, "model": self.model, "base_url": self.base_url, "response_time_ms": response_time_ms}
+                    )
+                    raise AgentError(
+                        dns_error_msg,
+                        agent_name=self.name,
+                        original_error=e
+                    ) from e
             
             logger.error(
                 f"API call failed for {self.name}: {e}",
@@ -745,14 +1396,23 @@ class MockAgent(BaseAgent):
         token_usage = TokenUsage(
             input=len(prompt.split()),
             output=len(response.split()),
-            total=len(prompt.split()) + len(response.split())
+            total=len(prompt.split()) + len(response.split()),
+            model_name=self.model,
         )
         
         return response, response_time_ms, token_usage
 
 
 class ComposerAgent(OpenAICompatibleAgent):
-    """Cursor Composer agent (via OpenAI-compatible API)"""
+    """
+    Cursor Composer agent (via OpenAI-compatible API)
+    
+    .. deprecated:: 
+        Cursor does not provide a public OpenAI-compatible API for external applications.
+        This agent class is maintained for backward compatibility but may not work with
+        current Cursor API endpoints. Consider using alternative providers like OpenRouter,
+        Together AI, or direct Claude/GPT-4 agents instead.
+    """
     
     def __init__(
         self,
@@ -760,20 +1420,23 @@ class ComposerAgent(OpenAICompatibleAgent):
         model: str = "composer",
         api_key: Optional[str] = None,
         api_key_env: str = "CURSOR_API_KEY",
-        base_url: str = "https://api.cursor.sh/v1",
+        base_url: str = "https://api.cursor.com/v1",
         max_tokens: int = 8192
     ):
         """
         Initialize Cursor Composer agent.
         
-        Composer is Cursor's AI model accessed via OpenAI-compatible API.
+        .. warning::
+            Cursor does not provide a public OpenAI-compatible API. This agent may not work
+            as expected. The default base_url has been updated to api.cursor.com, but Cursor's
+            API is designed for internal use only (admin API and background agents).
         
         Args:
             name: Agent identifier (default: "composer")
             model: Model name (default: "composer")
             api_key: Cursor API key (or use api_key_env)
             api_key_env: Environment variable for API key (default: CURSOR_API_KEY)
-            base_url: Cursor API base URL
+            base_url: Cursor API base URL (default updated to api.cursor.com)
             max_tokens: Maximum tokens to generate
         """
         super().__init__(
