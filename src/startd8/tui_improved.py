@@ -8,7 +8,7 @@ Includes agent configuration testing, API key management, and better guidance.
 import sys
 import os
 import json
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pathlib import Path
 
 try:
@@ -33,11 +33,17 @@ from .iterative_workflow import IterativeDevWorkflow, IterativeWorkflowResult, s
 from .config import ConfigManager
 from .tui_help_system import HelpSystem
 from .tui_workflow_help import WorkflowHelper
+from .error_analysis import (
+    get_last_error_from_logs,
+    format_error_for_analysis,
+)
+from .paths import default_config_dir, default_data_dir
 from .models import (
     DocumentEnhancementConfig,
     AgentConfig as EnhancementAgentConfig,
     ErrorHandling
 )
+from .exceptions import AgentError, APIError, ConfigurationError
 
 # Prompt Builder imports (lazy loaded to avoid circular imports)
 _prompt_builder_loaded = False
@@ -365,6 +371,7 @@ class CustomAgentManager:
                 'gpt-4o',
                 'gpt-4o-mini',
                 'gpt-3.5-turbo',
+                'gpt-5.2-pro',
             ]
         },
         'openai_compatible': {
@@ -511,33 +518,105 @@ class CustomAgentManager:
     def create_agent_instance(self, agent_config: Dict[str, Any]) -> Optional[BaseAgent]:
         """Create an agent instance from a custom config"""
         agent_type = agent_config.get('type')
+        model = agent_config.get('model', '')
         
         if agent_type == 'claude':
             return ClaudeAgent(
                 name=agent_config.get('name', 'claude'),
-                model=agent_config.get('model', 'claude-sonnet-4-20250514'),
+                model=model or 'claude-sonnet-4-20250514',
                 max_tokens=agent_config.get('max_tokens', 4096)
             )
         elif agent_type == 'gpt4':
             return GPT4Agent(
                 name=agent_config.get('name', 'gpt4'),
-                model=agent_config.get('model', 'gpt-4-turbo-preview'),
+                model=model or 'gpt-4-turbo-preview',
                 max_tokens=agent_config.get('max_tokens', 4096)
             )
         elif agent_type == 'openai_compatible':
             # Create OpenAI-compatible agent with custom base URL
+            base_url = agent_config.get('base_url')
+            if not base_url:
+                # If no base_url but model looks like a GPT model, might be misconfigured
+                # Try to help by checking if it should be gpt4 type instead
+                if model and ('gpt' in model.lower() or 'openai' in model.lower()):
+                    # This might be a GPT model that should use gpt4 type
+                    # But we'll still create it as openai_compatible if that's what user configured
+                    pass
             return OpenAICompatibleAgent(
                 name=agent_config.get('name', 'custom'),
-                model=agent_config.get('model', 'custom-model'),
+                model=model or 'custom-model',
                 max_tokens=agent_config.get('max_tokens', 4096),
-                base_url=agent_config.get('base_url'),
+                base_url=base_url,
                 api_key_env=agent_config.get('api_key_env')
             )
         elif agent_type == 'mock':
             return MockAgent(
                 name=agent_config.get('name', 'mock'),
-                model=agent_config.get('model', 'mock-model')
+                model=model or 'mock-model'
             )
+        elif agent_type == 'provider':
+            # Handle provider-backed agents (newer format)
+            # Use ProviderRegistry for proper provider handling
+            provider_name = agent_config.get('provider')
+            if not provider_name and model:
+                # Try to infer provider from model name
+                model_lower = model.lower()
+                if 'gemini' in model_lower:
+                    provider_name = 'gemini'
+                elif 'gpt' in model_lower or 'openai' in model_lower:
+                    provider_name = 'openai'
+                elif 'claude' in model_lower:
+                    provider_name = 'anthropic'
+            
+            if provider_name:
+                try:
+                    from .providers.registry import ProviderRegistry
+                    ProviderRegistry.discover()
+                    provider = ProviderRegistry.get_provider(provider_name.lower())
+                    
+                    if provider:
+                        # Use provider to create agent (handles model validation, etc.)
+                        return provider.create_agent(
+                            model=model or provider.supported_models[0] if provider.supported_models else 'unknown',
+                            name=agent_config.get('name'),
+                            api_key=agent_config.get('api_key'),
+                            max_tokens=agent_config.get('max_tokens', 4096),
+                            temperature=agent_config.get('temperature'),
+                            **{k: v for k, v in agent_config.items() 
+                               if k not in ['type', 'provider', 'name', 'model', 'api_key', 'max_tokens', 'temperature']}
+                        )
+                except Exception as e:
+                    # Log error but fall through to manual creation
+                    import logging
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"Failed to create agent via ProviderRegistry: {e}")
+            
+            # Fallback to manual creation if ProviderRegistry fails
+            if provider_name == 'openai' or (model and 'gpt' in model.lower()):
+                # Treat as GPT-4 agent
+                return GPT4Agent(
+                    name=agent_config.get('name', 'gpt4'),
+                    model=model or 'gpt-4-turbo-preview',
+                    max_tokens=agent_config.get('max_tokens', 4096)
+                )
+            elif provider_name == 'anthropic' or (model and 'claude' in model.lower()):
+                # Treat as Claude agent
+                return ClaudeAgent(
+                    name=agent_config.get('name', 'claude'),
+                    model=model or 'claude-sonnet-4-20250514',
+                    max_tokens=agent_config.get('max_tokens', 4096)
+                )
+            elif provider_name == 'gemini' or (model and 'gemini' in model.lower()):
+                # Treat as Gemini agent
+                from .agents import GeminiAgent
+                return GeminiAgent(
+                    name=agent_config.get('name', 'gemini'),
+                    model=model or 'gemini-1.5-flash',
+                    max_tokens=agent_config.get('max_tokens', 4096),
+                    temperature=agent_config.get('temperature', 0.7),
+                    api_key=agent_config.get('api_key')
+                )
+            # Fall through to None if provider type not recognized
         
         return None
 
@@ -779,12 +858,12 @@ class ImprovedTUI:
         # Get base directory
         default_base = str(Path.home() / "startd8-outputs")
         
-        base_dir = questionary.path(
+        base_dir = self._safe_path_input(
             "Base directory for agent outputs:",
             default=default_base,
             style=custom_style,
             only_directories=True
-        ).ask()
+        )
         
         if not base_dir:
             self.console.print("[yellow]Setup cancelled.[/yellow]")
@@ -997,10 +1076,16 @@ class ImprovedTUI:
                     is_working = True
                 else:
                     working_status = "[red]✗ Invalid[/red]"
-                    details = "[red]Invalid configuration[/red]"
+                    # Provide more helpful error message
+                    agent_type = agent.get('type', 'unknown')
+                    if agent_type not in ['claude', 'gpt4', 'openai_compatible', 'mock', 'provider']:
+                        details = f"[red]Invalid type: '{agent_type}' (must be claude, gpt4, openai_compatible, mock, or provider)[/red]"
+                    else:
+                        details = "[red]Invalid configuration (check model name and settings)[/red]"
             except Exception as e:
                 working_status = "[yellow]⚠ Error[/yellow]"
-                details = f"[yellow]{str(e)[:40]}[/yellow]"
+                error_msg = str(e)[:60]
+                details = f"[yellow]{error_msg}[/yellow]"
             
             agent_rows.append((name, agent_type, model, source, working_status, details, is_working))
         
@@ -1296,12 +1381,21 @@ class ImprovedTUI:
         
         # Select model
         if type_info.get('models'):
+            # Add option to enter custom model name
+            model_choices = type_info['models'] + ["✏️  Enter custom model name"]
             model = questionary.select(
                 "Select model:",
-                choices=type_info['models'],
+                choices=model_choices,
                 default=type_info.get('default_model'),
                 style=custom_style
             ).ask()
+            
+            # If user selected custom model option
+            if model == "✏️  Enter custom model name":
+                model = questionary.text(
+                    "Enter model name:",
+                    style=custom_style
+                ).ask()
         else:
             model = type_info.get('default_model', 'default')
         
@@ -1321,11 +1415,11 @@ class ImprovedTUI:
             max_tokens = 4096
         
         # Get output directory (optional)
-        output_dir = questionary.path(
+        output_dir = self._safe_path_input(
             "Output directory (optional):",
             style=custom_style,
             only_directories=True
-        ).ask()
+        )
         
         # Expand and validate if provided
         if output_dir:
@@ -1452,11 +1546,11 @@ class ImprovedTUI:
             max_tokens = 4096
         
         # Get output directory (optional)
-        output_dir = questionary.path(
+        output_dir = self._safe_path_input(
             "Output directory (optional):",
             style=custom_style,
             only_directories=True
-        ).ask()
+        )
         
         # Expand and validate if provided
         if output_dir:
@@ -1486,10 +1580,17 @@ class ImprovedTUI:
             return
         
         # Select agent to edit
-        choices = [
-            f"{a.get('name', 'unnamed')} ({a.get('type')}/{a.get('model', 'default')[:20]})"
-            for a in agents
-        ]
+        choices = []
+        for a in agents:
+            agent_type = a.get('type', 'unknown')
+            model = a.get('model', 'default')[:20]
+            # Check if agent is invalid
+            try:
+                instance = self.agent_manager.create_agent_instance(a)
+                status_icon = "✓" if instance else "✗"
+            except Exception:
+                status_icon = "⚠"
+            choices.append(f"{status_icon} {a.get('name', 'unnamed')} ({agent_type}/{model})")
         choices.append("← Cancel")
         
         selected = questionary.select(
@@ -1501,11 +1602,57 @@ class ImprovedTUI:
         if not selected or "Cancel" in selected:
             return
         
-        # Find the agent
-        idx = choices.index(selected)
-        agent = agents[idx]
+        # Find the agent (skip status icon)
+        selected_clean = selected.replace("✓ ", "").replace("✗ ", "").replace("⚠ ", "")
+        agent = None
+        agent_idx = None
+        for i, a in enumerate(agents):
+            agent_str = f"{a.get('name', 'unnamed')} ({a.get('type')}/{a.get('model', 'default')[:20]})"
+            if agent_str == selected_clean:
+                agent = a
+                agent_idx = i
+                break
+        
+        if not agent:
+            # Fallback: try to find by matching the name part
+            for i, a in enumerate(agents):
+                if a.get('name', 'unnamed') in selected_clean:
+                    agent = a
+                    agent_idx = i
+                    break
+        
+        if not agent:
+            self.console.print("[red]Agent not found[/red]")
+            return
+        
         agent_id = agent.get('id')
-        type_info = CustomAgentManager.AGENT_TYPES.get(agent.get('type'), {})
+        agent_type = agent.get('type', 'unknown')
+        type_info = CustomAgentManager.AGENT_TYPES.get(agent_type, {})
+        
+        # Check if agent type is invalid and offer to fix it
+        if agent_type not in ['claude', 'gpt4', 'openai_compatible', 'mock', 'provider']:
+            self.console.print(f"\n[yellow]⚠️  Warning: Invalid agent type '{agent_type}'[/yellow]")
+            model = agent.get('model', '').lower()
+            
+            # Try to auto-detect correct type based on model name
+            suggested_type = None
+            if 'gpt' in model or 'openai' in model:
+                suggested_type = 'gpt4'
+            elif 'claude' in model or 'anthropic' in model:
+                suggested_type = 'claude'
+            
+            if suggested_type:
+                fix_type = questionary.confirm(
+                    f"Would you like to change type to '{suggested_type}'?",
+                    default=True,
+                    style=custom_style
+                ).ask()
+                if fix_type:
+                    agent_type = suggested_type
+                    type_info = CustomAgentManager.AGENT_TYPES.get(agent_type, {})
+                    # Update the agent type
+                    self.agent_manager.update_agent(agent_id, {'type': agent_type})
+                    self.console.print(f"[green]✓ Updated agent type to '{agent_type}'[/green]\n")
         
         self.console.print()
         
@@ -1518,12 +1665,30 @@ class ImprovedTUI:
         
         # Edit model
         if type_info.get('models'):
+            # Add option to enter custom model name
+            model_choices = type_info['models'] + ["✏️  Enter custom model name"]
+            current_model = agent.get('model', type_info.get('default_model'))
+            # If current model is not in the list, add it as an option
+            if current_model and current_model not in type_info['models']:
+                model_choices.insert(-1, f"📌 {current_model} (current)")
+            
             new_model = questionary.select(
                 "Select model:",
-                choices=type_info['models'],
-                default=agent.get('model', type_info.get('default_model')),
+                choices=model_choices,
+                default=current_model if current_model in type_info['models'] else None,
                 style=custom_style
             ).ask()
+            
+            # Handle custom model selection
+            if new_model == "✏️  Enter custom model name":
+                new_model = questionary.text(
+                    "Enter model name:",
+                    default=current_model if current_model and current_model not in type_info['models'] else "",
+                    style=custom_style
+                ).ask()
+            elif new_model.startswith("📌 "):
+                # User selected the current custom model, keep it
+                new_model = new_model.replace("📌 ", "").replace(" (current)", "")
         else:
             new_model = agent.get('model')
         
@@ -1552,11 +1717,11 @@ class ImprovedTUI:
         
         new_output_dir = current_output_dir
         if change_output:
-            new_output_dir = questionary.path(
+            new_output_dir = self._safe_path_input(
                 "Output directory:",
                 style=custom_style,
-                only_directories=True,
-            ).ask()
+                only_directories=True
+            )
             
             # Expand and validate if provided
             if new_output_dir:
@@ -2045,6 +2210,7 @@ class ImprovedTUI:
         choices.append("📄 Document Updater")
         choices.append("🔗 Document Enhancement Chain (Multi-Agent)")
         choices.append("🚀 Run Design Pipeline (Draft → Review → Polish)")
+        choices.append("✨ Design Polish Pipeline (Polish → Suggest Updates → Final Polish)")
         choices.append("🔄 Iterative Dev Workflow (Dev → Review → Fix)")
         choices.append("📥 Job Queue")
         
@@ -2069,11 +2235,14 @@ class ImprovedTUI:
         # Agents section (separated testing and management)
         choices.append(questionary.Separator("═══ AGENTS ═══"))
         choices.append("🔬 Test Agent Connections")
+        choices.append("🔧 Fix Agent Configuration Issues")
         choices.append("🤖 Manage Agents")
         choices.append("🔑 Manage API Keys")
         
         # System section
         choices.append(questionary.Separator("═══ SYSTEM ═══"))
+        choices.append("🔍 Analyze Last Error")
+        choices.append("🔍 Analyze Agent Config Errors")
         choices.append("📁 Manage Output Folders")
         choices.append("❓ Help (Context)")
         choices.append("❓ Help & Guide")
@@ -2311,6 +2480,239 @@ class ImprovedTUI:
                     self.console.print(f"[green]Saved to {filename}[/green]")
         except Exception as e:
             self.console.print(f"\n[red]Pipeline failed: {e}[/red]")
+        
+        questionary.press_any_key_to_continue().ask()
+
+    def run_design_polish_pipeline(self):
+        """Run the Design Polish Pipeline workflow (Polish → Suggest Updates → Final Polish)"""
+        self.show_header("Design Polish Pipeline")
+        
+        self.console.print(Panel(
+            "✨ [bold cyan]Design Polish Pipeline[/bold cyan]\n\n"
+            "Sequential workflow for refining existing design documents:\n"
+            "  1. [bold]Polish[/bold] - Initial polish pass\n"
+            "  2. [bold]Suggest Updates[/bold] - Review and suggest improvements\n"
+            "  3. [bold]Final Polish[/bold] - Incorporate suggestions and finalize\n",
+            border_style="cyan"
+        ))
+        
+        # 1. Get document input (file or text)
+        input_method = questionary.select(
+            "Choose input method:",
+            choices=[
+                "📁 Load from file",
+                "✏️  Paste document text",
+                "← Cancel"
+            ],
+            style=custom_style
+        ).ask()
+        
+        if not input_method or "Cancel" in input_method:
+            return
+        
+        document_text = None
+        original_doc_path = None  # Track original file path for saving next to it
+        
+        if "file" in input_method.lower():
+            file_path = self._safe_path_input(
+                "Path to design document:",
+                only_directories=False,
+                style=custom_style
+            )
+            
+            if not file_path:
+                return
+            
+            doc_path = Path(file_path).expanduser()
+            if not doc_path.exists():
+                self.console.print(f"[red]File not found: {doc_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            
+            try:
+                document_text = doc_path.read_text(encoding='utf-8')
+                original_doc_path = doc_path  # Store original path for later use
+            except Exception as e:
+                self.console.print(f"[red]Error reading file: {e}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+        else:
+            # Paste text
+            document_text = questionary.text(
+                "Paste the design document text:",
+                multiline=True,
+                style=custom_style
+            ).ask()
+        
+        if not document_text or not document_text.strip():
+            self.console.print("[yellow]No document text provided.[/yellow]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Ensure agent status is up to date
+        self.agent_status = AgentConfigTester.test_all()
+        
+        # 2. Select Agents
+        self.console.print("\n[bold]Select Agents for Pipeline Steps:[/bold]")
+        
+        # Show available ready agents
+        ready_agents = self._get_ready_agents_for_selection()
+        if not ready_agents:
+            self.console.print("[red]No agents with Ready status available. Please configure agents first.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Display ready agents table
+        agent_table = Table(title="Available Agents (Ready Status)", show_header=True)
+        agent_table.add_column("", justify="center", width=3)  # Icon
+        agent_table.add_column("Agent", style="bold cyan")
+        agent_table.add_column("Model", style="cyan")
+        agent_table.add_column("Type", style="magenta")
+        
+        for agent in ready_agents:
+            agent_type = "Built-in" if agent['type'] == 'builtin' else "User added"
+            agent_table.add_row(
+                agent['icon'],
+                agent['name'],
+                agent['model'],
+                agent_type
+            )
+        
+        self.console.print(agent_table)
+        self.console.print()
+        
+        # Polisher
+        polisher = self._select_ready_agent("Select Agent for POLISHER", "Claude Sonnet")
+        if not polisher:
+            return
+        
+        # Updater
+        updater = self._select_ready_agent("Select Agent for UPDATER (suggests improvements)", "GPT-4")
+        if not updater:
+            return
+        
+        # Final Polisher
+        final_polisher = self._select_ready_agent("Select Agent for FINAL POLISHER", "Claude Opus")
+        if not final_polisher:
+            return
+        
+        # 3. Run Pipeline
+        self.console.print(f"\n[cyan]Running Design Polish Pipeline...[/cyan]")
+        self.console.print(f"  1. Polisher: {polisher.name}")
+        self.console.print(f"  2. Updater: {updater.name}")
+        self.console.print(f"  3. Final Polisher: {final_polisher.name}\n")
+        
+        try:
+            from .exceptions import AgentError, APIError, ConfigurationError
+            
+            pipeline = WorkflowTemplates.design_polish_chain(polisher, updater, final_polisher)
+            pipeline.framework = self.framework
+            
+            with self.console.status("[bold green]Executing pipeline steps...[/bold green]") as status:
+                result = pipeline.run(document_text)
+            
+            # 4. Show Result
+            self.console.print("\n[green]✓ Pipeline Complete![/green]\n")
+            
+            self.console.print(Panel(
+                result.final_output,
+                title="Final Polished Design Document",
+                border_style="green"
+            ))
+            
+            # 5. Save
+            save = questionary.confirm(
+                "Save result to file?",
+                default=True,
+                style=custom_style
+            ).ask()
+            
+            if save:
+                # Determine default filename and location
+                if original_doc_path:
+                    # If loaded from file, offer option to save next to original
+                    original_stem = original_doc_path.stem
+                    original_suffix = original_doc_path.suffix or '.md'
+                    original_dir = original_doc_path.parent
+                    
+                    # Generate polished filename next to original
+                    polished_filename_next_to_original = original_dir / f"{original_stem}_polished{original_suffix}"
+                    
+                    # Ask user where to save
+                    save_location = questionary.select(
+                        "Where would you like to save the polished document?",
+                        choices=[
+                            f"📁 Next to original file: {polished_filename_next_to_original.name}",
+                            "📝 Custom location",
+                            "← Cancel"
+                        ],
+                        default=f"📁 Next to original file: {polished_filename_next_to_original.name}",
+                        style=custom_style
+                    ).ask()
+                    
+                    if not save_location or "Cancel" in save_location:
+                        return
+                    
+                    if "Next to original" in save_location:
+                        # Save next to original file
+                        output_path = polished_filename_next_to_original
+                    else:
+                        # Custom location
+                        filename = questionary.text(
+                            "Filename:",
+                            default=f"polished_design_{result.pipeline_id[:8]}.md",
+                            style=custom_style
+                        ).ask()
+                        
+                        if not filename:
+                            return
+                        
+                        output_path = Path(filename)
+                        if not output_path.is_absolute():
+                            # If relative path, use current directory or original file's directory
+                            output_path = original_dir / output_path
+                else:
+                    # No original file (pasted text), use custom location
+                    filename = questionary.text(
+                        "Filename:",
+                        default=f"polished_design_{result.pipeline_id[:8]}.md",
+                        style=custom_style
+                    ).ask()
+                    
+                    if not filename:
+                        return
+                    
+                    output_path = Path(filename)
+                    if not output_path.is_absolute():
+                        output_path = Path.cwd() / output_path
+                
+                # Write the file
+                try:
+                    with open(output_path, 'w', encoding='utf-8') as f:
+                        f.write(f"# Design Polish Pipeline Result\n\n")
+                        f.write("---\n\n")
+                        f.write(result.final_output)
+                        f.write("\n\n---\n")
+                        f.write("## Pipeline Steps\n")
+                        for step in result.steps:
+                            f.write(f"### {step['step_name']} ({step['agent']})\n")
+                            f.write(f"{step['output']}\n\n")
+                    
+                    self.console.print(f"[green]✓ Saved to {output_path}[/green]")
+                    if original_doc_path:
+                        self.console.print(f"[dim]Original: {original_doc_path}[/dim]")
+                        self.console.print(f"[dim]Polished: {output_path}[/dim]")
+                except Exception as e:
+                    self.console.print(f"[red]Error saving file: {e}[/red]")
+                    questionary.press_any_key_to_continue().ask()
+        except (AgentError, APIError, ConfigurationError) as e:
+            self.console.print(f"\n[red]Design polish pipeline failed: {e}[/red]")
+            if hasattr(e, 'original_error') and e.original_error:
+                self.console.print(f"[dim]Original error: {e.original_error}[/dim]")
+        except Exception as e:
+            self.console.print(f"\n[red]Unexpected Error: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
         
         questionary.press_any_key_to_continue().ask()
 
@@ -2613,34 +3015,178 @@ class ImprovedTUI:
         """Get agent from unified selection choice"""
         agents = []
         
-        # Extract agent name from choice (format: "icon name (model) status")
-        # Find the agent by matching name
-        for agent_info in all_agents:
-            if agent_info['name'] in choice and agent_info['available']:
-                if agent_info['type'] == 'builtin':
-                    if agent_info['builtin_type'] == 'mock':
-                        agents.append(MockAgent(name="mock", model="mock-model"))
-                    elif agent_info['builtin_type'] == 'claude':
-                        try:
-                            agents.append(ClaudeAgent())
-                        except Exception:
-                            pass
-                    elif agent_info['builtin_type'] == 'gpt4':
-                        try:
-                            agents.append(GPT4Agent())
-                        except Exception:
-                            pass
-                else:
-                    # Custom agent
-                    try:
-                        instance = self.agent_manager.create_agent_instance(agent_info['custom_config'])
-                        if instance:
-                            agents.append(instance)
-                    except Exception:
-                        pass
-                break
+        # Extract agent name from choice (format: "icon name (model)")
+        # Try to parse the exact name from the choice string
+        agent_name = None
+        if "⭐" in choice:
+            # Custom agent format: "⭐ name (model)"
+            try:
+                parts = choice.split("⭐ ", 1)
+                if len(parts) > 1:
+                    name_part = parts[1].split(" (")[0]
+                    agent_name = name_part.strip()
+            except (IndexError, ValueError):
+                pass
+        
+        # If we couldn't parse, try substring matching
+        if not agent_name:
+            # Find the agent by matching name substring
+            for agent_info in all_agents:
+                if agent_info['name'] in choice and agent_info.get('available', False):
+                    agent_name = agent_info['name']
+                    break
+        
+        # Now find and create the agent
+        if agent_name:
+            for agent_info in all_agents:
+                if agent_info['name'] == agent_name and agent_info.get('available', False):
+                    if agent_info['type'] == 'builtin':
+                        if agent_info['builtin_type'] == 'mock':
+                            agents.append(MockAgent(name="mock", model="mock-model"))
+                        elif agent_info['builtin_type'] == 'claude':
+                            try:
+                                agents.append(ClaudeAgent())
+                            except Exception:
+                                pass
+                        elif agent_info['builtin_type'] == 'gpt4':
+                            try:
+                                agents.append(GPT4Agent())
+                            except Exception:
+                                pass
+                    else:
+                        # Custom agent
+                        custom_config = agent_info.get('custom_config')
+                        if not custom_config:
+                            # Try to find in custom_agents list
+                            for custom_agent in custom_agents:
+                                if custom_agent.get('name') == agent_name:
+                                    custom_config = custom_agent
+                                    break
+                        
+                        if custom_config:
+                            try:
+                                instance = self.agent_manager.create_agent_instance(custom_config)
+                                if instance:
+                                    agents.append(instance)
+                            except Exception as e:
+                                # Log the error for debugging but don't fail silently
+                                import logging
+                                logger = logging.getLogger(__name__)
+                                logger.warning(f"Failed to create agent '{agent_name}': {e}", exc_info=True)
+                                # Don't append, but continue to try other matches
+                                pass
+                    break
         
         return agents
+    
+    def _validate_agent_for_workflow(self, agent_info: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+        """
+        Validate that an agent can actually be created and is properly configured.
+        
+        This performs a real validation by attempting to create the agent instance
+        and checking model names against provider supported models.
+        
+        Args:
+            agent_info: Agent dictionary from unified agent list
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        try:
+            # Try to create the agent instance
+            if agent_info['type'] == 'builtin':
+                # Built-in agents - try to create
+                if agent_info.get('builtin_type') == 'mock':
+                    MockAgent(name="mock", model="mock-model")
+                    return True, None
+                elif agent_info.get('builtin_type') == 'claude':
+                    ClaudeAgent()
+                    return True, None
+                elif agent_info.get('builtin_type') == 'gpt4':
+                    GPT4Agent()
+                    return True, None
+            else:
+                # Custom agent - validate configuration
+                custom_config = agent_info.get('custom_config')
+                if not custom_config:
+                    # Try to find in custom agents list
+                    custom_agents = self.agent_manager.list_agents()
+                    for custom_agent in custom_agents:
+                        if custom_agent.get('name') == agent_info.get('name'):
+                            custom_config = custom_agent
+                            break
+                
+                if custom_config:
+                    # Validate model name if provider-backed agent
+                    agent_type = custom_config.get('type')
+                    model = custom_config.get('model', '')
+                    provider_name = custom_config.get('provider')
+                    
+                    if agent_type == 'provider' and provider_name and model:
+                        # Check if model is supported by provider
+                        try:
+                            from .providers.registry import ProviderRegistry
+                            ProviderRegistry.discover()
+                            provider = ProviderRegistry.get_provider(provider_name.lower())
+                            
+                            if provider:
+                                # Check if model is in supported models (or provider allows unknown models)
+                                supported_models = provider.supported_models or []
+                                model_lower = model.lower()
+                                
+                                # Pre-validation: Check for obviously invalid model names
+                                if provider_name.lower() == 'openai':
+                                    # Check for invalid GPT model versions
+                                    if 'gpt-5' in model_lower or 'gpt-6' in model_lower:
+                                        return False, f"Model '{model}' is not a valid OpenAI model (GPT-5/6 don't exist)"
+                                    # Check if model matches known GPT patterns
+                                    valid_patterns = ['gpt-4', 'gpt-3', 'gpt-4o', 'o1', 'davinci', 'curie', 'babbage', 'ada']
+                                    if not any(pattern in model_lower for pattern in valid_patterns):
+                                        # Not a known GPT pattern - check if it's in supported list
+                                        if supported_models and model_lower not in [m.lower() for m in supported_models]:
+                                            return False, f"Model '{model}' is not a recognized OpenAI model"
+                                
+                                elif provider_name.lower() == 'gemini':
+                                    # Check for invalid Gemini model names
+                                    valid_patterns = ['gemini-1', 'gemini-2', 'gemini-pro']
+                                    if not any(pattern in model_lower for pattern in valid_patterns):
+                                        if supported_models and model_lower not in [m.lower() for m in supported_models]:
+                                            return False, f"Model '{model}' is not a recognized Gemini model"
+                                
+                                # Try to create agent instance - this will validate everything
+                                instance = self.agent_manager.create_agent_instance(custom_config)
+                                if instance:
+                                    return True, None
+                                else:
+                                    return False, f"Agent creation returned None for model '{model}'"
+                        except Exception as e:
+                            error_msg = str(e)
+                            # Check for model not found errors
+                            if 'not found' in error_msg.lower() or 'not available' in error_msg.lower():
+                                return False, f"Model '{model}' not found or not available"
+                            elif 'api key' in error_msg.lower() or 'api_key' in error_msg.lower():
+                                return False, f"API key not configured"
+                            else:
+                                return False, f"Configuration error: {error_msg}"
+                    else:
+                        # Non-provider agent - just try to create
+                        instance = self.agent_manager.create_agent_instance(custom_config)
+                        if instance:
+                            return True, None
+                        else:
+                            return False, "Agent creation failed"
+            
+            return False, "Unknown agent type"
+        except Exception as e:
+            error_msg = str(e)
+            # Extract meaningful error message
+            if 'not found' in error_msg.lower() or 'not available' in error_msg.lower():
+                model = agent_info.get('model', 'unknown')
+                return False, f"Model '{model}' not found or not available"
+            elif 'api key' in error_msg.lower() or 'api_key' in error_msg.lower():
+                return False, "API key not configured"
+            else:
+                return False, f"Validation error: {error_msg}"
     
     def _get_ready_agents_for_selection(self) -> List[Dict[str, Any]]:
         """
@@ -2649,10 +3195,14 @@ class ImprovedTUI:
         This is the single modular way to select agents that have a status of Ready.
         Returns a list of agent dictionaries with 'available' == True (Ready status).
         
+        Additionally validates that agents can actually be created before including them.
+        Filters out agents with invalid model names or configuration issues.
+        
         Ensures agent_status is up to date before filtering.
         
         Returns:
             List of agent dicts with keys: name, model, type, icon, available, etc.
+            Only includes agents that pass validation.
         """
         # Ensure agent_status is up to date
         if self.agent_status is None:
@@ -2665,7 +3215,49 @@ class ImprovedTUI:
         # This corresponds to agents with Status "Ready" in the agent status table
         ready_agents = [agent for agent in all_agents if agent.get('available', False)]
         
-        return ready_agents
+        # Additional validation: actually try to create each agent to ensure it works
+        validated_agents = []
+        invalid_agents = []
+        
+        for agent in ready_agents:
+            is_valid, error_msg = self._validate_agent_for_workflow(agent)
+            if is_valid:
+                validated_agents.append(agent)
+            else:
+                # Mark agent as invalid but keep for reporting
+                agent['validation_error'] = error_msg
+                invalid_agents.append(agent)
+        
+        # Log invalid agents for debugging and optionally show to user
+        if invalid_agents:
+            import logging
+            logger = logging.getLogger(__name__)
+            for agent in invalid_agents:
+                logger.warning(
+                    f"Agent '{agent.get('name')}' filtered from selection: {agent.get('validation_error')}"
+                )
+            
+            # Show warning to user if there are invalid agents
+            if len(validated_agents) == 0 and len(invalid_agents) > 0:
+                # No valid agents available - show error
+                self.console.print(
+                    f"[red]No valid agents available for selection.[/red]\n"
+                    f"[yellow]Found {len(invalid_agents)} agent(s) with configuration issues:[/yellow]"
+                )
+                for agent in invalid_agents[:5]:  # Show first 5
+                    error = agent.get('validation_error', 'Unknown error')
+                    self.console.print(f"  • {agent.get('name')} ({agent.get('model', 'unknown')}): {error}")
+                if len(invalid_agents) > 5:
+                    self.console.print(f"  ... and {len(invalid_agents) - 5} more")
+            elif len(invalid_agents) > 0:
+                # Some agents filtered but we have valid ones
+                # Only log, don't interrupt workflow
+                logger.info(
+                    f"Filtered {len(invalid_agents)} invalid agent(s) from selection. "
+                    f"{len(validated_agents)} valid agent(s) available."
+                )
+        
+        return validated_agents
     
     def _select_ready_agent(self, prompt: str, default_hint: Optional[str] = None) -> Optional[BaseAgent]:
         """
@@ -2681,7 +3273,35 @@ class ImprovedTUI:
         ready_agents = self._get_ready_agents_for_selection()
         
         if not ready_agents:
-            self.console.print("[red]No agents with Ready status available. Please configure agents first.[/red]")
+            self.console.print("[red]No agents with Ready status available.[/red]")
+            # Check if there are custom agents that aren't ready
+            custom_agents = self.agent_manager.list_agents()
+            not_ready_custom = []
+            for agent in custom_agents:
+                try:
+                    instance = self.agent_manager.create_agent_instance(agent)
+                    if not instance:
+                        not_ready_custom.append(agent)
+                except Exception as e:
+                    try:
+                        self.agent_manager.capture_agent_error(agent, e, "creation")
+                    except Exception:
+                        pass
+                    not_ready_custom.append(agent)
+            
+            if not_ready_custom:
+                self.console.print(f"[yellow]Found {len(not_ready_custom)} agent(s) with configuration issues.[/yellow]")
+                fix_choice = questionary.confirm(
+                    "Would you like to diagnose and fix agent configuration issues?",
+                    default=True,
+                    style=custom_style
+                ).ask()
+                if fix_choice:
+                    self._fix_agent_configuration_issues(not_ready_custom)
+                    # Retry after fixing
+                    return self._select_ready_agent(prompt, default_hint)
+            else:
+                self.console.print("[yellow]Please configure agents first.[/yellow]")
             return None
         
         # Build choices from ready agents
@@ -2709,7 +3329,101 @@ class ImprovedTUI:
         # Convert selection to BaseAgent instance
         custom_agents = self.agent_manager.list_agents()
         all_agents = self._build_unified_agent_list(custom_agents, set())
-        return self._get_agent_from_unified_choice(selected, all_agents, custom_agents)[0]
+        
+        # Try to create agent and capture any errors
+        try:
+            agents = self._get_agent_from_unified_choice(selected, all_agents, custom_agents)
+            
+            if not agents:
+                # Try to get more details about why it failed
+                agent_name = None
+                if "⭐" in selected:
+                    try:
+                        parts = selected.split("⭐ ", 1)
+                        if len(parts) > 1:
+                            name_part = parts[1].split(" (")[0]
+                            agent_name = name_part.strip()
+                    except (IndexError, ValueError):
+                        pass
+                
+                # Find the agent config to get more details
+                agent_config = None
+                for agent_info in all_agents:
+                    if agent_info.get('name') == agent_name:
+                        agent_config = agent_info.get('custom_config') or agent_info
+                        break
+                
+                error_msg = f"[red]Error: Could not create agent from selection '{selected}'[/red]"
+                if agent_config:
+                    agent_type = agent_config.get('type', 'unknown')
+                    provider = agent_config.get('provider', 'unknown')
+                    model = agent_config.get('model', 'unknown')
+                    error_msg += f"\n[dim]Agent Type: {agent_type}, Provider: {provider}, Model: {model}[/dim]"
+                    
+                    # Provide helpful hints based on agent type
+                    if agent_type == 'provider' and provider == 'gemini':
+                        error_msg += "\n[yellow]Hint: Check that GOOGLE_API_KEY is set and the model name is valid.[/yellow]"
+                        error_msg += "\n[dim]Supported Gemini models: gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash-exp[/dim]"
+                    elif agent_type == 'provider' and provider == 'anthropic':
+                        error_msg += "\n[yellow]Hint: Check that ANTHROPIC_API_KEY is set.[/yellow]"
+                    elif agent_type == 'provider' and provider == 'openai':
+                        error_msg += "\n[yellow]Hint: Check that OPENAI_API_KEY is set and model name is valid.[/yellow]"
+                        error_msg += "\n[dim]Supported OpenAI models: gpt-4, gpt-4-turbo, gpt-3.5-turbo, gpt-4o, gpt-4o-mini[/dim]"
+                
+                self.console.print(error_msg)
+                return None
+            
+            # Final validation: ensure the created agent is actually valid
+            agent = agents[0]
+            
+            # Validate model name if it's a provider-backed agent
+            if hasattr(agent, 'model') and agent.model:
+                try:
+                    from .providers.registry import ProviderRegistry
+                    ProviderRegistry.discover()
+                    
+                    # Try to find provider for this model
+                    model_lower = agent.model.lower()
+                    provider = ProviderRegistry.find_provider_for_model(model_lower)
+                    
+                    if provider:
+                        # Check if model is in supported models
+                        supported_models = provider.supported_models or []
+                        if supported_models and model_lower not in [m.lower() for m in supported_models]:
+                            # Model not in supported list - check for clearly invalid models
+                            # Some providers are permissive, but we should catch obvious errors
+                            if 'gpt-5' in model_lower or 'gpt-6' in model_lower:
+                                # Clearly invalid GPT model (GPT-5 doesn't exist yet)
+                                self.console.print(
+                                    f"[red]Error: Model '{agent.model}' is not a valid OpenAI model.[/red]\n"
+                                    f"[yellow]Supported OpenAI models: gpt-4, gpt-4-turbo, gpt-3.5-turbo, gpt-4o, gpt-4o-mini[/yellow]\n"
+                                    f"[dim]Please update your agent configuration with a valid model name.[/dim]"
+                                )
+                                return None
+                            elif provider.name == 'openai' and 'gpt' in model_lower:
+                                # OpenAI provider but model not in supported list
+                                # Warn but allow (provider might be permissive)
+                                self.console.print(
+                                    f"[yellow]Warning: Model '{agent.model}' is not in the standard OpenAI model list.[/yellow]\n"
+                                    f"[dim]This may cause errors. Supported models: {', '.join(supported_models[:5])}...[/dim]"
+                                )
+                except Exception:
+                    # If provider lookup fails, continue - agent might still work
+                    pass
+            
+            return agent
+        except Exception as e:
+            # Catch any unexpected errors during agent creation
+            import traceback
+            error_msg = str(e)
+            
+            # Check for model-related errors
+            if 'not found' in error_msg.lower() or 'not available' in error_msg.lower():
+                self.console.print(f"[red]Error: {error_msg}[/red]")
+            else:
+                self.console.print(f"[red]Error creating agent: {e}[/red]")
+                self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            return None
     
     def _count_all_available_agents(self, custom_agents: List[Dict[str, Any]]) -> Dict[str, int]:
         """Count all available (working) agents"""
@@ -2911,6 +3625,223 @@ class ImprovedTUI:
         
         return agents
     
+    def _fix_agent_configuration_issues(self, not_ready_agents: List[Dict[str, Any]]):
+        """
+        Diagnose and help fix agent configuration issues.
+        
+        Args:
+            not_ready_agents: List of agent configs that failed to instantiate
+        """
+        self.show_header("Fix Agent Configuration Issues")
+        
+        if not not_ready_agents:
+            self.console.print("[green]✓ All agents are ready![/green]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        self.console.print(Panel(
+            f"[bold]Found {len(not_ready_agents)} agent(s) with configuration issues[/bold]\n\n"
+            "This tool will help you diagnose and fix common configuration problems:\n"
+            "  • Missing API keys\n"
+            "  • Invalid configuration\n"
+            "  • Model availability issues\n"
+            "  • Network/connection problems",
+            border_style="yellow"
+        ))
+        
+        # Diagnose each agent
+        issues_table = Table(title="Agent Configuration Issues", show_header=True)
+        issues_table.add_column("Agent", style="bold cyan")
+        issues_table.add_column("Type", style="magenta")
+        issues_table.add_column("Model", style="blue")
+        issues_table.add_column("Issue", style="red")
+        issues_table.add_column("Fix Available", justify="center")
+        
+        fixable_agents = []
+        
+        for agent in not_ready_agents:
+            agent_name = agent.get('name', 'unnamed')
+            agent_type = agent.get('type', 'unknown')
+            agent_model = agent.get('model', 'unknown')
+            
+            # Try to diagnose the issue
+            issue, can_fix = self._diagnose_agent_issue(agent)
+            
+            if can_fix:
+                fixable_agents.append((agent, issue))
+                fix_status = "[green]Yes[/green]"
+            else:
+                fix_status = "[yellow]Manual[/yellow]"
+            
+            issues_table.add_row(
+                agent_name,
+                agent_type,
+                agent_model,
+                issue[:60] + ("..." if len(issue) > 60 else ""),
+                fix_status
+            )
+        
+        self.console.print("\n")
+        self.console.print(issues_table)
+        
+        if not fixable_agents:
+            self.console.print("\n[yellow]No automatically fixable issues found.[/yellow]")
+            self.console.print("[dim]Please check the agent configurations manually.[/dim]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Offer to fix issues
+        self.console.print("\n")
+        fix_all = questionary.confirm(
+            f"Would you like to fix {len(fixable_agents)} agent(s) automatically?",
+            default=True,
+            style=custom_style
+        ).ask()
+        
+        if not fix_all:
+            # Let user select which ones to fix
+            fix_choices = []
+            for agent, issue in fixable_agents:
+                title = f"{agent.get('name', 'unnamed')} - {issue[:50]}"
+                fix_choices.append(title)
+            fix_choices.append("← Cancel")
+            
+            selected = select_with_filter(
+                "Select agents to fix:",
+                choices=fix_choices,
+                style=custom_style
+            )
+            
+            if not selected or "Cancel" in selected:
+                return
+            
+            # Find selected agent
+            selected_idx = fix_choices.index(selected) if selected in fix_choices else -1
+            if selected_idx >= 0 and selected_idx < len(fixable_agents):
+                fixable_agents = [fixable_agents[selected_idx]]
+            else:
+                return
+        
+        # Fix each agent
+        fixed_count = 0
+        for agent, issue in fixable_agents:
+            self.console.print(f"\n[cyan]Fixing: {agent.get('name', 'unnamed')}[/cyan]")
+            if self._fix_agent_issue(agent, issue):
+                fixed_count += 1
+                self.console.print(f"[green]✓ Fixed[/green]")
+            else:
+                self.console.print(f"[red]✗ Could not fix automatically[/red]")
+        
+        self.console.print(f"\n[green]Fixed {fixed_count}/{len(fixable_agents)} agent(s)[/green]")
+        
+        # Re-test agents
+        self.console.print("\n[yellow]Re-testing agents...[/yellow]")
+        self.agent_status = AgentConfigTester.test_all()
+        
+        questionary.press_any_key_to_continue().ask()
+    
+    def _diagnose_agent_issue(self, agent: Dict[str, Any]) -> Tuple[str, bool]:
+        """
+        Diagnose what's wrong with an agent configuration.
+        
+        Returns:
+            Tuple of (issue_description, can_fix_automatically)
+        """
+        from typing import Tuple
+        
+        agent_type = agent.get('type', 'unknown')
+        provider_name = agent.get('provider')
+        model = agent.get('model', 'unknown')
+        
+        # Try to create instance to get the actual error
+        try:
+            instance = self.agent_manager.create_agent_instance(agent)
+            if not instance:
+                # Provide more specific error message
+                agent_type = agent.get('type', 'unknown')
+                if agent_type not in ['claude', 'gpt4', 'openai_compatible', 'mock', 'provider']:
+                    return f"Invalid agent type: '{agent_type}'. Must be one of: claude, gpt4, openai_compatible, mock, provider", False
+                else:
+                    return "Agent creation returned None (check model name and configuration)", False
+        except Exception as e:
+            error_msg = str(e).lower()
+            error_class = e.__class__.__name__
+            
+            # Check for missing API key
+            if 'api' in error_msg and ('key' in error_msg or 'token' in error_msg):
+                # Determine which key is needed
+                if agent_type == 'claude' or provider_name == 'anthropic':
+                    return "Missing ANTHROPIC_API_KEY", True
+                elif agent_type == 'gpt4' or provider_name == 'openai':
+                    return "Missing OPENAI_API_KEY", True
+                elif agent_type == 'openai_compatible':
+                    api_key_env = agent.get('api_key_env')
+                    if api_key_env:
+                        return f"Missing {api_key_env}", True
+                    return "Missing API key (check configuration)", False
+                else:
+                    return "Missing API key", False
+            
+            # Check for model not found
+            if 'not found' in error_msg or '404' in error_msg:
+                return f"Model '{model}' not found or unavailable", False
+            
+            # Check for invalid configuration
+            if 'invalid' in error_msg or 'configuration' in error_msg:
+                return "Invalid configuration", False
+            
+            # Check for connection errors
+            if 'connection' in error_msg or 'network' in error_msg or 'dns' in error_msg:
+                return "Network/connection issue", False
+            
+            # Generic error
+            return f"{error_class}: {str(e)[:50]}", False
+        
+        return "Unknown issue", False
+    
+    def _fix_agent_issue(self, agent: Dict[str, Any], issue: str) -> bool:
+        """
+        Attempt to fix an agent configuration issue.
+        
+        Returns:
+            True if fix was successful, False otherwise
+        """
+        # Check if it's a missing API key issue
+        if "Missing" in issue and "API_KEY" in issue:
+            # Extract the key name
+            if "ANTHROPIC_API_KEY" in issue:
+                self._set_api_key("ANTHROPIC_API_KEY", "Claude (Anthropic)")
+                # Re-test
+                try:
+                    instance = self.agent_manager.create_agent_instance(agent)
+                    return instance is not None
+                except Exception:
+                    return False
+            elif "OPENAI_API_KEY" in issue:
+                self._set_api_key("OPENAI_API_KEY", "GPT-4 (OpenAI)")
+                # Re-test
+                try:
+                    instance = self.agent_manager.create_agent_instance(agent)
+                    return instance is not None
+                except Exception:
+                    return False
+            elif "Missing" in issue:
+                # Try to extract key name from issue
+                parts = issue.split()
+                for i, part in enumerate(parts):
+                    if part.endswith("_API_KEY") or part.endswith("_KEY"):
+                        key_name = part
+                        display_name = agent.get('name', 'Agent')
+                        self._set_api_key(key_name, display_name)
+                        # Re-test
+                        try:
+                            instance = self.agent_manager.create_agent_instance(agent)
+                            return instance is not None
+                        except Exception:
+                            return False
+        
+        return False
+    
     def _run_agents(self, agents: List[BaseAgent]):
         """Run agents on current prompt"""
         self.console.print(f"\n[cyan]Running {len(agents)} agent(s)...[/cyan]\n")
@@ -3071,11 +4002,11 @@ class ImprovedTUI:
             return
         
         # Get input file path
-        input_path = questionary.path(
+        input_path = self._safe_path_input(
             "Enter path to prompt file:",
             style=custom_style,
             only_directories=False
-        ).ask()
+        )
         
         if not input_path:
             return
@@ -3509,11 +4440,11 @@ class ImprovedTUI:
         ))
         
         # Get base document
-        base_path = questionary.path(
+        base_path = self._safe_path_input(
             "Base document path:",
             style=custom_style,
             only_directories=False
-        ).ask()
+        )
         
         if not base_path:
             return
@@ -3547,11 +4478,11 @@ class ImprovedTUI:
         
         patches = []
         while True:
-            source_path = questionary.path(
+            source_path = self._safe_path_input(
                 "Patch source document (empty to finish):",
                 style=custom_style,
                 only_directories=False
-            ).ask()
+            )
             
             if not source_path:
                 break
@@ -3676,12 +4607,12 @@ class ImprovedTUI:
         doc_config = self._load_document_updater_config()
         default_dir = doc_config.get('last_processed_dir', '')
         
-        directory_path = questionary.path(
+        directory_path = self._safe_path_input(
             "Directory containing design documents:",
             default=default_dir,
             style=custom_style,
             only_directories=True
-        ).ask()
+        )
         
         if not directory_path:
             return
@@ -3759,11 +4690,11 @@ class ImprovedTUI:
         # Get output directory
         output_dir = doc_config.get('output_dir', '')
         if not output_dir:
-            output_dir = questionary.path(
+            output_dir = self._safe_path_input(
                 "Output directory for consolidated files:",
                 style=custom_style,
                 only_directories=True
-            ).ask()
+            )
             
             if not output_dir:
                 return
@@ -3879,24 +4810,24 @@ class ImprovedTUI:
         
         for source_id, source_name in sources:
             current = source_dirs.get(source_id, '')
-            path = questionary.path(
+            path = self._safe_path_input(
                 f"{source_name} directory:",
                 default=current,
                 style=custom_style,
                 only_directories=True
-            ).ask()
+            )
             
             if path:
                 source_dirs[source_id] = str(Path(path).expanduser().resolve())
         
         # Output directory
         current_output = doc_config.get('output_dir', '')
-        output_dir = questionary.path(
+        output_dir = self._safe_path_input(
             "Output directory:",
             default=current_output,
             style=custom_style,
-            only_directories=True,
-        ).ask()
+            only_directories=True
+        )
         
         if output_dir:
             doc_config['output_dir'] = str(Path(output_dir).expanduser().resolve())
@@ -4245,12 +5176,12 @@ class ImprovedTUI:
         """Change the base directory for agent folders"""
         current = self._tui_settings.get('agent_folders_base_dir', '')
         
-        new_dir = questionary.path(
+        new_dir = self._safe_path_input(
             "New base directory:",
             default=current,
             style=custom_style,
             only_directories=True
-        ).ask()
+        )
         
         if not new_dir:
             return
@@ -4499,12 +5430,12 @@ class ImprovedTUI:
         if current_config:
             default_folder = str(current_config.watch_folder)
         
-        watch_folder = questionary.path(
+        watch_folder = self._safe_path_input(
             "Watch folder for job files:",
             default=default_folder,
             only_directories=True,
             style=custom_style
-        ).ask()
+        )
         
         if not watch_folder:
             return
@@ -4790,12 +5721,12 @@ class ImprovedTUI:
             default_folder = str(Path.home() / "startd8-jobs")
         
         # Get output folder
-        output_folder = questionary.path(
+        output_folder = self._safe_path_input(
             "Output folder for job file:",
             default=default_folder,
             only_directories=True,
             style=custom_style
-        ).ask()
+        )
         
         if not output_folder:
             return
@@ -4911,10 +5842,16 @@ class ImprovedTUI:
                 self.document_enhancement_chain_menu()
             elif "Run Design Pipeline" in choice:
                 self.step2_run_design_review_chain()
+            elif "Design Polish Pipeline" in choice:
+                self.run_design_polish_pipeline()
             elif "Iterative" in choice:
                 self.iterative_workflow_menu()
             elif "Job Queue" in choice:
                 self.job_queue_menu()
+            elif "Analyze Last Error" in choice:
+                self.analyze_last_error_workflow()
+            elif "Analyze Agent Config Errors" in choice:
+                self.run_agent_config_error_analysis()
             elif "Distribute Prompt" in choice:
                 if "[dim]" not in choice:  # Only if not disabled (no prompts exist)
                     self.step2_distribute_prompt()
@@ -4935,6 +5872,27 @@ class ImprovedTUI:
                 self.show_statistics()
             elif "Test Agent" in choice:
                 self.test_agent_connections()
+            elif "Fix Agent" in choice:
+                # Find all non-ready agents
+                custom_agents = self.agent_manager.list_agents()
+                not_ready_custom = []
+                for agent in custom_agents:
+                    try:
+                        instance = self.agent_manager.create_agent_instance(agent)
+                        if not instance:
+                            not_ready_custom.append(agent)
+                    except Exception as e:
+                        try:
+                            self.agent_manager.capture_agent_error(agent, e, "creation")
+                        except Exception:
+                            pass
+                        not_ready_custom.append(agent)
+                
+                if not_ready_custom:
+                    self._fix_agent_configuration_issues(not_ready_custom)
+                else:
+                    self.console.print("[green]✓ All agents are ready![/green]")
+                    questionary.press_any_key_to_continue().ask()
             elif "Manage Agents" in choice:
                 self.manage_agents()
             elif "Manage API" in choice:
@@ -5039,12 +5997,12 @@ class ImprovedTUI:
         doc_config = self._load_document_updater_config()
         default_dir = doc_config.get('last_processed_dir', '')
         
-        directory_path = questionary.path(
+        directory_path = self._safe_path_input(
             "Directory containing all design documents:",
             default=default_dir,
             style=custom_style,
             only_directories=True
-        ).ask()
+        )
         
         if not directory_path:
             return
@@ -5198,6 +6156,40 @@ class ImprovedTUI:
             border_style="cyan"
         ))
     
+    def _safe_path_input(self, prompt: str, **kwargs) -> Optional[str]:
+        """
+        Safely get path input from user, handling cases where questionary.path might not work.
+        
+        This handles the case where questionary.path() might return a string directly
+        instead of a prompt object, which causes "'str' object has no attribute 'ask'" errors.
+        
+        Args:
+            prompt: Prompt text
+            **kwargs: Additional arguments for questionary.path or questionary.text
+            
+        Returns:
+            Path string or None if cancelled
+        """
+        try:
+            if hasattr(questionary, 'path'):
+                path_prompt = questionary.path(prompt, **kwargs)
+                # Check if it's actually a prompt object (has .ask method)
+                if hasattr(path_prompt, 'ask'):
+                    result = path_prompt.ask()
+                    return result if isinstance(result, str) else None
+                elif isinstance(path_prompt, str):
+                    # If it returned a string directly (some versions do this), return it
+                    return path_prompt if path_prompt else None
+                else:
+                    # Unexpected return type, fallback to text
+                    return questionary.text(prompt, **kwargs).ask()
+            else:
+                # Fallback to text input if path() doesn't exist
+                return questionary.text(prompt, **kwargs).ask()
+        except (AttributeError, TypeError) as e:
+            # If questionary.path fails for any reason, fallback to text input
+            return questionary.text(prompt, **kwargs).ask()
+    
     def _get_text_or_file_input(
         self,
         title: str,
@@ -5250,12 +6242,12 @@ class ImprovedTUI:
             ).ask()
         
         elif "Load from file" in input_method:
-            # File input
-            file_path = questionary.path(
+            # File input - use safe path input helper
+            file_path = self._safe_path_input(
                 "Enter path to file:",
                 style=custom_style,
                 only_directories=False
-            ).ask()
+            )
             
             if not file_path:
                 return None
@@ -5672,12 +6664,19 @@ class ImprovedTUI:
             border_style="cyan"
         ))
         
-        doc_path = questionary.path(
+        # Use text input with validation since path() might not support validate parameter well
+        doc_path = questionary.text(
             "Select document:",
             default=default_dir,
-            style=custom_style,
-            validate=lambda p: Path(p).is_file() or "Please select a file, not a directory"
+            style=custom_style
         ).ask()
+        if doc_path:
+            from pathlib import Path
+            path_obj = Path(doc_path).expanduser()
+            if not path_obj.is_file():
+                self.console.print("[red]Please select a file, not a directory[/red]")
+                return None
+            doc_path = str(path_obj)
         
         if not doc_path:
             return None
@@ -6176,6 +7175,529 @@ class ImprovedTUI:
                 border_style=status_color
             ))
             self.console.print()
+        
+        questionary.press_any_key_to_continue().ask()
+
+    def analyze_last_error_workflow(self):
+        """Analyze the last error from log files"""
+        self.show_header("Analyze Last Error")
+        
+        # Show where logs are searched
+        config_dir = default_config_dir()
+        data_dir = default_data_dir()
+        search_paths = [
+            config_dir / "logs",
+            data_dir / "logs",
+            Path.cwd(),
+        ]
+        
+        error_info = get_last_error_from_logs()
+        if not error_info:
+            self.console.print(Panel(
+                "[yellow]No recent errors found.[/yellow]\n\n"
+                f"Searched directories:\n"
+                f"  • {config_dir / 'logs'}\n"
+                f"  • {data_dir / 'logs'}\n"
+                f"  • {Path.cwd()}\n\n"
+                "Logs are automatically created when you run workflows.\n"
+                "Run a workflow first to generate error logs.",
+                title="No Errors Found",
+                border_style="yellow",
+            ))
+            questionary.press_any_key_to_continue().ask()
+            return
+
+        # Display structured error information using Rich Table
+        formatted = format_error_for_analysis(error_info)
+        
+        # Create metadata table
+        metadata_table = Table(title="Error Metadata", show_header=True, header_style="bold cyan")
+        metadata_table.add_column("Field", style="cyan")
+        metadata_table.add_column("Value", style="white")
+        
+        if error_info.get('timestamp'):
+            metadata_table.add_row("Timestamp", str(error_info['timestamp']))
+        if error_info.get('logger'):
+            metadata_table.add_row("Logger", error_info['logger'])
+        if error_info.get('source'):
+            src = error_info['source']
+            source_str = f"{src.get('file', 'Unknown')}:{src.get('line', '?')} in {src.get('function', '?')}"
+            metadata_table.add_row("Source", source_str)
+        if error_info.get('exception_type'):
+            metadata_table.add_row("Exception Type", error_info['exception_type'])
+        if error_info.get('correlation_id'):
+            metadata_table.add_row("Correlation ID", f"[bold cyan]{error_info['correlation_id']}[/bold cyan]")
+        if error_info.get('trace_id'):
+            metadata_table.add_row("Trace ID", f"[bold cyan]{error_info['trace_id']}[/bold cyan]")
+        
+        self.console.print("\n")
+        self.console.print(metadata_table)
+        self.console.print("\n")
+        
+        # Show error message panel
+        error_message = error_info.get('message', 'No message')
+        self.console.print(Panel(
+            error_message,
+            title="Error Message",
+            border_style="red"
+        ))
+        
+        # Show traceback if available
+        if error_info.get('exception'):
+            self.console.print("\n")
+            self.console.print(Panel(
+                error_info['exception'],
+                title="Exception/Traceback",
+                border_style="yellow"
+            ))
+        
+        proceed = questionary.confirm("\nUse this error for analysis?", default=True, style=custom_style).ask()
+        if not proceed:
+            return
+        
+        # Allow editing the error text before analysis (requirement #3)
+        edit_choice = questionary.select(
+            "Would you like to edit the error text before analysis?",
+            choices=[
+                "Use as-is",
+                "Edit error text",
+                "← Cancel"
+            ],
+            default="Use as-is",
+            style=custom_style
+        ).ask()
+        
+        if not edit_choice or "Cancel" in edit_choice:
+            return
+        
+        if "Edit" in edit_choice:
+            edited_text = questionary.text(
+                "Edit the error text (you can modify or add context):",
+                default=formatted,
+                multiline=True,
+                style=custom_style
+            ).ask()
+            if edited_text:
+                formatted = edited_text
+            else:
+                self.console.print("[yellow]No changes made, using original error text.[/yellow]")
+
+        # Ensure agent status is up to date
+        self.agent_status = AgentConfigTester.test_all()
+        
+        # Select analyzer agent
+        analyzer = self._select_ready_agent("Select agent for error analysis")
+        if not analyzer:
+            return
+
+        # Run pipeline
+        try:
+            pipeline = WorkflowTemplates.error_analysis_chain(analyzer)
+            pipeline.framework = self.framework
+            
+            with self.console.status("[bold green]Running analysis...[/bold green]"):
+                result = pipeline.run(formatted)
+
+            # Display results
+            result_panel = Panel(
+                f"[bold]Agent:[/bold] {analyzer.name} ({analyzer.model})\n"
+                f"[bold]Time:[/bold] {result.total_time_ms}ms\n"
+                f"[bold]Tokens:[/bold] {result.total_tokens:,}\n"
+                f"[bold]Cost:[/bold] ${result.total_cost:.4f}\n\n"
+                f"{result.final_output}",
+                title="Error Analysis Summary",
+                border_style="green"
+            )
+            self.console.print("\n")
+            self.console.print(result_panel)
+            
+            # Save option
+            saved_path = None
+            save = questionary.confirm("\nSave analysis to file?", default=True, style=custom_style).ask()
+            if save:
+                default_dir = Path.cwd()
+                default_filename = f"error_analysis_{result.pipeline_id[:8]}.md"
+                filename = questionary.text("Filename:", default=default_filename, style=custom_style).ask()
+                
+                if filename:
+                    filename_path = Path(filename)
+                    if not filename_path.is_absolute():
+                        filename_path = default_dir / filename_path
+                    
+                    # Include raw JSON entry if available
+                    raw_json = error_info.get('raw_json_entry', '')
+                    json_section = ""
+                    if raw_json:
+                        json_section = f"\n\n---\n\n## Raw JSON Log Entry\n\n```json\n{json.dumps(raw_json, indent=2)}\n```\n"
+                    
+                    with open(filename_path, 'w', encoding='utf-8') as f:
+                        f.write(f"# Error Analysis Report\n\n")
+                        f.write(f"**Pipeline ID:** {result.pipeline_id}\n")
+                        f.write(f"**Analyzed:** {error_info.get('timestamp', 'Unknown')}\n")
+                        f.write(f"**Agent:** {analyzer.name} ({analyzer.model})\n\n")
+                        f.write("---\n\n")
+                        f.write("## Original Error\n\n")
+                        f.write(formatted)
+                        f.write("\n\n---\n\n")
+                        f.write("## Analysis Result\n\n")
+                        f.write(result.final_output)
+                        f.write("\n\n---\n\n")
+                        f.write("## Pipeline Steps\n\n")
+                        for step in result.steps:
+                            f.write(f"### {step['step_name']} ({step['agent']})\n\n")
+                            f.write(f"{step['output']}\n\n")
+                        f.write(json_section)
+                    
+                    saved_path = str(filename_path)
+                    self.console.print(f"[green]✓ Saved to {filename_path}[/green]")
+                    
+                    # Option to copy to clipboard (requirement #6)
+                    try:
+                        import pyperclip
+                        copy_choice = questionary.confirm(
+                            "Copy analysis result to clipboard?",
+                            default=False,
+                            style=custom_style
+                        ).ask()
+                        if copy_choice:
+                            clipboard_text = f"Error Analysis Result\n\n{result.final_output}\n\nSaved to: {saved_path}"
+                            pyperclip.copy(clipboard_text)
+                            self.console.print("[green]✓ Copied to clipboard[/green]")
+                    except ImportError:
+                        # pyperclip not available, skip clipboard option
+                        pass
+            
+            # Option to create queue prompt
+            if saved_path:
+                create_queue = questionary.confirm(
+                    "\nCreate a prompt from this analysis to distribute via job queue?",
+                    default=False,
+                    style=custom_style
+                ).ask()
+                if create_queue:
+                    error_info_str = formatted
+                    self._create_queue_prompt_from_analysis(
+                        error_info_str,
+                        result.final_output,
+                        saved_path
+                    )
+        except (AgentError, APIError, ConfigurationError) as e:
+            self.console.print(f"\n[red]Error analysis failed: {e}[/red]")
+            if hasattr(e, 'original_error') and e.original_error:
+                self.console.print(f"[dim]Original error: {e.original_error}[/dim]")
+        except Exception as e:
+            self.console.print(f"\n[red]Unexpected Error: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        
+        questionary.press_any_key_to_continue().ask()
+
+    def run_agent_config_error_analysis(self):
+        """Analyze agent configuration errors"""
+        self.show_header("Analyze Agent Config Errors")
+        
+        # Get non-ready agents
+        custom_agents = self.agent_manager.list_agents()
+        not_ready_agents = []
+        
+        for agent in custom_agents:
+            try:
+                instance = self.agent_manager.create_agent_instance(agent)
+                if not instance:
+                    not_ready_agents.append(agent)
+            except Exception as e:
+                try:
+                    self.agent_manager.capture_agent_error(agent, e, "creation")
+                except Exception:
+                    pass
+                not_ready_agents.append(agent)
+        
+        if not not_ready_agents:
+            self.console.print(Panel(
+                "[green]✓ All agents are configured correctly![/green]\n\n"
+                "No agent configuration errors found.",
+                title="No Errors",
+                border_style="green"
+            ))
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        # Display agents with errors
+        error_table = Table(title="Agents with Configuration Errors", show_header=True)
+        error_table.add_column("Agent", style="bold cyan")
+        error_table.add_column("Type", style="magenta")
+        error_table.add_column("Model", style="blue")
+        error_table.add_column("Error", style="red")
+        
+        error_info_list = []
+        for agent in not_ready_agents:
+            agent_name = agent.get('name', 'unnamed')
+            agent_type = agent.get('type', 'unknown')
+            agent_model = agent.get('model', 'unknown')
+            
+            # Try to get error details
+            error_msg = "Invalid configuration"
+            try:
+                instance = self.agent_manager.create_agent_instance(agent)
+                if not instance:
+                    error_msg = "Agent creation returned None"
+            except Exception as e:
+                error_msg = str(e)[:60]
+            
+            error_table.add_row(agent_name, agent_type, agent_model, error_msg)
+            error_info_list.append({
+                'agent': agent_name,
+                'type': agent_type,
+                'model': agent_model,
+                'error': error_msg,
+                'config': agent
+            })
+        
+        self.console.print("\n")
+        self.console.print(error_table)
+        
+        # Select which agent to analyze
+        if len(not_ready_agents) > 1:
+            choices = [f"{a.get('name', 'unnamed')} ({a.get('type')}/{a.get('model', 'default')})" for a in not_ready_agents]
+            choices.append("All agents")
+            choices.append("← Cancel")
+            
+            selected = questionary.select(
+                "\nSelect agent to analyze:",
+                choices=choices,
+                style=custom_style
+            ).ask()
+            
+            if not selected or "Cancel" in selected:
+                return
+            
+            if "All agents" in selected:
+                agents_to_analyze = not_ready_agents
+            else:
+                idx = choices.index(selected)
+                agents_to_analyze = [not_ready_agents[idx]]
+        else:
+            agents_to_analyze = not_ready_agents
+        
+        # Format error info for analysis
+        error_info_str = "Agent Configuration Errors:\n\n"
+        for agent_info in error_info_list:
+            if any(a.get('name') == agent_info['agent'] for a in agents_to_analyze):
+                error_info_str += f"Agent: {agent_info['agent']}\n"
+                error_info_str += f"Type: {agent_info['type']}\n"
+                error_info_str += f"Model: {agent_info['model']}\n"
+                error_info_str += f"Error: {agent_info['error']}\n"
+                error_info_str += f"Config: {json.dumps(agent_info['config'], indent=2)}\n\n"
+        
+        # Select analyzer agent
+        self.agent_status = AgentConfigTester.test_all()
+        analyzer = self._select_ready_agent("Select agent for error analysis")
+        if not analyzer:
+            return
+        
+        # Run pipeline
+        try:
+            pipeline = WorkflowTemplates.agent_config_error_analysis_chain(analyzer)
+            pipeline.framework = self.framework
+            
+            with self.console.status("[bold green]Running analysis...[/bold green]"):
+                result = pipeline.run(error_info_str)
+            
+            # Display results
+            result_panel = Panel(
+                f"[bold]Agent:[/bold] {analyzer.name} ({analyzer.model})\n"
+                f"[bold]Time:[/bold] {result.total_time_ms}ms\n"
+                f"[bold]Tokens:[/bold] {result.total_tokens:,}\n"
+                f"[bold]Cost:[/bold] ${result.total_cost:.4f}\n\n"
+                f"{result.final_output}",
+                title="Configuration Error Analysis Summary",
+                border_style="green"
+            )
+            self.console.print("\n")
+            self.console.print(result_panel)
+            
+            # Save option
+            saved_path = None
+            save = questionary.confirm("\nSave analysis to file?", default=True, style=custom_style).ask()
+            if save:
+                default_dir = Path.cwd()
+                default_filename = f"agent_config_analysis_{result.pipeline_id[:8]}.md"
+                filename = questionary.text("Filename:", default=default_filename, style=custom_style).ask()
+                
+                if filename:
+                    filename_path = Path(filename)
+                    if not filename_path.is_absolute():
+                        filename_path = default_dir / filename_path
+                    
+                    with open(filename_path, 'w', encoding='utf-8') as f:
+                        f.write(f"# Agent Configuration Error Analysis Report\n\n")
+                        f.write(f"**Pipeline ID:** {result.pipeline_id}\n")
+                        f.write(f"**Agent:** {analyzer.name} ({analyzer.model})\n\n")
+                        f.write("---\n\n")
+                        f.write("## Configuration Errors\n\n")
+                        f.write(error_info_str)
+                        f.write("\n\n---\n\n")
+                        f.write("## Analysis Result\n\n")
+                        f.write(result.final_output)
+                        f.write("\n\n---\n\n")
+                        f.write("## Pipeline Steps\n\n")
+                        for step in result.steps:
+                            f.write(f"### {step['step_name']} ({step['agent']})\n\n")
+                            f.write(f"{step['output']}\n\n")
+                    
+                    saved_path = str(filename_path)
+                    self.console.print(f"[green]✓ Saved to {filename_path}[/green]")
+            
+            # Option to create queue prompt
+            if saved_path:
+                create_queue = questionary.confirm(
+                    "\nCreate a prompt from this analysis to distribute via job queue?",
+                    default=False,
+                    style=custom_style
+                ).ask()
+                if create_queue:
+                    error_info_str_final = error_info_str if isinstance(error_info_str, str) else json.dumps(error_info_list, indent=2)
+                    self._create_queue_prompt_from_analysis(
+                        error_info_str_final,
+                        result.final_output,
+                        saved_path
+                    )
+        except (AgentError, APIError, ConfigurationError) as e:
+            self.console.print(f"\n[red]Error analysis failed: {e}[/red]")
+            if hasattr(e, 'original_error') and e.original_error:
+                self.console.print(f"[dim]Original error: {e.original_error}[/dim]")
+        except Exception as e:
+            self.console.print(f"\n[red]Unexpected Error: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+        
+        questionary.press_any_key_to_continue().ask()
+
+    def _create_queue_prompt_from_analysis(self, error_info: str, analysis_result: str, saved_path: str):
+        """Create a job queue prompt from error analysis results"""
+        self.show_header("Create Queue Prompt from Analysis")
+        
+        # Generate prompt content
+        prompt_content = f"""Error Analysis Summary
+
+## Error Information
+{error_info}
+
+## Analysis Result
+{analysis_result}
+
+## Analysis File
+Saved to: {saved_path}
+
+Please review this error analysis and provide feedback or suggestions for resolution.
+"""
+        
+        # Allow user to edit
+        edited = questionary.confirm(
+            "Would you like to edit the prompt before creating the job?",
+            default=False,
+            style=custom_style
+        ).ask()
+        
+        if edited:
+            prompt_content = questionary.text(
+                "Edit prompt content:",
+                default=prompt_content,
+                multiline=True,
+                style=custom_style
+            ).ask()
+            if not prompt_content:
+                return
+        
+        # Select agents for distribution
+        custom_agents = self.agent_manager.list_agents()
+        ready_agents = self._get_ready_agents_for_selection()
+        
+        if not ready_agents:
+            self.console.print("[red]No ready agents available for distribution.[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        
+        agent_choices = []
+        for agent in ready_agents:
+            agent_choices.append(f"{agent['icon']} {agent['name']} ({agent['model']})")
+        
+        # Add instruction text
+        self.console.print("[dim]💡 Use SPACE to select/deselect agents, ENTER to confirm selection[/dim]\n")
+        
+        # Loop until at least one agent is selected or user cancels
+        selected_agents = None
+        while True:
+            selected_agents = questionary.checkbox(
+                "Select agents to distribute this prompt to:",
+                choices=agent_choices,
+                style=custom_style,
+                instruction="(Press SPACE to select, ENTER to confirm)"
+            ).ask()
+            
+            # Check if user cancelled (None) vs selected nothing (empty list)
+            if selected_agents is None:
+                # User cancelled (Ctrl+C or similar)
+                self.console.print("[yellow]Cancelled.[/yellow]")
+                return
+            
+            if selected_agents and len(selected_agents) > 0:
+                # At least one agent selected - break out of loop
+                break
+            
+            # No agents selected - ask user what to do
+            self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected to create a job.[/yellow]\n")
+            action = questionary.select(
+                "What would you like to do?",
+                choices=[
+                    "🔄 Select agents again",
+                    "❌ Cancel job creation"
+                ],
+                default="🔄 Select agents again",
+                style=custom_style
+            ).ask()
+            
+            if "Cancel" in action:
+                return
+            # Otherwise, loop continues to retry selection
+        
+        # Get priority
+        priority = questionary.select(
+            "Job priority:",
+            choices=["low", "normal", "high"],
+            default="normal",
+            style=custom_style
+        ).ask()
+        
+        # Create job file
+        _load_job_queue()
+        if create_job_file:
+            config = self._load_queue_config()
+            if config:
+                watch_folder = config.watch_folder
+            else:
+                watch_folder = Path.home() / "startd8-jobs"
+            
+            watch_folder.mkdir(parents=True, exist_ok=True)
+            
+            # Create job file
+            job_name = f"error_analysis_{Path(saved_path).stem}"
+            job_file = create_job_file(
+                prompt_content=prompt_content,
+                agents=[agent.split(" (")[0].split("⭐ ")[-1] for agent in selected_agents],
+                priority=priority,
+                output_folder=str(watch_folder / "output"),
+                job_name=job_name
+            )
+            
+            if job_file:
+                job_path = watch_folder / f"{job_name}.json"
+                self.console.print(f"\n[green]✓ Created job file: {job_path}[/green]")
+                self.console.print(f"[dim]The job queue will process this automatically.[/dim]")
+            else:
+                self.console.print("[red]Failed to create job file.[/red]")
+        else:
+            self.console.print("[yellow]Job queue module not available.[/yellow]")
         
         questionary.press_any_key_to_continue().ask()
 
