@@ -12,7 +12,7 @@ from typing import List, Dict, Any, Optional, Callable
 from datetime import datetime, timezone
 from dataclasses import dataclass
 
-from .models import TokenUsage, AgentResponse
+from .models import TokenUsage, AgentResponse, ResponseMetadata
 from .agents import BaseAgent
 from .events import EventBus, EventType, Event
 from .exceptions import AgentError, APIError, ConfigurationError

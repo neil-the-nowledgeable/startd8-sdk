@@ -920,8 +920,8 @@ def queue_watch(
     
     def on_job_complete(job, result):
         status_color = "green" if result.status == JobStatus.COMPLETED else "red"
-            console.print(f"[{status_color}]✓ Completed job {job.job_id}[/{status_color}]")
-            logger.info(f"Job completed: {job.job_id}", extra={"job_id": job.job_id, "status": "completed"})
+        console.print(f"[{status_color}]✓ Completed job {job.job_id}[/{status_color}]")
+        logger.info(f"Job completed: {job.job_id}", extra={"job_id": job.job_id, "status": "completed"})
     
     def on_job_error(job, error):
         console.print(f"[red]✗ Job {job.job_id} failed: {error}[/red]")

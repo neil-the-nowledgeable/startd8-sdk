@@ -133,6 +133,65 @@ console = Console(
 )
 
 
+def select_with_filter(
+    message: str,
+    choices: List[str],
+    style: Optional[Any] = None,
+    default: Optional[str] = None
+) -> Optional[str]:
+    """
+    Select with typing filter support.
+    
+    Uses questionary.autocomplete to enable typing to filter menu choices.
+    Falls back to questionary.select if autocomplete is not available.
+    
+    Args:
+        message: Prompt message
+        choices: List of choice strings
+        style: Optional questionary Style object
+        default: Optional default choice
+        
+    Returns:
+        Selected choice string or None if cancelled
+    """
+    if not HAS_QUESTIONARY:
+        console.print("[red]questionary not available[/red]")
+        return None
+    
+    # Filter out Separator objects for autocomplete (they're not strings)
+    string_choices = [c for c in choices if isinstance(c, str)]
+    
+    # If we have separators, use regular select (autocomplete doesn't support separators well)
+    has_separators = any(not isinstance(c, str) for c in choices)
+    
+    if has_separators:
+        # Use regular select for menus with separators
+        return questionary.select(
+            message,
+            choices=choices,
+            style=style,
+            default=default
+        ).ask()
+    else:
+        # Use autocomplete for filtering when no separators
+        # Autocomplete allows typing to filter choices
+        try:
+            return questionary.autocomplete(
+                message,
+                choices=string_choices,
+                style=style,
+                default=default
+            ).ask()
+        except (AttributeError, TypeError):
+            # Fallback to select if autocomplete fails
+            return questionary.select(
+                message,
+                choices=choices,
+                style=style,
+                default=default
+            ).ask()
+
+
 class APIKeyManager:
     """Manage API keys with secure storage"""
     
@@ -1237,21 +1296,21 @@ class ImprovedTUI:
                 table.add_column("ID", style="dim")
                 table.add_column("Name", style="bold cyan")
                 table.add_column("Type", style="magenta")
-                table.add_column("Model", style="blue")
+                table.add_column("Model", style="bright_white")
                 table.add_column("Max Tokens", justify="right")
-                table.add_column("Output Dir", style="green")
+                table.add_column("Output Dir", style="green", no_wrap=False)
                 
                 for agent in custom_agents:
                     output_dir = agent.get('output_dir', '')
-                    # Truncate long paths for display
-                    output_display = output_dir if len(output_dir) <= 25 else "..." + output_dir[-22:]
+                    # Show full path - Rich will wrap it automatically
+                    output_display = output_dir or "[dim]default[/dim]"
                     table.add_row(
                         agent.get('id', '-')[:8],
                         agent.get('name', 'unnamed'),
                         agent.get('type', 'unknown'),
                         agent.get('model', 'default'),
                         str(agent.get('max_tokens', '-')),
-                        output_display or "[dim]default[/dim]"
+                        output_display
                     )
                 
                 self.console.print(table)
@@ -2541,10 +2600,204 @@ class ImprovedTUI:
         prompt_text = questionary.text(
             "\nEnter your prompt:",
             style=custom_style,
+            multiline=True
         ).ask()
         
         if not prompt_text:
             return
+        
+        # Ask if user wants to enhance the prompt with an agent
+        enhance_choice = questionary.select(
+            "\nWould you like to enhance this prompt with an AI agent?",
+            choices=[
+                "✅ Yes, enhance with an agent",
+                "⏭️  No, use prompt as-is"
+            ],
+            default="✅ Yes, enhance with an agent",
+            style=custom_style
+        ).ask()
+        
+        enhanced_prompt_text = prompt_text
+        enhancement_info = None
+        
+        if "Yes" in enhance_choice or "enhance" in enhance_choice.lower():
+            # Get ready agents for enhancement
+            ready_agents = self._get_ready_agents_for_selection()
+            if not ready_agents:
+                self.console.print("[yellow]No ready agents available. Using prompt as-is.[/yellow]")
+            else:
+                # Display available agents
+                agent_table = Table(title="Available Agents for Enhancement", show_header=True)
+                agent_table.add_column("", justify="center", width=3)
+                agent_table.add_column("Agent", style="bold cyan")
+                agent_table.add_column("Model", style="cyan")
+                agent_table.add_column("Type", style="magenta")
+                
+                for agent in ready_agents:
+                    agent_type = "Built-in" if agent['type'] == 'builtin' else "User added"
+                    agent_table.add_row(
+                        agent['icon'],
+                        agent['name'],
+                        agent['model'],
+                        agent_type
+                    )
+                
+                self.console.print("\n")
+                self.console.print(agent_table)
+                self.console.print()
+                
+                # Build agent choices
+                agent_choices = []
+                for agent in ready_agents:
+                    agent_choices.append(f"{agent['icon']} {agent['name']} ({agent['model']})")
+                agent_choices.append("← Cancel enhancement")
+                
+                # Select agent for enhancement
+                selected_agent_choice = questionary.select(
+                    "Select agent to enhance your prompt:",
+                    choices=agent_choices,
+                    style=custom_style
+                ).ask()
+                
+                if selected_agent_choice and "Cancel" not in selected_agent_choice:
+                    # Parse agent name from selection
+                    name_part = selected_agent_choice.split(" (")[0].strip()
+                    parts = name_part.split()
+                    if len(parts) > 1:
+                        agent_name = " ".join(parts[1:])
+                    else:
+                        agent_name = name_part
+                    
+                    # Find matching agent
+                    selected_agent_info = None
+                    for agent in ready_agents:
+                        if agent['name'] == agent_name:
+                            selected_agent_info = agent
+                            break
+                    
+                    if selected_agent_info:
+                        # Create agent instance
+                        agent_instance = self._create_agent_from_name(agent_name, ready_agents)
+                        if agent_instance:
+                            # Create enhancement prompt
+                            enhancement_prompt = """You are an expert prompt engineer. Your task is to enhance the given prompt to make it more effective for AI agents.
+
+Apply these prompt engineering best practices:
+
+1. **Clarity & Specificity**
+   - Make instructions explicit and unambiguous
+   - Define technical terms and expected formats
+   - Specify the desired output structure
+
+2. **Context & Background**
+   - Add relevant context that helps understand the task
+   - Include domain-specific information when helpful
+   - Specify the target audience or use case
+
+3. **Structure**
+   - Use clear sections with headers
+   - Add numbered steps for sequential tasks
+   - Include examples where helpful
+
+4. **Constraints & Guardrails**
+   - Specify what to include AND what to avoid
+   - Set length/scope boundaries when appropriate
+   - Define quality criteria for the output
+
+5. **Output Format**
+   - Specify exact format expected (markdown, JSON, etc.)
+   - Include template structures when useful
+   - Define sections/headers for the response
+
+IMPORTANT RULES:
+- Preserve the core intent of the original prompt
+- Don't add unnecessary complexity
+- Make the enhanced prompt self-contained
+- Output ONLY the enhanced prompt, no explanations
+
+After the enhanced prompt, add a brief "---CHANGES---" section listing key improvements made.
+
+---
+
+Enhance this prompt:
+
+"""
+                            enhancement_prompt += prompt_text
+                            enhancement_prompt += "\n---"
+                            
+                            # Send to agent for enhancement
+                            self.console.print(f"\n[cyan]🔧 Enhancing prompt with {agent_name}...[/cyan]\n")
+                            
+                            try:
+                                with self.console.status("[bold green]Processing enhancement..."):
+                                    response_tuple = agent_instance.generate(enhancement_prompt)
+                                    
+                                    # Extract response
+                                    if isinstance(response_tuple, tuple) and len(response_tuple) >= 1:
+                                        enhanced_response = response_tuple[0]
+                                    else:
+                                        enhanced_response = str(response_tuple)
+                                
+                                # Parse out the changes summary
+                                if "---CHANGES---" in enhanced_response:
+                                    parts = enhanced_response.split("---CHANGES---")
+                                    enhanced_prompt_text = parts[0].strip()
+                                    changes_summary = parts[1].strip() if len(parts) > 1 else ""
+                                    enhancement_info = {
+                                        'agent': agent_name,
+                                        'model': agent_instance.model,
+                                        'changes': changes_summary,
+                                        'original_length': len(prompt_text),
+                                        'enhanced_length': len(enhanced_prompt_text)
+                                    }
+                                else:
+                                    enhanced_prompt_text = enhanced_response.strip()
+                                    enhancement_info = {
+                                        'agent': agent_name,
+                                        'model': agent_instance.model,
+                                        'changes': 'No changes summary provided',
+                                        'original_length': len(prompt_text),
+                                        'enhanced_length': len(enhanced_prompt_text)
+                                    }
+                                
+                                # Show enhancement result
+                                self.console.print(Panel(
+                                    f"[green]✓ Prompt enhanced successfully![/green]\n\n"
+                                    f"[bold]Agent:[/bold] {agent_name} ({agent_instance.model})\n"
+                                    f"[bold]Original length:[/bold] {enhancement_info['original_length']} chars\n"
+                                    f"[bold]Enhanced length:[/bold] {enhancement_info['enhanced_length']} chars",
+                                    title="Enhancement Complete",
+                                    border_style="green"
+                                ))
+                                
+                                if enhancement_info.get('changes'):
+                                    self.console.print("\n")
+                                    self.console.print(Panel(
+                                        enhancement_info['changes'],
+                                        title="Changes Made",
+                                        border_style="blue"
+                                    ))
+                                
+                                # Ask user if they want to use the enhanced version
+                                use_enhanced = questionary.select(
+                                    "\nWhich version would you like to save?",
+                                    choices=[
+                                        f"✅ Enhanced version ({enhancement_info['enhanced_length']} chars)",
+                                        f"📝 Original version ({enhancement_info['original_length']} chars)"
+                                    ],
+                                    default=f"✅ Enhanced version ({enhancement_info['enhanced_length']} chars)",
+                                    style=custom_style
+                                ).ask()
+                                
+                                if "Original" in use_enhanced:
+                                    enhanced_prompt_text = prompt_text
+                                    enhancement_info = None
+                                
+                            except Exception as e:
+                                self.console.print(f"\n[red]Enhancement failed: {e}[/red]")
+                                self.console.print("[yellow]Using original prompt.[/yellow]\n")
+                                enhanced_prompt_text = prompt_text
+                                enhancement_info = None
         
         # Get tags (optional)
         tags_input = questionary.text(
@@ -2553,14 +2806,21 @@ class ImprovedTUI:
         ).ask()
         
         tags = [t.strip() for t in tags_input.split(",")] if tags_input else []
+        if enhancement_info:
+            tags.append("enhanced")
         
-        # Create prompt
+        # Create prompt with enhanced or original content
         self.console.print("\n[cyan]Creating prompt...[/cyan]")
         
+        metadata = {}
+        if enhancement_info:
+            metadata['enhancement'] = enhancement_info
+        
         self.current_prompt = self.framework.create_prompt(
-            content=prompt_text,
+            content=enhanced_prompt_text,
             version="1.0.0",
-            tags=tags
+            tags=tags,
+            metadata=metadata
         )
         
         self.console.print()
@@ -2568,8 +2828,9 @@ class ImprovedTUI:
             f"[green]✓ Prompt Created Successfully![/green]\n\n"
             f"[bold]Prompt ID:[/bold] {self.current_prompt.id}\n"
             f"[bold]Version:[/bold] {self.current_prompt.version}\n"
-            f"[bold]Tags:[/bold] {', '.join(self.current_prompt.tags) if self.current_prompt.tags else 'None'}\n\n"
-            f"[bold]Content:[/bold]\n{self.current_prompt.content}",
+            f"[bold]Tags:[/bold] {', '.join(self.current_prompt.tags) if self.current_prompt.tags else 'None'}\n"
+            + (f"[bold]Enhanced by:[/bold] {enhancement_info['agent']} ({enhancement_info['model']})\n" if enhancement_info else "")
+            + f"\n[bold]Content:[/bold]\n{self.current_prompt.content[:500]}{'...' if len(self.current_prompt.content) > 500 else ''}",
             title="✅ Prompt Stored",
             border_style="green"
         ))
@@ -6293,31 +6554,49 @@ class ImprovedTUI:
                 instruction="(Press SPACE to select, ENTER to confirm)"
             ).ask()
             
+            # Handle cancellation (Ctrl+C)
             if selected_agents is None:
                 return
             
-            if selected_agents and len(selected_agents) > 0:
-                break
-            
-            self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
-            retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
-            if not retry:
+            # Validate that we got a list (questionary.checkbox should always return a list)
+            if not isinstance(selected_agents, list):
+                self.console.print(f"[red]Error: Unexpected return type from checkbox: {type(selected_agents)}[/red]")
+                questionary.press_any_key_to_continue().ask()
                 return
-        
-        # Extract agent info
-        selected_agent_infos = []
-        for agent_choice in selected_agents:
-            name_part = agent_choice.split(" (")[0].strip()
-            parts = name_part.split()
-            if len(parts) > 1:
-                agent_name = " ".join(parts[1:])
-            else:
-                agent_name = name_part
             
-            for agent in ready_agents:
-                if agent['name'] == agent_name:
-                    selected_agent_infos.append(agent)
-                    break
+            # Check if any agents were selected
+            if len(selected_agents) == 0:
+                self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
+                retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+                if not retry:
+                    return
+                continue
+            
+            # Extract agent info
+            selected_agent_infos = []
+            for agent_choice in selected_agents:
+                name_part = agent_choice.split(" (")[0].strip()
+                parts = name_part.split()
+                if len(parts) > 1:
+                    agent_name = " ".join(parts[1:])
+                else:
+                    agent_name = name_part
+                
+                for agent in ready_agents:
+                    if agent['name'] == agent_name:
+                        selected_agent_infos.append(agent)
+                        break
+            
+            # Validate that we successfully matched at least one agent
+            if len(selected_agent_infos) == 0:
+                self.console.print("[red]Error: Could not match selected agents. Please try again.[/red]")
+                retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+                if not retry:
+                    return
+                continue
+            
+            # Successfully selected and matched agents
+            break
         
         # Output directory
         output_dir = Path.cwd() / "critical_reviews"
@@ -6448,35 +6727,48 @@ Please be thorough, constructive, and specific in your analysis."""
                 instruction="(Press SPACE to select, ENTER to confirm)"
             ).ask()
             
+            # Handle cancellation (Ctrl+C)
             if selected_agents is None:
                 return
             
-            if selected_agents and len(selected_agents) > 0:
-                break
-            
-            self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
-            retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
-            if not retry:
+            # Validate that we got a list (questionary.checkbox should always return a list)
+            if not isinstance(selected_agents, list):
+                self.console.print(f"[red]Error: Unexpected return type from checkbox: {type(selected_agents)}[/red]")
+                questionary.press_any_key_to_continue().ask()
                 return
-        
-        # Create agents
-        chain_agents = []
-        for agent_choice in selected_agents:
-            name_part = agent_choice.split(" (")[0].strip()
-            parts = name_part.split()
-            if len(parts) > 1:
-                agent_name = " ".join(parts[1:])
-            else:
-                agent_name = name_part
             
-            agent = self._create_agent_from_name(agent_name, ready_agents)
-            if agent:
-                chain_agents.append(agent)
-        
-        if not chain_agents:
-            self.console.print("[red]Failed to create agents.[/red]")
-            questionary.press_any_key_to_continue().ask()
-            return
+            # Check if any agents were selected
+            if len(selected_agents) == 0:
+                self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
+                retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+                if not retry:
+                    return
+                continue
+            
+            # Create agents
+            chain_agents = []
+            for agent_choice in selected_agents:
+                name_part = agent_choice.split(" (")[0].strip()
+                parts = name_part.split()
+                if len(parts) > 1:
+                    agent_name = " ".join(parts[1:])
+                else:
+                    agent_name = name_part
+                
+                agent = self._create_agent_from_name(agent_name, ready_agents)
+                if agent:
+                    chain_agents.append(agent)
+            
+            # Validate that we successfully created at least one agent
+            if len(chain_agents) == 0:
+                self.console.print("[red]Error: Failed to create agents. Please try again.[/red]")
+                retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+                if not retry:
+                    return
+                continue
+            
+            # Successfully selected and created agents
+            break
         
         # Run enhancement chain
         try:
@@ -8588,39 +8880,52 @@ Please be thorough, constructive, and specific in your analysis."""
                 instruction="(Press SPACE to select, ENTER to confirm)"
             ).ask()
             
+            # Handle cancellation (Ctrl+C)
             if selected_agents is None:
                 self.console.print("[yellow]Cancelled.[/yellow]")
                 return
             
-            if selected_agents and len(selected_agents) > 0:
-                break
-            
-            self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
-            retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
-            if not retry:
+            # Validate that we got a list (questionary.checkbox should always return a list)
+            if not isinstance(selected_agents, list):
+                self.console.print(f"[red]Error: Unexpected return type from checkbox: {type(selected_agents)}[/red]")
+                questionary.press_any_key_to_continue().ask()
                 return
-        
-        # Extract agent info from selections
-        selected_agent_infos = []
-        for agent_choice in selected_agents:
-            # Parse "Icon Name (model)" format
-            name_part = agent_choice.split(" (")[0].strip()
-            parts = name_part.split()
-            if len(parts) > 1:
-                agent_name = " ".join(parts[1:])
-            else:
-                agent_name = name_part
             
-            # Find matching agent
-            for agent in ready_agents:
-                if agent['name'] == agent_name:
-                    selected_agent_infos.append(agent)
-                    break
-        
-        if not selected_agent_infos:
-            self.console.print("[red]Error: Could not match selected agents.[/red]")
-            questionary.press_any_key_to_continue().ask()
-            return
+            # Check if any agents were selected
+            if len(selected_agents) == 0:
+                self.console.print("\n[yellow]⚠️  No agents selected. At least one agent must be selected.[/yellow]\n")
+                retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+                if not retry:
+                    return
+                continue
+            
+            # Extract agent info from selections
+            selected_agent_infos = []
+            for agent_choice in selected_agents:
+                # Parse "Icon Name (model)" format
+                name_part = agent_choice.split(" (")[0].strip()
+                parts = name_part.split()
+                if len(parts) > 1:
+                    agent_name = " ".join(parts[1:])
+                else:
+                    agent_name = name_part
+                
+                # Find matching agent
+                for agent in ready_agents:
+                    if agent['name'] == agent_name:
+                        selected_agent_infos.append(agent)
+                        break
+            
+            # Validate that we successfully matched at least one agent
+            if len(selected_agent_infos) == 0:
+                self.console.print("[red]Error: Could not match selected agents. Please try again.[/red]")
+                retry = questionary.confirm("Select agents again?", default=True, style=custom_style).ask()
+                if not retry:
+                    return
+                continue
+            
+            # Successfully selected and matched agents
+            break
         
         self.console.print(f"\n[green]✓ Selected {len(selected_agent_infos)} agent(s)[/green]\n")
         
@@ -9308,13 +9613,19 @@ Please review this error analysis and provide feedback or suggestions for resolu
                 instruction="(Press SPACE to select, ENTER to confirm)"
             ).ask()
             
-            # Check if user cancelled (None) vs selected nothing (empty list)
+            # Handle cancellation (Ctrl+C)
             if selected_agents is None:
-                # User cancelled (Ctrl+C or similar)
                 self.console.print("[yellow]Cancelled.[/yellow]")
                 return
             
-            if selected_agents and len(selected_agents) > 0:
+            # Validate that we got a list (questionary.checkbox should always return a list)
+            if not isinstance(selected_agents, list):
+                self.console.print(f"[red]Error: Unexpected return type from checkbox: {type(selected_agents)}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            
+            # Check if any agents were selected
+            if len(selected_agents) > 0:
                 # At least one agent selected - break out of loop
                 self.console.print(f"[green]✓ Selected {len(selected_agents)} agent(s)[/green]\n")
                 break
