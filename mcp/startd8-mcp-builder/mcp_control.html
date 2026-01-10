@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Startd8 MCP Control</title>
+    <style>
+      :root {
+        --bg: #0b0f14;
+        --panel: #121824;
+        --muted: #9aa4b2;
+        --text: #e6edf3;
+        --accent: #4aa3ff;
+        --danger: #ff5c5c;
+        --ok: #27c07d;
+        --border: #273246;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        --sans: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family: var(--sans);
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 18px;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 12px 0;
+        font-weight: 650;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 420px 1fr;
+        gap: 14px;
+      }
+      .card {
+        background: var(--panel);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      .row > * { margin: 4px 0; }
+      label {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      input[type="text"], input[type="number"] {
+        width: 100%;
+        box-sizing: border-box;
+        background: #0e1420;
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 8px;
+        padding: 10px 10px;
+        font-family: var(--mono);
+        font-size: 12px;
+        outline: none;
+      }
+      input[type="checkbox"] { transform: translateY(1px); }
+      button {
+        background: #182235;
+        border: 1px solid var(--border);
+        color: var(--text);
+        border-radius: 9px;
+        padding: 9px 11px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button.primary { border-color: #2d72ff; background: #14315a; }
+      button.danger { border-color: #ff5c5c; background: #3a1616; }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+      .kv {
+        display: grid;
+        grid-template-columns: 140px 1fr;
+        gap: 6px 10px;
+        margin-top: 8px;
+        font-size: 12px;
+      }
+      .k { color: var(--muted); }
+      .v { font-family: var(--mono); }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        font-size: 12px;
+      }
+      .pill.ok { border-color: rgba(39, 192, 125, 0.5); color: var(--ok); }
+      .pill.bad { border-color: rgba(255, 92, 92, 0.6); color: var(--danger); }
+      pre {
+        margin: 0;
+        background: #0a0f18;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 10px;
+        height: 520px;
+        overflow: auto;
+        font-family: var(--mono);
+        font-size: 12px;
+        line-height: 1.35;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .muted { color: var(--muted); font-size: 12px; }
+      .small { font-size: 12px; }
+      .spacer { height: 8px; }
+      @media (max-width: 960px) {
+        .grid { grid-template-columns: 1fr; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>Startd8 MCP Control</h1>
+      <div class="grid">
+        <div class="card">
+          <div class="row" style="justify-content: space-between;">
+            <div id="statusPill" class="pill">Status: <span class="v">unknown</span></div>
+            <div class="row">
+              <button id="btnRefresh" class="primary">Refresh</button>
+              <button id="btnStart" class="primary">Start</button>
+              <button id="btnStop" class="danger">Stop</button>
+            </div>
+          </div>
+
+          <div class="spacer"></div>
+
+          <label>Control server URL (if you opened this file directly)</label>
+          <input id="baseUrl" type="text" placeholder="http://127.0.0.1:5178" />
+          <div class="muted">If served by the controller, leave blank.</div>
+
+          <div class="spacer"></div>
+
+          <div class="row">
+            <label class="row"><input id="optQuiet" type="checkbox" /> <span class="small">STARTD8_MCP_QUIET=1 (hides startup logs)</span></label>
+            <label class="row"><input id="optDebug" type="checkbox" /> <span class="small">STARTD8_MCP_DEBUG=1</span></label>
+            <label class="row"><input id="optJsonLogs" type="checkbox" /> <span class="small">STARTD8_MCP_LOG_JSON=1</span></label>
+          </div>
+
+          <div class="spacer"></div>
+
+          <label>STARTD8_MCP_EVENT_LOG_FILE (optional)</label>
+          <input id="optEventLogFile" type="text" placeholder="logs/mcp-events.jsonl" />
+
+          <div class="spacer"></div>
+
+          <label>Prometheus metrics port (optional)</label>
+          <input id="optMetricsPort" type="number" min="1" max="65535" placeholder="9464" />
+          <div class="muted">Requires <span class="v">pip install prometheus-client</span> in the server’s env.</div>
+
+          <div class="spacer"></div>
+          <div class="row">
+            <label class="row"><input id="autoRefresh" type="checkbox" checked /> <span class="small">Auto-refresh</span></label>
+            <label class="row"><input id="autoScroll" type="checkbox" checked /> <span class="small">Auto-scroll logs</span></label>
+            <label class="row"><input id="showStdout" type="checkbox" /> <span class="small">Show stdout</span></label>
+          </div>
+
+          <div class="kv" id="kv"></div>
+          <div class="spacer"></div>
+          <label id="jsStatus" class="muted small">JS: loading…</label>
+          <div id="msg" class="muted" role="status" aria-live="polite"></div>
+        </div>
+
+        <div class="card">
+          <div class="row" style="justify-content: space-between;">
+            <div class="muted">Logs (controller-captured stdout/stderr)</div>
+            <div class="row">
+              <button id="btnClear">Clear</button>
+              <button id="btnTail">Fetch</button>
+            </div>
+          </div>
+          <div class="spacer"></div>
+          <pre id="log" role="textbox" aria-label="Controller logs" aria-multiline="true"></pre>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const el = (id) => document.getElementById(id);
+
+      const state = {
+        lastLogCursor: 0,
+        refreshTimer: null,
+      };
+
+      try {
+        el("jsStatus").textContent = "JS: ready";
+      } catch (_) {}
+
+      function base() {
+        const v = (el("baseUrl").value || "").trim();
+        return v || "";
+      }
+
+      function api(path) {
+        return `${base()}${path}`;
+      }
+
+      function setMsg(text) {
+        el("msg").textContent = text || "";
+      }
+
+      function setStatusPill(running) {
+        const pill = el("statusPill");
+        pill.classList.remove("ok", "bad");
+        if (running === true) pill.classList.add("ok");
+        else if (running === false) pill.classList.add("bad");
+        pill.innerHTML = `Status: <span class="v">${running === true ? "running" : running === false ? "stopped" : "unknown"}</span>`;
+      }
+
+      function kvRow(k, v) {
+        const div = document.createElement("div");
+        div.className = "k";
+        div.textContent = k;
+        const val = document.createElement("div");
+        val.className = "v";
+        val.textContent = v == null ? "" : String(v);
+        return [div, val];
+      }
+
+      async function fetchJson(url, opts) {
+        const headers = { ...(opts && opts.headers ? opts.headers : {}) };
+        // Only set Content-Type when we actually send a body (avoids CORS preflight on GETs from file://).
+        if (opts && opts.body != null) headers["content-type"] = "application/json";
+        headers["accept"] = "application/json";
+        const res = await fetch(url, { ...opts, headers });
+        const txt = await res.text();
+        let json = null;
+        try { json = txt ? JSON.parse(txt) : null; } catch (_) {}
+        if (!res.ok) {
+          const msg = (json && (json.error || json.message)) ? (json.error || json.message) : txt;
+          throw new Error(msg || `HTTP ${res.status}`);
+        }
+        return json;
+      }
+
+      async function refreshStatus() {
+        try {
+          const s = await fetchJson(api("/api/status"));
+          setStatusPill(!!s.running);
+          const kv = el("kv");
+          kv.innerHTML = "";
+          for (const [k, v] of [
+            ["pid", s.pid],
+            ["started_at", s.started_at],
+            ["uptime_sec", s.uptime_sec],
+            ["cwd", s.cwd],
+            ["command", s.command],
+            ["last_exit_code", s.last_exit_code],
+            ["last_exit_time", s.last_exit_time],
+            ["last_error", s.last_error],
+            ["log_file", s.log_file],
+          ]) {
+            const [a, b] = kvRow(k, v);
+            kv.appendChild(a);
+            kv.appendChild(b);
+          }
+          el("btnStart").disabled = !!s.running;
+          el("btnStop").disabled = !s.running;
+          setMsg("");
+          return s;
+        } catch (e) {
+          setMsg(`Status error: ${e.message}`);
+          setStatusPill(null);
+          return null;
+        }
+      }
+
+      function appendLog(text) {
+        if (!text) return;
+        const pre = el("log");
+        pre.textContent += text;
+        if (!text.endsWith("\n")) pre.textContent += "\n";
+        if (el("autoScroll").checked) pre.scrollTop = pre.scrollHeight;
+      }
+
+      async function fetchLogs() {
+        try {
+          const showStdout = el("showStdout").checked ? "1" : "0";
+          const data = await fetchJson(api(`/api/logs?since=${state.lastLogCursor}&stdout=${showStdout}`));
+          if (typeof data.cursor === "number") state.lastLogCursor = data.cursor;
+          if (Array.isArray(data.lines) && data.lines.length) {
+            appendLog(data.lines.join("\n") + "\n");
+          }
+        } catch (e) {
+          setMsg(`Log error: ${e.message}`);
+        }
+      }
+
+      async function startServer() {
+        try {
+          setMsg("Starting…");
+          state.lastLogCursor = 0;
+          el("log").textContent = "";
+
+          const env = {};
+          env["STARTD8_MCP_QUIET"] = el("optQuiet").checked ? "1" : "0";
+          env["STARTD8_MCP_DEBUG"] = el("optDebug").checked ? "1" : "0";
+          env["STARTD8_MCP_LOG_JSON"] = el("optJsonLogs").checked ? "1" : "0";
+          const ev = (el("optEventLogFile").value || "").trim();
+          if (ev) env["STARTD8_MCP_EVENT_LOG_FILE"] = ev;
+          const mp = (el("optMetricsPort").value || "").trim();
+          if (mp) env["STARTD8_MCP_METRICS_PORT"] = mp;
+
+          await fetchJson(api("/api/start"), { method: "POST", body: JSON.stringify({ env }) });
+
+          // Burst poll logs/status so you can see startup in real time.
+          for (let i = 0; i < 25; i++) {
+            const s = await refreshStatus();
+            await fetchLogs();
+            if (s && !s.running && s.last_exit_code != null) break; // exited quickly
+            await new Promise((r) => setTimeout(r, 160));
+          }
+          setMsg("Start requested. If the server is quiet, enable logs by unchecking QUIET and/or enabling DEBUG.");
+        } catch (e) {
+          setMsg(`Start failed: ${e.message}`);
+        }
+      }
+
+      async function stopServer() {
+        try {
+          setMsg("Stopping…");
+          await fetchJson(api("/api/stop"), { method: "POST", body: "{}" });
+          await refreshStatus();
+          setMsg("Stopped.");
+        } catch (e) {
+          setMsg(`Stop failed: ${e.message}`);
+        }
+      }
+
+      function startAuto() {
+        if (state.refreshTimer) clearInterval(state.refreshTimer);
+        if (!el("autoRefresh").checked) return;
+        state.refreshTimer = setInterval(async () => {
+          await refreshStatus();
+          await fetchLogs();
+        }, 2500);
+      }
+
+      el("btnRefresh").addEventListener("click", async () => { await refreshStatus(); await fetchLogs(); });
+      el("btnStart").addEventListener("click", startServer);
+      el("btnStop").addEventListener("click", stopServer);
+      el("btnTail").addEventListener("click", fetchLogs);
+      el("btnClear").addEventListener("click", () => { el("log").textContent = ""; state.lastLogCursor = 0; });
+      el("autoRefresh").addEventListener("change", startAuto);
+
+      // Default base URL to same origin (blank); for file://, suggest localhost.
+      try {
+        if (location.protocol === "file:") el("baseUrl").value = "http://127.0.0.1:5178";
+      } catch (_) {}
+
+      (async () => {
+        await refreshStatus();
+        await fetchLogs();
+        startAuto();
+      })();
+    </script>
+  </body>
+</html>
+

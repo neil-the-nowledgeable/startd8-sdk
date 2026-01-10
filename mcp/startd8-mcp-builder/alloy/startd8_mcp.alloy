@@ -1,0 +1,175 @@
+// Grafana Alloy configuration for Startd8 MCP (local Docker network)
+//
+// Data flows:
+// - Prometheus scrape -> relabel -> remote_write -> Mimir
+// - File logs (JSONL) -> Loki
+// - OTLP receiver -> Tempo
+//
+// Assumptions:
+// - You can run this Alloy config in two common modes:
+//   - Same Docker network as backends (use service DNS names: mimir/loki/tempo)
+//   - Backends published on your Mac (use host.docker.internal + published ports)
+//
+// Defaults below assume:
+// - Alloy runs in Docker
+// - MCP runs on macOS host (metrics on 9464, logs in ./logs)
+// - Backends are reachable via host.docker.internal (e.g. from ~/Documents/tools/Grafana stack)
+//
+// Backends:
+// - Mimir: http://host.docker.internal:9009/api/v1/push
+// - Loki:  http://host.docker.internal:3100/loki/api/v1/push
+// - Tempo: host.docker.internal:4317 (OTLP/gRPC)  (only if you publish it)
+//
+// MCP metrics endpoint:
+// - host.docker.internal:9464
+// - MCP event log file is mounted into this container at:
+//     /var/log/startd8-mcp/mcp-events.jsonl
+
+// -------------------------
+// Metrics -> Mimir
+// -------------------------
+
+prometheus.scrape "startd8_mcp" {
+  targets = [
+    // Default (MCP runs on macOS host):
+    { __address__ = "host.docker.internal:9464" },
+    // If you run the MCP server in Docker on the same network as Alloy:
+    // { __address__ = "startd8-mcp:9464" },
+  ]
+
+  scrape_interval = "15s"
+  forward_to      = [prometheus.relabel.startd8_mcp.receiver]
+}
+
+prometheus.relabel "startd8_mcp" {
+  forward_to = [prometheus.remote_write.mimir.receiver]
+
+  // Add stable labels for querying/alerting.
+  rule {
+    action       = "replace"
+    target_label = "service"
+    replacement  = "startd8-mcp"
+  }
+  rule {
+    action       = "replace"
+    target_label = "env"
+    replacement  = "local"
+  }
+}
+
+prometheus.remote_write "mimir" {
+  endpoint {
+    // If backends are on the same Docker network:
+    // url = "http://mimir:9009/api/v1/push"
+    url = "http://host.docker.internal:9009/api/v1/push"
+
+    // If your Mimir requires a tenant header (multitenancy enabled), uncomment:
+    // headers = {
+    //   "X-Scope-OrgID" = "anonymous",
+    // }
+  }
+}
+
+// -------------------------
+// Logs (JSONL events) -> Loki
+// -------------------------
+
+local.file_match "startd8_mcp_events" {
+  path_targets = [
+    { __path__ = "/var/log/startd8-mcp/mcp-events.jsonl" },
+  ]
+  sync_period = "5s"
+}
+
+loki.source.file "startd8_mcp" {
+  targets       = local.file_match.startd8_mcp_events.targets
+  forward_to    = [loki.process.startd8_mcp.receiver]
+  tail_from_end = true
+}
+
+loki.process "startd8_mcp" {
+  stage.json {
+    expressions = {
+      ts      = "",
+      event   = "",
+      tool    = "",
+      status  = "",
+      service = "",
+      env     = "",
+      version = "",
+    }
+  }
+
+  stage.timestamp {
+    source = "ts"
+    format = "RFC3339Nano"
+  }
+
+  // Labels: keep low-cardinality (do NOT label request_id/run_id).
+  stage.labels {
+    values = {
+      service = "",
+      env     = "",
+      version = "",
+      event   = "",
+      tool    = "",
+      status  = "",
+    }
+  }
+
+  // Fallback labels (in case older log lines don't include service/env/version yet).
+  stage.static_labels {
+    values = {
+      service = "startd8-mcp",
+      env     = "local",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    // If backends are on the same Docker network:
+    // url = "http://loki:3100/loki/api/v1/push"
+    url = "http://host.docker.internal:3100/loki/api/v1/push"
+
+    // If your Loki requires a tenant, uncomment ONE of:
+    // tenant_id = "anonymous"
+    // headers = { "X-Scope-OrgID" = "anonymous" }
+  }
+}
+
+// -------------------------
+// Traces (OTLP) -> Tempo
+// -------------------------
+
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    traces = [otelcol.processor.batch.default.input]
+  }
+}
+
+otelcol.processor.batch "default" {
+  output {
+    traces = [otelcol.exporter.otlp.tempo.input]
+  }
+}
+
+otelcol.exporter.otlp "tempo" {
+  client {
+    // If backends are on the same Docker network:
+    // endpoint = "tempo:4317"
+    endpoint = "host.docker.internal:4317"
+    tls {
+      insecure = true
+    }
+  }
+}

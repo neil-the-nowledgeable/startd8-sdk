@@ -1,0 +1,46 @@
+{
+  "name": "startd8_mcp",
+  "version": "0.1.0",
+  "capabilities": [
+    "resources:read",
+    "resources:write",
+    "commands:execute",
+    "tasks:execute"
+  ],
+  "resources": [
+    {
+      "name": "task-list",
+      "path": "${TASK_LIST_PATH:-MASTER_TASK_LIST.md}",
+      "readOnly": false
+    },
+    {
+      "name": "task-log",
+      "path": "${TASK_LOG_PATH:-logs/task-execution.log}",
+      "readOnly": false
+    }
+  ],
+  "commands": [
+    {
+      "name": "tasks.run",
+      "params": [
+        { "name": "id", "type": "string", "required": false },
+        { "name": "file", "type": "string", "required": false, "default": "${TASK_LIST_PATH:-MASTER_TASK_LIST.md}" },
+        { "name": "auto", "type": "boolean", "required": false, "default": false },
+        { "name": "agent", "type": "string", "required": false, "default": "${DEFAULT_AGENT:-claude}" },
+        { "name": "dry_run", "type": "boolean", "required": false, "default": true }
+      ]
+    },
+    {
+      "name": "tasks.list",
+      "params": [
+        { "name": "file", "type": "string", "required": false, "default": "${TASK_LIST_PATH:-MASTER_TASK_LIST.md}" }
+      ]
+    },
+    {
+      "name": "tasks.status",
+      "params": [
+        { "name": "file", "type": "string", "required": false, "default": "${TASK_LIST_PATH:-MASTER_TASK_LIST.md}" }
+      ]
+    }
+  ]
+}
