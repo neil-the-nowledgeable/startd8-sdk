@@ -8,6 +8,7 @@ import asyncio
 import uuid
 import logging
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
@@ -100,6 +101,64 @@ except ImportError as e:
 
 from .models import TokenUsage, AgentResponse, ResponseMetadata
 from .utils.retry import RetryConfig, RetryError, with_retry
+
+
+@dataclass
+class TimeoutConfig:
+    """
+    Timeout configuration for agent HTTP requests.
+
+    All timeouts are in seconds. Uses httpx.Timeout under the hood.
+
+    Attributes:
+        connect: Timeout for establishing a connection. Default: 10.0
+        read: Timeout for reading response data. Default: 120.0
+        write: Timeout for sending request data. Default: 30.0
+        pool: Timeout for acquiring a connection from the pool. Default: 10.0
+
+    Example:
+        ```python
+        from startd8.agents import ClaudeAgent, TimeoutConfig
+
+        # Quick timeouts for fast-fail behavior
+        fast_timeout = TimeoutConfig(connect=5.0, read=30.0)
+        agent = ClaudeAgent(name="claude", timeout_config=fast_timeout)
+
+        # Long timeouts for complex requests
+        slow_timeout = TimeoutConfig(read=300.0)
+        agent = ClaudeAgent(name="claude", timeout_config=slow_timeout)
+        ```
+    """
+
+    connect: float = 10.0
+    read: float = 120.0
+    write: float = 30.0
+    pool: float = 10.0
+
+    def __post_init__(self):
+        if self.connect < 0:
+            raise ValueError("connect timeout must be non-negative")
+        if self.read < 0:
+            raise ValueError("read timeout must be non-negative")
+        if self.write < 0:
+            raise ValueError("write timeout must be non-negative")
+        if self.pool < 0:
+            raise ValueError("pool timeout must be non-negative")
+
+    def to_httpx_timeout(self):
+        """
+        Convert to httpx.Timeout object.
+
+        Returns:
+            httpx.Timeout configured with these settings
+        """
+        import httpx
+        return httpx.Timeout(
+            connect=self.connect,
+            read=self.read,
+            write=self.write,
+            pool=self.pool,
+        )
 
 # Import cost tracking (optional dependency within the same package)
 try:
@@ -496,7 +555,7 @@ class BaseAgent(ABC):
 
 
 class ClaudeAgent(BaseAgent):
-    """Anthropic Claude agent with async support and optional retry"""
+    """Anthropic Claude agent with async support, optional retry, and configurable timeouts"""
 
     # Default retry configuration for Claude API calls
     DEFAULT_RETRY_CONFIG = RetryConfig(
@@ -505,6 +564,9 @@ class ClaudeAgent(BaseAgent):
         max_delay=60.0,
         retryable_status_codes=(429, 500, 502, 503, 504, 529),  # 529 = Anthropic overloaded
     )
+
+    # Default timeout configuration
+    DEFAULT_TIMEOUT_CONFIG = TimeoutConfig()
 
     def __init__(
         self,
@@ -516,6 +578,7 @@ class ClaudeAgent(BaseAgent):
         budget_manager: Optional['BudgetManager'] = None,
         retry_config: Optional[RetryConfig] = None,
         enable_retry: bool = False,
+        timeout_config: Optional[TimeoutConfig] = None,
     ):
         """
         Initialize Claude agent
@@ -530,6 +593,7 @@ class ClaudeAgent(BaseAgent):
             retry_config: Optional retry configuration. If None and enable_retry=True,
                 uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
             enable_retry: Enable retry with default config. Ignored if retry_config is provided.
+            timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
 
@@ -539,8 +603,12 @@ class ClaudeAgent(BaseAgent):
                 "Install with: pip install startd8[anthropic] or pip install anthropic"
             )
 
-        self.client = Anthropic(api_key=api_key)
-        self.async_client = AsyncAnthropic(api_key=api_key)
+        # Configure timeout
+        self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
+        httpx_timeout = self.timeout_config.to_httpx_timeout()
+
+        self.client = Anthropic(api_key=api_key, timeout=httpx_timeout)
+        self.async_client = AsyncAnthropic(api_key=api_key, timeout=httpx_timeout)
         self.max_tokens = max_tokens
 
         # Configure retry behavior
@@ -790,7 +858,7 @@ class ClaudeAgent(BaseAgent):
 
 
 class GPT4Agent(BaseAgent):
-    """OpenAI GPT-4 agent with async support and optional retry"""
+    """OpenAI GPT-4 agent with async support, optional retry, and configurable timeouts"""
 
     # Default retry configuration for OpenAI API calls
     DEFAULT_RETRY_CONFIG = RetryConfig(
@@ -799,6 +867,9 @@ class GPT4Agent(BaseAgent):
         max_delay=60.0,
         retryable_status_codes=(429, 500, 502, 503, 504),
     )
+
+    # Default timeout configuration
+    DEFAULT_TIMEOUT_CONFIG = TimeoutConfig()
 
     def __init__(
         self,
@@ -810,6 +881,7 @@ class GPT4Agent(BaseAgent):
         budget_manager: Optional['BudgetManager'] = None,
         retry_config: Optional[RetryConfig] = None,
         enable_retry: bool = False,
+        timeout_config: Optional[TimeoutConfig] = None,
     ):
         """
         Initialize GPT-4 agent
@@ -824,6 +896,7 @@ class GPT4Agent(BaseAgent):
             retry_config: Optional retry configuration. If None and enable_retry=True,
                 uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
             enable_retry: Enable retry with default config. Ignored if retry_config is provided.
+            timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
 
@@ -833,8 +906,12 @@ class GPT4Agent(BaseAgent):
                 "Install with: pip install startd8[openai] or pip install openai"
             )
 
-        self.client = OpenAI(api_key=api_key)
-        self.async_client = AsyncOpenAI(api_key=api_key)
+        # Configure timeout
+        self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
+        httpx_timeout = self.timeout_config.to_httpx_timeout()
+
+        self.client = OpenAI(api_key=api_key, timeout=httpx_timeout)
+        self.async_client = AsyncOpenAI(api_key=api_key, timeout=httpx_timeout)
         self.max_tokens = max_tokens
 
         # Configure retry behavior
@@ -1029,7 +1106,7 @@ class GPT4Agent(BaseAgent):
 
 
 class GeminiAgent(BaseAgent):
-    """Google Gemini agent with async support and optional retry"""
+    """Google Gemini agent with async support, optional retry, and configurable timeouts"""
 
     # Default retry configuration for Gemini API calls
     DEFAULT_RETRY_CONFIG = RetryConfig(
@@ -1038,6 +1115,9 @@ class GeminiAgent(BaseAgent):
         max_delay=60.0,
         retryable_status_codes=(429, 500, 502, 503, 504),
     )
+
+    # Default timeout configuration
+    DEFAULT_TIMEOUT_CONFIG = TimeoutConfig()
 
     def __init__(
         self,
@@ -1050,6 +1130,7 @@ class GeminiAgent(BaseAgent):
         budget_manager: Optional['BudgetManager'] = None,
         retry_config: Optional[RetryConfig] = None,
         enable_retry: bool = False,
+        timeout_config: Optional[TimeoutConfig] = None,
     ):
         """
         Initialize Gemini agent
@@ -1065,6 +1146,8 @@ class GeminiAgent(BaseAgent):
             retry_config: Optional retry configuration. If None and enable_retry=True,
                 uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
             enable_retry: Enable retry with default config. Ignored if retry_config is provided.
+            timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
+                Note: Gemini client uses httpx internally; timeout is applied via httpx_client.
 
         Raises:
             ImportError: If google-genai package is not installed
@@ -1136,9 +1219,14 @@ class GeminiAgent(BaseAgent):
                 "Set GOOGLE_API_KEY environment variable or pass api_key parameter."
             )
         
-        # Create the client with API key
-        # New google.genai uses Client-based API
-        self.client = genai.Client(api_key=api_key)
+        # Configure timeout
+        self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
+
+        # Create the client with API key and timeout
+        # New google.genai uses Client-based API with httpx under the hood
+        import httpx
+        httpx_client = httpx.Client(timeout=self.timeout_config.to_httpx_timeout())
+        self.client = genai.Client(api_key=api_key, http_client=httpx_client)
         self.model_name = self.model
 
         self.max_tokens = max_tokens
@@ -1422,7 +1510,7 @@ class GeminiAgent(BaseAgent):
 
 
 class OpenAICompatibleAgent(BaseAgent):
-    """Agent for OpenAI-compatible APIs (Cursor, Ollama, Together AI, Groq, etc.) with async support and optional retry"""
+    """Agent for OpenAI-compatible APIs (Cursor, Ollama, Together AI, Groq, etc.) with async support, optional retry, and configurable timeouts"""
 
     # Default retry configuration for OpenAI-compatible API calls
     DEFAULT_RETRY_CONFIG = RetryConfig(
@@ -1431,6 +1519,9 @@ class OpenAICompatibleAgent(BaseAgent):
         max_delay=60.0,
         retryable_status_codes=(429, 500, 502, 503, 504),
     )
+
+    # Default timeout configuration
+    DEFAULT_TIMEOUT_CONFIG = TimeoutConfig()
 
     def __init__(
         self,
@@ -1444,6 +1535,7 @@ class OpenAICompatibleAgent(BaseAgent):
         budget_manager: Optional['BudgetManager'] = None,
         retry_config: Optional[RetryConfig] = None,
         enable_retry: bool = False,
+        timeout_config: Optional[TimeoutConfig] = None,
     ):
         """
         Initialize OpenAI-compatible agent
@@ -1460,21 +1552,22 @@ class OpenAICompatibleAgent(BaseAgent):
             retry_config: Optional retry configuration. If None and enable_retry=True,
                 uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
             enable_retry: Enable retry with default config. Ignored if retry_config is provided.
+            timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
-        
+
         if not _OPENAI_AVAILABLE:
             raise ImportError(
                 "openai package not installed. "
                 "Install with: pip install startd8[openai] or pip install openai"
             )
-        
+
         # Get API key from env var if specified
         import os
         actual_api_key = api_key
         if not actual_api_key and api_key_env:
             actual_api_key = os.getenv(api_key_env)
-        
+
         # Some APIs (like Ollama) don't need an API key
         # For localhost URLs, we can use None if the client supports it
         if not actual_api_key and base_url:
@@ -1482,14 +1575,20 @@ class OpenAICompatibleAgent(BaseAgent):
             if 'localhost' in base_url or '127.0.0.1' in base_url:
                 # Use None instead of dummy key - OpenAI client accepts None for local APIs
                 actual_api_key = None
-        
+
+        # Configure timeout
+        self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
+        httpx_timeout = self.timeout_config.to_httpx_timeout()
+
         self.client = OpenAI(
             api_key=actual_api_key,
-            base_url=base_url
+            base_url=base_url,
+            timeout=httpx_timeout
         )
         self.async_client = AsyncOpenAI(
             api_key=actual_api_key,
-            base_url=base_url
+            base_url=base_url,
+            timeout=httpx_timeout
         )
         self.max_tokens = max_tokens
         self.base_url = base_url
