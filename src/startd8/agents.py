@@ -99,6 +99,7 @@ except ImportError as e:
     _GEMINI_IMPORT_ERROR = str(e)
 
 from .models import TokenUsage, AgentResponse, ResponseMetadata
+from .utils.retry import RetryConfig, RetryError, with_retry
 
 # Import cost tracking (optional dependency within the same package)
 try:
@@ -495,8 +496,16 @@ class BaseAgent(ABC):
 
 
 class ClaudeAgent(BaseAgent):
-    """Anthropic Claude agent with async support"""
-    
+    """Anthropic Claude agent with async support and optional retry"""
+
+    # Default retry configuration for Claude API calls
+    DEFAULT_RETRY_CONFIG = RetryConfig(
+        max_attempts=3,
+        base_delay=1.0,
+        max_delay=60.0,
+        retryable_status_codes=(429, 500, 502, 503, 504, 529),  # 529 = Anthropic overloaded
+    )
+
     def __init__(
         self,
         name: str = "claude",
@@ -504,11 +513,13 @@ class ClaudeAgent(BaseAgent):
         api_key: Optional[str] = None,
         max_tokens: int = 4096,
         cost_tracker: Optional['CostTracker'] = None,
-        budget_manager: Optional['BudgetManager'] = None
+        budget_manager: Optional['BudgetManager'] = None,
+        retry_config: Optional[RetryConfig] = None,
+        enable_retry: bool = False,
     ):
         """
         Initialize Claude agent
-        
+
         Args:
             name: Agent identifier
             model: Claude model to use
@@ -516,18 +527,30 @@ class ClaudeAgent(BaseAgent):
             max_tokens: Maximum tokens to generate
             cost_tracker: Optional cost tracker for recording costs
             budget_manager: Optional budget manager for enforcing limits
+            retry_config: Optional retry configuration. If None and enable_retry=True,
+                uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
+            enable_retry: Enable retry with default config. Ignored if retry_config is provided.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
-        
+
         if not _ANTHROPIC_AVAILABLE:
             raise ImportError(
                 "anthropic package not installed. "
                 "Install with: pip install startd8[anthropic] or pip install anthropic"
             )
-        
+
         self.client = Anthropic(api_key=api_key)
         self.async_client = AsyncAnthropic(api_key=api_key)
         self.max_tokens = max_tokens
+
+        # Configure retry behavior
+        if retry_config is not None:
+            self.retry_config = retry_config
+        elif enable_retry:
+            self.retry_config = self.DEFAULT_RETRY_CONFIG
+        else:
+            self.retry_config = None
+
         self._cleanup_registered = False
         self._register_cleanup()
     
@@ -626,36 +649,95 @@ class ClaudeAgent(BaseAgent):
                 )
                 pass
     
+    async def _make_api_call(self, prompt: str):
+        """
+        Make the raw API call to Anthropic.
+
+        This is separated from agenerate to allow retry logic to wrap it.
+        Raises the raw API exceptions for retry handling.
+        """
+        return await self.async_client.messages.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
-        """Generate response using Claude async API"""
+        """
+        Generate response using Claude async API.
+
+        If retry_config is set, transient failures (rate limits, server errors)
+        will be automatically retried with exponential backoff.
+
+        Args:
+            prompt: The prompt text to send
+
+        Returns:
+            Tuple of (response_text, response_time_ms, token_usage)
+
+        Raises:
+            AgentError: For DNS/connection errors that can't be retried
+            APIError: For API errors
+            RetryError: If all retry attempts are exhausted (when retry enabled)
+        """
         start_time = time.time()
-        
+
         try:
-            response = await self.async_client.messages.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-        except (AnthropicAPIConnectionError, ConnectionError, OSError) as e:
-            # Specific connection/network errors
+            # Use retry wrapper if configured
+            if self.retry_config is not None:
+                make_call = with_retry(self.retry_config)(self._make_api_call)
+                response = await make_call(prompt)
+            else:
+                response = await self._make_api_call(prompt)
+
+        except RetryError as e:
+            # All retry attempts exhausted
             from .logging_config import get_logger
-            from .exceptions import APIError, AgentError
-            
+            from .exceptions import APIError
+
             logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
-            
+
+            logger.error(
+                f"All retry attempts exhausted for {self.name}: {e.last_exception}",
+                exc_info=False,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "response_time_ms": response_time_ms,
+                    "retry_attempts": e.attempts,
+                    "total_retry_time": e.total_time,
+                }
+            )
+
+            raise APIError(
+                f"API call failed after {e.attempts} attempts: {e.last_exception}",
+                provider=self.name,
+                original_error=e.last_exception,
+            ) from e
+
+        except (AnthropicAPIConnectionError, ConnectionError, OSError) as e:
+            # Specific connection/network errors (only reached if retry not enabled
+            # or if it's a non-retryable connection error like DNS failure)
+            from .logging_config import get_logger
+            from .exceptions import APIError, AgentError
+
+            logger = get_logger(__name__)
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+
             error_msg = str(e)
-            
+
             # Check for DNS/connection errors specifically
             if AnthropicAPIConnectionError and isinstance(e, AnthropicAPIConnectionError):
                 # Check for DNS resolution failures in error message or underlying exception
                 underlying_error = getattr(e, 'cause', None) or getattr(e, '__cause__', None)
                 underlying_msg = str(underlying_error) if underlying_error else ""
                 combined_msg = f"{error_msg} {underlying_msg}".lower()
-                
+
                 if any(term in combined_msg for term in ["nodename nor servname", "getaddrinfo", "not known", "name or service not known", "name resolution"]):
                     dns_error_msg = (
                         f"DNS resolution failed for Anthropic API endpoint. "
@@ -672,43 +754,52 @@ class ClaudeAgent(BaseAgent):
                         agent_name=self.name,
                         original_error=e
                     ) from e
-            
-                logger.error(
-                    f"API call failed for {self.name}: {e}",
-                    exc_info=True,
-                    extra={
-                        "agent_name": self.name,
-                        "model": self.model,
-                        "response_time_ms": response_time_ms,
-                        "error_type": type(e).__name__,
-                        "operation": "agenerate"
-                    }
-                )
-                
-                raise APIError(
-                    f"API call failed: {str(e)}",
-                    provider=self.name,
-                    original_error=e
-                ) from e
-        
+
+            # Log and wrap all connection/network errors as APIError
+            logger.error(
+                f"API call failed for {self.name}: {e}",
+                exc_info=True,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "response_time_ms": response_time_ms,
+                    "error_type": type(e).__name__,
+                    "operation": "agenerate"
+                }
+            )
+
+            raise APIError(
+                f"API call failed: {str(e)}",
+                provider=self.name,
+                original_error=e
+            ) from e
+
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
-        
+
         response_text = response.content[0].text
-        
+
         token_usage = TokenUsage(
             input=response.usage.input_tokens,
             output=response.usage.output_tokens,
             total=response.usage.input_tokens + response.usage.output_tokens,
             model_name=self.model,
         )
-        
+
         return response_text, response_time_ms, token_usage
 
 
 class GPT4Agent(BaseAgent):
-    """OpenAI GPT-4 agent with async support"""
-    
+    """OpenAI GPT-4 agent with async support and optional retry"""
+
+    # Default retry configuration for OpenAI API calls
+    DEFAULT_RETRY_CONFIG = RetryConfig(
+        max_attempts=3,
+        base_delay=1.0,
+        max_delay=60.0,
+        retryable_status_codes=(429, 500, 502, 503, 504),
+    )
+
     def __init__(
         self,
         name: str = "gpt4",
@@ -716,11 +807,13 @@ class GPT4Agent(BaseAgent):
         api_key: Optional[str] = None,
         max_tokens: int = 4096,
         cost_tracker: Optional['CostTracker'] = None,
-        budget_manager: Optional['BudgetManager'] = None
+        budget_manager: Optional['BudgetManager'] = None,
+        retry_config: Optional[RetryConfig] = None,
+        enable_retry: bool = False,
     ):
         """
         Initialize GPT-4 agent
-        
+
         Args:
             name: Agent identifier
             model: GPT model to use
@@ -728,48 +821,117 @@ class GPT4Agent(BaseAgent):
             max_tokens: Maximum tokens to generate
             cost_tracker: Optional cost tracker for recording costs
             budget_manager: Optional budget manager for enforcing limits
+            retry_config: Optional retry configuration. If None and enable_retry=True,
+                uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
+            enable_retry: Enable retry with default config. Ignored if retry_config is provided.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
-        
+
         if not _OPENAI_AVAILABLE:
             raise ImportError(
                 "openai package not installed. "
                 "Install with: pip install startd8[openai] or pip install openai"
             )
-        
+
         self.client = OpenAI(api_key=api_key)
         self.async_client = AsyncOpenAI(api_key=api_key)
         self.max_tokens = max_tokens
-    
+
+        # Configure retry behavior
+        if retry_config is not None:
+            self.retry_config = retry_config
+        elif enable_retry:
+            self.retry_config = self.DEFAULT_RETRY_CONFIG
+        else:
+            self.retry_config = None
+
+    async def _make_api_call(self, prompt: str):
+        """
+        Make the raw API call to OpenAI.
+
+        This is separated from agenerate to allow retry logic to wrap it.
+        Raises the raw API exceptions for retry handling.
+        """
+        return await self.async_client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
-        """Generate response using GPT-4 async API"""
+        """
+        Generate response using GPT-4 async API.
+
+        If retry_config is set, transient failures (rate limits, server errors)
+        will be automatically retried with exponential backoff.
+
+        Args:
+            prompt: The prompt text to send
+
+        Returns:
+            Tuple of (response_text, response_time_ms, token_usage)
+
+        Raises:
+            AgentError: For model errors or DNS/connection errors that can't be retried
+            APIError: For API errors
+            RetryError: If all retry attempts are exhausted (when retry enabled)
+        """
         start_time = time.time()
-        
+
         try:
-            response = await self.async_client.chat.completions.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-        except Exception as e:
+            # Use retry wrapper if configured
+            if self.retry_config is not None:
+                make_call = with_retry(self.retry_config)(self._make_api_call)
+                response = await make_call(prompt)
+            else:
+                response = await self._make_api_call(prompt)
+
+        except RetryError as e:
+            # All retry attempts exhausted
             from .logging_config import get_logger
-            from .exceptions import APIError, AgentError
-            
+            from .exceptions import APIError
+
             logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
-            
+
+            logger.error(
+                f"All retry attempts exhausted for {self.name}: {e.last_exception}",
+                exc_info=False,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "response_time_ms": response_time_ms,
+                    "retry_attempts": e.attempts,
+                    "total_retry_time": e.total_time,
+                }
+            )
+
+            raise APIError(
+                f"API call failed after {e.attempts} attempts: {e.last_exception}",
+                provider=self.name,
+                original_error=e.last_exception,
+            ) from e
+
+        except Exception as e:
+            from .logging_config import get_logger
+            from .exceptions import APIError, AgentError
+
+            logger = get_logger(__name__)
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+
             error_msg = str(e)
             error_msg_lower = error_msg.lower()
-            
+
             # Check for completion model error (404 - not a chat model)
             # Only raise this error if we're confident it's actually a completion model issue
             # Check both the error message AND verify the model is actually a completion model
             is_completion = is_completion_model(self.model)
             if "404" in error_msg and is_completion and (
-                "not a chat model" in error_msg_lower or 
+                "not a chat model" in error_msg_lower or
                 "v1/completions" in error_msg_lower or
                 "chat/completions endpoint" in error_msg_lower
             ):
@@ -779,8 +941,6 @@ class GPT4Agent(BaseAgent):
                     f"use the /v1/completions endpoint, which is not supported by this agent. "
                     f"Please use a chat model (like gpt-4, gpt-3.5-turbo, gpt-4-turbo) instead."
                 )
-                # Log without exc_info=True to avoid printing traceback to console
-                # The original error is preserved in AgentError.original_error for debugging
                 logger.error(
                     f"Completion model used with chat endpoint for {self.name}: {completion_error_msg} (Original: {e})",
                     extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
@@ -790,7 +950,7 @@ class GPT4Agent(BaseAgent):
                     agent_name=self.name,
                     original_error=e
                 ) from e
-            
+
             # Check for model not found errors (404 but not a completion model)
             if "404" in error_msg and not is_completion and (
                 "model" in error_msg_lower or "not found" in error_msg_lower
@@ -800,8 +960,6 @@ class GPT4Agent(BaseAgent):
                     f"Please verify the model name is correct and that you have access to it. "
                     f"Common chat models include: gpt-4, gpt-4-turbo, gpt-3.5-turbo, gpt-4o"
                 )
-                # Log without exc_info=True to avoid printing traceback to console
-                # The original error is preserved in AgentError.original_error for debugging
                 logger.error(
                     f"Model not found error for {self.name}: {model_error_msg} (Original: {e})",
                     extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
@@ -811,14 +969,14 @@ class GPT4Agent(BaseAgent):
                     agent_name=self.name,
                     original_error=e
                 ) from e
-            
+
             # Check for DNS/connection errors specifically
             if OpenAIAPIConnectionError and isinstance(e, OpenAIAPIConnectionError):
                 # Check for DNS resolution failures in error message or underlying exception
                 underlying_error = getattr(e, 'cause', None) or getattr(e, '__cause__', None)
                 underlying_msg = str(underlying_error) if underlying_error else ""
                 combined_msg = f"{error_msg} {underlying_msg}".lower()
-                
+
                 if any(term in combined_msg for term in ["nodename nor servname", "getaddrinfo", "not known", "name or service not known", "name resolution"]):
                     dns_error_msg = (
                         f"DNS resolution failed for OpenAI API endpoint. "
@@ -835,43 +993,52 @@ class GPT4Agent(BaseAgent):
                         agent_name=self.name,
                         original_error=e
                     ) from e
-            
-                logger.error(
-                    f"API call failed for {self.name}: {e}",
-                    exc_info=True,
-                    extra={
-                        "agent_name": self.name,
-                        "model": self.model,
-                        "response_time_ms": response_time_ms,
-                        "error_type": type(e).__name__,
-                        "operation": "agenerate"
-                    }
-                )
-                
-                raise APIError(
-                    f"API call failed: {str(e)}",
-                    provider=self.name,
-                    original_error=e
-                ) from e
-        
+
+            # Log and wrap all other errors as APIError
+            logger.error(
+                f"API call failed for {self.name}: {e}",
+                exc_info=True,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "response_time_ms": response_time_ms,
+                    "error_type": type(e).__name__,
+                    "operation": "agenerate"
+                }
+            )
+
+            raise APIError(
+                f"API call failed: {str(e)}",
+                provider=self.name,
+                original_error=e
+            ) from e
+
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
-        
+
         response_text = response.choices[0].message.content
-        
+
         token_usage = TokenUsage(
             input=response.usage.prompt_tokens,
             output=response.usage.completion_tokens,
             total=response.usage.total_tokens,
             model_name=self.model,
         )
-        
+
         return response_text, response_time_ms, token_usage
 
 
 class GeminiAgent(BaseAgent):
-    """Google Gemini agent with async support"""
-    
+    """Google Gemini agent with async support and optional retry"""
+
+    # Default retry configuration for Gemini API calls
+    DEFAULT_RETRY_CONFIG = RetryConfig(
+        max_attempts=3,
+        base_delay=1.0,
+        max_delay=60.0,
+        retryable_status_codes=(429, 500, 502, 503, 504),
+    )
+
     def __init__(
         self,
         name: str = "gemini",
@@ -880,11 +1047,13 @@ class GeminiAgent(BaseAgent):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         cost_tracker: Optional['CostTracker'] = None,
-        budget_manager: Optional['BudgetManager'] = None
+        budget_manager: Optional['BudgetManager'] = None,
+        retry_config: Optional[RetryConfig] = None,
+        enable_retry: bool = False,
     ):
         """
         Initialize Gemini agent
-        
+
         Args:
             name: Agent identifier
             model: Gemini model to use (e.g., 'gemini-pro', 'gemini-1.5-pro')
@@ -893,7 +1062,10 @@ class GeminiAgent(BaseAgent):
             temperature: Sampling temperature (0.0 to 2.0)
             cost_tracker: Optional cost tracker for recording costs
             budget_manager: Optional budget manager for enforcing limits
-            
+            retry_config: Optional retry configuration. If None and enable_retry=True,
+                uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
+            enable_retry: Enable retry with default config. Ignored if retry_config is provided.
+
         Raises:
             ImportError: If google-genai package is not installed
             ValueError: If API key is not provided and not in environment
@@ -968,42 +1140,97 @@ class GeminiAgent(BaseAgent):
         # New google.genai uses Client-based API
         self.client = genai.Client(api_key=api_key)
         self.model_name = self.model
-        
+
         self.max_tokens = max_tokens
         self.temperature = temperature
-    
+
+        # Configure retry behavior
+        if retry_config is not None:
+            self.retry_config = retry_config
+        elif enable_retry:
+            self.retry_config = self.DEFAULT_RETRY_CONFIG
+        else:
+            self.retry_config = None
+
+    async def _make_api_call(self, prompt: str):
+        """
+        Make the raw API call to Gemini.
+
+        This is separated from agenerate to allow retry logic to wrap it.
+        Raises the raw API exceptions for retry handling.
+        """
+        # google.genai Client API - run in executor for async compatibility
+        # Create generation config
+        generation_config = genai_types.GenerateContentConfig(
+            temperature=self.temperature,
+            max_output_tokens=self.max_tokens,
+        )
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            None,
+            lambda: self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=generation_config
+            )
+        )
+
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
         """
-        Generate response using Gemini async API
-        
+        Generate response using Gemini async API.
+
+        If retry_config is set, transient failures (rate limits, server errors)
+        will be automatically retried with exponential backoff.
+
         Args:
             prompt: The prompt text
-            
+
         Returns:
             Tuple of (response_text, response_time_ms, token_usage)
-            
+
         Raises:
             RuntimeError: If Gemini API call fails
+            APIError: For API errors
+            RetryError: If all retry attempts are exhausted (when retry enabled)
         """
         start_time = time.time()
-        
+
         try:
-            # google.genai Client API - run in executor for async compatibility
-            # Create generation config
-            generation_config = genai_types.GenerateContentConfig(
-                temperature=self.temperature,
-                max_output_tokens=self.max_tokens,
+            # Use retry wrapper if configured
+            if self.retry_config is not None:
+                make_call = with_retry(self.retry_config)(self._make_api_call)
+                response = await make_call(prompt)
+            else:
+                response = await self._make_api_call(prompt)
+
+        except RetryError as e:
+            # All retry attempts exhausted
+            from .logging_config import get_logger
+            from .exceptions import APIError
+
+            logger = get_logger(__name__)
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+
+            logger.error(
+                f"All retry attempts exhausted for {self.name}: {e.last_exception}",
+                exc_info=False,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "response_time_ms": response_time_ms,
+                    "retry_attempts": e.attempts,
+                    "total_retry_time": e.total_time,
+                }
             )
-            
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.client.models.generate_content(
-                    model=self.model_name,
-                    contents=prompt,
-                    config=generation_config
-                )
-            )
+
+            raise APIError(
+                f"API call failed after {e.attempts} attempts: {e.last_exception}",
+                provider=self.name,
+                original_error=e.last_exception,
+            ) from e
+
         except (ConnectionError, OSError) as e:
             # Specific connection/network errors
             from .logging_config import get_logger
@@ -1195,8 +1422,16 @@ class GeminiAgent(BaseAgent):
 
 
 class OpenAICompatibleAgent(BaseAgent):
-    """Agent for OpenAI-compatible APIs (Cursor, Ollama, Together AI, Groq, etc.) with async support"""
-    
+    """Agent for OpenAI-compatible APIs (Cursor, Ollama, Together AI, Groq, etc.) with async support and optional retry"""
+
+    # Default retry configuration for OpenAI-compatible API calls
+    DEFAULT_RETRY_CONFIG = RetryConfig(
+        max_attempts=3,
+        base_delay=1.0,
+        max_delay=60.0,
+        retryable_status_codes=(429, 500, 502, 503, 504),
+    )
+
     def __init__(
         self,
         name: str = "custom",
@@ -1206,11 +1441,13 @@ class OpenAICompatibleAgent(BaseAgent):
         base_url: Optional[str] = None,
         max_tokens: int = 4096,
         cost_tracker: Optional['CostTracker'] = None,
-        budget_manager: Optional['BudgetManager'] = None
+        budget_manager: Optional['BudgetManager'] = None,
+        retry_config: Optional[RetryConfig] = None,
+        enable_retry: bool = False,
     ):
         """
         Initialize OpenAI-compatible agent
-        
+
         Args:
             name: Agent identifier
             model: Model name to use
@@ -1220,6 +1457,9 @@ class OpenAICompatibleAgent(BaseAgent):
             max_tokens: Maximum tokens to generate
             cost_tracker: Optional cost tracker for recording costs
             budget_manager: Optional budget manager for enforcing limits
+            retry_config: Optional retry configuration. If None and enable_retry=True,
+                uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
+            enable_retry: Enable retry with default config. Ignored if retry_config is provided.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
         
@@ -1256,7 +1496,15 @@ class OpenAICompatibleAgent(BaseAgent):
         self.api_key_env = api_key_env
         self._cleanup_registered = False
         self._register_cleanup()
-    
+
+        # Configure retry behavior
+        if retry_config is not None:
+            self.retry_config = retry_config
+        elif enable_retry:
+            self.retry_config = self.DEFAULT_RETRY_CONFIG
+        else:
+            self.retry_config = None
+
     def _register_cleanup(self):
         """Register cleanup handler to run on exit"""
         if not self._cleanup_registered:
@@ -1345,25 +1593,54 @@ class OpenAICompatibleAgent(BaseAgent):
                     extra={"agent_name": self.name, "error_type": type(e).__name__}
                 )
                 pass
-    
+
+    async def _make_api_call(self, prompt: str):
+        """
+        Make the raw API call to the OpenAI-compatible endpoint.
+
+        This is separated from agenerate to allow retry logic to wrap it.
+        Raises the raw API exceptions for retry handling.
+        """
+        return await self.async_client.chat.completions.create(
+            model=self.model,
+            max_tokens=self.max_tokens,
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+
     async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
-        """Generate response using OpenAI-compatible API (async)"""
+        """
+        Generate response using OpenAI-compatible API (async).
+
+        If retry_config is set, transient failures (rate limits, server errors)
+        will be automatically retried with exponential backoff.
+
+        Args:
+            prompt: The prompt text
+
+        Returns:
+            Tuple of (response_text, response_time_ms, token_usage)
+
+        Raises:
+            APIError: For API errors
+            RetryError: If all retry attempts are exhausted (when retry enabled)
+        """
         start_time = time.time()
-        
+
         try:
-            response = await self.async_client.chat.completions.create(
-                model=self.model,
-                max_tokens=self.max_tokens,
-                messages=[
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            
+            # Use retry wrapper if configured
+            if self.retry_config is not None:
+                make_call = with_retry(self.retry_config)(self._make_api_call)
+                response = await make_call(prompt)
+            else:
+                response = await self._make_api_call(prompt)
+
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
-            
+
             response_text = response.choices[0].message.content
-            
+
             # Some APIs may not return usage info
             if hasattr(response, 'usage') and response.usage:
                 token_usage = TokenUsage(
@@ -1380,9 +1657,36 @@ class OpenAICompatibleAgent(BaseAgent):
                     total=len(prompt.split()) + (len(response_text.split()) if response_text else 0),
                     model_name=self.model,
                 )
-            
+
             return response_text, response_time_ms, token_usage
-            
+
+        except RetryError as e:
+            # All retry attempts exhausted
+            from .logging_config import get_logger
+            from .exceptions import APIError
+
+            logger = get_logger(__name__)
+            end_time = time.time()
+            response_time_ms = int((end_time - start_time) * 1000)
+
+            logger.error(
+                f"All retry attempts exhausted for {self.name}: {e.last_exception}",
+                exc_info=False,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "response_time_ms": response_time_ms,
+                    "retry_attempts": e.attempts,
+                    "total_retry_time": e.total_time,
+                }
+            )
+
+            raise APIError(
+                f"API call failed after {e.attempts} attempts: {e.last_exception}",
+                provider=self.name,
+                original_error=e.last_exception,
+            ) from e
+
         except Exception as e:
             from .logging_config import get_logger
             from .exceptions import APIError, AgentError
