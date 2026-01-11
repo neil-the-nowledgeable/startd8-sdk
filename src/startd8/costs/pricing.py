@@ -56,15 +56,41 @@ class PricingService:
         )
     """
     
-    # Default pricing (updated December 2025)
+    # Default pricing (updated January 2026)
     DEFAULT_PRICING: Dict[str, ModelPricing] = {
-        # Anthropic Claude
-        "claude-3-opus-20240229": ModelPricing(
-            model="claude-3-opus-20240229",
+        # Anthropic Claude 4.5 family
+        "claude-opus-4-5-20251101": ModelPricing(
+            model="claude-opus-4-5-20251101",
+            provider="anthropic",
+            input_cost_per_million=5.0,
+            output_cost_per_million=25.0
+        ),
+        "claude-sonnet-4-5-20250927": ModelPricing(
+            model="claude-sonnet-4-5-20250927",
+            provider="anthropic",
+            input_cost_per_million=3.0,
+            output_cost_per_million=15.0
+        ),
+        "claude-haiku-4-5-20251008": ModelPricing(
+            model="claude-haiku-4-5-20251008",
+            provider="anthropic",
+            input_cost_per_million=1.0,
+            output_cost_per_million=5.0
+        ),
+        # Anthropic Claude 4.x family
+        "claude-opus-4-1-20250805": ModelPricing(
+            model="claude-opus-4-1-20250805",
             provider="anthropic",
             input_cost_per_million=15.0,
             output_cost_per_million=75.0
         ),
+        "claude-sonnet-4-20250514": ModelPricing(
+            model="claude-sonnet-4-20250514",
+            provider="anthropic",
+            input_cost_per_million=3.0,
+            output_cost_per_million=15.0
+        ),
+        # Anthropic Claude 3.5 family
         "claude-3-5-sonnet-20241022": ModelPricing(
             model="claude-3-5-sonnet-20241022",
             provider="anthropic",
@@ -77,37 +103,83 @@ class PricingService:
             input_cost_per_million=1.0,
             output_cost_per_million=5.0
         ),
+        # Anthropic Claude 3 legacy
+        "claude-3-opus-20240229": ModelPricing(
+            model="claude-3-opus-20240229",
+            provider="anthropic",
+            input_cost_per_million=15.0,
+            output_cost_per_million=75.0
+        ),
         "claude-3-haiku-20240307": ModelPricing(
             model="claude-3-haiku-20240307",
             provider="anthropic",
             input_cost_per_million=0.25,
             output_cost_per_million=1.25
         ),
-        
-        # OpenAI GPT
-        "gpt-4-turbo": ModelPricing(
-            model="gpt-4-turbo",
+
+        # OpenAI GPT-4.1 family (1M context)
+        "gpt-4.1": ModelPricing(
+            model="gpt-4.1",
+            provider="openai",
+            input_cost_per_million=2.0,
+            output_cost_per_million=8.0
+        ),
+        "gpt-4.1-mini": ModelPricing(
+            model="gpt-4.1-mini",
+            provider="openai",
+            input_cost_per_million=0.4,
+            output_cost_per_million=1.6
+        ),
+        "gpt-4.1-nano": ModelPricing(
+            model="gpt-4.1-nano",
+            provider="openai",
+            input_cost_per_million=0.1,
+            output_cost_per_million=0.4
+        ),
+        # OpenAI o-series reasoning models
+        "o3": ModelPricing(
+            model="o3",
             provider="openai",
             input_cost_per_million=10.0,
-            output_cost_per_million=30.0
+            output_cost_per_million=40.0
         ),
-        "gpt-4-turbo-preview": ModelPricing(
-            model="gpt-4-turbo-preview",
+        "o3-mini": ModelPricing(
+            model="o3-mini",
             provider="openai",
-            input_cost_per_million=10.0,
-            output_cost_per_million=30.0
+            input_cost_per_million=1.1,
+            output_cost_per_million=4.4
         ),
+        "o3-pro": ModelPricing(
+            model="o3-pro",
+            provider="openai",
+            input_cost_per_million=20.0,
+            output_cost_per_million=80.0
+        ),
+        "o4-mini": ModelPricing(
+            model="o4-mini",
+            provider="openai",
+            input_cost_per_million=1.1,
+            output_cost_per_million=4.4
+        ),
+        # OpenAI GPT-4o family
         "gpt-4o": ModelPricing(
             model="gpt-4o",
             provider="openai",
-            input_cost_per_million=5.0,
-            output_cost_per_million=15.0
+            input_cost_per_million=2.5,
+            output_cost_per_million=10.0
         ),
         "gpt-4o-mini": ModelPricing(
             model="gpt-4o-mini",
             provider="openai",
             input_cost_per_million=0.15,
             output_cost_per_million=0.60
+        ),
+        # OpenAI legacy
+        "gpt-4-turbo": ModelPricing(
+            model="gpt-4-turbo",
+            provider="openai",
+            input_cost_per_million=10.0,
+            output_cost_per_million=30.0
         ),
         "gpt-4": ModelPricing(
             model="gpt-4",
@@ -121,8 +193,53 @@ class PricingService:
             input_cost_per_million=0.5,
             output_cost_per_million=1.5
         ),
-        
-        # Google Gemini
+
+        # Google Gemini 3.x family
+        "gemini-3-pro-preview": ModelPricing(
+            model="gemini-3-pro-preview",
+            provider="google",
+            input_cost_per_million=1.25,
+            output_cost_per_million=5.0
+        ),
+        "gemini-3-flash-preview": ModelPricing(
+            model="gemini-3-flash-preview",
+            provider="google",
+            input_cost_per_million=0.1,
+            output_cost_per_million=0.4
+        ),
+        # Google Gemini 2.5 family
+        "gemini-2.5-pro": ModelPricing(
+            model="gemini-2.5-pro",
+            provider="google",
+            input_cost_per_million=1.25,
+            output_cost_per_million=5.0
+        ),
+        "gemini-2.5-flash": ModelPricing(
+            model="gemini-2.5-flash",
+            provider="google",
+            input_cost_per_million=0.15,
+            output_cost_per_million=0.6
+        ),
+        "gemini-2.5-flash-lite": ModelPricing(
+            model="gemini-2.5-flash-lite",
+            provider="google",
+            input_cost_per_million=0.075,
+            output_cost_per_million=0.3
+        ),
+        # Google Gemini 2.0 family
+        "gemini-2.0-flash": ModelPricing(
+            model="gemini-2.0-flash",
+            provider="google",
+            input_cost_per_million=0.1,
+            output_cost_per_million=0.4
+        ),
+        "gemini-2.0-flash-lite": ModelPricing(
+            model="gemini-2.0-flash-lite",
+            provider="google",
+            input_cost_per_million=0.075,
+            output_cost_per_million=0.3
+        ),
+        # Google Gemini legacy (retired)
         "gemini-1.5-pro": ModelPricing(
             model="gemini-1.5-pro",
             provider="google",
@@ -140,7 +257,7 @@ class PricingService:
     # Provider detection patterns
     PROVIDER_PATTERNS = {
         "anthropic": ["claude"],
-        "openai": ["gpt", "o1", "davinci", "curie"],
+        "openai": ["gpt", "o1", "o3", "o4", "davinci", "curie"],
         "google": ["gemini", "palm"],
     }
     

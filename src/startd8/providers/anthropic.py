@@ -18,12 +18,20 @@ class AnthropicProvider:
     
     # Official Claude models (hardcoded baseline)
     HARDCODED_MODELS = [
-        "claude-sonnet-4-20250514",  # Claude Sonnet 4 (latest)
-        "claude-3-5-sonnet-20241022",  # Claude 3.5 Sonnet
-        "claude-3-opus-20240229",  # Claude 3 Opus
-        "claude-3-sonnet-20240229",  # Claude 3 Sonnet
-        "claude-3-haiku-20240307",  # Claude 3 Haiku
+        # Claude 4.5 family (Latest - November 2025)
+        "claude-opus-4-5-20251101",   # Claude Opus 4.5 - most intelligent model
+        "claude-sonnet-4-5-20250927", # Claude Sonnet 4.5 - best for complex agents/coding
+        "claude-haiku-4-5-20251008",  # Claude Haiku 4.5 - fastest with near-frontier performance
+        # Claude 4.x family
+        "claude-opus-4-1-20250805",   # Claude Opus 4.1 - agentic tasks upgrade
+        "claude-sonnet-4-20250514",   # Claude Sonnet 4
+        # Claude 3.5 family
+        "claude-3-5-sonnet-20241022", # Claude 3.5 Sonnet
         "claude-3-5-haiku-20241022",  # Claude 3.5 Haiku
+        # Legacy (deprecated - will be retired Jan 5, 2026)
+        "claude-3-opus-20240229",     # Claude 3 Opus (deprecated June 30, 2025)
+        "claude-3-sonnet-20240229",   # Claude 3 Sonnet
+        "claude-3-haiku-20240307",    # Claude 3 Haiku
     ]
     
     @classmethod
@@ -61,6 +69,36 @@ class AnthropicProvider:
     
     # Model metadata for cost tracking and limits
     MODEL_INFO = {
+        # Claude 4.5 family
+        "claude-opus-4-5-20251101": {
+            "name": "Claude Opus 4.5",
+            "context_window": 200000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 5.00,
+            "cost_per_1m_output": 25.00,
+        },
+        "claude-sonnet-4-5-20250927": {
+            "name": "Claude Sonnet 4.5",
+            "context_window": 200000,  # 1M beta available
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 3.00,
+            "cost_per_1m_output": 15.00,
+        },
+        "claude-haiku-4-5-20251008": {
+            "name": "Claude Haiku 4.5",
+            "context_window": 200000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 1.00,
+            "cost_per_1m_output": 5.00,
+        },
+        # Claude 4.x family
+        "claude-opus-4-1-20250805": {
+            "name": "Claude Opus 4.1",
+            "context_window": 200000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 15.00,
+            "cost_per_1m_output": 75.00,
+        },
         "claude-sonnet-4-20250514": {
             "name": "Claude Sonnet 4",
             "context_window": 200000,
@@ -68,27 +106,7 @@ class AnthropicProvider:
             "cost_per_1m_input": 3.00,
             "cost_per_1m_output": 15.00,
         },
-        "claude-3-opus-20240229": {
-            "name": "Claude 3 Opus",
-            "context_window": 200000,
-            "max_output_tokens": 4096,
-            "cost_per_1m_input": 15.00,
-            "cost_per_1m_output": 75.00,
-        },
-        "claude-3-sonnet-20240229": {
-            "name": "Claude 3 Sonnet",
-            "context_window": 200000,
-            "max_output_tokens": 4096,
-            "cost_per_1m_input": 3.00,
-            "cost_per_1m_output": 15.00,
-        },
-        "claude-3-haiku-20240307": {
-            "name": "Claude 3 Haiku",
-            "context_window": 200000,
-            "max_output_tokens": 4096,
-            "cost_per_1m_input": 0.25,
-            "cost_per_1m_output": 1.25,
-        },
+        # Claude 3.5 family
         "claude-3-5-sonnet-20241022": {
             "name": "Claude 3.5 Sonnet",
             "context_window": 200000,
@@ -102,6 +120,34 @@ class AnthropicProvider:
             "max_output_tokens": 8192,
             "cost_per_1m_input": 1.00,
             "cost_per_1m_output": 5.00,
+        },
+        # Legacy models (deprecated)
+        "claude-3-opus-20240229": {
+            "name": "Claude 3 Opus (deprecated)",
+            "context_window": 200000,
+            "max_output_tokens": 4096,
+            "cost_per_1m_input": 15.00,
+            "cost_per_1m_output": 75.00,
+            "deprecated": True,
+            "replacement": "claude-opus-4-1-20250805",
+        },
+        "claude-3-sonnet-20240229": {
+            "name": "Claude 3 Sonnet (deprecated)",
+            "context_window": 200000,
+            "max_output_tokens": 4096,
+            "cost_per_1m_input": 3.00,
+            "cost_per_1m_output": 15.00,
+            "deprecated": True,
+            "replacement": "claude-sonnet-4-20250514",
+        },
+        "claude-3-haiku-20240307": {
+            "name": "Claude 3 Haiku (deprecated)",
+            "context_window": 200000,
+            "max_output_tokens": 4096,
+            "cost_per_1m_input": 0.25,
+            "cost_per_1m_output": 1.25,
+            "deprecated": True,
+            "replacement": "claude-3-5-haiku-20241022",
         },
     }
     

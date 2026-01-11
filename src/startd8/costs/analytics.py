@@ -160,11 +160,26 @@ class CostAnalytics:
         
         # Check for expensive models that could be downgraded
         downgrade_map = {
-            "claude-3-opus-20240229": "claude-3-5-sonnet-20241022",
+            # Claude downgrades
+            "claude-opus-4-5-20251101": "claude-sonnet-4-5-20250927",
+            "claude-opus-4-1-20250805": "claude-sonnet-4-20250514",
+            "claude-sonnet-4-5-20250927": "claude-haiku-4-5-20251008",
+            "claude-sonnet-4-20250514": "claude-3-5-haiku-20241022",
+            "claude-3-opus-20240229": "claude-sonnet-4-20250514",
+            "claude-3-5-sonnet-20241022": "claude-3-5-haiku-20241022",
+            # GPT downgrades
+            "o3-pro": "o3",
+            "o3": "o3-mini",
+            "gpt-4.1": "gpt-4.1-mini",
+            "gpt-4.1-mini": "gpt-4.1-nano",
             "gpt-4": "gpt-4o",
             "gpt-4-turbo": "gpt-4o",
-            "claude-3-5-sonnet-20241022": "claude-3-5-haiku-20241022",
             "gpt-4o": "gpt-4o-mini",
+            # Gemini downgrades
+            "gemini-3-pro-preview": "gemini-3-flash-preview",
+            "gemini-2.5-pro": "gemini-2.5-flash",
+            "gemini-2.5-flash": "gemini-2.5-flash-lite",
+            "gemini-2.0-flash": "gemini-2.0-flash-lite",
         }
         
         for expensive_model, cheaper_model in downgrade_map.items():

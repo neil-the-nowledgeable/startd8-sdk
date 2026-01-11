@@ -18,14 +18,23 @@ class OpenAIProvider:
     
     # Official OpenAI models (hardcoded baseline)
     HARDCODED_MODELS = [
-        "gpt-4",
-        "gpt-4-turbo-preview",
-        "gpt-4-turbo",
-        "gpt-4-1106-preview",
-        "gpt-4-0125-preview",
-        "gpt-3.5-turbo",
-        "gpt-3.5-turbo-16k",
-        "gpt-3.5-turbo-1106",
+        # GPT-4.1 family (Latest - April 2025, 1M context)
+        "gpt-4.1",              # Best for coding and instruction following
+        "gpt-4.1-mini",         # Fast, cost-efficient
+        "gpt-4.1-nano",         # Ultra-fast, lowest cost
+        # o-series reasoning models
+        "o3",                   # Most powerful reasoning model
+        "o3-mini",              # Small reasoning model
+        "o3-pro",               # Extended thinking for complex problems
+        "o4-mini",              # Fast, cost-efficient reasoning (best on AIME)
+        # GPT-4o family (flagship)
+        "gpt-4o",               # Latest flagship, versatile
+        "gpt-4o-mini",          # Fast, affordable
+        # Legacy models (still functional but outdated)
+        "gpt-4-turbo",          # Previous generation
+        "gpt-4-turbo-preview",  # Preview version
+        "gpt-4",                # Original GPT-4 (retired from ChatGPT April 2025)
+        "gpt-3.5-turbo",        # Budget option
     ]
     
     @classmethod
@@ -63,12 +72,81 @@ class OpenAIProvider:
     
     # Model metadata
     MODEL_INFO = {
-        "gpt-4": {
-            "name": "GPT-4",
-            "context_window": 8192,
+        # GPT-4.1 family (1M context)
+        "gpt-4.1": {
+            "name": "GPT-4.1",
+            "context_window": 1000000,
+            "max_output_tokens": 32768,
+            "cost_per_1m_input": 2.00,
+            "cost_per_1m_output": 8.00,
+        },
+        "gpt-4.1-mini": {
+            "name": "GPT-4.1 Mini",
+            "context_window": 1000000,
+            "max_output_tokens": 32768,
+            "cost_per_1m_input": 0.40,
+            "cost_per_1m_output": 1.60,
+        },
+        "gpt-4.1-nano": {
+            "name": "GPT-4.1 Nano",
+            "context_window": 1000000,
+            "max_output_tokens": 32768,
+            "cost_per_1m_input": 0.10,
+            "cost_per_1m_output": 0.40,
+        },
+        # o-series reasoning models
+        "o3": {
+            "name": "o3",
+            "context_window": 200000,
+            "max_output_tokens": 100000,
+            "cost_per_1m_input": 10.00,
+            "cost_per_1m_output": 40.00,
+        },
+        "o3-mini": {
+            "name": "o3-mini",
+            "context_window": 200000,
+            "max_output_tokens": 100000,
+            "cost_per_1m_input": 1.10,
+            "cost_per_1m_output": 4.40,
+        },
+        "o3-pro": {
+            "name": "o3-pro",
+            "context_window": 200000,
+            "max_output_tokens": 100000,
+            "cost_per_1m_input": 20.00,
+            "cost_per_1m_output": 80.00,
+        },
+        "o4-mini": {
+            "name": "o4-mini",
+            "context_window": 200000,
+            "max_output_tokens": 100000,
+            "cost_per_1m_input": 1.10,
+            "cost_per_1m_output": 4.40,
+        },
+        # GPT-4o family
+        "gpt-4o": {
+            "name": "GPT-4o",
+            "context_window": 128000,
+            "max_output_tokens": 16384,
+            "cost_per_1m_input": 2.50,
+            "cost_per_1m_output": 10.00,
+        },
+        "gpt-4o-mini": {
+            "name": "GPT-4o Mini",
+            "context_window": 128000,
+            "max_output_tokens": 16384,
+            "cost_per_1m_input": 0.15,
+            "cost_per_1m_output": 0.60,
+        },
+        # Legacy models
+        "gpt-4-turbo": {
+            "name": "GPT-4 Turbo",
+            "context_window": 128000,
             "max_output_tokens": 4096,
-            "cost_per_1m_input": 30.00,
-            "cost_per_1m_output": 60.00,
+            "cost_per_1m_input": 10.00,
+            "cost_per_1m_output": 30.00,
+            "deprecated": True,
+            "replacement": "gpt-4o",
         },
         "gpt-4-turbo-preview": {
             "name": "GPT-4 Turbo Preview",
@@ -76,27 +154,24 @@ class OpenAIProvider:
             "max_output_tokens": 4096,
             "cost_per_1m_input": 10.00,
             "cost_per_1m_output": 30.00,
+            "deprecated": True,
+            "replacement": "gpt-4o",
         },
-        "gpt-4-turbo": {
-            "name": "GPT-4 Turbo",
-            "context_window": 128000,
+        "gpt-4": {
+            "name": "GPT-4 (legacy)",
+            "context_window": 8192,
             "max_output_tokens": 4096,
-            "cost_per_1m_input": 10.00,
-            "cost_per_1m_output": 30.00,
+            "cost_per_1m_input": 30.00,
+            "cost_per_1m_output": 60.00,
+            "deprecated": True,
+            "replacement": "gpt-4o",
         },
         "gpt-3.5-turbo": {
             "name": "GPT-3.5 Turbo",
-            "context_window": 4096,
+            "context_window": 16384,
             "max_output_tokens": 4096,
             "cost_per_1m_input": 0.50,
             "cost_per_1m_output": 1.50,
-        },
-        "gpt-3.5-turbo-16k": {
-            "name": "GPT-3.5 Turbo 16K",
-            "context_window": 16384,
-            "max_output_tokens": 4096,
-            "cost_per_1m_input": 3.00,
-            "cost_per_1m_output": 4.00,
         },
     }
     

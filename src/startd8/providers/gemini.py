@@ -16,14 +16,21 @@ class GeminiProvider:
     """Provider for Google Gemini models"""
     
     # Official Gemini models (hardcoded baseline)
-    # Note: gemini-pro and gemini-pro-vision (1.0) are deprecated
-    # Default to gemini-1.5-flash for best compatibility
+    # Note: All Gemini 1.x models are retired and return 404
     HARDCODED_MODELS = [
-        "gemini-1.5-flash",      # Recommended default (fast, cost-effective)
-        "gemini-1.5-pro",        # Best for complex tasks
-        "gemini-2.0-flash-exp",  # Latest experimental model
-        "gemini-pro",            # Deprecated - will map to gemini-1.5-flash
-        "gemini-pro-vision",     # Deprecated - will map to gemini-1.5-flash
+        # Gemini 3.x family (Latest - November/December 2025)
+        "gemini-3-pro-preview",       # Most powerful, reasoning-first
+        "gemini-3-flash-preview",     # Complex multimodal understanding
+        # Gemini 2.5 family
+        "gemini-2.5-pro",             # Advanced reasoning and coding
+        "gemini-2.5-flash",           # Fast responses (default in ChatGPT-style)
+        "gemini-2.5-flash-lite",      # Fast, low-cost, high-performance
+        # Gemini 2.0 family (retiring March 2026)
+        "gemini-2.0-flash",           # Recommended default - stable
+        "gemini-2.0-flash-lite",      # Ultra-efficient for simple tasks
+        # Legacy (retired - return 404)
+        "gemini-1.5-flash",           # Retired
+        "gemini-1.5-pro",             # Retired
     ]
     
     @classmethod
@@ -59,41 +66,86 @@ class GeminiProvider:
         """Dynamic models list that includes discovered models"""
         return self._get_models_instance()
     
-    # Model name mapping for deprecated models
+    # Model name mapping for deprecated/retired models
     MODEL_MAPPING = {
-        "gemini-pro": "gemini-1.5-flash",           # Deprecated April 2025
-        "gemini-pro-vision": "gemini-1.5-flash",   # Deprecated June 2024
+        "gemini-pro": "gemini-2.0-flash",           # Retired
+        "gemini-pro-vision": "gemini-2.0-flash",    # Retired
+        "gemini-1.5-flash": "gemini-2.0-flash",     # Retired - returns 404
+        "gemini-1.5-pro": "gemini-2.5-pro",         # Retired - returns 404
     }
     
     # Model metadata
     MODEL_INFO = {
-        "gemini-pro": {
-            "name": "Gemini Pro",
-            "context_window": 32768,
+        # Gemini 3.x family (Latest)
+        "gemini-3-pro-preview": {
+            "name": "Gemini 3 Pro",
+            "context_window": 1000000,
             "max_output_tokens": 8192,
-            "cost_per_1m_input": 0.50,
-            "cost_per_1m_output": 1.50,
+            "cost_per_1m_input": 1.25,
+            "cost_per_1m_output": 5.00,
         },
-        "gemini-pro-vision": {
-            "name": "Gemini Pro Vision",
-            "context_window": 16384,
-            "max_output_tokens": 2048,
-            "cost_per_1m_input": 0.25,
-            "cost_per_1m_output": 0.50,
+        "gemini-3-flash-preview": {
+            "name": "Gemini 3 Flash",
+            "context_window": 1000000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 0.10,
+            "cost_per_1m_output": 0.40,
         },
+        # Gemini 2.5 family
+        "gemini-2.5-pro": {
+            "name": "Gemini 2.5 Pro",
+            "context_window": 1000000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 1.25,
+            "cost_per_1m_output": 5.00,
+        },
+        "gemini-2.5-flash": {
+            "name": "Gemini 2.5 Flash",
+            "context_window": 1000000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 0.15,
+            "cost_per_1m_output": 0.60,
+        },
+        "gemini-2.5-flash-lite": {
+            "name": "Gemini 2.5 Flash Lite",
+            "context_window": 1000000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 0.075,
+            "cost_per_1m_output": 0.30,
+        },
+        # Gemini 2.0 family
+        "gemini-2.0-flash": {
+            "name": "Gemini 2.0 Flash",
+            "context_window": 1000000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 0.10,
+            "cost_per_1m_output": 0.40,
+        },
+        "gemini-2.0-flash-lite": {
+            "name": "Gemini 2.0 Flash Lite",
+            "context_window": 1000000,
+            "max_output_tokens": 8192,
+            "cost_per_1m_input": 0.075,
+            "cost_per_1m_output": 0.30,
+        },
+        # Legacy models (retired - return 404)
         "gemini-1.5-pro": {
-            "name": "Gemini 1.5 Pro",
-            "context_window": 1000000,  # 1M tokens!
+            "name": "Gemini 1.5 Pro (retired)",
+            "context_window": 1000000,
             "max_output_tokens": 8192,
             "cost_per_1m_input": 3.50,
             "cost_per_1m_output": 10.50,
+            "deprecated": True,
+            "replacement": "gemini-2.5-pro",
         },
         "gemini-1.5-flash": {
-            "name": "Gemini 1.5 Flash",
+            "name": "Gemini 1.5 Flash (retired)",
             "context_window": 1000000,
             "max_output_tokens": 8192,
             "cost_per_1m_input": 0.35,
             "cost_per_1m_output": 1.05,
+            "deprecated": True,
+            "replacement": "gemini-2.0-flash",
         },
     }
     
