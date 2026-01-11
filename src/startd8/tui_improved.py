@@ -8657,7 +8657,13 @@ Please be thorough, constructive, and specific in your analysis."""
             # Generate response
             try:
                 with self.console.status("[bold cyan]Thinking...[/bold cyan]"):
-                    response, tokens_in, tokens_out = agent.generate(user_input)
+                    response, tokens_in, token_usage = agent.generate(user_input)
+
+                # Extract output tokens (handle both int and TokenUsage object)
+                if hasattr(token_usage, 'output'):
+                    tokens_out = token_usage.output
+                else:
+                    tokens_out = token_usage
 
                 # Display response with markdown rendering
                 self.console.print(Panel(
