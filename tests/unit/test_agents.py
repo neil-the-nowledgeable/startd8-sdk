@@ -601,12 +601,12 @@ class TestGeminiAgent:
             # This will raise ValueError about API key, not ImportError
             # which means the ImportError guard works
             with pytest.raises(ValueError, match="Google API key required"):
-                GeminiAgent(name="test-gemini", model="gemini-pro")
+                GeminiAgent(name="test-gemini", model="gemini-2.0-flash")
         else:
             # If not available, ImportError should be raised
             from startd8.agents import GeminiAgent
-            with pytest.raises(ImportError, match="google-generativeai"):
-                GeminiAgent(name="test-gemini", model="gemini-pro")
+            with pytest.raises(ImportError, match="google-genai"):
+                GeminiAgent(name="test-gemini", model="gemini-2.0-flash")
     
     def test_gemini_agent_api_key_validation(self):
         """Test that GeminiAgent validates API key"""
@@ -619,7 +619,7 @@ class TestGeminiAgent:
         with pytest.raises(ValueError, match="Google API key required"):
             GeminiAgent(
                 name="test-gemini",
-                model="gemini-pro",
+                model="gemini-2.0-flash",
                 api_key=None  # No API key provided
             )
     
@@ -634,14 +634,14 @@ class TestGeminiAgent:
         # This just tests initialization and structure
         agent = GeminiAgent(
             name="test-gemini",
-            model="gemini-pro",
+            model="gemini-2.0-flash",
             api_key="test-key-12345",
             max_tokens=2048,
             temperature=0.5
         )
         
         assert agent.name == "test-gemini"
-        assert agent.model == "gemini-pro"
+        assert agent.model == "gemini-2.0-flash"
         assert agent.max_tokens == 2048
         assert agent.temperature == 0.5
     
@@ -654,8 +654,9 @@ class TestGeminiAgent:
         # Test that it creates agents without instantiating them fully
         # (since that requires API key)
         assert provider.name == "gemini"
-        assert "gemini-pro" in provider.supported_models
-        assert len(provider.supported_models) == 4
+        assert "gemini-2.0-flash" in provider.supported_models
+        # Hardcoded models plus dynamically discovered models
+        assert len(provider.supported_models) >= 8
     
     def test_gemini_models_list(self):
         """Test that all Gemini models are properly configured"""
