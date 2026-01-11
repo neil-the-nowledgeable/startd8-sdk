@@ -38,8 +38,8 @@ class TestClientPool:
 
         def worker(i):
             try:
-                with patch('startd8.agents.OpenAI', MagicMock()):
-                    with patch('startd8.agents.AsyncOpenAI', MagicMock()):
+                with patch('startd8.agents.pool.OpenAI', MagicMock()):
+                    with patch('startd8.agents.pool.AsyncOpenAI', MagicMock()):
                         pool.get_openai_clients(
                             api_key=f"test-key-{i % 3}",  # Use 3 different keys
                             timeout_config=timeout_config
@@ -63,8 +63,8 @@ class TestClientPool:
 
         pool = ClientPool()
 
-        with patch('startd8.agents.OpenAI', MagicMock()):
-            with patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.pool.OpenAI', MagicMock()):
+            with patch('startd8.agents.pool.AsyncOpenAI', MagicMock()):
                 pool.get_openai_clients(
                     api_key="test-key",
                     timeout_config=TimeoutConfig()
@@ -86,8 +86,8 @@ class TestClientPoolAnthropicClients:
 
         pool = ClientPool()
 
-        with patch('startd8.agents.Anthropic') as mock_sync, \
-             patch('startd8.agents.AsyncAnthropic') as mock_async:
+        with patch('startd8.agents.pool.Anthropic') as mock_sync, \
+             patch('startd8.agents.pool.AsyncAnthropic') as mock_async:
             sync, async_client = pool.get_anthropic_clients(
                 api_key="test-key",
                 timeout_config=TimeoutConfig()
@@ -105,8 +105,8 @@ class TestClientPoolAnthropicClients:
         pool = ClientPool()
         timeout_config = TimeoutConfig()
 
-        with patch('startd8.agents.Anthropic') as mock_sync, \
-             patch('startd8.agents.AsyncAnthropic') as mock_async:
+        with patch('startd8.agents.pool.Anthropic') as mock_sync, \
+             patch('startd8.agents.pool.AsyncAnthropic') as mock_async:
             sync1, async1 = pool.get_anthropic_clients(
                 api_key="test-key",
                 timeout_config=timeout_config
@@ -129,8 +129,8 @@ class TestClientPoolAnthropicClients:
         pool = ClientPool()
         timeout_config = TimeoutConfig()
 
-        with patch('startd8.agents.Anthropic') as mock_sync, \
-             patch('startd8.agents.AsyncAnthropic') as mock_async:
+        with patch('startd8.agents.pool.Anthropic') as mock_sync, \
+             patch('startd8.agents.pool.AsyncAnthropic') as mock_async:
             pool.get_anthropic_clients(api_key="key1", timeout_config=timeout_config)
             pool.get_anthropic_clients(api_key="key2", timeout_config=timeout_config)
 
@@ -146,8 +146,8 @@ class TestClientPoolAnthropicClients:
         timeout1 = TimeoutConfig(read=30.0)
         timeout2 = TimeoutConfig(read=60.0)
 
-        with patch('startd8.agents.Anthropic') as mock_sync, \
-             patch('startd8.agents.AsyncAnthropic') as mock_async:
+        with patch('startd8.agents.pool.Anthropic') as mock_sync, \
+             patch('startd8.agents.pool.AsyncAnthropic') as mock_async:
             pool.get_anthropic_clients(api_key="key", timeout_config=timeout1)
             pool.get_anthropic_clients(api_key="key", timeout_config=timeout2)
 
@@ -162,9 +162,9 @@ class TestClientPoolOpenAIClients:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.pool._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.pool.OpenAI', MagicMock()), \
+             patch('startd8.agents.pool.AsyncOpenAI', MagicMock()):
             yield
 
     def test_get_openai_clients_creates_clients(self):
@@ -173,8 +173,8 @@ class TestClientPoolOpenAIClients:
 
         pool = ClientPool()
 
-        with patch('startd8.agents.OpenAI') as mock_sync, \
-             patch('startd8.agents.AsyncOpenAI') as mock_async:
+        with patch('startd8.agents.pool.OpenAI') as mock_sync, \
+             patch('startd8.agents.pool.AsyncOpenAI') as mock_async:
             sync, async_client = pool.get_openai_clients(
                 api_key="test-key",
                 timeout_config=TimeoutConfig()
@@ -190,8 +190,8 @@ class TestClientPoolOpenAIClients:
         pool = ClientPool()
         timeout_config = TimeoutConfig()
 
-        with patch('startd8.agents.OpenAI') as mock_sync, \
-             patch('startd8.agents.AsyncOpenAI') as mock_async:
+        with patch('startd8.agents.pool.OpenAI') as mock_sync, \
+             patch('startd8.agents.pool.AsyncOpenAI') as mock_async:
             pool.get_openai_clients(
                 api_key="key",
                 timeout_config=timeout_config,
@@ -213,8 +213,8 @@ class TestClientPoolGeminiClients:
     @pytest.fixture(autouse=True)
     def mock_gemini(self):
         """Mock Gemini availability"""
-        with patch('startd8.agents._GEMINI_AVAILABLE', True), \
-             patch('startd8.agents.genai') as mock_genai:
+        with patch('startd8.agents.pool._GEMINI_AVAILABLE', True), \
+             patch('startd8.agents.pool.genai') as mock_genai:
             mock_genai.Client = MagicMock()
             yield mock_genai
 
@@ -224,7 +224,7 @@ class TestClientPoolGeminiClients:
 
         pool = ClientPool()
 
-        with patch('startd8.agents.genai') as mock_genai, \
+        with patch('startd8.agents.pool.genai') as mock_genai, \
              patch('httpx.Client', MagicMock()):
             mock_genai.Client = MagicMock()
             client = pool.get_gemini_client(
@@ -241,7 +241,7 @@ class TestClientPoolGeminiClients:
         pool = ClientPool()
         timeout_config = TimeoutConfig()
 
-        with patch('startd8.agents.genai') as mock_genai, \
+        with patch('startd8.agents.pool.genai') as mock_genai, \
              patch('httpx.Client', MagicMock()):
             mock_genai.Client = MagicMock()
             client1 = pool.get_gemini_client(
@@ -264,9 +264,9 @@ class TestClaudeAgentConnectionPool:
     def test_uses_pool_when_enabled(self):
         """ClaudeAgent uses connection pool when use_connection_pool=True"""
         with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch('startd8.agents.Anthropic') as mock_sync, \
-                 patch('startd8.agents.AsyncAnthropic') as mock_async, \
-                 patch('startd8.agents.get_client_pool') as mock_get_pool:
+            with patch('startd8.agents.claude.Anthropic') as mock_sync, \
+                 patch('startd8.agents.claude.AsyncAnthropic') as mock_async, \
+                 patch('startd8.agents.claude.get_client_pool') as mock_get_pool:
                 from startd8.agents import ClaudeAgent
 
                 mock_pool = MagicMock()
@@ -283,8 +283,8 @@ class TestClaudeAgentConnectionPool:
     def test_creates_own_clients_when_disabled(self):
         """ClaudeAgent creates own clients when use_connection_pool=False"""
         with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch('startd8.agents.Anthropic') as mock_sync, \
-                 patch('startd8.agents.AsyncAnthropic') as mock_async:
+            with patch('startd8.agents.claude.Anthropic') as mock_sync, \
+                 patch('startd8.agents.claude.AsyncAnthropic') as mock_async:
                 from startd8.agents import ClaudeAgent
 
                 agent = ClaudeAgent(name="test", use_connection_pool=False)
@@ -301,15 +301,15 @@ class TestGPT4AgentConnectionPool:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     def test_uses_pool_when_enabled(self):
         """GPT4Agent uses connection pool when use_connection_pool=True"""
         with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
-            with patch('startd8.agents.get_client_pool') as mock_get_pool:
+            with patch('startd8.agents.openai.get_client_pool') as mock_get_pool:
                 from startd8.agents import GPT4Agent
 
                 mock_pool = MagicMock()
@@ -326,8 +326,8 @@ class TestGPT4AgentConnectionPool:
     def test_creates_own_clients_when_disabled(self):
         """GPT4Agent creates own clients when use_connection_pool=False"""
         with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
-            with patch('startd8.agents.OpenAI') as mock_sync, \
-                 patch('startd8.agents.AsyncOpenAI') as mock_async:
+            with patch('startd8.agents.openai.OpenAI') as mock_sync, \
+                 patch('startd8.agents.openai.AsyncOpenAI') as mock_async:
                 from startd8.agents import GPT4Agent
 
                 agent = GPT4Agent(name="test", use_connection_pool=False)
@@ -344,9 +344,9 @@ class TestGeminiAgentConnectionPool:
     @pytest.fixture(autouse=True)
     def mock_gemini(self):
         """Mock Gemini availability"""
-        with patch('startd8.agents._GEMINI_AVAILABLE', True), \
-             patch('startd8.agents.genai') as mock_genai, \
-             patch('startd8.agents.genai_types', MagicMock()), \
+        with patch('startd8.agents.gemini._GEMINI_AVAILABLE', True), \
+             patch('startd8.agents.gemini.genai') as mock_genai, \
+             patch('startd8.agents.gemini.genai_types', MagicMock()), \
              patch('httpx.Client', MagicMock()):
             mock_genai.Client = MagicMock()
             yield mock_genai
@@ -354,7 +354,7 @@ class TestGeminiAgentConnectionPool:
     def test_uses_pool_when_enabled(self):
         """GeminiAgent uses connection pool when use_connection_pool=True"""
         with patch.dict('os.environ', {'GOOGLE_API_KEY': 'test-key'}):
-            with patch('startd8.agents.get_client_pool') as mock_get_pool:
+            with patch('startd8.agents.gemini.get_client_pool') as mock_get_pool:
                 from startd8.agents import GeminiAgent
 
                 mock_pool = MagicMock()
@@ -371,7 +371,7 @@ class TestGeminiAgentConnectionPool:
     def test_creates_own_clients_when_disabled(self):
         """GeminiAgent creates own client when use_connection_pool=False"""
         with patch.dict('os.environ', {'GOOGLE_API_KEY': 'test-key'}):
-            with patch('startd8.agents.genai') as mock_genai, \
+            with patch('startd8.agents.gemini.genai') as mock_genai, \
                  patch('httpx.Client', MagicMock()):
                 mock_genai.Client = MagicMock()
                 from startd8.agents import GeminiAgent
@@ -389,14 +389,14 @@ class TestOpenAICompatibleAgentConnectionPool:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     def test_uses_pool_when_enabled(self):
         """OpenAICompatibleAgent uses connection pool when use_connection_pool=True"""
-        with patch('startd8.agents.get_client_pool') as mock_get_pool:
+        with patch('startd8.agents.openai.get_client_pool') as mock_get_pool:
             from startd8.agents import OpenAICompatibleAgent
 
             mock_pool = MagicMock()
@@ -416,8 +416,8 @@ class TestOpenAICompatibleAgentConnectionPool:
 
     def test_creates_own_clients_when_disabled(self):
         """OpenAICompatibleAgent creates own clients when use_connection_pool=False"""
-        with patch('startd8.agents.OpenAI') as mock_sync, \
-             patch('startd8.agents.AsyncOpenAI') as mock_async:
+        with patch('startd8.agents.openai.OpenAI') as mock_sync, \
+             patch('startd8.agents.openai.AsyncOpenAI') as mock_async:
             from startd8.agents import OpenAICompatibleAgent
 
             agent = OpenAICompatibleAgent(
@@ -433,7 +433,7 @@ class TestOpenAICompatibleAgentConnectionPool:
 
     def test_passes_base_url_to_pool(self):
         """OpenAICompatibleAgent passes base_url to pool"""
-        with patch('startd8.agents.get_client_pool') as mock_get_pool:
+        with patch('startd8.agents.openai.get_client_pool') as mock_get_pool:
             from startd8.agents import OpenAICompatibleAgent
 
             mock_pool = MagicMock()
@@ -457,15 +457,15 @@ class TestConnectionPoolWithRetryAndTimeout:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     def test_pool_with_custom_timeout_and_retry(self):
         """Connection pool works with custom timeout and retry config"""
         with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
-            with patch('startd8.agents.get_client_pool') as mock_get_pool:
+            with patch('startd8.agents.openai.get_client_pool') as mock_get_pool:
                 from startd8.agents import GPT4Agent, TimeoutConfig
                 from startd8.utils.retry import RetryConfig
 

@@ -1,0 +1,465 @@
+"""
+Base agent class and shared utilities.
+
+This module provides:
+- BaseAgent: Abstract base class for all LLM agents
+- is_completion_model: Utility to detect completion vs chat models
+- AgentRegistry: Backward compatibility shim
+"""
+
+import asyncio
+import logging
+import uuid
+from abc import ABC, abstractmethod
+from typing import Optional, Tuple
+
+from ..models import TokenUsage, AgentResponse, ResponseMetadata
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Backward compatibility shim
+# ---------------------------------------------------------------------------
+# Older integrations imported AgentRegistry from `startd8.agents`, but the
+# concrete implementation now lives in `startd8.job_queue`.
+#
+# IMPORTANT: This must be a lazy import to avoid circular imports:
+# - `startd8.job_queue` imports agent classes from `startd8.agents`.
+def AgentRegistry(*args, **kwargs):  # type: ignore
+    from ..job_queue import AgentRegistry as _AgentRegistry
+    return _AgentRegistry(*args, **kwargs)
+
+
+def is_completion_model(model: str) -> bool:
+    """
+    Check if a model is a completion model (not a chat model).
+
+    Completion models use the /v1/completions endpoint, while chat models
+    use the /v1/chat/completions endpoint.
+
+    Args:
+        model: Model identifier
+
+    Returns:
+        True if model is a completion model, False if chat model
+    """
+    model_lower = model.lower()
+
+    # Known completion models
+    completion_patterns = [
+        'text-davinci',  # text-davinci-003, text-davinci-002, etc.
+        'gpt-3.5-turbo-instruct',  # Completion variant of turbo
+        'text-curie',
+        'text-babbage',
+        'text-ada',
+    ]
+
+    # Check if model matches any completion pattern
+    for pattern in completion_patterns:
+        if pattern in model_lower:
+            return True
+
+    # Chat models typically start with these prefixes
+    chat_prefixes = ['gpt-', 'o1-', 'chatgpt-', 'claude-', 'gemini-']
+    for prefix in chat_prefixes:
+        if model_lower.startswith(prefix):
+            return False
+
+    # If model doesn't match known patterns, assume it's a chat model
+    # (most modern models are chat models)
+    return False
+
+
+# Import cost tracking (optional dependency within the same package)
+try:
+    from ..costs import CostTracker, BudgetManager, get_cost_context
+    from ..costs.budget import BudgetExceededError
+    from ..costs.pricing import PricingService
+    _COSTS_AVAILABLE = True
+except ImportError:
+    CostTracker = None
+    BudgetManager = None
+    get_cost_context = None
+    BudgetExceededError = None
+    PricingService = None
+    _COSTS_AVAILABLE = False
+
+
+class BaseAgent(ABC):
+    """Base class for LLM agents with sync and async support"""
+
+    def __init__(
+        self,
+        name: str,
+        model: str,
+        cost_tracker: Optional['CostTracker'] = None,
+        budget_manager: Optional['BudgetManager'] = None
+    ):
+        """
+        Initialize agent
+
+        Args:
+            name: Agent identifier
+            model: Model name to use
+            cost_tracker: Optional cost tracker for recording costs
+            budget_manager: Optional budget manager for enforcing limits
+        """
+        self.name = name
+        self.model = model
+        self.cost_tracker = cost_tracker
+        self.budget_manager = budget_manager
+
+    @property
+    def agent_name(self) -> str:
+        """
+        Alias for name property for compatibility.
+
+        Some code expects agent.agent_name instead of agent.name.
+        This property provides backward compatibility.
+        """
+        return self.name
+
+    def cleanup(self):
+        """
+        Cleanup resources synchronously.
+
+        This should be called before the event loop closes to ensure
+        async clients are properly closed.
+        """
+        # Base implementation - subclasses should override if they have async clients
+        pass
+
+    async def acleanup(self):
+        """
+        Cleanup resources asynchronously.
+
+        Closes async clients and other async resources.
+        """
+        # Base implementation - subclasses should override if they have async clients
+        pass
+
+    def __del__(self):
+        """
+        Destructor - attempts cleanup if event loop is still available.
+
+        Suppresses RuntimeError when event loop is closed.
+        """
+        try:
+            # Try to cleanup if possible
+            self.cleanup()
+        except RuntimeError as e:
+            # Suppress "Event loop is closed" errors during destruction
+            if 'Event loop is closed' not in str(e):
+                # Re-raise if it's a different RuntimeError
+                raise
+        except Exception as e:
+            # Ignore other errors during destruction - event loop may be closed
+            # Log at debug level for troubleshooting
+            logger.debug(
+                f"Error during {self.__class__.__name__} destruction (ignored): {e}",
+                exc_info=False,
+                extra={"agent_name": self.name, "error_type": type(e).__name__}
+            )
+            pass
+
+    @abstractmethod
+    async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+        """
+        Async generate a response to a prompt.
+
+        This is the primary method that subclasses must implement.
+
+        Args:
+            prompt: The prompt text
+
+        Returns:
+            Tuple of (response_text, response_time_ms, token_usage)
+        """
+        pass
+
+    def generate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+        """
+        Synchronous wrapper for backward compatibility.
+
+        Runs the async method in an event loop.
+
+        Args:
+            prompt: The prompt text
+
+        Returns:
+            Tuple of (response_text, response_time_ms, token_usage)
+        """
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop, safe to use asyncio.run
+            return asyncio.run(self.agenerate(prompt))
+
+        # Running inside an existing event loop (e.g. Jupyter/FastAPI).
+        # Bridge by running the coroutine in a new thread + event loop.
+        import concurrent.futures
+        import contextvars
+
+        ctx = contextvars.copy_context()
+
+        def _runner() -> Tuple[str, int, TokenUsage]:
+            return asyncio.run(self.agenerate(prompt))
+
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(ctx.run, _runner)
+            return future.result()
+
+    async def _run_with_cost_tracking(
+        self,
+        prompt: str,
+        prompt_id: str,
+        response_id: str,
+        metadata: Optional['ResponseMetadata'] = None,
+        project: Optional[str] = None,
+        tags: Optional[list] = None,
+        pipeline_id: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> Tuple[str, int, TokenUsage]:
+        """
+        Execute API call with cost tracking and budget enforcement.
+
+        This helper method orchestrates:
+        1. Pre-call budget check (if budget_manager is configured)
+        2. API call execution (agenerate)
+        3. Post-call cost recording (if cost_tracker is configured)
+
+        Args:
+            prompt: The prompt text
+            prompt_id: ID of the prompt (for cost record)
+            response_id: ID of the response (unique identifier linking cost record to response)
+            metadata: Optional metadata to include in cost record
+            project: Optional project identifier (overrides context default)
+            tags: Optional tags (merged with context tags)
+            pipeline_id: Optional pipeline ID for attribution
+            job_id: Optional job ID for attribution
+
+        Returns:
+            Tuple of (response_text, response_time_ms, token_usage)
+
+        Raises:
+            BudgetExceededError: If budget check fails with block_on_exceed=True
+        """
+        # STEP 1: Pre-call budget check
+        # Note: Budget enforcement works independently from cost tracking
+        # We only need budget_manager, not cost_tracker
+        if self.budget_manager and _COSTS_AVAILABLE:
+            # Get context defaults (Phase 1 integration)
+            context = get_cost_context() if get_cost_context else {}
+
+            # Use explicit project or fall back to context default
+            effective_project = project or context.get("project")
+
+            # Estimate cost from pricing service
+            # Use cost_tracker's pricing if available, otherwise create a new PricingService
+            if self.cost_tracker:
+                pricing = self.cost_tracker.pricing
+            else:
+                pricing = PricingService()
+
+            estimated_cost = pricing.estimate_cost(
+                model=self.model,
+                prompt_chars=len(prompt),
+                expected_output_chars=500  # Conservative estimate
+            )
+
+            # Check budget (may raise BudgetExceededError if block_on_exceed=True)
+            if effective_project:
+                self.budget_manager.check_budget(
+                    model=self.model,
+                    project=effective_project,
+                    tags=tags or context.get("tags", []),
+                    estimated_cost=estimated_cost
+                )
+
+        # STEP 2: Execute API call
+        response_text, response_time_ms, token_usage = await self.agenerate(prompt)
+
+        # STEP 3: Post-call cost recording
+        if self.cost_tracker and _COSTS_AVAILABLE:
+            # Get context defaults for recording (Phase 1 integration)
+            context = get_cost_context() if get_cost_context else {}
+
+            # Use explicit project or fall back to context default
+            effective_project = project or context.get("project")
+
+            # Merge explicit tags with context tags (decision A3)
+            context_tags = context.get("tags", []) if context else []
+            effective_tags = list(set((tags or []) + context_tags))
+
+            # Record actual cost with token usage
+            self.cost_tracker.record_cost(
+                agent_name=self.name,
+                model=self.model,
+                input_tokens=token_usage.input,
+                output_tokens=token_usage.output,
+                tags=effective_tags,
+                project=effective_project,
+                prompt_id=prompt_id,
+                response_id=response_id,
+                pipeline_id=pipeline_id,
+                job_id=job_id,
+                metadata=metadata or {}
+            )
+            # COST_RECORDED event is emitted automatically by record_cost()
+
+        return response_text, response_time_ms, token_usage
+
+    async def acreate_response(
+        self,
+        prompt_id: str,
+        prompt: str,
+        metadata: Optional[ResponseMetadata] = None,
+        project: Optional[str] = None,
+        tags: Optional[list] = None,
+        pipeline_id: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> AgentResponse:
+        """
+        Async generate and create an AgentResponse object
+
+        Integrates with cost tracking and budget enforcement if configured.
+
+        Args:
+            prompt_id: ID of the prompt
+            prompt: Prompt text
+            metadata: Optional metadata
+            project: Optional project identifier (overrides context default)
+            tags: Optional tags (merged with context tags)
+            pipeline_id: Optional pipeline ID for attribution
+            job_id: Optional job ID for attribution
+
+        Returns:
+            AgentResponse object
+
+        Raises:
+            BudgetExceededError: If budget check fails with block_on_exceed=True
+        """
+        # Generate response_id once at the start to ensure cost record and response use the same ID
+        response_id = f"response-{uuid.uuid4().hex[:12]}"
+
+        # Use cost/budget helper if either is configured.
+        # Budget enforcement must work even when cost_tracker is not present.
+        if _COSTS_AVAILABLE and (self.cost_tracker or self.budget_manager):
+            response_text, response_time_ms, token_usage = await self._run_with_cost_tracking(
+                prompt=prompt,
+                prompt_id=prompt_id,
+                response_id=response_id,
+                metadata=metadata,
+                project=project,
+                tags=tags,
+                pipeline_id=pipeline_id,
+                job_id=job_id,
+            )
+        else:
+            # Direct call without cost tracking
+            response_text, response_time_ms, token_usage = await self.agenerate(prompt)
+
+        return AgentResponse(
+            id=response_id,
+            prompt_id=prompt_id,
+            agent_name=self.name,
+            model=self.model,
+            response=response_text,
+            response_time_ms=response_time_ms,
+            token_usage=token_usage,
+            metadata=metadata or {}
+        )
+
+    def create_response(
+        self,
+        prompt_id: str,
+        prompt: str,
+        metadata: Optional[ResponseMetadata] = None,
+        project: Optional[str] = None,
+        tags: Optional[list] = None,
+        pipeline_id: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> AgentResponse:
+        """
+        Generate and create an AgentResponse object (sync wrapper)
+
+        Integrates with cost tracking and budget enforcement if configured.
+        Bridges sync code to async cost tracking pipeline.
+
+        Args:
+            prompt_id: ID of the prompt
+            prompt: Prompt text
+            metadata: Optional metadata
+            project: Optional project identifier (overrides context default)
+            tags: Optional tags (merged with context tags)
+            pipeline_id: Optional pipeline ID for attribution
+            job_id: Optional job ID for attribution
+
+        Returns:
+            AgentResponse object
+
+        Raises:
+            BudgetExceededError: If budget check fails with block_on_exceed=True
+        """
+        # Generate response_id once at the start to ensure cost record and response use the same ID
+        response_id = f"response-{uuid.uuid4().hex[:12]}"
+
+        # Use cost/budget helper via asyncio bridge if either is configured.
+        # Budget enforcement must work even when cost_tracker is not present.
+        if _COSTS_AVAILABLE and (self.cost_tracker or self.budget_manager):
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop, safe to use asyncio.run directly
+                response_text, response_time_ms, token_usage = asyncio.run(
+                    self._run_with_cost_tracking(
+                        prompt=prompt,
+                        prompt_id=prompt_id,
+                        response_id=response_id,
+                        metadata=metadata,
+                        project=project,
+                        tags=tags,
+                        pipeline_id=pipeline_id,
+                        job_id=job_id,
+                    )
+                )
+            else:
+                # Running inside an existing event loop (e.g. Jupyter/FastAPI).
+                # Bridge by running the coroutine in a new thread + event loop.
+                import concurrent.futures
+                import contextvars
+
+                ctx = contextvars.copy_context()
+
+                def _runner() -> Tuple[str, int, TokenUsage]:
+                    return asyncio.run(
+                        self._run_with_cost_tracking(
+                            prompt=prompt,
+                            prompt_id=prompt_id,
+                            response_id=response_id,
+                            metadata=metadata,
+                            project=project,
+                            tags=tags,
+                            pipeline_id=pipeline_id,
+                            job_id=job_id,
+                        )
+                    )
+
+                with concurrent.futures.ThreadPoolExecutor() as pool:
+                    future = pool.submit(ctx.run, _runner)
+                    response_text, response_time_ms, token_usage = future.result()
+        else:
+            # Direct call without cost tracking
+            response_text, response_time_ms, token_usage = self.generate(prompt)
+
+        return AgentResponse(
+            id=response_id,
+            prompt_id=prompt_id,
+            agent_name=self.name,
+            model=self.model,
+            response=response_text,
+            response_time_ms=response_time_ms,
+            token_usage=token_usage,
+            metadata=metadata or {}
+        )

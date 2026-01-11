@@ -591,8 +591,8 @@ class TestGeminiAgent:
         """Test that GeminiAgent raises ImportError if google-generativeai not installed"""
         # This test verifies the error handling exists
         # Actual test would require mocking _GEMINI_AVAILABLE to False
-        from startd8.agents import _GEMINI_AVAILABLE
-        
+        from startd8.agents.gemini import _GEMINI_AVAILABLE
+
         # If package is installed, we can't test the ImportError in this environment
         # But we verify the import guard exists
         if _GEMINI_AVAILABLE:
@@ -610,8 +610,9 @@ class TestGeminiAgent:
     
     def test_gemini_agent_api_key_validation(self):
         """Test that GeminiAgent validates API key"""
-        from startd8.agents import GeminiAgent, _GEMINI_AVAILABLE
-        
+        from startd8.agents import GeminiAgent
+        from startd8.agents.gemini import _GEMINI_AVAILABLE
+
         if not _GEMINI_AVAILABLE:
             pytest.skip("google-generativeai not installed")
         
@@ -625,8 +626,9 @@ class TestGeminiAgent:
     
     def test_gemini_agent_with_mock(self):
         """Test GeminiAgent with mocked google-generativeai"""
-        from startd8.agents import GeminiAgent, _GEMINI_AVAILABLE
-        
+        from startd8.agents import GeminiAgent
+        from startd8.agents.gemini import _GEMINI_AVAILABLE
+
         if not _GEMINI_AVAILABLE:
             pytest.skip("google-generativeai not installed")
         

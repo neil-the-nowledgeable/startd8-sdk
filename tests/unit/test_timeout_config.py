@@ -102,8 +102,8 @@ class TestClaudeAgentTimeout:
     def test_uses_default_timeout_when_none(self):
         """When timeout_config is None, uses DEFAULT_TIMEOUT_CONFIG"""
         with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch('startd8.agents.Anthropic') as mock_anthropic, \
-                 patch('startd8.agents.AsyncAnthropic') as mock_async:
+            with patch('startd8.agents.claude.Anthropic') as mock_anthropic, \
+                 patch('startd8.agents.claude.AsyncAnthropic') as mock_async:
                 from startd8.agents import ClaudeAgent
 
                 agent = ClaudeAgent(name="test", model="claude-3-opus-20240229")
@@ -117,8 +117,8 @@ class TestClaudeAgentTimeout:
     def test_custom_timeout_config(self):
         """Custom timeout_config is used when provided"""
         with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
-            with patch('startd8.agents.Anthropic') as mock_anthropic, \
-                 patch('startd8.agents.AsyncAnthropic') as mock_async:
+            with patch('startd8.agents.claude.Anthropic') as mock_anthropic, \
+                 patch('startd8.agents.claude.AsyncAnthropic') as mock_async:
                 from startd8.agents import ClaudeAgent, TimeoutConfig
 
                 custom_timeout = TimeoutConfig(connect=5.0, read=30.0)
@@ -139,9 +139,9 @@ class TestGPT4AgentTimeout:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability for all tests in this class"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     def test_default_timeout_config(self):
@@ -185,9 +185,9 @@ class TestGeminiAgentTimeout:
     @pytest.fixture(autouse=True)
     def mock_gemini(self):
         """Mock Gemini availability for all tests in this class"""
-        with patch('startd8.agents._GEMINI_AVAILABLE', True), \
-             patch('startd8.agents.genai') as mock_genai, \
-             patch('startd8.agents.genai_types', MagicMock()), \
+        with patch('startd8.agents.gemini._GEMINI_AVAILABLE', True), \
+             patch('startd8.agents.gemini.genai') as mock_genai, \
+             patch('startd8.agents.gemini.genai_types', MagicMock()), \
              patch('httpx.Client', MagicMock()):
             mock_genai.Client = MagicMock()
             yield mock_genai
@@ -233,9 +233,9 @@ class TestOpenAICompatibleAgentTimeout:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability for all tests in this class"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     def test_default_timeout_config(self):
@@ -282,9 +282,9 @@ class TestTimeoutAndRetryTogether:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability for all tests in this class"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     def test_timeout_and_retry_can_be_set_together(self):
