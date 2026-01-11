@@ -7,9 +7,11 @@ import time
 import asyncio
 import uuid
 import logging
+import threading
+import weakref
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, ClassVar
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +161,204 @@ class TimeoutConfig:
             write=self.write,
             pool=self.pool,
         )
+
+    def __hash__(self):
+        """Make TimeoutConfig hashable for use as dict key"""
+        return hash((self.connect, self.read, self.write, self.pool))
+
+    def __eq__(self, other):
+        if not isinstance(other, TimeoutConfig):
+            return False
+        return (self.connect, self.read, self.write, self.pool) == (
+            other.connect, other.read, other.write, other.pool
+        )
+
+
+class ClientPool:
+    """
+    Thread-safe connection pool for sharing HTTP clients across agent instances.
+
+    Reduces connection overhead by reusing clients with the same configuration.
+    Clients are keyed by (api_key_hash, timeout_config) to ensure agents with
+    different configurations get separate clients.
+
+    Example:
+        ```python
+        # Agents with same config share a client
+        agent1 = ClaudeAgent(name="a1", use_connection_pool=True)
+        agent2 = ClaudeAgent(name="a2", use_connection_pool=True)
+        # agent1 and agent2 share the same underlying HTTP client
+
+        # Agents with different timeouts get separate clients
+        fast_agent = ClaudeAgent(
+            name="fast",
+            timeout_config=TimeoutConfig(read=30.0),
+            use_connection_pool=True
+        )
+        # fast_agent has its own client due to different timeout
+        ```
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._sync_clients: Dict[Tuple[int, TimeoutConfig], Any] = {}
+        self._async_clients: Dict[Tuple[int, TimeoutConfig], Any] = {}
+        self._cleanup_registered = False
+
+    def _get_key(self, api_key: Optional[str], timeout_config: TimeoutConfig) -> Tuple[int, TimeoutConfig]:
+        """Generate cache key from api_key and timeout_config"""
+        # Hash the API key for privacy (don't store raw keys)
+        key_hash = hash(api_key) if api_key else 0
+        return (key_hash, timeout_config)
+
+    def get_anthropic_clients(
+        self,
+        api_key: Optional[str],
+        timeout_config: TimeoutConfig
+    ) -> Tuple[Any, Any]:
+        """
+        Get or create Anthropic sync and async clients.
+
+        Args:
+            api_key: Anthropic API key
+            timeout_config: Timeout configuration
+
+        Returns:
+            Tuple of (sync_client, async_client)
+        """
+        if not _ANTHROPIC_AVAILABLE:
+            raise ImportError("anthropic package not installed")
+
+        key = self._get_key(api_key, timeout_config)
+        httpx_timeout = timeout_config.to_httpx_timeout()
+
+        with self._lock:
+            if key not in self._sync_clients:
+                self._sync_clients[key] = Anthropic(api_key=api_key, timeout=httpx_timeout)
+                self._async_clients[key] = AsyncAnthropic(api_key=api_key, timeout=httpx_timeout)
+                self._register_cleanup()
+
+            return self._sync_clients[key], self._async_clients[key]
+
+    def get_openai_clients(
+        self,
+        api_key: Optional[str],
+        timeout_config: TimeoutConfig,
+        base_url: Optional[str] = None
+    ) -> Tuple[Any, Any]:
+        """
+        Get or create OpenAI sync and async clients.
+
+        Args:
+            api_key: OpenAI API key
+            timeout_config: Timeout configuration
+            base_url: Optional base URL for OpenAI-compatible APIs
+
+        Returns:
+            Tuple of (sync_client, async_client)
+        """
+        if not _OPENAI_AVAILABLE:
+            raise ImportError("openai package not installed")
+
+        # Include base_url in key for OpenAI-compatible APIs
+        key_base = self._get_key(api_key, timeout_config)
+        key = (key_base[0], key_base[1], base_url)
+        httpx_timeout = timeout_config.to_httpx_timeout()
+
+        with self._lock:
+            if key not in self._sync_clients:
+                self._sync_clients[key] = OpenAI(
+                    api_key=api_key,
+                    timeout=httpx_timeout,
+                    base_url=base_url
+                )
+                self._async_clients[key] = AsyncOpenAI(
+                    api_key=api_key,
+                    timeout=httpx_timeout,
+                    base_url=base_url
+                )
+                self._register_cleanup()
+
+            return self._sync_clients[key], self._async_clients[key]
+
+    def get_gemini_client(
+        self,
+        api_key: str,
+        timeout_config: TimeoutConfig
+    ) -> Any:
+        """
+        Get or create Gemini client.
+
+        Args:
+            api_key: Google API key
+            timeout_config: Timeout configuration
+
+        Returns:
+            genai.Client instance
+
+        Note:
+            Gemini uses a single sync client that's wrapped with run_in_executor
+            for async operations, so only one client is returned.
+        """
+        if not _GEMINI_AVAILABLE:
+            raise ImportError("google-genai package not installed")
+
+        key = self._get_key(api_key, timeout_config)
+        httpx_timeout = timeout_config.to_httpx_timeout()
+
+        with self._lock:
+            if key not in self._sync_clients:
+                import httpx
+                httpx_client = httpx.Client(timeout=httpx_timeout)
+                self._sync_clients[key] = genai.Client(api_key=api_key, http_client=httpx_client)
+                self._register_cleanup()
+
+            return self._sync_clients[key]
+
+    def _register_cleanup(self):
+        """Register cleanup handler to run on exit"""
+        if not self._cleanup_registered:
+            import atexit
+            atexit.register(self.cleanup)
+            self._cleanup_registered = True
+
+    def cleanup(self):
+        """Clean up all pooled clients"""
+        with self._lock:
+            # Clear references - clients will be garbage collected
+            self._sync_clients.clear()
+            self._async_clients.clear()
+
+    def stats(self) -> Dict[str, int]:
+        """Get pool statistics"""
+        with self._lock:
+            return {
+                "sync_clients": len(self._sync_clients),
+                "async_clients": len(self._async_clients),
+            }
+
+
+# Global client pool instance
+_client_pool: Optional[ClientPool] = None
+_pool_lock = threading.Lock()
+
+
+def get_client_pool() -> ClientPool:
+    """
+    Get the global client pool instance.
+
+    Creates the pool on first access (lazy initialization).
+
+    Returns:
+        The global ClientPool instance
+    """
+    global _client_pool
+    if _client_pool is None:
+        with _pool_lock:
+            if _client_pool is None:
+                _client_pool = ClientPool()
+    return _client_pool
+
 
 # Import cost tracking (optional dependency within the same package)
 try:
@@ -555,7 +755,7 @@ class BaseAgent(ABC):
 
 
 class ClaudeAgent(BaseAgent):
-    """Anthropic Claude agent with async support, optional retry, and configurable timeouts"""
+    """Anthropic Claude agent with async support, optional retry, configurable timeouts, and connection pooling"""
 
     # Default retry configuration for Claude API calls
     DEFAULT_RETRY_CONFIG = RetryConfig(
@@ -571,7 +771,7 @@ class ClaudeAgent(BaseAgent):
     def __init__(
         self,
         name: str = "claude",
-        model: str = "claude-3-opus-20240229",  # Most stable, widely available model
+        model: str = "claude-sonnet-4-20250514",  # Claude Sonnet 4 - best balance of capability and cost
         api_key: Optional[str] = None,
         max_tokens: int = 4096,
         cost_tracker: Optional['CostTracker'] = None,
@@ -579,6 +779,7 @@ class ClaudeAgent(BaseAgent):
         retry_config: Optional[RetryConfig] = None,
         enable_retry: bool = False,
         timeout_config: Optional[TimeoutConfig] = None,
+        use_connection_pool: bool = False,
     ):
         """
         Initialize Claude agent
@@ -594,6 +795,8 @@ class ClaudeAgent(BaseAgent):
                 uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
             enable_retry: Enable retry with default config. Ignored if retry_config is provided.
             timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
+            use_connection_pool: If True, share HTTP clients with other agents using the same
+                config. Reduces connection overhead for multi-agent workloads. Default: False.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
 
@@ -605,10 +808,21 @@ class ClaudeAgent(BaseAgent):
 
         # Configure timeout
         self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
-        httpx_timeout = self.timeout_config.to_httpx_timeout()
+        self._use_connection_pool = use_connection_pool
+        self._owns_clients = not use_connection_pool
 
-        self.client = Anthropic(api_key=api_key, timeout=httpx_timeout)
-        self.async_client = AsyncAnthropic(api_key=api_key, timeout=httpx_timeout)
+        # Get or create clients
+        if use_connection_pool:
+            pool = get_client_pool()
+            self.client, self.async_client = pool.get_anthropic_clients(
+                api_key=api_key,
+                timeout_config=self.timeout_config
+            )
+        else:
+            httpx_timeout = self.timeout_config.to_httpx_timeout()
+            self.client = Anthropic(api_key=api_key, timeout=httpx_timeout)
+            self.async_client = AsyncAnthropic(api_key=api_key, timeout=httpx_timeout)
+
         self.max_tokens = max_tokens
 
         # Configure retry behavior
@@ -620,7 +834,8 @@ class ClaudeAgent(BaseAgent):
             self.retry_config = None
 
         self._cleanup_registered = False
-        self._register_cleanup()
+        if self._owns_clients:
+            self._register_cleanup()
     
     def _register_cleanup(self):
         """Register cleanup handler to run on exit"""
@@ -858,7 +1073,7 @@ class ClaudeAgent(BaseAgent):
 
 
 class GPT4Agent(BaseAgent):
-    """OpenAI GPT-4 agent with async support, optional retry, and configurable timeouts"""
+    """OpenAI GPT-4 agent with async support, optional retry, configurable timeouts, and connection pooling"""
 
     # Default retry configuration for OpenAI API calls
     DEFAULT_RETRY_CONFIG = RetryConfig(
@@ -874,7 +1089,7 @@ class GPT4Agent(BaseAgent):
     def __init__(
         self,
         name: str = "gpt4",
-        model: str = "gpt-4-turbo-preview",
+        model: str = "gpt-4o",  # GPT-4o - latest flagship model
         api_key: Optional[str] = None,
         max_tokens: int = 4096,
         cost_tracker: Optional['CostTracker'] = None,
@@ -882,6 +1097,7 @@ class GPT4Agent(BaseAgent):
         retry_config: Optional[RetryConfig] = None,
         enable_retry: bool = False,
         timeout_config: Optional[TimeoutConfig] = None,
+        use_connection_pool: bool = False,
     ):
         """
         Initialize GPT-4 agent
@@ -897,6 +1113,8 @@ class GPT4Agent(BaseAgent):
                 uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
             enable_retry: Enable retry with default config. Ignored if retry_config is provided.
             timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
+            use_connection_pool: If True, share HTTP clients with other agents using the same
+                config. Reduces connection overhead for multi-agent workloads. Default: False.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
 
@@ -908,10 +1126,21 @@ class GPT4Agent(BaseAgent):
 
         # Configure timeout
         self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
-        httpx_timeout = self.timeout_config.to_httpx_timeout()
+        self._use_connection_pool = use_connection_pool
+        self._owns_clients = not use_connection_pool
 
-        self.client = OpenAI(api_key=api_key, timeout=httpx_timeout)
-        self.async_client = AsyncOpenAI(api_key=api_key, timeout=httpx_timeout)
+        # Get or create clients
+        if use_connection_pool:
+            pool = get_client_pool()
+            self.client, self.async_client = pool.get_openai_clients(
+                api_key=api_key,
+                timeout_config=self.timeout_config
+            )
+        else:
+            httpx_timeout = self.timeout_config.to_httpx_timeout()
+            self.client = OpenAI(api_key=api_key, timeout=httpx_timeout)
+            self.async_client = AsyncOpenAI(api_key=api_key, timeout=httpx_timeout)
+
         self.max_tokens = max_tokens
 
         # Configure retry behavior
@@ -1106,7 +1335,7 @@ class GPT4Agent(BaseAgent):
 
 
 class GeminiAgent(BaseAgent):
-    """Google Gemini agent with async support, optional retry, and configurable timeouts"""
+    """Google Gemini agent with async support, optional retry, configurable timeouts, and connection pooling"""
 
     # Default retry configuration for Gemini API calls
     DEFAULT_RETRY_CONFIG = RetryConfig(
@@ -1122,7 +1351,7 @@ class GeminiAgent(BaseAgent):
     def __init__(
         self,
         name: str = "gemini",
-        model: str = "gemini-1.5-flash",  # Updated default - gemini-pro is deprecated
+        model: str = "gemini-2.0-flash",  # Gemini 2.0 Flash - latest stable model
         api_key: Optional[str] = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
@@ -1131,6 +1360,7 @@ class GeminiAgent(BaseAgent):
         retry_config: Optional[RetryConfig] = None,
         enable_retry: bool = False,
         timeout_config: Optional[TimeoutConfig] = None,
+        use_connection_pool: bool = False,
     ):
         """
         Initialize Gemini agent
@@ -1148,6 +1378,8 @@ class GeminiAgent(BaseAgent):
             enable_retry: Enable retry with default config. Ignored if retry_config is provided.
             timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
                 Note: Gemini client uses httpx internally; timeout is applied via httpx_client.
+            use_connection_pool: If True, share HTTP clients with other agents using the same
+                config. Reduces connection overhead for multi-agent workloads. Default: False.
 
         Raises:
             ImportError: If google-genai package is not installed
@@ -1218,15 +1450,26 @@ class GeminiAgent(BaseAgent):
                 "Google API key required. "
                 "Set GOOGLE_API_KEY environment variable or pass api_key parameter."
             )
-        
+
         # Configure timeout
         self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
+        self._use_connection_pool = use_connection_pool
+        self._owns_clients = not use_connection_pool
 
-        # Create the client with API key and timeout
-        # New google.genai uses Client-based API with httpx under the hood
-        import httpx
-        httpx_client = httpx.Client(timeout=self.timeout_config.to_httpx_timeout())
-        self.client = genai.Client(api_key=api_key, http_client=httpx_client)
+        # Get or create client
+        if use_connection_pool:
+            pool = get_client_pool()
+            self.client = pool.get_gemini_client(
+                api_key=api_key,
+                timeout_config=self.timeout_config
+            )
+        else:
+            # Create the client with API key and timeout
+            # New google.genai uses Client-based API with httpx under the hood
+            import httpx
+            httpx_client = httpx.Client(timeout=self.timeout_config.to_httpx_timeout())
+            self.client = genai.Client(api_key=api_key, http_client=httpx_client)
+
         self.model_name = self.model
 
         self.max_tokens = max_tokens
@@ -1510,7 +1753,7 @@ class GeminiAgent(BaseAgent):
 
 
 class OpenAICompatibleAgent(BaseAgent):
-    """Agent for OpenAI-compatible APIs (Cursor, Ollama, Together AI, Groq, etc.) with async support, optional retry, and configurable timeouts"""
+    """Agent for OpenAI-compatible APIs (Cursor, Ollama, Together AI, Groq, etc.) with async support, optional retry, configurable timeouts, and connection pooling"""
 
     # Default retry configuration for OpenAI-compatible API calls
     DEFAULT_RETRY_CONFIG = RetryConfig(
@@ -1536,6 +1779,7 @@ class OpenAICompatibleAgent(BaseAgent):
         retry_config: Optional[RetryConfig] = None,
         enable_retry: bool = False,
         timeout_config: Optional[TimeoutConfig] = None,
+        use_connection_pool: bool = False,
     ):
         """
         Initialize OpenAI-compatible agent
@@ -1553,6 +1797,8 @@ class OpenAICompatibleAgent(BaseAgent):
                 uses DEFAULT_RETRY_CONFIG. If None and enable_retry=False, no retries.
             enable_retry: Enable retry with default config. Ignored if retry_config is provided.
             timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
+            use_connection_pool: If True, share HTTP clients with other agents using the same
+                config. Reduces connection overhead for multi-agent workloads. Default: False.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
 
@@ -1578,23 +1824,38 @@ class OpenAICompatibleAgent(BaseAgent):
 
         # Configure timeout
         self.timeout_config = timeout_config or self.DEFAULT_TIMEOUT_CONFIG
-        httpx_timeout = self.timeout_config.to_httpx_timeout()
+        self._use_connection_pool = use_connection_pool
+        self._owns_clients = not use_connection_pool
 
-        self.client = OpenAI(
-            api_key=actual_api_key,
-            base_url=base_url,
-            timeout=httpx_timeout
-        )
-        self.async_client = AsyncOpenAI(
-            api_key=actual_api_key,
-            base_url=base_url,
-            timeout=httpx_timeout
-        )
+        # Get or create clients
+        if use_connection_pool:
+            pool = get_client_pool()
+            self.client, self.async_client = pool.get_openai_clients(
+                api_key=actual_api_key,
+                timeout_config=self.timeout_config,
+                base_url=base_url
+            )
+        else:
+            httpx_timeout = self.timeout_config.to_httpx_timeout()
+            self.client = OpenAI(
+                api_key=actual_api_key,
+                base_url=base_url,
+                timeout=httpx_timeout
+            )
+            self.async_client = AsyncOpenAI(
+                api_key=actual_api_key,
+                base_url=base_url,
+                timeout=httpx_timeout
+            )
+
         self.max_tokens = max_tokens
         self.base_url = base_url
         self.api_key_env = api_key_env
         self._cleanup_registered = False
-        self._register_cleanup()
+
+        # Only register cleanup if we own the clients
+        if self._owns_clients:
+            self._register_cleanup()
 
         # Configure retry behavior
         if retry_config is not None:

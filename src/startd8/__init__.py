@@ -74,7 +74,19 @@ from .models import (
     JobResult,
     PromptSpec,
 )
-from .agents import ClaudeAgent, GPT4Agent, GeminiAgent, ComposerAgent, BaseAgent, MockAgent
+from .agents import (
+    ClaudeAgent,
+    GPT4Agent,
+    GeminiAgent,
+    ComposerAgent,
+    BaseAgent,
+    MockAgent,
+    OpenAICompatibleAgent,
+    TimeoutConfig,
+    ClientPool,
+    get_client_pool,
+)
+from .utils.retry import RetryConfig, RetryError
 from .benchmark import BenchmarkRunner, ComparisonReport
 from .orchestration import Pipeline, WorkflowTemplates, PipelineComparison
 from .document_enhancement import DocumentEnhancementChain
@@ -193,6 +205,12 @@ __all__ = [
     "ComposerAgent",
     "BaseAgent",
     "MockAgent",
+    "OpenAICompatibleAgent",
+    "TimeoutConfig",
+    "ClientPool",
+    "get_client_pool",
+    "RetryConfig",
+    "RetryError",
     "BenchmarkRunner",
     "ComparisonReport",
     "Pipeline",
