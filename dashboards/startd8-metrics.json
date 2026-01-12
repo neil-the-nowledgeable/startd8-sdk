@@ -1,0 +1,908 @@
+{
+  "uid": "startd8-sdk-metrics",
+  "title": "StartD8 SDK Metrics",
+  "description": "Technical and business metrics for StartD8 SDK sessions, tokens, costs, and performance",
+  "tags": ["startd8", "sdk", "llm", "agents"],
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Prometheus",
+          "value": "prometheus"
+        },
+        "hide": 0
+      },
+      {
+        "name": "agent_name",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(startd8_active_sessions, agent_name)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "model",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(startd8_active_sessions{agent_name=~\"$agent_name\"}, model)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "status",
+        "type": "custom",
+        "query": "success,error",
+        "includeAll": true,
+        "multi": true,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "name": "Truncation Events",
+        "datasource": "${datasource}",
+        "enable": true,
+        "expr": "increase(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\"}[1m]) > 0",
+        "tagKeys": "agent_name,model",
+        "titleFormat": "Truncation Detected",
+        "textFormat": "{{agent_name}} / {{model}}"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Overview KPIs",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Active Sessions",
+      "description": "Currently active SDK sessions",
+      "gridPos": { "x": 0, "y": 1, "w": 4, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(startd8_active_sessions{agent_name=~\"$agent_name\", model=~\"$model\"})",
+          "legendFormat": "Active"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "textMode": "auto",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Request Rate",
+      "description": "Requests per minute",
+      "gridPos": { "x": 4, "y": 1, "w": 4, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) * 60",
+          "legendFormat": "req/min"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "reqpm",
+          "decimals": 1
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total Tokens (24h)",
+      "description": "Input + Output tokens in last 24 hours",
+      "gridPos": { "x": 8, "y": 1, "w": 4, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(increase(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "Tokens"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1000000 },
+              { "color": "red", "value": 10000000 }
+            ]
+          },
+          "unit": "locale",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Total Cost (24h)",
+      "description": "Estimated cost in USD",
+      "gridPos": { "x": 12, "y": 1, "w": 4, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "Cost"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 10 },
+              { "color": "red", "value": 100 }
+            ]
+          },
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "gauge",
+      "title": "Avg Context Usage",
+      "description": "Average context window utilization",
+      "gridPos": { "x": 16, "y": 1, "w": 4, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "avg(startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\"})",
+          "legendFormat": "Usage"
+        }
+      ],
+      "options": {
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.6 },
+              { "color": "orange", "value": 0.8 },
+              { "color": "red", "value": 0.95 }
+            ]
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Truncations (24h)",
+      "description": "Response truncation events",
+      "gridPos": { "x": 20, "y": 1, "w": 4, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(increase(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "Truncations"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 10 }
+            ]
+          },
+          "unit": "short",
+          "decimals": 0
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Sessions & Requests",
+      "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Active Sessions Over Time",
+      "description": "Session count by agent and model",
+      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (agent_name, model) (startd8_active_sessions{agent_name=~\"$agent_name\", model=~\"$model\"})",
+          "legendFormat": "{{agent_name}} / {{model}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "spanNulls": true
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Request Rate by Status",
+      "description": "Success vs error requests per minute",
+      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (status) (rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", status=~\"$status\"}[5m])) * 60",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "sum"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "stacking": { "mode": "normal" }
+          },
+          "unit": "reqpm"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "success" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "error" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 9,
+      "type": "barchart",
+      "title": "Requests by Agent",
+      "description": "Total requests per agent (24h)",
+      "gridPos": { "x": 0, "y": 14, "w": 8, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (agent_name) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "{{agent_name}}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "Requests by Model",
+      "description": "Total requests per model (24h)",
+      "gridPos": { "x": 8, "y": 14, "w": 8, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (model) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "piechart",
+      "title": "Request Status Distribution",
+      "description": "Success vs error ratio",
+      "gridPos": { "x": 16, "y": 14, "w": 8, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (status) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "{{status}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right", "values": ["percent", "value"] },
+        "pieType": "donut",
+        "reduceOptions": { "calcs": ["lastNotNull"] }
+      },
+      "fieldConfig": {
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "success" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "error" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "title": "Token Consumption & Cost",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Token Consumption Over Time",
+      "description": "Input vs output token rate",
+      "gridPos": { "x": 0, "y": 23, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (direction) (rate(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) * 60",
+          "legendFormat": "{{direction}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "sum"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "stacking": { "mode": "normal" }
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "input" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "blue", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "output" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "purple", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "Cost Over Time",
+      "description": "Cumulative cost by agent",
+      "gridPos": { "x": 12, "y": 23, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (agent_name) (increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\"}[1h]))",
+          "legendFormat": "{{agent_name}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "unit": "currencyUSD"
+        }
+      }
+    },
+    {
+      "id": 14,
+      "type": "barchart",
+      "title": "Token Usage by Model",
+      "description": "Total tokens per model (24h)",
+      "gridPos": { "x": 0, "y": 31, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (model) (increase(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "locale"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "type": "barchart",
+      "title": "Cost by Model",
+      "description": "Estimated cost per model (24h)",
+      "gridPos": { "x": 12, "y": 31, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (model) (increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "{{model}}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "currencyUSD"
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Performance & Health",
+      "gridPos": { "x": 0, "y": 39, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "Response Time Distribution",
+      "description": "P50, P90, P99 response times",
+      "gridPos": { "x": 0, "y": 40, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) by (le))",
+          "legendFormat": "P50"
+        },
+        {
+          "expr": "histogram_quantile(0.90, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) by (le))",
+          "legendFormat": "P90"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) by (le))",
+          "legendFormat": "P99"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          },
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "P50" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "P90" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "P99" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "Context Usage by Session",
+      "description": "Context window utilization per session",
+      "gridPos": { "x": 12, "y": 40, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\"}",
+          "legendFormat": "{{session_id}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "thresholdsStyle": { "mode": "line" }
+          },
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 0.8 },
+              { "color": "red", "value": 0.95 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "Truncation Events",
+      "description": "Response truncations over time",
+      "gridPos": { "x": 0, "y": 48, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (agent_name, model) (rate(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) * 60",
+          "legendFormat": "{{agent_name}} / {{model}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "drawStyle": "bars"
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 19,
+      "type": "stat",
+      "title": "Success Rate",
+      "description": "Overall request success rate",
+      "gridPos": { "x": 12, "y": 48, "w": 6, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", status=\"success\"}[24h])) / sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "legendFormat": "Success Rate"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "yellow", "value": 0.9 },
+              { "color": "green", "value": 0.99 }
+            ]
+          },
+          "unit": "percentunit",
+          "decimals": 2
+        }
+      }
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "Avg Response Time",
+      "description": "Average response time (5m)",
+      "gridPos": { "x": 18, "y": 48, "w": 6, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) by (le))",
+          "legendFormat": "P50"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5000 },
+              { "color": "red", "value": 30000 }
+            ]
+          },
+          "unit": "ms"
+        }
+      }
+    },
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "Sessions Near Capacity",
+      "description": "Sessions with >80% context usage",
+      "gridPos": { "x": 12, "y": 52, "w": 6, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "count(startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\"} > 0.8)",
+          "legendFormat": "Near Capacity"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 3 }
+            ]
+          },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Truncation Rate",
+      "description": "Truncations per 100 requests",
+      "gridPos": { "x": 18, "y": 52, "w": 6, "h": 4 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum(rate(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h])) / sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h])) * 100",
+          "legendFormat": "Rate"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": ["lastNotNull"]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 1 },
+              { "color": "red", "value": 5 }
+            ]
+          },
+          "unit": "percent",
+          "decimals": 2
+        }
+      }
+    },
+    {
+      "type": "row",
+      "title": "Detailed Metrics Table",
+      "gridPos": { "x": 0, "y": 56, "w": 24, "h": 1 },
+      "collapsed": true,
+      "panels": [
+        {
+          "id": 23,
+          "type": "table",
+          "title": "Session Details",
+          "description": "Active session details",
+          "gridPos": { "x": 0, "y": 57, "w": 24, "h": 10 },
+          "datasource": "${datasource}",
+          "targets": [
+            {
+              "expr": "startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\"}",
+              "format": "table",
+              "instant": true
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true },
+                "renameByName": {
+                  "session_id": "Session ID",
+                  "agent_name": "Agent",
+                  "model": "Model",
+                  "Value": "Context Usage"
+                }
+              }
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "align": "left",
+                "filterable": true
+              }
+            },
+            "overrides": [
+              {
+                "matcher": { "id": "byName", "options": "Context Usage" },
+                "properties": [
+                  { "id": "unit", "value": "percentunit" },
+                  { "id": "custom.cellOptions", "value": { "type": "gauge", "mode": "gradient" } },
+                  { "id": "thresholds", "value": {
+                    "mode": "absolute",
+                    "steps": [
+                      { "color": "green", "value": null },
+                      { "color": "yellow", "value": 0.6 },
+                      { "color": "red", "value": 0.8 }
+                    ]
+                  }}
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}
