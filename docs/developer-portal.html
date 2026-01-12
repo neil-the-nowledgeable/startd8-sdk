@@ -498,7 +498,7 @@
                 <li><a href="#features">Features</a></li>
                 <li><a href="#quickstart">Quick Start</a></li>
                 <li><a href="#cli">CLI</a></li>
-                <li><a href="#architecture">Architecture</a></li>
+                <li><a href="#session-tracking">Observability</a></li>
                 <li><a href="https://github.com/startdate/startd8">GitHub</a></li>
             </ul>
         </div>
@@ -630,6 +630,14 @@
                 <p>Built-in retry with exponential backoff. Handle transient API failures gracefully.</p>
                 <span class="tag">RetryConfig</span>
                 <span class="tag">enable_retry</span>
+            </div>
+
+            <div class="feature-card">
+                <div class="icon">📊</div>
+                <h3>Session Tracking</h3>
+                <p>Monitor active sessions with Prometheus metrics. Track context usage, costs, and truncations in real-time.</p>
+                <span class="tag">Prometheus</span>
+                <span class="tag">Grafana</span>
             </div>
         </div>
     </section>
@@ -880,6 +888,96 @@ agent = anthropic.<span class="function">create_agent</span>(
 analytics = <span class="class">CostAnalytics</span>(tracker)
 summary = analytics.<span class="function">get_summary</span>()
 recommendations = analytics.<span class="function">get_optimizations</span>()</code></pre>
+        </div>
+    </section>
+
+    <!-- Session Tracking -->
+    <section id="session-tracking">
+        <h2>Session Tracking & Observability</h2>
+        <p class="section-subtitle">Monitor active sessions with Prometheus metrics and Grafana dashboards</p>
+
+        <div class="code-section">
+            <div class="code-header">
+                <span class="dot red"></span>
+                <span class="dot yellow"></span>
+                <span class="dot green"></span>
+                <span>Session Tracking Example</span>
+            </div>
+            <pre><code><span class="keyword">from</span> startd8 <span class="keyword">import</span> AgentFramework
+
+<span class="comment"># Enable session tracking with Prometheus export</span>
+framework = <span class="class">AgentFramework</span>(
+    enable_session_tracking=<span class="keyword">True</span>,
+    prometheus_port=<span class="number">9091</span>  <span class="comment"># Metrics at http://localhost:9091/metrics</span>
+)
+
+<span class="comment"># Start a tracked session</span>
+session_id = framework.<span class="function">start_session</span>(
+    agent_name=<span class="string">"claude"</span>,
+    model=<span class="string">"claude-sonnet-4-20250514"</span>
+)
+
+<span class="comment"># Get session summary</span>
+summary = framework.<span class="function">get_session_summary</span>()
+<span class="keyword">print</span>(f<span class="string">"Active sessions: {summary['active_sessions']}"</span>)
+<span class="keyword">print</span>(f<span class="string">"Context usage: {summary['average_context_usage']:.1%}"</span>)
+<span class="keyword">print</span>(f<span class="string">"Total cost: ${summary['total_cost']:.4f}"</span>)
+
+<span class="comment"># End session when done</span>
+framework.<span class="function">end_session</span>(session_id)</code></pre>
+        </div>
+
+        <div class="features-grid" style="margin-top: 2rem;">
+            <div class="feature-card">
+                <h3>Prometheus Metrics</h3>
+                <p>Metrics exported at <code>http://localhost:9091/metrics</code></p>
+                <table style="width: 100%; margin-top: 1rem; font-size: 0.85rem;">
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_active_sessions</code></td>
+                        <td style="color: var(--text-muted);">Gauge</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_requests_total</code></td>
+                        <td style="color: var(--text-muted);">Counter</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_tokens_total</code></td>
+                        <td style="color: var(--text-muted);">Counter</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_response_time_ms</code></td>
+                        <td style="color: var(--text-muted);">Histogram</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_context_usage_ratio</code></td>
+                        <td style="color: var(--text-muted);">Gauge</td>
+                    </tr>
+                    <tr style="border-bottom: 1px solid var(--border);">
+                        <td style="padding: 0.5rem 0;"><code>startd8_truncations_total</code></td>
+                        <td style="color: var(--text-muted);">Counter</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 0.5rem 0;"><code>startd8_cost_total</code></td>
+                        <td style="color: var(--text-muted);">Counter</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="feature-card">
+                <h3>Grafana Dashboard</h3>
+                <p>Pre-built dashboard at <code>dashboards/startd8-metrics.json</code></p>
+                <ul style="margin-top: 1rem; padding-left: 1.5rem; color: var(--text-muted); font-size: 0.9rem;">
+                    <li>Overview KPIs (sessions, requests, tokens, cost)</li>
+                    <li>Session trends by agent/model</li>
+                    <li>Token consumption over time</li>
+                    <li>Response time percentiles (P50/P90/P99)</li>
+                    <li>Context usage with capacity warnings</li>
+                </ul>
+                <p style="margin-top: 1rem; font-size: 0.85rem;">
+                    <span style="color: var(--accent);">Live:</span>
+                    <code>http://localhost:3000/d/startd8-sdk-metrics</code>
+                </p>
+            </div>
         </div>
     </section>
 
