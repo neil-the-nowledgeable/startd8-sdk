@@ -3,8 +3,57 @@ Type definitions for MCP Gateway module.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from ..models import TokenUsage
+
+
+@dataclass
+class WorkflowExecutionResult:
+    """Result of a workflow execution via MCP Gateway."""
+    workflow_id: str
+    success: bool
+    output: Any
+    error: Optional[str] = None
+    execution_time_ms: int = 0
+    total_cost: float = 0.0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for MCP response."""
+        return {
+            'workflow_id': self.workflow_id,
+            'success': self.success,
+            'output': self.output,
+            'error': self.error,
+            'execution_time_ms': self.execution_time_ms,
+            'total_cost': self.total_cost,
+            'token_usage': {
+                'input': self.input_tokens,
+                'output': self.output_tokens,
+                'total': self.input_tokens + self.output_tokens
+            },
+            'steps': self.steps,
+            'metadata': self.metadata
+        }
+
+    @classmethod
+    def from_workflow_result(cls, result: 'WorkflowResult') -> 'WorkflowExecutionResult':
+        """Create from a WorkflowResult object."""
+        return cls(
+            workflow_id=result.workflow_id,
+            success=result.success,
+            output=result.output,
+            error=result.error,
+            execution_time_ms=result.metrics.total_time_ms if result.metrics else 0,
+            total_cost=result.metrics.total_cost if result.metrics else 0.0,
+            input_tokens=result.metrics.input_tokens if result.metrics else 0,
+            output_tokens=result.metrics.output_tokens if result.metrics else 0,
+            steps=[s.to_dict() for s in result.steps] if result.steps else [],
+            metadata=result.metadata or {}
+        )
 
 
 @dataclass

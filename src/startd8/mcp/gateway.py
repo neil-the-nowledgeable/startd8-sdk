@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from .types import (
     MCPGatewayConfig,
     SkillExecutionResult,
+    WorkflowExecutionResult,
     CircuitBreakerConfig,
     RateLimiterConfig,
     CacheConfig,
@@ -776,3 +777,314 @@ class MCPGateway:
                 },
             },
         }
+
+    # --- Workflow Integration ---
+
+    async def list_workflows(self) -> List[Dict[str, Any]]:
+        """
+        List all available workflows with metadata.
+
+        Returns:
+            List of workflow metadata dictionaries containing:
+            - workflow_id: Unique identifier
+            - name: Display name
+            - description: What the workflow does
+            - capabilities: List of capability tags
+            - requires_agents: Whether agents are needed
+            - min_agents/max_agents: Agent count constraints
+
+        Example:
+            >>> async with gateway.session():
+            ...     workflows = await gateway.list_workflows()
+            ...     for wf in workflows:
+            ...         print(f"{wf['workflow_id']}: {wf['description']}")
+        """
+        # Import here to avoid circular imports
+        from ..workflows import WorkflowRegistry
+
+        # Ensure workflows are discovered
+        WorkflowRegistry.discover()
+
+        metadata_list = WorkflowRegistry.list_workflow_metadata()
+        return [
+            {
+                'workflow_id': m.workflow_id,
+                'name': m.name,
+                'description': m.description,
+                'version': m.version,
+                'capabilities': m.capabilities,
+                'tags': m.tags,
+                'requires_agents': m.requires_agents,
+                'agent_count': m.agent_count.value if m.agent_count else None,
+                'min_agents': m.min_agents,
+                'max_agents': m.max_agents,
+            }
+            for m in metadata_list
+        ]
+
+    async def describe_workflow(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed information about a workflow including input schema.
+
+        Args:
+            workflow_id: The workflow identifier
+
+        Returns:
+            Workflow info dictionary with full schema, or None if not found
+
+        Example:
+            >>> info = await gateway.describe_workflow("pipeline")
+            >>> print(info['input_schema'])
+        """
+        from ..workflows import WorkflowRegistry
+
+        WorkflowRegistry.discover()
+        return WorkflowRegistry.get_workflow_info(workflow_id)
+
+    async def execute_workflow(
+        self,
+        workflow_id: str,
+        config: Dict[str, Any],
+        tenant_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> WorkflowExecutionResult:
+        """
+        Execute a workflow through the gateway.
+
+        This method provides:
+        1. Workflow discovery and validation
+        2. Rate limiting (uses global rate limiter)
+        3. Audit logging
+        4. Error handling with proper result types
+
+        Args:
+            workflow_id: The workflow to execute
+            config: Configuration dictionary with workflow inputs
+            tenant_id: Optional tenant identifier for multi-tenancy
+            request_id: Optional request ID for tracing
+
+        Returns:
+            WorkflowExecutionResult with success status and output
+
+        Raises:
+            ValueError: If workflow_id not found or config invalid
+            GatewayRateLimitExceededError: If rate limited
+
+        Example:
+            >>> result = await gateway.execute_workflow(
+            ...     workflow_id="pipeline",
+            ...     config={
+            ...         "initial_input": "Write a hello world program",
+            ...         "agents": ["mock:mock-model"]
+            ...     }
+            ... )
+            >>> if result.success:
+            ...     print(result.output)
+        """
+        from ..workflows import WorkflowRegistry
+        from ..exceptions import ConfigurationError
+
+        start_time = time.time()
+
+        # Input validation
+        if not workflow_id or not isinstance(workflow_id, str):
+            raise ValueError("workflow_id must be a non-empty string")
+
+        # Log request
+        self.audit.log_request(
+            skill_id=f"workflow:{workflow_id}",
+            prompt=str(config)[:1000],  # Truncate for logging
+            tenant_id=tenant_id,
+            request_id=request_id
+        )
+
+        try:
+            # Rate limiting (use global limiter for workflows)
+            await self._global_rate_limiter.acquire()
+
+            # Discover and get workflow
+            WorkflowRegistry.discover()
+            workflow = WorkflowRegistry.get_workflow(workflow_id)
+
+            if workflow is None:
+                raise ValueError(f"Workflow '{workflow_id}' not found")
+
+            # Validate config
+            validation = workflow.validate_config(config)
+            if not validation.valid:
+                return WorkflowExecutionResult(
+                    workflow_id=workflow_id,
+                    success=False,
+                    output=None,
+                    error=f"Validation failed: {'; '.join(validation.errors)}",
+                    execution_time_ms=int((time.time() - start_time) * 1000),
+                )
+
+            # Execute workflow
+            result = workflow.run(config)
+
+            # Convert to MCP result type
+            execution_result = WorkflowExecutionResult.from_workflow_result(result)
+
+            # Log response
+            self.audit.log_response(
+                skill_id=f"workflow:{workflow_id}",
+                result=None,  # Different type, just log success
+                tenant_id=tenant_id,
+                request_id=request_id,
+                error=None if execution_result.success else execution_result.error
+            )
+
+            logger.info(
+                f"Workflow execution completed",
+                extra={
+                    'workflow_id': workflow_id,
+                    'success': execution_result.success,
+                    'execution_time_ms': execution_result.execution_time_ms,
+                    'tenant_id': tenant_id,
+                }
+            )
+
+            return execution_result
+
+        except ConfigurationError as e:
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            self.audit.log_response(
+                skill_id=f"workflow:{workflow_id}",
+                result=None,
+                tenant_id=tenant_id,
+                request_id=request_id,
+                error=str(e)
+            )
+            return WorkflowExecutionResult(
+                workflow_id=workflow_id,
+                success=False,
+                output=None,
+                error=str(e),
+                execution_time_ms=execution_time_ms,
+            )
+
+        except Exception as e:
+            execution_time_ms = int((time.time() - start_time) * 1000)
+            self.audit.log_response(
+                skill_id=f"workflow:{workflow_id}",
+                result=None,
+                tenant_id=tenant_id,
+                request_id=request_id,
+                error=str(e)
+            )
+            logger.error(
+                f"Workflow execution failed: {e}",
+                extra={
+                    'workflow_id': workflow_id,
+                    'execution_time_ms': execution_time_ms,
+                    'tenant_id': tenant_id
+                },
+                exc_info=True
+            )
+            raise GatewayError(f"Failed to execute workflow '{workflow_id}': {e}") from e
+
+    def get_workflow_tool_schema(self) -> Dict[str, Any]:
+        """
+        Get MCP tool schema for workflow execution.
+
+        Returns the tool definition that external AI agents can use
+        to discover and execute workflows.
+
+        Returns:
+            MCP tool schema dictionary
+
+        Example:
+            >>> schema = gateway.get_workflow_tool_schema()
+            >>> # Use in MCP tools list
+        """
+        return {
+            "name": "startd8_workflow",
+            "description": (
+                "Execute StartD8 workflows. Actions: "
+                "'list' returns available workflows, "
+                "'describe' returns workflow schema, "
+                "'run' executes a workflow with config."
+            ),
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["list", "describe", "run"],
+                        "description": "The action to perform"
+                    },
+                    "workflow_id": {
+                        "type": "string",
+                        "description": "Workflow ID (required for 'describe' and 'run')"
+                    },
+                    "config": {
+                        "type": "object",
+                        "description": "Workflow configuration (required for 'run')"
+                    }
+                },
+                "required": ["action"]
+            }
+        }
+
+    async def handle_workflow_tool(
+        self,
+        action: str,
+        workflow_id: Optional[str] = None,
+        config: Optional[Dict[str, Any]] = None,
+        tenant_id: Optional[str] = None,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Handle MCP tool calls for workflows.
+
+        This is the main entry point for external AI agents to interact
+        with workflows via MCP.
+
+        Args:
+            action: One of 'list', 'describe', or 'run'
+            workflow_id: Required for 'describe' and 'run'
+            config: Required for 'run'
+            tenant_id: Optional tenant identifier
+            request_id: Optional request ID for tracing
+
+        Returns:
+            Response dictionary based on action:
+            - list: {'workflows': [...]}
+            - describe: {'workflow': {...}}
+            - run: {'result': {...}}
+
+        Example:
+            >>> # Called by MCP when agent uses startd8_workflow tool
+            >>> response = await gateway.handle_workflow_tool(
+            ...     action="list"
+            ... )
+        """
+        if action == "list":
+            workflows = await self.list_workflows()
+            return {"workflows": workflows}
+
+        elif action == "describe":
+            if not workflow_id:
+                return {"error": "workflow_id required for 'describe' action"}
+            info = await self.describe_workflow(workflow_id)
+            if info is None:
+                return {"error": f"Workflow '{workflow_id}' not found"}
+            return {"workflow": info}
+
+        elif action == "run":
+            if not workflow_id:
+                return {"error": "workflow_id required for 'run' action"}
+            if config is None:
+                return {"error": "config required for 'run' action"}
+
+            result = await self.execute_workflow(
+                workflow_id=workflow_id,
+                config=config,
+                tenant_id=tenant_id,
+                request_id=request_id,
+            )
+            return {"result": result.to_dict()}
+
+        else:
+            return {"error": f"Unknown action: {action}. Use 'list', 'describe', or 'run'"}

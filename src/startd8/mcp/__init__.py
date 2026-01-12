@@ -12,6 +12,7 @@ This module provides infrastructure for production deployment:
 from .gateway import MCPGateway
 from .types import (
     SkillExecutionResult,
+    WorkflowExecutionResult,
     MCPGatewayConfig,
     CircuitBreakerConfig,
     RateLimiterConfig,
@@ -30,6 +31,7 @@ __all__ = [
     "MCPGateway",
     "MCPGatewayConfig",
     "SkillExecutionResult",
+    "WorkflowExecutionResult",
     "CircuitBreaker",
     "CircuitBreakerConfig",
     "CircuitState",
