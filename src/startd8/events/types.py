@@ -11,11 +11,17 @@ import uuid
 
 class EventType(Enum):
     """All event types in the StartD8 framework"""
-    
+
     # Agent events
     AGENT_CALL_START = auto()
     AGENT_CALL_COMPLETE = auto()
     AGENT_CALL_ERROR = auto()
+
+    # Agent pause/resume events
+    AGENT_MANUAL_PAUSED = auto()
+    AGENT_AUTO_PAUSED = auto()
+    AGENT_MANUAL_RESUMED = auto()
+    AGENT_AUTO_RESUMED = auto()
     
     # Cost tracking events
     COST_RECORDED = auto()
@@ -24,6 +30,11 @@ class EventType(Enum):
     BUDGET_CREATED = auto()
     BUDGET_UPDATED = auto()
     BUDGET_DELETED = auto()
+
+    # Usage limit events
+    USAGE_LIMIT_WARNING = auto()
+    USAGE_LIMIT_EXCEEDED = auto()
+    USAGE_LIMIT_CRITICAL = auto()
     
     # Pipeline events
     PIPELINE_START = auto()
