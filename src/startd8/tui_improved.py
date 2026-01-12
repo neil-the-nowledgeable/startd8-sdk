@@ -29,6 +29,7 @@ from rich import print as rprint
 from .framework import AgentFramework
 from .agents import MockAgent, ClaudeAgent, GPT4Agent, OpenAICompatibleAgent, ComposerAgent, BaseAgent
 from .orchestration import Pipeline, WorkflowTemplates
+from .workflows.builtin import DesignPolishWorkflow, CriticalReviewWorkflow
 from .document_enhancement import DocumentEnhancementChain
 from .iterative_workflow import IterativeDevWorkflow, IterativeWorkflowResult, save_workflow_result
 from .config import ConfigManager
@@ -3688,23 +3689,32 @@ Enhance this prompt:
         
         try:
             from .exceptions import AgentError, APIError, ConfigurationError
-            
-            pipeline = WorkflowTemplates.design_polish_chain(
-                polisher, 
-                updater, 
-                final_polisher,
-                prompt_instructions=polishing_instructions
-            )
-            pipeline.framework = self.framework
-            
+
+            # Use extracted workflow class for consistency
+            workflow = DesignPolishWorkflow()
+
             with self.console.status("[bold green]Executing pipeline steps...[/bold green]") as status:
-                result = pipeline.run(document_text)
-            
+                def progress_callback(current, total, message):
+                    status.update(f"[bold green]{message} ({current}/{total})...[/bold green]")
+
+                workflow_result = workflow.run(
+                    config={
+                        "document": document_text,
+                        "prompt_instructions": polishing_instructions,
+                    },
+                    agents=[polisher, updater, final_polisher],
+                    on_progress=progress_callback
+                )
+
+            # Check for failure
+            if not workflow_result.success:
+                raise Exception(workflow_result.error or "Workflow failed")
+
             # 4. Show Result
             self.console.print("\n[green]✓ Pipeline Complete![/green]\n")
-            
+
             self.console.print(Panel(
-                result.final_output,
+                workflow_result.output,
                 title="Final Polished Design Document",
                 border_style="green"
             ))
@@ -3749,7 +3759,7 @@ Enhance this prompt:
                         # Custom location
                         filename = questionary.text(
                             "Filename:",
-                            default=f"polished_design_{result.pipeline_id[:8]}.md",
+                            default=f"polished_design_{workflow_result.workflow_id}.md",
                             style=custom_style
                         ).ask()
                         
@@ -3764,7 +3774,7 @@ Enhance this prompt:
                     # No original file (pasted text), use custom location
                     filename = questionary.text(
                         "Filename:",
-                        default=f"polished_design_{result.pipeline_id[:8]}.md",
+                        default=f"polished_design_{workflow_result.workflow_id}.md",
                         style=custom_style
                     ).ask()
                     
@@ -3779,12 +3789,12 @@ Enhance this prompt:
                 try:
                     content = f"# Design Polish Pipeline Result\n\n"
                     content += "---\n\n"
-                    content += result.final_output
+                    content += workflow_result.output
                     content += "\n\n---\n"
                     content += "## Pipeline Steps\n"
-                    for step in result.steps:
-                        content += f"### {step['step_name']} ({step['agent']})\n"
-                        content += f"{step['output']}\n\n"
+                    for step in workflow_result.steps:
+                        content += f"### {step.step_name} ({step.agent_name})\n"
+                        content += f"{step.output}\n\n"
                     
                     saved_path = save_text_file_with_versioning(output_path, content)
                     self.console.print(f"[green]✓ Saved to {saved_path}[/green]")
@@ -6983,37 +6993,41 @@ Enhance this prompt:
             questionary.press_any_key_to_continue().ask()
             return
         
-        # Run pipeline
+        # Run pipeline using extracted workflow class
         try:
             from datetime import datetime, timezone
-            from .orchestration import WorkflowTemplates
-            pipeline = WorkflowTemplates.design_polish_chain(polisher, updater, final_polisher)
-            pipeline.framework = self.framework
-            
-            result = pipeline.run(content)
-            
+
+            workflow = DesignPolishWorkflow()
+            workflow_result = workflow.run(
+                config={"document": content},
+                agents=[polisher, updater, final_polisher]
+            )
+
+            if not workflow_result.success:
+                raise Exception(workflow_result.error or "Workflow failed")
+
             # Save result
             output_dir = Path.cwd() / "workflow_results"
             output_dir.mkdir(exist_ok=True)
-            output_file = output_dir / f"job_{job.job_id[:12]}_design_polish_{result.pipeline_id[:8]}.md"
-            
-            content = f"# Design Polish Pipeline Result\n\n"
-            content += f"**Job ID:** {job.job_id}\n"
-            content += f"**Pipeline ID:** {result.pipeline_id}\n"
-            content += f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
-            content += "---\n\n"
-            content += result.final_output
-            content += "\n\n---\n\n"
-            content += "## Pipeline Steps\n\n"
-            for step in result.steps:
-                content += f"### {step['step_name']} ({step['agent']})\n\n"
-                content += f"{step['output']}\n\n"
-            
-            saved_path = save_text_file_with_versioning(output_file, content)
+            output_file = output_dir / f"job_{job.job_id[:12]}_design_polish_{workflow_result.workflow_id}.md"
+
+            file_content = f"# Design Polish Pipeline Result\n\n"
+            file_content += f"**Job ID:** {job.job_id}\n"
+            file_content += f"**Workflow ID:** {workflow_result.workflow_id}\n"
+            file_content += f"**Generated:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
+            file_content += "---\n\n"
+            file_content += workflow_result.output
+            file_content += "\n\n---\n\n"
+            file_content += "## Pipeline Steps\n\n"
+            for step in workflow_result.steps:
+                file_content += f"### {step.step_name} ({step.agent_name})\n\n"
+                file_content += f"{step.output}\n\n"
+
+            saved_path = save_text_file_with_versioning(output_file, file_content)
             self.console.print(f"\n[green]✓ Pipeline completed successfully![/green]")
             self.console.print(f"[green]✓ Saved to: {saved_path}[/green]")
-            self.console.print(f"\n[dim]Total cost: ${result.total_cost:.4f}[/dim]")
-            self.console.print(f"[dim]Total time: {result.total_time_ms}ms[/dim]")
+            self.console.print(f"\n[dim]Total cost: ${workflow_result.metrics.total_cost:.4f}[/dim]")
+            self.console.print(f"[dim]Total time: {workflow_result.metrics.total_time_ms}ms[/dim]")
             
         except Exception as e:
             self.console.print(f"\n[red]Pipeline failed: {e}[/red]")
@@ -10070,102 +10084,75 @@ Please be thorough, constructive, and specific in your analysis."""
         self.console.print(f"  Total reviews: {len(document_files) * len(selected_agent_infos)}\n")
         
         all_results = []
-        
+
         try:
             from .exceptions import AgentError, APIError, ConfigurationError
-            
+
+            # Pre-create all agent instances
+            agent_instances = []
+            for agent_info in selected_agent_infos:
+                agent_name = agent_info.get('name', 'Unknown')
+                agent_instance = None
+
+                if agent_info.get('type') == 'builtin':
+                    builtin_type = agent_info.get('builtin_type')
+                    if builtin_type == 'mock':
+                        agent_instance = MockAgent(name="mock", model="mock-model")
+                    elif builtin_type == 'claude':
+                        agent_instance = ClaudeAgent()
+                    elif builtin_type == 'gpt4':
+                        agent_instance = GPT4Agent()
+                else:
+                    custom_config = agent_info.get('custom_config')
+                    if not custom_config:
+                        custom_agents = self.agent_manager.list_agents()
+                        for custom_agent in custom_agents:
+                            if custom_agent.get('name') == agent_name:
+                                custom_config = custom_agent
+                                break
+
+                    if custom_config:
+                        agent_instance = self.agent_manager.create_agent_instance(custom_config)
+
+                if agent_instance:
+                    agent_instances.append(agent_instance)
+                else:
+                    self.console.print(f"[yellow]Warning: Could not create agent instance for {agent_name}[/yellow]")
+
+            if not agent_instances:
+                raise Exception("No agent instances could be created")
+
+            # Use extracted workflow class for consistency
+            workflow = CriticalReviewWorkflow()
+
             with self.console.status("[bold green]Processing reviews...[/bold green]") as status:
-                for doc_idx, doc_file in enumerate(document_files, 1):
-                    status.update(f"[bold green]Processing document {doc_idx}/{len(document_files)}: {doc_file.name}...[/bold green]")
-                    
-                    try:
-                        document_content = doc_file.read_text(encoding='utf-8')
-                    except Exception as e:
-                        self.console.print(f"[red]Error reading {doc_file.name}: {e}[/red]")
-                        continue
-                    
-                    doc_stem = doc_file.stem
-                    doc_dir = doc_file.parent
-                    
-                    for agent_idx, agent_info in enumerate(selected_agent_infos, 1):
-                        agent_name = agent_info.get('name', 'Unknown')
-                        agent_model = agent_info.get('model', 'unknown')
-                        
-                        status.update(
-                            f"[bold green]Document {doc_idx}/{len(document_files)}, "
-                            f"Agent {agent_idx}/{len(selected_agent_infos)}: {agent_name}...[/bold green]"
-                        )
-                        
-                        # Create agent instance
-                        agent_instance = None
-                        try:
-                            if agent_info.get('type') == 'builtin':
-                                builtin_type = agent_info.get('builtin_type')
-                                if builtin_type == 'mock':
-                                    agent_instance = MockAgent(name="mock", model="mock-model")
-                                elif builtin_type == 'claude':
-                                    agent_instance = ClaudeAgent()
-                                elif builtin_type == 'gpt4':
-                                    agent_instance = GPT4Agent()
-                            else:
-                                custom_config = agent_info.get('custom_config')
-                                if not custom_config:
-                                    custom_agents = self.agent_manager.list_agents()
-                                    for custom_agent in custom_agents:
-                                        if custom_agent.get('name') == agent_name:
-                                            custom_config = custom_agent
-                                            break
-                                
-                                if custom_config:
-                                    agent_instance = self.agent_manager.create_agent_instance(custom_config)
-                            
-                            if not agent_instance:
-                                raise Exception(f"Failed to create agent instance for {agent_name}")
-                            
-                            # Generate review
-                            review_prompt = review_prompt_template.format(document_content=document_content)
-                            response_tuple = agent_instance.generate(review_prompt)
-                            
-                            # Extract response
-                            if isinstance(response_tuple, tuple) and len(response_tuple) >= 1:
-                                review_text = response_tuple[0]
-                            else:
-                                review_text = str(response_tuple)
-                            
-                            # Create output filename
-                            safe_agent_name = agent_name.replace(" ", "_").replace("/", "_")
-                            output_filename = f"{doc_stem}_review_{safe_agent_name}.md"
-                            output_path = output_dir / output_filename
-                            
-                            # Write review file
-                            from datetime import datetime, timezone
-                            content = f"# Critical Review: {doc_file.name}\n\n"
-                            content += f"**Reviewed by:** {agent_name} ({agent_model})\n"
-                            content += f"**Original Document:** {doc_file}\n"
-                            content += f"**Review Date:** {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n"
-                            content += "---\n\n"
-                            content += review_text
-                            
-                            saved_path = save_text_file_with_versioning(output_path, content)
-                            output_path = saved_path  # Update output_path to actual saved path
-                            
-                            all_results.append({
-                                'document': doc_file.name,
-                                'agent': agent_name,
-                                'model': agent_model,
-                                'output_path': output_path,
-                                'success': True
-                            })
-                            
-                        except Exception as e:
-                            error_msg = str(e)
-                            all_results.append({
-                                'document': doc_file.name,
-                                'agent': agent_name,
-                                'model': agent_model,
-                                'error': error_msg,
-                                'success': False
-                            })
+                def progress_callback(current, total, message):
+                    status.update(f"[bold green]{message} ({current}/{total})...[/bold green]")
+
+                workflow_result = workflow.run(
+                    config={
+                        "documents": [str(doc_file) for doc_file in document_files],
+                        "output_dir": str(output_dir),
+                        "review_template": review_prompt_template,
+                    },
+                    agents=agent_instances,
+                    on_progress=progress_callback
+                )
+
+            # Map workflow result to TUI format
+            if workflow_result.success and workflow_result.output:
+                reviews = workflow_result.output.get("reviews", [])
+                for review in reviews:
+                    all_results.append({
+                        'document': review.get('document', 'Unknown'),
+                        'agent': review.get('agent', 'Unknown'),
+                        'model': review.get('model', 'unknown'),
+                        'output_path': Path(review.get('output_path', '')) if review.get('output_path') else None,
+                        'error': review.get('error'),
+                        'success': review.get('success', False)
+                    })
+            elif not workflow_result.success:
+                raise Exception(workflow_result.error or "Critical review workflow failed")
             
             # 6. Display results summary
             self.console.print("\n[bold cyan]Review Complete![/bold cyan]\n")
