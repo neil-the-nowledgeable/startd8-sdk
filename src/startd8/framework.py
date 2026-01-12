@@ -30,6 +30,16 @@ except ImportError:
     ResilienceLevel = None
     DEFAULT_RESILIENCE_CONFIG = None
 
+# Session tracking imports
+try:
+    from .session_tracking import SessionTracker, SessionMetrics, SessionState
+    _SESSION_TRACKING_AVAILABLE = True
+except ImportError:
+    SessionTracker = None
+    SessionMetrics = None
+    SessionState = None
+    _SESSION_TRACKING_AVAILABLE = False
+
 logger = get_logger(__name__)
 
 
@@ -50,6 +60,8 @@ class AgentFramework:
         storage_dir: Optional[Path] = None,
         enable_cache: bool = True,
         resilience_config: Optional["ResilienceConfig"] = None,
+        enable_session_tracking: bool = False,
+        prometheus_port: Optional[int] = None,
     ):
         """
         Initialize the Agent Framework
@@ -58,6 +70,8 @@ class AgentFramework:
             storage_dir: Directory for storing data (default: ./.startd8)
             enable_cache: Whether to enable caching (default: True)
             resilience_config: Resilience/self-healing configuration (default: STANDARD level)
+            enable_session_tracking: Whether to enable session tracking (default: False)
+            prometheus_port: Port for Prometheus metrics (requires enable_session_tracking=True)
         """
         if storage_dir is None:
             storage_dir = Path.cwd() / ".startd8"
@@ -77,9 +91,90 @@ class AgentFramework:
         else:
             self._resilience_config = None
 
+        # Session tracking
+        self._session_tracker: Optional["SessionTracker"] = None
+        if enable_session_tracking and _SESSION_TRACKING_AVAILABLE:
+            self._session_tracker = SessionTracker(prometheus_port=prometheus_port)
+            logger.info(
+                f"Session tracking enabled" +
+                (f" with Prometheus on port {prometheus_port}" if prometheus_port else ""),
+                extra={"prometheus_port": prometheus_port}
+            )
+        elif enable_session_tracking and not _SESSION_TRACKING_AVAILABLE:
+            logger.warning("Session tracking requested but module not available")
+
         # Index for faster lookups
         self._prompt_index: Dict[str, Prompt] = {}
         self._response_index: Dict[str, List[AgentResponse]] = {}  # Indexed by prompt_id
+
+    # =========================================================================
+    # Session Tracking
+    # =========================================================================
+
+    @property
+    def session_tracker(self) -> Optional["SessionTracker"]:
+        """Get the session tracker instance (if enabled)."""
+        return self._session_tracker
+
+    def start_session(
+        self,
+        agent_name: Optional[str] = None,
+        model: Optional[str] = None,
+        tags: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Optional[str]:
+        """
+        Start a new tracked session.
+
+        Args:
+            agent_name: Name of the agent
+            model: Model being used
+            tags: Optional tags for filtering
+            metadata: Additional metadata
+
+        Returns:
+            Session ID, or None if session tracking is disabled
+        """
+        if not self._session_tracker:
+            return None
+        return self._session_tracker.start_session(
+            agent_name=agent_name,
+            model=model,
+            tags=tags,
+            metadata=metadata,
+        )
+
+    def end_session(self, session_id: str) -> None:
+        """
+        End a tracked session.
+
+        Args:
+            session_id: Session to end
+        """
+        if self._session_tracker:
+            self._session_tracker.end_session(session_id)
+
+    def get_session_summary(self) -> Optional[Dict[str, Any]]:
+        """
+        Get summary of all tracked sessions.
+
+        Returns:
+            Summary dictionary, or None if session tracking is disabled
+        """
+        if not self._session_tracker:
+            return None
+        return self._session_tracker.get_summary()
+
+    def get_active_sessions(self) -> List["SessionMetrics"]:
+        """
+        Get all active sessions.
+
+        Returns:
+            List of active SessionMetrics, or empty list if tracking disabled
+        """
+        if not self._session_tracker:
+            return []
+        return self._session_tracker.get_active_sessions()
 
     # =========================================================================
     # Resilience Configuration
