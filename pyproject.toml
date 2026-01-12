@@ -64,6 +64,11 @@ ollama = "startd8.providers.openai:OllamaProvider"
 mock = "startd8.providers.mock:MockProvider"
 gemini = "startd8.providers.gemini:GeminiProvider"
 
+[project.entry-points."startd8.workflows"]
+pipeline = "startd8.workflows.builtin.pipeline_workflow:PipelineWorkflow"
+doc-enhancement = "startd8.workflows.builtin.doc_enhancement_workflow:DocEnhancementWorkflow"
+iterative-dev = "startd8.workflows.builtin.iterative_dev_workflow:IterativeDevWorkflowWrapper"
+
 [project.urls]
 Homepage = "https://github.com/startdate/startd8"
 Repository = "https://github.com/startdate/startd8"

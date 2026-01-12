@@ -16,6 +16,7 @@ from .benchmark import BenchmarkRunner, ComparisonReport
 from .providers import ProviderRegistry
 from .exceptions import ConfigurationError
 from .logging_config import get_logger
+from .utils.agent_resolution import resolve_agent_spec as _resolve_agent_impl
 
 app = typer.Typer(
     name="startd8",
@@ -36,83 +37,14 @@ def get_framework(storage_dir: Optional[Path] = None) -> AgentFramework:
     return _framework
 
 
-_AGENT_ALIASES = {
-    # Backwards-compatible CLI shorthands
-    # - "claude" used to mean "an Anthropic default model"
-    "claude": ("anthropic", None),
-    # - "gpt4" used to mean GPT-4 Turbo Preview by default in this repo
-    "gpt4": ("openai", "gpt-4-turbo-preview"),
-}
-
-
-def _available_providers_hint() -> str:
-    providers = ProviderRegistry.list_providers()
-    if not providers:
-        return "No providers discovered."
-    return "Available providers: " + ", ".join(sorted(providers))
-
-
 def _resolve_agent(spec: str, *, name: Optional[str] = None) -> BaseAgent:
     """
     Resolve an agent spec (provider name or model id) into a BaseAgent.
 
-    Supports:
-    - Provider name: "openai", "anthropic", "mock", "gemini", "ollama"
-    - Model id: "gpt-4", "claude-3-opus-20240229", "mock-model", ...
-    - Backwards-compatible aliases (legacy shorthands)
-    - "provider:model" form
+    This is a thin wrapper around the shared utility for backwards compatibility.
+    See startd8.utils.agent_resolution.resolve_agent_spec for full documentation.
     """
-    ProviderRegistry.discover()
-
-    spec_raw = spec.strip()
-    spec_lower = spec_raw.lower()
-
-    # Back-compat aliases
-    if spec_lower in _AGENT_ALIASES:
-        provider_name, model_override = _AGENT_ALIASES[spec_lower]
-        provider = ProviderRegistry.get_provider(provider_name)
-        if not provider:
-            raise ConfigurationError(
-                f"Provider '{provider_name}' not available for alias '{spec_raw}'. "
-                f"{_available_providers_hint()}"
-            )
-        model = model_override or (provider.supported_models[0] if provider.supported_models else None)
-        if not model:
-            raise ConfigurationError(f"Provider '{provider.name}' has no supported models.")
-        provider.validate_config({})
-        return provider.create_agent(model, name=name)
-
-    # Explicit provider:model
-    if ":" in spec_lower:
-        provider_name, model = spec_lower.split(":", 1)
-        provider = ProviderRegistry.get_provider(provider_name)
-        if not provider:
-            raise ConfigurationError(
-                f"Unknown provider '{provider_name}' in '{spec_raw}'. { _available_providers_hint() }"
-            )
-        provider.validate_config({})
-        return provider.create_agent(model, name=name)
-
-    # Provider name
-    provider = ProviderRegistry.get_provider(spec_lower)
-    if provider:
-        model = provider.supported_models[0] if provider.supported_models else None
-        if not model:
-            raise ConfigurationError(f"Provider '{provider.name}' has no supported models.")
-        provider.validate_config({})
-        return provider.create_agent(model, name=name)
-
-    # Model id
-    provider = ProviderRegistry.find_provider_for_model(spec_lower)
-    if provider:
-        provider.validate_config({})
-        return provider.create_agent(spec_lower, name=name)
-
-    raise ConfigurationError(
-        f"Unknown agent/model '{spec_raw}'. "
-        f"Pass a provider name (e.g. 'openai') or a model id (e.g. 'gpt-4'). "
-        f"{_available_providers_hint()}"
-    )
+    return _resolve_agent_impl(spec, name=name)
 
 
 @app.command()
@@ -1090,6 +1022,220 @@ def queue_clear(
     count = queue.clear_completed()
     console.print(f"[green]✓ Cleared {count} status file(s)[/green]")
     logger.info("Cleared completed job status files", extra={"count": count})
+
+
+# =============================================================================
+# Workflow Commands
+# =============================================================================
+
+workflow_app = typer.Typer(
+    name="workflow",
+    help="Workflow discovery and execution commands"
+)
+app.add_typer(workflow_app, name="workflow")
+
+
+def _load_workflow_registry():
+    """Load workflow registry module"""
+    try:
+        from .workflows import WorkflowRegistry
+        return WorkflowRegistry
+    except ImportError as e:
+        console.print(f"[red]Workflow system not available: {e}[/red]")
+        raise typer.Exit(1)
+
+
+@workflow_app.command("list")
+def workflow_list():
+    """List all available workflows"""
+    WorkflowRegistry = _load_workflow_registry()
+    WorkflowRegistry.discover()
+
+    workflows = WorkflowRegistry.list_workflow_metadata()
+
+    if not workflows:
+        console.print("[yellow]No workflows available.[/yellow]")
+        return
+
+    table = Table(title="Available Workflows")
+    table.add_column("ID", style="cyan")
+    table.add_column("Name", style="green")
+    table.add_column("Description")
+    table.add_column("Capabilities", style="dim")
+
+    for meta in workflows:
+        table.add_row(
+            meta.workflow_id,
+            meta.name,
+            meta.description[:50] + "..." if len(meta.description) > 50 else meta.description,
+            ", ".join(meta.capabilities[:3])
+        )
+
+    console.print(table)
+
+
+@workflow_app.command("describe")
+def workflow_describe(
+    workflow_id: str = typer.Argument(..., help="Workflow ID to describe")
+):
+    """Show detailed information about a workflow"""
+    WorkflowRegistry = _load_workflow_registry()
+    WorkflowRegistry.discover()
+
+    info = WorkflowRegistry.get_workflow_info(workflow_id)
+    if not info:
+        available = WorkflowRegistry.list_workflows()
+        console.print(f"[red]Unknown workflow: {workflow_id}[/red]")
+        console.print(f"[dim]Available workflows: {', '.join(available)}[/dim]")
+        raise typer.Exit(1)
+
+    # Build info panel
+    content = f"""[bold]ID:[/bold] {info['workflow_id']}
+[bold]Name:[/bold] {info['name']}
+[bold]Version:[/bold] {info['version']}
+[bold]Description:[/bold] {info['description']}
+
+[bold]Capabilities:[/bold] {', '.join(info['capabilities'])}
+[bold]Tags:[/bold] {', '.join(info['tags'])}
+
+[bold]Agent Requirements:[/bold]
+  Requires agents: {info['requires_agents']}
+  Agent count: {info['agent_count']}
+  Min agents: {info['min_agents']}
+  Max agents: {info['max_agents'] or 'unlimited'}
+
+[bold]Input Schema:[/bold]"""
+
+    console.print(Panel(content, title=f"Workflow: {info['name']}"))
+
+    # Print input schema
+    schema = info.get('input_schema', {})
+    if schema.get('properties'):
+        table = Table(title="Inputs")
+        table.add_column("Name", style="cyan")
+        table.add_column("Type")
+        table.add_column("Required")
+        table.add_column("Description")
+
+        required = schema.get('required', [])
+        for name, prop in schema['properties'].items():
+            table.add_row(
+                name,
+                prop.get('type', '?'),
+                "✓" if name in required else "",
+                prop.get('description', '')[:40]
+            )
+
+        console.print(table)
+
+
+@workflow_app.command("run")
+def workflow_run(
+    workflow_id: str = typer.Argument(..., help="Workflow ID to run"),
+    config_file: Optional[Path] = typer.Option(
+        None, "--config", "-c",
+        help="JSON config file path"
+    ),
+    config_stdin: bool = typer.Option(
+        False, "--config-stdin",
+        help="Read config from stdin"
+    ),
+    agent: Optional[List[str]] = typer.Option(
+        None, "--agent", "-a",
+        help="Agent spec (can specify multiple)"
+    ),
+    input_text: Optional[str] = typer.Option(
+        None, "--input", "-i",
+        help="Input text (for simple workflows)"
+    ),
+    output_file: Optional[Path] = typer.Option(
+        None, "--output", "-o",
+        help="Output file path"
+    ),
+):
+    """Run a workflow with the given configuration"""
+    import json
+    import sys
+
+    WorkflowRegistry = _load_workflow_registry()
+    WorkflowRegistry.discover()
+
+    # Build config
+    config = {}
+
+    # Read from file
+    if config_file:
+        if not config_file.exists():
+            console.print(f"[red]Config file not found: {config_file}[/red]")
+            raise typer.Exit(1)
+        config = json.loads(config_file.read_text())
+
+    # Read from stdin
+    if config_stdin:
+        stdin_data = sys.stdin.read()
+        config.update(json.loads(stdin_data))
+
+    # Add agents from CLI
+    if agent:
+        config["agents"] = list(agent)
+
+    # Add input text
+    if input_text:
+        # Try to set common input field names
+        if "initial_input" not in config:
+            config["initial_input"] = input_text
+        if "document" not in config:
+            config["document"] = input_text
+        if "task" not in config:
+            config["task"] = input_text
+
+    # Progress callback
+    def on_progress(current: int, total: int, message: str):
+        console.print(f"[dim][{current}/{total}] {message}[/dim]")
+
+    console.print(f"[bold]Running workflow: {workflow_id}[/bold]")
+
+    try:
+        result = WorkflowRegistry.run_workflow(
+            workflow_id,
+            config=config,
+            on_progress=on_progress
+        )
+    except Exception as e:
+        console.print(f"[red]Error running workflow: {e}[/red]")
+        logger.error(f"Workflow failed", exc_info=True, extra={"workflow_id": workflow_id})
+        raise typer.Exit(1)
+
+    # Display result
+    if result.success:
+        console.print(f"\n[green]✓ Workflow completed successfully[/green]")
+    else:
+        console.print(f"\n[red]✗ Workflow failed: {result.error}[/red]")
+
+    # Show metrics
+    console.print(Panel(
+        f"[bold]Time:[/bold] {result.metrics.total_time_ms}ms\n"
+        f"[bold]Tokens:[/bold] {result.metrics.input_tokens + result.metrics.output_tokens}\n"
+        f"[bold]Cost:[/bold] ${result.metrics.total_cost:.4f}\n"
+        f"[bold]Steps:[/bold] {result.metrics.step_count}",
+        title="Metrics"
+    ))
+
+    # Write output
+    if output_file and result.output:
+        output_file.write_text(str(result.output))
+        console.print(f"[green]Output written to: {output_file}[/green]")
+    elif result.output:
+        console.print("\n[bold]Output:[/bold]")
+        output_str = str(result.output)
+        if len(output_str) > 500:
+            console.print(output_str[:500] + "...")
+            console.print(f"[dim]({len(output_str)} characters total)[/dim]")
+        else:
+            console.print(output_str)
+
+    if not result.success:
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
