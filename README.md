@@ -87,8 +87,8 @@ anthropic.validate_config({})
 openai.validate_config({})
 
 agents = [
-    anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    openai.create_agent("gpt-4-turbo-preview"),
+    anthropic.create_agent("claude-sonnet-4-20250514"),
+    openai.create_agent("gpt-4o"),
 ]
 
 # Run benchmark
@@ -208,8 +208,8 @@ prompt = framework.create_prompt(
 # Initialize agents (provider:model)
 ProviderRegistry.discover()
 agent_specs = [
-    ("anthropic", "claude-3-5-sonnet-20241022", "anthropic-sonnet"),
-    ("openai", "gpt-4-turbo-preview", "openai-gpt-4-turbo-preview"),
+    ("anthropic", "claude-sonnet-4-20250514", "anthropic-sonnet"),
+    ("openai", "gpt-4o", "openai-gpt4o"),
     ("mock", "mock-model", "baseline"),
 ]
 
@@ -258,9 +258,9 @@ prompt = framework.create_prompt(
 
 # Assign to different provider:model branches
 agent_specs = {
-    "anthropic:claude-3-5-sonnet-20241022": "feature/password-reset-anthropic-claude-3-5",
-    "openai:gpt-4-turbo-preview": "feature/password-reset-openai-gpt-4-turbo-preview",
-    "gemini:gemini-1.5-pro": "feature/password-reset-gemini-1-5-pro",
+    "anthropic:claude-sonnet-4-20250514": "feature/password-reset-anthropic-sonnet-4",
+    "openai:gpt-4o": "feature/password-reset-openai-gpt4o",
+    "gemini:gemini-2.0-flash": "feature/password-reset-gemini-2-flash",
 }
 
 for spec, branch in agent_specs.items():
@@ -371,9 +371,9 @@ ProviderRegistry.discover()
 anthropic = ProviderRegistry.get_provider("anthropic")
 anthropic.validate_config({})
 agent = anthropic.create_agent(
-    "claude-3-5-sonnet-20241022",
+    "claude-sonnet-4-20250514",
     name="anthropic-sonnet",
-    max_tokens=4096,
+    max_tokens=8192,
 )
 
 # Generate response
