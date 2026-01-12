@@ -38,12 +38,13 @@ class TestClientPool:
 
         def worker(i):
             try:
-                with patch('startd8.agents.pool.OpenAI', MagicMock()):
-                    with patch('startd8.agents.pool.AsyncOpenAI', MagicMock()):
-                        pool.get_openai_clients(
-                            api_key=f"test-key-{i % 3}",  # Use 3 different keys
-                            timeout_config=timeout_config
-                        )
+                with patch('startd8.agents.pool._OPENAI_AVAILABLE', True), \
+                     patch('startd8.agents.pool.OpenAI', MagicMock()), \
+                     patch('startd8.agents.pool.AsyncOpenAI', MagicMock()):
+                    pool.get_openai_clients(
+                        api_key=f"test-key-{i % 3}",  # Use 3 different keys
+                        timeout_config=timeout_config
+                    )
                 results.append(i)
             except Exception as e:
                 errors.append((i, e))
@@ -63,18 +64,19 @@ class TestClientPool:
 
         pool = ClientPool()
 
-        with patch('startd8.agents.pool.OpenAI', MagicMock()):
-            with patch('startd8.agents.pool.AsyncOpenAI', MagicMock()):
-                pool.get_openai_clients(
-                    api_key="test-key",
-                    timeout_config=TimeoutConfig()
-                )
+        with patch('startd8.agents.pool._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.pool.OpenAI', MagicMock()), \
+             patch('startd8.agents.pool.AsyncOpenAI', MagicMock()):
+            pool.get_openai_clients(
+                api_key="test-key",
+                timeout_config=TimeoutConfig()
+            )
 
-        assert pool.stats()["sync_clients"] > 0
+            assert pool.stats()["sync_clients"] > 0
 
-        pool.cleanup()
-        assert pool.stats()["sync_clients"] == 0
-        assert pool.stats()["async_clients"] == 0
+            pool.cleanup()
+            assert pool.stats()["sync_clients"] == 0
+            assert pool.stats()["async_clients"] == 0
 
 
 class TestClientPoolAnthropicClients:

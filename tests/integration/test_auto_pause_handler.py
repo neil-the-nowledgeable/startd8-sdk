@@ -43,8 +43,12 @@ def agent_provider_map():
 
 
 @pytest.fixture
-def auto_pause_handler(pause_manager, agent_provider_map):
-    """Create an AutoPauseHandler instance"""
+def auto_pause_handler(pause_manager, agent_provider_map, clear_event_bus):
+    """Create an AutoPauseHandler instance.
+
+    Note: Depends on clear_event_bus to ensure EventBus is cleared
+    BEFORE the handler subscribes to events.
+    """
     return AutoPauseHandler(
         pause_manager=pause_manager,
         agent_provider_map=agent_provider_map,
@@ -72,7 +76,7 @@ def cost_store():
     """Create a temporary cost store"""
     with tempfile.TemporaryDirectory() as tmpdir:
         store_path = Path(tmpdir) / "costs.db"
-        return CostStore(store_path)
+        yield CostStore(store_path)
 
 
 class TestBuildAgentProviderMap:
