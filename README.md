@@ -12,7 +12,10 @@ A comprehensive Python SDK for managing multi-LLM agent workflows, benchmarking,
 - 📊 **Benchmarking**: Compare multiple LLMs on the same prompts
 - 💰 **Cost Tracking**: Automatic cost estimation based on token usage
 - 🎯 **CLI Tools**: Command-line interface for easy management
+- 🖥️ **Interactive TUI**: Full-featured terminal UI (`startd8 tui`)
 - 💾 **Flexible Storage**: JSON-based file system storage (extensible to other backends)
+
+> **[View Developer Portal](docs/developer-portal.html)** - Interactive documentation with code examples and architecture overview
 
 ## Installation
 
