@@ -16,8 +16,8 @@ from ..exceptions import ConfigurationError
 _AGENT_ALIASES = {
     # "claude" used to mean "an Anthropic default model"
     "claude": ("anthropic", None),
-    # "gpt4" used to mean GPT-4 Turbo Preview by default
-    "gpt4": ("openai", "gpt-4-turbo-preview"),
+    # "gpt4" shorthand - now maps to gpt-4o (flagship model)
+    "gpt4": ("openai", "gpt-4o"),
 }
 
 

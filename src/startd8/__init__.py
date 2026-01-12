@@ -23,9 +23,9 @@ Example Usage:
     # Send to multiple agents (provider:model specs)
     ProviderRegistry.discover()
     agent_specs = [
-        "anthropic:claude-3-5-sonnet-20241022",
-        "openai:gpt-4-turbo-preview",
-        "gemini:gemini-1.5-pro",
+        "anthropic:claude-sonnet-4-20250514",
+        "openai:gpt-4o",
+        "gemini:gemini-2.0-flash",
     ]
     for spec in agent_specs:
         provider_name, model = spec.split(":", 1)

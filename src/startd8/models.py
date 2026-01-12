@@ -62,7 +62,7 @@ class TokenUsage(BaseModel):
         subsystem to avoid drift.
         """
         # If model_name is missing, fall back to a conservative default.
-        model = (self.model_name or "claude-3-5-sonnet-20241022").strip()
+        model = (self.model_name or "claude-sonnet-4-20250514").strip()
 
         try:
             return _default_pricing_service().calculate_total_cost(

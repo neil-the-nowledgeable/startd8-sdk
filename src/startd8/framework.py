@@ -317,7 +317,7 @@ class AgentFramework:
         elif agent_type_lower == 'gpt4':
             return GPT4Agent(
                 name=name or 'gpt4',
-                model=model or 'gpt-4-turbo-preview',
+                model=model or 'gpt-4o',
                 **agent_kwargs
             )
         elif agent_type_lower == 'gemini':
@@ -325,7 +325,7 @@ class AgentFramework:
                 from .agents import GeminiAgent
                 return GeminiAgent(
                     name=name or 'gemini',
-                    model=model or 'gemini-1.5-flash',
+                    model=model or 'gemini-2.0-flash',
                     **agent_kwargs
                 )
             except ImportError:

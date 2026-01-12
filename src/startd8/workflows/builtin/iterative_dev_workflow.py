@@ -50,7 +50,7 @@ class IterativeDevWorkflowWrapper(WorkflowBase):
             config={
                 "task": "Implement a function to validate email addresses",
                 "developer_agent": "anthropic:claude-sonnet-4-20250514",
-                "reviewer_agent": "openai:gpt-4"
+                "reviewer_agent": "openai:gpt-4o"
             }
         )
     """

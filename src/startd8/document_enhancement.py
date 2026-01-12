@@ -100,15 +100,15 @@ class DocumentEnhancementChain:
             enhancement_instructions="Add accessibility section",
             agents=[
                 AgentConfig(
-                    agent_name="openai:gpt-4-turbo-preview",
-                    agent_instance=openai.create_agent("gpt-4-turbo-preview"),
-                    step_name="openai:gpt-4-turbo-preview-enhancement",
+                    agent_name="openai:gpt-4o",
+                    agent_instance=openai.create_agent("gpt-4o"),
+                    step_name="openai:gpt-4o-enhancement",
                     order=0
                 ),
                 AgentConfig(
-                    agent_name="anthropic:claude-3-5-sonnet-20241022",
-                    agent_instance=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-                    step_name="anthropic:claude-3-5-sonnet-20241022-refinement",
+                    agent_name="anthropic:claude-sonnet-4-20250514",
+                    agent_instance=anthropic.create_agent("claude-sonnet-4-20250514"),
+                    step_name="anthropic:claude-sonnet-4-20250514-refinement",
                     order=1
                 )
             ],

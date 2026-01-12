@@ -162,7 +162,7 @@ def run_benchmark(
         "--agent", "-a",
         help=(
             "Agents to test (provider:model; repeatable). Example: "
-            "--agent mock:mock-model --agent anthropic:claude-3-5-sonnet-20241022 --agent openai:gpt-4-turbo-preview"
+            "--agent mock:mock-model --agent anthropic:claude-sonnet-4-20250514 --agent openai:gpt-4o"
         )
     ),
     storage_dir: Optional[Path] = typer.Option(None, "--dir", "-d", help="Storage directory")

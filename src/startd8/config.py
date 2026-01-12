@@ -63,12 +63,12 @@ class ConfigManager:
             },
             "models": {
                 "claude": {
-                    "default": "claude-3-opus-20240229",
-                    "max_tokens": 4096
+                    "default": "claude-sonnet-4-20250514",
+                    "max_tokens": 8192
                 },
                 "gpt4": {
-                    "default": "gpt-4-turbo-preview",
-                    "max_tokens": 4096
+                    "default": "gpt-4o",
+                    "max_tokens": 16384
                 }
             },
             "preferences": {

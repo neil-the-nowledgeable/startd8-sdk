@@ -432,24 +432,25 @@ class CustomAgentManager:
             'default_model': 'claude-sonnet-4-20250514',
             'models': [
                 'claude-sonnet-4-20250514',
-                'claude-3-5-sonnet-20241022',
-                'claude-3-opus-20240229',
-                'claude-3-haiku-20240307',
+                'claude-sonnet-4-5-20250927',
+                'claude-opus-4-5-20251101',
+                'claude-haiku-4-5-20251008',
+                'claude-3-5-haiku-20241022',
             ]
         },
         'gpt4': {
             'name': 'GPT-4 / OpenAI',
             'class': 'GPT4Agent',
             'api_key_env': 'OPENAI_API_KEY',
-            'default_model': 'gpt-4-turbo-preview',
+            'default_model': 'gpt-4o',
             'models': [
-                'gpt-4-turbo-preview',
-                'gpt-4-turbo',
-                'gpt-4',
                 'gpt-4o',
                 'gpt-4o-mini',
-                'gpt-3.5-turbo',
-                'gpt-5.2-pro',
+                'gpt-4.1',
+                'gpt-4.1-mini',
+                'gpt-4.1-nano',
+                'o3-mini',
+                'o4-mini',
             ]
         },
         'openai_compatible': {
@@ -475,31 +476,31 @@ class CustomAgentManager:
             'name': 'Cursor',
             'base_url': 'https://api.cursor.sh/v1',
             'api_key_env': 'CURSOR_API_KEY',
-            'models': ['cursor-small', 'cursor-large', 'gpt-4', 'gpt-3.5-turbo']
+            'models': ['cursor-small', 'cursor-large', 'gpt-4o', 'gpt-4o-mini']
         },
         'ollama': {
             'name': 'Ollama (Local)',
             'base_url': 'http://localhost:11434/v1',
             'api_key_env': None,
-            'models': ['llama2', 'llama3', 'mistral', 'codellama', 'mixtral']
+            'models': ['llama3.3', 'llama3.2', 'mistral', 'codellama', 'mixtral']
         },
         'together': {
             'name': 'Together AI',
             'base_url': 'https://api.together.xyz/v1',
             'api_key_env': 'TOGETHER_API_KEY',
-            'models': ['meta-llama/Llama-3-70b-chat-hf', 'mistralai/Mixtral-8x7B-Instruct-v0.1']
+            'models': ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'mistralai/Mixtral-8x7B-Instruct-v0.1']
         },
         'groq': {
             'name': 'Groq',
             'base_url': 'https://api.groq.com/openai/v1',
             'api_key_env': 'GROQ_API_KEY',
-            'models': ['llama3-8b-8192', 'llama3-70b-8192', 'mixtral-8x7b-32768']
+            'models': ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768']
         },
         'openrouter': {
             'name': 'OpenRouter',
             'base_url': 'https://openrouter.ai/api/v1',
             'api_key_env': 'OPENROUTER_API_KEY',
-            'models': ['openai/gpt-4-turbo', 'anthropic/claude-3-opus', 'meta-llama/llama-3-70b-instruct']
+            'models': ['openai/gpt-4o', 'anthropic/claude-sonnet-4', 'meta-llama/llama-3.3-70b-instruct']
         },
         'custom': {
             'name': 'Custom Endpoint',
@@ -628,7 +629,7 @@ class CustomAgentManager:
         elif agent_type == 'gpt4':
             return GPT4Agent(
                 name=name or 'gpt4',
-                model=model or 'gpt-4-turbo-preview',
+                model=model or 'gpt-4o',
                 max_tokens=max_tokens
             )
         elif agent_type == 'openai_compatible':
@@ -737,7 +738,7 @@ class CustomAgentManager:
                 if fallback_type == 'gpt4':
                     return GPT4Agent(
                         name=name or 'gpt4',
-                        model=model or 'gpt-4-turbo-preview',
+                        model=model or 'gpt-4o',
                         max_tokens=max_tokens
                     )
                 elif fallback_type == 'claude':
@@ -750,7 +751,7 @@ class CustomAgentManager:
                     from .agents import GeminiAgent
                     return GeminiAgent(
                         name=name or 'gemini',
-                        model=model or 'gemini-1.5-flash',
+                        model=model or 'gemini-2.0-flash',
                         max_tokens=max_tokens,
                         temperature=agent_config.get('temperature', 0.7),
                         api_key=agent_config.get('api_key')
@@ -788,7 +789,7 @@ class CustomAgentManager:
         elif agent_type == 'gpt4':
             return GPT4Agent(
                 name=kwargs.get('name', 'gpt4'),
-                model=kwargs.get('model', 'gpt-4-turbo-preview'),
+                model=kwargs.get('model', 'gpt-4o'),
                 max_tokens=kwargs.get('max_tokens', 4096)
             )
         elif agent_type == 'mock':
@@ -801,7 +802,7 @@ class CustomAgentManager:
                 from .agents import GeminiAgent
                 return GeminiAgent(
                     name=kwargs.get('name', 'gemini'),
-                    model=kwargs.get('model', 'gemini-1.5-flash'),
+                    model=kwargs.get('model', 'gemini-2.0-flash'),
                     max_tokens=kwargs.get('max_tokens', 4096)
                 )
             except ImportError:
@@ -3994,7 +3995,7 @@ Enhance this prompt:
         })
         
         # Built-in: GPT-4
-        gpt4_model = 'gpt-4-turbo-preview'
+        gpt4_model = 'gpt-4o'
         gpt4_key = f"gpt4:{gpt4_model}"
         agents.append({
             'name': 'GPT-4',

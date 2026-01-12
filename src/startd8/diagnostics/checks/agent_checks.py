@@ -265,7 +265,7 @@ def check_gemini_connectivity(framework: Optional[Any] = None) -> HealthCheck:
         # Use a fast model for connectivity test
         agent = GeminiAgent(
             name="diagnostic-test",
-            model="gemini-1.5-flash",  # Fast/cheap
+            model="gemini-2.0-flash",  # Fast/cheap
         )
 
         # Minimal prompt to test connectivity

@@ -4,7 +4,7 @@ Data models for cost tracking and budget management
 
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from enum import Enum
 import uuid
 
@@ -63,18 +63,17 @@ class ExternalTool(BaseModel):
         description="When this tool was registered"
     )
 
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "claude-code",
-                "display_name": "Claude Code (CLI)",
-                "provider": "anthropic",
-                "default_model": "claude-sonnet-4-20250514",
-                "pricing_type": "per_token",
-                "subscription_cost": None,
-                "notes": "Anthropic's official CLI tool"
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "id": "claude-code",
+            "display_name": "Claude Code (CLI)",
+            "provider": "anthropic",
+            "default_model": "claude-sonnet-4-20250514",
+            "pricing_type": "per_token",
+            "subscription_cost": None,
+            "notes": "Anthropic's official CLI tool"
         }
+    })
 
 
 class CostRecord(BaseModel):
@@ -132,25 +131,24 @@ class CostRecord(BaseModel):
     # Context
     correlation_id: Optional[str] = Field(default=None, description="For tracing")
     metadata: Dict[str, Any] = Field(default_factory=dict)
-    
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "cost-abc123",
-                "timestamp": "2025-12-09T10:30:00Z",
-                "agent_name": "claude",
-                "model": "claude-3-5-sonnet-20241022",
-                "provider": "anthropic",
-                "input_tokens": 1500,
-                "output_tokens": 500,
-                "total_tokens": 2000,
-                "input_cost": 0.0045,
-                "output_cost": 0.0075,
-                "total_cost": 0.012,
-                "tags": ["code-review", "backend"],
-                "project": "my-app"
-            }
+
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "id": "cost-abc123",
+            "timestamp": "2025-12-09T10:30:00Z",
+            "agent_name": "claude",
+            "model": "claude-3-5-sonnet-20241022",
+            "provider": "anthropic",
+            "input_tokens": 1500,
+            "output_tokens": 500,
+            "total_tokens": 2000,
+            "input_cost": 0.0045,
+            "output_cost": 0.0075,
+            "total_cost": 0.012,
+            "tags": ["code-review", "backend"],
+            "project": "my-app"
         }
+    })
 
 
 class Budget(BaseModel):

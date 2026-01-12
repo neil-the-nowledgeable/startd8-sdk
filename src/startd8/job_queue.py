@@ -83,10 +83,10 @@ class AgentRegistry:
         Example:
             # Get custom agent
             agent = registry.get_agent("my-custom-agent")
-            
+
             # Get agent by provider:model spec
-            agent = registry.get_agent("openai:gpt-4-turbo-preview")
-            
+            agent = registry.get_agent("openai:gpt-4o")
+
             # Get agent by provider name (uses default model)
             agent = registry.get_agent("anthropic")
         """
