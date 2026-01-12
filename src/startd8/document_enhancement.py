@@ -129,15 +129,29 @@ class DocumentEnhancementChain:
     ):
         """
         Initialize document enhancement chain.
-        
+
         Args:
             config: Enhancement configuration
-            framework: Optional AgentFramework for storage
+            framework: Optional AgentFramework for storage and resilience settings
+
+        Note:
+            If framework is provided and has resilience config enabled,
+            the error handling strategy from ResilienceConfig will be used
+            unless explicitly overridden in config.
         """
         self.config = config
         self.framework = framework
         self.results: List[EnhancementStepResult] = []
         self.chain_id = f"chain-{uuid.uuid4().hex[:12]}"
+
+        # Apply framework's error strategy if available and not explicitly set
+        if framework and hasattr(framework, 'get_error_strategy'):
+            framework_strategy = framework.get_error_strategy()
+            # Only override if config uses default (STOP)
+            if self.config.on_error == ErrorHandling.STOP:
+                self.config = self.config.model_copy(
+                    update={'on_error': framework_strategy}
+                )
     
     def _load_document(self, path: Path) -> str:
         """

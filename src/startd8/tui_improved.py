@@ -594,21 +594,42 @@ class CustomAgentManager:
         return False
     
     def create_agent_instance(self, agent_config: Dict[str, Any]) -> Optional[BaseAgent]:
-        """Create an agent instance from a custom config"""
+        """Create an agent instance from a custom config.
+
+        Uses the framework's create_agent method when available to apply
+        resilience settings (retry config, etc.) automatically.
+        """
         agent_type = agent_config.get('type')
         model = agent_config.get('model', '')
-        
+        name = agent_config.get('name')
+        max_tokens = agent_config.get('max_tokens', 4096)
+
+        # Use framework's factory method for standard agent types
+        # This automatically applies retry config from ResilienceConfig
+        if self.framework and agent_type in ('claude', 'gpt4', 'gemini', 'mock'):
+            try:
+                return self.framework.create_agent(
+                    agent_type=agent_type,
+                    name=name,
+                    model=model if model else None,
+                    max_tokens=max_tokens
+                )
+            except (ValueError, ImportError):
+                # Fall back to direct creation
+                pass
+
+        # Direct creation (fallback or for types not supported by framework)
         if agent_type == 'claude':
             return ClaudeAgent(
-                name=agent_config.get('name', 'claude'),
+                name=name or 'claude',
                 model=model or 'claude-sonnet-4-20250514',
-                max_tokens=agent_config.get('max_tokens', 4096)
+                max_tokens=max_tokens
             )
         elif agent_type == 'gpt4':
             return GPT4Agent(
-                name=agent_config.get('name', 'gpt4'),
+                name=name or 'gpt4',
                 model=model or 'gpt-4-turbo-preview',
-                max_tokens=agent_config.get('max_tokens', 4096)
+                max_tokens=max_tokens
             )
         elif agent_type == 'openai_compatible':
             # Create OpenAI-compatible agent with custom base URL
@@ -690,33 +711,102 @@ class CustomAgentManager:
                         }
                     )
             
-            # Fallback to manual creation if ProviderRegistry fails
+            # Fallback to framework.create_agent or manual creation if ProviderRegistry fails
+            fallback_type = None
             if provider_name == 'openai' or (model and 'gpt' in model.lower()):
-                # Treat as GPT-4 agent
-                return GPT4Agent(
-                    name=agent_config.get('name', 'gpt4'),
-                    model=model or 'gpt-4-turbo-preview',
-                    max_tokens=agent_config.get('max_tokens', 4096)
-                )
+                fallback_type = 'gpt4'
             elif provider_name == 'anthropic' or (model and 'claude' in model.lower()):
-                # Treat as Claude agent
-                return ClaudeAgent(
-                    name=agent_config.get('name', 'claude'),
-                    model=model or 'claude-sonnet-4-20250514',
-                    max_tokens=agent_config.get('max_tokens', 4096)
-                )
+                fallback_type = 'claude'
             elif provider_name == 'gemini' or (model and 'gemini' in model.lower()):
-                # Treat as Gemini agent
+                fallback_type = 'gemini'
+
+            if fallback_type:
+                # Try framework factory first for resilience settings
+                if self.framework:
+                    try:
+                        return self.framework.create_agent(
+                            agent_type=fallback_type,
+                            name=name,
+                            model=model if model else None,
+                            max_tokens=max_tokens
+                        )
+                    except (ValueError, ImportError):
+                        pass
+
+                # Direct creation fallback
+                if fallback_type == 'gpt4':
+                    return GPT4Agent(
+                        name=name or 'gpt4',
+                        model=model or 'gpt-4-turbo-preview',
+                        max_tokens=max_tokens
+                    )
+                elif fallback_type == 'claude':
+                    return ClaudeAgent(
+                        name=name or 'claude',
+                        model=model or 'claude-sonnet-4-20250514',
+                        max_tokens=max_tokens
+                    )
+                elif fallback_type == 'gemini':
+                    from .agents import GeminiAgent
+                    return GeminiAgent(
+                        name=name or 'gemini',
+                        model=model or 'gemini-1.5-flash',
+                        max_tokens=max_tokens,
+                        temperature=agent_config.get('temperature', 0.7),
+                        api_key=agent_config.get('api_key')
+                    )
+            # Fall through to None if provider type not recognized
+
+        return None
+
+    def _create_builtin_agent(self, agent_type: str, **kwargs) -> Optional[BaseAgent]:
+        """Create a built-in agent with resilience settings from framework.
+
+        Helper method for creating agents throughout the TUI.
+        Uses framework.create_agent when available for retry/resilience config.
+
+        Args:
+            agent_type: Type of agent ('claude', 'gpt4', 'gemini', 'mock')
+            **kwargs: Additional arguments to pass to the agent
+
+        Returns:
+            Configured agent instance, or None if creation fails
+        """
+        if self.framework:
+            try:
+                return self.framework.create_agent(agent_type=agent_type, **kwargs)
+            except (ValueError, ImportError):
+                pass
+
+        # Fallback to direct creation
+        if agent_type == 'claude':
+            return ClaudeAgent(
+                name=kwargs.get('name', 'claude'),
+                model=kwargs.get('model', 'claude-sonnet-4-20250514'),
+                max_tokens=kwargs.get('max_tokens', 4096)
+            )
+        elif agent_type == 'gpt4':
+            return GPT4Agent(
+                name=kwargs.get('name', 'gpt4'),
+                model=kwargs.get('model', 'gpt-4-turbo-preview'),
+                max_tokens=kwargs.get('max_tokens', 4096)
+            )
+        elif agent_type == 'mock':
+            return MockAgent(
+                name=kwargs.get('name', 'mock'),
+                model=kwargs.get('model', 'mock-model')
+            )
+        elif agent_type == 'gemini':
+            try:
                 from .agents import GeminiAgent
                 return GeminiAgent(
-                    name=agent_config.get('name', 'gemini'),
-                    model=model or 'gemini-1.5-flash',
-                    max_tokens=agent_config.get('max_tokens', 4096),
-                    temperature=agent_config.get('temperature', 0.7),
-                    api_key=agent_config.get('api_key')
+                    name=kwargs.get('name', 'gemini'),
+                    model=kwargs.get('model', 'gemini-1.5-flash'),
+                    max_tokens=kwargs.get('max_tokens', 4096)
                 )
-            # Fall through to None if provider type not recognized
-        
+            except ImportError:
+                return None
+
         return None
 
 
@@ -2929,9 +3019,17 @@ class ImprovedTUI:
         choices.append("🤖 Manage Agents")
         choices.append("🔑 Manage API Keys")
         
+        # External usage tracking section
+        choices.append(questionary.Separator("═══ EXTERNAL USAGE ═══"))
+        choices.append("📥 Log External Usage")
+        choices.append("📊 Compare SDK vs External")
+        choices.append("🔧 Manage External Tools")
+
         # System section
         choices.append(questionary.Separator("═══ SYSTEM ═══"))
         choices.append("🧪 Test All Agents Readiness")
+        choices.append("🩺 Self-Diagnostics")
+        choices.append("🛡️ Resilience Settings")
         choices.append("🔍 Analyze Last Error")
         choices.append("🔍 Analyze Agent Config Errors")
         choices.append("📁 Manage Output Folders")
@@ -7433,7 +7531,467 @@ Please be thorough, constructive, and specific in your analysis."""
         self.console.print(f"[dim]{file_path}[/dim]")
         
         questionary.press_any_key_to_continue("\nPress any key...").ask()
-    
+
+    # =========================================================================
+    # External Usage Tracking Methods
+    # =========================================================================
+
+    def _get_external_tracker(self):
+        """Lazy-load external usage tracker"""
+        from .costs.external import ExternalUsageTracker
+        from .costs.store import CostStore
+
+        # Use framework's cost store if available, or create new one
+        if hasattr(self.framework, 'cost_tracker') and self.framework.cost_tracker:
+            store = self.framework.cost_tracker.store
+        else:
+            store = CostStore(default_data_dir() / "costs.db")
+
+        return ExternalUsageTracker(store)
+
+    def _get_comparison_analytics(self):
+        """Lazy-load comparison analytics"""
+        from .costs.comparison import ComparisonAnalytics
+        from .costs.store import CostStore
+
+        if hasattr(self.framework, 'cost_tracker') and self.framework.cost_tracker:
+            store = self.framework.cost_tracker.store
+        else:
+            store = CostStore(default_data_dir() / "costs.db")
+
+        return ComparisonAnalytics(store)
+
+    def log_external_usage(self):
+        """Log usage from an external tool"""
+        self.show_header("Log External Usage")
+
+        self.console.print(Panel(
+            "[bold]Track External Tool Usage[/bold]\n\n"
+            "Record LLM usage from tools outside the SDK:\n"
+            "• Claude Code (CLI)\n"
+            "• Cursor IDE\n"
+            "• GitHub Copilot\n"
+            "• ChatGPT Web\n"
+            "• And more...\n\n"
+            "This helps you compare development productivity across all AI tools.",
+            border_style="cyan"
+        ))
+
+        tracker = self._get_external_tracker()
+        tools = tracker.list_tools()
+
+        if not tools:
+            self.console.print("[yellow]No external tools registered.[/yellow]")
+            questionary.press_any_key_to_continue().ask()
+            return
+
+        # Select tool
+        tool_choices = [f"{t.display_name} ({t.id})" for t in tools]
+        tool_choices.append("✚ Add Custom Tool")
+        tool_choices.append("← Back")
+
+        selected = questionary.select(
+            "Select external tool:",
+            choices=tool_choices,
+            style=custom_style
+        ).ask()
+
+        if not selected or "Back" in selected:
+            return
+
+        if "Custom" in selected:
+            self._add_custom_external_tool()
+            return
+
+        # Get tool ID from selection
+        tool_id = None
+        for t in tools:
+            if t.display_name in selected:
+                tool_id = t.id
+                break
+
+        if not tool_id:
+            return
+
+        tool = tracker.get_tool(tool_id)
+
+        # Select entry type
+        from .costs.models import PricingType
+
+        if tool.pricing_type == PricingType.SUBSCRIPTION:
+            entry_types = [
+                "⏱️  Time-based (estimate from usage time)",
+                "💰 Direct cost entry",
+                "← Back"
+            ]
+        else:
+            entry_types = [
+                "🔢 Token counts (input/output)",
+                "💰 Direct cost entry",
+                "⏱️  Time-based (estimate subscription)",
+                "← Back"
+            ]
+
+        entry_type = questionary.select(
+            "How would you like to record this usage?",
+            choices=entry_types,
+            style=custom_style
+        ).ask()
+
+        if not entry_type or "Back" in entry_type:
+            return
+
+        # Collect data based on entry type
+        input_tokens = None
+        output_tokens = None
+        total_cost = None
+
+        if "Token" in entry_type:
+            input_tokens = questionary.text(
+                "Input tokens:",
+                validate=lambda x: x.isdigit() or x == "",
+                style=custom_style
+            ).ask()
+            input_tokens = int(input_tokens) if input_tokens else 0
+
+            output_tokens = questionary.text(
+                "Output tokens:",
+                validate=lambda x: x.isdigit() or x == "",
+                style=custom_style
+            ).ask()
+            output_tokens = int(output_tokens) if output_tokens else 0
+
+        elif "cost" in entry_type:
+            cost_str = questionary.text(
+                "Total cost (USD):",
+                validate=lambda x: x.replace('.', '', 1).isdigit() or x == "",
+                style=custom_style
+            ).ask()
+            total_cost = float(cost_str) if cost_str else 0.0
+
+        elif "Time" in entry_type:
+            hours = questionary.text(
+                "Hours of usage:",
+                validate=lambda x: x.replace('.', '', 1).isdigit() or x == "",
+                style=custom_style
+            ).ask()
+            if hours:
+                total_cost = tracker.estimate_subscription_cost(
+                    tool_id, usage_hours=float(hours)
+                )
+                self.console.print(f"[dim]Estimated cost: ${total_cost:.4f}[/dim]")
+
+        # Task description (optional but helpful)
+        task_description = questionary.text(
+            "Task description (optional):",
+            style=custom_style
+        ).ask()
+
+        # Project attribution (optional)
+        project = questionary.text(
+            "Project (optional):",
+            style=custom_style
+        ).ask()
+
+        # Tags (optional)
+        tags_str = questionary.text(
+            "Tags (comma-separated, optional):",
+            style=custom_style
+        ).ask()
+        tags = [t.strip() for t in tags_str.split(",")] if tags_str else None
+
+        # Record the usage
+        try:
+            record = tracker.record_external_usage(
+                tool_name=tool_id,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_cost=total_cost,
+                task_description=task_description or None,
+                project=project or None,
+                tags=tags,
+            )
+
+            self.console.print(Panel(
+                f"[bold green]✓ Usage Recorded[/bold green]\n\n"
+                f"Tool: {tool.display_name}\n"
+                f"Tokens: {record.total_tokens:,}\n"
+                f"Cost: ${record.total_cost:.4f}\n"
+                + (f"Task: {task_description}\n" if task_description else "")
+                + (f"Project: {project}" if project else ""),
+                border_style="green"
+            ))
+        except Exception as e:
+            self.console.print(f"[red]Error recording usage: {e}[/red]")
+
+        questionary.press_any_key_to_continue().ask()
+
+    def _add_custom_external_tool(self):
+        """Add a custom external tool to the registry"""
+        self.show_header("Add Custom External Tool")
+
+        from .costs.models import ExternalTool, PricingType
+
+        tool_id = questionary.text(
+            "Tool ID (lowercase, no spaces):",
+            validate=lambda x: x.isalnum() or "-" in x,
+            style=custom_style
+        ).ask()
+
+        if not tool_id:
+            return
+
+        display_name = questionary.text(
+            "Display name:",
+            style=custom_style
+        ).ask()
+
+        provider = questionary.text(
+            "Provider (e.g., openai, anthropic, google):",
+            style=custom_style
+        ).ask()
+
+        pricing_type = questionary.select(
+            "Pricing model:",
+            choices=[
+                "per_token - Pay per token (API-style)",
+                "subscription - Fixed monthly cost",
+                "hybrid - Subscription + per-token overages"
+            ],
+            style=custom_style
+        ).ask()
+
+        pricing_type_value = PricingType(pricing_type.split(" - ")[0])
+
+        subscription_cost = None
+        if pricing_type_value in [PricingType.SUBSCRIPTION, PricingType.HYBRID]:
+            cost_str = questionary.text(
+                "Monthly subscription cost (USD):",
+                validate=lambda x: x.replace('.', '', 1).isdigit(),
+                style=custom_style
+            ).ask()
+            subscription_cost = float(cost_str) if cost_str else None
+
+        # Create and save tool
+        tracker = self._get_external_tracker()
+        tool = ExternalTool(
+            id=tool_id,
+            display_name=display_name or tool_id,
+            provider=provider or "custom",
+            pricing_type=pricing_type_value,
+            subscription_cost=subscription_cost,
+        )
+        tracker.register_tool(tool)
+
+        self.console.print(f"[green]✓ Tool '{display_name}' registered![/green]")
+        questionary.press_any_key_to_continue().ask()
+
+    def compare_sdk_vs_external(self):
+        """Show comparison of SDK vs external tool usage"""
+        self.show_header("Compare SDK vs External Usage")
+
+        from datetime import datetime, timedelta, timezone
+
+        # Select time period
+        period = questionary.select(
+            "Select time period:",
+            choices=[
+                "Last 7 days",
+                "Last 30 days",
+                "Last 90 days",
+                "Custom range",
+                "← Back"
+            ],
+            style=custom_style
+        ).ask()
+
+        if not period or "Back" in period:
+            return
+
+        now = datetime.now(timezone.utc)
+        if "7" in period:
+            start = now - timedelta(days=7)
+        elif "30" in period:
+            start = now - timedelta(days=30)
+        elif "90" in period:
+            start = now - timedelta(days=90)
+        else:
+            # Custom range
+            start_str = questionary.text(
+                "Start date (YYYY-MM-DD):",
+                style=custom_style
+            ).ask()
+            try:
+                start = datetime.strptime(start_str, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            except ValueError:
+                self.console.print("[red]Invalid date format[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+
+        analytics = self._get_comparison_analytics()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=self.console
+        ) as progress:
+            progress.add_task("Analyzing usage data...", total=None)
+            report = analytics.get_tool_comparison(start, now)
+
+        # Display comparison table
+        table = Table(title=f"Usage Comparison ({start.strftime('%Y-%m-%d')} to {now.strftime('%Y-%m-%d')})")
+        table.add_column("Source", style="cyan")
+        table.add_column("Calls", justify="right", style="white")
+        table.add_column("Tokens", justify="right", style="white")
+        table.add_column("Cost", justify="right", style="green")
+        table.add_column("$/1K tokens", justify="right", style="yellow")
+
+        # SDK row
+        sdk = report.sdk_usage
+        table.add_row(
+            "SDK (StartD8)",
+            f"{sdk.total_calls:,}",
+            f"{sdk.total_tokens:,}",
+            f"${sdk.total_cost:.2f}",
+            f"${sdk.avg_cost_per_1k_tokens:.4f}" if sdk.total_tokens > 0 else "-"
+        )
+
+        # External tools
+        for tool_name, summary in sorted(report.external_usage.items()):
+            table.add_row(
+                tool_name,
+                f"{summary.total_calls:,}",
+                f"{summary.total_tokens:,}",
+                f"${summary.total_cost:.2f}",
+                f"${summary.avg_cost_per_1k_tokens:.4f}" if summary.total_tokens > 0 else "-"
+            )
+
+        # Totals row
+        table.add_section()
+        table.add_row(
+            "[bold]TOTAL[/bold]",
+            f"[bold]{report.total_calls:,}[/bold]",
+            f"[bold]{report.total_tokens:,}[/bold]",
+            f"[bold]${report.total_cost:.2f}[/bold]",
+            ""
+        )
+
+        self.console.print(table)
+
+        # Show recommendations
+        if report.recommendations:
+            self.console.print("\n[bold]Recommendations:[/bold]")
+            for rec in report.recommendations:
+                self.console.print(f"  • {rec}")
+
+        if report.most_cost_effective_tool:
+            self.console.print(f"\n[green]Most cost-effective: {report.most_cost_effective_tool}[/green]")
+
+        # Offer detailed report
+        show_detailed = questionary.confirm(
+            "\nWould you like to see the detailed report?",
+            default=False,
+            style=custom_style
+        ).ask()
+
+        if show_detailed:
+            detailed = analytics.generate_comparison_report(start, now, format="markdown")
+            from rich.markdown import Markdown
+            self.console.print(Markdown(detailed))
+
+        questionary.press_any_key_to_continue().ask()
+
+    def manage_external_tools(self):
+        """Manage external tools registry"""
+        while True:
+            self.show_header("Manage External Tools")
+
+            tracker = self._get_external_tracker()
+            tools = tracker.list_tools()
+
+            # Display current tools
+            table = Table(title="Registered External Tools")
+            table.add_column("ID", style="cyan")
+            table.add_column("Name", style="white")
+            table.add_column("Provider", style="blue")
+            table.add_column("Pricing", style="yellow")
+            table.add_column("Subscription", justify="right", style="green")
+
+            for tool in tools:
+                sub_cost = f"${tool.subscription_cost:.0f}/mo" if tool.subscription_cost else "-"
+                table.add_row(
+                    tool.id,
+                    tool.display_name,
+                    tool.provider,
+                    tool.pricing_type.value,
+                    sub_cost
+                )
+
+            self.console.print(table)
+
+            # Menu options
+            choice = questionary.select(
+                "\nWhat would you like to do?",
+                choices=[
+                    "✚ Add Custom Tool",
+                    "🗑️  Remove Tool",
+                    "📋 View Tool Details",
+                    "← Back"
+                ],
+                style=custom_style
+            ).ask()
+
+            if not choice or "Back" in choice:
+                break
+
+            if "Add" in choice:
+                self._add_custom_external_tool()
+
+            elif "Remove" in choice:
+                tool_choices = [f"{t.display_name} ({t.id})" for t in tools]
+                tool_choices.append("← Cancel")
+
+                to_remove = questionary.select(
+                    "Select tool to remove:",
+                    choices=tool_choices,
+                    style=custom_style
+                ).ask()
+
+                if to_remove and "Cancel" not in to_remove:
+                    for t in tools:
+                        if t.display_name in to_remove:
+                            if tracker.unregister_tool(t.id):
+                                self.console.print(f"[green]✓ Removed {t.display_name}[/green]")
+                            else:
+                                self.console.print(f"[red]Failed to remove {t.display_name}[/red]")
+                            break
+
+            elif "Details" in choice:
+                tool_choices = [f"{t.display_name} ({t.id})" for t in tools]
+                tool_choices.append("← Cancel")
+
+                to_view = questionary.select(
+                    "Select tool to view:",
+                    choices=tool_choices,
+                    style=custom_style
+                ).ask()
+
+                if to_view and "Cancel" not in to_view:
+                    for t in tools:
+                        if t.display_name in to_view:
+                            self.console.print(Panel(
+                                f"[bold]{t.display_name}[/bold]\n\n"
+                                f"ID: {t.id}\n"
+                                f"Provider: {t.provider}\n"
+                                f"Default Model: {t.default_model or 'N/A'}\n"
+                                f"Pricing Type: {t.pricing_type.value}\n"
+                                f"Subscription: ${t.subscription_cost:.2f}/month" if t.subscription_cost else "N/A\n"
+                                f"Notes: {t.notes or 'N/A'}",
+                                border_style="cyan"
+                            ))
+                            questionary.press_any_key_to_continue().ask()
+                            break
+
     def show_help(self):
         """Show help guide using HelpSystem"""
         self.show_header("Help & Guide")
@@ -7488,6 +8046,10 @@ Please be thorough, constructive, and specific in your analysis."""
                 self.job_queue_menu()
             elif "Test All Agents Readiness" in choice:
                 self.test_all_agents_readiness()
+            elif "Self-Diagnostics" in choice:
+                self.run_self_diagnostics()
+            elif "Resilience Settings" in choice:
+                self.configure_resilience()
             elif "Analyze Last Error" in choice:
                 self.analyze_last_error_workflow()
             elif "Analyze Agent Config Errors" in choice:
@@ -7541,6 +8103,12 @@ Please be thorough, constructive, and specific in your analysis."""
                 self.manage_api_keys()
             elif "Manage Output Folders" in choice:
                 self.manage_output_folders()
+            elif "Log External Usage" in choice:
+                self.log_external_usage()
+            elif "Compare SDK vs External" in choice:
+                self.compare_sdk_vs_external()
+            elif "Manage External Tools" in choice:
+                self.manage_external_tools()
             elif "Tour Guide" in choice:
                 if self.tour_guide:
                     self.tour_guide.show_tour_menu()
@@ -9869,6 +10437,495 @@ Please be thorough, constructive, and specific in your analysis."""
             self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
         
         questionary.press_any_key_to_continue().ask()
+
+    def run_self_diagnostics(self):
+        """Run self-diagnostic workflow"""
+        self.show_header("Self-Diagnostics")
+
+        self.console.print(Panel(
+            "[bold]Self-Diagnostic Workflow[/bold]\n\n"
+            "This workflow checks the health of the Startd8 SDK:\n"
+            "• Agent connectivity and API keys\n"
+            "• Cost database integrity\n"
+            "• Storage and file permissions\n"
+            "• Framework initialization\n\n"
+            "If issues are found, you can:\n"
+            "• Get AI-powered analysis\n"
+            "• Apply safe auto-fixes",
+            border_style="cyan"
+        ))
+
+        # Ask for check options
+        check_choice = questionary.select(
+            "What type of diagnostics do you want to run?",
+            choices=[
+                "🔍 Quick Checks (no API calls, fast)",
+                "🔬 Full Diagnostics (includes API connectivity tests)",
+                "📂 Storage Checks Only",
+                "🤖 Agent Checks Only",
+                "💰 Cost System Checks Only",
+                "⚙️  Framework Checks Only",
+                "← Back to Menu"
+            ],
+            style=custom_style
+        ).ask()
+
+        if not check_choice or "Back" in check_choice:
+            return
+
+        try:
+            from startd8.diagnostics import (
+                DiagnosticRunner,
+                DiagnosticAnalyzer,
+                AutoFixer,
+                CheckCategory,
+            )
+        except ImportError as e:
+            self.console.print(f"[red]Failed to import diagnostics module: {e}[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+
+        # Run diagnostics
+        runner = DiagnosticRunner(framework=self.framework)
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("Running diagnostics...", total=None)
+
+            if "Quick" in check_choice:
+                report = runner.run_quick()
+            elif "Full" in check_choice:
+                report = runner.run_all(include_api_checks=True)
+            elif "Storage" in check_choice:
+                report = runner.run_category(CheckCategory.STORAGE)
+            elif "Agent" in check_choice:
+                report = runner.run_category(CheckCategory.AGENTS)
+            elif "Cost" in check_choice:
+                report = runner.run_category(CheckCategory.COSTS)
+            elif "Framework" in check_choice:
+                report = runner.run_category(CheckCategory.FRAMEWORK)
+            else:
+                report = runner.run_all()
+
+            progress.update(task, completed=True)
+
+        # Display results
+        self._display_diagnostic_report(report)
+
+        # If failures, offer options
+        if report.has_failures():
+            self.console.print("\n[yellow]Issues found![/yellow]\n")
+
+            action = questionary.select(
+                "What would you like to do?",
+                choices=[
+                    "🤖 Analyze with AI agent",
+                    "🔧 Apply safe auto-fixes",
+                    "📄 Save report to file",
+                    "← Continue without action"
+                ],
+                style=custom_style
+            ).ask()
+
+            if action and "Analyze" in action:
+                self._analyze_diagnostics_with_agent(report)
+            elif action and "auto-fix" in action:
+                self._apply_diagnostic_fixes(report)
+            elif action and "Save" in action:
+                self._save_diagnostic_report(report)
+        else:
+            self.console.print("\n[green]All diagnostics passed![/green]\n")
+
+        questionary.press_any_key_to_continue().ask()
+
+    def _display_diagnostic_report(self, report):
+        """Display diagnostic report with Rich formatting"""
+        from startd8.diagnostics import HealthStatus, CheckCategory
+
+        # Summary table
+        summary = report.summary
+        summary_table = Table(title="Diagnostic Summary", show_header=True, header_style="bold cyan")
+        summary_table.add_column("Status", justify="center")
+        summary_table.add_column("Count", justify="center")
+
+        status_colors = {
+            "healthy": "green",
+            "warning": "yellow",
+            "critical": "red",
+            "unknown": "dim",
+            "skipped": "dim",
+        }
+
+        for status, count in summary.items():
+            if count > 0:
+                color = status_colors.get(status, "white")
+                summary_table.add_row(f"[{color}]{status.upper()}[/{color}]", str(count))
+
+        self.console.print("\n")
+        self.console.print(summary_table)
+
+        # Details by category
+        for category in CheckCategory:
+            category_checks = report.get_by_category(category)
+            if not category_checks:
+                continue
+
+            self.console.print(f"\n[bold]{category.value.upper()}[/bold]")
+
+            for check in category_checks:
+                icon = {
+                    HealthStatus.HEALTHY: "[green]✓[/green]",
+                    HealthStatus.WARNING: "[yellow]⚠[/yellow]",
+                    HealthStatus.CRITICAL: "[red]✗[/red]",
+                    HealthStatus.UNKNOWN: "[dim]?[/dim]",
+                    HealthStatus.SKIPPED: "[dim]⏭[/dim]",
+                }[check.status]
+
+                self.console.print(f"  {icon} {check.name}: {check.message}")
+
+                if check.details and check.status != HealthStatus.HEALTHY:
+                    for key, value in check.details.items():
+                        self.console.print(f"      [dim]{key}: {value}[/dim]")
+
+    def _analyze_diagnostics_with_agent(self, report):
+        """Analyze diagnostic failures with an AI agent"""
+        from startd8.diagnostics import DiagnosticAnalyzer
+
+        # Get ready agents
+        ready_agents = self._get_ready_agents()
+        if not ready_agents:
+            self.console.print("[yellow]No agents available for analysis. Using mock agent.[/yellow]")
+            analyzer = DiagnosticAnalyzer()  # Uses MockAgent by default
+        else:
+            agent_choice = questionary.select(
+                "Select agent for analysis:",
+                choices=ready_agents + ["← Use Mock Agent (no API cost)"],
+                style=custom_style
+            ).ask()
+
+            if not agent_choice or "Mock" in agent_choice:
+                analyzer = DiagnosticAnalyzer()
+            else:
+                # Create agent instance
+                agent = self._create_agent_from_name(agent_choice)
+                if agent:
+                    analyzer = DiagnosticAnalyzer(agent=agent)
+                else:
+                    analyzer = DiagnosticAnalyzer()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=self.console
+        ) as progress:
+            task = progress.add_task("Analyzing failures with agent...", total=None)
+            analysis = analyzer.analyze_failures(report)
+            progress.update(task, completed=True)
+
+        self.console.print("\n")
+        self.console.print(Panel(
+            Markdown(analysis),
+            title="Agent Analysis",
+            border_style="cyan"
+        ))
+
+    def _apply_diagnostic_fixes(self, report):
+        """Apply safe auto-fixes for diagnostic failures"""
+        from startd8.diagnostics import AutoFixer
+
+        fixer = AutoFixer()
+        available = fixer.get_available_fixes(report)
+
+        if not available:
+            self.console.print("[yellow]No auto-fixes available for these issues.[/yellow]")
+            return
+
+        self.console.print(f"[cyan]Available fixes: {', '.join(available)}[/cyan]\n")
+
+        confirm = questionary.confirm(
+            f"Apply {len(available)} safe auto-fix(es)?",
+            default=True,
+            style=custom_style
+        ).ask()
+
+        if not confirm:
+            return
+
+        results = fixer.apply_all(report)
+
+        for fix_hint, result in results:
+            self.console.print(f"  • {fix_hint}: {result}")
+
+        self.console.print("\n[green]Auto-fixes applied.[/green]")
+
+    def _save_diagnostic_report(self, report):
+        """Save diagnostic report to file"""
+        from pathlib import Path
+        from datetime import datetime
+
+        default_dir = default_data_dir() / "diagnostics"
+        default_dir.mkdir(parents=True, exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_filename = f"diagnostic_report_{timestamp}.md"
+
+        filename = questionary.text(
+            "Save report as:",
+            default=str(default_dir / default_filename),
+            style=custom_style
+        ).ask()
+
+        if not filename:
+            return
+
+        filepath = Path(filename)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(filepath, 'w') as f:
+            f.write(report.to_markdown())
+
+        self.console.print(f"[green]✓ Saved to {filepath}[/green]")
+
+    def configure_resilience(self):
+        """Configure resilience and self-healing settings"""
+        self.show_header("Resilience Settings")
+
+        # Get current config
+        from .config import get_config_manager
+        config_manager = get_config_manager()
+        current_level = config_manager.get_resilience_level()
+
+        self.console.print(Panel(
+            "[bold]Resilience Configuration[/bold]\n\n"
+            "Control self-healing and fault-tolerance features:\n\n"
+            "• [cyan]OFF[/cyan] - No resilience (fastest, no overhead)\n"
+            "• [cyan]MINIMAL[/cyan] - Basic retry only\n"
+            "• [cyan]STANDARD[/cyan] - Retry + Circuit Breaker + Auto-fix (recommended)\n"
+            "• [cyan]AGGRESSIVE[/cyan] - All features with higher limits\n"
+            "• [cyan]CUSTOM[/cyan] - Fine-grained control\n\n"
+            f"Current level: [bold green]{current_level.upper()}[/bold green]",
+            border_style="cyan"
+        ))
+
+        # Show current settings summary
+        try:
+            resilience_config = config_manager.load_resilience_config()
+            if resilience_config:
+                summary_table = Table(title="Current Settings", show_header=True, header_style="bold cyan")
+                summary_table.add_column("Feature", style="cyan")
+                summary_table.add_column("Status", justify="center")
+                summary_table.add_column("Details", style="dim")
+
+                # Retry
+                retry_status = "[green]ON[/green]" if resilience_config.retry.enabled else "[red]OFF[/red]"
+                retry_detail = f"max_attempts={resilience_config.retry.max_attempts}"
+                summary_table.add_row("Retry", retry_status, retry_detail)
+
+                # Circuit Breaker
+                cb_status = "[green]ON[/green]" if resilience_config.circuit_breaker.enabled else "[red]OFF[/red]"
+                cb_detail = f"threshold={resilience_config.circuit_breaker.failure_threshold}"
+                summary_table.add_row("Circuit Breaker", cb_status, cb_detail)
+
+                # Auto-fix
+                af_status = "[green]ON[/green]" if resilience_config.auto_fix.enabled else "[red]OFF[/red]"
+                af_detail = "safe_only" if resilience_config.auto_fix.safe_only else "all fixes"
+                summary_table.add_row("Auto-Fix", af_status, af_detail)
+
+                # Diagnostics
+                diag_status = "[green]ON[/green]" if resilience_config.diagnostics.enabled else "[red]OFF[/red]"
+                diag_detail = "+API checks" if resilience_config.diagnostics.include_api_checks else "quick only"
+                summary_table.add_row("Diagnostics", diag_status, diag_detail)
+
+                # Error Strategy
+                strategy = resilience_config.workflow_errors.default_strategy.value
+                summary_table.add_row("Error Strategy", strategy.upper(), f"max_iter={resilience_config.workflow_errors.max_iterations}")
+
+                self.console.print("\n")
+                self.console.print(summary_table)
+        except Exception as e:
+            self.console.print(f"[yellow]Could not load current settings: {e}[/yellow]")
+
+        # Menu options
+        action = questionary.select(
+            "\nWhat would you like to do?",
+            choices=[
+                "🔄 Change Resilience Level",
+                "⚙️  Fine-tune Settings",
+                "📊 View Full Configuration",
+                "🔙 Reset to Default (STANDARD)",
+                "← Back to Menu"
+            ],
+            style=custom_style
+        ).ask()
+
+        if not action or "Back" in action:
+            return
+
+        if "Change Resilience Level" in action:
+            self._change_resilience_level(config_manager, current_level)
+        elif "Fine-tune" in action:
+            self._fine_tune_resilience(config_manager)
+        elif "View Full" in action:
+            self._view_full_resilience_config(config_manager)
+        elif "Reset" in action:
+            config_manager.set_resilience_level("standard")
+            self.console.print("[green]✓ Reset to STANDARD level[/green]")
+            # Update framework if available
+            if self.framework and hasattr(self.framework, 'resilience_config'):
+                self.framework.resilience_config = config_manager.load_resilience_config()
+
+        questionary.press_any_key_to_continue().ask()
+
+    def _change_resilience_level(self, config_manager, current_level):
+        """Change resilience level"""
+        levels = [
+            ("OFF - No resilience features", "off"),
+            ("MINIMAL - Basic retry only", "minimal"),
+            ("STANDARD - Retry + Circuit Breaker + Auto-fix (Recommended)", "standard"),
+            ("AGGRESSIVE - All features, more retries", "aggressive"),
+        ]
+
+        choices = []
+        for label, value in levels:
+            if value == current_level:
+                choices.append(f"✓ {label}")
+            else:
+                choices.append(f"  {label}")
+
+        selected = questionary.select(
+            "Select resilience level:",
+            choices=choices + ["← Cancel"],
+            style=custom_style
+        ).ask()
+
+        if not selected or "Cancel" in selected:
+            return
+
+        # Extract level from selection
+        for label, value in levels:
+            if label in selected:
+                config_manager.set_resilience_level(value)
+                self.console.print(f"[green]✓ Resilience level set to {value.upper()}[/green]")
+
+                # Update framework if available
+                if self.framework and hasattr(self.framework, 'resilience_config'):
+                    self.framework.resilience_config = config_manager.load_resilience_config()
+                break
+
+    def _fine_tune_resilience(self, config_manager):
+        """Fine-tune individual resilience settings"""
+        try:
+            from startd8.resilience import (
+                ResilienceConfig, ResilienceLevel, RetrySettings,
+                CircuitBreakerSettings, WorkflowErrorSettings,
+                AutoFixSettings, DiagnosticsSettings, ErrorStrategy
+            )
+        except ImportError:
+            self.console.print("[red]Resilience module not available[/red]")
+            return
+
+        current = config_manager.load_resilience_config()
+        if not current:
+            self.console.print("[red]Could not load current config[/red]")
+            return
+
+        setting = questionary.select(
+            "Which setting to adjust?",
+            choices=[
+                "🔄 Retry - max attempts, delays",
+                "⚡ Circuit Breaker - failure threshold, recovery",
+                "🔧 Auto-Fix - enable/disable, safe only",
+                "🩺 Diagnostics - API checks, auto-analyze",
+                "⚠️  Error Strategy - stop/retry/skip",
+                "← Cancel"
+            ],
+            style=custom_style
+        ).ask()
+
+        if not setting or "Cancel" in setting:
+            return
+
+        if "Retry" in setting:
+            max_attempts = questionary.text(
+                "Max retry attempts:",
+                default=str(current.retry.max_attempts),
+                style=custom_style
+            ).ask()
+            if max_attempts:
+                current.retry.max_attempts = int(max_attempts)
+
+        elif "Circuit Breaker" in setting:
+            threshold = questionary.text(
+                "Failure threshold before opening:",
+                default=str(current.circuit_breaker.failure_threshold),
+                style=custom_style
+            ).ask()
+            if threshold:
+                current.circuit_breaker.failure_threshold = int(threshold)
+
+        elif "Auto-Fix" in setting:
+            enabled = questionary.confirm(
+                "Enable auto-fix?",
+                default=current.auto_fix.enabled,
+                style=custom_style
+            ).ask()
+            current.auto_fix.enabled = enabled
+
+            if enabled:
+                safe_only = questionary.confirm(
+                    "Safe fixes only (recommended)?",
+                    default=current.auto_fix.safe_only,
+                    style=custom_style
+                ).ask()
+                current.auto_fix.safe_only = safe_only
+
+        elif "Diagnostics" in setting:
+            include_api = questionary.confirm(
+                "Include API connectivity checks (costs tokens)?",
+                default=current.diagnostics.include_api_checks,
+                style=custom_style
+            ).ask()
+            current.diagnostics.include_api_checks = include_api
+
+        elif "Error Strategy" in setting:
+            strategy = questionary.select(
+                "Default error handling strategy:",
+                choices=[
+                    "STOP - Stop workflow on first error",
+                    "RETRY - Retry failed step",
+                    "SKIP - Skip failed step, continue"
+                ],
+                style=custom_style
+            ).ask()
+            if strategy:
+                if "STOP" in strategy:
+                    current.workflow_errors.default_strategy = ErrorStrategy.STOP
+                elif "RETRY" in strategy:
+                    current.workflow_errors.default_strategy = ErrorStrategy.RETRY
+                elif "SKIP" in strategy:
+                    current.workflow_errors.default_strategy = ErrorStrategy.SKIP
+
+        # Save changes
+        current.level = ResilienceLevel.CUSTOM
+        config_manager.save_resilience_config(current)
+        self.console.print("[green]✓ Settings saved[/green]")
+
+        # Update framework
+        if self.framework and hasattr(self.framework, 'resilience_config'):
+            self.framework.resilience_config = current
+
+    def _view_full_resilience_config(self, config_manager):
+        """View full resilience configuration as JSON"""
+        config = config_manager.get_resilience_config()
+        self.console.print("\n")
+        self.console.print(Panel(
+            json.dumps(config, indent=2),
+            title="Full Resilience Configuration",
+            border_style="cyan"
+        ))
 
     def run_agent_config_error_analysis(self):
         """Analyze agent configuration errors"""

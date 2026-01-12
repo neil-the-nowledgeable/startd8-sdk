@@ -80,6 +80,34 @@ class ConfigManager:
                 "show_mock_agent": False,
                 "show_mock_in_workflows": False,  # Show mock agents in workflow agent selection
                 "agents_per_page": 10
+            },
+            "resilience": {
+                "level": "standard",  # off, minimal, standard, aggressive, custom
+                "retry": {
+                    "enabled": True,
+                    "max_attempts": 3,
+                    "base_delay_seconds": 1.0,
+                    "max_delay_seconds": 60.0
+                },
+                "circuit_breaker": {
+                    "enabled": True,
+                    "failure_threshold": 5,
+                    "recovery_timeout_seconds": 30.0
+                },
+                "workflow_errors": {
+                    "default_strategy": "retry",  # stop, retry, skip, fallback
+                    "max_iterations": 3
+                },
+                "auto_fix": {
+                    "enabled": True,
+                    "safe_only": True,
+                    "require_confirmation": True
+                },
+                "diagnostics": {
+                    "enabled": True,
+                    "include_api_checks": False,
+                    "auto_analyze": False
+                }
             }
         }
     
@@ -191,8 +219,116 @@ class ConfigManager:
         self._config["preferences"][key] = value
         self._save_config()
     
+    # Resilience Configuration
+
+    def get_resilience_level(self) -> str:
+        """Get current resilience level."""
+        return self._config.get("resilience", {}).get("level", "standard")
+
+    def set_resilience_level(self, level: str):
+        """
+        Set resilience level.
+
+        Args:
+            level: One of 'off', 'minimal', 'standard', 'aggressive', 'custom'
+        """
+        valid_levels = {"off", "minimal", "standard", "aggressive", "custom"}
+        if level not in valid_levels:
+            raise ValueError(f"Invalid resilience level: {level}. Must be one of {valid_levels}")
+
+        if "resilience" not in self._config:
+            self._config["resilience"] = self._default_config()["resilience"]
+
+        self._config["resilience"]["level"] = level
+        self._save_config()
+
+    def get_resilience_config(self) -> Dict[str, Any]:
+        """Get full resilience configuration."""
+        return self._config.get("resilience", self._default_config()["resilience"])
+
+    def set_resilience_config(self, config: Dict[str, Any]):
+        """
+        Set full resilience configuration.
+
+        Args:
+            config: Resilience configuration dictionary
+        """
+        self._config["resilience"] = config
+        self._save_config()
+
+    def load_resilience_config(self):
+        """
+        Load resilience configuration as ResilienceConfig object.
+
+        Returns:
+            ResilienceConfig object or None if module not available
+        """
+        try:
+            from .resilience import (
+                ResilienceConfig, ResilienceLevel, RetrySettings,
+                CircuitBreakerSettings, WorkflowErrorSettings,
+                AutoFixSettings, DiagnosticsSettings, ErrorStrategy
+            )
+        except ImportError:
+            return None
+
+        cfg = self.get_resilience_config()
+        level_str = cfg.get("level", "standard")
+
+        # If using a preset level, use from_level
+        if level_str in ("off", "minimal", "standard", "aggressive"):
+            level = ResilienceLevel(level_str)
+            return ResilienceConfig.from_level(level)
+
+        # Custom configuration
+        retry_cfg = cfg.get("retry", {})
+        cb_cfg = cfg.get("circuit_breaker", {})
+        workflow_cfg = cfg.get("workflow_errors", {})
+        autofix_cfg = cfg.get("auto_fix", {})
+        diag_cfg = cfg.get("diagnostics", {})
+
+        return ResilienceConfig(
+            enabled=level_str != "off",
+            level=ResilienceLevel.CUSTOM,
+            retry=RetrySettings(
+                enabled=retry_cfg.get("enabled", True),
+                max_attempts=retry_cfg.get("max_attempts", 3),
+                base_delay_seconds=retry_cfg.get("base_delay_seconds", 1.0),
+                max_delay_seconds=retry_cfg.get("max_delay_seconds", 60.0),
+            ),
+            circuit_breaker=CircuitBreakerSettings(
+                enabled=cb_cfg.get("enabled", True),
+                failure_threshold=cb_cfg.get("failure_threshold", 5),
+                recovery_timeout_seconds=cb_cfg.get("recovery_timeout_seconds", 30.0),
+            ),
+            workflow_errors=WorkflowErrorSettings(
+                default_strategy=ErrorStrategy(workflow_cfg.get("default_strategy", "retry")),
+                max_iterations=workflow_cfg.get("max_iterations", 3),
+            ),
+            auto_fix=AutoFixSettings(
+                enabled=autofix_cfg.get("enabled", True),
+                safe_only=autofix_cfg.get("safe_only", True),
+                require_confirmation=autofix_cfg.get("require_confirmation", True),
+            ),
+            diagnostics=DiagnosticsSettings(
+                enabled=diag_cfg.get("enabled", True),
+                include_api_checks=diag_cfg.get("include_api_checks", False),
+                auto_analyze=diag_cfg.get("auto_analyze", False),
+            ),
+        )
+
+    def save_resilience_config(self, config) -> None:
+        """
+        Save ResilienceConfig object to persistent storage.
+
+        Args:
+            config: ResilienceConfig object
+        """
+        self._config["resilience"] = config.to_dict()
+        self._save_config()
+
     # Utility
-    
+
     def export_config(self) -> Dict[str, Any]:
         """Export config (with masked API keys)"""
         config = self._config.copy()

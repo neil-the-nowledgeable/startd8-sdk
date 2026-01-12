@@ -15,7 +15,10 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
-from .models import CostRecord, Budget, CostSummary, CostPeriod
+from .models import (
+    CostRecord, Budget, CostSummary, CostPeriod,
+    ExternalTool, UsageSource, PricingType
+)
 from ..logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -51,8 +54,8 @@ class CostStore:
         )
     """
     
-    SCHEMA_VERSION = 1
-    
+    SCHEMA_VERSION = 2  # Version 2 adds external usage tracking fields
+
     def __init__(self, db_path: Path):
         """
         Initialize cost store.
@@ -191,14 +194,74 @@ class CostStore:
                     applied_at TEXT NOT NULL
                 )
             """)
-            
+
+            # External tools registry table
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS external_tools (
+                    id TEXT PRIMARY KEY,
+                    display_name TEXT NOT NULL,
+                    provider TEXT NOT NULL,
+                    default_model TEXT,
+                    pricing_type TEXT NOT NULL,
+                    subscription_cost REAL,
+                    notes TEXT,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+            # Run migrations
+            self._run_migrations(cursor)
+
             # Insert or update schema version
             cursor.execute(
                 "INSERT OR REPLACE INTO schema_version (version, applied_at) VALUES (?, ?)",
                 (self.SCHEMA_VERSION, datetime.now(timezone.utc).isoformat())
             )
-            
+
             conn.commit()
+
+    def _run_migrations(self, cursor: sqlite3.Cursor) -> None:
+        """Run database migrations based on current schema version."""
+        # Get current version
+        result = cursor.execute(
+            "SELECT version FROM schema_version ORDER BY version DESC LIMIT 1"
+        ).fetchone()
+        current_version = result[0] if result else 0
+
+        # Migration 1 -> 2: Add external usage tracking columns
+        if current_version < 2:
+            logger.info("Running migration 1 -> 2: Adding external usage tracking columns")
+
+            # Add new columns (SQLite doesn't support ADD COLUMN IF NOT EXISTS)
+            # So we check if columns exist first
+            columns = {row[1] for row in cursor.execute("PRAGMA table_info(cost_records)")}
+
+            if "source_type" not in columns:
+                cursor.execute(
+                    "ALTER TABLE cost_records ADD COLUMN source_type TEXT DEFAULT 'sdk'"
+                )
+            if "tool_name" not in columns:
+                cursor.execute("ALTER TABLE cost_records ADD COLUMN tool_name TEXT")
+            if "task_description" not in columns:
+                cursor.execute("ALTER TABLE cost_records ADD COLUMN task_description TEXT")
+            if "session_id" not in columns:
+                cursor.execute("ALTER TABLE cost_records ADD COLUMN session_id TEXT")
+
+            # Add indexes for new columns
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_cost_source_type
+                ON cost_records(source_type)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_cost_tool_name
+                ON cost_records(tool_name)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_cost_session_id
+                ON cost_records(session_id)
+            """)
+
+            logger.info("Migration 1 -> 2 completed")
     
     def migrate_tags_to_normalized_table(self) -> int:
         """
@@ -268,9 +331,10 @@ class CostStore:
                     id, timestamp, agent_name, model, provider,
                     input_tokens, output_tokens, total_tokens,
                     input_cost, output_cost, total_cost,
+                    source_type, tool_name, task_description, session_id,
                     tags, project, prompt_id, response_id,
                     pipeline_id, job_id, correlation_id, metadata
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 record.id,
                 record.timestamp.isoformat(),
@@ -283,6 +347,10 @@ class CostStore:
                 record.input_cost,
                 record.output_cost,
                 record.total_cost,
+                record.source_type.value if record.source_type else UsageSource.SDK.value,
+                record.tool_name,
+                record.task_description,
+                record.session_id,
                 json.dumps(record.tags),
                 record.project,
                 record.prompt_id,
@@ -399,6 +467,13 @@ class CostStore:
     
     def _row_to_cost_record(self, row: sqlite3.Row) -> CostRecord:
         """Convert database row to CostRecord"""
+        # Handle source_type - may not exist in older databases
+        source_type_str = row["source_type"] if "source_type" in row.keys() else "sdk"
+        try:
+            source_type = UsageSource(source_type_str) if source_type_str else UsageSource.SDK
+        except ValueError:
+            source_type = UsageSource.SDK
+
         return CostRecord(
             id=row["id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -411,6 +486,10 @@ class CostStore:
             input_cost=row["input_cost"],
             output_cost=row["output_cost"],
             total_cost=row["total_cost"],
+            source_type=source_type,
+            tool_name=row["tool_name"] if "tool_name" in row.keys() else None,
+            task_description=row["task_description"] if "task_description" in row.keys() else None,
+            session_id=row["session_id"] if "session_id" in row.keys() else None,
             tags=json.loads(row["tags"]) if row["tags"] else [],
             project=row["project"],
             prompt_id=row["prompt_id"],
@@ -780,4 +859,225 @@ class CostStore:
             avg_tokens_per_call=total_tokens / len(records) if records else 0,
             avg_cost_per_1k_tokens=(total_cost / total_tokens * 1000) if total_tokens else 0
         )
+
+    # =========================================================================
+    # External Tools Management
+    # =========================================================================
+
+    def save_external_tool(self, tool: ExternalTool) -> None:
+        """
+        Save an external tool to the registry.
+
+        Args:
+            tool: ExternalTool to save
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO external_tools (
+                    id, display_name, provider, default_model,
+                    pricing_type, subscription_cost, notes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                tool.id,
+                tool.display_name,
+                tool.provider,
+                tool.default_model,
+                tool.pricing_type.value if isinstance(tool.pricing_type, PricingType) else tool.pricing_type,
+                tool.subscription_cost,
+                tool.notes,
+                tool.created_at.isoformat()
+            ))
+            conn.commit()
+
+    def get_external_tool(self, tool_id: str) -> Optional[ExternalTool]:
+        """
+        Get an external tool by ID.
+
+        Args:
+            tool_id: Tool identifier
+
+        Returns:
+            ExternalTool or None if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM external_tools WHERE id = ?", (tool_id,))
+            row = cursor.fetchone()
+
+        if not row:
+            return None
+
+        return self._row_to_external_tool(row)
+
+    def list_external_tools(self) -> List[ExternalTool]:
+        """
+        List all registered external tools.
+
+        Returns:
+            List of ExternalTool objects
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM external_tools ORDER BY display_name")
+            rows = cursor.fetchall()
+
+        return [self._row_to_external_tool(row) for row in rows]
+
+    def delete_external_tool(self, tool_id: str) -> bool:
+        """
+        Delete an external tool from the registry.
+
+        Args:
+            tool_id: ID of tool to delete
+
+        Returns:
+            True if deleted, False if not found
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM external_tools WHERE id = ?", (tool_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def _row_to_external_tool(self, row: sqlite3.Row) -> ExternalTool:
+        """Convert database row to ExternalTool"""
+        try:
+            pricing_type = PricingType(row["pricing_type"])
+        except ValueError:
+            pricing_type = PricingType.PER_TOKEN
+
+        return ExternalTool(
+            id=row["id"],
+            display_name=row["display_name"],
+            provider=row["provider"],
+            default_model=row["default_model"],
+            pricing_type=pricing_type,
+            subscription_cost=row["subscription_cost"],
+            notes=row["notes"],
+            created_at=datetime.fromisoformat(row["created_at"])
+        )
+
+    def query_by_source(
+        self,
+        source_type: Optional[UsageSource] = None,
+        tool_name: Optional[str] = None,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+        project: Optional[str] = None,
+        limit: Optional[int] = None
+    ) -> List[CostRecord]:
+        """
+        Query cost records filtered by source type and/or tool name.
+
+        Args:
+            source_type: Filter by source type (SDK, EXTERNAL, IMPORT)
+            tool_name: Filter by external tool name
+            start: Start datetime for query range
+            end: End datetime for query range
+            project: Filter by project
+            limit: Maximum number of records to return
+
+        Returns:
+            List of matching CostRecord objects
+        """
+        conditions = []
+        params: List[Any] = []
+
+        if source_type:
+            conditions.append("source_type = ?")
+            params.append(source_type.value)
+
+        if tool_name:
+            conditions.append("tool_name = ?")
+            params.append(tool_name)
+
+        if start:
+            conditions.append("timestamp >= ?")
+            params.append(start.isoformat())
+
+        if end:
+            conditions.append("timestamp <= ?")
+            params.append(end.isoformat())
+
+        if project:
+            conditions.append("project = ?")
+            params.append(project)
+
+        query = "SELECT * FROM cost_records"
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY timestamp ASC"
+
+        if limit:
+            query += f" LIMIT {limit}"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+
+        return [self._row_to_cost_record(row) for row in rows]
+
+    def get_usage_by_source(
+        self,
+        start: datetime,
+        end: datetime,
+        project: Optional[str] = None
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Get usage statistics grouped by source type and tool.
+
+        Args:
+            start: Start datetime
+            end: End datetime
+            project: Optional project filter
+
+        Returns:
+            Dictionary with usage stats by source/tool
+        """
+        conditions = ["timestamp >= ?", "timestamp <= ?"]
+        params: List[Any] = [start.isoformat(), end.isoformat()]
+
+        if project:
+            conditions.append("project = ?")
+            params.append(project)
+
+        where_clause = " AND ".join(conditions)
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Get totals by source_type
+            cursor.execute(f"""
+                SELECT
+                    COALESCE(source_type, 'sdk') as source,
+                    tool_name,
+                    COUNT(*) as call_count,
+                    SUM(total_tokens) as total_tokens,
+                    SUM(total_cost) as total_cost
+                FROM cost_records
+                WHERE {where_clause}
+                GROUP BY source_type, tool_name
+                ORDER BY source_type, tool_name
+            """, params)
+
+            rows = cursor.fetchall()
+
+        result: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            source = row["source"] or "sdk"
+            tool = row["tool_name"] or "sdk"
+
+            key = f"{source}:{tool}" if tool != "sdk" else source
+
+            result[key] = {
+                "source_type": source,
+                "tool_name": tool if tool != "sdk" else None,
+                "total_calls": row["call_count"],
+                "total_tokens": row["total_tokens"] or 0,
+                "total_cost": row["total_cost"] or 0.0
+            }
+
+        return result
 

@@ -22,6 +22,14 @@ try:
 except ImportError:
     SimpleCache = None
 
+# Resilience imports
+try:
+    from .resilience import ResilienceConfig, ResilienceLevel, DEFAULT_RESILIENCE_CONFIG
+except ImportError:
+    ResilienceConfig = None
+    ResilienceLevel = None
+    DEFAULT_RESILIENCE_CONFIG = None
+
 logger = get_logger(__name__)
 
 
@@ -37,28 +45,218 @@ class AgentFramework:
     - Multi-agent coordination
     """
     
-    def __init__(self, storage_dir: Optional[Path] = None, enable_cache: bool = True):
+    def __init__(
+        self,
+        storage_dir: Optional[Path] = None,
+        enable_cache: bool = True,
+        resilience_config: Optional["ResilienceConfig"] = None,
+    ):
         """
         Initialize the Agent Framework
-        
+
         Args:
             storage_dir: Directory for storing data (default: ./.startd8)
             enable_cache: Whether to enable caching (default: True)
+            resilience_config: Resilience/self-healing configuration (default: STANDARD level)
         """
         if storage_dir is None:
             storage_dir = Path.cwd() / ".startd8"
-        
+
         self.storage: StorageBackend = FileSystemStorage(storage_dir)
-        
+
         if enable_cache and SimpleCache:
             self._cache = SimpleCache()
         else:
             self._cache = None
-            
+
+        # Resilience configuration
+        if resilience_config is not None:
+            self._resilience_config = resilience_config
+        elif DEFAULT_RESILIENCE_CONFIG is not None:
+            self._resilience_config = DEFAULT_RESILIENCE_CONFIG
+        else:
+            self._resilience_config = None
+
         # Index for faster lookups
         self._prompt_index: Dict[str, Prompt] = {}
         self._response_index: Dict[str, List[AgentResponse]] = {}  # Indexed by prompt_id
-    
+
+    # =========================================================================
+    # Resilience Configuration
+    # =========================================================================
+
+    @property
+    def resilience_config(self) -> Optional["ResilienceConfig"]:
+        """Get the current resilience configuration."""
+        return self._resilience_config
+
+    @resilience_config.setter
+    def resilience_config(self, config: "ResilienceConfig") -> None:
+        """Set the resilience configuration."""
+        self._resilience_config = config
+        logger.info(
+            f"Resilience config updated: level={config.level.value if config else 'None'}",
+            extra={"resilience_level": config.level.value if config else None}
+        )
+
+    def get_retry_config(self):
+        """
+        Get retry configuration for agents.
+
+        Returns RetryConfig suitable for agent initialization.
+        Returns None if resilience is disabled.
+        """
+        if not self._resilience_config or not self._resilience_config.enabled:
+            return None
+        if not self._resilience_config.retry.enabled:
+            return None
+        return self._resilience_config.retry.to_retry_config()
+
+    def get_circuit_breaker_config(self):
+        """
+        Get circuit breaker configuration.
+
+        Returns CircuitBreakerConfig suitable for MCP Gateway.
+        Returns None if resilience is disabled.
+        """
+        if not self._resilience_config or not self._resilience_config.enabled:
+            return None
+        if not self._resilience_config.circuit_breaker.enabled:
+            return None
+        return self._resilience_config.circuit_breaker.to_circuit_breaker_config()
+
+    def get_error_strategy(self):
+        """
+        Get default error handling strategy for workflows.
+
+        Returns ErrorStrategy enum value.
+        """
+        if not self._resilience_config or not self._resilience_config.enabled:
+            from .models import ErrorHandling
+            return ErrorHandling.STOP
+
+        # Map resilience ErrorStrategy to models.ErrorHandling
+        from .models import ErrorHandling
+        strategy = self._resilience_config.workflow_errors.default_strategy
+
+        mapping = {
+            "stop": ErrorHandling.STOP,
+            "retry": ErrorHandling.RETRY,
+            "skip": ErrorHandling.SKIP,
+        }
+        return mapping.get(strategy.value, ErrorHandling.STOP)
+
+    def should_auto_fix(self) -> bool:
+        """Check if auto-fix is enabled."""
+        if not self._resilience_config or not self._resilience_config.enabled:
+            return False
+        return self._resilience_config.auto_fix.enabled
+
+    def should_run_diagnostics(self) -> bool:
+        """Check if diagnostics are enabled."""
+        if not self._resilience_config or not self._resilience_config.enabled:
+            return False
+        return self._resilience_config.diagnostics.enabled
+
+    # =========================================================================
+    # Agent Factory Methods
+    # =========================================================================
+
+    def create_agent(
+        self,
+        agent_type: str,
+        name: Optional[str] = None,
+        model: Optional[str] = None,
+        max_tokens: int = 4096,
+        **kwargs
+    ):
+        """
+        Create an agent with the framework's resilience settings applied.
+
+        This factory method automatically applies:
+        - Retry configuration from ResilienceConfig
+        - Connection pooling settings
+        - Other framework-level settings
+
+        Args:
+            agent_type: Type of agent ('claude', 'gpt4', 'gemini', 'mock', 'openai_compatible')
+            name: Optional agent name
+            model: Optional model identifier
+            max_tokens: Max tokens for response (default: 4096)
+            **kwargs: Additional agent-specific arguments
+
+        Returns:
+            Configured agent instance
+
+        Example:
+            framework = AgentFramework()
+            agent = framework.create_agent('claude', name='my-agent')
+            # Agent has retry config from framework.resilience_config
+        """
+        from .agents import ClaudeAgent, GPT4Agent, MockAgent
+
+        # Get retry config from resilience settings
+        retry_config = self.get_retry_config()
+
+        # Common kwargs for all agents
+        common_kwargs = {
+            'max_tokens': max_tokens,
+        }
+
+        # Add retry config if enabled
+        if retry_config:
+            common_kwargs['retry_config'] = retry_config
+            common_kwargs['enable_retry'] = True
+
+        # Merge with user-provided kwargs (user kwargs take precedence)
+        agent_kwargs = {**common_kwargs, **kwargs}
+
+        agent_type_lower = agent_type.lower()
+
+        if agent_type_lower == 'claude':
+            return ClaudeAgent(
+                name=name or 'claude',
+                model=model or 'claude-sonnet-4-20250514',
+                **agent_kwargs
+            )
+        elif agent_type_lower == 'gpt4':
+            return GPT4Agent(
+                name=name or 'gpt4',
+                model=model or 'gpt-4-turbo-preview',
+                **agent_kwargs
+            )
+        elif agent_type_lower == 'gemini':
+            try:
+                from .agents import GeminiAgent
+                return GeminiAgent(
+                    name=name or 'gemini',
+                    model=model or 'gemini-1.5-flash',
+                    **agent_kwargs
+                )
+            except ImportError:
+                raise ValueError("GeminiAgent not available. Install google-generativeai package.")
+        elif agent_type_lower == 'mock':
+            return MockAgent(
+                name=name or 'mock',
+                model=model or 'mock-model'
+            )
+        elif agent_type_lower == 'openai_compatible':
+            try:
+                from .agents import OpenAICompatibleAgent
+                return OpenAICompatibleAgent(
+                    name=name or 'custom',
+                    model=model or 'custom-model',
+                    **agent_kwargs
+                )
+            except ImportError:
+                raise ValueError("OpenAICompatibleAgent not available.")
+        else:
+            raise ValueError(f"Unknown agent type: {agent_type}")
+
+    # =========================================================================
+    # Prompt Management
+    # =========================================================================
+
     def create_prompt(
         self,
         content: str,

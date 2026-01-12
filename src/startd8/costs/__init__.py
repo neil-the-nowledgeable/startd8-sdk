@@ -10,6 +10,8 @@ Main components:
 - PricingService: Manage model pricing
 - CostAnalytics: Analyze spending and generate recommendations
 - Cost Context: Manage tracking context for cost attribution
+- ExternalUsageTracker: Track usage from external tools (Claude Code, Cursor, etc.)
+- ComparisonAnalytics: Compare SDK vs external tool usage
 """
 
 from .models import (
@@ -18,7 +20,14 @@ from .models import (
     BudgetStatus,
     CostSummary,
     CostOptimization,
-    CostPeriod
+    CostPeriod,
+    # External tracking models
+    UsageSource,
+    PricingType,
+    ExternalTool,
+    SourceUsageSummary,
+    ToolComparisonReport,
+    ProductivityMetrics,
 )
 from .tracker import (
     CostTracker,
@@ -29,6 +38,8 @@ from .tracker import (
 from .budget import BudgetManager, BudgetExceededError
 from .pricing import PricingService, ModelPricing
 from .analytics import CostAnalytics
+from .external import ExternalUsageTracker, DEFAULT_TOOLS
+from .comparison import ComparisonAnalytics
 
 __all__ = [
     # Models
@@ -38,21 +49,32 @@ __all__ = [
     "CostSummary",
     "CostOptimization",
     "CostPeriod",
-    
+
+    # External tracking models
+    "UsageSource",
+    "PricingType",
+    "ExternalTool",
+    "SourceUsageSummary",
+    "ToolComparisonReport",
+    "ProductivityMetrics",
+
     # Services
     "CostTracker",
     "BudgetManager",
     "PricingService",
     "CostAnalytics",
-    
+    "ExternalUsageTracker",
+    "ComparisonAnalytics",
+
     # Context management (Issue #3)
     "get_cost_context",
     "set_cost_context",
     "clear_cost_context",
-    
+
     # Exceptions
     "BudgetExceededError",
-    
+
     # Additional exports
     "ModelPricing",
+    "DEFAULT_TOOLS",
 ]
