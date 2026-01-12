@@ -246,10 +246,10 @@ class SkillAgent(BaseAgent):
             self._validate_mcp_availability()
         
         logger.info(
-            f"SkillAgent initialized",
+            "SkillAgent initialized",
             extra={
                 'skill_id': self.skill_id,
-                'name': self.name,
+                'agent_name': self.name,
                 'model': self.model,
                 'mcp_enabled': self.mcp_enabled
             }
