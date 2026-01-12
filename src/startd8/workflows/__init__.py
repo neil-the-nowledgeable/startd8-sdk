@@ -6,6 +6,7 @@ orchestrating workflows. Workflows can be accessed:
 - Programmatically via Python API
 - Via CLI: `startd8 workflow run <id>`
 - Via MCP for external AI agents
+- Via filesystem for token-efficient agent discovery
 
 Quick Start:
     from startd8.workflows import WorkflowRegistry
@@ -23,6 +24,16 @@ Quick Start:
         config={"initial_input": "Write a function..."},
         agents=[my_agent]
     )
+
+Filesystem-based Discovery (for agents):
+    # Export workflows to filesystem for agent discovery
+    result = WorkflowRegistry.export_to_filesystem("./workflows")
+
+    # Agent discovers workflows from lightweight index
+    workflows = WorkflowRegistry.discover_from_filesystem("./workflows")
+
+    # Agent loads full schema only when needed
+    schema = WorkflowRegistry.get_workflow_from_filesystem("pipeline")
 
 Creating Custom Workflows:
     from startd8.workflows import WorkflowBase, WorkflowMetadata, WorkflowResult
@@ -58,6 +69,7 @@ from .base import (
     ProgressCallback,
 )
 from .registry import WorkflowRegistry
+from .filesystem import WorkflowFilesystem, export_registry_to_filesystem
 
 __all__ = [
     # Models
@@ -76,4 +88,7 @@ __all__ = [
     "ProgressCallback",
     # Registry
     "WorkflowRegistry",
+    # Filesystem discovery
+    "WorkflowFilesystem",
+    "export_registry_to_filesystem",
 ]

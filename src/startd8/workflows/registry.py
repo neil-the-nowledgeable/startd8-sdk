@@ -503,3 +503,115 @@ class WorkflowRegistry:
             cls._workflows.clear()
             cls._discovered = False
             logger.debug("Cleared workflow registry")
+
+    # --- Filesystem-based Discovery ---
+
+    @classmethod
+    def export_to_filesystem(cls, output_dir: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Export all workflows to filesystem for agent discovery.
+
+        Creates YAML files that agents can explore on-demand instead of
+        loading all schemas upfront. Follows Anthropic's "progressive
+        disclosure" pattern for token efficiency.
+
+        Args:
+            output_dir: Output directory (default: .startd8/workflows)
+
+        Returns:
+            Dict with 'files' (mapping workflow_id to path) and 'index' path
+
+        Example:
+            result = WorkflowRegistry.export_to_filesystem("./workflows")
+            print(f"Index at: {result['index']}")
+            print(f"Exported: {list(result['files'].keys())}")
+        """
+        from .filesystem import WorkflowFilesystem
+
+        cls.discover()
+        metadata_list = cls.list_workflow_metadata()
+
+        fs = WorkflowFilesystem(output_dir)
+        exported = fs.export_all(metadata_list)
+
+        # Separate index from workflow files
+        index_path = exported.pop('_index', None)
+        return {
+            'files': exported,
+            'index': index_path,
+            'directory': str(fs.base_dir),
+        }
+
+    @classmethod
+    def discover_from_filesystem(
+        cls,
+        directory: Optional[str] = None,
+        register: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """
+        Discover workflows from filesystem (lightweight listing).
+
+        Returns minimal workflow info from index file without loading
+        full definitions. Use get_workflow_from_filesystem() to load
+        full schema for specific workflow when needed.
+
+        Args:
+            directory: Directory containing workflow files
+            register: If True, also register discovered workflows
+
+        Returns:
+            List of lightweight workflow summaries from index
+
+        Example:
+            # Agent discovers available workflows (minimal tokens)
+            workflows = WorkflowRegistry.discover_from_filesystem()
+            for wf in workflows:
+                print(f"{wf['workflow_id']}: {wf['description']}")
+
+            # Later, get full schema for specific workflow
+            schema = WorkflowRegistry.get_workflow_from_filesystem("pipeline")
+        """
+        from .filesystem import WorkflowFilesystem
+
+        fs = WorkflowFilesystem(directory)
+        workflows = fs.list_workflows()
+
+        if register:
+            for entry in workflows:
+                # Import full metadata and create placeholder
+                metadata = fs.import_workflow(entry['workflow_id'])
+                if metadata:
+                    logger.info(f"Discovered workflow from filesystem: {entry['workflow_id']}")
+
+        return workflows
+
+    @classmethod
+    def get_workflow_from_filesystem(
+        cls,
+        workflow_id: str,
+        directory: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get full workflow definition from filesystem.
+
+        Loads complete schema for a specific workflow. Use this when
+        agent needs full details after discovering via index.
+
+        Args:
+            workflow_id: The workflow to load
+            directory: Directory containing workflow files
+
+        Returns:
+            Full workflow definition dict, or None if not found
+
+        Example:
+            # Agent needs full schema for pipeline workflow
+            schema = WorkflowRegistry.get_workflow_from_filesystem("pipeline")
+            if schema:
+                print(f"Inputs: {schema['input_schema']}")
+                print(f"Example: {schema['invocation']['example']}")
+        """
+        from .filesystem import WorkflowFilesystem
+
+        fs = WorkflowFilesystem(directory)
+        return fs.get_workflow_definition(workflow_id)

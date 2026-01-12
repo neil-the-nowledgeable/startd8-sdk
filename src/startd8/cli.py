@@ -1238,6 +1238,52 @@ def workflow_run(
         raise typer.Exit(1)
 
 
+@workflow_app.command("export")
+def workflow_export(
+    output_dir: Optional[Path] = typer.Option(
+        None, "--output", "-o",
+        help="Output directory (default: .startd8/workflows)"
+    ),
+):
+    """
+    Export workflows to filesystem for agent discovery.
+
+    Creates YAML files that agents can explore on-demand instead of
+    loading all schemas upfront. Follows Anthropic's 'progressive
+    disclosure' pattern for token efficiency.
+
+    Example:
+        startd8 workflow export
+        startd8 workflow export -o ./workflows
+
+    Agents can then:
+        1. Read _index.yaml for lightweight workflow listing
+        2. Read specific workflow file for full schema when needed
+    """
+    WorkflowRegistry = _load_workflow_registry()
+
+    output_path = str(output_dir) if output_dir else None
+
+    console.print("[bold]Exporting workflows to filesystem...[/bold]")
+
+    try:
+        result = WorkflowRegistry.export_to_filesystem(output_path)
+    except Exception as e:
+        console.print(f"[red]Error exporting workflows: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Display results
+    console.print(f"\n[green]✓ Exported to: {result['directory']}[/green]")
+    console.print(f"[green]✓ Index file: {result['index']}[/green]")
+
+    console.print("\n[bold]Exported workflows:[/bold]")
+    for workflow_id, path in result['files'].items():
+        console.print(f"  • {workflow_id}: {path}")
+
+    console.print(f"\n[dim]Agents can now discover workflows by reading the index file,[/dim]")
+    console.print(f"[dim]then load full schemas for specific workflows as needed.[/dim]")
+
+
 if __name__ == "__main__":
     app()
 
