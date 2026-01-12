@@ -45,7 +45,7 @@ class ClaudeAgent(BaseAgent):
         name: str = "claude",
         model: str = "claude-sonnet-4-20250514",  # Claude Sonnet 4 - best balance of capability and cost
         api_key: Optional[str] = None,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         cost_tracker: Optional['CostTracker'] = None,
         budget_manager: Optional['BudgetManager'] = None,
         retry_config: Optional[RetryConfig] = None,
@@ -334,11 +334,30 @@ class ClaudeAgent(BaseAgent):
 
         response_text = response.content[0].text
 
+        # Extract stop_reason to detect truncation
+        # Anthropic uses: "end_turn" (natural), "max_tokens" (truncated), "stop_sequence"
+        stop_reason = getattr(response, 'stop_reason', None)
+
         token_usage = TokenUsage(
             input=response.usage.input_tokens,
             output=response.usage.output_tokens,
             total=response.usage.input_tokens + response.usage.output_tokens,
             model_name=self.model,
+            finish_reason=stop_reason,
         )
+
+        # Log warning if response was truncated
+        if token_usage.was_truncated:
+            logger.warning(
+                f"Response from {self.name} was truncated (stop_reason={stop_reason}). "
+                f"Output tokens: {token_usage.output}. Consider increasing max_tokens (currently {self.max_tokens}).",
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "stop_reason": stop_reason,
+                    "output_tokens": token_usage.output,
+                    "max_tokens": self.max_tokens,
+                }
+            )
 
         return response_text, response_time_ms, token_usage

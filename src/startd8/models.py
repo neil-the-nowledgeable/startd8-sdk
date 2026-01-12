@@ -4,7 +4,7 @@ Data models for StartDate Agent Framework
 
 from datetime import datetime, timezone
 from typing import Optional, Dict, Any, List, TYPE_CHECKING, TypedDict
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from enum import Enum
 from pathlib import Path
 import re
@@ -20,6 +20,23 @@ class TokenUsage(BaseModel):
     output: int = Field(description="Output tokens generated")
     total: int = Field(description="Total tokens (input + output)")
     model_name: Optional[str] = Field(default=None, description="Model name for cost calculation")
+    finish_reason: Optional[str] = Field(
+        default=None,
+        description="API finish reason (e.g., 'end_turn', 'stop', 'max_tokens', 'length')"
+    )
+
+    @property
+    def was_truncated(self) -> bool:
+        """
+        Check if the response was truncated due to hitting max_tokens limit.
+
+        Returns True if the API indicated the response was cut off.
+        """
+        if not self.finish_reason:
+            return False
+        # Different providers use different values for truncation
+        truncation_reasons = {"max_tokens", "length"}
+        return self.finish_reason.lower() in truncation_reasons
     
     @field_validator('input', 'output', 'total')
     @classmethod
@@ -128,16 +145,15 @@ class Prompt(BaseModel):
             )
         return v
     
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "prompt-123",
-                "content": "Implement JWT authentication",
-                "version": "1.0.0",
-                "tags": ["auth", "security"],
-                "metadata": {"priority": "high"}
-            }
+    model_config = ConfigDict(json_schema_extra={
+        "example": {
+            "id": "prompt-123",
+            "content": "Implement JWT authentication",
+            "version": "1.0.0",
+            "tags": ["auth", "security"],
+            "metadata": {"priority": "high"}
         }
+    })
 
 
 class AgentResponse(BaseModel):
@@ -298,9 +314,8 @@ class AgentConfig(BaseModel):
     order: int = Field(description="Position in chain (0-based)", ge=0)
     agent_instance: Any = Field(default=None, description="Agent instance (not serialized)")
     
-    class Config:
-        arbitrary_types_allowed = True
-        
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     @field_validator('agent_name')
     @classmethod
     def validate_agent_name(cls, v: str) -> str:
@@ -346,10 +361,8 @@ class DocumentEnhancementConfig(BaseModel):
         description="Error handling strategy"
     )
     
-    class Config:
-        arbitrary_types_allowed = True
-        use_enum_values = True
-    
+    model_config = ConfigDict(arbitrary_types_allowed=True, use_enum_values=True)
+
     @field_validator('source_document')
     @classmethod
     def validate_source_document(cls, v: Path) -> Path:
@@ -409,9 +422,8 @@ class EnhancementStepResult(BaseModel):
         default=None,
         description="Path to intermediate result file"
     )
-    
-    class Config:
-        arbitrary_types_allowed = True
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
 
 class DocumentEnhancementResult(BaseModel):
@@ -435,10 +447,9 @@ class DocumentEnhancementResult(BaseModel):
         default_factory=lambda: datetime.now(timezone.utc),
         description="Timestamp of chain completion"
     )
-    
-    class Config:
-        arbitrary_types_allowed = True
-    
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     @property
     def steps_completed(self) -> int:
         """Number of successfully completed steps"""
@@ -514,11 +525,9 @@ class JobFile(BaseModel):
     )
     error: Optional[str] = Field(default=None, description="Error message if failed")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional job metadata")
-    
-    class Config:
-        arbitrary_types_allowed = True
-        use_enum_values = True
-    
+
+    model_config = ConfigDict(arbitrary_types_allowed=True, use_enum_values=True)
+
     @property
     def processing_time_ms(self) -> Optional[int]:
         """Calculate processing time in milliseconds"""
@@ -526,12 +535,12 @@ class JobFile(BaseModel):
             delta = self.completed_at - self.started_at
             return int(delta.total_seconds() * 1000)
         return None
-    
+
     @property
     def is_pending(self) -> bool:
         """Check if job is pending"""
         return self.status == JobStatus.PENDING
-    
+
     @property
     def is_completed(self) -> bool:
         """Check if job completed (success or failure)"""
@@ -569,10 +578,9 @@ class JobQueueConfig(BaseModel):
         default_factory=list,
         description="Default agents to use if job doesn't specify"
     )
-    
-    class Config:
-        arbitrary_types_allowed = True
-    
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     @field_validator('watch_folder')
     @classmethod
     def validate_watch_folder(cls, v: Path) -> Path:
@@ -604,6 +612,5 @@ class JobResult(BaseModel):
         description="Agents that were run"
     )
     error: Optional[str] = Field(default=None, description="Error message if failed")
-    
-    class Config:
-        use_enum_values = True
+
+    model_config = ConfigDict(use_enum_values=True)

@@ -10,10 +10,13 @@ This module provides:
 import asyncio
 import logging
 import uuid
+import warnings
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 
 from ..models import TokenUsage, AgentResponse, ResponseMetadata
+from ..exceptions import TruncationWarning
+from ..truncation_detection import detect_truncation
 
 logger = logging.getLogger(__name__)
 
@@ -310,6 +313,86 @@ class BaseAgent(ABC):
 
         return response_text, response_time_ms, token_usage
 
+    def _check_for_truncation(
+        self,
+        response: AgentResponse,
+        original_prompt: str = None
+    ) -> None:
+        """
+        Check for truncation using both API finish_reason and heuristic detection.
+
+        Issues a TruncationWarning if truncation is detected.
+
+        Args:
+            response: The AgentResponse to check
+            original_prompt: Original prompt text (for length comparison)
+        """
+        truncation_detected = False
+        finish_reason = None
+        indicators = []
+        confidence = 0.0
+
+        # Check API-level truncation via finish_reason
+        if response.token_usage and response.token_usage.was_truncated:
+            truncation_detected = True
+            finish_reason = response.token_usage.finish_reason
+            indicators.append(f"API finish_reason: {finish_reason}")
+            confidence = 1.0  # API says it was truncated - definitive
+
+        # Also run heuristic detection for additional signals
+        heuristic_result = detect_truncation(
+            output=response.response,
+            original_input=original_prompt,
+            strict_mode=False
+        )
+
+        if heuristic_result.is_truncated:
+            truncation_detected = True
+            indicators.extend(heuristic_result.indicators)
+            # Use max confidence between API and heuristic
+            confidence = max(confidence, heuristic_result.confidence)
+
+        # Store truncation info in response metadata
+        if truncation_detected:
+            response.metadata['truncation_detected'] = True
+            response.metadata['truncation_indicators'] = indicators
+            response.metadata['truncation_confidence'] = confidence
+
+            # Get max_tokens from the agent if available
+            max_tokens = getattr(self, 'max_tokens', None)
+
+            # Issue warning
+            warning_msg = (
+                f"Response from {self.name} appears truncated. "
+                f"Indicators: {', '.join(indicators[:3])}{'...' if len(indicators) > 3 else ''}. "
+                f"Confidence: {confidence:.0%}"
+            )
+
+            warnings.warn(
+                TruncationWarning(
+                    warning_msg,
+                    agent_name=self.name,
+                    finish_reason=finish_reason,
+                    output_tokens=response.token_usage.output if response.token_usage else None,
+                    max_tokens=max_tokens,
+                    indicators=indicators,
+                    confidence=confidence
+                ),
+                stacklevel=3  # Point to the caller's caller
+            )
+
+            logger.warning(
+                warning_msg,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "finish_reason": finish_reason,
+                    "indicators": indicators,
+                    "confidence": confidence,
+                    "response_id": response.id,
+                }
+            )
+
     async def acreate_response(
         self,
         prompt_id: str,
@@ -360,7 +443,7 @@ class BaseAgent(ABC):
             # Direct call without cost tracking
             response_text, response_time_ms, token_usage = await self.agenerate(prompt)
 
-        return AgentResponse(
+        response_obj = AgentResponse(
             id=response_id,
             prompt_id=prompt_id,
             agent_name=self.name,
@@ -370,6 +453,11 @@ class BaseAgent(ABC):
             token_usage=token_usage,
             metadata=metadata or {}
         )
+
+        # Check for truncation using heuristics (second layer of defense)
+        self._check_for_truncation(response_obj, prompt)
+
+        return response_obj
 
     def create_response(
         self,
@@ -453,7 +541,7 @@ class BaseAgent(ABC):
             # Direct call without cost tracking
             response_text, response_time_ms, token_usage = self.generate(prompt)
 
-        return AgentResponse(
+        response_obj = AgentResponse(
             id=response_id,
             prompt_id=prompt_id,
             agent_name=self.name,
@@ -463,3 +551,8 @@ class BaseAgent(ABC):
             token_usage=token_usage,
             metadata=metadata or {}
         )
+
+        # Check for truncation using heuristics (second layer of defense)
+        self._check_for_truncation(response_obj, prompt)
+
+        return response_obj

@@ -50,7 +50,7 @@ class GPT4Agent(BaseAgent):
         name: str = "gpt4",
         model: str = "gpt-4o",  # GPT-4o - latest flagship model
         api_key: Optional[str] = None,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         cost_tracker: Optional['CostTracker'] = None,
         budget_manager: Optional['BudgetManager'] = None,
         retry_config: Optional[RetryConfig] = None,
@@ -283,12 +283,31 @@ class GPT4Agent(BaseAgent):
 
         response_text = response.choices[0].message.content
 
+        # Extract finish_reason to detect truncation
+        # OpenAI uses: "stop" (natural), "length" (truncated), "content_filter", "tool_calls"
+        finish_reason = getattr(response.choices[0], 'finish_reason', None)
+
         token_usage = TokenUsage(
             input=response.usage.prompt_tokens,
             output=response.usage.completion_tokens,
             total=response.usage.total_tokens,
             model_name=self.model,
+            finish_reason=finish_reason,
         )
+
+        # Log warning if response was truncated
+        if token_usage.was_truncated:
+            logger.warning(
+                f"Response from {self.name} was truncated (finish_reason={finish_reason}). "
+                f"Output tokens: {token_usage.output}. Consider increasing max_tokens (currently {self.max_tokens}).",
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "finish_reason": finish_reason,
+                    "output_tokens": token_usage.output,
+                    "max_tokens": self.max_tokens,
+                }
+            )
 
         return response_text, response_time_ms, token_usage
 
@@ -314,7 +333,7 @@ class OpenAICompatibleAgent(BaseAgent):
         api_key: Optional[str] = None,
         api_key_env: Optional[str] = None,
         base_url: Optional[str] = None,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         cost_tracker: Optional['CostTracker'] = None,
         budget_manager: Optional['BudgetManager'] = None,
         retry_config: Optional[RetryConfig] = None,
@@ -541,6 +560,10 @@ class OpenAICompatibleAgent(BaseAgent):
 
             response_text = response.choices[0].message.content
 
+            # Extract finish_reason to detect truncation
+            # OpenAI-compatible APIs use: "stop" (natural), "length" (truncated)
+            finish_reason = getattr(response.choices[0], 'finish_reason', None)
+
             # Some APIs may not return usage info
             if hasattr(response, 'usage') and response.usage:
                 token_usage = TokenUsage(
@@ -548,6 +571,7 @@ class OpenAICompatibleAgent(BaseAgent):
                     output=response.usage.completion_tokens or 0,
                     total=response.usage.total_tokens or 0,
                     model_name=self.model,
+                    finish_reason=finish_reason,
                 )
             else:
                 # Estimate tokens if not provided
@@ -556,6 +580,21 @@ class OpenAICompatibleAgent(BaseAgent):
                     output=len(response_text.split()) if response_text else 0,
                     total=len(prompt.split()) + (len(response_text.split()) if response_text else 0),
                     model_name=self.model,
+                    finish_reason=finish_reason,
+                )
+
+            # Log warning if response was truncated
+            if token_usage.was_truncated:
+                logger.warning(
+                    f"Response from {self.name} was truncated (finish_reason={finish_reason}). "
+                    f"Output tokens: {token_usage.output}. Consider increasing max_tokens (currently {self.max_tokens}).",
+                    extra={
+                        "agent_name": self.name,
+                        "model": self.model,
+                        "finish_reason": finish_reason,
+                        "output_tokens": token_usage.output,
+                        "max_tokens": self.max_tokens,
+                    }
                 )
 
             return response_text, response_time_ms, token_usage

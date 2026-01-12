@@ -47,7 +47,7 @@ class GeminiAgent(BaseAgent):
         name: str = "gemini",
         model: str = "gemini-2.0-flash",  # Gemini 2.0 Flash - latest stable model
         api_key: Optional[str] = None,
-        max_tokens: int = 4096,
+        max_tokens: int = 16384,
         temperature: float = 0.7,
         cost_tracker: Optional['CostTracker'] = None,
         budget_manager: Optional['BudgetManager'] = None,
@@ -381,13 +381,24 @@ class GeminiAgent(BaseAgent):
         end_time = time.time()
         response_time_ms = int((end_time - start_time) * 1000)
 
+        # Extract finish_reason to detect truncation
+        # Gemini uses: "STOP" (natural), "MAX_TOKENS" (truncated), "SAFETY", etc.
+        # Note: In google.genai, finish_reason may be on response or candidates[0]
+        finish_reason = None
+        if hasattr(response, 'candidates') and response.candidates:
+            finish_reason = getattr(response.candidates[0], 'finish_reason', None)
+        if not finish_reason:
+            finish_reason = getattr(response, 'finish_reason', None)
+        # Convert enum to string if needed
+        if finish_reason and hasattr(finish_reason, 'name'):
+            finish_reason = finish_reason.name
+
         # Extract response text
         # New google.genai API structure
         if not hasattr(response, 'text') or not response.text:
-            finish_reason = getattr(response, 'finish_reason', 'unknown')
             raise RuntimeError(
                 f"Gemini returned empty response. "
-                f"Finish reason: {finish_reason}"
+                f"Finish reason: {finish_reason or 'unknown'}"
             )
 
         response_text = response.text
@@ -437,11 +448,32 @@ class GeminiAgent(BaseAgent):
                 }
             )
 
+        # Normalize Gemini's finish_reason for truncation detection
+        # Gemini uses "MAX_TOKENS", we standardize to "max_tokens"
+        normalized_finish_reason = finish_reason
+        if finish_reason and finish_reason.upper() == "MAX_TOKENS":
+            normalized_finish_reason = "max_tokens"
+
         token_usage = TokenUsage(
             input=int(input_tokens),
             output=int(output_tokens),
             total=int(total_tokens),
             model_name=self.model,
+            finish_reason=normalized_finish_reason,
         )
+
+        # Log warning if response was truncated
+        if token_usage.was_truncated:
+            logger.warning(
+                f"Response from {self.name} was truncated (finish_reason={finish_reason}). "
+                f"Output tokens: {token_usage.output}. Consider increasing max_tokens (currently {self.max_tokens}).",
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "finish_reason": finish_reason,
+                    "output_tokens": token_usage.output,
+                    "max_tokens": self.max_tokens,
+                }
+            )
 
         return response_text, response_time_ms, token_usage
