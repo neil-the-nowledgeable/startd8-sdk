@@ -68,6 +68,8 @@ gemini = "startd8.providers.gemini:GeminiProvider"
 pipeline = "startd8.workflows.builtin.pipeline_workflow:PipelineWorkflow"
 doc-enhancement = "startd8.workflows.builtin.doc_enhancement_workflow:DocEnhancementWorkflow"
 iterative-dev = "startd8.workflows.builtin.iterative_dev_workflow:IterativeDevWorkflowWrapper"
+design-polish = "startd8.workflows.builtin.design_polish_workflow:DesignPolishWorkflow"
+critical-review = "startd8.workflows.builtin.critical_review_workflow:CriticalReviewWorkflow"
 
 [project.urls]
 Homepage = "https://github.com/startdate/startd8"

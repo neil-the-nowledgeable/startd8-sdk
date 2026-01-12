@@ -8,6 +8,8 @@ Available workflows:
 - PipelineWorkflow: Sequential multi-agent pipelines
 - DocEnhancementWorkflow: Document enhancement chains
 - IterativeDevWorkflowWrapper: Dev-review-fix iterations
+- DesignPolishWorkflow: 3-stage design document refinement
+- CriticalReviewWorkflow: Multi-agent document review
 """
 
 # Imports are done lazily to avoid circular imports
@@ -17,6 +19,8 @@ __all__ = [
     "PipelineWorkflow",
     "DocEnhancementWorkflow",
     "IterativeDevWorkflowWrapper",
+    "DesignPolishWorkflow",
+    "CriticalReviewWorkflow",
 ]
 
 
@@ -31,4 +35,10 @@ def __getattr__(name: str):
     elif name == "IterativeDevWorkflowWrapper":
         from .iterative_dev_workflow import IterativeDevWorkflowWrapper
         return IterativeDevWorkflowWrapper
+    elif name == "DesignPolishWorkflow":
+        from .design_polish_workflow import DesignPolishWorkflow
+        return DesignPolishWorkflow
+    elif name == "CriticalReviewWorkflow":
+        from .critical_review_workflow import CriticalReviewWorkflow
+        return CriticalReviewWorkflow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
