@@ -256,6 +256,7 @@ class TestClaudeAgentRetryBehavior:
         response = MagicMock()
         response.content = [MagicMock(text="Test response")]
         response.usage = MagicMock(input_tokens=10, output_tokens=20)
+        response.stop_reason = "end_turn"  # Must be a string, not MagicMock
         return response
 
     @pytest.mark.asyncio
@@ -405,7 +406,7 @@ class TestClaudeAgentMakeApiCall:
             assert result is mock_response
             agent.async_client.messages.create.assert_called_once_with(
                 model="claude-3-opus-20240229",
-                max_tokens=4096,
+                max_tokens=16384,
                 messages=[{"role": "user", "content": "Test prompt"}]
             )
 
