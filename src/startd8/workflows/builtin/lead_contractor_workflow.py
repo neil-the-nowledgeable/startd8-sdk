@@ -1,0 +1,939 @@
+"""
+LeadContractorWorkflow - Cost-efficient multi-agent implementation pattern.
+
+Claude acts as "lead contractor" (architect, spec writer, reviewer, integrator)
+while cheaper models handle the actual drafting work.
+
+Pattern:
+1. Claude creates detailed implementation spec
+2. Drafter (GPT-4o-mini or Gemini Flash) implements from spec
+3. Claude reviews implementation
+4. If not approved, loop back to step 2 (max 3 iterations)
+5. Claude integrates/finalizes
+
+Cost Structure:
+- Claude Sonnet 4: $3.00/$15.00 per 1M tokens (lead contractor)
+- GPT-4o-mini: $0.15/$0.60 per 1M tokens (drafter)
+- Gemini Flash: $0.10/$0.40 per 1M tokens (drafter)
+"""
+
+from datetime import datetime, timezone
+from typing import Any, Dict, List, Optional
+import uuid
+import json
+import re
+
+from ..base import WorkflowBase, ProgressCallback
+from ..models import (
+    WorkflowMetadata,
+    WorkflowInput,
+    WorkflowResult,
+    WorkflowMetrics,
+    StepResult,
+    AgentCount,
+    ValidationResult,
+)
+from ...agents import BaseAgent
+from ...utils.agent_resolution import resolve_agent_spec
+from ...logging_config import get_logger
+from ...costs.pricing import PricingService
+
+from .lead_contractor_models import (
+    LeadContractorConfig,
+    ImplementationSpec,
+    DraftResult,
+    ReviewResult,
+    IntegrationResult,
+    LeadContractorResult,
+    PhaseMetrics,
+    WorkflowPhase,
+    TestPlanJSON,
+    TestPlanMarkdown,
+    TestCase,
+)
+
+logger = get_logger(__name__)
+
+
+# ============================================================================
+# Prompt Templates
+# ============================================================================
+
+SPEC_PROMPT_TEMPLATE = """You are a senior software architect acting as the Lead Contractor for this implementation task.
+
+## Task Description
+{task_description}
+
+## Context
+{context}
+
+## Your Role
+Create a detailed implementation specification that a junior developer (or AI model) can follow precisely.
+Be explicit, thorough, and leave no ambiguity.
+
+## Required Output Format
+
+Provide your specification in the following structure:
+
+### Task Summary
+[One paragraph summary of what needs to be built]
+
+### Requirements
+1. [Requirement 1]
+2. [Requirement 2]
+...
+
+### Technical Approach
+[Detailed technical approach with architecture decisions]
+
+### Code Structure
+[Expected files, classes, functions with signatures]
+
+### Acceptance Criteria
+1. [Criterion 1]
+2. [Criterion 2]
+...
+
+### Edge Cases
+- [Edge case 1]
+- [Edge case 2]
+...
+
+### Constraints
+- [Constraint 1]
+- [Constraint 2]
+...
+
+### Examples
+[Code examples or pseudocode if helpful]
+
+Be thorough - the implementer will follow your spec exactly.
+"""
+
+DRAFT_PROMPT_TEMPLATE = """You are implementing code based on a detailed specification from a senior architect.
+
+## Implementation Specification
+{spec}
+
+## Previous Feedback (if any)
+{feedback}
+
+## Instructions
+1. Follow the specification EXACTLY
+2. Implement all requirements listed
+3. Handle all edge cases mentioned
+4. Write clean, well-documented code
+5. Include inline comments explaining key decisions
+
+## Output Format
+Provide your complete implementation followed by a brief explanation of your approach.
+
+```
+[Your implementation code here]
+```
+
+## Explanation
+[Brief notes on your implementation approach]
+"""
+
+REVIEW_PROMPT_TEMPLATE = """You are reviewing an implementation as the Lead Contractor.
+
+## Original Task
+{task_description}
+
+## Your Specification
+{spec}
+
+## Implementation to Review
+{implementation}
+
+## Review Instructions
+Evaluate the implementation against your specification. Be thorough but fair.
+
+## Required Output Format
+
+### Score: [0-100]
+[Single number representing overall quality]
+
+### Verdict: [PASS/FAIL]
+[PASS if score >= {pass_threshold} and no blocking issues, otherwise FAIL]
+
+### Strengths
+- [What was done well]
+
+### Issues
+- [Problems found, with severity: BLOCKING, MAJOR, MINOR]
+
+### Suggestions
+- [Specific improvements for next iteration if FAIL]
+
+### Blocking Issues (if any)
+- [Issues that MUST be fixed before passing]
+
+### Full Review
+[Detailed analysis of the implementation]
+"""
+
+INTEGRATION_PROMPT_TEMPLATE = """You are the Lead Contractor finalizing the implementation.
+
+## Original Task
+{task_description}
+
+## Final Implementation
+{implementation}
+
+## Review History
+{review_history}
+
+## Integration Instructions
+{integration_instructions}
+
+## Your Role
+1. Review the final implementation one last time
+2. Make any minor polish or adjustments needed
+3. Ensure the code is production-ready
+4. Add any final documentation or comments
+
+## Output Format
+Provide the finalized, production-ready implementation:
+
+```
+[Final implementation code]
+```
+
+## Integration Notes
+[Any notes about the final version]
+"""
+
+
+class LeadContractorWorkflow(WorkflowBase):
+    """
+    Lead Contractor workflow for cost-efficient multi-agent implementation.
+
+    Uses Claude as the architect/reviewer while cheaper models draft code.
+
+    Config Schema:
+        {
+            "task_description": "string - What to implement",
+            "context": {...} - Optional additional context,
+            "lead_agent": "anthropic:claude-sonnet-4-20250514" - Lead contractor,
+            "drafter_agent": "openai:gpt-4o-mini" - Drafter agent,
+            "max_iterations": 3 - Max review cycles,
+            "pass_threshold": 80 - Minimum score to pass (0-100),
+            "output_format": "string - Expected output format (optional)",
+            "integration_instructions": "string - Final integration notes (optional)"
+        }
+
+    Example:
+        result = workflow.run(
+            config={
+                "task_description": "Implement a rate limiter using token bucket algorithm",
+                "context": {"language": "Python", "framework": "FastAPI"},
+                "drafter_agent": "openai:gpt-4o-mini",
+                "max_iterations": 3
+            }
+        )
+    """
+
+    def __init__(self):
+        self._pricing = PricingService()
+
+    @property
+    def metadata(self) -> WorkflowMetadata:
+        return WorkflowMetadata(
+            workflow_id="lead-contractor",
+            name="Lead Contractor Workflow",
+            description="Cost-efficient multi-agent pattern: Claude specs/reviews, cheaper models draft",
+            version="1.0.0",
+            capabilities=[
+                "cost-optimization",
+                "multi-agent",
+                "iterative-development",
+                "code-generation",
+                "spec-driven"
+            ],
+            tags=["development", "cost-efficient", "multi-agent", "iterative"],
+            requires_agents=False,  # We resolve agents from specs
+            agent_count=AgentCount.NONE,  # Config specifies agents
+            min_agents=0,
+            max_agents=None,
+            inputs=[
+                WorkflowInput(
+                    name="task_description",
+                    type="text",
+                    required=True,
+                    description="Description of what needs to be implemented"
+                ),
+                WorkflowInput(
+                    name="context",
+                    type="object",
+                    required=False,
+                    description="Additional context (existing code, requirements, constraints)"
+                ),
+                WorkflowInput(
+                    name="lead_agent",
+                    type="agent_spec",
+                    required=False,
+                    default="anthropic:claude-sonnet-4-20250514",
+                    description="Lead contractor agent (Claude recommended)"
+                ),
+                WorkflowInput(
+                    name="drafter_agent",
+                    type="agent_spec",
+                    required=False,
+                    default="openai:gpt-4o-mini",
+                    description="Drafter agent (cheaper model: gpt-4o-mini, gemini-2.0-flash)"
+                ),
+                WorkflowInput(
+                    name="max_iterations",
+                    type="number",
+                    required=False,
+                    default=3,
+                    description="Maximum draft/review iterations"
+                ),
+                WorkflowInput(
+                    name="pass_threshold",
+                    type="number",
+                    required=False,
+                    default=80,
+                    description="Minimum review score to pass (0-100)"
+                ),
+                WorkflowInput(
+                    name="output_format",
+                    type="text",
+                    required=False,
+                    description="Expected output format guidance for drafter"
+                ),
+                WorkflowInput(
+                    name="integration_instructions",
+                    type="text",
+                    required=False,
+                    description="Instructions for final integration step"
+                ),
+            ]
+        )
+
+    def validate_config(self, config: Dict[str, Any]) -> ValidationResult:
+        """Validate lead contractor configuration."""
+        errors = []
+
+        # Required: task_description
+        if "task_description" not in config:
+            errors.append("Missing required input: task_description")
+        elif not config["task_description"].strip():
+            errors.append("task_description cannot be empty")
+
+        # Validate max_iterations
+        max_iter = config.get("max_iterations", 3)
+        if not isinstance(max_iter, int) or max_iter < 1 or max_iter > 10:
+            errors.append("max_iterations must be an integer between 1 and 10")
+
+        # Validate pass_threshold
+        threshold = config.get("pass_threshold", 80)
+        if not isinstance(threshold, (int, float)) or threshold < 0 or threshold > 100:
+            errors.append("pass_threshold must be a number between 0 and 100")
+
+        if errors:
+            return ValidationResult.failure(errors)
+        return ValidationResult.success()
+
+    def _execute(
+        self,
+        config: Dict[str, Any],
+        agents: Optional[List[BaseAgent]],
+        on_progress: Optional[ProgressCallback],
+    ) -> WorkflowResult:
+        """Execute the Lead Contractor workflow synchronously."""
+        started_at = datetime.now(timezone.utc)
+        workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
+
+        # Parse configuration
+        task_description = config["task_description"]
+        context = config.get("context", {})
+        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
+        drafter_spec = config.get("drafter_agent", "openai:gpt-4o-mini")
+        max_iterations = config.get("max_iterations", 3)
+        pass_threshold = config.get("pass_threshold", 80)
+        output_format = config.get("output_format")
+        integration_instructions = config.get("integration_instructions", "")
+
+        # Resolve agents
+        try:
+            lead_agent = resolve_agent_spec(lead_spec)
+            drafter_agent = resolve_agent_spec(drafter_spec)
+        except Exception as e:
+            return WorkflowResult.from_error(
+                self.metadata.workflow_id,
+                f"Failed to resolve agents: {e}"
+            )
+
+        # Initialize result tracking
+        result = LeadContractorResult(
+            workflow_id=workflow_id,
+            success=False,
+            final_implementation=""
+        )
+
+        step_results: List[StepResult] = []
+        total_steps = 2 + max_iterations * 2 + 1  # spec + (draft+review)*N + integration
+        current_step = 0
+
+        self._emit_progress(on_progress, current_step, total_steps, "Starting Lead Contractor workflow")
+
+        try:
+            # =================================================================
+            # Phase 1: Spec Creation (Lead)
+            # =================================================================
+            current_step += 1
+            self._emit_progress(on_progress, current_step, total_steps, "Creating implementation spec")
+
+            spec = self._create_spec(
+                lead_agent=lead_agent,
+                task_description=task_description,
+                context=context,
+                output_format=output_format,
+            )
+            result.spec = spec
+
+            step_results.append(StepResult(
+                step_name="spec_creation",
+                agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                output=spec.raw_spec[:500] + "..." if len(spec.raw_spec) > 500 else spec.raw_spec,
+                time_ms=spec.time_ms,
+                input_tokens=spec.input_tokens,
+                output_tokens=spec.output_tokens,
+                cost=spec.cost,
+                metadata={"phase": WorkflowPhase.SPEC_CREATION.value}
+            ))
+
+            result.lead_input_tokens += spec.input_tokens
+            result.lead_output_tokens += spec.output_tokens
+            result.lead_cost += spec.cost
+
+            # =================================================================
+            # Phase 2-4: Draft/Review Loop
+            # =================================================================
+            current_implementation = ""
+            review_feedback = ""
+            final_review: Optional[ReviewResult] = None
+
+            for iteration in range(1, max_iterations + 1):
+                # Draft phase
+                current_step += 1
+                self._emit_progress(
+                    on_progress, current_step, total_steps,
+                    f"Drafting implementation (iteration {iteration}/{max_iterations})"
+                )
+
+                draft = self._create_draft(
+                    drafter_agent=drafter_agent,
+                    spec=spec,
+                    feedback=review_feedback,
+                    iteration=iteration,
+                )
+                result.drafts.append(draft)
+                current_implementation = draft.implementation
+
+                step_results.append(StepResult(
+                    step_name=f"draft_iteration_{iteration}",
+                    agent_name=f"{drafter_agent.name}:{drafter_agent.model}",
+                    output=draft.implementation[:500] + "..." if len(draft.implementation) > 500 else draft.implementation,
+                    time_ms=draft.time_ms,
+                    input_tokens=draft.input_tokens,
+                    output_tokens=draft.output_tokens,
+                    cost=draft.cost,
+                    metadata={"phase": WorkflowPhase.DRAFTING.value, "iteration": iteration}
+                ))
+
+                result.drafter_input_tokens += draft.input_tokens
+                result.drafter_output_tokens += draft.output_tokens
+                result.drafter_cost += draft.cost
+
+                # Review phase
+                current_step += 1
+                self._emit_progress(
+                    on_progress, current_step, total_steps,
+                    f"Reviewing implementation (iteration {iteration}/{max_iterations})"
+                )
+
+                review = self._review_draft(
+                    lead_agent=lead_agent,
+                    task_description=task_description,
+                    spec=spec,
+                    implementation=current_implementation,
+                    pass_threshold=pass_threshold,
+                    iteration=iteration,
+                )
+                result.reviews.append(review)
+                final_review = review
+
+                step_results.append(StepResult(
+                    step_name=f"review_iteration_{iteration}",
+                    agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                    output=review.review_text[:500] + "..." if len(review.review_text) > 500 else review.review_text,
+                    time_ms=review.time_ms,
+                    input_tokens=review.input_tokens,
+                    output_tokens=review.output_tokens,
+                    cost=review.cost,
+                    metadata={
+                        "phase": WorkflowPhase.REVIEW.value,
+                        "iteration": iteration,
+                        "score": review.score,
+                        "passed": review.passed
+                    }
+                ))
+
+                result.lead_input_tokens += review.input_tokens
+                result.lead_output_tokens += review.output_tokens
+                result.lead_cost += review.cost
+
+                # Check if passed
+                if review.passed:
+                    logger.info(f"Review passed on iteration {iteration} with score {review.score}")
+                    break
+
+                # Prepare feedback for next iteration
+                review_feedback = self._format_review_feedback(review)
+
+                if iteration == max_iterations:
+                    logger.warning(f"Max iterations ({max_iterations}) reached without passing review")
+
+            result.total_iterations = len(result.drafts)
+
+            # =================================================================
+            # Phase 5: Integration (Lead)
+            # =================================================================
+            current_step += 1
+            self._emit_progress(on_progress, current_step, total_steps, "Integrating final implementation")
+
+            integration = self._integrate_final(
+                lead_agent=lead_agent,
+                task_description=task_description,
+                implementation=current_implementation,
+                reviews=result.reviews,
+                integration_instructions=integration_instructions,
+            )
+            result.integration = integration
+
+            step_results.append(StepResult(
+                step_name="integration",
+                agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                output=integration.final_implementation[:500] + "..." if len(integration.final_implementation) > 500 else integration.final_implementation,
+                time_ms=integration.time_ms,
+                input_tokens=integration.input_tokens,
+                output_tokens=integration.output_tokens,
+                cost=integration.cost,
+                metadata={"phase": WorkflowPhase.INTEGRATION.value}
+            ))
+
+            result.lead_input_tokens += integration.input_tokens
+            result.lead_output_tokens += integration.output_tokens
+            result.lead_cost += integration.cost
+
+            # Finalize result
+            result.success = True
+            result.final_implementation = integration.final_implementation
+            result.final_phase = WorkflowPhase.COMPLETED
+            result.completed_at = datetime.now(timezone.utc)
+            result.total_cost = result.lead_cost + result.drafter_cost
+            result.total_time_ms = sum(s.time_ms for s in step_results)
+
+        except Exception as e:
+            logger.error(f"Lead Contractor workflow failed: {e}", exc_info=True)
+            result.success = False
+            result.error = str(e)
+            result.final_phase = WorkflowPhase.FAILED
+            result.completed_at = datetime.now(timezone.utc)
+            result.total_cost = result.lead_cost + result.drafter_cost
+            result.total_time_ms = sum(s.time_ms for s in step_results)
+
+        # Build workflow metrics
+        metrics = WorkflowMetrics(
+            total_time_ms=result.total_time_ms,
+            input_tokens=result.lead_input_tokens + result.drafter_input_tokens,
+            output_tokens=result.lead_output_tokens + result.drafter_output_tokens,
+            total_cost=result.total_cost,
+            step_count=len(step_results),
+        )
+
+        completed_at = datetime.now()
+
+        return WorkflowResult(
+            workflow_id=self.metadata.workflow_id,
+            success=result.success,
+            output={
+                "final_implementation": result.final_implementation,
+                "summary": result.to_summary(),
+            },
+            metrics=metrics,
+            steps=step_results,
+            error=result.error,
+            started_at=started_at,
+            completed_at=completed_at,
+            metadata={
+                "lead_contractor_result": result.to_summary(),
+                "lead_agent": lead_spec,
+                "drafter_agent": drafter_spec,
+                "total_iterations": result.total_iterations,
+                "lead_cost": result.lead_cost,
+                "drafter_cost": result.drafter_cost,
+                "cost_efficiency_ratio": result.get_cost_efficiency_ratio(),
+            }
+        )
+
+    # =========================================================================
+    # Private Methods - Phase Implementations
+    # =========================================================================
+
+    def _create_spec(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        context: Dict[str, Any],
+        output_format: Optional[str],
+    ) -> ImplementationSpec:
+        """Phase 1: Lead creates implementation specification."""
+        spec_id = f"spec-{uuid.uuid4().hex[:8]}"
+
+        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
+        if output_format:
+            context_str += f"\n\nExpected Output Format:\n{output_format}"
+
+        prompt = SPEC_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            context=context_str
+        )
+
+        response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
+
+        # Parse structured data from the spec response
+        requirements = self._parse_list_section(response_text, "Requirements")
+        acceptance_criteria = self._parse_list_section(response_text, "Acceptance Criteria")
+        edge_cases = self._parse_list_section(response_text, "Edge Cases")
+        constraints = self._parse_list_section(response_text, "Constraints")
+        technical_approach = self._parse_section_content(response_text, "Technical Approach")
+        code_structure = self._parse_section_content(response_text, "Code Structure")
+
+        spec = ImplementationSpec(
+            spec_id=spec_id,
+            task_summary=task_description,
+            requirements=requirements,
+            technical_approach=technical_approach,
+            acceptance_criteria=acceptance_criteria,
+            code_structure=code_structure if code_structure else None,
+            edge_cases=edge_cases,
+            constraints=constraints,
+            raw_spec=response_text,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        # Calculate cost
+        spec.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            spec.input_tokens,
+            spec.output_tokens
+        )
+
+        return spec
+
+    def _create_draft(
+        self,
+        drafter_agent: BaseAgent,
+        spec: ImplementationSpec,
+        feedback: str,
+        iteration: int,
+    ) -> DraftResult:
+        """Phase 2/4: Drafter creates implementation from spec."""
+        draft_id = f"draft-{uuid.uuid4().hex[:8]}"
+
+        prompt = DRAFT_PROMPT_TEMPLATE.format(
+            spec=spec.raw_spec,
+            feedback=feedback if feedback else "This is the initial implementation attempt."
+        )
+
+        response_text, response_time_ms, token_usage = drafter_agent.generate(prompt)
+
+        draft = DraftResult(
+            draft_id=draft_id,
+            iteration=iteration,
+            implementation=response_text,
+            spec_id=spec.spec_id,
+            agent_name=drafter_agent.name,
+            model=drafter_agent.model,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        draft.cost = self._pricing.calculate_total_cost(
+            drafter_agent.model,
+            draft.input_tokens,
+            draft.output_tokens
+        )
+
+        return draft
+
+    def _review_draft(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        spec: ImplementationSpec,
+        implementation: str,
+        pass_threshold: int,
+        iteration: int,
+    ) -> ReviewResult:
+        """Phase 3: Lead reviews the draft implementation."""
+        review_id = f"review-{uuid.uuid4().hex[:8]}"
+
+        prompt = REVIEW_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            spec=spec.raw_spec,
+            implementation=implementation,
+            pass_threshold=pass_threshold
+        )
+
+        response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
+
+        # Parse review
+        review_text = response_text
+        score = self._parse_score(review_text)
+        # Use word boundary regex to avoid false positives (e.g., "BYPASS", "PASSPORT")
+        has_pass_verdict = bool(re.search(r'\bPASS\b', review_text, re.IGNORECASE))
+        passed = score >= pass_threshold and has_pass_verdict
+
+        # Parse issues
+        issues = self._parse_list_section(review_text, "Issues")
+        blocking = self._parse_list_section(review_text, "Blocking Issues")
+        suggestions = self._parse_list_section(review_text, "Suggestions")
+        strengths = self._parse_list_section(review_text, "Strengths")
+
+        review = ReviewResult(
+            review_id=review_id,
+            iteration=iteration,
+            passed=passed,
+            score=score,
+            review_text=review_text,
+            issues=issues,
+            blocking_issues=blocking,
+            suggestions=suggestions,
+            strengths=strengths,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        review.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            review.input_tokens,
+            review.output_tokens
+        )
+
+        return review
+
+    def _integrate_final(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        implementation: str,
+        reviews: List[ReviewResult],
+        integration_instructions: str,
+    ) -> IntegrationResult:
+        """Phase 5: Lead integrates and finalizes the implementation."""
+        integration_id = f"int-{uuid.uuid4().hex[:8]}"
+
+        review_history = "\n\n".join([
+            f"### Iteration {r.iteration}\n- Score: {r.score}\n- Passed: {r.passed}\n{r.review_text[:500]}"
+            for r in reviews
+        ])
+
+        prompt = INTEGRATION_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            implementation=implementation,
+            review_history=review_history,
+            integration_instructions=integration_instructions or "Finalize for production use."
+        )
+
+        response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
+
+        integration = IntegrationResult(
+            integration_id=integration_id,
+            final_implementation=response_text,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        integration.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            integration.input_tokens,
+            integration.output_tokens
+        )
+
+        return integration
+
+    def _format_review_feedback(self, review: ReviewResult) -> str:
+        """Format review into feedback for next draft iteration."""
+        issues_str = '\n'.join(f'- {issue}' for issue in review.issues) if review.issues else '- None listed'
+        blocking_str = '\n'.join(f'- {b}' for b in review.blocking_issues) if review.blocking_issues else '- None'
+        suggestions_str = '\n'.join(f'- {s}' for s in review.suggestions) if review.suggestions else '- None listed'
+
+        feedback = f"""## Review Feedback (Score: {review.score}/100)
+
+### Issues to Address:
+{issues_str}
+
+### Blocking Issues (MUST FIX):
+{blocking_str}
+
+### Suggestions:
+{suggestions_str}
+
+### Full Feedback:
+{review.review_text}
+"""
+        return feedback
+
+    def _parse_score(self, review_text: str) -> int:
+        """Parse score from review text."""
+        # Look for "Score: X" pattern
+        match = re.search(r'Score:\s*(\d+)', review_text, re.IGNORECASE)
+        if match:
+            return min(100, max(0, int(match.group(1))))
+        return 0
+
+    def _parse_list_section(self, text: str, section_name: str) -> List[str]:
+        """Parse a bulleted list section from review text."""
+        # Look for section header followed by bulleted items
+        pattern = rf'###?\s*{section_name}[^\n]*\n((?:\s*[-*]\s*[^\n]+\n?)+)'
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            items_text = match.group(1)
+            items = re.findall(r'[-*]\s*(.+)', items_text)
+            return [item.strip() for item in items if item.strip()]
+        return []
+
+    def _parse_section_content(self, text: str, section_name: str) -> str:
+        """Parse the content of a section (non-list) from spec text."""
+        # Look for section header and capture until next section or end
+        pattern = rf'###?\s*{section_name}[^\n]*\n(.*?)(?=###|\Z)'
+        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+        if match:
+            content = match.group(1).strip()
+            # Remove any leading bullet points if present
+            content = re.sub(r'^[-*]\s*', '', content, flags=re.MULTILINE)
+            return content.strip()
+        return ""
+
+    # =========================================================================
+    # Test Plan Generation Methods
+    # =========================================================================
+
+    def generate_test_plan_json(self, result: LeadContractorResult) -> TestPlanJSON:
+        """Generate machine-parseable JSON test plan from workflow result."""
+        test_cases = []
+
+        # Generate test cases from spec acceptance criteria
+        if result.spec and result.spec.acceptance_criteria:
+            for i, criterion in enumerate(result.spec.acceptance_criteria):
+                test_cases.append(TestCase(
+                    id=f"TC-{i+1:03d}",
+                    name=f"Verify: {criterion[:50]}",
+                    description=criterion,
+                    priority="P1",
+                    category="unit",
+                    steps=[f"Execute test for: {criterion}"],
+                    expected_result="Criterion is satisfied"
+                ))
+
+        # Generate test cases from edge cases
+        if result.spec and result.spec.edge_cases:
+            for i, edge_case in enumerate(result.spec.edge_cases):
+                test_cases.append(TestCase(
+                    id=f"TC-E{i+1:03d}",
+                    name=f"Edge case: {edge_case[:50]}",
+                    description=edge_case,
+                    priority="P2",
+                    category="unit",
+                    steps=[f"Test edge case: {edge_case}"],
+                    expected_result="Edge case is handled correctly"
+                ))
+
+        # Count by priority and category
+        by_priority: Dict[str, int] = {}
+        by_category: Dict[str, int] = {}
+        for tc in test_cases:
+            by_priority[tc.priority] = by_priority.get(tc.priority, 0) + 1
+            by_category[tc.category] = by_category.get(tc.category, 0) + 1
+
+        return TestPlanJSON(
+            plan_id=f"test-{result.workflow_id}",
+            task_description=result.spec.task_summary if result.spec else "",
+            created_at=datetime.now(timezone.utc),
+            workflow_id=result.workflow_id,
+            test_cases=test_cases,
+            total_tests=len(test_cases),
+            by_priority=by_priority,
+            by_category=by_category,
+            coverage_notes=["Generated from acceptance criteria and edge cases"],
+            gaps_identified=["Integration tests not generated", "Performance tests not included"]
+        )
+
+    def generate_test_plan_markdown(self, result: LeadContractorResult) -> str:
+        """Generate human-readable Markdown test plan."""
+        final_score = result.reviews[-1].score if result.reviews else "N/A"
+
+        # Build test cases table
+        test_cases_rows = []
+        if result.spec and result.spec.acceptance_criteria:
+            for i, criterion in enumerate(result.spec.acceptance_criteria):
+                test_cases_rows.append(f"| TC-{i+1:03d} | {criterion[:60]} | P1 | unit |")
+
+        test_cases_table = "\n".join(test_cases_rows) if test_cases_rows else "| - | No criteria found | - | - |"
+
+        md = f"""# Test Plan: {result.workflow_id}
+
+## Overview
+- **Task**: {result.spec.task_summary if result.spec else 'N/A'}
+- **Iterations**: {result.total_iterations}
+- **Final Score**: {final_score}
+- **Total Cost**: ${result.total_cost:.4f}
+
+## Test Strategy
+
+### Unit Tests
+- Test each acceptance criterion individually
+- Verify edge case handling
+- Test error conditions
+
+### Integration Tests
+- Test component interactions
+- Verify data flow
+
+### End-to-End Tests
+- Test complete workflows
+- Verify user scenarios
+
+## Test Cases
+
+| ID | Description | Priority | Category |
+|----|-------------|----------|----------|
+{test_cases_table}
+
+## Execution Plan
+1. Run unit tests (`pytest tests/unit/`)
+2. Run integration tests (`pytest tests/integration/`)
+3. Perform manual validation
+
+## Coverage Analysis
+
+### Requirements Covered
+{chr(10).join('- ' + c for c in (result.spec.acceptance_criteria or [])) if result.spec else '- N/A'}
+
+### Gaps Identified
+- Integration testing with external services not covered
+- Performance testing not included
+- Security testing needs manual review
+"""
+        return md

@@ -70,6 +70,9 @@ doc-enhancement = "startd8.workflows.builtin.doc_enhancement_workflow:DocEnhance
 iterative-dev = "startd8.workflows.builtin.iterative_dev_workflow:IterativeDevWorkflowWrapper"
 design-polish = "startd8.workflows.builtin.design_polish_workflow:DesignPolishWorkflow"
 critical-review = "startd8.workflows.builtin.critical_review_workflow:CriticalReviewWorkflow"
+lead-contractor = "startd8.workflows.builtin.lead_contractor_workflow:LeadContractorWorkflow"
+policy-analysis = "startd8.workflows.builtin.policy_analysis_workflow:PolicyAnalysisWorkflow"
+plain-language = "startd8.workflows.builtin.plain_language_workflow:PlainLanguageWorkflow"
 
 [project.urls]
 Homepage = "https://github.com/startdate/startd8"
@@ -82,6 +85,7 @@ where = ["src"]
 startd8 = [
     "prompt_builder/templates/*.yaml",
     "help_content/*.yaml",
+    "evaluation/corpus/*.yaml",
 ]
 
 

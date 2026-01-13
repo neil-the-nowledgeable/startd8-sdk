@@ -158,11 +158,10 @@ class GeminiAgent(BaseAgent):
                 timeout_config=self.timeout_config
             )
         else:
-            # Create the client with API key and timeout
-            # New google.genai uses Client-based API with httpx under the hood
-            import httpx
-            httpx_client = httpx.Client(timeout=self.timeout_config.to_httpx_timeout())
-            self.client = genai.Client(api_key=api_key, http_client=httpx_client)
+            # Create the client with API key
+            # Note: google-genai 1.x doesn't support custom http_client in Client()
+            # Timeout is handled internally by the library
+            self.client = genai.Client(api_key=api_key)
 
         self.model_name = self.model
 

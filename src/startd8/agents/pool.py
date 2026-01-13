@@ -238,9 +238,8 @@ class ClientPool:
 
         with self._lock:
             if key not in self._sync_clients:
-                import httpx
-                httpx_client = httpx.Client(timeout=httpx_timeout)
-                self._sync_clients[key] = genai.Client(api_key=api_key, http_client=httpx_client)
+                # Note: google-genai 1.x doesn't support custom http_client in Client()
+                self._sync_clients[key] = genai.Client(api_key=api_key)
                 self._register_cleanup()
 
             return self._sync_clients[key]

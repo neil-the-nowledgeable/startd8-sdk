@@ -10,6 +10,9 @@ Available workflows:
 - IterativeDevWorkflowWrapper: Dev-review-fix iterations
 - DesignPolishWorkflow: 3-stage design document refinement
 - CriticalReviewWorkflow: Multi-agent document review
+- LeadContractorWorkflow: Cost-efficient lead contractor pattern
+- PolicyAnalysisWorkflow: Multi-agent critical policy analysis
+- PlainLanguageWorkflow: Simplifies complex content into plain language
 """
 
 # Imports are done lazily to avoid circular imports
@@ -21,6 +24,9 @@ __all__ = [
     "IterativeDevWorkflowWrapper",
     "DesignPolishWorkflow",
     "CriticalReviewWorkflow",
+    "LeadContractorWorkflow",
+    "PolicyAnalysisWorkflow",
+    "PlainLanguageWorkflow",
 ]
 
 
@@ -41,4 +47,13 @@ def __getattr__(name: str):
     elif name == "CriticalReviewWorkflow":
         from .critical_review_workflow import CriticalReviewWorkflow
         return CriticalReviewWorkflow
+    elif name == "LeadContractorWorkflow":
+        from .lead_contractor_workflow import LeadContractorWorkflow
+        return LeadContractorWorkflow
+    elif name == "PolicyAnalysisWorkflow":
+        from .policy_analysis_workflow import PolicyAnalysisWorkflow
+        return PolicyAnalysisWorkflow
+    elif name == "PlainLanguageWorkflow":
+        from .plain_language_workflow import PlainLanguageWorkflow
+        return PlainLanguageWorkflow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

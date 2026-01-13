@@ -249,10 +249,8 @@ class ClaudeAgent(BaseAgent):
 
         except RetryError as e:
             # All retry attempts exhausted
-            from ..logging_config import get_logger
             from ..exceptions import APIError
 
-            logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
@@ -277,10 +275,8 @@ class ClaudeAgent(BaseAgent):
         except (AnthropicAPIConnectionError, ConnectionError, OSError) as e:
             # Specific connection/network errors (only reached if retry not enabled
             # or if it's a non-retryable connection error like DNS failure)
-            from ..logging_config import get_logger
             from ..exceptions import APIError, AgentError
 
-            logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
