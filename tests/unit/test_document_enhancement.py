@@ -624,9 +624,10 @@ class TestOutputGeneration:
         """Test final document is saved"""
         doc_path = tmp_path / "test.md"
         doc_path.write_text("# Original")
-        
+
         config = DocumentEnhancementConfig(
             source_document=doc_path,
+            preferred_output_dir=str(tmp_path),
             agents=[
                 EnhancementAgentConfig(
                     agent_name="mock",
