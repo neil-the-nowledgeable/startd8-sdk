@@ -455,7 +455,7 @@ PostgreSQL offers advantages for session storage in certain contexts...
 
 ---
 
-## Perspective 3: Gemini (gemini-pro)
+## Perspective 3: Gemini (gemini-2.0-flash)
 
 A hybrid approach may serve best...
 

@@ -64,12 +64,12 @@ pipeline = Pipeline(name="design-implement")
 # Add steps
 pipeline.add_step(
     name="designer",
-    agent=anthropic.create_agent("claude-3-opus-20240229", name="anthropic:claude-3-opus-20240229")
+    agent=anthropic.create_agent("claude-opus-4-5-20251101", name="anthropic:claude-opus-4-5-20251101")
 )
 
 pipeline.add_step(
     name="implementer",
-    agent=openai.create_agent("gpt-4-turbo-preview", name="openai:gpt-4-turbo-preview"),
+    agent=openai.create_agent("gpt-4o", name="openai:gpt-4o"),
     transform=lambda design: f"Implement this design:\n\n{design}"
 )
 
@@ -100,8 +100,8 @@ anthropic.validate_config({})
 openai.validate_config({})
 
 pipeline = WorkflowTemplates.planner_implementer(
-    planner_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    implementer_agent=openai.create_agent("gpt-4-turbo-preview"),
+    planner_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    implementer_agent=openai.create_agent("gpt-4o"),
 )
 
 result = pipeline.run("Create a REST API for user management")
@@ -121,8 +121,8 @@ anthropic.validate_config({})
 openai.validate_config({})
 
 pipeline = WorkflowTemplates.code_review(
-    reviewer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    improver_agent=openai.create_agent("gpt-4-turbo-preview"),
+    reviewer_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    improver_agent=openai.create_agent("gpt-4o"),
 )
 
 result = pipeline.run(code_to_review)
@@ -144,7 +144,7 @@ openai.validate_config({})
 pipeline = WorkflowTemplates.design_review_chain(
     drafter_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
     reviewer_agent=openai.create_agent("gpt-4o"),
-    final_reviewer_agent=anthropic.create_agent("claude-3-opus-20240229")
+    final_reviewer_agent=anthropic.create_agent("claude-opus-4-5-20251101")
 )
 
 result = pipeline.run("Design a feature for session management")
@@ -167,7 +167,7 @@ openai.validate_config({})
 # Simple transform - add context
 pipeline.add_step(
     name="implementer",
-    agent=openai.create_agent("gpt-4-turbo-preview"),
+    agent=openai.create_agent("gpt-4o"),
     transform=lambda spec: f"Based on this specification:\n\n{spec}\n\nImplement the code."
 )
 
@@ -187,7 +187,7 @@ def extract_requirements(output):
 
 pipeline.add_step(
     name="validator",
-    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    agent=anthropic.create_agent("claude-sonnet-4-20250514"),
     transform=extract_requirements
 )
 ```
@@ -268,7 +268,7 @@ anthropic.validate_config({})
 
 pipeline.add_step(
     name="refiner",
-    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    agent=anthropic.create_agent("claude-sonnet-4-20250514"),
     condition=should_refine  # Only runs if condition is True
 )
 ```
@@ -300,8 +300,8 @@ openai.validate_config({})
 
 parallel = ParallelPipeline()
 parallel.add_parallel_steps([
-    ("anthropic:claude-3-5-sonnet-20241022", anthropic.create_agent("claude-3-5-sonnet-20241022")),
-    ("openai:gpt-4-turbo-preview", openai.create_agent("gpt-4-turbo-preview")),
+    ("anthropic:claude-sonnet-4-20250514", anthropic.create_agent("claude-sonnet-4-20250514")),
+    ("openai:gpt-4o", openai.create_agent("gpt-4o")),
 ])
 parallel.add_merge_step(merge_function)
 ```
@@ -404,7 +404,7 @@ openai.validate_config({})
 pipeline = WorkflowTemplates.design_review_chain(
     drafter_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
     reviewer_agent=openai.create_agent("gpt-4o"),
-    final_reviewer_agent=anthropic.create_agent("claude-3-opus-20240229")
+    final_reviewer_agent=anthropic.create_agent("claude-opus-4-5-20251101")
 )
 
 result = pipeline.run("""
@@ -428,15 +428,15 @@ openai.validate_config({})
 
 pipeline = Pipeline(name="code-gen")
 
-pipeline.add_step(name="architect", agent=anthropic.create_agent("claude-3-5-sonnet-20241022"))
+pipeline.add_step(name="architect", agent=anthropic.create_agent("claude-sonnet-4-20250514"))
 pipeline.add_step(
     name="coder",
-    agent=openai.create_agent("gpt-4-turbo-preview"),
+    agent=openai.create_agent("gpt-4o"),
     transform=lambda arch: f"Write code for:\n{arch}"
 )
 pipeline.add_step(
     name="reviewer",
-    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    agent=anthropic.create_agent("claude-sonnet-4-20250514"),
     transform=lambda code: f"Review and fix:\n{code}"
 )
 
@@ -458,17 +458,17 @@ pipeline = Pipeline(name="docs")
 
 pipeline.add_step(
     name="outline",
-    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    agent=anthropic.create_agent("claude-sonnet-4-20250514"),
     transform=lambda topic: f"Create outline for: {topic}"
 )
 pipeline.add_step(
     name="writer",
-    agent=openai.create_agent("gpt-4-turbo-preview"),
+    agent=openai.create_agent("gpt-4o"),
     transform=lambda outline: f"Write documentation:\n{outline}"
 )
 pipeline.add_step(
     name="editor",
-    agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
+    agent=anthropic.create_agent("claude-sonnet-4-20250514"),
     transform=lambda doc: f"Edit for clarity:\n{doc}"
 )
 

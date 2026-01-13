@@ -42,7 +42,7 @@ cost_tracker.enable()
 # Simple cost recording
 cost_tracker.record_cost(
     agent_name="my-agent",
-    model="gpt-4",
+    model="gpt-4o",
     provider="openai",
     input_tokens=100,
     output_tokens=50,
@@ -197,11 +197,11 @@ budget_manager.create_budget(
 
 # Budget for specific project AND model
 budget_manager.create_budget(
-    name="openai-gpt-4-project-a",
+    name="openai-gpt-4o-project-a",
     period=CostPeriod.DAILY,
     limit_amount=30.00,
     scope_project="project-a",
-    scope_model="gpt-4"
+    scope_model="gpt-4o"
 )
 ```
 
@@ -236,7 +236,7 @@ project_costs = cost_tracker.store.query(project="my-project")
 feature_costs = cost_tracker.store.query(tags=["feature-a"])
 
 # Filter by model
-gpt4_costs = cost_tracker.store.query(model="gpt-4")
+gpt4_costs = cost_tracker.store.query(model="gpt-4o")
 
 # Filter by agent name
 agent_costs = cost_tracker.store.query(agent="my-agent")
@@ -264,7 +264,7 @@ december_costs = cost_tracker.store.query(start=start, end=end)
 costs = cost_tracker.store.query(
     project="my-project",
     tags=["feature-a"],
-    model="gpt-4",
+    model="gpt-4o",
     start=datetime.now(timezone.utc) - timedelta(days=7)
 )
 
@@ -291,7 +291,7 @@ feature_total = cost_tracker.store.get_total(tags=["feature-a"])
 filtered_total = cost_tracker.store.get_total(
     project="my-project",
     tags=["feature-a"],
-    model="gpt-4"
+    model="gpt-4o"
 )
 ```
 

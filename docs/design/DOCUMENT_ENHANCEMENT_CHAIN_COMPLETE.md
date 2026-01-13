@@ -231,15 +231,15 @@ config = DocumentEnhancementConfig(
     enhancement_instructions="Add accessibility section and examples",
     agents=[
         AgentConfig(
-            agent_name="openai:gpt-4-turbo-preview",
-            agent_instance=openai.create_agent("gpt-4-turbo-preview"),
-            step_name="openai:gpt-4-turbo-preview-enhancement",
+            agent_name="openai:gpt-4o",
+            agent_instance=openai.create_agent("gpt-4o"),
+            step_name="openai:gpt-4o-enhancement",
             order=0
         ),
         AgentConfig(
-            agent_name="anthropic:claude-3-5-sonnet-20241022",
-            agent_instance=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-            step_name="anthropic:claude-3-5-sonnet-20241022-refinement",
+            agent_name="anthropic:claude-sonnet-4-20250514",
+            agent_instance=anthropic.create_agent("claude-sonnet-4-20250514"),
+            step_name="anthropic:claude-sonnet-4-20250514-refinement",
             order=1
         )
     ],
@@ -265,9 +265,9 @@ print(f"Output: {result.output_path}")
 enhanced_documents/
 └── 20241206_1430/              # Timestamped run
     ├── enhanced_final.md       # Final enhanced document
-    ├── step1_openai-gpt-4-turbo-preview/             # Intermediate results (if enabled)
+    ├── step1_openai-gpt-4o/             # Intermediate results (if enabled)
     │   └── enhanced_1.md
-    └── step2_anthropic-claude-3-5-sonnet-20241022/
+    └── step2_anthropic-claude-sonnet-4-20250514/
         └── enhanced_2.md
 ```
 

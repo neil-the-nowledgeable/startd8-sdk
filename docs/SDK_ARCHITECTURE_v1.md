@@ -109,9 +109,9 @@ openai.validate_config({})
 
 # Use pre-built template
 pipeline = WorkflowTemplates.design_review_chain(
-    drafter_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
-    final_reviewer_agent=anthropic.create_agent("claude-3-opus-20240229"),
+    drafter_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    reviewer_agent=openai.create_agent("gpt-4o"),
+    final_reviewer_agent=anthropic.create_agent("claude-opus-4-5-20251101"),
 )
 
 result = pipeline.run("Design a feature for X")

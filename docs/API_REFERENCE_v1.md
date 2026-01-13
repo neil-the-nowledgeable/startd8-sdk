@@ -140,8 +140,8 @@ class BaseAgent(ABC):
 from startd8 import ClaudeAgent
 
 agent = ClaudeAgent(
-    name: str = "anthropic:claude-3-opus-20240229",
-    model: str = "claude-3-opus-20240229",
+    name: str = "anthropic:claude-sonnet-4-20250514",
+    model: str = "claude-sonnet-4-20250514",
     api_key: Optional[str] = None,
     max_tokens: int = 4096
 )
@@ -155,9 +155,9 @@ agent = ClaudeAgent(
 
 #### Available Models
 - `claude-sonnet-4-20250514`
-- `claude-3-5-sonnet-20241022`
-- `claude-3-opus-20240229`
-- `claude-3-haiku-20240307`
+- `claude-sonnet-4-20250514`
+- `claude-sonnet-4-20250514`
+- `claude-haiku-4-5-20251008`
 
 ### GPT4Agent
 
@@ -165,8 +165,8 @@ agent = ClaudeAgent(
 from startd8 import GPT4Agent
 
 agent = GPT4Agent(
-    name: str = "openai:gpt-4-turbo-preview",
-    model: str = "gpt-4-turbo-preview",
+    name: str = "openai:gpt-4o",
+    model: str = "gpt-4o",
     api_key: Optional[str] = None,
     max_tokens: int = 4096
 )
@@ -179,8 +179,8 @@ agent = GPT4Agent(
 - `max_tokens`: Maximum tokens in response
 
 #### Available Models
-- `gpt-4-turbo-preview`
-- `gpt-4-turbo`
+- `gpt-4o`
+- `gpt-4o`
 - `gpt-4`
 - `gpt-4o`
 - `gpt-4o-mini`

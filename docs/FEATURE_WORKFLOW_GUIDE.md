@@ -136,7 +136,7 @@ Each job file contains:
       "game_repo": "/path/to/repo"
     }
   },
-  "agents": ["anthropic:claude-3-5-sonnet-20241022"],
+  "agents": ["anthropic:claude-sonnet-4-20250514"],
   "priority": 8,
   "status": "pending"
 }
@@ -280,10 +280,10 @@ Use different agents for different tasks:
 
 ```bash
 # Use an explicit provider:model spec
-python3 scripts/generate_feature_jobs.py --feature 1 --agent openai:gpt-4-turbo-preview
+python3 scripts/generate_feature_jobs.py --feature 1 --agent openai:gpt-4o
 
 # Or another provider/model
-python3 scripts/generate_feature_jobs.py --feature 1 --agent anthropic:claude-3-5-sonnet-20241022
+python3 scripts/generate_feature_jobs.py --feature 1 --agent anthropic:claude-sonnet-4-20250514
 ```
 
 ### Multiple Agents per Job
@@ -292,7 +292,7 @@ Edit the job file to use multiple agents:
 
 ```json
 {
-  "agents": ["anthropic:claude-3-5-sonnet-20241022", "openai:gpt-4-turbo-preview"],
+  "agents": ["anthropic:claude-sonnet-4-20250514", "openai:gpt-4o"],
   ...
 }
 ```
@@ -447,7 +447,7 @@ ProviderRegistry.discover()
 anthropic = ProviderRegistry.get_provider("anthropic")
 anthropic.validate_config({})
 
-agent = anthropic.create_agent("claude-3-5-sonnet-20241022")
+agent = anthropic.create_agent("claude-sonnet-4-20250514")
 response_text, time_ms, token_usage = agent.generate("Test prompt")
 print(response_text)
 ```

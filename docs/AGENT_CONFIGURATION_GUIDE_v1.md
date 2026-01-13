@@ -16,9 +16,9 @@ Startd8 ships with built-in providers discovered via `ProviderRegistry`:
 
 | Provider | Example Model | API Key Env |
 |----------|---------------|-------------|
-| Anthropic (`anthropic`) | `claude-3-5-sonnet-20241022` | `ANTHROPIC_API_KEY` |
-| OpenAI (`openai`) | `gpt-4-turbo-preview` | `OPENAI_API_KEY` |
-| Google (`gemini`) | `gemini-1.5-pro` | `GOOGLE_API_KEY` |
+| Anthropic (`anthropic`) | `claude-sonnet-4-20250514` | `ANTHROPIC_API_KEY` |
+| OpenAI (`openai`) | `gpt-4o` | `OPENAI_API_KEY` |
+| Google (`gemini`) | `gemini-2.0-flash` | `GOOGLE_API_KEY` |
 | Ollama (`ollama`) | `llama3` | (optional) |
 | Mock (`mock`) | `mock-model` | None required |
 
@@ -121,7 +121,7 @@ This allows you to:
 Name: my-anthropic-sonnet
 Type: provider
 Provider: anthropic
-Model: claude-3-5-sonnet-20241022
+Model: claude-sonnet-4-20250514
 Max Tokens: 8192
 Output Directory: /path/to/outputs/my-anthropic-sonnet
 ```
@@ -151,7 +151,7 @@ User added agents are stored in `~/.startd8/custom_agents.json`:
       "name": "my-anthropic-sonnet",
       "type": "provider",
       "provider": "anthropic",
-      "model": "claude-3-5-sonnet-20241022",
+      "model": "claude-sonnet-4-20250514",
       "max_tokens": 8192,
       "output_dir": "/path/to/outputs/my-anthropic-sonnet"
     },
@@ -193,7 +193,7 @@ ready_agents = tui._get_ready_agents_for_selection()
 # - error: None (no error for ready agents)
 
 # Select a single ready agent interactively
-agent = tui._select_ready_agent("Select an agent", "Tip: use provider:model (e.g., openai:gpt-4-turbo-preview)")
+agent = tui._select_ready_agent("Select an agent", "Tip: use provider:model (e.g., openai:gpt-4o)")
 ```
 
 ### Integration Example

@@ -68,9 +68,9 @@ class DocumentEnhancementConfig:
 @dataclass
 class AgentConfig:
     """Configuration for a single agent in the chain"""
-    agent_name: str  # e.g., "openai:gpt-4-turbo-preview"
+    agent_name: str  # e.g., "openai:gpt-4o"
     agent_instance: BaseAgent
-    step_name: str  # e.g., "openai:gpt-4-turbo-preview-enhancement"
+    step_name: str  # e.g., "openai:gpt-4o-enhancement"
     order: int  # Position in chain (0-based)
 
 @dataclass
@@ -481,15 +481,15 @@ config = DocumentEnhancementConfig(
     enhancement_instructions="Add accessibility section and improve CSS animations",
     agents=[
         AgentConfig(
-            agent_name="openai:gpt-4-turbo-preview",
-            agent_instance=openai.create_agent("gpt-4-turbo-preview"),
-            step_name="openai:gpt-4-turbo-preview-enhancement",
+            agent_name="openai:gpt-4o",
+            agent_instance=openai.create_agent("gpt-4o"),
+            step_name="openai:gpt-4o-enhancement",
             order=0
         ),
         AgentConfig(
-            agent_name="anthropic:claude-3-5-sonnet-20241022",
-            agent_instance=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-            step_name="anthropic:claude-3-5-sonnet-20241022-refinement",
+            agent_name="anthropic:claude-sonnet-4-20250514",
+            agent_instance=anthropic.create_agent("claude-sonnet-4-20250514"),
+            step_name="anthropic:claude-sonnet-4-20250514-refinement",
             order=1
         )
     ],

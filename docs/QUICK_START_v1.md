@@ -132,8 +132,8 @@ anthropic.validate_config({})
 openai.validate_config({})
 
 agents = [
-    anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    openai.create_agent("gpt-4-turbo-preview"),
+    anthropic.create_agent("claude-sonnet-4-20250514"),
+    openai.create_agent("gpt-4o"),
 ]
 
 for agent in agents:
@@ -161,9 +161,9 @@ anthropic.validate_config({})
 openai.validate_config({})
 
 pipeline = WorkflowTemplates.design_review_chain(
-    drafter_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
-    final_reviewer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022")
+    drafter_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    reviewer_agent=openai.create_agent("gpt-4o"),
+    final_reviewer_agent=anthropic.create_agent("claude-sonnet-4-20250514")
 )
 
 result = pipeline.run("Design a REST API for a todo app")

@@ -33,8 +33,8 @@ openai = ProviderRegistry.get_provider("openai")
 anthropic.validate_config({})
 openai.validate_config({})
 
-developer = anthropic.create_agent("claude-3-5-sonnet-20241022", name="developer")
-reviewer = openai.create_agent("gpt-4-turbo-preview", name="reviewer")
+developer = anthropic.create_agent("claude-sonnet-4-20250514", name="developer")
+reviewer = openai.create_agent("gpt-4o", name="reviewer")
 
 # Create workflow
 workflow = IterativeDevWorkflow(
@@ -251,8 +251,8 @@ openai = ProviderRegistry.get_provider("openai")
 anthropic.validate_config({})
 openai.validate_config({})
 
-dev = anthropic.create_agent("claude-3-5-sonnet-20241022")
-reviewer = openai.create_agent("gpt-4-turbo-preview")
+dev = anthropic.create_agent("claude-sonnet-4-20250514")
+reviewer = openai.create_agent("gpt-4o")
 
 workflow = IterativeDevWorkflow(dev, reviewer, max_iterations=3)
 
@@ -341,8 +341,8 @@ anthropic.validate_config({})
 openai.validate_config({})
 
 workflow = IterativeDevWorkflow(
-    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
+    developer_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    reviewer_agent=openai.create_agent("gpt-4o"),
     max_iterations=5,  # More iterations for security
     review_prompt_template=security_review_prompt
 )
@@ -388,8 +388,8 @@ anthropic.validate_config({})
 openai.validate_config({})
 
 workflow = IterativeDevWorkflow(
-    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
+    developer_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    reviewer_agent=openai.create_agent("gpt-4o"),
     max_iterations=3,
     on_iteration_complete=print_progress  # Add callback
 )
@@ -500,12 +500,12 @@ openai.validate_config({})
 
 # Good: Diverse perspectives (different providers/models)
 workflow = IterativeDevWorkflow(
-    developer_agent=anthropic.create_agent("claude-3-5-sonnet-20241022"),
-    reviewer_agent=openai.create_agent("gpt-4-turbo-preview"),
+    developer_agent=anthropic.create_agent("claude-sonnet-4-20250514"),
+    reviewer_agent=openai.create_agent("gpt-4o"),
 )
 
 # Okay but less effective: same provider/model for both roles
-same = openai.create_agent("gpt-4-turbo-preview")
+same = openai.create_agent("gpt-4o")
 workflow = IterativeDevWorkflow(
     developer_agent=same,
     reviewer_agent=same,
@@ -647,7 +647,7 @@ with open(filepath) as f:
    dev_agent = openai.create_agent("gpt-4o-mini")
    
    # Stronger model only for final review
-   review_agent = openai.create_agent("gpt-4-turbo-preview")
+   review_agent = openai.create_agent("gpt-4o")
    ```
 
 3. Simplify prompts (remove verbose instructions)
@@ -655,7 +655,7 @@ with open(filepath) as f:
 ### Issue: Timeout or Slow Performance
 
 **Solutions:**
-1. Use faster models (e.g., `claude-3-haiku-20240307`, `gpt-4o-mini`)
+1. Use faster models (e.g., `claude-haiku-4-5-20251008`, `gpt-4o-mini`)
 2. Reduce task complexity
 3. Split into multiple smaller workflows
 
@@ -675,13 +675,13 @@ openai = ProviderRegistry.get_provider("openai")
 anthropic.validate_config({})
 openai.validate_config({})
 
-func_reviewer = anthropic.create_agent("claude-3-5-sonnet-20241022")
+func_reviewer = anthropic.create_agent("claude-sonnet-4-20250514")
 func_workflow = IterativeDevWorkflow(dev, func_reviewer, max_iterations=3)
 result1 = func_workflow.run(task)
 
 if result1.successful:
     # Stage 2: Security review
-    sec_reviewer = openai.create_agent("gpt-4-turbo-preview")  # Different provider/model
+    sec_reviewer = openai.create_agent("gpt-4o")  # Different provider/model
     sec_workflow = IterativeDevWorkflow(
         dev,
         sec_reviewer,
@@ -773,8 +773,8 @@ openai = ProviderRegistry.get_provider("openai")
 anthropic.validate_config({})
 openai.validate_config({})
 
-dev_agent = anthropic.create_agent("claude-3-5-sonnet-20241022", name="dev")
-review_agent = openai.create_agent("gpt-4-turbo-preview", name="review")
+dev_agent = anthropic.create_agent("claude-sonnet-4-20250514", name="dev")
+review_agent = openai.create_agent("gpt-4o", name="review")
 
 for agent_pair in [(dev_agent, review_agent), (review_agent, dev_agent), (dev_agent, dev_agent)]:
     workflow = IterativeDevWorkflow(*agent_pair, max_iterations=3)

@@ -694,7 +694,7 @@ openai.<span class="function">validate_config</span>({})
 
 agents = [
     anthropic.<span class="function">create_agent</span>(<span class="string">"claude-sonnet-4-20250514"</span>),
-    openai.<span class="function">create_agent</span>(<span class="string">"gpt-4-turbo-preview"</span>),
+    openai.<span class="function">create_agent</span>(<span class="string">"gpt-4o"</span>),
 ]
 
 <span class="comment"># Run benchmark</span>
@@ -748,7 +748,7 @@ results = runner.<span class="function">run_benchmark</span>(
                 <span class="desc">Create a versioned prompt with tags</span>
             </div>
             <div class="cli-command">
-                <code>startd8 run-benchmark --agent anthropic:claude-3-5-sonnet --agent openai:gpt-4</code>
+                <code>startd8 run-benchmark --agent anthropic:claude-sonnet-4 --agent openai:gpt-4o</code>
                 <span class="desc">Benchmark multiple models</span>
             </div>
             <div class="cli-command">
@@ -812,8 +812,8 @@ openai = "startd8.providers.openai:OpenAIProvider"</code></pre>
                 <h3>Agent Specs</h3>
                 <p>Simple <code>provider:model</code> format for specifying agents anywhere.</p>
                 <pre style="background: var(--bg); padding: 1rem; border-radius: 0.5rem; margin-top: 1rem; font-size: 0.8rem;"><code>anthropic:claude-sonnet-4-20250514
-openai:gpt-4-turbo-preview
-gemini:gemini-1.5-pro
+openai:gpt-4oo
+gemini:gemini-2.0-flash
 ollama:llama2
 mock:mock-model</code></pre>
             </div>

@@ -529,7 +529,7 @@ def run_multi_agent_review(
     Example:
         result = run_multi_agent_review(
             doc_path=Path("test_doc.md"),
-            agent_ids=["anthropic:claude-3-5-sonnet-20241022", "openai:gpt-4-turbo-preview"],
+            agent_ids=["anthropic:claude-sonnet-4-20250514", "openai:gpt-4o"],
             question="Review this design for security issues",
             mode=ChatMode.PARALLEL
         )
@@ -937,7 +937,7 @@ PostgreSQL offers ACID compliance, which may matter for sensitive session data (
 
 ---
 
-## Perspective 3: Gemini (gemini-pro)
+## Perspective 3: Gemini (gemini-2.0-flash)
 
 **Verdict:** Looks good
 

@@ -1406,7 +1406,7 @@ PostgreSQL offers ACID compliance, which may matter for sensitive session data (
 
 ---
 
-## Perspective 3: Gemini (gemini-pro)
+## Perspective 3: Gemini (gemini-2.0-flash)
 
 **Verdict:** Looks good
 
