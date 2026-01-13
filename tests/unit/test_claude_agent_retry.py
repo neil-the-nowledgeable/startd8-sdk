@@ -20,9 +20,9 @@ class TestGPT4AgentRetryConfig:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability for all tests in this class"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     def test_default_retry_disabled(self):
@@ -72,16 +72,19 @@ class TestGPT4AgentRetryBehavior:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability for all tests in this class"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     @pytest.fixture
     def mock_response(self):
         """Create a mock OpenAI response"""
         response = MagicMock()
-        response.choices = [MagicMock(message=MagicMock(content="Test response"))]
+        choice = MagicMock()
+        choice.message = MagicMock(content="Test response")
+        choice.finish_reason = "stop"  # Must be a string, not MagicMock
+        response.choices = [choice]
         response.usage = MagicMock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
         return response
 
@@ -422,9 +425,9 @@ class TestGeminiAgentRetryConfig:
     @pytest.fixture(autouse=True)
     def mock_gemini(self):
         """Mock Gemini availability for all tests in this class"""
-        with patch('startd8.agents._GEMINI_AVAILABLE', True), \
-             patch('startd8.agents.genai') as mock_genai, \
-             patch('startd8.agents.genai_types', MagicMock()):
+        with patch('startd8.agents.gemini._GEMINI_AVAILABLE', True), \
+             patch('startd8.agents.gemini.genai') as mock_genai, \
+             patch('startd8.agents.gemini.genai_types', MagicMock()):
             mock_genai.Client = MagicMock()
             yield mock_genai
 
@@ -475,9 +478,9 @@ class TestGeminiAgentRetryBehavior:
     @pytest.fixture(autouse=True)
     def mock_gemini(self):
         """Mock Gemini availability for all tests in this class"""
-        with patch('startd8.agents._GEMINI_AVAILABLE', True), \
-             patch('startd8.agents.genai') as mock_genai, \
-             patch('startd8.agents.genai_types') as mock_types:
+        with patch('startd8.agents.gemini._GEMINI_AVAILABLE', True), \
+             patch('startd8.agents.gemini.genai') as mock_genai, \
+             patch('startd8.agents.gemini.genai_types') as mock_types:
             mock_genai.Client = MagicMock()
             mock_types.GenerateContentConfig = MagicMock()
             yield mock_genai
@@ -492,6 +495,10 @@ class TestGeminiAgentRetryBehavior:
             candidates_token_count=20,
             total_token_count=30
         )
+        # Mock candidates with finish_reason
+        candidate = MagicMock()
+        candidate.finish_reason = "STOP"  # Must be a string, not MagicMock
+        response.candidates = [candidate]
         return response
 
     @pytest.mark.asyncio
@@ -562,9 +569,9 @@ class TestOpenAICompatibleAgentRetryConfig:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability for all tests in this class"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     def test_default_retry_disabled(self):
@@ -617,16 +624,19 @@ class TestOpenAICompatibleAgentRetryBehavior:
     @pytest.fixture(autouse=True)
     def mock_openai(self):
         """Mock OpenAI availability for all tests in this class"""
-        with patch('startd8.agents._OPENAI_AVAILABLE', True), \
-             patch('startd8.agents.OpenAI', MagicMock()), \
-             patch('startd8.agents.AsyncOpenAI', MagicMock()):
+        with patch('startd8.agents.openai._OPENAI_AVAILABLE', True), \
+             patch('startd8.agents.openai.OpenAI', MagicMock()), \
+             patch('startd8.agents.openai.AsyncOpenAI', MagicMock()):
             yield
 
     @pytest.fixture
     def mock_response(self):
         """Create a mock OpenAI response"""
         response = MagicMock()
-        response.choices = [MagicMock(message=MagicMock(content="Test response"))]
+        choice = MagicMock()
+        choice.message = MagicMock(content="Test response")
+        choice.finish_reason = "stop"  # Must be a string, not MagicMock
+        response.choices = [choice]
         response.usage = MagicMock(prompt_tokens=10, completion_tokens=20, total_tokens=30)
         return response
 
