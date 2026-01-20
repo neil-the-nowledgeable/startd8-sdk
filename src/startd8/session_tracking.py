@@ -97,6 +97,13 @@ class SessionMetrics:
     tags: List[str] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+    # ContextCore project metadata fields
+    project_id: Optional[str] = None           # io.contextcore.project.id
+    project_name: Optional[str] = None         # io.contextcore.project.name
+    task_id: Optional[str] = None              # io.contextcore.task.id
+    sprint_id: Optional[str] = None            # io.contextcore.sprint.id
+    business_criticality: Optional[str] = None # io.contextcore.business.criticality
+
     @property
     def average_response_time_ms(self) -> float:
         """Average response time in milliseconds"""
@@ -146,6 +153,12 @@ class SessionMetrics:
             "agent_name": self.agent_name,
             "model": self.model,
             "tags": self.tags,
+            # ContextCore project metadata
+            "project_id": self.project_id,
+            "project_name": self.project_name,
+            "task_id": self.task_id,
+            "sprint_id": self.sprint_id,
+            "business_criticality": self.business_criticality,
         }
 
 
@@ -316,9 +329,14 @@ class SessionTracker:
         tags: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
+        # ContextCore project context parameters
+        project_id: Optional[str] = None,
+        project_name: Optional[str] = None,
+        task_id: Optional[str] = None,
+        sprint_id: Optional[str] = None,
     ) -> str:
         """
-        Start a new session.
+        Start a new session with optional ContextCore project context.
 
         Args:
             agent_name: Name of the agent
@@ -326,6 +344,10 @@ class SessionTracker:
             tags: Optional tags for filtering
             metadata: Additional metadata
             session_id: Optional custom session ID (auto-generated if not provided)
+            project_id: ContextCore project identifier (io.contextcore.project.id)
+            project_name: Human-readable project name (io.contextcore.project.name)
+            task_id: ContextCore task identifier (io.contextcore.task.id)
+            sprint_id: ContextCore sprint identifier (io.contextcore.sprint.id)
 
         Returns:
             Session ID
@@ -348,6 +370,12 @@ class SessionTracker:
                 model=model,
                 tags=tags or [],
                 metadata=metadata or {},
+                # ContextCore project context
+                project_id=project_id,
+                project_name=project_name,
+                task_id=task_id,
+                sprint_id=sprint_id,
+                business_criticality=self._derive_business_criticality(project_id, project_name),
             )
             self._sessions[session_id] = metrics
 
@@ -369,6 +397,92 @@ class SessionTracker:
             )
 
         return session_id
+
+    def set_project_context(
+        self,
+        session_id: str,
+        project_id: Optional[str] = None,
+        project_name: Optional[str] = None,
+        task_id: Optional[str] = None,
+        sprint_id: Optional[str] = None,
+    ) -> None:
+        """
+        Update ContextCore project context for an existing session.
+
+        Args:
+            session_id: Session to update
+            project_id: ContextCore project identifier (io.contextcore.project.id)
+            project_name: Human-readable project name (io.contextcore.project.name)
+            task_id: ContextCore task identifier (io.contextcore.task.id)
+            sprint_id: ContextCore sprint identifier (io.contextcore.sprint.id)
+
+        Raises:
+            KeyError: If session_id does not exist
+        """
+        with self._lock:
+            if session_id not in self._sessions:
+                raise KeyError(f"Session '{session_id}' not found")
+
+            metrics = self._sessions[session_id]
+
+            # Update provided fields (only if explicitly passed)
+            if project_id is not None:
+                metrics.project_id = project_id
+            if project_name is not None:
+                metrics.project_name = project_name
+            if task_id is not None:
+                metrics.task_id = task_id
+            if sprint_id is not None:
+                metrics.sprint_id = sprint_id
+
+            # Re-derive business criticality if project context changed
+            if project_id is not None or project_name is not None:
+                metrics.business_criticality = self._derive_business_criticality(
+                    metrics.project_id, metrics.project_name
+                )
+
+            logger.debug(
+                f"Updated project context for session {session_id}",
+                extra={
+                    "session_id": session_id,
+                    "project_id": metrics.project_id,
+                    "task_id": metrics.task_id,
+                    "sprint_id": metrics.sprint_id,
+                }
+            )
+
+    def _derive_business_criticality(
+        self,
+        project_id: Optional[str],
+        project_name: Optional[str]
+    ) -> Optional[str]:
+        """
+        Derive business criticality from project context.
+
+        This uses heuristics based on project naming conventions.
+        Can be extended with external project metadata lookups.
+
+        Args:
+            project_id: Project identifier
+            project_name: Project name
+
+        Returns:
+            Business criticality level ('low', 'medium', 'high', 'critical') or None
+        """
+        if not project_id and not project_name:
+            return None
+
+        # Check project name for keywords
+        name_to_check = (project_name or project_id or "").lower()
+
+        if any(kw in name_to_check for kw in ['prod', 'production', 'critical', 'live']):
+            return 'critical'
+        elif any(kw in name_to_check for kw in ['staging', 'pre-prod', 'preprod']):
+            return 'high'
+        elif any(kw in name_to_check for kw in ['test', 'qa', 'dev', 'development']):
+            return 'medium'
+        else:
+            return 'low'
 
     def record_request(
         self,
