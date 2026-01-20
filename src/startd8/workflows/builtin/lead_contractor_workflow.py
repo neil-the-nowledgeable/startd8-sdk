@@ -6,15 +6,23 @@ while cheaper models handle the actual drafting work.
 
 Pattern:
 1. Claude creates detailed implementation spec
-2. Drafter (GPT-4o-mini or Gemini Flash) implements from spec
+2. Drafter (Gemini Flash, GPT-4.1-nano, etc.) implements from spec
 3. Claude reviews implementation
 4. If not approved, loop back to step 2 (max 3 iterations)
 5. Claude integrates/finalizes
 
-Cost Structure:
-- Claude Sonnet 4: $3.00/$15.00 per 1M tokens (lead contractor)
-- GPT-4o-mini: $0.15/$0.60 per 1M tokens (drafter)
-- Gemini Flash: $0.10/$0.40 per 1M tokens (drafter)
+Cost Structure (January 2026):
+Lead Contractors (Claude 4.5 family - recommended):
+- Claude Sonnet 4.5: $3.00/$15.00 per 1M tokens (default, best for coding/agents)
+- Claude Opus 4.5: $5.00/$25.00 per 1M tokens (most intelligent)
+- Claude Haiku 4.5: $1.00/$5.00 per 1M tokens (fastest)
+
+Drafters (cost-efficient options):
+- Gemini 2.5 Flash Lite: $0.075/$0.30 per 1M tokens (default - best value)
+- GPT-4.1-nano: $0.10/$0.40 per 1M tokens (ultra-fast)
+- Gemini 3 Flash Preview: $0.10/$0.40 per 1M tokens (latest)
+- GPT-4o-mini: $0.15/$0.60 per 1M tokens (legacy but reliable)
+- Gemini 2.5 Flash: $0.15/$0.60 per 1M tokens (balanced)
 """
 
 from datetime import datetime, timezone
@@ -216,20 +224,31 @@ class LeadContractorWorkflow(WorkflowBase):
         {
             "task_description": "string - What to implement",
             "context": {...} - Optional additional context,
-            "lead_agent": "anthropic:claude-sonnet-4-20250514" - Lead contractor,
-            "drafter_agent": "openai:gpt-4o-mini" - Drafter agent,
+            "lead_agent": "anthropic:claude-sonnet-4-5-20250927" - Lead contractor (Sonnet 4.5),
+            "drafter_agent": "gemini:gemini-2.5-flash-lite" - Drafter agent (best value),
             "max_iterations": 3 - Max review cycles,
             "pass_threshold": 80 - Minimum score to pass (0-100),
             "output_format": "string - Expected output format (optional)",
             "integration_instructions": "string - Final integration notes (optional)"
         }
 
+    Recommended Lead Agents:
+        - anthropic:claude-sonnet-4-5-20250927 (default - best for coding/agents)
+        - anthropic:claude-opus-4-5-20251101 (most intelligent)
+        - anthropic:claude-haiku-4-5-20251008 (fastest, near-frontier)
+
+    Recommended Drafter Agents:
+        - gemini:gemini-2.5-flash-lite (default - $0.075/$0.30, best value)
+        - openai:gpt-4.1-nano ($0.10/$0.40 - ultra-fast)
+        - gemini:gemini-3-flash-preview ($0.10/$0.40 - latest)
+        - openai:gpt-4o-mini ($0.15/$0.60 - reliable)
+
     Example:
         result = workflow.run(
             config={
                 "task_description": "Implement a rate limiter using token bucket algorithm",
                 "context": {"language": "Python", "framework": "FastAPI"},
-                "drafter_agent": "openai:gpt-4o-mini",
+                "drafter_agent": "openai:gpt-4.1-nano",
                 "max_iterations": 3
             }
         )
@@ -274,15 +293,15 @@ class LeadContractorWorkflow(WorkflowBase):
                     name="lead_agent",
                     type="agent_spec",
                     required=False,
-                    default="anthropic:claude-sonnet-4-20250514",
-                    description="Lead contractor agent (Claude recommended)"
+                    default="anthropic:claude-sonnet-4-5-20250927",
+                    description="Lead contractor agent (Claude 4.5 recommended: sonnet-4-5, opus-4-5, haiku-4-5)"
                 ),
                 WorkflowInput(
                     name="drafter_agent",
                     type="agent_spec",
                     required=False,
-                    default="openai:gpt-4o-mini",
-                    description="Drafter agent (cheaper model: gpt-4o-mini, gemini-2.0-flash)"
+                    default="gemini:gemini-2.5-flash-lite",
+                    description="Drafter agent (cost-efficient: gemini-2.5-flash-lite, gpt-4.1-nano, gpt-4o-mini)"
                 ),
                 WorkflowInput(
                     name="max_iterations",
@@ -350,8 +369,8 @@ class LeadContractorWorkflow(WorkflowBase):
         # Parse configuration
         task_description = config["task_description"]
         context = config.get("context", {})
-        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
-        drafter_spec = config.get("drafter_agent", "openai:gpt-4o-mini")
+        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-5-20250927")
+        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash-lite")
         max_iterations = config.get("max_iterations", 3)
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
@@ -556,7 +575,7 @@ class LeadContractorWorkflow(WorkflowBase):
             step_count=len(step_results),
         )
 
-        completed_at = datetime.now()
+        completed_at = datetime.now(timezone.utc)
 
         return WorkflowResult(
             workflow_id=self.metadata.workflow_id,
