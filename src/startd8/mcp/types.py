@@ -170,7 +170,12 @@ class RequestSigningConfig:
 
 @dataclass
 class ObservabilityConfig:
-    """Observability endpoints and flags."""
+    """
+    Observability endpoints and flags with ContextCore project support.
+    
+    ContextCore project context (project_id, task_id, sprint_id) can be
+    included as OTel resource attributes for unified observability.
+    """
     # Metrics
     enable_metrics: bool = True
     metrics_path: str = "/metrics"
@@ -184,11 +189,30 @@ class ObservabilityConfig:
     otlp_client_cert: Optional[str] = None
     otlp_client_key: Optional[str] = None
     
+    # ContextCore project context (included in OTel resource attributes)
+    project_id: Optional[str] = None           # io.contextcore.project.id
+    project_name: Optional[str] = None         # io.contextcore.project.name
+    task_id: Optional[str] = None              # io.contextcore.task.id
+    sprint_id: Optional[str] = None            # io.contextcore.sprint.id
+    
     def __post_init__(self):
         if self.metrics_port <= 0 or self.metrics_port > 65535:
             raise ValueError("metrics_port must be between 1 and 65535")
         if self.otlp_protocol not in ("grpc", "http"):
             raise ValueError("otlp_protocol must be 'grpc' or 'http'")
+    
+    def get_contextcore_attributes(self) -> Dict[str, str]:
+        """Get ContextCore attributes for OTel resource."""
+        attrs = {}
+        if self.project_id:
+            attrs["io.contextcore.project.id"] = self.project_id
+        if self.project_name:
+            attrs["io.contextcore.project.name"] = self.project_name
+        if self.task_id:
+            attrs["io.contextcore.task.id"] = self.task_id
+        if self.sprint_id:
+            attrs["io.contextcore.sprint.id"] = self.sprint_id
+        return attrs
 
 
 @dataclass

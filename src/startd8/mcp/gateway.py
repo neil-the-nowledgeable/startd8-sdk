@@ -591,13 +591,16 @@ class MCPGateway:
         # Traces (OTLP)
         if obs.enable_traces and _OTEL_AVAILABLE and self._tracer is None:
             try:
-                resource = Resource.create(
-                    {
-                        "service.name": "mcp-gateway",
-                        "service.version": os.getenv("VERSION", "1.0.0"),
-                        "deployment.environment": os.getenv("ENV", "development"),
-                    }
-                )
+                # Build resource attributes with standard + ContextCore attributes
+                resource_attrs = {
+                    "service.name": "mcp-gateway",
+                    "service.version": os.getenv("VERSION", "1.0.0"),
+                    "deployment.environment": os.getenv("ENV", "development"),
+                }
+                # Add ContextCore project context if configured
+                resource_attrs.update(obs.get_contextcore_attributes())
+                
+                resource = Resource.create(resource_attrs)
                 provider = TracerProvider(resource=resource)
                 exporter = OTLPSpanExporter(endpoint=obs.otlp_endpoint)
                 processor = BatchSpanProcessor(exporter)
@@ -609,6 +612,7 @@ class MCPGateway:
                     extra={
                         "otlp_endpoint": obs.otlp_endpoint,
                         "otlp_protocol": obs.otlp_protocol,
+                        "contextcore_attrs": obs.get_contextcore_attributes(),
                     },
                 )
             except Exception as exc:  # pragma: no cover - defensive

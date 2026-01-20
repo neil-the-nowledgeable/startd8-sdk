@@ -139,6 +139,23 @@ from .session_tracking import (
 )
 from .exceptions import TruncationError, TruncationWarning
 
+# OpenTelemetry with ContextCore support
+from .otel import (
+    OTEL_AVAILABLE,
+    CONTEXTCORE_PROJECT_ID,
+    CONTEXTCORE_PROJECT_NAME,
+    CONTEXTCORE_TASK_ID,
+    CONTEXTCORE_SPRINT_ID,
+    CONTEXTCORE_BUSINESS_CRITICALITY,
+    ProjectContext as OTelProjectContext,
+    OTelConfig,
+    create_resource as create_otel_resource,
+    configure_tracing,
+    configure_metrics,
+    configure_otel,
+    add_project_context_to_span,
+)
+
 def _read_version_from_pyproject() -> Optional[str]:
     """Best-effort read of [project].version from a nearby pyproject.toml."""
     from pathlib import Path
@@ -279,5 +296,19 @@ __all__ = [
     "create_game_enhancer_agent",
     "create_html5_game_designer_agent",
     "create_code_reviewer_agent",
+    # OpenTelemetry with ContextCore
+    "OTEL_AVAILABLE",
+    "CONTEXTCORE_PROJECT_ID",
+    "CONTEXTCORE_PROJECT_NAME",
+    "CONTEXTCORE_TASK_ID",
+    "CONTEXTCORE_SPRINT_ID",
+    "CONTEXTCORE_BUSINESS_CRITICALITY",
+    "OTelProjectContext",
+    "OTelConfig",
+    "create_otel_resource",
+    "configure_tracing",
+    "configure_metrics",
+    "configure_otel",
+    "add_project_context_to_span",
 ]
 
