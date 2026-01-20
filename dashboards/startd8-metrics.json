@@ -1,8 +1,8 @@
 {
   "uid": "startd8-sdk-metrics",
   "title": "StartD8 SDK Metrics",
-  "description": "Technical and business metrics for StartD8 SDK sessions, tokens, costs, and performance",
-  "tags": ["startd8", "sdk", "llm", "agents"],
+  "description": "Technical and business metrics for StartD8 SDK sessions, tokens, costs, and performance with ContextCore project tracking",
+  "tags": ["startd8", "sdk", "llm", "agents", "contextcore"],
   "editable": true,
   "refresh": "30s",
   "time": {
@@ -23,10 +23,56 @@
         "hide": 0
       },
       {
-        "name": "agent_name",
+        "name": "project_id",
+        "label": "Project",
         "type": "query",
         "datasource": "${datasource}",
-        "query": "label_values(startd8_active_sessions, agent_name)",
+        "query": "label_values(startd8_active_sessions, project_id)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "task_id",
+        "label": "Task",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(startd8_active_sessions{project_id=~\"$project_id\"}, task_id)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "sprint_id",
+        "label": "Sprint",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(startd8_active_sessions{project_id=~\"$project_id\"}, sprint_id)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        }
+      },
+      {
+        "name": "agent_name",
+        "label": "Agent",
+        "type": "query",
+        "datasource": "${datasource}",
+        "query": "label_values(startd8_active_sessions{project_id=~\"$project_id\"}, agent_name)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -38,9 +84,10 @@
       },
       {
         "name": "model",
+        "label": "Model",
         "type": "query",
         "datasource": "${datasource}",
-        "query": "label_values(startd8_active_sessions{agent_name=~\"$agent_name\"}, model)",
+        "query": "label_values(startd8_active_sessions{agent_name=~\"$agent_name\", project_id=~\"$project_id\"}, model)",
         "refresh": 2,
         "includeAll": true,
         "multi": true,
@@ -69,10 +116,10 @@
         "name": "Truncation Events",
         "datasource": "${datasource}",
         "enable": true,
-        "expr": "increase(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\"}[1m]) > 0",
-        "tagKeys": "agent_name,model",
+        "expr": "increase(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\"}[1m]) > 0",
+        "tagKeys": "agent_name,model,project_id",
         "titleFormat": "Truncation Detected",
-        "textFormat": "{{agent_name}} / {{model}}"
+        "textFormat": "{{agent_name}} / {{model}} ({{project_id}})"
       }
     ]
   },
@@ -92,7 +139,7 @@
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum(startd8_active_sessions{agent_name=~\"$agent_name\", model=~\"$model\"})",
+          "expr": "sum(startd8_active_sessions{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"})",
           "legendFormat": "Active"
         }
       ],
@@ -131,7 +178,7 @@
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) * 60",
+          "expr": "sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[5m])) * 60",
           "legendFormat": "req/min"
         }
       ],
@@ -159,7 +206,7 @@
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum(increase(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum(increase(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "Tokens"
         }
       ],
@@ -195,7 +242,7 @@
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum(increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum(increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "Cost"
         }
       ],
@@ -231,7 +278,7 @@
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "avg(startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\"})",
+          "expr": "avg(startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"})",
           "legendFormat": "Usage"
         }
       ],
@@ -269,7 +316,7 @@
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum(increase(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum(increase(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "Truncations"
         }
       ],
@@ -298,8 +345,214 @@
     },
     {
       "type": "row",
-      "title": "Sessions & Requests",
+      "title": "📊 Project Context (ContextCore)",
       "gridPos": { "x": 0, "y": 5, "w": 24, "h": 1 },
+      "collapsed": false
+    },
+    {
+      "id": 100,
+      "type": "barchart",
+      "title": "Cost by Project",
+      "description": "Total cost per project (24h)",
+      "gridPos": { "x": 0, "y": 6, "w": 8, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (project_id) (increase(startd8_cost_total{project_id=~\"$project_id\", project_id!=\"\"}[24h]))",
+          "legendFormat": "{{project_id}}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "currencyUSD"
+        }
+      }
+    },
+    {
+      "id": 101,
+      "type": "barchart",
+      "title": "Tokens by Project",
+      "description": "Total tokens per project (24h)",
+      "gridPos": { "x": 8, "y": 6, "w": 8, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (project_id) (increase(startd8_tokens_total{project_id=~\"$project_id\", project_id!=\"\"}[24h]))",
+          "legendFormat": "{{project_id}}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "locale"
+        }
+      }
+    },
+    {
+      "id": 102,
+      "type": "barchart",
+      "title": "Requests by Sprint",
+      "description": "Total requests per sprint (24h)",
+      "gridPos": { "x": 16, "y": 6, "w": 8, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (sprint_id) (increase(startd8_requests_total{sprint_id=~\"$sprint_id\", sprint_id!=\"\"}[24h]))",
+          "legendFormat": "{{sprint_id}}"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "always",
+        "legend": { "displayMode": "hidden" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "short"
+        }
+      }
+    },
+    {
+      "id": 103,
+      "type": "timeseries",
+      "title": "Cost Over Time by Project",
+      "description": "Cost trends per project",
+      "gridPos": { "x": 0, "y": 14, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (project_id) (increase(startd8_cost_total{project_id=~\"$project_id\", project_id!=\"\"}[1h]))",
+          "legendFormat": "{{project_id}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "unit": "currencyUSD"
+        }
+      }
+    },
+    {
+      "id": 104,
+      "type": "timeseries",
+      "title": "Requests Over Time by Task",
+      "description": "Request rate per task",
+      "gridPos": { "x": 12, "y": 14, "w": 12, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (task_id) (rate(startd8_requests_total{task_id=~\"$task_id\", task_id!=\"\"}[5m])) * 60",
+          "legendFormat": "{{task_id}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "sum"] },
+        "tooltip": { "mode": "multi" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "unit": "reqpm"
+        }
+      }
+    },
+    {
+      "id": 105,
+      "type": "table",
+      "title": "Project Summary",
+      "description": "Aggregated metrics by project",
+      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 8 },
+      "datasource": "${datasource}",
+      "targets": [
+        {
+          "expr": "sum by (project_id, project_name) (increase(startd8_requests_total{project_id!=\"\"}[24h]))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "requests"
+        },
+        {
+          "expr": "sum by (project_id, project_name) (increase(startd8_tokens_total{project_id!=\"\"}[24h]))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "tokens"
+        },
+        {
+          "expr": "sum by (project_id, project_name) (increase(startd8_cost_total{project_id!=\"\"}[24h]))",
+          "format": "table",
+          "instant": true,
+          "legendFormat": "cost"
+        }
+      ],
+      "transformations": [
+        {
+          "id": "merge"
+        },
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": { "Time": true, "__name__": true, "job": true, "instance": true },
+            "renameByName": {
+              "project_id": "Project ID",
+              "project_name": "Project Name",
+              "Value #A": "Requests (24h)",
+              "Value #B": "Tokens (24h)",
+              "Value #C": "Cost (24h)"
+            }
+          }
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "left",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Cost (24h)" },
+            "properties": [
+              { "id": "unit", "value": "currencyUSD" },
+              { "id": "decimals", "value": 2 }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "Tokens (24h)" },
+            "properties": [
+              { "id": "unit", "value": "locale" }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "title": "Sessions & Requests",
+      "gridPos": { "x": 0, "y": 30, "w": 24, "h": 1 },
       "collapsed": false
     },
     {
@@ -307,11 +560,11 @@
       "type": "timeseries",
       "title": "Active Sessions Over Time",
       "description": "Session count by agent and model",
-      "gridPos": { "x": 0, "y": 6, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 31, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (agent_name, model) (startd8_active_sessions{agent_name=~\"$agent_name\", model=~\"$model\"})",
+          "expr": "sum by (agent_name, model) (startd8_active_sessions{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"})",
           "legendFormat": "{{agent_name}} / {{model}}"
         }
       ],
@@ -336,11 +589,11 @@
       "type": "timeseries",
       "title": "Request Rate by Status",
       "description": "Success vs error requests per minute",
-      "gridPos": { "x": 12, "y": 6, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 31, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (status) (rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", status=~\"$status\"}[5m])) * 60",
+          "expr": "sum by (status) (rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", status=~\"$status\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[5m])) * 60",
           "legendFormat": "{{status}}"
         }
       ],
@@ -375,11 +628,11 @@
       "type": "barchart",
       "title": "Requests by Agent",
       "description": "Total requests per agent (24h)",
-      "gridPos": { "x": 0, "y": 14, "w": 8, "h": 8 },
+      "gridPos": { "x": 0, "y": 39, "w": 8, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (agent_name) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum by (agent_name) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "{{agent_name}}"
         }
       ],
@@ -400,11 +653,11 @@
       "type": "barchart",
       "title": "Requests by Model",
       "description": "Total requests per model (24h)",
-      "gridPos": { "x": 8, "y": 14, "w": 8, "h": 8 },
+      "gridPos": { "x": 8, "y": 39, "w": 8, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (model) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum by (model) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "{{model}}"
         }
       ],
@@ -425,11 +678,11 @@
       "type": "piechart",
       "title": "Request Status Distribution",
       "description": "Success vs error ratio",
-      "gridPos": { "x": 16, "y": 14, "w": 8, "h": 8 },
+      "gridPos": { "x": 16, "y": 39, "w": 8, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (status) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum by (status) (increase(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "{{status}}"
         }
       ],
@@ -454,7 +707,7 @@
     {
       "type": "row",
       "title": "Token Consumption & Cost",
-      "gridPos": { "x": 0, "y": 22, "w": 24, "h": 1 },
+      "gridPos": { "x": 0, "y": 47, "w": 24, "h": 1 },
       "collapsed": false
     },
     {
@@ -462,11 +715,11 @@
       "type": "timeseries",
       "title": "Token Consumption Over Time",
       "description": "Input vs output token rate",
-      "gridPos": { "x": 0, "y": 23, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 48, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (direction) (rate(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) * 60",
+          "expr": "sum by (direction) (rate(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[5m])) * 60",
           "legendFormat": "{{direction}}"
         }
       ],
@@ -501,11 +754,11 @@
       "type": "timeseries",
       "title": "Cost Over Time",
       "description": "Cumulative cost by agent",
-      "gridPos": { "x": 12, "y": 23, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 48, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (agent_name) (increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\"}[1h]))",
+          "expr": "sum by (agent_name) (increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[1h]))",
           "legendFormat": "{{agent_name}}"
         }
       ],
@@ -529,11 +782,11 @@
       "type": "barchart",
       "title": "Token Usage by Model",
       "description": "Total tokens per model (24h)",
-      "gridPos": { "x": 0, "y": 31, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 56, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (model) (increase(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum by (model) (increase(startd8_tokens_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "{{model}}"
         }
       ],
@@ -554,11 +807,11 @@
       "type": "barchart",
       "title": "Cost by Model",
       "description": "Estimated cost per model (24h)",
-      "gridPos": { "x": 12, "y": 31, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 56, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (model) (increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum by (model) (increase(startd8_cost_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "{{model}}"
         }
       ],
@@ -577,7 +830,7 @@
     {
       "type": "row",
       "title": "Performance & Health",
-      "gridPos": { "x": 0, "y": 39, "w": 24, "h": 1 },
+      "gridPos": { "x": 0, "y": 64, "w": 24, "h": 1 },
       "collapsed": false
     },
     {
@@ -585,19 +838,19 @@
       "type": "timeseries",
       "title": "Response Time Distribution",
       "description": "P50, P90, P99 response times",
-      "gridPos": { "x": 0, "y": 40, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 65, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[5m])) by (le))",
           "legendFormat": "P50"
         },
         {
-          "expr": "histogram_quantile(0.90, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.90, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[5m])) by (le))",
           "legendFormat": "P90"
         },
         {
-          "expr": "histogram_quantile(0.99, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[5m])) by (le))",
           "legendFormat": "P99"
         }
       ],
@@ -635,11 +888,11 @@
       "type": "timeseries",
       "title": "Context Usage by Session",
       "description": "Context window utilization per session",
-      "gridPos": { "x": 12, "y": 40, "w": 12, "h": 8 },
+      "gridPos": { "x": 12, "y": 65, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\"}",
+          "expr": "startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}",
           "legendFormat": "{{session_id}}"
         }
       ],
@@ -674,11 +927,11 @@
       "type": "timeseries",
       "title": "Truncation Events",
       "description": "Response truncations over time",
-      "gridPos": { "x": 0, "y": 48, "w": 12, "h": 8 },
+      "gridPos": { "x": 0, "y": 73, "w": 12, "h": 8 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum by (agent_name, model) (rate(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) * 60",
+          "expr": "sum by (agent_name, model) (rate(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[5m])) * 60",
           "legendFormat": "{{agent_name}} / {{model}}"
         }
       ],
@@ -703,11 +956,11 @@
       "type": "stat",
       "title": "Success Rate",
       "description": "Overall request success rate",
-      "gridPos": { "x": 12, "y": 48, "w": 6, "h": 4 },
+      "gridPos": { "x": 12, "y": 73, "w": 6, "h": 4 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", status=\"success\"}[24h])) / sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h]))",
+          "expr": "sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", status=\"success\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h])) / sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h]))",
           "legendFormat": "Success Rate"
         }
       ],
@@ -739,11 +992,11 @@
       "type": "stat",
       "title": "Avg Response Time",
       "description": "Average response time (5m)",
-      "gridPos": { "x": 18, "y": 48, "w": 6, "h": 4 },
+      "gridPos": { "x": 18, "y": 73, "w": 6, "h": 4 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\"}[5m])) by (le))",
+          "expr": "histogram_quantile(0.50, sum(rate(startd8_response_time_ms_bucket{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[5m])) by (le))",
           "legendFormat": "P50"
         }
       ],
@@ -774,11 +1027,11 @@
       "type": "stat",
       "title": "Sessions Near Capacity",
       "description": "Sessions with >80% context usage",
-      "gridPos": { "x": 12, "y": 52, "w": 6, "h": 4 },
+      "gridPos": { "x": 12, "y": 77, "w": 6, "h": 4 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "count(startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\"} > 0.8)",
+          "expr": "count(startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"} > 0.8)",
           "legendFormat": "Near Capacity"
         }
       ],
@@ -809,11 +1062,11 @@
       "type": "stat",
       "title": "Truncation Rate",
       "description": "Truncations per 100 requests",
-      "gridPos": { "x": 18, "y": 52, "w": 6, "h": 4 },
+      "gridPos": { "x": 18, "y": 77, "w": 6, "h": 4 },
       "datasource": "${datasource}",
       "targets": [
         {
-          "expr": "sum(rate(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h])) / sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\"}[24h])) * 100",
+          "expr": "sum(rate(startd8_truncations_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h])) / sum(rate(startd8_requests_total{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}[24h])) * 100",
           "legendFormat": "Rate"
         }
       ],
@@ -843,19 +1096,19 @@
     {
       "type": "row",
       "title": "Detailed Metrics Table",
-      "gridPos": { "x": 0, "y": 56, "w": 24, "h": 1 },
+      "gridPos": { "x": 0, "y": 81, "w": 24, "h": 1 },
       "collapsed": true,
       "panels": [
         {
           "id": 23,
           "type": "table",
           "title": "Session Details",
-          "description": "Active session details",
-          "gridPos": { "x": 0, "y": 57, "w": 24, "h": 10 },
+          "description": "Active session details with project context",
+          "gridPos": { "x": 0, "y": 82, "w": 24, "h": 10 },
           "datasource": "${datasource}",
           "targets": [
             {
-              "expr": "startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\"}",
+              "expr": "startd8_context_usage_ratio{agent_name=~\"$agent_name\", model=~\"$model\", project_id=~\"$project_id\", task_id=~\"$task_id\", sprint_id=~\"$sprint_id\"}",
               "format": "table",
               "instant": true
             }
@@ -869,6 +1122,9 @@
                   "session_id": "Session ID",
                   "agent_name": "Agent",
                   "model": "Model",
+                  "project_id": "Project",
+                  "task_id": "Task",
+                  "sprint_id": "Sprint",
                   "Value": "Context Usage"
                 }
               }
@@ -904,5 +1160,5 @@
     }
   ],
   "schemaVersion": 39,
-  "version": 1
+  "version": 2
 }
