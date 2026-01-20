@@ -20,6 +20,79 @@ class WorkflowStatus(str, Enum):
     CANCELLED = "cancelled"
 
 
+@dataclass
+class ProjectContext:
+    """
+    ContextCore project metadata for workflow tracking.
+    
+    Enables correlation of workflow executions with project management
+    systems and Grafana dashboards.
+    
+    Semantic Conventions:
+        - project_id: io.contextcore.project.id
+        - project_name: io.contextcore.project.name
+        - task_id: io.contextcore.task.id
+        - sprint_id: io.contextcore.sprint.id
+    """
+    project_id: Optional[str] = None
+    project_name: Optional[str] = None
+    task_id: Optional[str] = None
+    sprint_id: Optional[str] = None
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dictionary, excluding None values."""
+        return {k: v for k, v in {
+            "project_id": self.project_id,
+            "project_name": self.project_name,
+            "task_id": self.task_id,
+            "sprint_id": self.sprint_id,
+        }.items() if v is not None}
+    
+    def to_labels(self) -> Dict[str, str]:
+        """Convert to Prometheus/OTel labels format."""
+        labels = {}
+        if self.project_id:
+            labels["project_id"] = self.project_id
+        if self.project_name:
+            labels["project_name"] = self.project_name
+        if self.task_id:
+            labels["task_id"] = self.task_id
+        if self.sprint_id:
+            labels["sprint_id"] = self.sprint_id
+        return labels
+    
+    @classmethod
+    def from_config(cls, config: Dict[str, Any]) -> "ProjectContext":
+        """
+        Extract project context from workflow config.
+        
+        Looks for top-level keys or nested under 'project_context'.
+        """
+        # Check for nested project_context first
+        if "project_context" in config and isinstance(config["project_context"], dict):
+            ctx = config["project_context"]
+            return cls(
+                project_id=ctx.get("project_id"),
+                project_name=ctx.get("project_name"),
+                task_id=ctx.get("task_id"),
+                sprint_id=ctx.get("sprint_id"),
+            )
+        
+        # Fall back to top-level keys
+        return cls(
+            project_id=config.get("project_id"),
+            project_name=config.get("project_name"),
+            task_id=config.get("task_id"),
+            sprint_id=config.get("sprint_id"),
+        )
+    
+    def is_empty(self) -> bool:
+        """Check if all fields are None."""
+        return all(v is None for v in [
+            self.project_id, self.project_name, self.task_id, self.sprint_id
+        ])
+
+
 class AgentCount(str, Enum):
     """How many agents a workflow requires."""
     NONE = "none"           # Workflow doesn't use agents
@@ -181,6 +254,7 @@ class WorkflowResult:
     Result of a workflow execution.
 
     Contains the final output, all step results, and aggregated metrics.
+    Includes optional ContextCore project context for tracking/correlation.
     """
     workflow_id: str
     success: bool
@@ -191,6 +265,8 @@ class WorkflowResult:
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # ContextCore project context
+    project_context: Optional[ProjectContext] = None
 
     @property
     def duration_ms(self) -> int:
@@ -202,7 +278,7 @@ class WorkflowResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dictionary for JSON export."""
-        return {
+        result = {
             "workflow_id": self.workflow_id,
             "success": self.success,
             "output": str(self.output)[:1000] if self.output else None,
@@ -214,6 +290,10 @@ class WorkflowResult:
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,
             "metadata": self.metadata,
         }
+        # Include project context if present
+        if self.project_context and not self.project_context.is_empty():
+            result["project_context"] = self.project_context.to_dict()
+        return result
 
     @classmethod
     def from_error(cls, workflow_id: str, error: str) -> "WorkflowResult":

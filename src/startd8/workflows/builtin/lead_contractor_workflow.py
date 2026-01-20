@@ -40,6 +40,7 @@ from ..models import (
     StepResult,
     AgentCount,
     ValidationResult,
+    ProjectContext,
 )
 from ...agents import BaseAgent
 from ...utils.agent_resolution import resolve_agent_spec
@@ -375,6 +376,9 @@ class LeadContractorWorkflow(WorkflowBase):
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
         integration_instructions = config.get("integration_instructions", "")
+        
+        # Extract ContextCore project context
+        project_context = self._extract_project_context(config)
 
         # Resolve agents
         try:
@@ -597,7 +601,8 @@ class LeadContractorWorkflow(WorkflowBase):
                 "lead_cost": result.lead_cost,
                 "drafter_cost": result.drafter_cost,
                 "cost_efficiency_ratio": result.get_cost_efficiency_ratio(),
-            }
+            },
+            project_context=project_context if not project_context.is_empty() else None,
         )
 
     # =========================================================================

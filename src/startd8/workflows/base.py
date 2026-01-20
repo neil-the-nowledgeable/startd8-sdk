@@ -12,6 +12,7 @@ from .models import (
     WorkflowMetadata,
     WorkflowResult,
     ValidationResult,
+    ProjectContext,
 )
 
 
@@ -354,3 +355,19 @@ class WorkflowBase:
                 callback(current, total, message)
             except Exception:
                 pass  # Don't let callback errors break workflow
+
+    def _extract_project_context(self, config: Dict[str, Any]) -> ProjectContext:
+        """
+        Extract ContextCore project context from workflow config.
+        
+        Supports two formats:
+        1. Nested: {"project_context": {"project_id": "...", ...}}
+        2. Top-level: {"project_id": "...", "task_id": "...", ...}
+        
+        Args:
+            config: Workflow configuration dictionary
+            
+        Returns:
+            ProjectContext instance (may be empty if no context provided)
+        """
+        return ProjectContext.from_config(config)
