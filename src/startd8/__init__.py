@@ -1,3 +1,16 @@
+# Copyright 2026 StartD8 Contributors
+# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+#
+# Licensed under the Equitable Use License, Version 1.0.
+# You may obtain a copy of the License at: LICENSE.md
+#
+# This software is provided "AS IS" without warranties of any kind.
+#
+# IMPORTANT: Use by government agencies (federal, state, local), fossil fuel
+# companies, military contractors, private prisons, investment banks, and
+# organizations using forced ranking systems is subject to the Maximum Fee.
+# See LICENSE.md for complete terms including worker protection provisions.
+
 """
 StartDate (startd8) SDK - Multi-LLM Agent Framework
 ====================================================

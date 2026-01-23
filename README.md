@@ -426,7 +426,53 @@ Contributions are welcome! This project is part of the StartDate initiative to b
 
 ## License
 
-MIT License - See LICENSE file for details
+This software is licensed under the **Equitable Use License v1.0**.
+
+### Who Can Use This Software for Free
+
+| You Are | Fee |
+|---------|-----|
+| Individual (personal use) | **Free** |
+| Small business (<$1M annual revenue) | **Free** |
+| Non-profit organization (501(c)(3) or equivalent) | **Free** |
+| Educational institution | **Free** |
+| Worker cooperative | **Free** |
+| Open source project | **Free** |
+| Founder from historically excluded community | **Free** (Restorative Access) |
+
+### Who Pays an Equitable Fee (5-15% of documented value)
+
+| You Are | Fee Basis |
+|---------|-----------|
+| Large corporation ($100M+ revenue) | 5-15% of documented value received |
+| Healthcare company (for-profit) | 5-15% of documented value received |
+
+### Who Pays Maximum Fee
+
+The following users are subject to the maximum fee permissible under law:
+
+- **All government agencies** (federal, state, and local) — including but not limited to law enforcement, military, intelligence, and immigration enforcement
+- Fossil fuel companies
+- Military contractors
+- Private prison operators
+- Investment banks
+- Lobbyists
+- Individuals with assets exceeding $100 million
+- Organizations using forced ranking/stack ranking systems
+
+### Worker Protection
+
+This license requires that efficiency gains from automation benefit workers:
+- **50%** of documented savings must flow to affected workers
+- **25%** must fund retraining and transition support
+- Using this software to eliminate jobs violates the license
+
+### Full License
+
+See [LICENSE.md](LICENSE.md) for complete terms, including:
+- Restorative Access provisions for historically excluded communities
+- Worker displacement remedies
+- Prohibited uses (fascism, genocide, weapons, surveillance)
 
 ## Related Projects
 

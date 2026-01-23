@@ -7,7 +7,7 @@ name = "startd8"
 version = "0.4.0"
 description = "Python SDK for StartDate (startd8) Agent Framework - Multi-LLM benchmarking and prompt management"
 readme = "README.md"
-license = {text = "MIT"}
+license = {file = "LICENSE.md"}
 requires-python = ">=3.9"
 authors = [
     {name = "StartDate Contributors", email = "contributors@startdate.dev"}
@@ -16,7 +16,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Libraries :: Python Modules",
-    "License :: OSI Approved :: MIT License",
+    "License :: Other/Proprietary License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -71,6 +71,7 @@ iterative-dev = "startd8.workflows.builtin.iterative_dev_workflow:IterativeDevWo
 design-polish = "startd8.workflows.builtin.design_polish_workflow:DesignPolishWorkflow"
 critical-review = "startd8.workflows.builtin.critical_review_workflow:CriticalReviewWorkflow"
 lead-contractor = "startd8.workflows.builtin.lead_contractor_workflow:LeadContractorWorkflow"
+lead-contractor-contextcore = "startd8.workflows.builtin.lead_contractor_contextcore_workflow:LeadContractorContextCoreWorkflow"
 policy-analysis = "startd8.workflows.builtin.policy_analysis_workflow:PolicyAnalysisWorkflow"
 plain-language = "startd8.workflows.builtin.plain_language_workflow:PlainLanguageWorkflow"
 

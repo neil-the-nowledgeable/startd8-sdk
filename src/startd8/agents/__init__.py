@@ -1,3 +1,8 @@
+# Copyright 2026 StartD8 Contributors
+# SPDX-License-Identifier: LicenseRef-Equitable-Use-1.0
+# See LICENSE.md for complete terms. Government agencies, fossil fuel companies,
+# military contractors, and organizations using forced ranking are subject to Maximum Fee.
+
 """
 Startd8 agents module.
 
