@@ -702,15 +702,18 @@ class LeadContractorWorkflow(WorkflowBase):
 
         response_text, response_time_ms, token_usage = drafter_agent.generate(prompt)
 
+        # Extract code from markdown code blocks (removes LLM commentary)
+        implementation_code = self._extract_code_from_response(response_text)
+
         # Check for truncation (API-level detection)
         was_truncated = token_usage.was_truncated if token_usage else False
 
         # Also run heuristic detection for incomplete code
-        if not was_truncated and response_text:
+        if not was_truncated and implementation_code:
             truncation_result = detect_truncation(
-                response_text,
+                implementation_code,
                 original_input=prompt,
-                expected_sections=["```python", "```"],  # Expect code blocks
+                expected_sections=["def ", "class "],  # Expect code structures
             )
             if truncation_result.is_truncated and truncation_result.confidence >= 0.7:
                 was_truncated = True
@@ -721,7 +724,7 @@ class LeadContractorWorkflow(WorkflowBase):
         draft = DraftResult(
             draft_id=draft_id,
             iteration=iteration,
-            implementation=response_text,
+            implementation=implementation_code,
             spec_id=spec.spec_id,
             agent_name=drafter_agent.name,
             model=drafter_agent.model,
@@ -821,9 +824,12 @@ class LeadContractorWorkflow(WorkflowBase):
 
         response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
 
+        # Extract code from markdown code blocks (removes LLM commentary/notes)
+        final_code = self._extract_code_from_response(response_text)
+
         integration = IntegrationResult(
             integration_id=integration_id,
-            final_implementation=response_text,
+            final_implementation=final_code,
             input_tokens=token_usage.input if token_usage else 0,
             output_tokens=token_usage.output if token_usage else 0,
             time_ms=response_time_ms,
@@ -889,6 +895,65 @@ class LeadContractorWorkflow(WorkflowBase):
             content = re.sub(r'^[-*]\s*', '', content, flags=re.MULTILINE)
             return content.strip()
         return ""
+
+    def _extract_code_from_response(self, response: str) -> str:
+        """
+        Extract code from markdown code blocks in LLM response.
+
+        Handles responses that include preamble text, code blocks, and
+        explanatory notes. Returns only the code content.
+
+        Supports:
+        - ```python ... ```
+        - ```yaml ... ```
+        - ``` ... ``` (generic)
+        - Multiple code blocks (returns first one)
+
+        Falls back to raw response if no code block found.
+        """
+        if not response:
+            return response
+
+        # Pattern to match code blocks with optional language specifier
+        # Captures content between ``` markers
+        pattern = r'```(?:\w+)?\s*\n(.*?)```'
+        matches = re.findall(pattern, response, re.DOTALL)
+
+        if matches:
+            # Return the first (and typically main) code block
+            extracted = matches[0].strip()
+
+            # If multiple code blocks, check if we should concatenate
+            # (e.g., for multi-file outputs). For now, return largest block.
+            if len(matches) > 1:
+                largest = max(matches, key=len).strip()
+                if len(largest) > len(extracted):
+                    extracted = largest
+
+            logger.debug(f"Extracted {len(extracted)} chars from code block (response was {len(response)} chars)")
+            return extracted
+
+        # No code blocks found - check if response looks like raw code
+        # (starts with shebang, import, def, class, etc.)
+        code_indicators = [
+            response.strip().startswith('#!/'),
+            response.strip().startswith('import '),
+            response.strip().startswith('from '),
+            response.strip().startswith('def '),
+            response.strip().startswith('class '),
+            response.strip().startswith('# ==='),  # Common header pattern
+        ]
+
+        if any(code_indicators):
+            logger.debug("Response appears to be raw code without markdown blocks")
+            return response.strip()
+
+        # Fallback: return as-is but log warning
+        logger.warning(
+            f"No code blocks found in response ({len(response)} chars). "
+            "Using raw response - may include commentary."
+        )
+        return response
 
     # =========================================================================
     # Test Plan Generation Methods
