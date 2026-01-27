@@ -73,21 +73,21 @@ class AnthropicProvider:
         "claude-opus-4-5-20251101": {
             "name": "Claude Opus 4.5",
             "context_window": 200000,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 64000,
             "cost_per_1m_input": 5.00,
             "cost_per_1m_output": 25.00,
         },
         "claude-sonnet-4-5-20250927": {
             "name": "Claude Sonnet 4.5",
             "context_window": 200000,  # 1M beta available
-            "max_output_tokens": 8192,
+            "max_output_tokens": 64000,
             "cost_per_1m_input": 3.00,
             "cost_per_1m_output": 15.00,
         },
         "claude-haiku-4-5-20251008": {
             "name": "Claude Haiku 4.5",
             "context_window": 200000,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 64000,
             "cost_per_1m_input": 1.00,
             "cost_per_1m_output": 5.00,
         },
@@ -95,14 +95,14 @@ class AnthropicProvider:
         "claude-opus-4-1-20250805": {
             "name": "Claude Opus 4.1",
             "context_window": 200000,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 64000,
             "cost_per_1m_input": 15.00,
             "cost_per_1m_output": 75.00,
         },
         "claude-sonnet-4-20250514": {
             "name": "Claude Sonnet 4",
             "context_window": 200000,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 64000,
             "cost_per_1m_input": 3.00,
             "cost_per_1m_output": 15.00,
         },
@@ -110,14 +110,14 @@ class AnthropicProvider:
         "claude-3-5-sonnet-20241022": {
             "name": "Claude 3.5 Sonnet",
             "context_window": 200000,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 64000,
             "cost_per_1m_input": 3.00,
             "cost_per_1m_output": 15.00,
         },
         "claude-3-5-haiku-20241022": {
             "name": "Claude 3.5 Haiku",
             "context_window": 200000,
-            "max_output_tokens": 8192,
+            "max_output_tokens": 64000,
             "cost_per_1m_input": 1.00,
             "cost_per_1m_output": 5.00,
         },
@@ -198,7 +198,7 @@ class AnthropicProvider:
             name: Optional agent name (defaults to model-based name)
             **config: Configuration options
                 - api_key: Anthropic API key (or use ANTHROPIC_API_KEY env var)
-                - max_tokens: Maximum tokens to generate (default 4096)
+                - max_tokens: Maximum tokens to generate (default 16384)
                 - cost_tracker: Optional cost tracker instance
                 - budget_manager: Optional budget manager instance
         """
@@ -224,7 +224,7 @@ class AnthropicProvider:
             name=name,
             model=model,
             api_key=config.get('api_key'),
-            max_tokens=config.get('max_tokens', 4096),
+            max_tokens=config.get('max_tokens', 16384),  # Claude 4.5 supports up to 64K output tokens
             cost_tracker=config.get('cost_tracker'),
             budget_manager=config.get('budget_manager')
         )
