@@ -30,10 +30,20 @@ __all__ = [
 
 
 class DrafterChoice(str, Enum):
-    """Available drafter models (cheaper options)."""
+    """Available drafter models (cheaper options for drafting work)."""
+    # OpenAI GPT-4.1 family (1M context, April 2025)
+    GPT_4_1_MINI = "openai:gpt-4.1-mini"       # $0.40/$1.60 per 1M tokens - fast, cost-efficient
+    GPT_4_1_NANO = "openai:gpt-4.1-nano"       # $0.10/$0.40 per 1M tokens - ultra-fast, lowest cost
+    # OpenAI GPT-4o family (legacy but still good)
     GPT_4O_MINI = "openai:gpt-4o-mini"         # $0.15/$0.60 per 1M tokens
-    GEMINI_FLASH = "gemini:gemini-2.0-flash"    # $0.10/$0.40 per 1M tokens
-    GEMINI_FLASH_LITE = "gemini:gemini-2.0-flash-lite"  # $0.075/$0.30
+    # Google Gemini 2.5 family (recommended)
+    GEMINI_2_5_FLASH = "gemini:gemini-2.5-flash"         # $0.15/$0.60 per 1M tokens
+    GEMINI_2_5_FLASH_LITE = "gemini:gemini-2.5-flash-lite"  # $0.075/$0.30 per 1M tokens
+    # Google Gemini 3.x family (latest)
+    GEMINI_3_FLASH_PREVIEW = "gemini:gemini-3-flash-preview"  # $0.10/$0.40 per 1M tokens
+    # Google Gemini 2.0 family (retiring March 2026)
+    GEMINI_2_0_FLASH = "gemini:gemini-2.0-flash"          # $0.10/$0.40 per 1M tokens
+    GEMINI_2_0_FLASH_LITE = "gemini:gemini-2.0-flash-lite"  # $0.075/$0.30 per 1M tokens
 
 
 class WorkflowPhase(str, Enum):
@@ -55,8 +65,8 @@ class LeadContractorConfig:
     Attributes:
         task_description: What needs to be implemented
         context: Additional context (existing code, requirements, constraints)
-        lead_agent: Claude agent spec (default: claude-sonnet-4-20250514)
-        drafter_agent: Drafter agent spec (default: openai:gpt-4o-mini)
+        lead_agent: Claude agent spec (default: claude-sonnet-4-20250514 - Sonnet 4)
+        drafter_agent: Drafter agent spec (default: gemini:gemini-2.5-flash-lite)
         max_iterations: Maximum draft/review cycles (default: 3)
         pass_threshold: Minimum review score to pass (0-100, default: 80)
         output_format: Expected output format guidance for drafter
@@ -65,7 +75,7 @@ class LeadContractorConfig:
     task_description: str
     context: Optional[Dict[str, Any]] = None
     lead_agent: str = "anthropic:claude-sonnet-4-20250514"
-    drafter_agent: str = "openai:gpt-4o-mini"
+    drafter_agent: str = "gemini:gemini-2.5-flash"
     max_iterations: int = 3
     pass_threshold: int = 80
     output_format: Optional[str] = None
@@ -119,6 +129,7 @@ class DraftResult:
     output_tokens: int = 0
     cost: float = 0.0
     time_ms: int = 0
+    was_truncated: bool = False  # Whether output was truncated
 
 
 @dataclass

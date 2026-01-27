@@ -46,6 +46,7 @@ from ...agents import BaseAgent
 from ...utils.agent_resolution import resolve_agent_spec
 from ...logging_config import get_logger
 from ...costs.pricing import PricingService
+from ...truncation_detection import TruncationResult, detect_truncation
 
 from .lead_contractor_models import (
     LeadContractorConfig,
@@ -225,7 +226,7 @@ class LeadContractorWorkflow(WorkflowBase):
         {
             "task_description": "string - What to implement",
             "context": {...} - Optional additional context,
-            "lead_agent": "anthropic:claude-sonnet-4-5-20250927" - Lead contractor (Sonnet 4.5),
+            "lead_agent": "anthropic:claude-sonnet-4-20250514" - Lead contractor (Sonnet 4),
             "drafter_agent": "gemini:gemini-2.5-flash-lite" - Drafter agent (best value),
             "max_iterations": 3 - Max review cycles,
             "pass_threshold": 80 - Minimum score to pass (0-100),
@@ -234,7 +235,7 @@ class LeadContractorWorkflow(WorkflowBase):
         }
 
     Recommended Lead Agents:
-        - anthropic:claude-sonnet-4-5-20250927 (default - best for coding/agents)
+        - anthropic:claude-sonnet-4-20250514 (default - best for coding/agents)
         - anthropic:claude-opus-4-5-20251101 (most intelligent)
         - anthropic:claude-haiku-4-5-20251008 (fastest, near-frontier)
 
@@ -294,8 +295,8 @@ class LeadContractorWorkflow(WorkflowBase):
                     name="lead_agent",
                     type="agent_spec",
                     required=False,
-                    default="anthropic:claude-sonnet-4-5-20250927",
-                    description="Lead contractor agent (Claude 4.5 recommended: sonnet-4-5, opus-4-5, haiku-4-5)"
+                    default="anthropic:claude-sonnet-4-20250514",
+                    description="Lead contractor agent (Claude 4 recommended: sonnet-4, opus-4-5, haiku-4-5)"
                 ),
                 WorkflowInput(
                     name="drafter_agent",
@@ -370,12 +371,13 @@ class LeadContractorWorkflow(WorkflowBase):
         # Parse configuration
         task_description = config["task_description"]
         context = config.get("context", {})
-        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-5-20250927")
-        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash-lite")
+        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
+        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash")
         max_iterations = config.get("max_iterations", 3)
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
         integration_instructions = config.get("integration_instructions", "")
+        fail_on_truncation = config.get("fail_on_truncation", True)  # Fail by default
         
         # Extract ContextCore project context
         project_context = self._extract_project_context(config)
@@ -456,6 +458,27 @@ class LeadContractorWorkflow(WorkflowBase):
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
+
+                # Check for truncation - fail fast if enabled
+                if draft.was_truncated:
+                    if fail_on_truncation:
+                        error_msg = (
+                            f"Draft was truncated at iteration {iteration}. "
+                            f"Output tokens: {draft.output_tokens}. "
+                            "Consider: (1) increasing max_tokens, (2) decomposing the task, "
+                            "or (3) setting fail_on_truncation=False to continue anyway."
+                        )
+                        logger.error(error_msg)
+                        return WorkflowResult.from_error(
+                            self.metadata.workflow_id,
+                            error_msg,
+                            steps=step_results,
+                        )
+                    else:
+                        logger.warning(
+                            f"Draft was truncated at iteration {iteration}, continuing anyway. "
+                            f"Set fail_on_truncation=True to fail on truncation."
+                        )
 
                 step_results.append(StepResult(
                     step_name=f"draft_iteration_{iteration}",
@@ -679,6 +702,22 @@ class LeadContractorWorkflow(WorkflowBase):
 
         response_text, response_time_ms, token_usage = drafter_agent.generate(prompt)
 
+        # Check for truncation (API-level detection)
+        was_truncated = token_usage.was_truncated if token_usage else False
+
+        # Also run heuristic detection for incomplete code
+        if not was_truncated and response_text:
+            truncation_result = detect_truncation(
+                response_text,
+                original_input=prompt,
+                expected_sections=["```python", "```"],  # Expect code blocks
+            )
+            if truncation_result.is_truncated and truncation_result.confidence >= 0.7:
+                was_truncated = True
+                logger.warning(
+                    f"Draft appears truncated (heuristic): {truncation_result.indicators[:3]}"
+                )
+
         draft = DraftResult(
             draft_id=draft_id,
             iteration=iteration,
@@ -689,6 +728,7 @@ class LeadContractorWorkflow(WorkflowBase):
             input_tokens=token_usage.input if token_usage else 0,
             output_tokens=token_usage.output if token_usage else 0,
             time_ms=response_time_ms,
+            was_truncated=was_truncated,  # Track truncation status
         )
 
         draft.cost = self._pricing.calculate_total_cost(
