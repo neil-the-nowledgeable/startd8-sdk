@@ -22,9 +22,170 @@ class TruncationResult:
     confidence: float  # 0.0 to 1.0
     indicators: List[str]
     details: Dict[str, Any]
-    
+
     def __bool__(self):
         return self.is_truncated
+
+
+@dataclass
+class PreFlightEstimate:
+    """
+    Pre-flight size estimation for proactive truncation prevention.
+
+    Used to estimate output size BEFORE generation to prevent truncation,
+    rather than detecting it after the fact.
+
+    Attributes:
+        estimated_lines: Estimated number of output lines
+        estimated_tokens: Estimated output token count
+        complexity: Task complexity level
+        confidence: Confidence in the estimate (0.0 to 1.0)
+        exceeds_limit: Whether estimate exceeds the safe limit
+        suggested_action: Recommended action ('generate', 'decompose', 'reject')
+        reasoning: Human-readable explanation
+    """
+    estimated_lines: int
+    estimated_tokens: int
+    complexity: str  # "low", "medium", "high"
+    confidence: float
+    exceeds_limit: bool
+    suggested_action: str  # "generate", "decompose", "reject"
+    reasoning: str
+    safe_line_limit: int = 150
+    safe_token_limit: int = 500
+
+
+def estimate_output_size(
+    task_description: str,
+    inputs: Optional[Dict[str, Any]] = None,
+    safe_line_limit: int = 150,
+    safe_token_limit: int = 500,
+) -> PreFlightEstimate:
+    """
+    Estimate output size BEFORE generation for proactive truncation prevention.
+
+    This function uses heuristics to estimate how large the LLM output will be,
+    allowing callers to decompose large tasks BEFORE hitting token limits.
+
+    Args:
+        task_description: Natural language description of what to generate
+        inputs: Additional context (target_file, required_exports, etc.)
+        safe_line_limit: Maximum safe lines for output (default 150)
+        safe_token_limit: Maximum safe tokens for output (default 500)
+
+    Returns:
+        PreFlightEstimate with size prediction and recommended action
+
+    Example:
+        estimate = estimate_output_size(
+            "Implement a REST API client with CRUD operations",
+            inputs={"required_exports": ["APIClient", "Response"]}
+        )
+
+        if estimate.exceeds_limit:
+            # Decompose into smaller tasks
+            print(f"Task too large: {estimate.reasoning}")
+    """
+    inputs = inputs or {}
+    task_lower = task_description.lower()
+
+    # Detect complexity from keywords
+    high_keywords = [
+        "comprehensive", "complete", "full", "entire", "all methods",
+        "with tests", "crud", "api", "rest api", "async", "concurrent",
+        "error handling", "logging", "metrics", "observability",
+    ]
+    medium_keywords = [
+        "implement", "create", "build", "add", "multiple",
+        "methods", "functions", "class", "module", "service",
+    ]
+    low_keywords = [
+        "fix", "patch", "update", "modify", "simple", "basic",
+        "single", "one", "small", "minor", "quick",
+    ]
+
+    high_score = sum(1 for kw in high_keywords if kw in task_lower)
+    medium_score = sum(1 for kw in medium_keywords if kw in task_lower)
+    low_score = sum(1 for kw in low_keywords if kw in task_lower)
+
+    if high_score >= 2 or (high_score >= 1 and medium_score >= 2):
+        complexity = "high"
+        base_multiplier = 1.4
+    elif low_score >= 2 and high_score == 0:
+        complexity = "low"
+        base_multiplier = 0.8
+    else:
+        complexity = "medium"
+        base_multiplier = 1.0
+
+    # Estimate constructs from task and inputs
+    lines = 20  # Base minimum
+
+    # Count from required exports
+    required_exports = inputs.get("required_exports") or []
+    for export in required_exports:
+        if export and export[0].isupper():
+            lines += 40  # Class
+        else:
+            lines += 15  # Function
+
+    # Count from task description patterns
+    if "class" in task_lower:
+        lines += 40
+    if "dataclass" in task_lower:
+        lines += 15
+    if "enum" in task_lower:
+        lines += 10
+    if "crud" in task_lower:
+        lines += 48  # 4 methods * 12 lines
+    if "api" in task_lower and "client" in task_lower:
+        lines += 60  # API client typically needs multiple methods
+    if "test" in task_lower:
+        lines += 50  # Tests add significant code
+
+    # Apply complexity multiplier
+    estimated_lines = int(lines * base_multiplier)
+    estimated_tokens = estimated_lines * 3  # ~3 tokens per line
+
+    # Determine if limits exceeded
+    exceeds_limit = estimated_lines > safe_line_limit or estimated_tokens > safe_token_limit
+
+    # Determine action
+    if exceeds_limit:
+        allows_chunking = inputs.get("allows_chunking", True)
+        suggested_action = "decompose" if allows_chunking else "reject"
+    else:
+        suggested_action = "generate"
+
+    # Calculate confidence
+    confidence = 0.5
+    if required_exports:
+        confidence += 0.2
+    if inputs.get("context_files"):
+        confidence += 0.1
+    if "vague" in task_lower or "something" in task_lower:
+        confidence -= 0.2
+    confidence = max(0.2, min(0.9, confidence))
+
+    # Build reasoning
+    reasoning_parts = [f"Complexity: {complexity}"]
+    if required_exports:
+        reasoning_parts.append(f"{len(required_exports)} exports requested")
+    reasoning_parts.append(f"Estimated {estimated_lines} lines ({estimated_tokens} tokens)")
+    if exceeds_limit:
+        reasoning_parts.append(f"Exceeds safe limit of {safe_line_limit} lines")
+
+    return PreFlightEstimate(
+        estimated_lines=estimated_lines,
+        estimated_tokens=estimated_tokens,
+        complexity=complexity,
+        confidence=confidence,
+        exceeds_limit=exceeds_limit,
+        suggested_action=suggested_action,
+        reasoning="; ".join(reasoning_parts),
+        safe_line_limit=safe_line_limit,
+        safe_token_limit=safe_token_limit,
+    )
 
 
 def detect_truncation(

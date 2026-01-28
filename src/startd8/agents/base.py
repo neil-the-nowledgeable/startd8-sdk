@@ -16,7 +16,11 @@ from typing import Optional, Tuple
 
 from ..models import TokenUsage, AgentResponse, ResponseMetadata
 from ..exceptions import TruncationWarning
-from ..truncation_detection import detect_truncation
+from ..truncation_detection import (
+    detect_truncation,
+    PreFlightEstimate,
+    estimate_output_size,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -556,3 +560,160 @@ class BaseAgent(ABC):
         self._check_for_truncation(response_obj, prompt)
 
         return response_obj
+
+    def _pre_flight_check(
+        self,
+        task_description: str,
+        inputs: Optional[dict] = None,
+        safe_line_limit: int = 150,
+        safe_token_limit: int = 500,
+    ) -> PreFlightEstimate:
+        """
+        Perform pre-flight size estimation BEFORE generation.
+
+        This is the proactive truncation prevention pattern: estimate output
+        size before generation and provide warnings/recommendations if the
+        output is likely to exceed safe limits.
+
+        Args:
+            task_description: Natural language description of what to generate
+            inputs: Additional context (target_file, required_exports, etc.)
+            safe_line_limit: Maximum safe lines for output (default 150)
+            safe_token_limit: Maximum safe tokens for output (default 500)
+
+        Returns:
+            PreFlightEstimate with size prediction and recommended action
+
+        Example:
+            estimate = agent._pre_flight_check(
+                "Implement a REST API client with CRUD operations",
+                inputs={"required_exports": ["APIClient"]}
+            )
+
+            if estimate.exceeds_limit:
+                logger.warning(f"Task may be too large: {estimate.reasoning}")
+                if estimate.suggested_action == "decompose":
+                    # Split into smaller tasks
+                    pass
+        """
+        return estimate_output_size(
+            task_description=task_description,
+            inputs=inputs,
+            safe_line_limit=safe_line_limit,
+            safe_token_limit=safe_token_limit,
+        )
+
+    async def agenerate_with_validation(
+        self,
+        prompt: str,
+        task_description: Optional[str] = None,
+        inputs: Optional[dict] = None,
+        safe_line_limit: int = 150,
+        safe_token_limit: int = 500,
+        strict: bool = False,
+    ) -> Tuple[str, int, TokenUsage, Optional[PreFlightEstimate]]:
+        """
+        Generate with pre-flight validation and post-generation truncation check.
+
+        This method combines proactive (pre-flight) and reactive (post-generation)
+        truncation prevention for comprehensive protection.
+
+        Args:
+            prompt: The prompt text
+            task_description: Optional description for pre-flight estimation
+                             (if None, skips pre-flight check)
+            inputs: Additional context for pre-flight estimation
+            safe_line_limit: Maximum safe lines for output
+            safe_token_limit: Maximum safe tokens for output
+            strict: If True, raise exception when limits exceeded
+
+        Returns:
+            Tuple of (response_text, response_time_ms, token_usage, pre_flight_estimate)
+            pre_flight_estimate is None if task_description was not provided
+
+        Raises:
+            ValueError: If strict=True and pre-flight estimate exceeds limits
+
+        Example:
+            response, time_ms, usage, estimate = await agent.agenerate_with_validation(
+                prompt="Generate the FooBar class...",
+                task_description="Implement FooBar class with 5 methods",
+                inputs={"required_exports": ["FooBar"]},
+                strict=False,
+            )
+
+            if estimate and estimate.exceeds_limit:
+                logger.warning(f"Output may be truncated: {estimate.reasoning}")
+        """
+        pre_flight_estimate = None
+
+        # Step 1: Pre-flight check (if task_description provided)
+        if task_description:
+            pre_flight_estimate = self._pre_flight_check(
+                task_description=task_description,
+                inputs=inputs,
+                safe_line_limit=safe_line_limit,
+                safe_token_limit=safe_token_limit,
+            )
+
+            if pre_flight_estimate.exceeds_limit:
+                warning_msg = (
+                    f"Pre-flight check warning for {self.name}: "
+                    f"{pre_flight_estimate.reasoning}. "
+                    f"Suggested action: {pre_flight_estimate.suggested_action}"
+                )
+                logger.warning(
+                    warning_msg,
+                    extra={
+                        "agent_name": self.name,
+                        "model": self.model,
+                        "estimated_lines": pre_flight_estimate.estimated_lines,
+                        "safe_line_limit": safe_line_limit,
+                        "suggested_action": pre_flight_estimate.suggested_action,
+                    }
+                )
+
+                if strict and pre_flight_estimate.suggested_action == "reject":
+                    raise ValueError(
+                        f"Pre-flight check rejected task: {pre_flight_estimate.reasoning}"
+                    )
+
+        # Step 2: Generate
+        response_text, response_time_ms, token_usage = await self.agenerate(prompt)
+
+        # Step 3: Post-generation truncation check
+        truncation_result = detect_truncation(
+            output=response_text,
+            original_input=prompt,
+            strict_mode=strict,
+        )
+
+        if truncation_result.is_truncated:
+            warning_msg = (
+                f"Truncation detected in output from {self.name}. "
+                f"Confidence: {truncation_result.confidence:.0%}. "
+                f"Indicators: {', '.join(truncation_result.indicators[:3])}"
+            )
+            logger.warning(
+                warning_msg,
+                extra={
+                    "agent_name": self.name,
+                    "model": self.model,
+                    "truncation_confidence": truncation_result.confidence,
+                    "truncation_indicators": truncation_result.indicators,
+                    "pre_flight_estimated_lines": pre_flight_estimate.estimated_lines if pre_flight_estimate else None,
+                }
+            )
+
+            if strict:
+                warnings.warn(
+                    TruncationWarning(
+                        warning_msg,
+                        agent_name=self.name,
+                        indicators=truncation_result.indicators,
+                        confidence=truncation_result.confidence,
+                    ),
+                    stacklevel=2,
+                )
+
+        return response_text, response_time_ms, token_usage, pre_flight_estimate

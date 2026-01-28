@@ -175,11 +175,59 @@ class AgentProvider(Protocol):
         If `model` is provided, returns capabilities specific to that model.
         If `model` is None, returns provider-level capabilities (often a union
         across supported models).
-        
+
         Returns:
             List of capability identifiers
-        
+
         Example:
             ['text-generation', 'function-calling', 'vision']
         """
         return ['text-generation']
+
+    def estimate_safe_output(
+        self,
+        model: str,
+        complexity: str = "medium",
+    ) -> Dict[str, int]:
+        """
+        Estimate safe output limits for a model based on task complexity.
+
+        This method enables proactive truncation prevention by providing
+        model-specific output limits that callers can use to decompose
+        large tasks BEFORE generation.
+
+        Args:
+            model: Model identifier (e.g., 'claude-3-opus-20240229')
+            complexity: Task complexity level ('low', 'medium', 'high')
+
+        Returns:
+            Dictionary with safe limits:
+            {
+                'max_lines': int,      # Safe number of output lines
+                'max_tokens': int,     # Safe number of output tokens
+                'buffer_percent': int, # Safety margin percentage
+            }
+
+        Example:
+            limits = provider.estimate_safe_output(
+                model="claude-3-opus-20240229",
+                complexity="high"
+            )
+            # Returns: {'max_lines': 120, 'max_tokens': 400, 'buffer_percent': 20}
+
+            if estimated_lines > limits['max_lines']:
+                # Decompose the task
+                pass
+
+        Note:
+            Default implementation provides conservative estimates.
+            Provider implementations should override with model-specific limits.
+        """
+        # Default conservative estimates based on complexity
+        # Providers should override with model-specific values
+        complexity_limits = {
+            "low": {"max_lines": 200, "max_tokens": 600, "buffer_percent": 10},
+            "medium": {"max_lines": 150, "max_tokens": 500, "buffer_percent": 15},
+            "high": {"max_lines": 100, "max_tokens": 350, "buffer_percent": 20},
+        }
+        return complexity_limits.get(complexity, complexity_limits["medium"])
