@@ -1,0 +1,491 @@
+# Documentation Tasks for Evaluation
+# Category: documentation
+# Tests: documentation writing, explanation, and technical communication capabilities
+
+tasks:
+  - id: documentation-api-docs
+    name: Write API Documentation
+    description: Write clear, comprehensive API documentation for developers.
+    category: documentation
+    difficulty: easy
+    prompt_template: |
+      Write API documentation for the following {{LANGUAGE}} API:
+
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Documentation requirements:
+      1. **Overview**: Brief description of what the API does
+      2. **Authentication**: How to authenticate (if applicable)
+      3. **Endpoints/Methods**: For each public method:
+         - Description
+         - Parameters (name, type, required, description)
+         - Return value (type, description)
+         - Exceptions/errors
+         - Example usage
+      4. **Error Handling**: Common errors and how to handle them
+      5. **Rate Limits**: If applicable
+      6. **Quick Start**: Getting started example
+
+      Use {{FORMAT}} format. Include code examples in {{EXAMPLE_LANGUAGE}}.
+
+      Documentation should be:
+      - Clear and concise
+      - Complete without being overwhelming
+      - Include copy-paste ready examples
+      - Follow standard documentation conventions
+    variables:
+      - name: LANGUAGE
+        description: Language of the API code
+        default: "Python"
+        required: true
+      - name: CODE
+        description: API code to document
+        default: |
+          class WeatherClient:
+              """Client for fetching weather data."""
+
+              def __init__(self, api_key: str, base_url: str = "https://api.weather.example.com"):
+                  self.api_key = api_key
+                  self.base_url = base_url
+
+              def get_current(self, city: str, units: str = "metric") -> dict:
+                  """Get current weather for a city."""
+                  pass
+
+              def get_forecast(self, city: str, days: int = 5, units: str = "metric") -> list:
+                  """Get weather forecast for upcoming days."""
+                  pass
+
+              def get_historical(self, city: str, date: str) -> dict:
+                  """Get historical weather for a specific date (YYYY-MM-DD)."""
+                  pass
+
+              def search_cities(self, query: str, limit: int = 10) -> list:
+                  """Search for cities matching a query."""
+                  pass
+        required: true
+      - name: FORMAT
+        description: Documentation format
+        default: "Markdown"
+        required: true
+        options:
+          - Markdown
+          - reStructuredText
+          - OpenAPI
+      - name: EXAMPLE_LANGUAGE
+        description: Language for code examples
+        default: "Python"
+        required: false
+    capabilities_tested:
+      - documentation
+      - reasoning
+    evaluation_criteria:
+      - name: completeness
+        description: All methods are documented
+        weight: 0.3
+        required: true
+      - name: clarity
+        description: Documentation is clear and understandable
+        weight: 0.25
+        required: true
+      - name: examples
+        description: Examples are helpful and runnable
+        weight: 0.25
+        required: true
+      - name: format
+        description: Proper formatting and structure
+        weight: 0.2
+        required: false
+    tags:
+      - api-docs
+      - developer-docs
+      - technical-writing
+
+  - id: documentation-explain-code
+    name: Explain Complex Code
+    description: Explain complex code to developers of different skill levels.
+    category: documentation
+    difficulty: medium
+    prompt_template: |
+      Explain the following {{LANGUAGE}} code for a {{AUDIENCE}} developer:
+
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Explanation should include:
+      1. **High-level overview**: What does this code do?
+      2. **Step-by-step walkthrough**: Explain each major section
+      3. **Key concepts**: Explain any patterns, algorithms, or techniques used
+      4. **Why it works**: The reasoning behind the approach
+      5. **Potential gotchas**: Non-obvious behaviors or edge cases
+      6. **Alternatives**: Other ways this could be implemented
+
+      Adjust technical depth for the {{AUDIENCE}} audience:
+      - Junior: Explain fundamentals, define terms
+      - Mid-level: Focus on patterns and trade-offs
+      - Senior: Emphasize architectural decisions and edge cases
+
+      Use diagrams or pseudocode if helpful.
+    variables:
+      - name: LANGUAGE
+        description: Programming language
+        default: "Python"
+        required: true
+      - name: CODE
+        description: Code to explain
+        default: |
+          from typing import TypeVar, Generic, Optional, Callable
+          from dataclasses import dataclass
+
+          T = TypeVar('T')
+          E = TypeVar('E')
+
+          @dataclass
+          class Result(Generic[T, E]):
+              _value: Optional[T] = None
+              _error: Optional[E] = None
+              _is_ok: bool = True
+
+              @classmethod
+              def ok(cls, value: T) -> 'Result[T, E]':
+                  return cls(_value=value, _is_ok=True)
+
+              @classmethod
+              def err(cls, error: E) -> 'Result[T, E]':
+                  return cls(_error=error, _is_ok=False)
+
+              def map(self, fn: Callable[[T], 'U']) -> 'Result[U, E]':
+                  if self._is_ok:
+                      return Result.ok(fn(self._value))
+                  return Result.err(self._error)
+
+              def flat_map(self, fn: Callable[[T], 'Result[U, E]']) -> 'Result[U, E]':
+                  if self._is_ok:
+                      return fn(self._value)
+                  return Result.err(self._error)
+
+              def unwrap_or(self, default: T) -> T:
+                  return self._value if self._is_ok else default
+
+              def unwrap_or_else(self, fn: Callable[[E], T]) -> T:
+                  return self._value if self._is_ok else fn(self._error)
+        required: true
+      - name: AUDIENCE
+        description: Target audience skill level
+        default: "mid-level"
+        required: true
+        options:
+          - junior
+          - mid-level
+          - senior
+    capabilities_tested:
+      - documentation
+      - code_analysis
+      - reasoning
+    evaluation_criteria:
+      - name: accuracy
+        description: Explanation is technically accurate
+        weight: 0.3
+        required: true
+      - name: clarity
+        description: Explanation is clear for the target audience
+        weight: 0.25
+        required: true
+      - name: depth
+        description: Appropriate depth for audience level
+        weight: 0.2
+        required: true
+      - name: completeness
+        description: All important aspects are covered
+        weight: 0.15
+        required: true
+      - name: pedagogy
+        description: Explanation teaches effectively
+        weight: 0.1
+        required: false
+    tags:
+      - code-explanation
+      - teaching
+      - technical-writing
+
+  - id: documentation-readme
+    name: Write README
+    description: Write a comprehensive README for a software project.
+    category: documentation
+    difficulty: easy
+    prompt_template: |
+      Write a README.md for the following project:
+
+      Project name: {{PROJECT_NAME}}
+      Description: {{PROJECT_DESCRIPTION}}
+
+      Project structure:
+      ```
+      {{PROJECT_STRUCTURE}}
+      ```
+
+      README sections to include:
+      1. **Title and badges** (build status, version, license)
+      2. **Description**: What the project does and why
+      3. **Features**: Key features list
+      4. **Installation**: How to install/setup
+      5. **Quick Start**: Minimal example to get started
+      6. **Usage**: More detailed usage examples
+      7. **Configuration**: Configuration options
+      8. **API Reference**: Brief API overview (link to full docs)
+      9. **Contributing**: How to contribute
+      10. **License**: License information
+
+      The README should be:
+      - Scannable (users should quickly understand what this is)
+      - Complete enough to get started
+      - Professional and well-formatted
+      - Include real, working examples
+    variables:
+      - name: PROJECT_NAME
+        description: Name of the project
+        default: "FastCache"
+        required: true
+      - name: PROJECT_DESCRIPTION
+        description: What the project does
+        default: "A high-performance, thread-safe in-memory cache for Python with TTL support, size limits, and multiple eviction policies."
+        required: true
+      - name: PROJECT_STRUCTURE
+        description: Project directory structure
+        default: |
+          fastcache/
+          ├── __init__.py
+          ├── cache.py          # Core Cache class
+          ├── policies.py       # Eviction policies (LRU, LFU, FIFO)
+          ├── serializers.py    # Serialization support
+          └── stats.py          # Cache statistics
+          tests/
+          ├── test_cache.py
+          ├── test_policies.py
+          └── test_concurrency.py
+          examples/
+          ├── basic_usage.py
+          └── web_caching.py
+          pyproject.toml
+          LICENSE
+        required: true
+    capabilities_tested:
+      - documentation
+      - reasoning
+    evaluation_criteria:
+      - name: completeness
+        description: All essential sections are included
+        weight: 0.25
+        required: true
+      - name: clarity
+        description: README is clear and well-organized
+        weight: 0.25
+        required: true
+      - name: examples
+        description: Examples are practical and work
+        weight: 0.25
+        required: true
+      - name: professionalism
+        description: Professional formatting and tone
+        weight: 0.15
+        required: false
+      - name: scannability
+        description: Easy to scan and find information
+        weight: 0.1
+        required: false
+    tags:
+      - readme
+      - project-docs
+      - open-source
+
+  - id: documentation-architecture-docs
+    name: Architecture Documentation
+    description: Write architecture documentation for a complex system.
+    category: documentation
+    difficulty: hard
+    prompt_template: |
+      Write architecture documentation for the following system:
+
+      {{SYSTEM_DESCRIPTION}}
+
+      Create documentation following the arc42 or C4 model including:
+
+      1. **Introduction and Goals**
+         - System purpose and objectives
+         - Key quality requirements
+         - Stakeholders
+
+      2. **Constraints**
+         - Technical constraints
+         - Organizational constraints
+         - Conventions
+
+      3. **Context and Scope**
+         - Business context (external actors)
+         - Technical context (external systems)
+
+      4. **Solution Strategy**
+         - Key architectural decisions
+         - Technology choices with rationale
+
+      5. **Building Block View**
+         - Level 1: System decomposition
+         - Level 2: Component details
+         - Key interfaces
+
+      6. **Runtime View**
+         - Key scenarios and flows
+         - Sequence diagrams for critical paths
+
+      7. **Deployment View**
+         - Infrastructure
+         - Deployment topology
+
+      8. **Cross-cutting Concepts**
+         - Security
+         - Error handling
+         - Monitoring
+
+      9. **Decisions**
+         - Architecture Decision Records (ADRs)
+
+      Include diagrams (described in text/Mermaid format) where appropriate.
+    variables:
+      - name: SYSTEM_DESCRIPTION
+        description: System to document
+        default: |
+          ## System: Real-time Analytics Platform
+
+          ### Purpose
+          Process and analyze millions of events per day from IoT devices,
+          providing real-time dashboards and historical analytics.
+
+          ### Components
+          - Event ingestion (Kafka)
+          - Stream processing (Flink)
+          - Time-series database (InfluxDB)
+          - API layer (Go microservices)
+          - Dashboard (React)
+          - Alerting system
+
+          ### Scale
+          - 10M events/day
+          - 1000 connected devices
+          - 50 dashboard users
+          - 99.9% uptime requirement
+          - P95 query latency < 500ms
+        required: true
+    capabilities_tested:
+      - documentation
+      - architecture
+      - system_design
+      - reasoning
+    evaluation_criteria:
+      - name: structure
+        description: Follows arc42/C4 structure properly
+        weight: 0.2
+        required: true
+      - name: completeness
+        description: All major sections are covered
+        weight: 0.25
+        required: true
+      - name: clarity
+        description: Documentation is clear and useful
+        weight: 0.2
+        required: true
+      - name: diagrams
+        description: Diagrams effectively illustrate the architecture
+        weight: 0.2
+        required: true
+      - name: decisions
+        description: Key decisions are documented with rationale
+        weight: 0.15
+        required: false
+    tags:
+      - architecture
+      - arc42
+      - c4-model
+      - system-design
+
+  - id: documentation-troubleshooting
+    name: Troubleshooting Guide
+    description: Write a troubleshooting guide for common issues.
+    category: documentation
+    difficulty: medium
+    prompt_template: |
+      Write a troubleshooting guide for the following system:
+
+      System: {{SYSTEM_NAME}}
+      Description: {{SYSTEM_DESCRIPTION}}
+
+      Known issues to cover:
+      {{KNOWN_ISSUES}}
+
+      For each issue, document:
+      1. **Symptom**: How the issue manifests
+      2. **Possible Causes**: What might cause this
+      3. **Diagnosis Steps**: How to identify the root cause
+      4. **Solutions**: Step-by-step resolution for each cause
+      5. **Prevention**: How to prevent this in the future
+      6. **Related Issues**: Links to related problems
+
+      Also include:
+      - **General Debugging Tips**: How to approach unknown issues
+      - **Log Locations**: Where to find relevant logs
+      - **Health Checks**: How to verify system health
+      - **Escalation Path**: When and how to escalate
+
+      Format for searchability and quick reference.
+    variables:
+      - name: SYSTEM_NAME
+        description: Name of the system
+        default: "PaymentService"
+        required: true
+      - name: SYSTEM_DESCRIPTION
+        description: Brief system description
+        default: "Microservice handling payment processing, integrating with Stripe and PayPal, using PostgreSQL for transaction records and Redis for idempotency keys."
+        required: true
+      - name: KNOWN_ISSUES
+        description: Known issues to document
+        default: |
+          1. Payment timeouts during peak hours
+          2. Duplicate charges appearing
+          3. Webhook delivery failures
+          4. Database connection pool exhaustion
+          5. Redis connection drops
+          6. Stripe API rate limiting
+          7. Inconsistent payment status between service and provider
+        required: true
+    capabilities_tested:
+      - documentation
+      - debugging
+      - reasoning
+    evaluation_criteria:
+      - name: coverage
+        description: All known issues are covered
+        weight: 0.25
+        required: true
+      - name: actionability
+        description: Solutions are actionable and specific
+        weight: 0.25
+        required: true
+      - name: diagnosis
+        description: Diagnosis steps are clear and effective
+        weight: 0.2
+        required: true
+      - name: organization
+        description: Well-organized for quick reference
+        weight: 0.15
+        required: true
+      - name: prevention
+        description: Prevention advice is practical
+        weight: 0.15
+        required: false
+    tags:
+      - troubleshooting
+      - operations
+      - debugging
+      - runbook

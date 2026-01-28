@@ -1,0 +1,401 @@
+# Coding Tasks for Evaluation
+# Category: coding
+# Tests: code generation, algorithm design, refactoring capabilities
+
+tasks:
+  - id: coding-rate-limiter
+    name: Implement Rate Limiter
+    description: Implement a rate limiter with configurable limits and time windows.
+    category: coding
+    difficulty: medium
+    prompt_template: |
+      Implement a rate limiter in {{LANGUAGE}} using the {{ALGORITHM}} algorithm.
+
+      Requirements:
+      - Support configurable rate limits (requests per time window)
+      - Thread-safe implementation
+      - Return whether a request is allowed or should be rejected
+      - Include method to get remaining quota
+      - Handle clock drift gracefully
+      - Memory efficient for large numbers of clients
+
+      Interface:
+      ```
+      class RateLimiter:
+          def __init__(self, max_requests: int, window_seconds: int)
+          def allow(self, client_id: str) -> bool
+          def remaining(self, client_id: str) -> int
+          def reset_time(self, client_id: str) -> float
+      ```
+
+      Provide:
+      1. Complete implementation with comments
+      2. Unit tests covering edge cases
+      3. Explanation of algorithm choice and trade-offs
+    variables:
+      - name: LANGUAGE
+        description: Programming language to use
+        default: "Python"
+        required: true
+        options:
+          - Python
+          - TypeScript
+          - Go
+          - Java
+          - Rust
+      - name: ALGORITHM
+        description: Rate limiting algorithm to implement
+        default: "token bucket"
+        required: true
+        options:
+          - token bucket
+          - sliding window
+          - fixed window
+          - leaky bucket
+    capabilities_tested:
+      - code_generation
+      - algorithm_design
+      - reasoning
+    evaluation_criteria:
+      - name: correctness
+        description: Implementation correctly limits requests
+        weight: 0.3
+        required: true
+      - name: thread_safety
+        description: Implementation is thread-safe
+        weight: 0.2
+        required: true
+      - name: efficiency
+        description: Memory and time complexity are acceptable
+        weight: 0.2
+        required: true
+      - name: tests
+        description: Unit tests cover important cases
+        weight: 0.15
+        required: true
+      - name: code_quality
+        description: Code is clean, readable, and well-documented
+        weight: 0.15
+        required: false
+    tags:
+      - algorithm
+      - concurrency
+      - system-design
+
+  - id: coding-lru-cache
+    name: Implement LRU Cache
+    description: Implement an LRU (Least Recently Used) cache with O(1) operations.
+    category: coding
+    difficulty: easy
+    prompt_template: |
+      Implement an LRU Cache in {{LANGUAGE}} with O(1) time complexity for get and put operations.
+
+      Requirements:
+      - Fixed capacity specified at creation
+      - O(1) time complexity for get() and put()
+      - Evict least recently used item when capacity exceeded
+      - Thread-safe implementation (optional bonus)
+
+      Interface:
+      ```
+      class LRUCache:
+          def __init__(self, capacity: int)
+          def get(self, key: K) -> Optional[V]
+          def put(self, key: K, value: V) -> None
+          def size(self) -> int
+          def clear(self) -> None
+      ```
+
+      Provide:
+      1. Complete implementation
+      2. Explanation of data structure choices
+      3. Time and space complexity analysis
+      4. At least 5 test cases
+    variables:
+      - name: LANGUAGE
+        description: Programming language to use
+        default: "Python"
+        required: true
+        options:
+          - Python
+          - TypeScript
+          - Java
+          - Go
+          - C++
+    capabilities_tested:
+      - code_generation
+      - algorithm_design
+      - reasoning
+    evaluation_criteria:
+      - name: correctness
+        description: LRU eviction works correctly
+        weight: 0.3
+        required: true
+      - name: complexity
+        description: O(1) operations are achieved
+        weight: 0.3
+        required: true
+      - name: implementation
+        description: Code is complete and runnable
+        weight: 0.2
+        required: true
+      - name: tests
+        description: Test cases cover edge cases
+        weight: 0.2
+        required: false
+    tags:
+      - data-structures
+      - algorithm
+      - cache
+
+  - id: coding-refactor-legacy
+    name: Refactor Legacy Code
+    description: Refactor legacy code to improve maintainability and testability.
+    category: coding
+    difficulty: medium
+    prompt_template: |
+      Refactor the following legacy {{LANGUAGE}} code to improve its quality.
+
+      Original code:
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Issues to address:
+      - {{ISSUES}}
+
+      Requirements:
+      - Maintain existing functionality (no behavior changes)
+      - Apply SOLID principles where appropriate
+      - Improve testability (dependency injection, etc.)
+      - Add meaningful names and documentation
+      - Consider design patterns if applicable
+
+      Provide:
+      1. Refactored code with comments explaining changes
+      2. List of refactoring techniques applied
+      3. Before/after comparison of key improvements
+      4. Suggestions for further improvements
+    variables:
+      - name: LANGUAGE
+        description: Programming language of the code
+        default: "Python"
+        required: true
+      - name: CODE
+        description: The legacy code to refactor
+        default: |
+          def process(data):
+              result = []
+              for item in data:
+                  if item['type'] == 'A':
+                      x = item['value'] * 2
+                      if x > 100:
+                          x = 100
+                      result.append({'type': 'A', 'value': x, 'status': 'processed'})
+                  elif item['type'] == 'B':
+                      x = item['value'] + 10
+                      if x < 0:
+                          x = 0
+                      result.append({'type': 'B', 'value': x, 'status': 'processed'})
+                  elif item['type'] == 'C':
+                      x = item['value'] / 2
+                      result.append({'type': 'C', 'value': x, 'status': 'processed'})
+                  else:
+                      result.append({'type': item['type'], 'value': item['value'], 'status': 'unknown'})
+              return result
+        required: true
+      - name: ISSUES
+        description: Specific issues to address
+        default: |
+          Long method with multiple responsibilities
+          Magic numbers and unclear variable names
+          Repetitive code patterns
+          Hard to test individual behaviors
+          No type hints or documentation
+        required: false
+    capabilities_tested:
+      - refactoring
+      - code_analysis
+      - reasoning
+    evaluation_criteria:
+      - name: behavior_preservation
+        description: Original functionality is maintained
+        weight: 0.25
+        required: true
+      - name: solid_principles
+        description: SOLID principles are applied appropriately
+        weight: 0.25
+        required: true
+      - name: testability
+        description: Refactored code is easier to test
+        weight: 0.2
+        required: true
+      - name: readability
+        description: Code is more readable and maintainable
+        weight: 0.2
+        required: true
+      - name: patterns
+        description: Appropriate design patterns are used
+        weight: 0.1
+        required: false
+    tags:
+      - refactoring
+      - clean-code
+      - solid
+
+  - id: coding-binary-search-tree
+    name: Implement Binary Search Tree
+    description: Implement a self-balancing binary search tree with all standard operations.
+    category: coding
+    difficulty: hard
+    prompt_template: |
+      Implement a {{TREE_TYPE}} (self-balancing BST) in {{LANGUAGE}}.
+
+      Required operations:
+      - insert(key, value) - Insert a key-value pair
+      - delete(key) - Remove a key and rebalance
+      - search(key) - Find a value by key
+      - min() / max() - Find minimum/maximum key
+      - in_order_traversal() - Return sorted key-value pairs
+      - height() - Return tree height
+      - is_balanced() - Verify balance invariant
+
+      Requirements:
+      - Self-balancing after insertions and deletions
+      - O(log n) time complexity for core operations
+      - Generic key/value types with comparable keys
+      - Handle duplicate keys (update value)
+
+      Provide:
+      1. Complete implementation with all operations
+      2. Explanation of rebalancing algorithm
+      3. Time complexity analysis for each operation
+      4. Comprehensive test suite
+    variables:
+      - name: TREE_TYPE
+        description: Type of self-balancing BST
+        default: "AVL tree"
+        required: true
+        options:
+          - AVL tree
+          - Red-Black tree
+          - B-tree
+      - name: LANGUAGE
+        description: Programming language to use
+        default: "Python"
+        required: true
+        options:
+          - Python
+          - TypeScript
+          - Java
+          - Go
+          - Rust
+    capabilities_tested:
+      - code_generation
+      - algorithm_design
+      - reasoning
+    evaluation_criteria:
+      - name: correctness
+        description: All operations work correctly
+        weight: 0.3
+        required: true
+      - name: balancing
+        description: Tree maintains balance after mutations
+        weight: 0.25
+        required: true
+      - name: complexity
+        description: Operations achieve O(log n) complexity
+        weight: 0.2
+        required: true
+      - name: completeness
+        description: All required operations are implemented
+        weight: 0.15
+        required: true
+      - name: tests
+        description: Test suite covers edge cases
+        weight: 0.1
+        required: false
+    tags:
+      - data-structures
+      - algorithm
+      - trees
+      - advanced
+
+  - id: coding-async-task-queue
+    name: Async Task Queue
+    description: Implement an async task queue with priority, retries, and concurrency control.
+    category: coding
+    difficulty: hard
+    prompt_template: |
+      Implement an asynchronous task queue in {{LANGUAGE}} with the following features:
+
+      Core features:
+      - Async task execution with configurable concurrency
+      - Priority-based scheduling (higher priority runs first)
+      - Automatic retry with exponential backoff
+      - Task timeout handling
+      - Graceful shutdown
+
+      Advanced features:
+      - Task dependencies (task B waits for task A)
+      - Progress callbacks
+      - Dead letter queue for failed tasks
+      - Task cancellation
+
+      Interface:
+      ```
+      class TaskQueue:
+          def __init__(self, max_concurrency: int = 5)
+          async def enqueue(self, task: Callable, priority: int = 0,
+                           retries: int = 3, timeout: float = 30.0) -> TaskHandle
+          async def wait_all(self) -> List[TaskResult]
+          async def shutdown(self, timeout: float = 30.0) -> None
+          def cancel(self, task_handle: TaskHandle) -> bool
+      ```
+
+      Provide:
+      1. Complete implementation
+      2. Example usage demonstrating all features
+      3. Error handling strategy explanation
+      4. Unit tests for core functionality
+    variables:
+      - name: LANGUAGE
+        description: Programming language to use
+        default: "Python"
+        required: true
+        options:
+          - Python
+          - TypeScript
+          - Go
+          - Rust
+    capabilities_tested:
+      - code_generation
+      - algorithm_design
+      - architecture
+      - reasoning
+    evaluation_criteria:
+      - name: correctness
+        description: Queue operations work correctly
+        weight: 0.25
+        required: true
+      - name: concurrency
+        description: Concurrency is properly controlled
+        weight: 0.2
+        required: true
+      - name: reliability
+        description: Retries and error handling work correctly
+        weight: 0.2
+        required: true
+      - name: completeness
+        description: All required features are implemented
+        weight: 0.2
+        required: true
+      - name: code_quality
+        description: Code is well-structured and documented
+        weight: 0.15
+        required: false
+    tags:
+      - async
+      - concurrency
+      - queue
+      - distributed-systems

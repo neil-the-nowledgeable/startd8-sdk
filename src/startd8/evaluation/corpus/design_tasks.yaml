@@ -1,0 +1,337 @@
+# Design Tasks for Evaluation
+# Category: design
+# Tests: architecture, API design, system design capabilities
+
+tasks:
+  - id: design-rest-api
+    name: REST API Design
+    description: Design a RESTful API for a given domain with proper resource modeling and HTTP semantics.
+    category: design
+    difficulty: medium
+    prompt_template: |
+      Design a RESTful API for a {{DOMAIN}} application.
+
+      Requirements:
+      - Define the main resources and their relationships
+      - Specify endpoints with HTTP methods (GET, POST, PUT, DELETE)
+      - Include request/response schemas for each endpoint
+      - Handle pagination, filtering, and sorting where appropriate
+      - Include authentication and authorization considerations
+      - Follow REST best practices and conventions
+
+      Provide a complete API specification with example requests and responses.
+    variables:
+      - name: DOMAIN
+        description: The domain/business area for the API
+        default: "e-commerce"
+        required: true
+        options:
+          - e-commerce
+          - social media
+          - task management
+          - healthcare
+          - banking
+    capabilities_tested:
+      - api_design
+      - architecture
+      - reasoning
+    evaluation_criteria:
+      - name: completeness
+        description: All required endpoints and resources are defined
+        weight: 0.3
+        required: true
+      - name: rest_compliance
+        description: Follows REST principles (proper HTTP methods, status codes, resource naming)
+        weight: 0.25
+        required: true
+      - name: schema_quality
+        description: Request/response schemas are well-defined and consistent
+        weight: 0.2
+        required: true
+      - name: security
+        description: Authentication and authorization are properly addressed
+        weight: 0.15
+        required: false
+      - name: usability
+        description: API is intuitive and developer-friendly
+        weight: 0.1
+        required: false
+    tags:
+      - api
+      - rest
+      - backend
+
+  - id: design-database-schema
+    name: Database Schema Design
+    description: Design a normalized database schema for a given application domain.
+    category: design
+    difficulty: medium
+    prompt_template: |
+      Design a database schema for a {{APPLICATION_TYPE}} application.
+
+      Requirements:
+      - Define tables with appropriate columns and data types
+      - Establish primary keys and foreign key relationships
+      - Apply normalization (aim for 3NF minimum)
+      - Include indexes for common query patterns
+      - Consider constraints (NOT NULL, UNIQUE, CHECK)
+      - Add timestamps for auditing (created_at, updated_at)
+
+      Target database: {{DATABASE_TYPE}}
+
+      Provide the complete schema with CREATE TABLE statements and explanations for design decisions.
+    variables:
+      - name: APPLICATION_TYPE
+        description: Type of application the schema is for
+        default: "blog platform"
+        required: true
+        options:
+          - blog platform
+          - inventory management
+          - event ticketing
+          - learning management system
+          - CRM
+      - name: DATABASE_TYPE
+        description: Target database system
+        default: "PostgreSQL"
+        required: true
+        options:
+          - PostgreSQL
+          - MySQL
+          - SQLite
+    capabilities_tested:
+      - database_design
+      - architecture
+      - reasoning
+    evaluation_criteria:
+      - name: normalization
+        description: Schema is properly normalized (3NF)
+        weight: 0.3
+        required: true
+      - name: relationships
+        description: Relationships are correctly modeled with proper keys
+        weight: 0.25
+        required: true
+      - name: data_types
+        description: Appropriate data types are used for each column
+        weight: 0.2
+        required: true
+      - name: indexing
+        description: Indexes are added for performance-critical queries
+        weight: 0.15
+        required: false
+      - name: constraints
+        description: Proper constraints ensure data integrity
+        weight: 0.1
+        required: false
+    tags:
+      - database
+      - schema
+      - sql
+
+  - id: design-microservice-architecture
+    name: Microservice Architecture
+    description: Design a microservice architecture for decomposing a monolithic application.
+    category: design
+    difficulty: hard
+    prompt_template: |
+      Design a microservice architecture for a {{SYSTEM_TYPE}} system that is currently a monolith.
+
+      The system handles:
+      {{SYSTEM_CAPABILITIES}}
+
+      Requirements:
+      - Identify service boundaries using domain-driven design principles
+      - Define inter-service communication patterns (sync/async)
+      - Specify data ownership and database strategy per service
+      - Address cross-cutting concerns (auth, logging, monitoring)
+      - Include API gateway and service discovery
+      - Consider deployment and scaling strategies
+
+      Provide:
+      1. Service decomposition diagram
+      2. Communication patterns between services
+      3. Data management strategy
+      4. Deployment architecture
+    variables:
+      - name: SYSTEM_TYPE
+        description: Type of system being decomposed
+        default: "online marketplace"
+        required: true
+      - name: SYSTEM_CAPABILITIES
+        description: Current capabilities of the monolith
+        default: |
+          - User registration and authentication
+          - Product catalog management
+          - Order processing
+          - Payment handling
+          - Inventory management
+          - Shipping and delivery tracking
+          - Customer notifications
+        required: true
+    capabilities_tested:
+      - architecture
+      - system_design
+      - reasoning
+    evaluation_criteria:
+      - name: service_boundaries
+        description: Services are well-bounded and cohesive
+        weight: 0.25
+        required: true
+      - name: communication
+        description: Inter-service communication is appropriate and resilient
+        weight: 0.2
+        required: true
+      - name: data_strategy
+        description: Data ownership and consistency are properly addressed
+        weight: 0.2
+        required: true
+      - name: scalability
+        description: Architecture supports independent scaling
+        weight: 0.15
+        required: true
+      - name: operations
+        description: Cross-cutting concerns are handled appropriately
+        weight: 0.2
+        required: false
+    tags:
+      - microservices
+      - architecture
+      - distributed-systems
+
+  - id: design-state-machine
+    name: State Machine Design
+    description: Design a state machine for a workflow or process.
+    category: design
+    difficulty: easy
+    prompt_template: |
+      Design a state machine for a {{PROCESS_TYPE}} process.
+
+      Requirements:
+      - Define all possible states
+      - Specify valid transitions between states
+      - Include trigger events for each transition
+      - Add guard conditions where appropriate
+      - Handle error/exception states
+      - Ensure no orphaned or unreachable states
+
+      Provide:
+      1. State diagram (can be text-based)
+      2. State transition table
+      3. Implementation pseudocode or code in {{LANGUAGE}}
+    variables:
+      - name: PROCESS_TYPE
+        description: Type of process to model
+        default: "order fulfillment"
+        required: true
+        options:
+          - order fulfillment
+          - user registration
+          - document approval
+          - payment processing
+          - support ticket
+      - name: LANGUAGE
+        description: Language for implementation
+        default: "Python"
+        required: false
+        options:
+          - Python
+          - TypeScript
+          - Java
+          - Go
+    capabilities_tested:
+      - reasoning
+      - code_generation
+      - architecture
+    evaluation_criteria:
+      - name: completeness
+        description: All states and transitions are defined
+        weight: 0.3
+        required: true
+      - name: correctness
+        description: State machine is valid (no orphaned states, proper transitions)
+        weight: 0.3
+        required: true
+      - name: implementation
+        description: Code/pseudocode correctly implements the state machine
+        weight: 0.25
+        required: true
+      - name: error_handling
+        description: Error states and recovery are considered
+        weight: 0.15
+        required: false
+    tags:
+      - state-machine
+      - workflow
+      - design-patterns
+
+  - id: design-event-driven-architecture
+    name: Event-Driven Architecture
+    description: Design an event-driven architecture for a complex business domain.
+    category: design
+    difficulty: hard
+    prompt_template: |
+      Design an event-driven architecture for a {{DOMAIN}} system.
+
+      Current pain points:
+      {{PAIN_POINTS}}
+
+      Requirements:
+      - Define domain events and their schemas
+      - Design event producers and consumers
+      - Specify event routing and filtering strategies
+      - Address event ordering and idempotency
+      - Handle dead letter queues and error recovery
+      - Consider event sourcing where appropriate
+      - Include monitoring and observability
+
+      Provide:
+      1. Event catalog with schemas
+      2. Producer/consumer topology
+      3. Infrastructure recommendations (message broker, etc.)
+      4. Error handling and resilience patterns
+      5. Sample event flow for a key use case
+    variables:
+      - name: DOMAIN
+        description: Business domain for the system
+        default: "financial trading"
+        required: true
+      - name: PAIN_POINTS
+        description: Current system pain points to address
+        default: |
+          - Tight coupling between services
+          - Synchronous calls causing latency issues
+          - Difficulty adding new consumers of business events
+          - Lost events during peak load
+          - No audit trail of state changes
+        required: true
+    capabilities_tested:
+      - architecture
+      - system_design
+      - reasoning
+    evaluation_criteria:
+      - name: event_design
+        description: Events are well-designed with clear schemas
+        weight: 0.25
+        required: true
+      - name: topology
+        description: Producer/consumer topology is appropriate
+        weight: 0.2
+        required: true
+      - name: reliability
+        description: Reliability patterns (DLQ, idempotency) are addressed
+        weight: 0.2
+        required: true
+      - name: scalability
+        description: Architecture can scale with load
+        weight: 0.15
+        required: true
+      - name: observability
+        description: Monitoring and tracing are considered
+        weight: 0.2
+        required: false
+    tags:
+      - event-driven
+      - architecture
+      - messaging
+      - distributed-systems

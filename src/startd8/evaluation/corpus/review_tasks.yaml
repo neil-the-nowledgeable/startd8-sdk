@@ -1,0 +1,529 @@
+# Review Tasks for Evaluation
+# Category: review
+# Tests: code analysis, security review, performance review capabilities
+
+tasks:
+  - id: review-code-review
+    name: Code Review
+    description: Perform a comprehensive code review identifying issues and improvements.
+    category: review
+    difficulty: medium
+    prompt_template: |
+      Perform a comprehensive code review of the following {{LANGUAGE}} code:
+
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Review categories:
+      1. **Correctness**: Logic errors, bugs, edge cases
+      2. **Readability**: Naming, formatting, comments, complexity
+      3. **Maintainability**: SOLID principles, coupling, cohesion
+      4. **Performance**: Efficiency, resource usage, scalability
+      5. **Security**: Input validation, data handling, vulnerabilities
+      6. **Testing**: Testability, missing test coverage
+
+      For each issue:
+      - Categorize by severity (critical/major/minor/suggestion)
+      - Explain the problem clearly
+      - Provide a code example of the fix
+      - Note if it's a blocking issue
+
+      Conclude with:
+      - Overall assessment (approve/request changes)
+      - Top 3 priorities to address
+      - Positive aspects worth highlighting
+    variables:
+      - name: LANGUAGE
+        description: Programming language
+        default: "Python"
+        required: true
+      - name: CODE
+        description: Code to review
+        default: |
+          class OrderProcessor:
+              def __init__(self, db, payment_client, email_service):
+                  self.db = db
+                  self.payment = payment_client
+                  self.email = email_service
+
+              def process(self, order_data):
+                  # Create order
+                  order = self.db.orders.insert({
+                      'items': order_data['items'],
+                      'total': sum([i['price'] * i['qty'] for i in order_data['items']]),
+                      'user_id': order_data['user_id'],
+                      'status': 'pending'
+                  })
+
+                  # Process payment
+                  try:
+                      result = self.payment.charge(
+                          order_data['payment_method'],
+                          order['total']
+                      )
+                      if result['status'] == 'success':
+                          self.db.orders.update(order['id'], {'status': 'paid'})
+                          self.email.send(order_data['email'], 'Order confirmed',
+                                         f'Your order {order["id"]} is confirmed')
+                          return {'success': True, 'order_id': order['id']}
+                      else:
+                          self.db.orders.update(order['id'], {'status': 'payment_failed'})
+                          return {'success': False, 'error': 'Payment failed'}
+                  except:
+                      self.db.orders.update(order['id'], {'status': 'error'})
+                      return {'success': False, 'error': 'Processing error'}
+        required: true
+    capabilities_tested:
+      - code_analysis
+      - reasoning
+      - debugging
+    evaluation_criteria:
+      - name: issue_identification
+        description: Important issues are identified
+        weight: 0.3
+        required: true
+      - name: severity_accuracy
+        description: Severity levels are appropriate
+        weight: 0.2
+        required: true
+      - name: fixes
+        description: Suggested fixes are correct
+        weight: 0.2
+        required: true
+      - name: coverage
+        description: All review categories are addressed
+        weight: 0.15
+        required: true
+      - name: constructive
+        description: Feedback is constructive and actionable
+        weight: 0.15
+        required: false
+    tags:
+      - code-review
+      - quality
+      - best-practices
+
+  - id: review-security-review
+    name: Security Review
+    description: Perform a security-focused code review identifying vulnerabilities.
+    category: review
+    difficulty: hard
+    prompt_template: |
+      Perform a security review of the following {{LANGUAGE}} code:
+
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Context: This code is part of a {{APPLICATION_TYPE}}.
+
+      Security review checklist:
+      1. **Injection Vulnerabilities**: SQL, command, LDAP, XPath injection
+      2. **Authentication/Authorization**: Auth bypasses, privilege escalation
+      3. **Data Exposure**: Sensitive data in logs, responses, storage
+      4. **Input Validation**: Missing or insufficient validation
+      5. **Cryptography**: Weak algorithms, improper key handling
+      6. **Session Management**: Session fixation, timeout issues
+      7. **Error Handling**: Information leakage in errors
+      8. **Dependencies**: Known vulnerable dependencies
+
+      For each vulnerability:
+      - CVE reference if applicable
+      - CVSS score estimate (critical/high/medium/low)
+      - Attack vector description
+      - Proof of concept (if safe to demonstrate)
+      - Remediation with secure code example
+
+      Provide an executive summary with risk assessment and prioritized remediation plan.
+    variables:
+      - name: LANGUAGE
+        description: Programming language
+        default: "Python"
+        required: true
+      - name: CODE
+        description: Code to review for security
+        default: |
+          from flask import Flask, request, session
+          import subprocess
+          import hashlib
+          import sqlite3
+
+          app = Flask(__name__)
+          app.secret_key = 'development-key-123'
+
+          def get_db():
+              return sqlite3.connect('users.db')
+
+          @app.route('/login', methods=['POST'])
+          def login():
+              username = request.form['username']
+              password = request.form['password']
+
+              db = get_db()
+              cursor = db.cursor()
+              query = f"SELECT * FROM users WHERE username='{username}' AND password='{hashlib.md5(password.encode()).hexdigest()}'"
+              cursor.execute(query)
+              user = cursor.fetchone()
+
+              if user:
+                  session['user'] = username
+                  session['is_admin'] = user[3]
+                  return {'status': 'success', 'user': username}
+              return {'status': 'error', 'message': 'Invalid credentials'}
+
+          @app.route('/admin/run-report', methods=['POST'])
+          def run_report():
+              if not session.get('is_admin'):
+                  return {'error': 'Unauthorized'}, 403
+
+              report_type = request.json.get('report')
+              output = subprocess.check_output(f'./reports/{report_type}.sh', shell=True)
+              return {'output': output.decode()}
+
+          @app.route('/user/<user_id>')
+          def get_user(user_id):
+              db = get_db()
+              cursor = db.cursor()
+              cursor.execute(f"SELECT id, username, email FROM users WHERE id = {user_id}")
+              user = cursor.fetchone()
+              return {'user': user}
+        required: true
+      - name: APPLICATION_TYPE
+        description: Type of application
+        default: "web application handling user data"
+        required: true
+    capabilities_tested:
+      - security_analysis
+      - code_analysis
+      - reasoning
+    evaluation_criteria:
+      - name: vulnerability_detection
+        description: Critical vulnerabilities are identified
+        weight: 0.35
+        required: true
+      - name: severity_accuracy
+        description: Risk levels are correctly assessed
+        weight: 0.2
+        required: true
+      - name: remediation
+        description: Fixes are secure and complete
+        weight: 0.25
+        required: true
+      - name: attack_vectors
+        description: Attack vectors are clearly explained
+        weight: 0.1
+        required: false
+      - name: comprehensiveness
+        description: All OWASP categories are considered
+        weight: 0.1
+        required: false
+    tags:
+      - security
+      - owasp
+      - vulnerability-assessment
+
+  - id: review-performance-review
+    name: Performance Review
+    description: Analyze code for performance issues and optimization opportunities.
+    category: review
+    difficulty: medium
+    prompt_template: |
+      Perform a performance review of the following {{LANGUAGE}} code:
+
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Context: {{CONTEXT}}
+
+      Performance analysis areas:
+      1. **Time Complexity**: Identify O(n^2) or worse operations
+      2. **Space Complexity**: Memory usage patterns
+      3. **I/O Efficiency**: Database queries, file operations, network calls
+      4. **Caching Opportunities**: Repeated computations or fetches
+      5. **Concurrency**: Blocking operations, parallelization potential
+      6. **Resource Management**: Connection pools, memory leaks
+      7. **Algorithm Choice**: More efficient alternatives
+
+      For each issue:
+      - Current complexity/impact
+      - Expected improvement
+      - Optimized code example
+      - Trade-offs of the optimization
+
+      Provide:
+      1. Performance hotspots ranked by impact
+      2. Quick wins (easy optimizations)
+      3. Architecture changes for major improvements
+      4. Benchmarking recommendations
+    variables:
+      - name: LANGUAGE
+        description: Programming language
+        default: "Python"
+        required: true
+      - name: CODE
+        description: Code to review for performance
+        default: |
+          class ProductCatalog:
+              def __init__(self, db):
+                  self.db = db
+
+              def search_products(self, query, filters):
+                  # Get all products
+                  all_products = self.db.query("SELECT * FROM products")
+
+                  # Filter in memory
+                  results = []
+                  for product in all_products:
+                      if query.lower() in product['name'].lower():
+                          if self._matches_filters(product, filters):
+                              results.append(product)
+
+                  # Sort by relevance
+                  results.sort(key=lambda p: self._calculate_relevance(p, query), reverse=True)
+
+                  # Add category info
+                  for product in results:
+                      category = self.db.query(
+                          f"SELECT * FROM categories WHERE id = {product['category_id']}"
+                      )[0]
+                      product['category'] = category
+
+                  # Add reviews
+                  for product in results:
+                      reviews = self.db.query(
+                          f"SELECT * FROM reviews WHERE product_id = {product['id']}"
+                      )
+                      product['avg_rating'] = sum(r['rating'] for r in reviews) / len(reviews) if reviews else 0
+
+                  return results[:20]
+
+              def _matches_filters(self, product, filters):
+                  for key, value in filters.items():
+                      if product.get(key) != value:
+                          return False
+                  return True
+
+              def _calculate_relevance(self, product, query):
+                  score = 0
+                  if query.lower() == product['name'].lower():
+                      score += 100
+                  if query.lower() in product['name'].lower():
+                      score += 50
+                  if query.lower() in product.get('description', '').lower():
+                      score += 10
+                  return score
+        required: true
+      - name: CONTEXT
+        description: Performance context
+        default: "Product search endpoint, expected load of 100 requests/second, catalog of 500K products"
+        required: true
+    capabilities_tested:
+      - optimization
+      - code_analysis
+      - reasoning
+    evaluation_criteria:
+      - name: issue_identification
+        description: Performance issues are correctly identified
+        weight: 0.3
+        required: true
+      - name: impact_assessment
+        description: Impact is accurately assessed
+        weight: 0.2
+        required: true
+      - name: optimizations
+        description: Suggested optimizations are effective
+        weight: 0.3
+        required: true
+      - name: trade_offs
+        description: Trade-offs are acknowledged
+        weight: 0.1
+        required: false
+      - name: benchmarking
+        description: Measurement approach is suggested
+        weight: 0.1
+        required: false
+    tags:
+      - performance
+      - optimization
+      - scalability
+
+  - id: review-api-design
+    name: API Design Review
+    description: Review an API design for usability, consistency, and best practices.
+    category: review
+    difficulty: medium
+    prompt_template: |
+      Review the following API specification for design quality:
+
+      ```
+      {{API_SPEC}}
+      ```
+
+      API design review criteria:
+      1. **RESTfulness**: Proper use of HTTP methods, status codes, resources
+      2. **Naming Conventions**: Consistent, intuitive resource and field names
+      3. **Versioning**: Clear versioning strategy
+      4. **Error Handling**: Consistent error format, appropriate codes
+      5. **Pagination**: Proper pagination for collections
+      6. **Filtering/Sorting**: Query parameter design
+      7. **Security**: Authentication, rate limiting, input validation
+      8. **Documentation**: Completeness, examples, edge cases
+
+      For each issue:
+      - Severity (breaking/major/minor/enhancement)
+      - Current design problem
+      - Recommended improvement
+      - Before/after example
+
+      Provide:
+      1. Compatibility concerns for existing clients
+      2. Developer experience assessment
+      3. Prioritized list of changes
+      4. Example of ideal endpoint design
+    variables:
+      - name: API_SPEC
+        description: API specification to review
+        default: |
+          POST /api/getUsers
+          Body: { "page": 1, "filter": "active" }
+          Response: { "data": [...], "error": null }
+
+          POST /api/createUser
+          Body: { "name": "John", "email": "john@example.com" }
+          Response: { "success": true, "user_id": 123 }
+
+          GET /api/user?id=123
+          Response: { "user": {...}, "error": null }
+
+          POST /api/updateUser
+          Body: { "id": 123, "name": "Jane" }
+          Response: { "success": true }
+
+          POST /api/deleteUser
+          Body: { "id": 123 }
+          Response: { "success": true }
+
+          GET /api/getUserOrders?userId=123
+          Response: { "orders": [...] }
+
+          POST /api/createOrder
+          Body: { "user_id": 123, "items": [...], "paymentMethod": "card" }
+          Response: { "order_id": 456, "Status": "pending" }
+        required: true
+    capabilities_tested:
+      - api_design
+      - code_analysis
+      - reasoning
+    evaluation_criteria:
+      - name: rest_issues
+        description: REST violations are identified
+        weight: 0.3
+        required: true
+      - name: consistency
+        description: Inconsistencies are found
+        weight: 0.25
+        required: true
+      - name: improvements
+        description: Improvements are well-reasoned
+        weight: 0.25
+        required: true
+      - name: examples
+        description: Examples demonstrate the improvements
+        weight: 0.2
+        required: false
+    tags:
+      - api-design
+      - rest
+      - developer-experience
+
+  - id: review-architecture-review
+    name: Architecture Review
+    description: Review a system architecture for quality, scalability, and maintainability.
+    category: review
+    difficulty: hard
+    prompt_template: |
+      Review the following system architecture:
+
+      {{ARCHITECTURE_DESCRIPTION}}
+
+      Architecture review dimensions:
+      1. **Scalability**: Horizontal/vertical scaling capabilities
+      2. **Reliability**: Fault tolerance, disaster recovery
+      3. **Maintainability**: Modularity, coupling, complexity
+      4. **Security**: Defense in depth, data protection
+      5. **Performance**: Latency, throughput bottlenecks
+      6. **Cost**: Resource efficiency, optimization opportunities
+      7. **Observability**: Monitoring, logging, tracing
+      8. **Developer Experience**: Deployment, debugging, testing
+
+      Analysis should include:
+      - Current state assessment
+      - Risk identification with likelihood/impact
+      - Improvement recommendations with effort/benefit
+      - Architecture decision records (ADR) suggestions
+
+      Provide:
+      1. SWOT analysis of the architecture
+      2. Risk register with mitigation strategies
+      3. Roadmap for improvements
+      4. Alternative architecture options if applicable
+    variables:
+      - name: ARCHITECTURE_DESCRIPTION
+        description: Architecture to review
+        default: |
+          ## Current Architecture
+
+          ### Components:
+          - **Frontend**: React SPA served from S3 + CloudFront
+          - **API Gateway**: AWS API Gateway
+          - **Backend**: Monolithic Node.js app on single EC2 instance
+          - **Database**: Single MySQL RDS instance (db.r5.large)
+          - **Cache**: None
+          - **Queue**: None
+          - **Storage**: S3 for file uploads
+
+          ### Traffic:
+          - 50K daily active users
+          - Peak: 500 requests/second
+          - Growing 20% month-over-month
+
+          ### Pain Points:
+          - API latency spikes during peak hours
+          - Database CPU regularly hits 80%
+          - Deployments require 10-minute downtime
+          - Difficult to scale specific features independently
+          - No staging environment
+        required: true
+    capabilities_tested:
+      - architecture
+      - system_design
+      - reasoning
+      - security_analysis
+    evaluation_criteria:
+      - name: issue_identification
+        description: Key architectural issues are identified
+        weight: 0.3
+        required: true
+      - name: risk_assessment
+        description: Risks are properly assessed
+        weight: 0.2
+        required: true
+      - name: recommendations
+        description: Recommendations are actionable
+        weight: 0.25
+        required: true
+      - name: trade_offs
+        description: Trade-offs are analyzed
+        weight: 0.15
+        required: true
+      - name: roadmap
+        description: Improvement roadmap is realistic
+        weight: 0.1
+        required: false
+    tags:
+      - architecture
+      - scalability
+      - system-design
+      - cloud

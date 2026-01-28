@@ -1,0 +1,465 @@
+# Testing Tasks for Evaluation
+# Category: testing
+# Tests: testing strategy, debugging, test generation capabilities
+
+tasks:
+  - id: testing-generate-unit-tests
+    name: Generate Unit Tests
+    description: Generate comprehensive unit tests for a given function or class.
+    category: testing
+    difficulty: easy
+    prompt_template: |
+      Generate comprehensive unit tests for the following {{LANGUAGE}} code:
+
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Requirements:
+      - Use {{TEST_FRAMEWORK}} testing framework
+      - Cover all public methods/functions
+      - Include happy path and edge cases
+      - Test error conditions and exceptions
+      - Use descriptive test names
+      - Include setup/teardown if needed
+      - Aim for high code coverage
+
+      Test categories to include:
+      - Basic functionality tests
+      - Boundary value tests
+      - Error handling tests
+      - Integration points (mock external dependencies)
+
+      Provide complete, runnable test code with comments explaining each test's purpose.
+    variables:
+      - name: LANGUAGE
+        description: Programming language of the code
+        default: "Python"
+        required: true
+        options:
+          - Python
+          - TypeScript
+          - Java
+          - Go
+      - name: CODE
+        description: The code to generate tests for
+        default: |
+          class Calculator:
+              def add(self, a: float, b: float) -> float:
+                  return a + b
+
+              def divide(self, a: float, b: float) -> float:
+                  if b == 0:
+                      raise ValueError("Cannot divide by zero")
+                  return a / b
+
+              def factorial(self, n: int) -> int:
+                  if n < 0:
+                      raise ValueError("Factorial not defined for negative numbers")
+                  if n <= 1:
+                      return 1
+                  return n * self.factorial(n - 1)
+        required: true
+      - name: TEST_FRAMEWORK
+        description: Testing framework to use
+        default: "pytest"
+        required: true
+        options:
+          - pytest
+          - unittest
+          - jest
+          - junit
+          - go test
+    capabilities_tested:
+      - testing_strategy
+      - code_generation
+      - code_analysis
+    evaluation_criteria:
+      - name: coverage
+        description: Tests cover all code paths
+        weight: 0.3
+        required: true
+      - name: edge_cases
+        description: Edge cases and boundaries are tested
+        weight: 0.25
+        required: true
+      - name: runnable
+        description: Tests are complete and executable
+        weight: 0.2
+        required: true
+      - name: naming
+        description: Test names are descriptive and follow conventions
+        weight: 0.15
+        required: false
+      - name: organization
+        description: Tests are well-organized and maintainable
+        weight: 0.1
+        required: false
+    tags:
+      - unit-testing
+      - test-generation
+      - code-coverage
+
+  - id: testing-find-bugs
+    name: Find Bugs in Code
+    description: Analyze code to identify bugs, vulnerabilities, and potential issues.
+    category: testing
+    difficulty: medium
+    prompt_template: |
+      Analyze the following {{LANGUAGE}} code for bugs, vulnerabilities, and issues:
+
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Look for:
+      - Logic errors and off-by-one errors
+      - Null/undefined reference issues
+      - Resource leaks (memory, file handles, connections)
+      - Race conditions and concurrency issues
+      - Security vulnerabilities (injection, XSS, etc.)
+      - Performance problems
+      - Error handling gaps
+
+      For each issue found, provide:
+      1. Location (line number or code snippet)
+      2. Issue type and severity (critical/high/medium/low)
+      3. Explanation of why it's a problem
+      4. Recommended fix with code example
+      5. How to test the fix
+
+      Summarize with a prioritized list of issues to address.
+    variables:
+      - name: LANGUAGE
+        description: Programming language of the code
+        default: "Python"
+        required: true
+      - name: CODE
+        description: The code to analyze for bugs
+        default: |
+          import sqlite3
+
+          class UserService:
+              def __init__(self, db_path):
+                  self.conn = sqlite3.connect(db_path)
+
+              def get_user(self, username):
+                  cursor = self.conn.cursor()
+                  query = f"SELECT * FROM users WHERE username = '{username}'"
+                  cursor.execute(query)
+                  return cursor.fetchone()
+
+              def create_user(self, username, email):
+                  cursor = self.conn.cursor()
+                  cursor.execute(
+                      f"INSERT INTO users (username, email) VALUES ('{username}', '{email}')"
+                  )
+                  # forgot to commit
+
+              def delete_user(self, user_id):
+                  cursor = self.conn.cursor()
+                  cursor.execute(f"DELETE FROM users WHERE id = {user_id}")
+                  self.conn.commit()
+                  return True
+
+              def get_users_by_ids(self, ids):
+                  results = []
+                  for id in ids:
+                      user = self.get_user_by_id(id)
+                      results.append(user)
+                  return results
+
+              def get_user_by_id(self, user_id):
+                  cursor = self.conn.cursor()
+                  cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")
+                  return cursor.fetchone()
+        required: true
+    capabilities_tested:
+      - debugging
+      - code_analysis
+      - security_analysis
+      - reasoning
+    evaluation_criteria:
+      - name: bug_detection
+        description: Critical bugs are identified
+        weight: 0.35
+        required: true
+      - name: security
+        description: Security vulnerabilities are found
+        weight: 0.25
+        required: true
+      - name: fixes
+        description: Fixes are correct and complete
+        weight: 0.2
+        required: true
+      - name: explanation
+        description: Issues are clearly explained
+        weight: 0.1
+        required: false
+      - name: prioritization
+        description: Issues are properly prioritized
+        weight: 0.1
+        required: false
+    tags:
+      - debugging
+      - security
+      - code-review
+
+  - id: testing-design-test-strategy
+    name: Design Test Strategy
+    description: Design a comprehensive test strategy for a software project.
+    category: testing
+    difficulty: medium
+    prompt_template: |
+      Design a comprehensive test strategy for a {{PROJECT_TYPE}} project.
+
+      Project details:
+      {{PROJECT_DETAILS}}
+
+      Create a test strategy covering:
+
+      1. Test Levels:
+         - Unit testing approach
+         - Integration testing approach
+         - End-to-end testing approach
+         - Performance testing
+
+      2. Test Infrastructure:
+         - Testing frameworks and tools
+         - CI/CD integration
+         - Test environments
+         - Test data management
+
+      3. Quality Gates:
+         - Code coverage requirements
+         - Performance benchmarks
+         - Security scanning
+
+      4. Testing Schedule:
+         - What to test in each development phase
+         - Regression testing approach
+
+      Provide a practical, implementable strategy with specific tool recommendations and example configurations.
+    variables:
+      - name: PROJECT_TYPE
+        description: Type of project
+        default: "web application"
+        required: true
+        options:
+          - web application
+          - mobile app
+          - microservices
+          - API service
+          - data pipeline
+      - name: PROJECT_DETAILS
+        description: Project-specific details
+        default: |
+          - React frontend with TypeScript
+          - Node.js/Express backend
+          - PostgreSQL database
+          - Redis for caching
+          - Auth0 for authentication
+          - Deployed on AWS (ECS)
+          - Team of 5 developers
+        required: true
+    capabilities_tested:
+      - testing_strategy
+      - architecture
+      - reasoning
+    evaluation_criteria:
+      - name: completeness
+        description: All test levels are addressed
+        weight: 0.25
+        required: true
+      - name: practicality
+        description: Strategy is implementable and realistic
+        weight: 0.25
+        required: true
+      - name: tools
+        description: Tool recommendations are appropriate
+        weight: 0.2
+        required: true
+      - name: automation
+        description: CI/CD integration is well-defined
+        weight: 0.15
+        required: true
+      - name: metrics
+        description: Quality metrics and gates are specified
+        weight: 0.15
+        required: false
+    tags:
+      - test-strategy
+      - quality-assurance
+      - ci-cd
+
+  - id: testing-property-based
+    name: Property-Based Tests
+    description: Design and implement property-based tests for complex functions.
+    category: testing
+    difficulty: hard
+    prompt_template: |
+      Design and implement property-based tests for the following {{LANGUAGE}} code:
+
+      ```{{LANGUAGE}}
+      {{CODE}}
+      ```
+
+      Requirements:
+      - Identify invariants and properties that should always hold
+      - Use {{PBT_LIBRARY}} for property-based testing
+      - Generate comprehensive test cases automatically
+      - Include shrinking for failure cases
+      - Test edge cases that example-based tests might miss
+
+      For each property:
+      1. Explain the invariant being tested
+      2. Define the property in code
+      3. Specify generators for test data
+      4. Handle edge cases explicitly
+
+      Provide complete, runnable property-based tests.
+    variables:
+      - name: LANGUAGE
+        description: Programming language
+        default: "Python"
+        required: true
+        options:
+          - Python
+          - TypeScript
+          - Haskell
+          - Scala
+      - name: CODE
+        description: Code to test with properties
+        default: |
+          from typing import List, TypeVar
+
+          T = TypeVar('T')
+
+          def merge_sorted(left: List[T], right: List[T]) -> List[T]:
+              """Merge two sorted lists into one sorted list."""
+              result = []
+              i = j = 0
+              while i < len(left) and j < len(right):
+                  if left[i] <= right[j]:
+                      result.append(left[i])
+                      i += 1
+                  else:
+                      result.append(right[j])
+                      j += 1
+              result.extend(left[i:])
+              result.extend(right[j:])
+              return result
+
+          def sort_list(items: List[T]) -> List[T]:
+              """Sort a list using merge sort."""
+              if len(items) <= 1:
+                  return items
+              mid = len(items) // 2
+              left = sort_list(items[:mid])
+              right = sort_list(items[mid:])
+              return merge_sorted(left, right)
+        required: true
+      - name: PBT_LIBRARY
+        description: Property-based testing library
+        default: "hypothesis"
+        required: true
+        options:
+          - hypothesis
+          - fast-check
+          - QuickCheck
+          - ScalaCheck
+    capabilities_tested:
+      - testing_strategy
+      - reasoning
+      - code_generation
+    evaluation_criteria:
+      - name: properties
+        description: Correct properties/invariants are identified
+        weight: 0.35
+        required: true
+      - name: generators
+        description: Test data generators are appropriate
+        weight: 0.25
+        required: true
+      - name: coverage
+        description: Properties cover key behaviors
+        weight: 0.2
+        required: true
+      - name: runnable
+        description: Tests are complete and executable
+        weight: 0.2
+        required: true
+    tags:
+      - property-testing
+      - advanced-testing
+      - invariants
+
+  - id: testing-integration-suite
+    name: Integration Test Suite
+    description: Design and implement an integration test suite for a multi-component system.
+    category: testing
+    difficulty: medium
+    prompt_template: |
+      Design and implement an integration test suite for a {{SYSTEM_TYPE}} system.
+
+      System components:
+      {{COMPONENTS}}
+
+      Requirements:
+      - Test interactions between components
+      - Use appropriate test doubles (mocks, stubs, fakes)
+      - Set up and tear down test fixtures
+      - Handle async operations and timeouts
+      - Test error scenarios and recovery
+      - Ensure tests are isolated and repeatable
+
+      Provide:
+      1. Test architecture overview
+      2. Fixture and test double setup
+      3. At least 5 integration test scenarios
+      4. CI/CD configuration for running tests
+      5. Guidelines for adding new tests
+    variables:
+      - name: SYSTEM_TYPE
+        description: Type of system
+        default: "e-commerce API"
+        required: true
+      - name: COMPONENTS
+        description: System components to integrate
+        default: |
+          - REST API server (Express.js)
+          - PostgreSQL database
+          - Redis cache
+          - External payment gateway (Stripe)
+          - Email service (SendGrid)
+          - Message queue (RabbitMQ)
+        required: true
+    capabilities_tested:
+      - testing_strategy
+      - architecture
+      - code_generation
+    evaluation_criteria:
+      - name: scenarios
+        description: Test scenarios cover key integrations
+        weight: 0.3
+        required: true
+      - name: isolation
+        description: Tests are properly isolated
+        weight: 0.25
+        required: true
+      - name: test_doubles
+        description: Appropriate test doubles are used
+        weight: 0.2
+        required: true
+      - name: setup
+        description: Setup/teardown is complete and correct
+        weight: 0.15
+        required: true
+      - name: ci_cd
+        description: CI/CD integration is specified
+        weight: 0.1
+        required: false
+    tags:
+      - integration-testing
+      - test-fixtures
+      - ci-cd
