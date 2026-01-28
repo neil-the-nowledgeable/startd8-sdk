@@ -70,3 +70,33 @@ verify_pipeline_error_logging.py
 !/.startd8/prompts/
 !/.startd8/prompts/**
 /.startd8/prompts/.*.lock
+
+# ---------------------------------------------------------------------------
+# WIP Features (gitignored until ready to commit)
+# ---------------------------------------------------------------------------
+# Prime Contractor / Contractors system
+src/startd8/contractors/
+tests/contractors/
+
+# ContextCore integration (WIP)
+src/startd8/integrations/
+src/startd8/workflows/builtin/lead_contractor_contextcore_workflow.py
+
+# Integration scripts (experimental)
+scripts/apply_contextcore_integration.py
+scripts/apply_semantic_convention_fixes.py
+scripts/example_tasks.yaml
+scripts/fix_contextcore_semantic_conventions.py
+scripts/generate_otel_blueprint_docs.py
+scripts/generate_otel_blueprint_submissions.py
+scripts/init_project_tracking.py
+scripts/integrate_contextcore_metadata.py
+scripts/run_baseline_evaluation.py
+scripts/run_contextcore_workflow.py
+scripts/start_metrics_exporter.py
+scripts/sync_project_reality.py
+scripts/view_contextcore_tasks.sh
+scripts/DASHBOARD_SETUP_GUIDE.md
+scripts/QUICK_START_SEMANTIC_CONVENTIONS.md
+scripts/README_CONTEXTCORE_INTEGRATION.md
+scripts/README_SEMANTIC_CONVENTIONS.md
