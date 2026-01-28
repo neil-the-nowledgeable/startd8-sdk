@@ -158,11 +158,11 @@ class GPT4Agent(BaseAgent):
             from ..logging_config import get_logger
             from ..exceptions import APIError
 
-            logger = get_logger(__name__)
+            local_logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
-            logger.error(
+            local_logger.error(
                 f"All retry attempts exhausted for {self.name}: {e.last_exception}",
                 exc_info=False,
                 extra={
@@ -184,7 +184,7 @@ class GPT4Agent(BaseAgent):
             from ..logging_config import get_logger
             from ..exceptions import APIError, AgentError
 
-            logger = get_logger(__name__)
+            local_logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
@@ -206,7 +206,7 @@ class GPT4Agent(BaseAgent):
                     f"use the /v1/completions endpoint, which is not supported by this agent. "
                     f"Please use a chat model (like gpt-4, gpt-3.5-turbo, gpt-4-turbo) instead."
                 )
-                logger.error(
+                local_logger.error(
                     f"Completion model used with chat endpoint for {self.name}: {completion_error_msg} (Original: {e})",
                     extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
                 )
@@ -225,7 +225,7 @@ class GPT4Agent(BaseAgent):
                     f"Please verify the model name is correct and that you have access to it. "
                     f"Common chat models include: gpt-4, gpt-4-turbo, gpt-3.5-turbo, gpt-4o"
                 )
-                logger.error(
+                local_logger.error(
                     f"Model not found error for {self.name}: {model_error_msg} (Original: {e})",
                     extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
                 )
@@ -248,7 +248,7 @@ class GPT4Agent(BaseAgent):
                         f"The endpoint may be unreachable or there may be network connectivity issues. "
                         f"Please check your network connection and API configuration for agent '{self.name}'."
                     )
-                    logger.error(
+                    local_logger.error(
                         f"DNS resolution failed for {self.name}: {e}",
                         exc_info=True,
                         extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
@@ -260,7 +260,7 @@ class GPT4Agent(BaseAgent):
                     ) from e
 
             # Log and wrap all other errors as APIError
-            logger.error(
+            local_logger.error(
                 f"API call failed for {self.name}: {e}",
                 exc_info=True,
                 extra={
@@ -604,11 +604,11 @@ class OpenAICompatibleAgent(BaseAgent):
             from ..logging_config import get_logger
             from ..exceptions import APIError
 
-            logger = get_logger(__name__)
+            local_logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
-            logger.error(
+            local_logger.error(
                 f"All retry attempts exhausted for {self.name}: {e.last_exception}",
                 exc_info=False,
                 extra={
@@ -630,7 +630,7 @@ class OpenAICompatibleAgent(BaseAgent):
             from ..logging_config import get_logger
             from ..exceptions import APIError, AgentError
 
-            logger = get_logger(__name__)
+            local_logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
@@ -654,7 +654,7 @@ class OpenAICompatibleAgent(BaseAgent):
                 )
                 # Log without exc_info=True to avoid printing traceback to console
                 # The original error is preserved in AgentError.original_error for debugging
-                logger.error(
+                local_logger.error(
                     f"Completion model used with chat endpoint for {self.name}: {completion_error_msg} (Original: {e})",
                     extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
                 )
@@ -675,7 +675,7 @@ class OpenAICompatibleAgent(BaseAgent):
                 )
                 # Log without exc_info=True to avoid printing traceback to console
                 # The original error is preserved in AgentError.original_error for debugging
-                logger.error(
+                local_logger.error(
                     f"Model not found error for {self.name}: {model_error_msg} (Original: {e})",
                     extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
                 )
@@ -698,7 +698,7 @@ class OpenAICompatibleAgent(BaseAgent):
                         f"The endpoint may be unreachable, the URL may be incorrect, or the service may be deprecated. "
                         f"Please verify the base_url configuration for agent '{self.name}'."
                     )
-                    logger.error(
+                    local_logger.error(
                         f"DNS resolution failed for {self.name} ({self.base_url}): {e}",
                         exc_info=True,
                         extra={"agent_name": self.name, "model": self.model, "base_url": self.base_url, "response_time_ms": response_time_ms}
@@ -709,7 +709,7 @@ class OpenAICompatibleAgent(BaseAgent):
                         original_error=e
                     ) from e
 
-            logger.error(
+            local_logger.error(
                 f"API call failed for {self.name}: {e}",
                 exc_info=True,
                 extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}

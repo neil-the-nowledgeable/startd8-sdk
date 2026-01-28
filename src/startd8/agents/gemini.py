@@ -233,11 +233,11 @@ class GeminiAgent(BaseAgent):
             from ..logging_config import get_logger
             from ..exceptions import APIError
 
-            logger = get_logger(__name__)
+            local_logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
-            logger.error(
+            local_logger.error(
                 f"All retry attempts exhausted for {self.name}: {e.last_exception}",
                 exc_info=False,
                 extra={
@@ -260,11 +260,11 @@ class GeminiAgent(BaseAgent):
             from ..logging_config import get_logger
             from ..exceptions import APIError
 
-            logger = get_logger(__name__)
+            local_logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
-            logger.error(
+            local_logger.error(
                 f"Connection error for {self.name}: {e}",
                 exc_info=True,
                 extra={
@@ -286,7 +286,7 @@ class GeminiAgent(BaseAgent):
             from ..logging_config import get_logger
             from ..exceptions import APIError, AgentError
 
-            logger = get_logger(__name__)
+            local_logger = get_logger(__name__)
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)
 
@@ -307,7 +307,7 @@ class GeminiAgent(BaseAgent):
                         f"Please update your configuration to use '{suggested_model}' instead. "
                         f"The model '{self.model}' was deprecated by Google and is no longer available."
                     )
-                    logger.error(
+                    local_logger.error(
                         f"Deprecated model error for {self.name}: {e}",
                         exc_info=True,
                         extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
@@ -324,7 +324,7 @@ class GeminiAgent(BaseAgent):
                         f"Please verify the model name is correct. "
                         f"Available models include: gemini-1.5-flash, gemini-1.5-pro, gemini-2.0-flash-exp"
                     )
-                    logger.error(
+                    local_logger.error(
                         f"Model not found error for {self.name}: {e}",
                         exc_info=True,
                         extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
@@ -347,7 +347,7 @@ class GeminiAgent(BaseAgent):
                     f"The endpoint may be unreachable or there may be network connectivity issues. "
                     f"Please check your network connection and API configuration for agent '{self.name}'."
                 )
-                logger.error(
+                local_logger.error(
                     f"DNS/connection error for {self.name}: {e}",
                     exc_info=True,
                     extra={"agent_name": self.name, "model": self.model, "response_time_ms": response_time_ms}
@@ -359,7 +359,7 @@ class GeminiAgent(BaseAgent):
                 ) from e
 
             # Generic API error fallback
-            logger.error(
+            local_logger.error(
                 f"API call failed for {self.name}: {e}",
                 exc_info=True,
                 extra={
