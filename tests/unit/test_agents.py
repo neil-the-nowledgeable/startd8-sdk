@@ -598,10 +598,17 @@ class TestGeminiAgent:
         if _GEMINI_AVAILABLE:
             # If available, instantiation should work (without valid API key)
             from startd8.agents import GeminiAgent
-            # This will raise ValueError about API key, not ImportError
-            # which means the ImportError guard works
-            with pytest.raises(ValueError, match="Google API key required"):
-                GeminiAgent(name="test-gemini", model="gemini-2.0-flash")
+            import os
+            # Clear API key from environment to test validation
+            old_key = os.environ.pop('GOOGLE_API_KEY', None)
+            try:
+                # This will raise ValueError about API key, not ImportError
+                # which means the ImportError guard works
+                with pytest.raises(ValueError, match="Google API key required"):
+                    GeminiAgent(name="test-gemini", model="gemini-2.0-flash")
+            finally:
+                if old_key:
+                    os.environ['GOOGLE_API_KEY'] = old_key
         else:
             # If not available, ImportError should be raised
             from startd8.agents import GeminiAgent
@@ -612,17 +619,24 @@ class TestGeminiAgent:
         """Test that GeminiAgent validates API key"""
         from startd8.agents import GeminiAgent
         from startd8.agents.gemini import _GEMINI_AVAILABLE
+        import os
 
         if not _GEMINI_AVAILABLE:
             pytest.skip("google-generativeai not installed")
-        
-        # Test ValueError when API key is missing
-        with pytest.raises(ValueError, match="Google API key required"):
-            GeminiAgent(
-                name="test-gemini",
-                model="gemini-2.0-flash",
-                api_key=None  # No API key provided
-            )
+
+        # Clear API key from environment to test validation
+        old_key = os.environ.pop('GOOGLE_API_KEY', None)
+        try:
+            # Test ValueError when API key is missing
+            with pytest.raises(ValueError, match="Google API key required"):
+                GeminiAgent(
+                    name="test-gemini",
+                    model="gemini-2.0-flash",
+                    api_key=None  # No API key provided
+                )
+        finally:
+            if old_key:
+                os.environ['GOOGLE_API_KEY'] = old_key
     
     def test_gemini_agent_with_mock(self):
         """Test GeminiAgent with mocked google-generativeai"""

@@ -91,6 +91,19 @@ class MockProvider:
     
     def supports_streaming(self) -> bool:
         return False
-    
+
     def get_capabilities(self, model: Optional[str] = None) -> List[str]:
         return ['text-generation', 'testing']
+
+    def estimate_safe_output(
+        self,
+        model: str,
+        complexity: str = "medium",
+    ) -> Dict[str, int]:
+        """Mock provider uses default conservative estimates."""
+        complexity_limits = {
+            "low": {"max_lines": 200, "max_tokens": 600, "buffer_percent": 10},
+            "medium": {"max_lines": 150, "max_tokens": 500, "buffer_percent": 15},
+            "high": {"max_lines": 100, "max_tokens": 350, "buffer_percent": 20},
+        }
+        return complexity_limits.get(complexity, complexity_limits["medium"])
