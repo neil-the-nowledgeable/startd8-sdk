@@ -11,6 +11,7 @@ Available workflows:
 - DesignPolishWorkflow: 3-stage design document refinement
 - CriticalReviewWorkflow: Multi-agent document review
 - LeadContractorWorkflow: Cost-efficient lead contractor pattern
+- LeadContractorContextCoreWorkflow: Lead contractor with ContextCore task tracking
 - PolicyAnalysisWorkflow: Multi-agent critical policy analysis
 - PlainLanguageWorkflow: Simplifies complex content into plain language
 """
@@ -25,6 +26,7 @@ __all__ = [
     "DesignPolishWorkflow",
     "CriticalReviewWorkflow",
     "LeadContractorWorkflow",
+    "LeadContractorContextCoreWorkflow",
     "PolicyAnalysisWorkflow",
     "PlainLanguageWorkflow",
 ]
@@ -50,6 +52,9 @@ def __getattr__(name: str):
     elif name == "LeadContractorWorkflow":
         from .lead_contractor_workflow import LeadContractorWorkflow
         return LeadContractorWorkflow
+    elif name == "LeadContractorContextCoreWorkflow":
+        from .lead_contractor_contextcore_workflow import LeadContractorContextCoreWorkflow
+        return LeadContractorContextCoreWorkflow
     elif name == "PolicyAnalysisWorkflow":
         from .policy_analysis_workflow import PolicyAnalysisWorkflow
         return PolicyAnalysisWorkflow
