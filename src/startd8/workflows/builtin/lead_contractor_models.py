@@ -12,6 +12,8 @@ from typing import Optional, List, Dict, Any
 
 from pydantic import BaseModel, Field
 
+from startd8.model_catalog import Models
+
 
 __all__ = [
     "DrafterChoice",
@@ -65,17 +67,22 @@ class LeadContractorConfig:
     Attributes:
         task_description: What needs to be implemented
         context: Additional context (existing code, requirements, constraints)
-        lead_agent: Claude agent spec (default: claude-sonnet-4-20250514 - Sonnet 4)
-        drafter_agent: Drafter agent spec (default: gemini:gemini-2.5-flash-lite)
+        lead_agent: Lead agent spec (default: Models.LEAD_CONTRACTOR_LEAD)
+        drafter_agent: Drafter agent spec (default: Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations: Maximum draft/review cycles (default: 3)
         pass_threshold: Minimum review score to pass (0-100, default: 80)
         output_format: Expected output format guidance for drafter
         integration_instructions: Instructions for final integration
+
+    Note:
+        Default models are defined in startd8.model_catalog.Models.
+        Update Models.LEAD_CONTRACTOR_LEAD and Models.LEAD_CONTRACTOR_DRAFTER
+        when newer models are available.
     """
     task_description: str
     context: Optional[Dict[str, Any]] = None
-    lead_agent: str = "anthropic:claude-sonnet-4-20250514"
-    drafter_agent: str = "gemini:gemini-2.5-flash"
+    lead_agent: str = Models.LEAD_CONTRACTOR_LEAD  # Claude Sonnet (latest)
+    drafter_agent: str = Models.LEAD_CONTRACTOR_DRAFTER  # Gemini Flash Lite (cheapest)
     max_iterations: int = 3
     pass_threshold: int = 80
     output_format: Optional[str] = None

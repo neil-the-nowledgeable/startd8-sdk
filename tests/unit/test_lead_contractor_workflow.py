@@ -28,6 +28,7 @@ from startd8.workflows.builtin.lead_contractor_models import (
     TestCase,
 )
 from startd8.workflows.models import ValidationResult
+from startd8.model_catalog import Models
 
 
 class TestLeadContractorConfig:
@@ -37,8 +38,9 @@ class TestLeadContractorConfig:
         """Test default configuration values."""
         config = LeadContractorConfig(task_description="Test task")
         assert config.task_description == "Test task"
-        assert config.lead_agent == "anthropic:claude-sonnet-4-20250514"
-        assert config.drafter_agent == "openai:gpt-4o-mini"
+        # Use Models constants to stay in sync with config defaults
+        assert config.lead_agent == Models.LEAD_CONTRACTOR_LEAD
+        assert config.drafter_agent == Models.LEAD_CONTRACTOR_DRAFTER
         assert config.max_iterations == 3
         assert config.pass_threshold == 80
 
@@ -47,13 +49,13 @@ class TestLeadContractorConfig:
         config = LeadContractorConfig(
             task_description="Custom task",
             lead_agent="anthropic:claude-opus-4-5-20251101",
-            drafter_agent="gemini:gemini-2.0-flash",
+            drafter_agent="openai:gpt-4.1-nano",
             max_iterations=5,
             pass_threshold=90,
         )
         assert config.max_iterations == 5
         assert config.pass_threshold == 90
-        assert config.drafter_agent == "gemini:gemini-2.0-flash"
+        assert config.drafter_agent == "openai:gpt-4.1-nano"
 
 
 class TestLeadContractorResult:
@@ -427,23 +429,31 @@ class TestWorkflowExecution:
     @patch('startd8.workflows.builtin.lead_contractor_workflow.resolve_agent_spec')
     def test_workflow_run_success(self, mock_resolve):
         """Test successful workflow execution."""
+        # Create mock token usage objects with was_truncated=False
+        def make_token_usage(input_tokens, output_tokens):
+            usage = Mock()
+            usage.input = input_tokens
+            usage.output = output_tokens
+            usage.was_truncated = False
+            return usage
+
         # Create mock agents
         mock_lead = Mock()
         mock_lead.name = "claude"
-        mock_lead.model = "claude-sonnet-4-20250514"
+        mock_lead.model = "claude-sonnet-4-5-20250927"
         mock_lead.generate.return_value = (
             "### Score: 90\n### Verdict: PASS\n### Strengths\n- Good code",
             1000,
-            Mock(input=500, output=200)
+            make_token_usage(500, 200)
         )
 
         mock_drafter = Mock()
-        mock_drafter.name = "gpt4"
-        mock_drafter.model = "gpt-4o-mini"
+        mock_drafter.name = "gemini"
+        mock_drafter.model = "gemini-2.5-flash-lite"
         mock_drafter.generate.return_value = (
             "```python\ndef feature():\n    pass\n```",
             500,
-            Mock(input=300, output=100)
+            make_token_usage(300, 100)
         )
 
         mock_resolve.side_effect = [mock_lead, mock_drafter]
@@ -453,6 +463,7 @@ class TestWorkflowExecution:
             config={
                 "task_description": "Implement a test feature",
                 "max_iterations": 2,
+                "fail_on_truncation": False,  # Disable for mock tests
             }
         )
 
@@ -477,25 +488,33 @@ class TestWorkflowExecution:
     @patch('startd8.workflows.builtin.lead_contractor_workflow.resolve_agent_spec')
     def test_workflow_tracks_iterations(self, mock_resolve):
         """Test workflow correctly tracks iteration count."""
+        # Create mock token usage objects with was_truncated=False
+        def make_token_usage(input_tokens, output_tokens):
+            usage = Mock()
+            usage.input = input_tokens
+            usage.output = output_tokens
+            usage.was_truncated = False
+            return usage
+
         mock_lead = Mock()
         mock_lead.name = "claude"
-        mock_lead.model = "claude-sonnet-4-20250514"
+        mock_lead.model = "claude-sonnet-4-5-20250927"
 
         # First review fails, second passes
         mock_lead.generate.side_effect = [
-            ("Spec content", 1000, Mock(input=500, output=200)),
-            ("### Score: 60\n### Verdict: FAIL\n### Issues\n- Fix X", 800, Mock(input=400, output=150)),
-            ("### Score: 85\n### Verdict: PASS", 800, Mock(input=400, output=150)),
-            ("Final code", 600, Mock(input=300, output=200)),
+            ("Spec content", 1000, make_token_usage(500, 200)),
+            ("### Score: 60\n### Verdict: FAIL\n### Issues\n- Fix X", 800, make_token_usage(400, 150)),
+            ("### Score: 85\n### Verdict: PASS", 800, make_token_usage(400, 150)),
+            ("Final code", 600, make_token_usage(300, 200)),
         ]
 
         mock_drafter = Mock()
-        mock_drafter.name = "gpt4"
-        mock_drafter.model = "gpt-4o-mini"
+        mock_drafter.name = "gemini"
+        mock_drafter.model = "gemini-2.5-flash-lite"
         mock_drafter.generate.return_value = (
-            "Implementation",
+            "```python\ndef implementation():\n    pass\n```",  # Proper code block
             500,
-            Mock(input=300, output=100)
+            make_token_usage(300, 100)
         )
 
         mock_resolve.side_effect = [mock_lead, mock_drafter]
@@ -505,6 +524,7 @@ class TestWorkflowExecution:
             config={
                 "task_description": "Test task",
                 "max_iterations": 3,
+                "fail_on_truncation": False,  # Disable for mock tests
             }
         )
 
