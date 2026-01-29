@@ -296,13 +296,32 @@ class WorkflowResult:
         return result
 
     @classmethod
-    def from_error(cls, workflow_id: str, error: str) -> "WorkflowResult":
-        """Create a failed result from an error message."""
+    def from_error(
+        cls,
+        workflow_id: str,
+        error: str,
+        steps: Optional[List["StepResult"]] = None,
+        metrics: Optional["WorkflowMetrics"] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> "WorkflowResult":
+        """
+        Create a failed result from an error message.
+
+        Args:
+            workflow_id: Workflow identifier
+            error: Error message describing the failure
+            steps: Optional list of steps completed before failure
+            metrics: Optional metrics collected before failure
+            metadata: Optional metadata to include
+        """
         return cls(
             workflow_id=workflow_id,
             success=False,
             output=None,
             error=error,
+            steps=steps or [],
+            metrics=metrics,
+            metadata=metadata or {},
         )
 
 
