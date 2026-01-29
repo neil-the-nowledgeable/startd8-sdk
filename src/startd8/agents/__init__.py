@@ -26,6 +26,13 @@ from .claude import ClaudeAgent
 from .openai import GPT4Agent, OpenAICompatibleAgent
 from .gemini import GeminiAgent
 from .mock import MockAgent, ComposerAgent
+from .tracked import (
+    TrackedAgentMixin,
+    TrackedClaudeAgent,
+    TrackedGPT4Agent,
+    TrackedGeminiAgent,
+    create_tracked_agent,
+)
 
 __all__ = [
     # Infrastructure
@@ -43,4 +50,10 @@ __all__ = [
     "GeminiAgent",
     "MockAgent",
     "ComposerAgent",
+    # Tracked Agents (OTel span emission)
+    "TrackedAgentMixin",
+    "TrackedClaudeAgent",
+    "TrackedGPT4Agent",
+    "TrackedGeminiAgent",
+    "create_tracked_agent",
 ]
