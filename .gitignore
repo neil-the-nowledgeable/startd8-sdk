@@ -72,17 +72,8 @@ verify_pipeline_error_logging.py
 /.startd8/prompts/.*.lock
 
 # ---------------------------------------------------------------------------
-# WIP Features (gitignored until ready to commit)
+# WIP/Experimental Scripts (gitignored until ready to commit)
 # ---------------------------------------------------------------------------
-# Prime Contractor / Contractors system
-src/startd8/contractors/
-tests/contractors/
-
-# ContextCore integration (WIP)
-src/startd8/integrations/
-src/startd8/workflows/builtin/lead_contractor_contextcore_workflow.py
-
-# Integration scripts (experimental)
 scripts/apply_contextcore_integration.py
 scripts/apply_semantic_convention_fixes.py
 scripts/example_tasks.yaml

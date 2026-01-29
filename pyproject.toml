@@ -75,6 +75,16 @@ lead-contractor-contextcore = "startd8.workflows.builtin.lead_contractor_context
 policy-analysis = "startd8.workflows.builtin.policy_analysis_workflow:PolicyAnalysisWorkflow"
 plain-language = "startd8.workflows.builtin.plain_language_workflow:PlainLanguageWorkflow"
 
+# Prime Contractor entry points for plugin discovery
+[project.entry-points."startd8.contractors.instrumentors"]
+logging = "startd8.contractors.adapters.standalone:LoggingInstrumentor"
+
+[project.entry-points."startd8.contractors.size_estimators"]
+heuristic = "startd8.contractors.adapters.standalone:HeuristicSizeEstimator"
+
+[project.entry-points."startd8.contractors.merge_strategies"]
+simple = "startd8.contractors.adapters.standalone:SimpleMergeStrategy"
+
 [project.urls]
 Homepage = "https://github.com/startdate/startd8"
 Repository = "https://github.com/startdate/startd8"
