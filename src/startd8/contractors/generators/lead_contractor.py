@@ -1,0 +1,155 @@
+"""
+Lead Contractor Code Generator.
+
+Implements the CodeGenerator protocol using the Lead Contractor workflow
+(Claude specs/reviews, cheaper models draft).
+"""
+
+import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from ..protocols import CodeGenerator, GenerationResult
+
+logger = logging.getLogger("startd8.contractors.generators")
+
+
+class LeadContractorCodeGenerator:
+    """
+    Code generator using the Lead Contractor workflow.
+
+    The Lead Contractor pattern uses Claude as the architect/reviewer
+    while cheaper models (Gemini Flash, GPT-4o-mini) do the drafting.
+
+    Example:
+        generator = LeadContractorCodeGenerator(
+            lead_agent="anthropic:claude-sonnet-4-20250514",
+            drafter_agent="gemini:gemini-2.5-flash-lite",
+        )
+        result = generator.generate(
+            task="Implement a rate limiter",
+            context={"language": "Python"},
+            target_files=["rate_limiter.py"],
+        )
+    """
+
+    def __init__(
+        self,
+        lead_agent: str = "anthropic:claude-sonnet-4-20250514",
+        drafter_agent: str = "gemini:gemini-2.5-flash-lite",
+        max_iterations: int = 3,
+        pass_threshold: int = 80,
+        output_dir: Optional[Path] = None,
+    ):
+        """
+        Initialize the Lead Contractor code generator.
+
+        Args:
+            lead_agent: Agent spec for lead contractor (architect/reviewer)
+            drafter_agent: Agent spec for drafter (implementation)
+            max_iterations: Maximum draft/review iterations
+            pass_threshold: Minimum score to pass review (0-100)
+            output_dir: Directory for generated files
+        """
+        self.lead_agent = lead_agent
+        self.drafter_agent = drafter_agent
+        self.max_iterations = max_iterations
+        self.pass_threshold = pass_threshold
+        self.output_dir = output_dir or Path("generated")
+
+    def generate(
+        self,
+        task: str,
+        context: Dict[str, Any],
+        target_files: List[str],
+    ) -> GenerationResult:
+        """
+        Generate code using the Lead Contractor workflow.
+
+        Args:
+            task: Description of what to implement
+            context: Additional context (existing code, requirements, etc.)
+            target_files: Expected output file paths
+
+        Returns:
+            GenerationResult with success status and generated file paths
+        """
+        try:
+            # Import the workflow
+            from startd8.workflows.builtin.lead_contractor_workflow import (
+                LeadContractorWorkflow,
+            )
+
+            workflow = LeadContractorWorkflow()
+
+            # Build config
+            config = {
+                "task_description": task,
+                "context": context,
+                "lead_agent": self.lead_agent,
+                "drafter_agent": self.drafter_agent,
+                "max_iterations": self.max_iterations,
+                "pass_threshold": self.pass_threshold,
+            }
+
+            # Run the workflow
+            result = workflow.run(config=config)
+
+            if not result.success:
+                return GenerationResult(
+                    success=False,
+                    error=result.error or "Lead Contractor workflow failed",
+                    input_tokens=result.metrics.input_tokens if result.metrics else 0,
+                    output_tokens=result.metrics.output_tokens if result.metrics else 0,
+                    cost_usd=result.metrics.total_cost if result.metrics else 0.0,
+                    model=self.lead_agent,
+                )
+
+            # Get the final implementation
+            final_implementation = result.output.get("final_implementation", "")
+
+            # Write to output files
+            generated_files = []
+            for i, target_file in enumerate(target_files):
+                output_path = self.output_dir / Path(target_file).name
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(final_implementation, encoding="utf-8")
+                generated_files.append(output_path)
+                logger.info(f"Generated: {output_path}")
+
+            # If no target files specified, use a default
+            if not generated_files:
+                feature_name = context.get("feature_name", "code")
+                output_path = self.output_dir / f"{feature_name}.py"
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(final_implementation, encoding="utf-8")
+                generated_files.append(output_path)
+
+            return GenerationResult(
+                success=True,
+                generated_files=generated_files,
+                input_tokens=result.metrics.input_tokens if result.metrics else 0,
+                output_tokens=result.metrics.output_tokens if result.metrics else 0,
+                cost_usd=result.metrics.total_cost if result.metrics else 0.0,
+                iterations=result.metadata.get("total_iterations", 1),
+                model=self.lead_agent,
+                metadata={
+                    "lead_cost": result.metadata.get("lead_cost", 0.0),
+                    "drafter_cost": result.metadata.get("drafter_cost", 0.0),
+                    "cost_efficiency_ratio": result.metadata.get(
+                        "cost_efficiency_ratio", 0.0
+                    ),
+                },
+            )
+
+        except ImportError as e:
+            return GenerationResult(
+                success=False,
+                error=f"LeadContractorWorkflow not available: {e}",
+            )
+        except Exception as e:
+            logger.error(f"Code generation failed: {e}", exc_info=True)
+            return GenerationResult(
+                success=False,
+                error=str(e),
+            )
