@@ -8,7 +8,20 @@ Provides framework-level tracking of:
 - Response times and costs
 - Truncation events
 
-Exports metrics to Prometheus for Grafana visualization.
+Exports metrics via OpenTelemetry (preferred) or Prometheus (legacy).
+
+OpenTelemetry Integration:
+    The SessionTracker uses OpenTelemetry metrics by default, enabling
+    export to any OTel-compatible backend (Prometheus, Mimir, OTLP, etc.).
+
+    Metrics exported:
+    - startd8_active_sessions: Number of active sessions (up/down counter)
+    - startd8_requests_total: Total API requests (counter)
+    - startd8_tokens_total: Total tokens processed (counter)
+    - startd8_response_time_ms: Response time distribution (histogram)
+    - startd8_context_usage_ratio: Context window usage 0-1 (observable gauge)
+    - startd8_truncations_total: Truncation events (counter)
+    - startd8_cost_total: Total cost in USD (counter)
 """
 
 import time
@@ -17,10 +30,24 @@ import threading
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Generator
 from enum import Enum
 
 logger = logging.getLogger(__name__)
+
+# Lazy-load OpenTelemetry to avoid hard dependency
+_otel_metrics = None
+
+def _get_otel_metrics():
+    """Get OpenTelemetry metrics module if available."""
+    global _otel_metrics
+    if _otel_metrics is None:
+        try:
+            from opentelemetry import metrics as otel_m
+            _otel_metrics = otel_m
+        except ImportError:
+            _otel_metrics = False  # Mark as unavailable
+    return _otel_metrics if _otel_metrics else None
 
 
 class SessionState(Enum):
@@ -197,19 +224,40 @@ class SessionTracker:
         "mock": 100000,
     }
 
-    def __init__(self, prometheus_port: Optional[int] = None):
+    def __init__(
+        self,
+        prometheus_port: Optional[int] = None,
+        enable_otel: bool = True,
+        otel_service_name: str = "startd8",
+    ):
         """
         Initialize session tracker.
 
         Args:
-            prometheus_port: Port for Prometheus metrics server (default: None, disabled)
+            prometheus_port: Port for Prometheus metrics server (legacy, deprecated)
+            enable_otel: Whether to enable OpenTelemetry metrics (default: True)
+            otel_service_name: Service name for OTel metrics (default: "startd8")
         """
         self._sessions: Dict[str, SessionMetrics] = {}
         self._lock = threading.RLock()
-        self._prometheus_port = prometheus_port
-        self._metrics_server = None
+        self._otel_enabled = False
+        self._otel_service_name = otel_service_name
 
-        # Prometheus metrics (initialized lazily)
+        # OpenTelemetry metrics (initialized lazily)
+        self._otel_meter = None
+        self._otel_active_sessions = None
+        self._otel_requests_counter = None
+        self._otel_tokens_counter = None
+        self._otel_response_time = None
+        self._otel_context_usage = None
+        self._otel_truncations = None
+        self._otel_cost_counter = None
+
+        # Track active session counts for gauge updates
+        self._active_session_counts: Dict[str, int] = {}
+
+        # Legacy prometheus support (deprecated)
+        self._prometheus_port = prometheus_port
         self._prom_active_sessions = None
         self._prom_total_requests = None
         self._prom_total_tokens = None
@@ -218,11 +266,119 @@ class SessionTracker:
         self._prom_truncations = None
         self._prom_total_cost = None
 
-        if prometheus_port:
+        # Initialize OTel first (preferred)
+        if enable_otel:
+            self._init_otel_metrics()
+
+        # Fall back to prometheus if OTel not available and port specified
+        if prometheus_port and not self._otel_enabled:
             self._init_prometheus(prometheus_port)
 
+    def _init_otel_metrics(self) -> None:
+        """Initialize OpenTelemetry metrics."""
+        try:
+            from opentelemetry import metrics
+            from opentelemetry.sdk.metrics import MeterProvider
+            from opentelemetry.sdk.resources import Resource
+
+            # Get or create meter
+            self._otel_meter = metrics.get_meter(
+                self._otel_service_name,
+                version="0.4.0",
+            )
+
+            # Create metrics using OTel SDK
+
+            # Active sessions (using UpDownCounter for gauge-like behavior)
+            self._otel_active_sessions = self._otel_meter.create_up_down_counter(
+                name="startd8_active_sessions",
+                description="Number of active sessions",
+                unit="sessions",
+            )
+
+            # Total requests counter
+            self._otel_requests_counter = self._otel_meter.create_counter(
+                name="startd8_requests_total",
+                description="Total number of requests",
+                unit="requests",
+            )
+
+            # Total tokens counter
+            self._otel_tokens_counter = self._otel_meter.create_counter(
+                name="startd8_tokens_total",
+                description="Total tokens processed",
+                unit="tokens",
+            )
+
+            # Response time histogram
+            self._otel_response_time = self._otel_meter.create_histogram(
+                name="startd8_response_time_ms",
+                description="Response time in milliseconds",
+                unit="ms",
+            )
+
+            # Context usage gauge (using observable gauge with callback)
+            # We'll update this via the callback pattern
+            self._otel_context_usage = self._otel_meter.create_observable_gauge(
+                name="startd8_context_usage_ratio",
+                description="Context window usage ratio (0-1)",
+                unit="ratio",
+                callbacks=[self._observe_context_usage],
+            )
+
+            # Truncation counter
+            self._otel_truncations = self._otel_meter.create_counter(
+                name="startd8_truncations_total",
+                description="Total truncation events",
+                unit="events",
+            )
+
+            # Cost counter
+            self._otel_cost_counter = self._otel_meter.create_counter(
+                name="startd8_cost_total",
+                description="Total cost in USD",
+                unit="USD",
+            )
+
+            self._otel_enabled = True
+            logger.info("OpenTelemetry metrics initialized for session tracking")
+
+        except ImportError:
+            logger.debug(
+                "OpenTelemetry not installed. Install with: pip install opentelemetry-api opentelemetry-sdk"
+            )
+            self._otel_enabled = False
+        except Exception as e:
+            logger.warning(f"Failed to initialize OpenTelemetry metrics: {e}")
+            self._otel_enabled = False
+
+    def _observe_context_usage(self, options) -> Generator:
+        """Callback for observable gauge - yields current context usage values."""
+        otel = _get_otel_metrics()
+        if not otel:
+            return
+
+        from opentelemetry.metrics import Observation
+
+        with self._lock:
+            for session in self._sessions.values():
+                if session.state == SessionState.ACTIVE and session.context_usage:
+                    yield Observation(
+                        session.context_usage.capacity_used,
+                        attributes={
+                            "session_id": session.session_id,
+                            "agent_name": session.agent_name or "unknown",
+                            "model": session.model or "unknown",
+                            "project_id": session.project_id or "",
+                        }
+                    )
+
     def _init_prometheus(self, port: int) -> None:
-        """Initialize Prometheus metrics and start HTTP server"""
+        """Initialize Prometheus metrics and start HTTP server (legacy/deprecated)."""
+        logger.warning(
+            "prometheus_client is deprecated. Migrate to OpenTelemetry: "
+            "pip install opentelemetry-api opentelemetry-sdk opentelemetry-exporter-prometheus"
+        )
         try:
             from prometheus_client import (
                 Gauge, Counter, Histogram, start_http_server,
@@ -379,7 +535,18 @@ class SessionTracker:
             )
             self._sessions[session_id] = metrics
 
-            # Update Prometheus metrics
+            # Update metrics
+            attrs = {
+                "agent_name": agent_name or "unknown",
+                "model": model or "unknown",
+                "project_id": project_id or "",
+            }
+
+            # OpenTelemetry metrics (preferred)
+            if self._otel_enabled and self._otel_active_sessions:
+                self._otel_active_sessions.add(1, attrs)
+
+            # Legacy Prometheus metrics
             if self._prom_active_sessions:
                 self._prom_active_sessions.labels(
                     agent_name=agent_name or "unknown",
@@ -540,10 +707,45 @@ class SessionTracker:
             if truncated:
                 metrics.truncation_count += 1
 
-            # Update Prometheus metrics
+            # Prepare common attributes
             agent = metrics.agent_name or "unknown"
             model = metrics.model or "unknown"
+            project_id = metrics.project_id or ""
 
+            base_attrs = {
+                "agent_name": agent,
+                "model": model,
+                "project_id": project_id,
+            }
+
+            # OpenTelemetry metrics (preferred)
+            if self._otel_enabled:
+                if self._otel_requests_counter:
+                    self._otel_requests_counter.add(1, {
+                        **base_attrs,
+                        "status": "success" if success else "error",
+                    })
+
+                if self._otel_tokens_counter:
+                    self._otel_tokens_counter.add(input_tokens, {
+                        **base_attrs,
+                        "direction": "input",
+                    })
+                    self._otel_tokens_counter.add(output_tokens, {
+                        **base_attrs,
+                        "direction": "output",
+                    })
+
+                if self._otel_response_time:
+                    self._otel_response_time.record(response_time_ms, base_attrs)
+
+                if truncated and self._otel_truncations:
+                    self._otel_truncations.add(1, base_attrs)
+
+                if cost > 0 and self._otel_cost_counter:
+                    self._otel_cost_counter.add(cost, base_attrs)
+
+            # Legacy Prometheus metrics
             if self._prom_total_requests:
                 self._prom_total_requests.labels(
                     agent_name=agent,
@@ -617,7 +819,18 @@ class SessionTracker:
             metrics.state = state
             metrics.last_activity = datetime.now(timezone.utc)
 
-            # Update Prometheus metrics
+            # Prepare attributes
+            attrs = {
+                "agent_name": metrics.agent_name or "unknown",
+                "model": metrics.model or "unknown",
+                "project_id": metrics.project_id or "",
+            }
+
+            # OpenTelemetry metrics (preferred)
+            if self._otel_enabled and self._otel_active_sessions:
+                self._otel_active_sessions.add(-1, attrs)
+
+            # Legacy Prometheus metrics
             if self._prom_active_sessions:
                 self._prom_active_sessions.labels(
                     agent_name=metrics.agent_name or "unknown",
