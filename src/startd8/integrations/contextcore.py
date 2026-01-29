@@ -1152,3 +1152,451 @@ def run_contextcore_project(
             for task_id, r in results.items()
         },
     }
+
+
+# ============================================================================
+# Agent Insight Bridge
+# ============================================================================
+
+@dataclass
+class InsightRecord:
+    """Represents a retrieved insight from ContextCore."""
+    insight_id: str
+    insight_type: str  # "decision", "lesson", "question"
+    summary: str
+    timestamp: datetime
+    confidence: Optional[float] = None
+    category: Optional[str] = None
+    applies_to: List[str] = field(default_factory=list)
+    context: Dict[str, Any] = field(default_factory=dict)
+    task_id: Optional[str] = None
+    agent_id: Optional[str] = None
+
+
+class AgentInsightBridge:
+    """
+    Bridge between StartD8 agent reasoning and ContextCore insights.
+
+    Allows agent decisions, lessons, and questions to be:
+    - Emitted as insights during workflow execution
+    - Queried later via TraceQL for retrospective analysis
+
+    Features:
+    - emit_decision(): Record agent decisions with confidence scores
+    - emit_lesson(): Record lessons learned during execution
+    - emit_question(): Record blocking questions needing human input
+    - query_decisions(): Retrieve past decisions by project/time/confidence
+    - query_lessons(): Retrieve lessons by category or file applicability
+
+    Example:
+        bridge = AgentInsightBridge(project_id="my-project", agent_id="claude")
+
+        # Emit during workflow
+        bridge.emit_decision(
+            summary="Selected Redis for caching based on latency requirements",
+            confidence=0.9,
+            alternatives_considered=["Memcached", "In-memory"],
+        )
+
+        # Query later
+        decisions = bridge.query_decisions(time_range="7d", confidence_min=0.8)
+        for d in decisions:
+            print(f"{d.timestamp}: {d.summary} (confidence: {d.confidence})")
+    """
+
+    def __init__(
+        self,
+        project_id: str,
+        agent_id: str,
+        session_id: Optional[str] = None,
+    ):
+        """
+        Initialize the insight bridge.
+
+        Args:
+            project_id: Project identifier for scoping insights
+            agent_id: Agent identifier (e.g., "claude", "gpt4", "lead-contractor")
+            session_id: Optional session identifier for grouping related insights
+        """
+        self.project_id = project_id
+        self.agent_id = agent_id
+        self.session_id = session_id or f"session-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
+        self._emitter = None
+        self._querier = None
+        self._enabled = False
+
+        self._initialize()
+
+    def _initialize(self):
+        """Try to initialize ContextCore insight components."""
+        try:
+            from contextcore.agent import InsightEmitter, InsightQuerier
+
+            self._emitter = InsightEmitter(
+                project_id=self.project_id,
+                agent_id=self.agent_id,
+            )
+            self._querier = InsightQuerier()
+            self._enabled = True
+            logger.info(f"AgentInsightBridge initialized for project: {self.project_id}")
+
+        except ImportError:
+            logger.warning("ContextCore agent module not available - insights disabled")
+            logger.info("Install with: pip install contextcore")
+            self._enabled = False
+        except Exception as e:
+            logger.warning(f"Failed to initialize insight bridge: {e}")
+            self._enabled = False
+
+    @property
+    def enabled(self) -> bool:
+        """Check if insight bridge is enabled."""
+        return self._enabled
+
+    def emit_decision(
+        self,
+        summary: str,
+        confidence: float = 0.8,
+        context: Optional[Dict[str, Any]] = None,
+        alternatives_considered: Optional[List[str]] = None,
+        task_id: Optional[str] = None,
+        rationale: Optional[str] = None,
+    ) -> bool:
+        """
+        Emit an agent decision as an insight.
+
+        Args:
+            summary: Brief description of the decision made
+            confidence: Confidence score (0.0-1.0)
+            context: Additional context dictionary
+            alternatives_considered: List of alternatives that were evaluated
+            task_id: Optional task ID to link this decision to
+            rationale: Optional explanation of why this decision was made
+
+        Returns:
+            True if successfully emitted, False otherwise
+        """
+        if not self._enabled or not self._emitter:
+            logger.info(f"[mock] Emit decision: {summary} (confidence: {confidence})")
+            return False
+
+        try:
+            full_context = {
+                "session_id": self.session_id,
+                "agent_id": self.agent_id,
+                **(context or {})
+            }
+
+            if alternatives_considered:
+                full_context["alternatives_considered"] = alternatives_considered
+
+            if task_id:
+                full_context["task_id"] = task_id
+
+            # Build rationale string if context provided
+            if not rationale and full_context:
+                rationale = ", ".join(f"{k}={v}" for k, v in full_context.items()
+                                      if k not in ("session_id", "agent_id"))
+
+            self._emitter.emit_decision(
+                summary=summary,
+                confidence=confidence,
+                rationale=rationale,
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to emit decision: {e}")
+            return False
+
+    def emit_lesson(
+        self,
+        summary: str,
+        category: str = "general",
+        applies_to: Optional[List[str]] = None,
+        task_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Emit a lesson learned as an insight.
+
+        Args:
+            summary: What was learned
+            category: Category (e.g., "testing", "architecture", "performance")
+            applies_to: List of files or components this lesson applies to
+            task_id: Optional task ID to link this lesson to
+
+        Returns:
+            True if successfully emitted, False otherwise
+        """
+        if not self._enabled or not self._emitter:
+            logger.info(f"[mock] Emit lesson: {summary} (category: {category})")
+            return False
+
+        try:
+            self._emitter.emit_lesson(
+                summary=summary,
+                category=category,
+                applies_to=applies_to or [],
+                context={
+                    "session_id": self.session_id,
+                    "agent_id": self.agent_id,
+                    "task_id": task_id,
+                }
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to emit lesson: {e}")
+            return False
+
+    def emit_question(
+        self,
+        question: str,
+        context: Optional[Dict[str, Any]] = None,
+        blocking: bool = False,
+        task_id: Optional[str] = None,
+        options: Optional[List[str]] = None,
+    ) -> bool:
+        """
+        Emit a question that needs human input.
+
+        Args:
+            question: The question being asked
+            context: Additional context
+            blocking: Whether this question blocks further progress
+            task_id: Optional task ID this question relates to
+            options: Optional list of suggested answers
+
+        Returns:
+            True if successfully emitted, False otherwise
+        """
+        if not self._enabled or not self._emitter:
+            logger.info(f"[mock] Emit question: {question} (blocking: {blocking})")
+            return False
+
+        try:
+            self._emitter.emit_question(
+                question=question,
+                context={
+                    "session_id": self.session_id,
+                    "agent_id": self.agent_id,
+                    "blocking": blocking,
+                    "task_id": task_id,
+                    "options": options,
+                    **(context or {})
+                }
+            )
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to emit question: {e}")
+            return False
+
+    def query_decisions(
+        self,
+        time_range: str = "7d",
+        confidence_min: Optional[float] = None,
+        task_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[InsightRecord]:
+        """
+        Query past decisions for this project.
+
+        Args:
+            time_range: Time range to query (e.g., "1h", "7d", "30d")
+            confidence_min: Minimum confidence threshold (0.0-1.0)
+            task_id: Optional filter by task ID
+            limit: Maximum number of results
+
+        Returns:
+            List of InsightRecord objects for matching decisions
+        """
+        if not self._enabled or not self._querier:
+            logger.info(f"[mock] Query decisions: time_range={time_range}")
+            return []
+
+        try:
+            raw_results = self._querier.query(
+                project_id=self.project_id,
+                insight_type="decision",
+                time_range=time_range,
+            )
+
+            # Convert to InsightRecord and apply filters
+            decisions = []
+            for raw in raw_results[:limit]:
+                record = self._convert_to_record(raw, "decision")
+
+                # Apply confidence filter
+                if confidence_min is not None and record.confidence is not None:
+                    if record.confidence < confidence_min:
+                        continue
+
+                # Apply task_id filter
+                if task_id and record.task_id != task_id:
+                    continue
+
+                decisions.append(record)
+
+            return decisions
+
+        except Exception as e:
+            logger.error(f"Failed to query decisions: {e}")
+            return []
+
+    def query_lessons(
+        self,
+        category: Optional[str] = None,
+        applies_to: Optional[str] = None,
+        time_range: str = "30d",
+        limit: int = 100,
+    ) -> List[InsightRecord]:
+        """
+        Query past lessons for this project.
+
+        Args:
+            category: Filter by category (e.g., "testing", "architecture")
+            applies_to: Filter by file or component path
+            time_range: Time range to query (e.g., "7d", "30d")
+            limit: Maximum number of results
+
+        Returns:
+            List of InsightRecord objects for matching lessons
+        """
+        if not self._enabled or not self._querier:
+            logger.info(f"[mock] Query lessons: category={category}, time_range={time_range}")
+            return []
+
+        try:
+            raw_results = self._querier.query(
+                project_id=self.project_id,
+                insight_type="lesson",
+                time_range=time_range,
+                applies_to=applies_to,
+            )
+
+            # Convert to InsightRecord and apply filters
+            lessons = []
+            for raw in raw_results[:limit]:
+                record = self._convert_to_record(raw, "lesson")
+
+                # Apply category filter
+                if category and record.category != category:
+                    continue
+
+                lessons.append(record)
+
+            return lessons
+
+        except Exception as e:
+            logger.error(f"Failed to query lessons: {e}")
+            return []
+
+    def query_questions(
+        self,
+        blocking_only: bool = False,
+        answered: Optional[bool] = None,
+        time_range: str = "7d",
+        limit: int = 100,
+    ) -> List[InsightRecord]:
+        """
+        Query past questions for this project.
+
+        Args:
+            blocking_only: Only return blocking questions
+            answered: Filter by answered status (None = all)
+            time_range: Time range to query
+            limit: Maximum number of results
+
+        Returns:
+            List of InsightRecord objects for matching questions
+        """
+        if not self._enabled or not self._querier:
+            logger.info(f"[mock] Query questions: blocking_only={blocking_only}")
+            return []
+
+        try:
+            raw_results = self._querier.query(
+                project_id=self.project_id,
+                insight_type="question",
+                time_range=time_range,
+            )
+
+            # Convert to InsightRecord and apply filters
+            questions = []
+            for raw in raw_results[:limit]:
+                record = self._convert_to_record(raw, "question")
+
+                # Apply blocking filter
+                if blocking_only:
+                    if not record.context.get("blocking", False):
+                        continue
+
+                questions.append(record)
+
+            return questions
+
+        except Exception as e:
+            logger.error(f"Failed to query questions: {e}")
+            return []
+
+    def _convert_to_record(self, raw: Any, insight_type: str) -> InsightRecord:
+        """Convert raw query result to InsightRecord."""
+        # Handle different possible formats from ContextCore
+        if hasattr(raw, 'to_dict'):
+            data = raw.to_dict()
+        elif isinstance(raw, dict):
+            data = raw
+        else:
+            data = {"summary": str(raw)}
+
+        return InsightRecord(
+            insight_id=data.get("id", data.get("insight_id", "")),
+            insight_type=insight_type,
+            summary=data.get("summary", ""),
+            timestamp=data.get("timestamp", datetime.now(timezone.utc)),
+            confidence=data.get("confidence"),
+            category=data.get("category"),
+            applies_to=data.get("applies_to", []),
+            context=data.get("context", {}),
+            task_id=data.get("task_id") or data.get("context", {}).get("task_id"),
+            agent_id=data.get("agent_id") or data.get("context", {}).get("agent_id"),
+        )
+
+    def get_session_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of insights emitted in this session.
+
+        Returns:
+            Dictionary with counts and highlights from this session
+        """
+        if not self._enabled:
+            return {"enabled": False, "session_id": self.session_id}
+
+        # Query this session's insights
+        decisions = self.query_decisions(time_range="1d")
+        lessons = self.query_lessons(time_range="1d")
+        questions = self.query_questions(time_range="1d")
+
+        # Filter to this session
+        session_decisions = [d for d in decisions if d.context.get("session_id") == self.session_id]
+        session_lessons = [l for l in lessons if l.context.get("session_id") == self.session_id]
+        session_questions = [q for q in questions if q.context.get("session_id") == self.session_id]
+
+        return {
+            "enabled": True,
+            "session_id": self.session_id,
+            "project_id": self.project_id,
+            "agent_id": self.agent_id,
+            "decisions_count": len(session_decisions),
+            "lessons_count": len(session_lessons),
+            "questions_count": len(session_questions),
+            "high_confidence_decisions": [
+                d.summary for d in session_decisions
+                if d.confidence and d.confidence >= 0.9
+            ],
+            "blocking_questions": [
+                q.summary for q in session_questions
+                if q.context.get("blocking")
+            ],
+        }

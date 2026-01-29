@@ -6,6 +6,7 @@ project tracking and observability.
 
 Integrations:
     - ContextCore: Task tracking as OpenTelemetry spans
+    - AgentInsightBridge: Emit and query agent decisions/lessons/questions
 
 Usage Examples:
 
@@ -36,6 +37,16 @@ Usage Examples:
 
     source = ContextCoreTaskSource(project_id="my-project")
     tasks = source.get_pending_tasks()  # Gets tasks with status 'todo' or 'backlog'
+
+    # Emit and query agent insights
+    from startd8.integrations import AgentInsightBridge
+
+    bridge = AgentInsightBridge(project_id="my-project", agent_id="claude")
+    bridge.emit_decision("Selected Redis for caching", confidence=0.9)
+    bridge.emit_lesson("Always validate config before deployment", category="ops")
+
+    # Query past decisions
+    decisions = bridge.query_decisions(time_range="7d", confidence_min=0.8)
 """
 
 from .contextcore import (
@@ -46,9 +57,13 @@ from .contextcore import (
     ContextCoreTaskSource,
     load_tasks_from_yaml,
     run_contextcore_project,
+    # Insight bridge
+    AgentInsightBridge,
+    InsightRecord,
 )
 
 __all__ = [
+    # Workflow integration
     "ContextCoreConfig",
     "WorkflowTaskSpec",
     "ContextCoreWorkflowAdapter",
@@ -56,4 +71,7 @@ __all__ = [
     "ContextCoreTaskSource",
     "load_tasks_from_yaml",
     "run_contextcore_project",
+    # Insight bridge
+    "AgentInsightBridge",
+    "InsightRecord",
 ]
