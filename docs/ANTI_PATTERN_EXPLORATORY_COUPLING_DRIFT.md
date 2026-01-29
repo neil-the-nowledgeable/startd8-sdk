@@ -48,7 +48,13 @@ When exploring whether two projects should be coupled (e.g., SDK as expansion of
 | **(B) Separate contextcore-startd8 package** | Clean separation, optional dependency, but more repos to maintain |
 | **(C) Hybrid** | Integration interfaces in SDK, ContextCore-specific code in separate package |
 
-**Current state:** You're oscillating between A and B without committing, creating drift.
+**Decision (2026-01-28):** **Option A - All inside SDK** selected.
+
+Rationale:
+- Simpler single-repo maintenance
+- SDK and ContextCore are typically used together
+- Reduces context switching during development
+- One `pip install` for full functionality
 
 ---
 
@@ -84,26 +90,32 @@ When exploring whether two projects should be coupled (e.g., SDK as expansion of
 
 ---
 
-## Recommended Architecture (Hybrid - Option C)
+## Adopted Architecture (Option A - All Inside SDK)
 
 ```
-startd8-sdk/                          # Main SDK (always independent)
+startd8-sdk/                          # Single canonical location
 ├── src/startd8/
 │   ├── integrations/
-│   │   └── base.py                   # Integration interfaces/protocols
+│   │   ├── __init__.py               # Integration exports
+│   │   └── contextcore.py            # ContextCore adapter (full implementation)
 │   └── workflows/
-│       └── builtin/                  # Core workflows (no ContextCore deps)
-├── tasks/                            # CANONICAL task registry (NEW)
-│   ├── registry.yaml                 # All task definitions
-│   └── results/                      # Execution results
-└── dashboards/                       # All Grafana dashboards
+│       └── builtin/
+│           ├── lead_contractor_workflow.py
+│           └── lead_contractor_contextcore_workflow.py  # ContextCore variant
+├── dashboards/                       # All Grafana dashboards
+│   └── lead-contractor-progress.json # Migrated from contextcore-startd8
+└── docs/
+    └── PRIME_CONTRACTOR_WORKFLOW_GUIDE.md
 
-contextcore-startd8/                  # Optional expansion (depends on startd8-sdk)
-├── src/contextcore_startd8/
-│   ├── adapters.py                   # ContextCore-specific adapters
-│   └── exporters.py                  # OTel/Tempo exporters
-└── (NO task definitions here)        # Tasks always in startd8-sdk
+contextcore-startd8/                  # DEPRECATED - redirect to startd8-sdk
+└── (Consider archiving or making thin re-export wrapper)
 ```
+
+**Migration Tasks:**
+1. ✅ Integration code already in `src/startd8/integrations/`
+2. ⏳ MIGRATE-001: Move dashboard to `startd8-sdk/dashboards/`
+3. ⏳ SDK-102: Complete MetricsHandler enhancements
+4. ⏳ SDK-105: Add integration tests
 
 ---
 
