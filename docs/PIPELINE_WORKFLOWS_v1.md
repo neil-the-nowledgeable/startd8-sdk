@@ -1,12 +1,36 @@
 # Startd8 Pipeline Workflows Guide
 
-**Version:** 0.2.0  
-**Document Version:** v1  
-**Last Updated:** 2025-01-13
+**Version:** 0.4.0
+**Document Version:** v1.1
+**Last Updated:** 2026-01-29
+
+> **See also:** [Capability Manifest](capability-index/startd8.workflow.capabilities.yaml) for the full capability inventory and roadmap.
 
 ## Overview
 
 Startd8 provides a powerful pipeline orchestration system for chaining multiple LLM agents in sequential workflows. This enables complex multi-step processes where each agent's output feeds into the next agent's input.
+
+### Available Workflows
+
+| Workflow | ID | Pattern | Agents |
+|----------|----|---------|--------|
+| Pipeline | `pipeline` | Sequential multi-agent | Configurable (1+) |
+| Document Enhancement | `doc-enhancement` | Sequential refinement | Multi-agent |
+| Iterative Development | `iterative-dev` | Dev-review-fix loop | Multi-agent |
+| Design Polish | `design-polish` | 3-stage refinement | Multi-agent |
+| Critical Review | `critical-review` | Multi-agent review | Multi-agent |
+| Lead Contractor | `lead-contractor` | Spec-driven iteration | Config-based |
+| Lead Contractor + ContextCore | `lead-contractor-contextcore` | Spec-driven + tracking | Config-based |
+| Policy Analysis | `policy-analysis` | Parallel critical analysis | 2-5 agents |
+| Plain Language | `plain-language` | Content simplification | 1-5 agents |
+
+Discover workflows via CLI:
+
+```bash
+startd8 workflow list              # List all workflows
+startd8 workflow describe pipeline # Show workflow details
+startd8 workflow export            # Export YAML definitions
+```
 
 ## Core Concepts
 
@@ -285,25 +309,31 @@ pipeline = Pipeline(
 )
 ```
 
-### Parallel Steps (Future)
+### Parallel Steps (Roadmap)
+
+Parallel execution is planned via `ParallelStep` in the Pipeline refactor (see [capability manifest](capability-index/startd8.workflow.capabilities.yaml), capability `startd8.workflow.execution.parallel`).
 
 ```python
-# Planned for future versions
-from startd8 import ParallelPipeline
-from startd8.providers import ProviderRegistry
+# Planned: Pipeline.add_parallel() for concurrent agent execution
+pipeline.add_parallel("analyze", [step_a, step_b, step_c], failure_policy="collect_all")
+```
 
-ProviderRegistry.discover()
-anthropic = ProviderRegistry.get_provider("anthropic")
-openai = ProviderRegistry.get_provider("openai")
-anthropic.validate_config({})
-openai.validate_config({})
+### Conditional Routing (Roadmap)
 
-parallel = ParallelPipeline()
-parallel.add_parallel_steps([
-    ("anthropic:claude-sonnet-4-20250514", anthropic.create_agent("claude-sonnet-4-20250514")),
-    ("openai:gpt-4o", openai.create_agent("gpt-4o")),
-])
-parallel.add_merge_step(merge_function)
+Conditional branching is planned via `ConditionalStep` (see capability `startd8.workflow.execution.conditional`).
+
+```python
+# Planned: Pipeline.add_conditional() for content-based branching
+pipeline.add_conditional("route", lambda x: "error" in x, error_handler, normal_agent)
+```
+
+### Workflow Composition (Roadmap)
+
+Composing workflows from other workflows is planned via `WorkflowStep` (see capability `startd8.workflow.reusability.compose`).
+
+```python
+# Planned: Pipeline.add_workflow() for sub-workflow steps
+pipeline.add_workflow("enhance", doc_workflow, lambda out: {"document": out})
 ```
 
 ## Storing Results
@@ -475,5 +505,29 @@ pipeline.add_step(
 result = pipeline.run("REST API documentation for user service")
 ```
 
+## Optional Dependencies
 
+Install optional extras for advanced workflow capabilities:
+
+```bash
+pip install startd8[validation]  # JSON Schema validation (jsonschema)
+pip install startd8[otel]        # OpenTelemetry tracing (opentelemetry-api, opentelemetry-sdk)
+pip install startd8[server]      # HTTP workflow server (starlette, uvicorn)
+```
+
+## Workflow Roadmap
+
+The workflow system roadmap is tracked in the [capability manifest](capability-index/startd8.workflow.capabilities.yaml). Planned capabilities by phase:
+
+| Phase | Capabilities | Key Feature |
+|-------|-------------|-------------|
+| 1 - Foundation | Auto-validation, search/filter, test assertions, async audit | Zero new dependencies |
+| 2 - Core Orchestration | Retry/resilience, mixed steps, conditional, parallel, compose | Pipeline refactor (FR-310) |
+| 3 - Observability | Dry-run simulation, OpenTelemetry spans, Mermaid visualization | Optional `otel` dependency |
+| 4 - Enterprise | HTTP workflow server | Optional `server` dependency |
+
+See also:
+- [Gap Analysis](capability-index/startd8.workflow.gap-analysis.md)
+- [Functional Requirements](capability-index/startd8.workflow.functional-requirements.yaml)
+- [Benefits Manifest](capability-index/startd8.workflow.benefits.yaml)
 
