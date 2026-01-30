@@ -1,0 +1,1186 @@
+# StartD8 Workflow Capabilities Manifest
+# Version: 2.0.0
+# Created: 2026-01-28
+# Updated: 2026-01-29
+#
+# PURPOSE: Capability design for StartD8 SDK workflow system.
+# Implements functional requirements from Phase 3 (startd8.workflow.functional-requirements.yaml).
+#
+# SCHEMA: Phase 4 from WORKFLOW_DEVELOPER_ROADMAP_PROMPT.md
+# COMPLEMENT: startd8.workflow.benefits.yaml, startd8.workflow.gap-analysis.md
+
+manifest_id: startd8.workflow.capabilities
+name: StartD8 Workflow System Capabilities
+version: "2.0.0"
+description: |
+  Capabilities for StartD8 SDK workflow system.
+  Protocol-based multi-agent orchestration with cost tracking and observability.
+  v2.0.0: Updated from Phase 3 functional requirements with implementation details.
+
+owner: neilyashinsky
+repository: https://github.com/neilyashinsky/startd8-sdk
+
+labels:
+  domain: workflow-orchestration
+  tier: sdk
+  audience: developer
+
+manifest_tokens: 800
+index_tokens: 6000
+
+# ==============================================================================
+# CAPABILITIES
+# ==============================================================================
+
+capabilities:
+
+  # ============================================================================
+  # PROTOCOL LAYER - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.protocol.base
+    category: validate
+    maturity: stable
+    summary: "WorkflowBase protocol defining required interface for all workflows"
+    audiences: [workflow_developer, sdk_architect]
+    user_benefit: "Consistent workflow interface across all implementations"
+    delivers_benefit: workflow.authoring.protocol_clarity
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/base.py
+        description: "Workflow protocol, AsyncWorkflow protocol, WorkflowBase class"
+
+  - capability_id: startd8.workflow.metadata.model
+    category: validate
+    maturity: stable
+    summary: "WorkflowMetadata model for describing workflow capabilities and requirements"
+    audiences: [workflow_developer, ai_agent]
+    user_benefit: "Self-describing workflows without code inspection"
+    delivers_benefit: workflow.authoring.metadata_rich
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/models.py
+        description: "WorkflowMetadata, WorkflowInput, AgentCount dataclasses"
+
+  - capability_id: startd8.workflow.validation.config
+    category: validate
+    maturity: stable
+    summary: "Config validation returning ValidationResult with errors list"
+    audiences: [workflow_developer, workflow_user]
+    user_benefit: "Catch config errors before execution starts"
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/base.py
+        description: "WorkflowBase.validate_config() with required-input and agent-count checks"
+
+  - capability_id: startd8.workflow.authoring.scaffold
+    category: generate
+    maturity: stable
+    summary: "CLI command to scaffold new workflow from Jinja2 templates"
+    audiences: [workflow_developer]
+    user_benefit: "Create new workflows in <1 minute with correct structure"
+    delivers_benefit: workflow.authoring.scaffolding
+    description:
+      developer: |
+        WorkflowScaffolder with 4 templates: basic, pipeline, multi_agent, async.
+        ScaffoldConfig(name, template, description, output_dir). CLI: startd8 workflow new.
+      user: |
+        startd8 workflow new my-workflow --template pipeline -d "My pipeline workflow"
+        startd8 workflow templates  # list available templates
+      agent: |
+        CLI: startd8 workflow new <name> --template [basic|pipeline|multi_agent|async].
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/scaffold.py
+        description: "WorkflowScaffolder, ScaffoldConfig, ScaffoldResult"
+      - type: code
+        ref: src/startd8/workflows/templates/
+        description: "4 Jinja2 templates: basic, pipeline, multi_agent, async"
+      - type: code
+        ref: src/startd8/cli.py
+        description: "workflow new and workflow templates CLI commands"
+
+  # ============================================================================
+  # REGISTRY LAYER - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.registry.discover
+    category: action
+    maturity: stable
+    summary: "Auto-discover workflows from Python entry points"
+    audiences: [workflow_developer, sdk_architect]
+    user_benefit: "Third-party workflows work automatically after pip install"
+    delivers_benefit: workflow.reusability.plugin_ecosystem
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/registry.py
+        description: "WorkflowRegistry.discover() with entry_points and builtin fallback"
+
+  - capability_id: startd8.workflow.registry.list
+    category: query
+    maturity: stable
+    summary: "List all registered workflows with metadata"
+    audiences: [workflow_user, ai_agent]
+    user_benefit: "Discover all available workflows programmatically"
+    delivers_benefit: workflow.discovery.registry_central
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/registry.py
+        description: "list_workflows(), list_workflow_metadata(), get_workflow_info()"
+
+  - capability_id: startd8.workflow.registry.run
+    category: action
+    maturity: stable
+    summary: "Execute workflow by ID with config validation and error handling"
+    audiences: [workflow_user, ai_agent]
+    user_benefit: "Execute any workflow with consistent interface"
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/registry.py
+        description: "run_workflow() and arun_workflow() with validation"
+
+  - capability_id: startd8.workflow.registry.find_by_capability
+    category: query
+    maturity: stable
+    summary: "Find workflows by capability tag (exact match, case-insensitive)"
+    audiences: [workflow_user, ai_agent]
+    user_benefit: "Filter workflows by what they can do"
+    delivers_benefit: workflow.discovery.search_filter
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/registry.py
+        description: "find_workflows_by_capability() and find_workflows_by_tag() (lines 449-491)"
+
+  # ============================================================================
+  # FILESYSTEM LAYER - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.filesystem.index
+    category: query
+    maturity: stable
+    summary: "Lightweight YAML index for token-efficient workflow discovery"
+    audiences: [ai_agent, sdk_architect]
+    user_benefit: "95% token reduction for workflow discovery"
+    delivers_benefit: workflow.discovery.progressive_disclosure
+    evidence:
+      - type: doc
+        ref: .startd8/workflows/_index.yaml
+        description: "Lightweight workflow index"
+
+  - capability_id: startd8.workflow.filesystem.export
+    category: generate
+    maturity: stable
+    summary: "Export workflow definitions to YAML for agent consumption"
+    audiences: [workflow_developer, ai_agent]
+    user_benefit: "Agents can read workflow definitions without loading Python"
+    delivers_benefit: workflow.discovery.progressive_disclosure
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/filesystem.py
+        description: "WorkflowFilesystem.export_all()"
+
+  # ============================================================================
+  # EXECUTION LAYER - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.execution.pipeline
+    category: action
+    maturity: stable
+    summary: "Sequential multi-agent pipeline with step-by-step execution and metrics"
+    audiences: [workflow_developer, workflow_user]
+    user_benefit: "Chain multiple agents with data transformation between steps"
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/orchestration.py
+        description: "Pipeline, PipelineStep, PipelineResult classes"
+
+  - capability_id: startd8.workflow.execution.progress
+    category: observe
+    maturity: stable
+    summary: "Progress callbacks during workflow execution"
+    audiences: [workflow_user, integration_developer]
+    user_benefit: "Know workflow is progressing during long runs"
+    delivers_benefit: workflow.execution.progress_tracking
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/base.py
+        description: "ProgressCallback type alias and _emit_progress() helper"
+
+  - capability_id: startd8.workflow.execution.async
+    category: action
+    maturity: beta
+    summary: "Async workflow execution via arun() with automatic sync/async bridging"
+    audiences: [workflow_developer, integration_developer]
+    user_benefit: "Integrate workflows with async applications"
+    delivers_benefit: workflow.execution.async_native
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/base.py
+        description: "WorkflowBase.arun() with _aexecute/_execute fallback (lines 268-313)"
+
+  # ============================================================================
+  # OBSERVABILITY LAYER - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.observability.cost
+    category: observe
+    maturity: stable
+    summary: "Token usage and cost tracking for every workflow execution"
+    audiences: [workflow_user, ai_agent]
+    user_benefit: "Know exact cost of every workflow run"
+    delivers_benefit: workflow.observability.cost_tracking
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/models.py
+        description: "WorkflowMetrics, StepResult with token/cost fields"
+
+  - capability_id: startd8.workflow.observability.events
+    category: observe
+    maturity: stable
+    summary: "EventBus for workflow lifecycle events (PIPELINE_START/STEP/COMPLETE/ERROR)"
+    audiences: [integration_developer, sdk_architect]
+    user_benefit: "Build real-time dashboards and integrations"
+    delivers_benefit: workflow.observability.event_stream
+    evidence:
+      - type: code
+        ref: src/startd8/events/types.py
+        description: "PIPELINE_START, PIPELINE_STEP_START, PIPELINE_STEP_COMPLETE, PIPELINE_COMPLETE, PIPELINE_ERROR"
+
+  - capability_id: startd8.workflow.observability.step_results
+    category: query
+    maturity: stable
+    summary: "Step-by-step results for debugging workflow failures"
+    audiences: [workflow_developer, workflow_user]
+    user_benefit: "Debug failures by inspecting each step"
+    delivers_benefit: workflow.observability.step_debugging
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/models.py
+        description: "WorkflowResult.steps: List[StepResult]"
+
+  # ============================================================================
+  # CLI LAYER - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.cli.list
+    category: query
+    maturity: stable
+    summary: "CLI command to list available workflows"
+    audiences: [workflow_user]
+    user_benefit: "Discover workflows without writing code"
+    delivers_benefit: workflow.discovery.cli_exploration
+    evidence:
+      - type: code
+        ref: src/startd8/cli.py
+        description: "workflow list command"
+
+  - capability_id: startd8.workflow.cli.describe
+    category: query
+    maturity: stable
+    summary: "CLI command to show full workflow metadata"
+    audiences: [workflow_user, ai_agent]
+    user_benefit: "Understand workflow requirements without reading code"
+    delivers_benefit: workflow.discovery.cli_exploration
+    evidence:
+      - type: code
+        ref: src/startd8/cli.py
+        description: "workflow describe command"
+
+  - capability_id: startd8.workflow.cli.run
+    category: action
+    maturity: stable
+    summary: "CLI command to execute workflows with config"
+    audiences: [workflow_user]
+    user_benefit: "Execute workflows from command line"
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/cli.py
+        description: "workflow run command"
+
+  # ============================================================================
+  # TESTING LAYER - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.testing.mock_agent
+    category: validate
+    maturity: stable
+    summary: "MockAgent for testing workflows without API calls"
+    audiences: [workflow_developer]
+    user_benefit: "Fast, deterministic workflow tests"
+    delivers_benefit: workflow.testing.mock_agents
+    evidence:
+      - type: code
+        ref: src/startd8/providers/mock.py
+        description: "MockProvider and MockAgent"
+
+  # ============================================================================
+  # INTEGRATION LAYER - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.mcp.tool
+    category: action
+    maturity: stable
+    summary: "MCP tool for AI agents to list, describe, and run workflows"
+    audiences: [ai_agent, integration_developer]
+    user_benefit: "All workflows accessible via single MCP tool"
+    delivers_benefit: workflow.integration.mcp_native
+    description:
+      developer: |
+        MCPGateway.handle_workflow_tool() dispatches list/describe/run actions.
+        Rate limited, audit logged. Returns structured WorkflowResult.
+      agent: |
+        MCP tool: startd8_workflow. Actions: list, describe, run.
+        Input: {action: "run", workflow_id: "pipeline", config: {...}}.
+    evidence:
+      - type: code
+        ref: src/startd8/mcp/gateway.py
+        description: "handle_workflow_tool(), list_workflows(), describe_workflow(), execute_workflow()"
+
+  - capability_id: startd8.workflow.models.project_context
+    category: observe
+    maturity: stable
+    summary: "ContextCore project metadata for workflow tracking and Grafana correlation"
+    audiences: [workflow_developer, integration_developer]
+    user_benefit: "Workflow runs visible in ContextCore project dashboards"
+    delivers_benefit: workflow.integration.contextcore_tracking
+    description:
+      developer: |
+        ProjectContext(project_id, task_id, sprint_id) with semantic conventions
+        (io.contextcore.*). to_labels() for Prometheus/OTel. Extracted from config
+        via from_config(). Included in WorkflowResult when non-empty.
+      agent: |
+        Config: {project_context: {project_id: "P1", task_id: "T1"}}.
+        Result: result.project_context.to_labels() for Grafana queries.
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/models.py
+        description: "ProjectContext dataclass (lines 24-93)"
+      - type: code
+        ref: src/startd8/workflows/builtin/lead_contractor_contextcore_workflow.py
+        description: "ContextCore integration with task status events and OTel spans"
+
+  # ============================================================================
+  # BUILTIN WORKFLOWS - Stable (Delivered)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.builtin.pipeline
+    category: action
+    maturity: stable
+    summary: "Sequential multi-agent pipeline workflow"
+    audiences: [workflow_user, ai_agent]
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/pipeline_workflow.py
+
+  - capability_id: startd8.workflow.builtin.iterative_dev
+    category: action
+    maturity: stable
+    summary: "Dev-review-fix loop with feedback iteration"
+    audiences: [workflow_user, ai_agent]
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/iterative_dev_workflow.py
+
+  - capability_id: startd8.workflow.builtin.doc_enhancement
+    category: action
+    maturity: stable
+    summary: "Multi-agent document refinement chain"
+    audiences: [workflow_user, ai_agent]
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/doc_enhancement_workflow.py
+
+  - capability_id: startd8.workflow.builtin.design_polish
+    category: action
+    maturity: stable
+    summary: "3-stage design document refinement"
+    audiences: [workflow_user, ai_agent]
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/design_polish_workflow.py
+
+  - capability_id: startd8.workflow.builtin.critical_review
+    category: action
+    maturity: stable
+    summary: "Multi-agent document review with analysis reports"
+    audiences: [workflow_user, ai_agent]
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/critical_review_workflow.py
+
+  - capability_id: startd8.workflow.builtin.lead_contractor
+    category: action
+    maturity: beta
+    summary: "Cost-efficient multi-agent orchestration with lead/contractor pattern"
+    audiences: [workflow_developer, ai_agent]
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/lead_contractor_workflow.py
+
+  - capability_id: startd8.workflow.builtin.policy_analysis
+    category: action
+    maturity: beta
+    summary: "Multi-agent parallel critical policy analysis with 7-criteria scoring"
+    audiences: [workflow_user, ai_agent]
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/policy_analysis_workflow.py
+
+  - capability_id: startd8.workflow.builtin.plain_language
+    category: action
+    maturity: beta
+    summary: "Complex content simplification into plain language"
+    audiences: [workflow_user, ai_agent]
+    delivers_benefit: workflow.execution.validated_run
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/plain_language_workflow.py
+
+  # ============================================================================
+  # PHASE 1 CAPABILITIES (Foundation - Draft)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.authoring.auto_validate
+    category: validate
+    maturity: draft
+    summary: "Auto-generate validation from WorkflowInput definitions with optional JSON Schema"
+
+    audiences: [workflow_developer]
+
+    description:
+      developer: |
+        Enhanced WorkflowBase.validate_config(): (1) type checking from WorkflowInput.type,
+        (2) optional JSON Schema validation via jsonschema package, (3) _custom_validate()
+        hook for workflow-specific logic composable with auto-validation.
+        Errors include field name, expected type, actual value.
+      user: |
+        No CLI changes. Workflows automatically validate config types.
+      agent: |
+        workflow.validate_config(config) returns richer error messages with field paths.
+
+    user_benefit: "80% less validation boilerplate per workflow"
+    delivers_benefit: workflow.authoring.validation_helpers
+
+    triggers:
+      - "auto validate"
+      - "validation helper"
+      - "declarative validation"
+
+    protocol_changes:
+      new_methods:
+        - "_custom_validate(config) -> List[str]"
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands: []
+
+    mcp_tool:
+      tool_name: "startd8_workflow"
+      action: "No changes"
+
+    roadmap:
+      phase: 1
+      depends_on: []
+      estimated_effort: small
+      implements_frs: [FR-110, FR-111, FR-112]
+      breaking_change: false
+
+  - capability_id: startd8.workflow.discovery.search
+    category: query
+    maturity: draft
+    summary: "Search and filter workflows by capability, tag, or description text"
+
+    audiences: [workflow_user, ai_agent]
+
+    description:
+      developer: |
+        Enhances existing find_workflows_by_capability() with partial/substring matching.
+        New search_workflows(query) for text search across name and description.
+        CLI flags: --capability, --tag, --search on startd8 workflow list.
+      user: |
+        startd8 workflow list --capability code-review
+        startd8 workflow list --tag multi-agent
+        startd8 workflow list --search "document enhancement"
+      agent: |
+        WorkflowRegistry.find_workflows_by_capability("doc") matches "document-enhancement".
+        WorkflowRegistry.search_workflows("review") finds workflows with "review" in name/description.
+
+    user_benefit: "Find the right workflow in <5 seconds"
+    delivers_benefit: workflow.discovery.search_filter
+
+    triggers:
+      - "filter workflows"
+      - "search capability"
+      - "find workflow"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods:
+        - "search_workflows(query: str) -> List[Workflow]"
+      yaml_schema_changes: []
+
+    cli_commands:
+      - command: "startd8 workflow list --capability <tag>"
+        description: "Filter by capability (partial match)"
+      - command: "startd8 workflow list --tag <tag>"
+        description: "Filter by tag"
+      - command: "startd8 workflow list --search <query>"
+        description: "Text search in name and description"
+
+    mcp_tool:
+      tool_name: "startd8_workflow"
+      action: "list (with optional capability/search params)"
+
+    roadmap:
+      phase: 1
+      depends_on: [startd8.workflow.registry.find_by_capability]
+      estimated_effort: small
+      implements_frs: [FR-200, FR-201, FR-210, FR-211, FR-212]
+      breaking_change: false
+
+  - capability_id: startd8.workflow.testing.assertions
+    category: validate
+    maturity: draft
+    summary: "Pytest assertion helpers for WorkflowResult: success, steps, cost, order"
+
+    audiences: [workflow_developer]
+
+    description:
+      developer: |
+        New startd8.testing module:
+        - assert_workflow_success(result) -- raises with step details on failure
+        - assert_step_called(result, "step_name") -- verify step executed
+        - assert_step_not_called(result, "step_name") -- verify step skipped
+        - assert_cost_below(result, 0.10) -- cost regression guard
+        - assert_steps_in_order(result, ["s1", "s2"]) -- execution order check
+      user: |
+        No CLI changes. Use in pytest tests.
+      agent: |
+        from startd8.testing import assert_workflow_success, assert_cost_below
+
+    user_benefit: "Automated regression detection for workflows"
+    delivers_benefit: workflow.testing.workflow_assertions
+
+    triggers:
+      - "workflow assertions"
+      - "test helpers"
+      - "assert workflow"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands: []
+
+    mcp_tool:
+      tool_name: "N/A"
+      action: "N/A"
+
+    roadmap:
+      phase: 1
+      depends_on: []
+      estimated_effort: small
+      implements_frs: [FR-500, FR-501, FR-502, FR-503, FR-504]
+      breaking_change: false
+
+  - capability_id: startd8.workflow.execution.async_audit
+    category: action
+    maturity: draft
+    summary: "Audit and add native _aexecute() to all builtin workflows"
+
+    audiences: [workflow_developer, integration_developer]
+
+    description:
+      developer: |
+        Audit all 9 builtin workflows. Add _aexecute() where workflows call
+        acreate_response(). WorkflowBase executor fallback handles sync-only workflows,
+        but native async avoids thread pool overhead in event loops.
+      user: |
+        No user-facing changes. await workflow.arun() works for all builtins.
+      agent: |
+        All builtin workflows support await workflow.arun(config, agents).
+
+    user_benefit: "All workflows usable in async contexts without thread overhead"
+    delivers_benefit: workflow.execution.async_native
+
+    triggers:
+      - "async workflow"
+      - "native async"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands: []
+
+    roadmap:
+      phase: 1
+      depends_on: []
+      estimated_effort: small
+      implements_frs: [FR-150]
+      breaking_change: false
+
+  # ============================================================================
+  # PHASE 2 CAPABILITIES (Core Orchestration - Draft)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.execution.retry
+    category: action
+    maturity: draft
+    summary: "Automatic retry with exponential backoff, jitter, and error classification"
+
+    audiences: [workflow_user, ai_agent]
+
+    description:
+      developer: |
+        RetryPolicy(max_retries=3, backoff_base=1.0, backoff_max=60, jitter=True,
+        retryable_status_codes=[429,500,502,503,504]). Added to WorkflowBase.run()
+        and Pipeline.arun() as optional parameter. Per-step retry loop with
+        is_retryable(exception) classification. Checkpoint/resume for long workflows.
+      user: |
+        startd8 workflow run pipeline --max-retries 3
+        Automatic retry on rate limits and server errors.
+      agent: |
+        WorkflowRegistry.run_workflow(id, config, retry_policy=RetryPolicy(max_retries=3)).
+        Transient failures retried automatically.
+
+    user_benefit: "90%+ transient failures recovered without manual re-run"
+    delivers_benefit: workflow.execution.retry_resilience
+
+    triggers:
+      - "retry policy"
+      - "automatic retry"
+      - "resilience"
+      - "rate limit recovery"
+
+    protocol_changes:
+      new_methods:
+        - "run(config, agents, on_progress, retry_policy=None)"
+        - "arun(config, agents, on_progress, retry_policy=None)"
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods:
+        - "run_workflow(id, config, agents, on_progress, retry_policy=None)"
+      yaml_schema_changes: []
+
+    cli_commands:
+      - command: "startd8 workflow run <id> --max-retries N"
+        description: "Enable retry with N maximum attempts"
+
+    mcp_tool:
+      tool_name: "startd8_workflow"
+      action: "run (with optional retry_policy in config)"
+
+    roadmap:
+      phase: 2
+      depends_on: []
+      estimated_effort: medium
+      implements_frs: [FR-100, FR-101, FR-300, FR-301, FR-302, FR-410, FR-411, FR-511]
+      breaking_change: false
+
+  - capability_id: startd8.workflow.execution.mixed_steps
+    category: action
+    maturity: draft
+    summary: "Pipeline step-type dispatch enabling conditional, parallel, and workflow steps"
+
+    audiences: [workflow_developer, sdk_architect]
+
+    description:
+      developer: |
+        Refactor Pipeline.arun() from flat PipelineStep iteration to isinstance dispatch:
+        PipelineStep (sequential), ConditionalStep (branch), ParallelStep (concurrent),
+        WorkflowStep (sub-workflow). Foundation for three capabilities simultaneously.
+        Existing Pipeline tests pass unchanged.
+      user: |
+        No direct user changes. Enables new pipeline.add_conditional/add_parallel/add_workflow.
+      agent: |
+        Pipeline now supports mixed step types. Existing add_step() unchanged.
+
+    user_benefit: "Foundation for conditional, parallel, and composable workflows"
+    delivers_benefit:
+      - workflow.execution.conditional_routing
+      - workflow.execution.parallel_agents
+      - workflow.reusability.composition
+
+    triggers:
+      - "mixed steps"
+      - "step types"
+      - "pipeline refactor"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands: []
+
+    roadmap:
+      phase: 2
+      depends_on: [startd8.workflow.execution.pipeline]
+      estimated_effort: medium
+      implements_frs: [FR-310]
+      breaking_change: false
+      note: "Critical refactor that unlocks three capabilities simultaneously"
+
+  - capability_id: startd8.workflow.execution.conditional
+    category: action
+    maturity: draft
+    summary: "Conditional branching based on predicate evaluation of intermediate results"
+
+    audiences: [workflow_developer]
+
+    description:
+      developer: |
+        ConditionalStep(name, predicate, if_step, else_step). predicate: Callable[[str], bool]
+        receives previous step output. Pipeline.add_conditional(name, predicate, if_agent, else_agent).
+        else_step optional (skip if False). Step result metadata includes branch taken.
+      user: |
+        No direct CLI changes. Used in Python workflow development.
+      agent: |
+        pipeline.add_conditional("route", lambda x: "error" in x, error_handler, normal_agent)
+
+    user_benefit: "Workflows adapt to content without custom orchestration code"
+    delivers_benefit: workflow.execution.conditional_routing
+
+    triggers:
+      - "conditional workflow"
+      - "branching"
+      - "if else agent"
+      - "predicate routing"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands: []
+
+    mcp_tool:
+      tool_name: "N/A"
+      action: "Code-level only"
+
+    roadmap:
+      phase: 2
+      depends_on: [startd8.workflow.execution.mixed_steps]
+      estimated_effort: medium
+      implements_frs: [FR-311, FR-312]
+      breaking_change: false
+
+  - capability_id: startd8.workflow.execution.parallel
+    category: action
+    maturity: draft
+    summary: "Concurrent agent execution with result aggregation and configurable failure policy"
+
+    audiences: [workflow_developer, workflow_user]
+
+    description:
+      developer: |
+        ParallelStep(name, steps, aggregator?, failure_policy?). Pipeline.add_parallel(name, steps).
+        Steps run via asyncio.gather(). Results ordered same as input.
+        failure_policy: "fail_fast" | "collect_all" (default). Default aggregator joins outputs.
+      user: |
+        Workflows using parallel steps complete faster for independent tasks.
+      agent: |
+        pipeline.add_parallel("analyze", [step_a, step_b, step_c], failure_policy="collect_all")
+
+    user_benefit: "N parallel tasks complete in ~1x time, not Nx"
+    delivers_benefit: workflow.execution.parallel_agents
+
+    triggers:
+      - "parallel agents"
+      - "concurrent execution"
+      - "parallel pipeline"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands: []
+
+    roadmap:
+      phase: 2
+      depends_on: [startd8.workflow.execution.mixed_steps]
+      estimated_effort: medium
+      implements_frs: [FR-320, FR-321, FR-322]
+      breaking_change: false
+
+  - capability_id: startd8.workflow.reusability.compose
+    category: action
+    maturity: draft
+    summary: "Compose workflows from other workflows as Pipeline steps with metrics aggregation"
+
+    audiences: [workflow_developer, sdk_architect]
+
+    description:
+      developer: |
+        WorkflowStep(name, workflow, config_mapping). config_mapping: Callable[[str], Dict]
+        transforms previous output to sub-workflow config. Pipeline.add_workflow(name, workflow, mapping).
+        Sub-workflow metrics aggregated into parent. Step results flattened with "sub:" prefix.
+      user: |
+        No direct CLI changes. Used in Python workflow composition.
+      agent: |
+        pipeline.add_workflow("enhance", doc_workflow, lambda out: {"document": out, "agents": [...]})
+
+    user_benefit: "Build complex workflows from tested primitives without copy-paste"
+    delivers_benefit: workflow.reusability.composition
+
+    triggers:
+      - "compose workflows"
+      - "nested workflow"
+      - "workflow as step"
+      - "sub-workflow"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes:
+        - "Optional composed_from field in workflow YAML metadata"
+
+    cli_commands: []
+
+    roadmap:
+      phase: 2
+      depends_on: [startd8.workflow.execution.mixed_steps]
+      estimated_effort: medium
+      implements_frs: [FR-330, FR-331, FR-332]
+      breaking_change: false
+
+  # ============================================================================
+  # PHASE 3 CAPABILITIES (Observability & Simulation - Draft)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.execution.dry_run
+    category: validate
+    maturity: draft
+    summary: "Simulate workflow execution without API calls, returning plan and cost estimate"
+
+    audiences: [workflow_developer, ai_agent]
+
+    description:
+      developer: |
+        dry_run=True on WorkflowBase.run(): skips _execute(), builds execution plan
+        from metadata (step count, agent assignments). Estimates tokens from input size
+        (chars/4 heuristic) and cost from PricingService. Returns WorkflowResult with
+        metadata["dry_run"]=True and DryRunResult as output.
+      user: |
+        startd8 workflow run pipeline --dry-run
+        Shows execution plan, agent assignments, estimated tokens and cost.
+      agent: |
+        result = WorkflowRegistry.run_workflow(id, config, dry_run=True)
+        result.metadata["dry_run"] == True; result.output contains execution plan.
+
+    user_benefit: "Validate orchestration and estimate cost before committing tokens"
+    delivers_benefit: workflow.execution.dry_run
+
+    triggers:
+      - "dry run"
+      - "simulate workflow"
+      - "estimate cost"
+      - "execution plan"
+
+    protocol_changes:
+      new_methods:
+        - "run(config, agents, on_progress, dry_run=False)"
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods:
+        - "run_workflow(id, config, agents, on_progress, dry_run=False)"
+      yaml_schema_changes: []
+
+    cli_commands:
+      - command: "startd8 workflow run <id> --dry-run"
+        description: "Simulate execution with plan and cost estimate"
+
+    mcp_tool:
+      tool_name: "startd8_workflow"
+      action: "run (with dry_run: true)"
+
+    roadmap:
+      phase: 3
+      depends_on: []
+      estimated_effort: medium
+      implements_frs: [FR-102, FR-103, FR-340, FR-341, FR-510]
+      breaking_change: false
+
+  - capability_id: startd8.workflow.observability.otel
+    category: observe
+    maturity: draft
+    summary: "OpenTelemetry spans for workflow execution with ContextCore project linkage"
+
+    audiences: [integration_developer, sdk_architect]
+
+    description:
+      developer: |
+        WorkflowBase.run() creates parent span "workflow.{workflow_id}". Each step creates
+        child span "workflow.{id}.step.{name}". Attributes: workflow.id, workflow.name,
+        step.name, agent.name, agent.model, tokens, cost. ProjectContext labels attached
+        to root span. Graceful no-op when opentelemetry not installed.
+        Optional dependency: pip install startd8[otel]
+      user: |
+        pip install startd8[otel]
+        Set OTEL_EXPORTER_OTLP_ENDPOINT. Workflows appear in Grafana/Tempo.
+      agent: |
+        Automatic when opentelemetry-api installed. No code changes needed.
+        Query spans in Tempo by workflow.id attribute.
+
+    user_benefit: "Workflows visible in existing Grafana/Tempo observability tools"
+    delivers_benefit: workflow.observability.otel_integration
+
+    triggers:
+      - "otel workflow"
+      - "workflow tracing"
+      - "grafana integration"
+      - "opentelemetry"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands: []
+
+    mcp_tool:
+      tool_name: "N/A"
+      action: "Automatic instrumentation"
+
+    roadmap:
+      phase: 3
+      depends_on: []
+      estimated_effort: medium
+      implements_frs: [FR-400, FR-401, FR-402, FR-403]
+      breaking_change: false
+
+  - capability_id: startd8.workflow.observability.visualize
+    category: generate
+    maturity: draft
+    summary: "Mermaid diagram export of workflow structure and post-execution results"
+
+    audiences: [workflow_developer, workflow_user]
+
+    description:
+      developer: |
+        New WorkflowVisualizer class in src/startd8/workflows/visualizer.py.
+        to_mermaid(pipeline): exports Pipeline structure as Mermaid flowchart.
+        Sequential steps as linear flow, ConditionalSteps as diamond decisions,
+        ParallelSteps as fork/join, WorkflowSteps as sub-graphs.
+        to_mermaid(result): post-execution with step status colors and timing.
+      user: |
+        startd8 workflow visualize <id>  -- show workflow structure
+        startd8 workflow visualize --last-run  -- show execution result
+        --format mermaid|ascii  -- output format
+      agent: |
+        from startd8.workflows.visualizer import WorkflowVisualizer
+        diagram = WorkflowVisualizer.to_mermaid(pipeline)
+
+    user_benefit: "Understand complex multi-step workflows at a glance"
+    delivers_benefit: workflow.observability.visualization
+
+    triggers:
+      - "visualize workflow"
+      - "workflow diagram"
+      - "mermaid"
+      - "workflow graph"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands:
+      - command: "startd8 workflow visualize <id>"
+        description: "Output Mermaid diagram of workflow structure"
+      - command: "startd8 workflow visualize --last-run"
+        description: "Visualize last execution with step statuses"
+
+    mcp_tool:
+      tool_name: "startd8_workflow"
+      action: "visualize (returns Mermaid markdown)"
+
+    roadmap:
+      phase: 3
+      depends_on: []
+      estimated_effort: medium
+      implements_frs: [FR-420, FR-421, FR-530]
+      breaking_change: false
+
+  # ============================================================================
+  # PHASE 4 CAPABILITY (Enterprise - Draft)
+  # ============================================================================
+
+  - capability_id: startd8.workflow.integration.http
+    category: action
+    maturity: draft
+    summary: "HTTP server for webhook-triggered workflow execution with API key auth"
+
+    audiences: [integration_developer]
+
+    description:
+      developer: |
+        New startd8.server module with ASGI app (starlette/FastAPI).
+        Endpoints: GET /workflows (list), POST /workflows/{id}/run (trigger async),
+        GET /workflows/{id}/runs/{run_id} (poll status). X-API-Key header auth.
+        Async execution queue with in-memory state (SQLite optional).
+        Optional dependency: pip install startd8[server]
+      user: |
+        pip install startd8[server]
+        startd8 serve --port 8080 --api-key <key>
+        curl -X POST localhost:8080/workflows/pipeline/run -H "X-API-Key: <key>" -d '...'
+      agent: |
+        HTTP API. POST /workflows/{id}/run returns {run_id: "..."}. Poll GET for result.
+
+    user_benefit: "Trigger workflows from CI/CD, GitHub Actions, or any HTTP client"
+    delivers_benefit: workflow.integration.webhook_triggers
+
+    triggers:
+      - "webhook workflow"
+      - "http trigger"
+      - "workflow api"
+      - "startd8 serve"
+
+    protocol_changes:
+      new_methods: []
+      new_properties: []
+      breaking: false
+
+    registry_changes:
+      new_methods: []
+      yaml_schema_changes: []
+
+    cli_commands:
+      - command: "startd8 serve --port <port> --api-key <key>"
+        description: "Start HTTP server for workflow execution"
+
+    mcp_tool:
+      tool_name: "N/A"
+      action: "HTTP endpoints replace MCP for external systems"
+
+    roadmap:
+      phase: 4
+      depends_on: [startd8.workflow.registry.run]
+      estimated_effort: medium
+      implements_frs: [FR-520, FR-521, FR-522]
+      breaking_change: false
+
+# ==============================================================================
+# RISK FLAGS
+# ==============================================================================
+
+risk_flags:
+  - id: risk:pre-1.0-breaking-changes
+    description: "SDK is pre-1.0, breaking changes possible in MINOR versions"
+    affects: [all]
+  - id: risk:async-not-universal
+    description: "Not all builtin workflows support native _aexecute()"
+    affects: [startd8.workflow.execution.async]
+    resolution: "FR-150 in Phase 1"
+  - id: risk:pipeline-refactor
+    description: "FR-310 mixed_steps refactor touches core Pipeline.arun() loop"
+    affects:
+      - startd8.workflow.execution.conditional
+      - startd8.workflow.execution.parallel
+      - startd8.workflow.reusability.compose
+    resolution: "Comprehensive test coverage before refactor"
+
+# ==============================================================================
+# SUMMARY
+# ==============================================================================
+
+summary:
+  total_capabilities: 38
+  by_maturity:
+    stable: 24
+    beta: 3
+    draft: 11
+  by_phase:
+    delivered: 27  # stable + beta
+    phase_1: 4     # auto_validate, search, assertions, async_audit
+    phase_2: 5     # retry, mixed_steps, conditional, parallel, compose
+    phase_3: 3     # dry_run, otel, visualize
+    phase_4: 1     # http server
+  new_in_v2:
+    added: 9   # scaffold(upgraded), mcp.tool, project_context, mixed_steps, dry_run, otel, visualize, http, async_audit
+    upgraded: 1  # scaffold: draft -> stable
+  implements_frs: 46  # All Phase 3 requirements covered
+
+# ==============================================================================
+# CHANGELOG
+# ==============================================================================
+
+changelog:
+  - version: "2.0.0"
+    date: "2026-01-29"
+    changes:
+      - "Phase 4 capability design from 46 functional requirements"
+      - "38 total capabilities (was 29): 24 stable, 3 beta, 11 draft"
+      - "Upgraded authoring.scaffold: draft -> stable"
+      - "Added stable: mcp.tool, models.project_context, registry.find_by_capability"
+      - "Added stable: builtin.policy_analysis, builtin.plain_language"
+      - "Added draft: execution.mixed_steps (FR-310 Pipeline refactor)"
+      - "Added draft: execution.dry_run (FR-102/103/340/341)"
+      - "Added draft: execution.async_audit (FR-150)"
+      - "All draft capabilities include protocol_changes, registry_changes, cli_commands, roadmap"
+      - "Full FR traceability in roadmap.implements_frs"
+      - "Risk flags for Pipeline refactor and async coverage"
+  - version: "1.0.0"
+    date: "2026-01-28"
+    changes:
+      - "Initial capability manifest"
+      - "29 capabilities: 19 stable, 1 beta, 9 draft"
