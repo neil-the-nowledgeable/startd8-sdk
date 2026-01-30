@@ -1051,15 +1051,34 @@ def _load_workflow_registry():
 
 
 @workflow_app.command("list")
-def workflow_list():
-    """List all available workflows"""
+def workflow_list(
+    capability: Optional[str] = typer.Option(None, help="Filter by capability (partial match)"),
+    tag: Optional[str] = typer.Option(None, help="Filter by tag"),
+    search: Optional[str] = typer.Option(None, help="Search name and description"),
+):
+    """List all available workflows, with optional filters."""
     WorkflowRegistry = _load_workflow_registry()
     WorkflowRegistry.discover()
 
-    workflows = WorkflowRegistry.list_workflow_metadata()
+    # Start with all workflows (FR-210, FR-211, FR-212)
+    all_workflows = WorkflowRegistry.list_workflow_metadata()
+    all_ids = {m.workflow_id for m in all_workflows}
+
+    # Apply filters as intersection
+    if capability:
+        cap_matches = WorkflowRegistry.find_workflows_by_capability(capability)
+        all_ids &= {w.metadata.workflow_id for w in cap_matches}
+    if tag:
+        tag_matches = WorkflowRegistry.find_workflows_by_tag(tag)
+        all_ids &= {w.metadata.workflow_id for w in tag_matches}
+    if search:
+        search_matches = WorkflowRegistry.search_workflows(search)
+        all_ids &= {w.metadata.workflow_id for w in search_matches}
+
+    workflows = [m for m in all_workflows if m.workflow_id in all_ids]
 
     if not workflows:
-        console.print("[yellow]No workflows available.[/yellow]")
+        console.print("[yellow]No workflows match the given filters.[/yellow]")
         return
 
     table = Table(title="Available Workflows")

@@ -175,11 +175,25 @@ class WorkflowBase:
         """Override to provide workflow metadata."""
         raise NotImplementedError("Subclasses must implement metadata property")
 
+    # Type mapping for auto-validation (FR-110)
+    _TYPE_MAP = {
+        "string": str, "text": str, "file": str,
+        "number": (int, float), "boolean": bool,
+        "agent_spec": str, "agent_spec_list": list,
+    }
+
     def validate_config(self, config: Dict[str, Any]) -> ValidationResult:
         """
         Default validation checks required inputs from metadata.
 
-        Override for custom validation logic.
+        Performs three layers of validation:
+        1. Required-field presence check
+        2. Type checking against WorkflowInput.type definitions (FR-110)
+        3. Optional JSON Schema validation when jsonschema is installed (FR-111)
+        4. Custom validation via _custom_validate() hook (FR-112)
+
+        Override for custom validation logic. Subclass overrides bypass
+        all auto-validation; use _custom_validate() to extend instead.
         """
         errors = []
         meta = self.metadata
@@ -188,6 +202,27 @@ class WorkflowBase:
         for inp in meta.inputs:
             if inp.required and inp.name not in config:
                 errors.append(f"Missing required input: {inp.name}")
+
+        # Type checking (FR-110)
+        for inp in meta.inputs:
+            if inp.name in config:
+                expected = self._TYPE_MAP.get(inp.type)
+                if expected and not isinstance(config[inp.name], expected):
+                    errors.append(
+                        f"Input '{inp.name}': expected {inp.type}, "
+                        f"got {type(config[inp.name]).__name__}"
+                    )
+
+        # Optional JSON Schema validation (FR-111)
+        try:
+            import jsonschema
+            schema = meta.get_input_schema()
+            jsonschema.validate(config, schema)
+        except ImportError:
+            pass  # Graceful fallback — jsonschema not installed
+        except Exception as e:
+            # Handle both ValidationError and SchemaError
+            errors.append(f"Schema validation: {e.message}")
 
         # Check agent count if agents provided
         agents = config.get("agents", [])
@@ -201,9 +236,16 @@ class WorkflowBase:
                     f"Maximum {meta.max_agents} agent(s) allowed, got {len(agents)}"
                 )
 
+        # Custom validation hook (FR-112)
+        errors.extend(self._custom_validate(config))
+
         if errors:
             return ValidationResult.failure(errors)
         return ValidationResult.success()
+
+    def _custom_validate(self, config: Dict[str, Any]) -> List[str]:
+        """Override for workflow-specific validation. Returns error messages."""
+        return []
 
     def run(
         self,

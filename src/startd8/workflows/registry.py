@@ -467,7 +467,7 @@ class WorkflowRegistry:
         with cls._lock:
             return [
                 w for w in cls._workflows.values()
-                if capability_lower in [c.lower() for c in w.metadata.capabilities]
+                if any(capability_lower in c.lower() for c in w.metadata.capabilities)
             ]
 
     @classmethod
@@ -488,6 +488,27 @@ class WorkflowRegistry:
             return [
                 w for w in cls._workflows.values()
                 if tag_lower in [t.lower() for t in w.metadata.tags]
+            ]
+
+    @classmethod
+    def search_workflows(cls, query: str) -> List[Workflow]:
+        """
+        Search workflows by name or description text (FR-201).
+
+        Args:
+            query: Substring to search for in workflow name or description
+
+        Returns:
+            List of workflows matching the query
+        """
+        cls.discover()
+        query_lower = query.lower()
+
+        with cls._lock:
+            return [
+                w for w in cls._workflows.values()
+                if query_lower in w.metadata.name.lower()
+                or query_lower in w.metadata.description.lower()
             ]
 
     @classmethod

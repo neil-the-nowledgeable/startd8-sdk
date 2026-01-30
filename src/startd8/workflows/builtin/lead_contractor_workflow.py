@@ -843,6 +843,466 @@ class LeadContractorWorkflow(WorkflowBase):
 
         return integration
 
+    # =========================================================================
+    # Async Execution (FR-150)
+    # =========================================================================
+
+    async def _aexecute(
+        self,
+        config: Dict[str, Any],
+        agents: Optional[List[BaseAgent]],
+        on_progress: Optional[ProgressCallback],
+    ) -> WorkflowResult:
+        """Execute the Lead Contractor workflow asynchronously (FR-150)."""
+        started_at = datetime.now(timezone.utc)
+        workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
+
+        task_description = config["task_description"]
+        context = config.get("context", {})
+        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
+        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash")
+        max_iterations = config.get("max_iterations", 3)
+        pass_threshold = config.get("pass_threshold", 80)
+        output_format = config.get("output_format")
+        integration_instructions = config.get("integration_instructions", "")
+        fail_on_truncation = config.get("fail_on_truncation", True)
+
+        project_context = self._extract_project_context(config)
+
+        try:
+            lead_agent = resolve_agent_spec(lead_spec)
+            drafter_agent = resolve_agent_spec(drafter_spec)
+        except Exception as e:
+            return WorkflowResult.from_error(
+                self.metadata.workflow_id,
+                f"Failed to resolve agents: {e}"
+            )
+
+        result = LeadContractorResult(
+            workflow_id=workflow_id,
+            success=False,
+            final_implementation=""
+        )
+
+        step_results: List[StepResult] = []
+        total_steps = 2 + max_iterations * 2 + 1
+        current_step = 0
+
+        self._emit_progress(on_progress, current_step, total_steps, "Starting Lead Contractor workflow")
+
+        try:
+            # Phase 1: Spec Creation (Lead)
+            current_step += 1
+            self._emit_progress(on_progress, current_step, total_steps, "Creating implementation spec")
+
+            spec = await self._acreate_spec(
+                lead_agent=lead_agent,
+                task_description=task_description,
+                context=context,
+                output_format=output_format,
+            )
+            result.spec = spec
+
+            step_results.append(StepResult(
+                step_name="spec_creation",
+                agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                output=spec.raw_spec[:500] + "..." if len(spec.raw_spec) > 500 else spec.raw_spec,
+                time_ms=spec.time_ms,
+                input_tokens=spec.input_tokens,
+                output_tokens=spec.output_tokens,
+                cost=spec.cost,
+                metadata={"phase": WorkflowPhase.SPEC_CREATION.value}
+            ))
+
+            result.lead_input_tokens += spec.input_tokens
+            result.lead_output_tokens += spec.output_tokens
+            result.lead_cost += spec.cost
+
+            # Phase 2-4: Draft/Review Loop
+            current_implementation = ""
+            review_feedback = ""
+            final_review: Optional[ReviewResult] = None
+
+            for iteration in range(1, max_iterations + 1):
+                current_step += 1
+                self._emit_progress(
+                    on_progress, current_step, total_steps,
+                    f"Drafting implementation (iteration {iteration}/{max_iterations})"
+                )
+
+                draft = await self._acreate_draft(
+                    drafter_agent=drafter_agent,
+                    spec=spec,
+                    feedback=review_feedback,
+                    iteration=iteration,
+                )
+                result.drafts.append(draft)
+                current_implementation = draft.implementation
+
+                if draft.was_truncated:
+                    if fail_on_truncation:
+                        error_msg = (
+                            f"Draft was truncated at iteration {iteration}. "
+                            f"Output tokens: {draft.output_tokens}. "
+                            "Consider: (1) increasing max_tokens, (2) decomposing the task, "
+                            "or (3) setting fail_on_truncation=False to continue anyway."
+                        )
+                        logger.error(error_msg)
+                        return WorkflowResult.from_error(
+                            self.metadata.workflow_id,
+                            error_msg,
+                            steps=step_results,
+                        )
+                    else:
+                        logger.warning(
+                            f"Draft was truncated at iteration {iteration}, continuing anyway. "
+                            f"Set fail_on_truncation=True to fail on truncation."
+                        )
+
+                step_results.append(StepResult(
+                    step_name=f"draft_iteration_{iteration}",
+                    agent_name=f"{drafter_agent.name}:{drafter_agent.model}",
+                    output=draft.implementation[:500] + "..." if len(draft.implementation) > 500 else draft.implementation,
+                    time_ms=draft.time_ms,
+                    input_tokens=draft.input_tokens,
+                    output_tokens=draft.output_tokens,
+                    cost=draft.cost,
+                    metadata={"phase": WorkflowPhase.DRAFTING.value, "iteration": iteration}
+                ))
+
+                result.drafter_input_tokens += draft.input_tokens
+                result.drafter_output_tokens += draft.output_tokens
+                result.drafter_cost += draft.cost
+
+                # Review phase
+                current_step += 1
+                self._emit_progress(
+                    on_progress, current_step, total_steps,
+                    f"Reviewing implementation (iteration {iteration}/{max_iterations})"
+                )
+
+                review = await self._areview_draft(
+                    lead_agent=lead_agent,
+                    task_description=task_description,
+                    spec=spec,
+                    implementation=current_implementation,
+                    pass_threshold=pass_threshold,
+                    iteration=iteration,
+                )
+                result.reviews.append(review)
+                final_review = review
+
+                step_results.append(StepResult(
+                    step_name=f"review_iteration_{iteration}",
+                    agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                    output=review.review_text[:500] + "..." if len(review.review_text) > 500 else review.review_text,
+                    time_ms=review.time_ms,
+                    input_tokens=review.input_tokens,
+                    output_tokens=review.output_tokens,
+                    cost=review.cost,
+                    metadata={
+                        "phase": WorkflowPhase.REVIEW.value,
+                        "iteration": iteration,
+                        "score": review.score,
+                        "passed": review.passed
+                    }
+                ))
+
+                result.lead_input_tokens += review.input_tokens
+                result.lead_output_tokens += review.output_tokens
+                result.lead_cost += review.cost
+
+                if review.passed:
+                    logger.info(f"Review passed on iteration {iteration} with score {review.score}")
+                    break
+
+                review_feedback = self._format_review_feedback(review)
+
+                if iteration == max_iterations:
+                    logger.warning(f"Max iterations ({max_iterations}) reached without passing review")
+
+            result.total_iterations = len(result.drafts)
+
+            # Phase 5: Integration (Lead)
+            current_step += 1
+            self._emit_progress(on_progress, current_step, total_steps, "Integrating final implementation")
+
+            integration = await self._aintegrate_final(
+                lead_agent=lead_agent,
+                task_description=task_description,
+                implementation=current_implementation,
+                reviews=result.reviews,
+                integration_instructions=integration_instructions,
+            )
+            result.integration = integration
+
+            step_results.append(StepResult(
+                step_name="integration",
+                agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                output=integration.final_implementation[:500] + "..." if len(integration.final_implementation) > 500 else integration.final_implementation,
+                time_ms=integration.time_ms,
+                input_tokens=integration.input_tokens,
+                output_tokens=integration.output_tokens,
+                cost=integration.cost,
+                metadata={"phase": WorkflowPhase.INTEGRATION.value}
+            ))
+
+            result.lead_input_tokens += integration.input_tokens
+            result.lead_output_tokens += integration.output_tokens
+            result.lead_cost += integration.cost
+
+            result.success = True
+            result.final_implementation = integration.final_implementation
+            result.final_phase = WorkflowPhase.COMPLETED
+            result.completed_at = datetime.now(timezone.utc)
+            result.total_cost = result.lead_cost + result.drafter_cost
+            result.total_time_ms = sum(s.time_ms for s in step_results)
+
+        except Exception as e:
+            logger.error(f"Lead Contractor workflow failed: {e}", exc_info=True)
+            result.success = False
+            result.error = str(e)
+            result.final_phase = WorkflowPhase.FAILED
+            result.completed_at = datetime.now(timezone.utc)
+            result.total_cost = result.lead_cost + result.drafter_cost
+            result.total_time_ms = sum(s.time_ms for s in step_results)
+
+        metrics = WorkflowMetrics(
+            total_time_ms=result.total_time_ms,
+            input_tokens=result.lead_input_tokens + result.drafter_input_tokens,
+            output_tokens=result.lead_output_tokens + result.drafter_output_tokens,
+            total_cost=result.total_cost,
+            step_count=len(step_results),
+        )
+
+        completed_at = datetime.now(timezone.utc)
+
+        return WorkflowResult(
+            workflow_id=self.metadata.workflow_id,
+            success=result.success,
+            output={
+                "final_implementation": result.final_implementation,
+                "summary": result.to_summary(),
+            },
+            metrics=metrics,
+            steps=step_results,
+            error=result.error,
+            started_at=started_at,
+            completed_at=completed_at,
+            metadata={
+                "lead_contractor_result": result.to_summary(),
+                "lead_agent": lead_spec,
+                "drafter_agent": drafter_spec,
+                "total_iterations": result.total_iterations,
+                "lead_cost": result.lead_cost,
+                "drafter_cost": result.drafter_cost,
+                "cost_efficiency_ratio": result.get_cost_efficiency_ratio(),
+            },
+            project_context=project_context if not project_context.is_empty() else None,
+        )
+
+    async def _acreate_spec(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        context: Dict[str, Any],
+        output_format: Optional[str],
+    ) -> ImplementationSpec:
+        """Phase 1 (async): Lead creates implementation specification."""
+        spec_id = f"spec-{uuid.uuid4().hex[:8]}"
+
+        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
+        if output_format:
+            context_str += f"\n\nExpected Output Format:\n{output_format}"
+
+        prompt = SPEC_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            context=context_str
+        )
+
+        response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
+
+        requirements = self._parse_list_section(response_text, "Requirements")
+        acceptance_criteria = self._parse_list_section(response_text, "Acceptance Criteria")
+        edge_cases = self._parse_list_section(response_text, "Edge Cases")
+        constraints = self._parse_list_section(response_text, "Constraints")
+        technical_approach = self._parse_section_content(response_text, "Technical Approach")
+        code_structure = self._parse_section_content(response_text, "Code Structure")
+
+        spec = ImplementationSpec(
+            spec_id=spec_id,
+            task_summary=task_description,
+            requirements=requirements,
+            technical_approach=technical_approach,
+            acceptance_criteria=acceptance_criteria,
+            code_structure=code_structure if code_structure else None,
+            edge_cases=edge_cases,
+            constraints=constraints,
+            raw_spec=response_text,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        spec.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            spec.input_tokens,
+            spec.output_tokens
+        )
+
+        return spec
+
+    async def _acreate_draft(
+        self,
+        drafter_agent: BaseAgent,
+        spec: ImplementationSpec,
+        feedback: str,
+        iteration: int,
+    ) -> DraftResult:
+        """Phase 2/4 (async): Drafter creates implementation from spec."""
+        draft_id = f"draft-{uuid.uuid4().hex[:8]}"
+
+        prompt = DRAFT_PROMPT_TEMPLATE.format(
+            spec=spec.raw_spec,
+            feedback=feedback if feedback else "This is the initial implementation attempt."
+        )
+
+        response_text, response_time_ms, token_usage = await drafter_agent.agenerate(prompt)
+
+        implementation_code = self._extract_code_from_response(response_text)
+
+        was_truncated = token_usage.was_truncated if token_usage else False
+
+        if not was_truncated and implementation_code:
+            truncation_result = detect_truncation(
+                implementation_code,
+                original_input=prompt,
+                expected_sections=["def ", "class "],
+            )
+            if truncation_result.is_truncated and truncation_result.confidence >= 0.7:
+                was_truncated = True
+                logger.warning(
+                    f"Draft appears truncated (heuristic): {truncation_result.indicators[:3]}"
+                )
+
+        draft = DraftResult(
+            draft_id=draft_id,
+            iteration=iteration,
+            implementation=implementation_code,
+            spec_id=spec.spec_id,
+            agent_name=drafter_agent.name,
+            model=drafter_agent.model,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+            was_truncated=was_truncated,
+        )
+
+        draft.cost = self._pricing.calculate_total_cost(
+            drafter_agent.model,
+            draft.input_tokens,
+            draft.output_tokens
+        )
+
+        return draft
+
+    async def _areview_draft(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        spec: ImplementationSpec,
+        implementation: str,
+        pass_threshold: int,
+        iteration: int,
+    ) -> ReviewResult:
+        """Phase 3 (async): Lead reviews the draft implementation."""
+        review_id = f"review-{uuid.uuid4().hex[:8]}"
+
+        prompt = REVIEW_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            spec=spec.raw_spec,
+            implementation=implementation,
+            pass_threshold=pass_threshold
+        )
+
+        response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
+
+        review_text = response_text
+        score = self._parse_score(review_text)
+        has_pass_verdict = bool(re.search(r'\bPASS\b', review_text, re.IGNORECASE))
+        passed = score >= pass_threshold and has_pass_verdict
+
+        issues = self._parse_list_section(review_text, "Issues")
+        blocking = self._parse_list_section(review_text, "Blocking Issues")
+        suggestions = self._parse_list_section(review_text, "Suggestions")
+        strengths = self._parse_list_section(review_text, "Strengths")
+
+        review = ReviewResult(
+            review_id=review_id,
+            iteration=iteration,
+            passed=passed,
+            score=score,
+            review_text=review_text,
+            issues=issues,
+            blocking_issues=blocking,
+            suggestions=suggestions,
+            strengths=strengths,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        review.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            review.input_tokens,
+            review.output_tokens
+        )
+
+        return review
+
+    async def _aintegrate_final(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        implementation: str,
+        reviews: List[ReviewResult],
+        integration_instructions: str,
+    ) -> IntegrationResult:
+        """Phase 5 (async): Lead integrates and finalizes the implementation."""
+        integration_id = f"int-{uuid.uuid4().hex[:8]}"
+
+        review_history = "\n\n".join([
+            f"### Iteration {r.iteration}\n- Score: {r.score}\n- Passed: {r.passed}\n{r.review_text[:500]}"
+            for r in reviews
+        ])
+
+        prompt = INTEGRATION_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            implementation=implementation,
+            review_history=review_history,
+            integration_instructions=integration_instructions or "Finalize for production use."
+        )
+
+        response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
+
+        final_code = self._extract_code_from_response(response_text)
+
+        integration = IntegrationResult(
+            integration_id=integration_id,
+            final_implementation=final_code,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        integration.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            integration.input_tokens,
+            integration.output_tokens
+        )
+
+        return integration
+
     def _format_review_feedback(self, review: ReviewResult) -> str:
         """Format review into feedback for next draft iteration."""
         issues_str = '\n'.join(f'- {issue}' for issue in review.issues) if review.issues else '- None listed'

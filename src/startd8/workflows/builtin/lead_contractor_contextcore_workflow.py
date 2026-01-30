@@ -418,6 +418,93 @@ class LeadContractorContextCoreWorkflow(LeadContractorWorkflow):
                 tracker.fail_task(str(e))
             raise
 
+    async def _aexecute(
+        self,
+        config: Dict[str, Any],
+        agents: Optional[List[BaseAgent]],
+        on_progress: Optional[ProgressCallback],
+    ) -> WorkflowResult:
+        """Execute with ContextCore task tracking (async, FR-150)."""
+
+        task_id = config.get("task_id")
+        project_id = config.get("project_id", "default")
+        parent_id = config.get("parent_id")
+        local_storage = config.get("local_storage")
+        emit_insights = config.get("emit_insights", True)
+
+        tracker: Optional[ContextCoreTaskTracker] = None
+        if task_id:
+            tracker = ContextCoreTaskTracker(
+                project_id=project_id,
+                task_id=task_id,
+                parent_id=parent_id,
+                local_storage=local_storage,
+            )
+
+            task_title = f"Lead Contractor: {config.get('task_description', 'Unknown')[:50]}"
+            tracker.start_task(task_title, task_type="task")
+            tracker.update_status("in_progress")
+
+        original_on_progress = on_progress
+
+        def tracking_progress(current: int, total: int, message: str):
+            if original_on_progress:
+                original_on_progress(current, total, message)
+            if tracker:
+                tracker.add_event(
+                    f"progress_{current}",
+                    {"current": current, "total": total, "message": message}
+                )
+
+        try:
+            result = await super()._aexecute(config, agents, tracking_progress)
+
+            if tracker:
+                if result.success:
+                    if emit_insights and result.steps:
+                        spec_step = next(
+                            (s for s in result.steps if s.step_name == "spec_creation"),
+                            None
+                        )
+                        if spec_step:
+                            tracker.emit_decision(
+                                summary=f"Created implementation spec for: {config.get('task_description', 'task')[:100]}",
+                                confidence=0.9,
+                                context={
+                                    "agent": spec_step.agent_name,
+                                    "tokens": spec_step.output_tokens,
+                                }
+                            )
+
+                        review_steps = [s for s in result.steps if "review" in s.step_name]
+                        if review_steps:
+                            final_review = review_steps[-1]
+                            score = final_review.metadata.get("score", "unknown")
+                            tracker.emit_decision(
+                                summary=f"Implementation passed review with score: {score}",
+                                confidence=0.85,
+                                context={
+                                    "iterations": len(review_steps),
+                                    "final_score": score,
+                                }
+                            )
+
+                    tracker.complete_task()
+                else:
+                    tracker.fail_task(result.error or "Workflow failed")
+
+            result.project_context = ProjectContext(
+                project_id=project_id,
+                task_id=task_id,
+            )
+
+            return result
+
+        except Exception as e:
+            if tracker:
+                tracker.fail_task(str(e))
+            raise
+
     def validate_config(self, config: Dict[str, Any]) -> ValidationResult:
         """Validate config including ContextCore fields."""
         # First validate base config

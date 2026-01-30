@@ -192,6 +192,93 @@ class TestWorkflowRegistry:
         assert WorkflowRegistry.get_workflow("MYWORKFLOW") is not None
 
 
+class SearchableWorkflow(WorkflowBase):
+    """Workflow with specific capabilities/tags for search testing."""
+
+    def __init__(self, wid="searchable", caps=None, tags=None, name="Searchable", desc="A searchable workflow"):
+        self._wid = wid
+        self._caps = caps or ["document-enhancement", "multi-agent"]
+        self._tags = tags or ["review", "analysis"]
+        self._name = name
+        self._desc = desc
+
+    @property
+    def metadata(self) -> WorkflowMetadata:
+        return WorkflowMetadata(
+            workflow_id=self._wid,
+            name=self._name,
+            description=self._desc,
+            version="1.0.0",
+            capabilities=self._caps,
+            tags=self._tags,
+            requires_agents=False,
+            agent_count=AgentCount.NONE,
+            min_agents=0,
+            inputs=[],
+        )
+
+    def _execute(self, config, agents=None, on_progress=None):
+        return WorkflowResult(
+            workflow_id=self._wid,
+            success=True,
+            output="ok",
+        )
+
+
+class TestDiscoverySearch:
+    """FR-200, FR-201: Partial matching and search_workflows."""
+
+    def setup_method(self):
+        WorkflowRegistry.clear()
+
+    def teardown_method(self):
+        WorkflowRegistry.clear()
+
+    def test_find_by_capability_partial_match(self):
+        """FR-200: Partial/substring matching."""
+        WorkflowRegistry.register(SearchableWorkflow())
+        found = WorkflowRegistry.find_workflows_by_capability("doc")
+        assert len(found) >= 1
+        assert any(w.metadata.workflow_id == "searchable" for w in found)
+
+    def test_find_by_capability_exact_still_works(self):
+        """Exact match still works after partial match change."""
+        WorkflowRegistry.register(SearchableWorkflow())
+        found = WorkflowRegistry.find_workflows_by_capability("document-enhancement")
+        assert len(found) >= 1
+        assert any(w.metadata.workflow_id == "searchable" for w in found)
+
+    def test_find_by_capability_partial_no_match(self):
+        WorkflowRegistry.register(SearchableWorkflow())
+        found = WorkflowRegistry.find_workflows_by_capability("xyz-nonexistent")
+        assert not any(w.metadata.workflow_id == "searchable" for w in found)
+
+    def test_search_workflows_by_name(self):
+        """FR-201: Search by name."""
+        WorkflowRegistry.register(SearchableWorkflow(name="Document Enhancer"))
+        found = WorkflowRegistry.search_workflows("Document")
+        assert len(found) >= 1
+        assert any(w.metadata.workflow_id == "searchable" for w in found)
+
+    def test_search_workflows_by_description(self):
+        """FR-201: Search by description."""
+        WorkflowRegistry.register(SearchableWorkflow(desc="Analyzes policy documents"))
+        found = WorkflowRegistry.search_workflows("policy")
+        assert len(found) >= 1
+        assert any(w.metadata.workflow_id == "searchable" for w in found)
+
+    def test_search_case_insensitive(self):
+        WorkflowRegistry.register(SearchableWorkflow(name="Critical Review"))
+        found = WorkflowRegistry.search_workflows("critical review")
+        assert len(found) >= 1
+        assert any(w.metadata.workflow_id == "searchable" for w in found)
+
+    def test_search_no_match(self):
+        WorkflowRegistry.register(SearchableWorkflow())
+        found = WorkflowRegistry.search_workflows("nonexistent-term-xyz")
+        assert not any(w.metadata.workflow_id == "searchable" for w in found)
+
+
 class TestWorkflowModels:
     """Test workflow data models."""
 
