@@ -1176,6 +1176,10 @@ def workflow_run(
         None, "--output", "-o",
         help="Output file path"
     ),
+    max_retries: Optional[int] = typer.Option(
+        None, "--max-retries",
+        help="Max retries on transient failures (enables retry policy)"
+    ),
 ):
     """Run a workflow with the given configuration"""
     import json

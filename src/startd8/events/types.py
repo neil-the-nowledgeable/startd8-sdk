@@ -41,6 +41,7 @@ class EventType(Enum):
     PIPELINE_STEP_START = auto()
     PIPELINE_STEP_COMPLETE = auto()
     PIPELINE_COMPLETE = auto()
+    PIPELINE_STEP_RETRY = auto()  # FR-410
     PIPELINE_ERROR = auto()
     
     # Job Queue events
