@@ -1497,6 +1497,41 @@ def workflow_templates():
     console.print("[dim]Usage: startd8 workflow new <name> --template <template>[/dim]")
 
 
+@app.command("serve")
+def serve(
+    port: int = typer.Option(8080, "--port", "-p", help="Server port"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address"),
+    api_key: Optional[str] = typer.Option(
+        None, "--api-key", envvar="STARTD8_API_KEY",
+        help="API key for mutation endpoints (POST)"
+    ),
+):
+    """Start the HTTP workflow server (FR-522).
+
+    Serves a REST API for listing, triggering, and polling workflows.
+    Requires the server extras: pip install startd8[server]
+
+    Example:
+        startd8 serve --port 8080
+        startd8 serve --api-key secret
+    """
+    try:
+        import uvicorn
+        from .server import create_app as _create_server_app
+    except ImportError:
+        console.print("[red]Server extras required: pip install startd8[server][/red]")
+        raise typer.Exit(1)
+
+    server_app = _create_server_app(api_key=api_key)
+    console.print(f"[bold]Starting StartD8 server on {host}:{port}[/bold]")
+    console.print(f"  GET  http://localhost:{port}/workflows")
+    console.print(f"  POST http://localhost:{port}/workflows/{{id}}/run")
+    console.print(f"  GET  http://localhost:{port}/workflows/{{id}}/runs/{{run_id}}")
+    if api_key:
+        console.print(f"  [dim]API key auth enabled for POST endpoints[/dim]")
+    uvicorn.run(server_app, host=host, port=port)
+
+
 if __name__ == "__main__":
     app()
 
