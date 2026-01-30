@@ -338,8 +338,10 @@ benefits:
       ref: "Claude workflow selection sessions"
       date: 2025-12-01
 
-    delivered_by: []  # GAP
-    delivery_status: gap
+    delivered_by:
+      - startd8.workflow.registry.find_by_capability
+      - startd8.workflow.registry.find_by_tag
+    delivery_status: partial
 
     priority: medium
     effort_estimate: small
@@ -348,6 +350,7 @@ benefits:
       - id: FR-201
         description: "Filter workflows by capability tags"
         type: query
+        status: delivered  # WorkflowRegistry.find_workflows_by_capability()
       - id: FR-202
         description: "Search workflow descriptions"
         type: query
@@ -1109,8 +1112,8 @@ benefits:
 gap_summary:
   total_benefits: 27
   delivered: 15
-  partial: 2
-  gaps: 10
+  partial: 3
+  gaps: 9
 
   delivered_benefits:
     - workflow.authoring.protocol_clarity
@@ -1134,6 +1137,8 @@ gap_summary:
       note: "arun() in protocol and Pipeline, not all builtin workflows"
     - benefit_id: workflow.execution.parallel_agents
       note: "Pipeline.arun_parallel_agents() for comparison runs, no ParallelStep pipeline primitive"
+    - benefit_id: workflow.discovery.search_filter
+      note: "Registry API (find_workflows_by_capability/tag) delivered, CLI flags missing"
 
   gaps_by_priority:
     high:
@@ -1147,9 +1152,6 @@ gap_summary:
       - benefit_id: workflow.authoring.validation_helpers
         effort: small
         recommendation: "Developer experience -- auto-validate from WorkflowInput definitions"
-      - benefit_id: workflow.discovery.search_filter
-        effort: small
-        recommendation: "Discoverability -- filter by capability tags"
       - benefit_id: workflow.execution.conditional_routing
         effort: medium
         recommendation: "Orchestration flexibility -- branch on intermediate results"
@@ -1183,7 +1185,7 @@ changelog:
       - "Relocated to SDK repo: docs/capability-index/"
       - "benefit_id namespace changed from [category] to workflow.[category]"
       - "27 benefits across 7 categories (was 22)"
-      - "15 delivered, 2 partial, 10 gaps (was 13/2/7)"
+      - "15 delivered, 3 partial, 9 gaps (was 13/2/7)"
       - "UPGRADED authoring.scaffolding: gap -> delivered (CLI + 4 Jinja2 templates)"
       - "UPGRADED execution.parallel_agents: gap -> partial (arun_parallel_agents comparison mode)"
       - "UPGRADED integration.mcp_native: partial -> delivered (full list/describe/run in MCP gateway)"
@@ -1191,6 +1193,13 @@ changelog:
       - "NEW workflow.observability.visualization: gap (Mermaid DAG export)"
       - "NEW workflow.integration.contextcore_tracking: delivered (ProjectContext + OTel labels)"
       - "Categories: Authoring (4), Discovery (4), Execution (7), Observability (5), Reusability (2), Testing (2), Integration (3)"
+  - version: "2.0.1"
+    date: "2026-01-29"
+    changes:
+      - "Phase 2 gap analysis correction: workflow.discovery.search_filter upgraded gap -> partial"
+      - "Registry API (find_workflows_by_capability/tag) already delivered at registry.py:449-491"
+      - "Remaining gap is CLI --capability flag only"
+      - "Updated totals: 15 delivered, 3 partial, 9 gaps"
   - version: "1.0.0"
     date: "2026-01-28"
     changes:

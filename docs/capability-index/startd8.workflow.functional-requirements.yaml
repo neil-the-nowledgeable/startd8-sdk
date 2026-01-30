@@ -1,0 +1,1200 @@
+# StartD8 Workflow Functional Requirements (Phase 3)
+# Version: 1.0.0
+# Created: 2026-01-29
+#
+# PURPOSE: Functional requirements derived from Phase 2 gap analysis.
+# Organized by layer (FR-1xx protocol, FR-2xx registry, FR-3xx execution,
+# FR-4xx observability, FR-5xx integration).
+#
+# INPUT: startd8.workflow.gap-analysis.md (Phase 2)
+# OUTPUT: Requirements for Phase 4 capability design
+
+manifest_id: startd8.workflow.functional_requirements
+version: "1.0.0"
+
+# ==============================================================================
+# LAYER: PROTOCOL (FR-1xx)
+# Extensions to WorkflowBase, Workflow protocol, and data models
+# ==============================================================================
+
+protocol_requirements:
+
+  # --- Retry Policy Model ---
+
+  - id: FR-100
+    description: "Define RetryPolicy dataclass with max_retries, backoff_base, backoff_max, retryable_status_codes"
+    type: protocol
+    delivers_benefit: workflow.execution.retry_resilience
+
+    acceptance_criteria:
+      - "RetryPolicy dataclass with max_retries (default 3), backoff_base (default 1.0s), backoff_max (default 60s)"
+      - "retryable_status_codes defaults to [429, 500, 502, 503, 504]"
+      - "Includes jitter: bool = True"
+      - "Importable from startd8.workflows.models"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: models
+      file: src/startd8/workflows/models.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.retry"
+
+  - id: FR-101
+    description: "Add optional retry_policy parameter to WorkflowBase.run() and WorkflowBase.arun()"
+    type: protocol
+    delivers_benefit: workflow.execution.retry_resilience
+
+    acceptance_criteria:
+      - "run(config, agents, on_progress, retry_policy=None) signature"
+      - "arun(config, agents, on_progress, retry_policy=None) signature"
+      - "None means no retry (backward compatible)"
+      - "RetryPolicy passed through to _execute/_aexecute wrapper"
+
+    depends_on: [FR-100]
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.retry"
+
+  # --- Dry Run Model ---
+
+  - id: FR-102
+    description: "Define DryRunResult with execution_plan, estimated_tokens, estimated_cost, step_order"
+    type: protocol
+    delivers_benefit: workflow.execution.dry_run
+
+    acceptance_criteria:
+      - "DryRunResult dataclass with execution_plan: List[Dict], estimated_cost: float"
+      - "step_order lists step names with agent assignments"
+      - "estimated_tokens broken down per step"
+      - "to_dict() serializable"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: models
+      file: src/startd8/workflows/models.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.dry_run"
+
+  - id: FR-103
+    description: "Add optional dry_run: bool = False parameter to WorkflowBase.run()"
+    type: protocol
+    delivers_benefit: workflow.execution.dry_run
+
+    acceptance_criteria:
+      - "run(config, agents, on_progress, dry_run=False) signature"
+      - "When dry_run=True, returns WorkflowResult with metadata['dry_run']=True"
+      - "No LLM API calls made during dry run"
+      - "Backward compatible (default False)"
+
+    depends_on: [FR-102]
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.dry_run"
+
+  # --- Validation Enhancement ---
+
+  - id: FR-110
+    description: "Enhance WorkflowBase.validate_config() to validate input types against WorkflowInput.type definitions"
+    type: protocol
+    delivers_benefit: workflow.authoring.validation_helpers
+
+    acceptance_criteria:
+      - "Type checking: string input validated as str, number as int/float, boolean as bool"
+      - "Error messages include field name, expected type, actual type"
+      - "Existing required-field validation preserved"
+      - "Validation extensible via _custom_validate() hook"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.authoring.auto_validate"
+
+  - id: FR-111
+    description: "Add optional JSON Schema validation using WorkflowMetadata.get_input_schema()"
+    type: protocol
+    delivers_benefit: workflow.authoring.validation_helpers
+
+    acceptance_criteria:
+      - "If jsonschema package installed, validate against generated schema"
+      - "Graceful fallback to type-only validation if jsonschema absent"
+      - "jsonschema listed as optional dependency in pyproject.toml"
+      - "Schema validation errors include JSON path to failing field"
+
+    depends_on: [FR-110]
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+      optional_dependency: jsonschema
+
+    maps_to_capability: "new: startd8.workflow.authoring.auto_validate"
+
+  - id: FR-112
+    description: "Add _custom_validate() hook for workflow-specific validation composable with auto-validation"
+    type: protocol
+    delivers_benefit: workflow.authoring.validation_helpers
+
+    acceptance_criteria:
+      - "_custom_validate(config) -> List[str] returns additional error messages"
+      - "Called after auto-validation; errors merged"
+      - "Default implementation returns empty list"
+      - "Existing validate_config() overrides still work (backward compatible)"
+
+    depends_on: [FR-110]
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.authoring.auto_validate"
+
+  # --- Async Audit ---
+
+  - id: FR-150
+    description: "Audit all 9 builtin workflows and add _aexecute() where agent async calls are used"
+    type: protocol
+    delivers_benefit: workflow.execution.async_native
+
+    acceptance_criteria:
+      - "Each builtin workflow reviewed for async support"
+      - "Workflows calling acreate_response() implement _aexecute()"
+      - "WorkflowBase executor fallback still handles sync-only workflows"
+      - "No behavioral changes to existing sync execution"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: builtin
+      files:
+        - src/startd8/workflows/builtin/doc_enhancement_workflow.py
+        - src/startd8/workflows/builtin/critical_review_workflow.py
+        - src/startd8/workflows/builtin/design_polish_workflow.py
+        - src/startd8/workflows/builtin/policy_analysis_workflow.py
+        - src/startd8/workflows/builtin/plain_language_workflow.py
+        - src/startd8/workflows/builtin/lead_contractor_workflow.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "startd8.workflow.execution.async"
+
+# ==============================================================================
+# LAYER: REGISTRY (FR-2xx)
+# Extensions to WorkflowRegistry and discovery
+# ==============================================================================
+
+registry_requirements:
+
+  - id: FR-200
+    description: "Add partial/substring matching to find_workflows_by_capability()"
+    type: registry
+    delivers_benefit: workflow.discovery.search_filter
+
+    acceptance_criteria:
+      - "find_workflows_by_capability('doc') matches 'document-enhancement'"
+      - "Existing exact match still works"
+      - "Case-insensitive (already implemented)"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: registry
+      file: src/startd8/workflows/registry.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "startd8.workflow.discovery.search"
+
+  - id: FR-201
+    description: "Add search_workflows(query) method for text search across name and description"
+    type: registry
+    delivers_benefit: workflow.discovery.search_filter
+
+    acceptance_criteria:
+      - "search_workflows('document') finds workflows with 'document' in name or description"
+      - "Case-insensitive"
+      - "Returns List[Workflow]"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: registry
+      file: src/startd8/workflows/registry.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "startd8.workflow.discovery.search"
+
+  - id: FR-210
+    description: "Add --capability filter flag to startd8 workflow list CLI command"
+    type: registry
+    delivers_benefit: workflow.discovery.search_filter
+
+    acceptance_criteria:
+      - "startd8 workflow list --capability code-review filters output"
+      - "Uses WorkflowRegistry.find_workflows_by_capability() (partial match)"
+      - "Flag is optional; omitting shows all workflows"
+
+    depends_on: [FR-200]
+
+    implementation_hints:
+      layer: cli
+      file: src/startd8/cli.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "startd8.workflow.discovery.search"
+
+  - id: FR-211
+    description: "Add --tag filter flag to startd8 workflow list CLI command"
+    type: registry
+    delivers_benefit: workflow.discovery.search_filter
+
+    acceptance_criteria:
+      - "startd8 workflow list --tag multi-agent filters output"
+      - "Uses WorkflowRegistry.find_workflows_by_tag()"
+      - "Combinable with --capability"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: cli
+      file: src/startd8/cli.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "startd8.workflow.discovery.search"
+
+  - id: FR-212
+    description: "Add --search flag for text search across workflow names and descriptions"
+    type: registry
+    delivers_benefit: workflow.discovery.search_filter
+
+    acceptance_criteria:
+      - "startd8 workflow list --search document shows matching workflows"
+      - "Uses WorkflowRegistry.search_workflows()"
+
+    depends_on: [FR-201]
+
+    implementation_hints:
+      layer: cli
+      file: src/startd8/cli.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "startd8.workflow.discovery.search"
+
+# ==============================================================================
+# LAYER: EXECUTION (FR-3xx)
+# Pipeline enhancements, new step types, orchestration primitives
+# ==============================================================================
+
+execution_requirements:
+
+  # --- Retry Resilience ---
+
+  - id: FR-300
+    description: "Add retry loop in Pipeline.arun() per step with configurable RetryPolicy"
+    type: execution
+    delivers_benefit: workflow.execution.retry_resilience
+
+    acceptance_criteria:
+      - "Each step retried up to max_retries on retryable errors"
+      - "Exponential backoff: delay = min(base * 2^attempt, max) + jitter"
+      - "Non-retryable errors (400, 401, 403) fail immediately"
+      - "Pipeline accepts retry_policy parameter"
+
+    depends_on: [FR-100, FR-101]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.retry"
+
+  - id: FR-301
+    description: "Classify errors as retryable vs fatal based on HTTP status and exception type"
+    type: execution
+    delivers_benefit: workflow.execution.retry_resilience
+
+    acceptance_criteria:
+      - "Retryable: httpx.HTTPStatusError with 429/500/502/503/504, ConnectionError, TimeoutError"
+      - "Fatal: 400, 401, 403, ValidationError, ConfigurationError"
+      - "Classification function: is_retryable(exception) -> bool"
+      - "Configurable via RetryPolicy.retryable_status_codes"
+
+    depends_on: [FR-100]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.retry"
+
+  - id: FR-302
+    description: "Checkpoint completed steps so failed workflows can resume from last successful step"
+    type: execution
+    delivers_benefit: workflow.execution.retry_resilience
+
+    acceptance_criteria:
+      - "Completed step indices tracked during execution"
+      - "Resume parameter accepts checkpoint to skip completed steps"
+      - "Checkpoint serializable for persistence (optional)"
+      - "Optional feature, not required for basic retry"
+
+    depends_on: [FR-300]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.checkpoint"
+
+  # --- Pipeline Step Type Refactor ---
+
+  - id: FR-310
+    description: "Refactor Pipeline.arun() to dispatch on step type instead of assuming PipelineStep"
+    type: execution
+    delivers_benefit:
+      - workflow.execution.conditional_routing
+      - workflow.execution.parallel_agents
+      - workflow.reusability.composition
+
+    acceptance_criteria:
+      - "Pipeline.arun() checks isinstance for each step type"
+      - "PipelineStep: existing sequential behavior (unchanged)"
+      - "ConditionalStep: evaluate predicate, run matching branch"
+      - "ParallelStep: run steps concurrently via asyncio.gather"
+      - "WorkflowStep: delegate to sub-workflow"
+      - "Existing Pipeline tests pass unchanged"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+      note: "Key refactor that unlocks three benefits simultaneously"
+
+    maps_to_capability: "new: startd8.workflow.execution.mixed_steps"
+
+  # --- Conditional Routing ---
+
+  - id: FR-311
+    description: "Define ConditionalStep dataclass with predicate, if_step, and else_step"
+    type: execution
+    delivers_benefit: workflow.execution.conditional_routing
+
+    acceptance_criteria:
+      - "ConditionalStep(name, predicate, if_step, else_step)"
+      - "predicate: Callable[[str], bool] receives previous step output"
+      - "if_step and else_step are PipelineStep instances"
+      - "else_step is optional (skip if predicate False)"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.conditional"
+
+  - id: FR-312
+    description: "Add Pipeline.add_conditional(name, predicate, if_agent, else_agent) method"
+    type: execution
+    delivers_benefit: workflow.execution.conditional_routing
+
+    acceptance_criteria:
+      - "Returns self for chaining (like add_step)"
+      - "Creates ConditionalStep internally"
+      - "if_agent required, else_agent optional"
+      - "Predicate receives string output from previous step"
+
+    depends_on: [FR-311, FR-310]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.conditional"
+
+  # --- Parallel Execution ---
+
+  - id: FR-320
+    description: "Define ParallelStep dataclass with list of concurrent PipelineSteps"
+    type: execution
+    delivers_benefit: workflow.execution.parallel_agents
+
+    acceptance_criteria:
+      - "ParallelStep(name, steps: List[PipelineStep])"
+      - "Optional aggregator: Callable[[List[str]], str] to merge outputs"
+      - "Optional failure_policy: 'fail_fast' | 'collect_all' (default: collect_all)"
+      - "Default aggregator joins outputs with separator"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.parallel"
+
+  - id: FR-321
+    description: "Add Pipeline.add_parallel(name, steps, aggregator, failure_policy) method"
+    type: execution
+    delivers_benefit: workflow.execution.parallel_agents
+
+    acceptance_criteria:
+      - "Returns self for chaining"
+      - "Creates ParallelStep internally"
+      - "Steps run concurrently via asyncio.gather()"
+      - "Results ordered same as input steps"
+
+    depends_on: [FR-320, FR-310]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.parallel"
+
+  - id: FR-322
+    description: "Handle partial failures in parallel execution based on failure_policy"
+    type: execution
+    delivers_benefit: workflow.execution.parallel_agents
+
+    acceptance_criteria:
+      - "fail_fast: cancel remaining on first failure, raise immediately"
+      - "collect_all: run all steps, return mixed success/failure results"
+      - "Failed parallel steps recorded in StepResult with error"
+      - "ParallelStep overall success = all sub-steps succeeded"
+
+    depends_on: [FR-320]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.parallel"
+
+  # --- Workflow Composition ---
+
+  - id: FR-330
+    description: "Define WorkflowStep that wraps a Workflow instance as a Pipeline step"
+    type: execution
+    delivers_benefit: workflow.reusability.composition
+
+    acceptance_criteria:
+      - "WorkflowStep(name, workflow, config_mapping)"
+      - "config_mapping: Callable[[str], Dict[str, Any]] transforms previous output to sub-workflow config"
+      - "Executes workflow.run(mapped_config, agents)"
+      - "Extracts WorkflowResult.output as step output for next step"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.reusability.compose"
+
+  - id: FR-331
+    description: "Add Pipeline.add_workflow(name, workflow, config_mapping) method"
+    type: execution
+    delivers_benefit: workflow.reusability.composition
+
+    acceptance_criteria:
+      - "Returns self for chaining"
+      - "Creates WorkflowStep internally"
+      - "Sub-workflow validated before execution"
+      - "Sub-workflow agents resolved from parent pipeline context"
+
+    depends_on: [FR-330, FR-310]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.reusability.compose"
+
+  - id: FR-332
+    description: "Aggregate sub-workflow metrics and step results into parent workflow"
+    type: execution
+    delivers_benefit: workflow.reusability.composition
+
+    acceptance_criteria:
+      - "Sub-workflow tokens/cost added to parent WorkflowMetrics"
+      - "Sub-workflow StepResults flattened into parent with namespace prefix (e.g., 'sub:step1')"
+      - "Sub-workflow progress nested under parent progress callback"
+      - "Parent duration includes sub-workflow duration"
+
+    depends_on: [FR-330]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.reusability.compose"
+
+  # --- Dry Run ---
+
+  - id: FR-340
+    description: "Implement dry_run interception in WorkflowBase.run() before _execute()"
+    type: execution
+    delivers_benefit: workflow.execution.dry_run
+
+    acceptance_criteria:
+      - "When dry_run=True, build execution plan without calling _execute()"
+      - "Plan includes: step count, step names, agent assignments"
+      - "Returns WorkflowResult with output=DryRunResult and metadata['dry_run']=True"
+      - "No LLM API calls made"
+
+    depends_on: [FR-102, FR-103]
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.dry_run"
+
+  - id: FR-341
+    description: "Estimate token usage and cost per step from input size and model pricing"
+    type: execution
+    delivers_benefit: workflow.execution.dry_run
+
+    acceptance_criteria:
+      - "Estimate input tokens from character count / 4 heuristic"
+      - "Estimate output tokens from model-specific multiplier"
+      - "Lookup cost via PricingService"
+      - "Return per-step and total estimated cost"
+
+    depends_on: [FR-340]
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+      note: "PricingService already exists in costs/pricing.py"
+
+    maps_to_capability: "new: startd8.workflow.execution.dry_run"
+
+# ==============================================================================
+# LAYER: OBSERVABILITY (FR-4xx)
+# OTel spans, events, metrics, visualization
+# ==============================================================================
+
+observability_requirements:
+
+  # --- OpenTelemetry Integration ---
+
+  - id: FR-400
+    description: "Create parent OTel span for each workflow execution in WorkflowBase.run()"
+    type: observability
+    delivers_benefit: workflow.observability.otel_integration
+
+    acceptance_criteria:
+      - "Span name: workflow.{workflow_id}"
+      - "Span attributes: workflow.id, workflow.name, workflow.version"
+      - "Span starts before _execute(), ends after completion"
+      - "Error recorded on span if workflow fails"
+      - "No-op when opentelemetry not installed"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+      optional_dependency: opentelemetry-api
+
+    maps_to_capability: "new: startd8.workflow.observability.otel"
+
+  - id: FR-401
+    description: "Create child OTel span for each workflow step"
+    type: observability
+    delivers_benefit: workflow.observability.otel_integration
+
+    acceptance_criteria:
+      - "Span name: workflow.{workflow_id}.step.{step_name}"
+      - "Attributes: step.name, agent.name, agent.model"
+      - "Span events for step start and completion"
+      - "Token and cost metrics as span attributes on completion"
+
+    depends_on: [FR-400]
+
+    implementation_hints:
+      layer: pipeline
+      file: src/startd8/orchestration.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.observability.otel"
+
+  - id: FR-402
+    description: "Attach ProjectContext labels to root workflow span"
+    type: observability
+    delivers_benefit: workflow.observability.otel_integration
+
+    acceptance_criteria:
+      - "If ProjectContext non-empty, add as span attributes"
+      - "Attribute names follow semantic conventions: io.contextcore.project.id, etc."
+      - "Enables Grafana filtering by project/task/sprint"
+
+    depends_on: [FR-400]
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.observability.otel"
+
+  - id: FR-403
+    description: "Graceful no-op when OpenTelemetry packages not installed"
+    type: observability
+    delivers_benefit: workflow.observability.otel_integration
+
+    acceptance_criteria:
+      - "try/except ImportError for opentelemetry imports"
+      - "No-op tracer when OTel absent (no spans created, no errors)"
+      - "Zero performance overhead when OTel not installed"
+      - "opentelemetry-api listed as optional dependency: pip install startd8[otel]"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: base
+      file: src/startd8/workflows/base.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.observability.otel"
+
+  # --- Retry Observability ---
+
+  - id: FR-410
+    description: "Emit PIPELINE_STEP_RETRY EventBus event on each retry attempt"
+    type: observability
+    delivers_benefit: workflow.execution.retry_resilience
+
+    acceptance_criteria:
+      - "New EventType.PIPELINE_STEP_RETRY in events/types.py"
+      - "Event data includes: step_name, attempt_number, error, delay_seconds"
+      - "Emitted before backoff sleep"
+
+    depends_on: [FR-300]
+
+    implementation_hints:
+      layer: events
+      file: src/startd8/events/types.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.retry"
+
+  - id: FR-411
+    description: "Add retry_count to StepResult.metadata and total_retries to WorkflowMetrics"
+    type: observability
+    delivers_benefit: workflow.execution.retry_resilience
+
+    acceptance_criteria:
+      - "StepResult.metadata['retry_count'] set after step execution"
+      - "WorkflowMetrics gains total_retries: int = 0 field"
+      - "Existing serialization (to_dict) includes new fields"
+
+    depends_on: [FR-300]
+
+    implementation_hints:
+      layer: models
+      file: src/startd8/workflows/models.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.retry"
+
+  # --- Visualization ---
+
+  - id: FR-420
+    description: "Create WorkflowVisualizer that exports Pipeline structure as Mermaid diagram"
+    type: observability
+    delivers_benefit: workflow.observability.visualization
+
+    acceptance_criteria:
+      - "WorkflowVisualizer.to_mermaid(pipeline) returns Mermaid markdown string"
+      - "Sequential steps shown as linear flow"
+      - "ConditionalSteps shown as diamond decision nodes"
+      - "ParallelSteps shown as fork/join"
+      - "WorkflowSteps shown as sub-graph"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: new_module
+      file: src/startd8/workflows/visualizer.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.observability.visualize"
+
+  - id: FR-421
+    description: "Post-execution visualization with step statuses and timing"
+    type: observability
+    delivers_benefit: workflow.observability.visualization
+
+    acceptance_criteria:
+      - "WorkflowVisualizer.to_mermaid(result) accepts WorkflowResult"
+      - "Steps colored by status: green=success, red=failed, gray=skipped"
+      - "Timing annotations on edges (e.g., '1200ms')"
+      - "Failed step includes error summary"
+
+    depends_on: [FR-420]
+
+    implementation_hints:
+      layer: new_module
+      file: src/startd8/workflows/visualizer.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.observability.visualize"
+
+# ==============================================================================
+# LAYER: INTEGRATION (FR-5xx)
+# CLI commands, MCP tools, testing module, HTTP server
+# ==============================================================================
+
+integration_requirements:
+
+  # --- Testing Module ---
+
+  - id: FR-500
+    description: "Create startd8.testing module with workflow assertion helpers"
+    type: integration
+    delivers_benefit: workflow.testing.workflow_assertions
+
+    acceptance_criteria:
+      - "Module at src/startd8/testing/__init__.py"
+      - "Importable: from startd8.testing import assert_workflow_success"
+      - "Listed in startd8 package exports"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: new_module
+      file: src/startd8/testing/__init__.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.testing.assertions"
+
+  - id: FR-501
+    description: "Implement assert_workflow_success(result) with detailed failure output"
+    type: integration
+    delivers_benefit: workflow.testing.workflow_assertions
+
+    acceptance_criteria:
+      - "Raises AssertionError if result.success is False"
+      - "Error message includes: workflow_id, error, failed step name"
+      - "Lists all step statuses for debugging"
+
+    depends_on: [FR-500]
+
+    implementation_hints:
+      layer: testing
+      file: src/startd8/testing/assertions.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.testing.assertions"
+
+  - id: FR-502
+    description: "Implement assert_step_called(result, step_name) and assert_step_not_called()"
+    type: integration
+    delivers_benefit: workflow.testing.workflow_assertions
+
+    acceptance_criteria:
+      - "assert_step_called raises if step_name not in result.steps"
+      - "assert_step_not_called raises if step_name IS in result.steps"
+      - "Useful for conditional routing verification"
+
+    depends_on: [FR-500]
+
+    implementation_hints:
+      layer: testing
+      file: src/startd8/testing/assertions.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.testing.assertions"
+
+  - id: FR-503
+    description: "Implement assert_cost_below(result, max_cost) cost guard"
+    type: integration
+    delivers_benefit: workflow.testing.workflow_assertions
+
+    acceptance_criteria:
+      - "Raises AssertionError if result.metrics.total_cost > max_cost"
+      - "Error message includes actual cost vs limit"
+      - "Useful for regression detection on cost-sensitive workflows"
+
+    depends_on: [FR-500]
+
+    implementation_hints:
+      layer: testing
+      file: src/startd8/testing/assertions.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.testing.assertions"
+
+  - id: FR-504
+    description: "Implement assert_steps_in_order(result, expected_step_names) for execution order verification"
+    type: integration
+    delivers_benefit: workflow.testing.workflow_assertions
+
+    acceptance_criteria:
+      - "Verifies step_names appear in result.steps in given order"
+      - "Does not require exact match (additional steps allowed between)"
+      - "Error shows actual vs expected order"
+
+    depends_on: [FR-500]
+
+    implementation_hints:
+      layer: testing
+      file: src/startd8/testing/assertions.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.testing.assertions"
+
+  # --- CLI Enhancements ---
+
+  - id: FR-510
+    description: "Add --dry-run flag to startd8 workflow run CLI command"
+    type: integration
+    delivers_benefit: workflow.execution.dry_run
+
+    acceptance_criteria:
+      - "startd8 workflow run <id> --dry-run shows execution plan"
+      - "Displays: step order, agent assignments, estimated cost"
+      - "No API calls made"
+      - "Rich table output"
+
+    depends_on: [FR-340]
+
+    implementation_hints:
+      layer: cli
+      file: src/startd8/cli.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.dry_run"
+
+  - id: FR-511
+    description: "Add --max-retries flag to startd8 workflow run CLI command"
+    type: integration
+    delivers_benefit: workflow.execution.retry_resilience
+
+    acceptance_criteria:
+      - "startd8 workflow run <id> --max-retries 3 enables retry"
+      - "Creates RetryPolicy from CLI flags"
+      - "Default: no retry (backward compatible)"
+
+    depends_on: [FR-300]
+
+    implementation_hints:
+      layer: cli
+      file: src/startd8/cli.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.execution.retry"
+
+  - id: FR-530
+    description: "Add startd8 workflow visualize CLI command"
+    type: integration
+    delivers_benefit: workflow.observability.visualization
+
+    acceptance_criteria:
+      - "startd8 workflow visualize <id> outputs Mermaid diagram of workflow structure"
+      - "--format mermaid (default) or ascii"
+      - "Outputs to stdout or --output <file>"
+
+    depends_on: [FR-420]
+
+    implementation_hints:
+      layer: cli
+      file: src/startd8/cli.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.observability.visualize"
+
+  # --- HTTP Server (Low Priority) ---
+
+  - id: FR-520
+    description: "Create startd8.server module with HTTP workflow execution endpoints"
+    type: integration
+    delivers_benefit: workflow.integration.webhook_triggers
+
+    acceptance_criteria:
+      - "Module at src/startd8/server/__init__.py"
+      - "ASGI app using starlette or FastAPI"
+      - "GET /workflows lists workflows"
+      - "POST /workflows/{id}/run triggers async execution, returns run_id"
+      - "GET /workflows/{id}/runs/{run_id} polls status"
+
+    depends_on: []
+
+    implementation_hints:
+      layer: new_module
+      file: src/startd8/server/app.py
+      breaking_change: false
+      affects_yaml_schema: false
+      optional_dependency: "starlette, uvicorn"
+
+    maps_to_capability: "new: startd8.workflow.integration.http"
+
+  - id: FR-521
+    description: "Add API key authentication to HTTP server"
+    type: integration
+    delivers_benefit: workflow.integration.webhook_triggers
+
+    acceptance_criteria:
+      - "X-API-Key header required for all mutation endpoints"
+      - "API key configurable via STARTD8_API_KEY env var"
+      - "401 Unauthorized on missing/invalid key"
+      - "GET /workflows readable without auth (optional)"
+
+    depends_on: [FR-520]
+
+    implementation_hints:
+      layer: new_module
+      file: src/startd8/server/auth.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.integration.http"
+
+  - id: FR-522
+    description: "Add startd8 serve CLI command to start HTTP server"
+    type: integration
+    delivers_benefit: workflow.integration.webhook_triggers
+
+    acceptance_criteria:
+      - "startd8 serve --port 8080 starts server"
+      - "--api-key flag or STARTD8_API_KEY env var"
+      - "Logs startup URL and available endpoints"
+
+    depends_on: [FR-520]
+
+    implementation_hints:
+      layer: cli
+      file: src/startd8/cli.py
+      breaking_change: false
+      affects_yaml_schema: false
+
+    maps_to_capability: "new: startd8.workflow.integration.http"
+
+# ==============================================================================
+# IMPLEMENTATION ORDER
+# ==============================================================================
+
+implementation_order:
+
+  phase_1:
+    name: "Foundation (non-breaking, small effort)"
+    requirements:
+      - FR-110  # Validation type checking
+      - FR-111  # JSON Schema validation
+      - FR-112  # Custom validate hook
+      - FR-200  # Partial match in find_by_capability
+      - FR-201  # search_workflows() method
+      - FR-210  # CLI --capability flag
+      - FR-211  # CLI --tag flag
+      - FR-212  # CLI --search flag
+      - FR-500  # Testing module
+      - FR-501  # assert_workflow_success
+      - FR-502  # assert_step_called
+      - FR-503  # assert_cost_below
+      - FR-504  # assert_steps_in_order
+      - FR-150  # Async audit
+    benefits_delivered:
+      - workflow.authoring.validation_helpers
+      - workflow.discovery.search_filter  # partial -> delivered
+      - workflow.testing.workflow_assertions
+      - workflow.execution.async_native   # partial -> delivered
+    estimated_frs: 14
+
+  phase_2:
+    name: "Core Orchestration (Pipeline refactor)"
+    requirements:
+      - FR-100  # RetryPolicy model
+      - FR-101  # retry_policy parameter
+      - FR-300  # Retry loop in Pipeline
+      - FR-301  # Error classification
+      - FR-302  # Checkpoint/resume
+      - FR-310  # Pipeline step-type dispatch refactor
+      - FR-311  # ConditionalStep
+      - FR-312  # add_conditional()
+      - FR-320  # ParallelStep
+      - FR-321  # add_parallel()
+      - FR-322  # Parallel failure policy
+      - FR-330  # WorkflowStep
+      - FR-331  # add_workflow()
+      - FR-332  # Sub-workflow metrics aggregation
+      - FR-410  # PIPELINE_STEP_RETRY event
+      - FR-411  # retry_count metrics
+      - FR-511  # CLI --max-retries
+    benefits_delivered:
+      - workflow.execution.retry_resilience
+      - workflow.execution.conditional_routing
+      - workflow.execution.parallel_agents  # partial -> delivered
+      - workflow.reusability.composition
+    estimated_frs: 17
+
+  phase_3:
+    name: "Observability & Simulation"
+    requirements:
+      - FR-102  # DryRunResult model
+      - FR-103  # dry_run parameter
+      - FR-340  # Dry run interception
+      - FR-341  # Cost estimation
+      - FR-400  # Parent OTel span
+      - FR-401  # Child step spans
+      - FR-402  # ProjectContext on spans
+      - FR-403  # Graceful no-op
+      - FR-420  # Mermaid visualizer
+      - FR-421  # Post-execution visualization
+      - FR-510  # CLI --dry-run
+      - FR-530  # CLI workflow visualize
+    benefits_delivered:
+      - workflow.execution.dry_run
+      - workflow.observability.otel_integration
+      - workflow.observability.visualization
+    estimated_frs: 12
+
+  phase_4:
+    name: "Enterprise (HTTP server)"
+    requirements:
+      - FR-520  # HTTP server module
+      - FR-521  # API key auth
+      - FR-522  # CLI serve command
+    benefits_delivered:
+      - workflow.integration.webhook_triggers
+    estimated_frs: 3
+
+# ==============================================================================
+# CROSS-REFERENCE: FR -> Benefit
+# ==============================================================================
+
+traceability:
+  workflow.authoring.validation_helpers:
+    requirements: [FR-110, FR-111, FR-112]
+    phase: 1
+  workflow.discovery.search_filter:
+    requirements: [FR-200, FR-201, FR-210, FR-211, FR-212]
+    phase: 1
+  workflow.testing.workflow_assertions:
+    requirements: [FR-500, FR-501, FR-502, FR-503, FR-504]
+    phase: 1
+  workflow.execution.async_native:
+    requirements: [FR-150]
+    phase: 1
+  workflow.execution.retry_resilience:
+    requirements: [FR-100, FR-101, FR-300, FR-301, FR-302, FR-410, FR-411, FR-511]
+    phase: 2
+  workflow.execution.conditional_routing:
+    requirements: [FR-310, FR-311, FR-312]
+    phase: 2
+  workflow.execution.parallel_agents:
+    requirements: [FR-310, FR-320, FR-321, FR-322]
+    phase: 2
+  workflow.reusability.composition:
+    requirements: [FR-310, FR-330, FR-331, FR-332]
+    phase: 2
+  workflow.execution.dry_run:
+    requirements: [FR-102, FR-103, FR-340, FR-341, FR-510]
+    phase: 3
+  workflow.observability.otel_integration:
+    requirements: [FR-400, FR-401, FR-402, FR-403]
+    phase: 3
+  workflow.observability.visualization:
+    requirements: [FR-420, FR-421, FR-530]
+    phase: 3
+  workflow.integration.webhook_triggers:
+    requirements: [FR-520, FR-521, FR-522]
+    phase: 4
+
+# ==============================================================================
+# SUMMARY
+# ==============================================================================
+
+summary:
+  total_requirements: 46
+  by_layer:
+    protocol: 10   # FR-1xx
+    registry: 5    # FR-2xx
+    execution: 16  # FR-3xx
+    observability: 8  # FR-4xx
+    integration: 11   # FR-5xx
+  by_phase:
+    phase_1: 14  # Foundation
+    phase_2: 17  # Core Orchestration
+    phase_3: 12  # Observability
+    phase_4: 3   # Enterprise
+  benefits_resolved: 12  # All 9 gaps + 3 partial -> delivered
+  breaking_changes: 0
+  new_modules: 3  # testing, visualizer, server
+  optional_dependencies: 3  # jsonschema, opentelemetry-api, starlette+uvicorn
