@@ -340,6 +340,23 @@ class WorkflowResult:
 
 
 @dataclass
+class DryRunResult:
+    """Result of a dry-run simulation (FR-102)."""
+    execution_plan: List[Dict[str, Any]]
+    estimated_tokens: Dict[str, Any]
+    estimated_cost: float
+    step_order: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "execution_plan": self.execution_plan,
+            "estimated_tokens": self.estimated_tokens,
+            "estimated_cost": self.estimated_cost,
+            "step_order": self.step_order,
+        }
+
+
+@dataclass
 class ValidationResult:
     """Result of workflow configuration validation."""
     valid: bool

@@ -354,6 +354,7 @@ class WorkflowRegistry:
         config: Dict[str, Any],
         agents: Optional[List['BaseAgent']] = None,
         on_progress: Optional[ProgressCallback] = None,
+        dry_run: bool = False,
     ) -> WorkflowResult:
         """
         Convenience method to run a workflow by ID.
@@ -363,6 +364,7 @@ class WorkflowRegistry:
             config: Workflow configuration
             agents: Optional pre-resolved agents
             on_progress: Optional progress callback
+            dry_run: If True, simulate execution without API calls (FR-103)
 
         Returns:
             WorkflowResult
@@ -386,7 +388,7 @@ class WorkflowRegistry:
             )
 
         try:
-            return workflow.run(config, agents, on_progress)
+            return workflow.run(config, agents, on_progress, dry_run=dry_run)
         except Exception as e:
             logger.error(
                 f"Workflow {workflow_id} failed: {e}",

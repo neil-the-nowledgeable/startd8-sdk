@@ -1180,6 +1180,10 @@ def workflow_run(
         None, "--max-retries",
         help="Max retries on transient failures (enables retry policy)"
     ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Simulate without API calls; show execution plan and cost estimate"
+    ),
 ):
     """Run a workflow with the given configuration"""
     import json
@@ -1221,18 +1225,42 @@ def workflow_run(
     def on_progress(current: int, total: int, message: str):
         console.print(f"[dim][{current}/{total}] {message}[/dim]")
 
-    console.print(f"[bold]Running workflow: {workflow_id}[/bold]")
+    if dry_run:
+        console.print(f"[bold]Dry run: {workflow_id}[/bold]")
+    else:
+        console.print(f"[bold]Running workflow: {workflow_id}[/bold]")
 
     try:
         result = WorkflowRegistry.run_workflow(
             workflow_id,
             config=config,
-            on_progress=on_progress
+            on_progress=on_progress,
+            dry_run=dry_run,
         )
     except Exception as e:
         console.print(f"[red]Error running workflow: {e}[/red]")
         logger.error(f"Workflow failed", exc_info=True, extra={"workflow_id": workflow_id})
         raise typer.Exit(1)
+
+    # Display dry run result as Rich table (FR-510)
+    if dry_run and result.success and isinstance(result.output, dict):
+        plan = result.output
+        table = Table(title="Execution Plan")
+        table.add_column("#", style="dim")
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("Agent")
+        for step in plan.get("execution_plan", []):
+            table.add_row(
+                str(step.get("step", "")),
+                step.get("name", ""),
+                step.get("type", ""),
+                step.get("agent", ""),
+            )
+        console.print(table)
+        console.print(f"\n[bold]Estimated cost:[/bold] ${plan.get('estimated_cost', 0):.6f}")
+        console.print(f"[bold]Step order:[/bold] {' -> '.join(plan.get('step_order', []))}")
+        return
 
     # Display result
     if result.success:
@@ -1264,6 +1292,45 @@ def workflow_run(
 
     if not result.success:
         raise typer.Exit(1)
+
+
+@workflow_app.command("visualize")
+def workflow_visualize(
+    workflow_id: str = typer.Argument(..., help="Workflow ID to visualize"),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o",
+        help="Output file path (default: print to stdout)"
+    ),
+):
+    """Generate a Mermaid flowchart diagram of a workflow's structure (FR-530)."""
+    from .workflows.visualizer import WorkflowVisualizer
+    from .orchestration import Pipeline, PipelineStep
+
+    WorkflowRegistry = _load_workflow_registry()
+    WorkflowRegistry.discover()
+
+    workflow = WorkflowRegistry.get_workflow(workflow_id)
+    if workflow is None:
+        available = WorkflowRegistry.list_workflows()
+        console.print(f"[red]Unknown workflow: {workflow_id}[/red]")
+        console.print(f"[dim]Available: {', '.join(available)}[/dim]")
+        raise typer.Exit(1)
+
+    # Build a Pipeline from workflow metadata for visualization
+    meta = workflow.metadata
+    pipeline = Pipeline(name=meta.name)
+    for inp in meta.inputs:
+        # Create placeholder steps from input definitions
+        mock_agent = type('_Agent', (), {'name': inp.name, 'model': 'n/a'})()
+        pipeline.add_step(inp.name, mock_agent)
+
+    diagram = WorkflowVisualizer.to_mermaid(pipeline)
+
+    if output:
+        output.write_text(diagram)
+        console.print(f"[green]Diagram written to: {output}[/green]")
+    else:
+        console.print(Panel(diagram, title=f"Mermaid: {workflow_id}"))
 
 
 @workflow_app.command("export")

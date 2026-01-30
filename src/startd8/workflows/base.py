@@ -13,7 +13,16 @@ from .models import (
     WorkflowResult,
     ValidationResult,
     ProjectContext,
+    DryRunResult,
 )
+
+# Graceful OTel import — no-op when not installed (FR-403)
+try:
+    from opentelemetry import trace as _otel_trace
+    _tracer = _otel_trace.get_tracer("startd8.workflows")
+except ImportError:
+    _otel_trace = None  # type: ignore[assignment]
+    _tracer = None
 
 
 # Type alias for progress callbacks
@@ -252,11 +261,13 @@ class WorkflowBase:
         config: Dict[str, Any],
         agents: Optional[List['BaseAgent']] = None,
         on_progress: Optional[ProgressCallback] = None,
+        dry_run: bool = False,
     ) -> WorkflowResult:
         """
         Synchronous execution wrapper.
 
         Calls _execute if implemented, otherwise wraps _aexecute synchronously.
+        If dry_run=True, returns an execution plan without making API calls (FR-103).
         """
         # Validate first
         validation = self.validate_config(config)
@@ -266,46 +277,81 @@ class WorkflowBase:
                 f"Validation failed: {'; '.join(validation.errors)}"
             )
 
-        # Check if _execute is overridden (not the base class version)
-        has_sync = (
-            hasattr(self, '_execute') and
-            type(self)._execute is not WorkflowBase._execute
-        )
-        has_async = (
-            hasattr(self, '_aexecute') and
-            type(self)._aexecute is not WorkflowBase._aexecute
-        )
+        # Dry run interception (FR-340)
+        if dry_run:
+            return self._build_dry_run_result(config, agents)
 
-        # Prefer sync execution if available
-        if has_sync:
-            return self._execute(config, agents, on_progress)
+        # OTel parent span (FR-400)
+        span = None
+        if _tracer:
+            span = _tracer.start_span(
+                f"workflow.{self.metadata.workflow_id}",
+                attributes={
+                    "workflow.id": self.metadata.workflow_id,
+                    "workflow.name": self.metadata.name,
+                    "workflow.version": self.metadata.version,
+                },
+            )
+            # Attach ProjectContext labels (FR-402)
+            project_ctx = self._extract_project_context(config)
+            if not project_ctx.is_empty():
+                for key, value in project_ctx.to_labels().items():
+                    span.set_attribute(f"io.contextcore.{key}", value)
 
-        # Fall back to async wrapped synchronously
-        if has_async:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+        try:
+            # Check if _execute is overridden (not the base class version)
+            has_sync = (
+                hasattr(self, '_execute') and
+                type(self)._execute is not WorkflowBase._execute
+            )
+            has_async = (
+                hasattr(self, '_aexecute') and
+                type(self)._aexecute is not WorkflowBase._aexecute
+            )
 
-            if loop.is_running():
-                # Already in async context - can't use run_until_complete
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as pool:
-                    future = pool.submit(
-                        asyncio.run,
+            # Prefer sync execution if available
+            if has_sync:
+                result = self._execute(config, agents, on_progress)
+                if span:
+                    span.set_attribute("workflow.success", result.success)
+                return result
+
+            # Fall back to async wrapped synchronously
+            if has_async:
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                if loop.is_running():
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor() as pool:
+                        future = pool.submit(
+                            asyncio.run,
+                            self._aexecute(config, agents, on_progress)
+                        )
+                        result = future.result()
+                else:
+                    result = loop.run_until_complete(
                         self._aexecute(config, agents, on_progress)
                     )
-                    return future.result()
-            else:
-                return loop.run_until_complete(
-                    self._aexecute(config, agents, on_progress)
-                )
+                if span:
+                    span.set_attribute("workflow.success", result.success)
+                return result
 
-        # Neither implemented
-        raise NotImplementedError(
-            "Subclasses must implement _execute or _aexecute"
-        )
+            # Neither implemented
+            raise NotImplementedError(
+                "Subclasses must implement _execute or _aexecute"
+            )
+        except Exception as e:
+            if span:
+                span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                span.record_exception(e)
+            raise
+        finally:
+            if span:
+                span.end()
 
     async def arun(
         self,
@@ -383,6 +429,71 @@ class WorkflowBase:
         raise NotImplementedError(
             "Subclasses must implement _execute or _aexecute"
         )
+
+    def _build_dry_run_result(
+        self,
+        config: Dict[str, Any],
+        agents: Optional[List['BaseAgent']],
+    ) -> WorkflowResult:
+        """Build execution plan without making API calls (FR-340)."""
+        meta = self.metadata
+        steps = []
+        for i, inp in enumerate(meta.inputs):
+            steps.append({
+                "step": i + 1,
+                "name": inp.name,
+                "type": inp.type,
+                "agent": agents[i].name if agents and i < len(agents) else "unassigned",
+            })
+
+        step_order = [inp.name for inp in meta.inputs]
+        estimated_tokens = self._estimate_tokens(config)
+        estimated_cost = self._estimate_cost(estimated_tokens)
+
+        dry_result = DryRunResult(
+            execution_plan=steps,
+            estimated_tokens=estimated_tokens,
+            estimated_cost=estimated_cost,
+            step_order=step_order,
+        )
+        return WorkflowResult(
+            workflow_id=meta.workflow_id,
+            success=True,
+            output=dry_result.to_dict(),
+            metadata={"dry_run": True},
+        )
+
+    def _estimate_tokens(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Estimate tokens from input character count — chars/4 heuristic (FR-341)."""
+        estimates: Dict[str, Any] = {}
+        for inp in self.metadata.inputs:
+            value = config.get(inp.name, "")
+            char_count = len(str(value))
+            input_tokens = char_count // 4
+            output_tokens = input_tokens * 2
+            estimates[inp.name] = {"input": input_tokens, "output": output_tokens}
+        return estimates
+
+    def _estimate_cost(self, token_estimates: Dict[str, Any]) -> float:
+        """Estimate cost using PricingService if available (FR-341)."""
+        try:
+            from ..costs.pricing import PricingService
+            pricing = PricingService()
+            total = 0.0
+            for name, tokens in token_estimates.items():
+                total += pricing.calculate_total_cost(
+                    "claude-sonnet-4-20250514",  # Default model for estimation
+                    tokens["input"],
+                    tokens["output"],
+                )
+            return total
+        except (ImportError, Exception):
+            # Fallback: rough $3/$15 per million tokens estimate
+            total = 0.0
+            for name, tokens in token_estimates.items():
+                total += tokens["input"] * 3.0 / 1_000_000
+                total += tokens["output"] * 15.0 / 1_000_000
+            return total
 
     def _emit_progress(
         self,

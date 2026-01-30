@@ -18,6 +18,14 @@ from .agents import BaseAgent
 from .events import EventBus, EventType, Event
 from .exceptions import AgentError, APIError, ConfigurationError
 
+# Graceful OTel import — no-op when not installed (FR-403)
+try:
+    from opentelemetry import trace as _otel_trace
+    _tracer = _otel_trace.get_tracer("startd8.orchestration")
+except ImportError:
+    _otel_trace = None  # type: ignore[assignment]
+    _tracer = None
+
 
 @dataclass
 class PipelineStep:
@@ -463,70 +471,99 @@ class Pipeline:
             **{k: v for k, v in step.metadata.items() if k in valid_metadata_fields}
         }
 
-        # Retry loop (FR-300)
-        max_attempts = 1 + (retry_policy.max_retries if retry_policy else 0)
-        retry_count = 0
-        last_error = None
+        # OTel child span (FR-401)
+        step_span = None
+        if _tracer:
+            step_span = _tracer.start_span(
+                f"workflow.{self.name}.step.{step.name}",
+                attributes={
+                    "step.name": step.name,
+                    "step.index": step_index,
+                    "agent.name": step.agent.name,
+                    "agent.model": step.agent.model,
+                },
+            )
 
-        for attempt in range(max_attempts):
-            try:
-                agent_response = await step.agent.acreate_response(
-                    prompt_id=tracking_prompt_id,
-                    prompt=step_input,
-                    metadata=step_metadata,
-                    tags=[self.name, "pipeline", step.name],
-                    pipeline_id=pipeline_id
-                )
-                break
-            except Exception as e:
-                if not retry_policy or not is_retryable(
-                    e, retry_policy.retryable_status_codes
-                ):
-                    raise
-                last_error = e
-                retry_count = attempt + 1
-                delay = min(
-                    retry_policy.backoff_base * (2 ** attempt),
-                    retry_policy.backoff_max
-                )
-                if retry_policy.jitter:
-                    delay += random.uniform(0, delay * 0.1)
+        try:
+            # Retry loop (FR-300)
+            max_attempts = 1 + (retry_policy.max_retries if retry_policy else 0)
+            retry_count = 0
+            last_error = None
 
-                # Emit retry event (FR-410)
-                EventBus.emit(Event(
-                    type=EventType.PIPELINE_STEP_RETRY,
-                    source="Pipeline",
-                    data={
-                        "step_name": step.name,
-                        "attempt_number": retry_count,
-                        "error": str(e),
-                        "delay_seconds": delay,
-                    },
-                    correlation_id=pipeline_id
-                ))
-                await asyncio.sleep(delay)
-        else:
-            raise last_error  # type: ignore[misc]
+            for attempt in range(max_attempts):
+                try:
+                    agent_response = await step.agent.acreate_response(
+                        prompt_id=tracking_prompt_id,
+                        prompt=step_input,
+                        metadata=step_metadata,
+                        tags=[self.name, "pipeline", step.name],
+                        pipeline_id=pipeline_id
+                    )
+                    break
+                except Exception as e:
+                    if not retry_policy or not is_retryable(
+                        e, retry_policy.retryable_status_codes
+                    ):
+                        raise
+                    last_error = e
+                    retry_count = attempt + 1
+                    delay = min(
+                        retry_policy.backoff_base * (2 ** attempt),
+                        retry_policy.backoff_max
+                    )
+                    if retry_policy.jitter:
+                        delay += random.uniform(0, delay * 0.1)
 
-        response_text = agent_response.response
-        response_time_ms = agent_response.response_time_ms
-        token_usage = agent_response.token_usage
+                    # Emit retry event (FR-410)
+                    EventBus.emit(Event(
+                        type=EventType.PIPELINE_STEP_RETRY,
+                        source="Pipeline",
+                        data={
+                            "step_name": step.name,
+                            "attempt_number": retry_count,
+                            "error": str(e),
+                            "delay_seconds": delay,
+                        },
+                        correlation_id=pipeline_id
+                    ))
+                    await asyncio.sleep(delay)
+            else:
+                raise last_error  # type: ignore[misc]
 
-        tokens = token_usage.total if token_usage else 0
-        cost = token_usage.cost_estimate if token_usage else 0
+            response_text = agent_response.response
+            response_time_ms = agent_response.response_time_ms
+            token_usage = agent_response.token_usage
 
-        step_result = {
-            "step_number": step_index + 1,
-            "step_name": step.name,
-            "agent": step.agent.name,
-            "model": step.agent.model,
-            "input": step_input[:200] + "..." if len(step_input) > 200 else step_input,
-            "output": response_text,
-            "response_time_ms": response_time_ms,
-            "tokens": tokens,
-            "cost": cost,
-            "metadata": {**step.metadata, "retry_count": retry_count},
-        }
+            tokens = token_usage.total if token_usage else 0
+            cost = token_usage.cost_estimate if token_usage else 0
+
+            # Set span metrics (FR-401)
+            if step_span:
+                step_span.set_attribute("tokens", tokens)
+                step_span.set_attribute("cost", cost)
+                step_span.set_attribute("response_time_ms", response_time_ms)
+                step_span.set_attribute("retry_count", retry_count)
+
+            step_result = {
+                "step_number": step_index + 1,
+                "step_name": step.name,
+                "agent": step.agent.name,
+                "model": step.agent.model,
+                "input": step_input[:200] + "..." if len(step_input) > 200 else step_input,
+                "output": response_text,
+                "response_time_ms": response_time_ms,
+                "tokens": tokens,
+                "cost": cost,
+                "metadata": {**step.metadata, "retry_count": retry_count},
+            }
+        except Exception as e:
+            if step_span:
+                step_span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                step_span.record_exception(e)
+            raise
+        finally:
+            if step_span:
+                step_span.end()
 
         EventBus.emit(Event(
             type=EventType.PIPELINE_STEP_COMPLETE,
