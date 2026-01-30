@@ -1,164 +1,91 @@
 # Scaffold Capability Implementation Handoff
 
 **Last Updated:** 2026-01-28
-**Status:** Design complete, implementation not started
+**Status:** ✅ Implementation complete
 **Priority:** Phase 1 (highest visibility capability)
 
-## Quick Resume
+## Summary
 
-```bash
-# To resume this work, tell Claude:
-"Resume implementing the scaffold capability for StartD8 SDK workflows.
-Read /Users/neilyashinsky/Documents/dev/startd8-sdk/docs/design/scaffold/HANDOFF.md first."
-```
-
-## What We're Building
-
-A CLI command `startd8 workflow new` that generates new workflow files from templates:
+The scaffold capability has been fully implemented. Users can now generate new workflow files from templates using:
 
 ```bash
 startd8 workflow new my-workflow --template pipeline
-# Creates: src/startd8/workflows/builtin/my_workflow.py
+# Creates: src/startd8/workflows/builtin/my_workflow_workflow.py
 ```
 
-## Current State
+## Implementation Completed
 
-### ✅ Completed
+### Files Created
 
-1. **Analyzed roadmap** - Selected scaffold as first capability (highest visibility, unblocks others)
-2. **Design documents drafted** (in previous session, not persisted)
-3. **Lessons learned integrated** - 9 applicable lessons identified
-4. **Existing code patterns analyzed** - Understood WorkflowBase, CLI structure, template patterns
+| File | Purpose |
+|------|---------|
+| `src/startd8/workflows/scaffold_constants.py` | Centralized constants, error messages |
+| `src/startd8/workflows/templates/__init__.py` | Template loader with Jinja2 optional import |
+| `src/startd8/workflows/templates/basic.py.jinja` | Basic single-agent template |
+| `src/startd8/workflows/templates/pipeline.py.jinja` | Sequential pipeline template |
+| `src/startd8/workflows/templates/multi_agent.py.jinja` | Parallel execution template |
+| `src/startd8/workflows/templates/async.py.jinja` | Async-first template |
+| `src/startd8/workflows/scaffold.py` | WorkflowScaffolder class |
+| `tests/unit/test_workflow_scaffold.py` | 31 unit tests (all passing) |
 
-### ❌ Not Yet Started
+### CLI Commands Added
 
-1. Create `scaffold_constants.py`
-2. Create Jinja2 templates
-3. Create `WorkflowScaffolder` class
-4. Add `workflow new` CLI command
-5. Write tests
+| Command | Description |
+|---------|-------------|
+| `startd8 workflow new <name>` | Create a new workflow from template |
+| `startd8 workflow templates` | List available templates |
 
-## Key Design Decisions
-
-### 1. Template Types (4 variants)
+### Templates Available
 
 | Template | Use Case |
 |----------|----------|
-| `basic` | Simple single-agent workflow |
+| `basic` | Simple single-agent workflow (default) |
 | `pipeline` | Sequential multi-agent pipeline |
 | `multi_agent` | Parallel agent coordination |
 | `async` | Async-first implementation |
 
-### 2. File Structure to Create
+## Usage Examples
 
-```
-src/startd8/workflows/
-├── scaffold_constants.py      # NEW: Centralized strings (per LL-MCP-3-8)
-├── scaffold.py                # NEW: WorkflowScaffolder class
-└── templates/                 # NEW: Jinja2 templates
-    ├── __init__.py
-    ├── basic.py.jinja
-    ├── pipeline.py.jinja
-    ├── multi_agent.py.jinja
-    └── async.py.jinja
-```
+```bash
+# Create a basic workflow
+startd8 workflow new my-workflow
 
-### 3. CLI Command Signature
+# Create a pipeline workflow with description
+startd8 workflow new my-pipeline --template pipeline -d "Multi-step processing"
 
-```python
-@workflow_app.command("new")
-def workflow_new(
-    name: str = typer.Argument(..., help="Workflow name (e.g., my-workflow)"),
-    template: str = typer.Option("basic", "--template", "-t", help="Template type"),
-    output_dir: Optional[Path] = typer.Option(None, "--output", "-o"),
-    description: str = typer.Option("", "--description", "-d"),
-    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing"),
-):
+# Create in custom directory
+startd8 workflow new custom-flow --output ./workflows -t async
+
+# Overwrite existing
+startd8 workflow new existing-flow --force
+
+# List available templates
+startd8 workflow templates
 ```
 
-## Lessons Learned to Apply
+## Lessons Learned Applied
 
 | Lesson | Application |
 |--------|-------------|
-| **SDK Leg 4 #2** | Keep CLI thin, delegate to scaffold.py |
-| **SDK Leg 9 #3** | Use `yield` not `return` in test fixtures with temp dirs |
-| **SDK Leg 9 #4** | Track mock patch paths if we refactor |
-| **SDK Leg 9 #5** | Set explicit mock attrs for Pydantic validation |
-| **SDK Leg 10 #1** | Entry points require `pip install -e .` |
-| **SDK Leg 12 #2** | Optional imports with graceful fallback for Jinja2 |
-| **MCP Leg 3 #8** | Centralize constants in `scaffold_constants.py` |
+| **SDK Leg 4 #2** | CLI thin delegation to WorkflowScaffolder |
+| **SDK Leg 9 #3** | Used `yield` in test fixtures for temp dirs |
+| **SDK Leg 12 #2** | Optional Jinja2 import with graceful fallback |
+| **MCP Leg 3 #8** | Centralized constants in scaffold_constants.py |
 
-## Existing Patterns to Follow
+## Test Results
 
-### WorkflowBase Pattern (from base.py)
-
-```python
-class MyWorkflow(WorkflowBase):
-    @property
-    def metadata(self) -> WorkflowMetadata:
-        return WorkflowMetadata(
-            workflow_id="my-workflow",
-            name="My Workflow",
-            description="...",
-            inputs=[WorkflowInput(name="...", type="text", required=True)],
-        )
-
-    def _execute(self, config, agents, on_progress) -> WorkflowResult:
-        # Implementation
-        return WorkflowResult(...)
+```
+tests/unit/test_workflow_scaffold.py: 31 passed
+Full suite: 1208 passed, 121 warnings
 ```
 
-### CLI Pattern (from cli.py)
+## Open Questions (Future Enhancements)
 
-```python
-workflow_app = typer.Typer(name="workflow", help="...")
-app.add_typer(workflow_app, name="workflow")
-
-@workflow_app.command("new")  # Add here
-def workflow_new(...):
-    ...
-```
-
-## Implementation Order
-
-1. **scaffold_constants.py** - Error messages, default values, template names
-2. **templates/__init__.py** - Template loading utilities with Jinja2 optional import
-3. **templates/*.jinja** - The 4 template files
-4. **scaffold.py** - WorkflowScaffolder class with ScaffoldConfig, ScaffoldResult
-5. **cli.py modification** - Add `workflow new` command
-6. **tests/** - Unit tests following lesson patterns
-
-## Reference Files
-
-| File | Purpose |
-|------|---------|
-| `/Users/neilyashinsky/Documents/dev/startd8-sdk/src/startd8/cli.py` | CLI patterns, workflow_app location |
-| `/Users/neilyashinsky/Documents/dev/startd8-sdk/src/startd8/workflows/base.py` | WorkflowBase protocol |
-| `/Users/neilyashinsky/Documents/dev/startd8-sdk/src/startd8/workflows/models.py` | WorkflowMetadata, WorkflowInput |
-| `/Users/neilyashinsky/Documents/dev/startd8-sdk/src/startd8/workflows/builtin/pipeline_workflow.py` | Example workflow |
-| `/Users/neilyashinsky/Documents/craft/Lessons_Learned/sdk/SDK_developer_LESSONS_LEARNED.md` | SDK lessons index |
-| `/Users/neilyashinsky/Documents/craft/Lessons_Learned/sdk/lessons/04-cli.md` | CLI-specific lessons |
-
-## Context from Capability Index
-
-This work originated from the capability-index project:
-- `/Users/neilyashinsky/Documents/craft/capability-index/` - Benefits/capabilities/roadmap YAMLs
-- Scaffold is Phase 1 capability with highest visibility score
-- Unblocks: auto_validate, assertions, filter capabilities
-
-## Questions Resolved
-
-1. **Where do generated workflows go?** → `src/startd8/workflows/builtin/` by default
-2. **Template engine?** → Jinja2 with optional import fallback
-3. **Naming convention?** → kebab-case input → snake_case file → PascalCase class
-4. **How to test?** → Golden file tests comparing generated output to expected
-
-## Open Questions
-
-1. Should we support custom template directories?
-2. Should templates include test file generation?
-3. Interactive mode with prompts for metadata?
+1. **Custom template directories** - Allow users to provide their own templates
+2. **Test file generation** - Optionally generate matching test file
+3. **Interactive mode** - Prompt for metadata if not provided
+4. **Auto-registration** - Automatically add to `__init__.py`
 
 ---
 
-**To continue:** Read this file, then start with `scaffold_constants.py` implementation.
+**Status:** Complete. No further action needed for Phase 1.

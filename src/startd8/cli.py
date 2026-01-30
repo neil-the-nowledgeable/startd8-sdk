@@ -1289,6 +1289,124 @@ def workflow_export(
     console.print(f"[dim]then load full schemas for specific workflows as needed.[/dim]")
 
 
+@workflow_app.command("new")
+def workflow_new(
+    name: str = typer.Argument(..., help="Workflow name (e.g., my-workflow)"),
+    template: str = typer.Option(
+        "basic", "--template", "-t",
+        help="Template type: basic, pipeline, multi_agent, async"
+    ),
+    output_dir: Optional[Path] = typer.Option(
+        None, "--output", "-o",
+        help="Output directory (default: src/startd8/workflows/builtin/)"
+    ),
+    description: str = typer.Option(
+        "", "--description", "-d",
+        help="Workflow description"
+    ),
+    force: bool = typer.Option(
+        False, "--force", "-f",
+        help="Overwrite existing file"
+    ),
+):
+    """
+    Create a new workflow from a template.
+
+    Templates available:
+      basic       - Simple single-agent workflow
+      pipeline    - Sequential multi-agent pipeline
+      multi_agent - Parallel agent coordination
+      async       - Async-first implementation
+
+    Examples:
+        startd8 workflow new my-workflow
+        startd8 workflow new my-pipeline --template pipeline
+        startd8 workflow new custom-flow -t async -d "My async workflow"
+    """
+    try:
+        from .workflows.scaffold import WorkflowScaffolder, ScaffoldConfig
+        from .workflows.scaffold_constants import DEFAULT_DESCRIPTION
+    except ImportError as e:
+        console.print(f"[red]Scaffold module not available: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Check Jinja2 availability
+    try:
+        from .workflows.templates import check_jinja2_available
+        if not check_jinja2_available():
+            console.print("[red]Jinja2 is required for workflow scaffolding.[/red]")
+            console.print("[yellow]Install with: pip install jinja2[/yellow]")
+            raise typer.Exit(1)
+    except ImportError:
+        console.print("[red]Jinja2 is required for workflow scaffolding.[/red]")
+        console.print("[yellow]Install with: pip install jinja2[/yellow]")
+        raise typer.Exit(1)
+
+    # Use default description if not provided
+    if not description:
+        description = DEFAULT_DESCRIPTION
+
+    # Build config
+    config = ScaffoldConfig(
+        name=name,
+        template=template,
+        output_dir=output_dir,
+        description=description,
+        force=force,
+    )
+
+    # Scaffold the workflow
+    scaffolder = WorkflowScaffolder()
+    result = scaffolder.scaffold(config)
+
+    if not result.success:
+        console.print(f"[red]Error: {result.error}[/red]")
+        raise typer.Exit(1)
+
+    # Success output
+    console.print(f"[green]✓ Created workflow: {result.file_path}[/green]")
+    console.print(f"[dim]  Workflow ID: {result.workflow_id}[/dim]")
+    console.print(f"[dim]  Class name: {result.class_name}[/dim]")
+    console.print()
+    console.print("[bold]Next steps:[/bold]")
+    console.print(f"  1. Edit {result.file_path.name} to implement your workflow logic")
+    console.print(f"  2. Register the workflow in workflows/builtin/__init__.py")
+    console.print(f"  3. Run: startd8 workflow list")
+    logger.info(
+        "Workflow scaffolded",
+        extra={
+            "workflow_id": result.workflow_id,
+            "class_name": result.class_name,
+            "template": template,
+            "file_path": str(result.file_path),
+        }
+    )
+
+
+@workflow_app.command("templates")
+def workflow_templates():
+    """List available workflow templates."""
+    try:
+        from .workflows.scaffold import WorkflowScaffolder
+    except ImportError as e:
+        console.print(f"[red]Scaffold module not available: {e}[/red]")
+        raise typer.Exit(1)
+
+    scaffolder = WorkflowScaffolder()
+    templates = scaffolder.list_templates()
+
+    table = Table(title="Available Workflow Templates")
+    table.add_column("Template", style="cyan")
+    table.add_column("Description")
+
+    for t in templates:
+        table.add_row(t["name"], t["description"])
+
+    console.print(table)
+    console.print()
+    console.print("[dim]Usage: startd8 workflow new <name> --template <template>[/dim]")
+
+
 if __name__ == "__main__":
     app()
 
