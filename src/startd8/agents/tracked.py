@@ -40,6 +40,7 @@ from .claude import ClaudeAgent
 from .openai import GPT4Agent
 from .gemini import GeminiAgent
 from ..models import TokenUsage
+from ..genai_compat import DualEmitAttributes, EmitMode, get_emit_mode
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +75,17 @@ class TrackedAgentMixin:
     - Token usage (input, output, total)
     - Truncation detection events
     - Optional task linking for ContextCore integration
+    - OTel GenAI semantic convention attributes (dual-emit)
 
     Attributes:
         project_id: ContextCore project ID for span attributes
         emit_spans: Whether to emit spans (default: True)
         _tracker: Optional TaskTracker for ContextCore integration
         _insight_emitter: Optional InsightEmitter for decision/lesson emission
+        GEN_AI_SYSTEM: OTel gen_ai.system value (override in subclasses)
     """
+
+    GEN_AI_SYSTEM = "unknown"
 
     def __init__(
         self,
@@ -105,6 +110,7 @@ class TrackedAgentMixin:
         self.emit_spans = emit_spans
         self._tracker = tracker
         self._insight_emitter = insight_emitter
+        self._dual_emit = DualEmitAttributes()
         super().__init__(*args, **kwargs)
 
     async def agenerate(
@@ -138,38 +144,73 @@ class TrackedAgentMixin:
         # Create span for this generation
         if self.emit_spans and tracer and _OTEL_AVAILABLE:
             from opentelemetry import trace
+            from opentelemetry.trace import SpanKind
+
+            mode = self._dual_emit.mode
+            model_name = getattr(self, 'model', 'unknown')
+            emit_genai = mode in (EmitMode.DUAL, EmitMode.OTEL)
+
+            # Span name follows OTel GenAI spec in OTEL mode
+            if mode == EmitMode.OTEL:
+                span_name = f"chat {model_name}"
+            else:
+                span_name = f"agent.generate:{self.name}"
+
+            # Build initial attributes and transform
+            init_attrs = {
+                "agent.id": self.name,
+                "agent.model": model_name,
+                "agent.prompt_length": len(prompt),
+                "task.id": task_id or "",
+                "project.id": self.project_id or "",
+            }
+            span_attrs = self._dual_emit.transform(init_attrs)
+
+            # Add gen_ai-only attributes
+            if emit_genai:
+                span_attrs["gen_ai.system"] = self._get_genai_system()
+                span_attrs["gen_ai.operation.name"] = "chat"
 
             with tracer.start_as_current_span(
-                f"agent.generate:{self.name}",
-                attributes={
-                    "agent.id": self.name,
-                    "agent.model": getattr(self, 'model', 'unknown'),
-                    "agent.prompt_length": len(prompt),
-                    "task.id": task_id or "",
-                    "project.id": self.project_id or "",
-                }
+                span_name,
+                kind=SpanKind.CLIENT,
+                attributes=span_attrs,
             ) as span:
                 # Call parent implementation
                 response_text, response_time_ms, token_usage = await super().agenerate(
                     prompt, **kwargs
                 )
 
-                # Add response attributes
-                span.set_attribute("agent.response_time_ms", response_time_ms)
-                span.set_attribute("agent.response_length", len(response_text))
-
+                # Build response attributes and transform
+                resp_attrs: Dict[str, Any] = {
+                    "agent.response_time_ms": response_time_ms,
+                    "agent.response_length": len(response_text),
+                }
                 if token_usage:
-                    span.set_attribute("agent.tokens_input", token_usage.input or 0)
-                    span.set_attribute("agent.tokens_output", token_usage.output or 0)
-                    span.set_attribute("agent.tokens_total",
-                                       (token_usage.input or 0) + (token_usage.output or 0))
-                    span.set_attribute("agent.truncated", token_usage.was_truncated or False)
+                    resp_attrs["agent.tokens_input"] = token_usage.input or 0
+                    resp_attrs["agent.tokens_output"] = token_usage.output or 0
+                    resp_attrs["agent.tokens_total"] = (
+                        (token_usage.input or 0) + (token_usage.output or 0)
+                    )
+                    resp_attrs["agent.truncated"] = token_usage.was_truncated or False
 
-                    if token_usage.was_truncated:
-                        span.add_event("truncation_detected", attributes={
-                            "finish_reason": token_usage.finish_reason or "unknown",
-                            "output_tokens": token_usage.output or 0,
-                        })
+                resp_attrs = self._dual_emit.transform(resp_attrs)
+
+                for key, value in resp_attrs.items():
+                    span.set_attribute(key, value)
+
+                # Add gen_ai.response.finish_reasons (array per OTel spec)
+                if emit_genai and token_usage and token_usage.finish_reason:
+                    span.set_attribute(
+                        "gen_ai.response.finish_reasons",
+                        [token_usage.finish_reason],
+                    )
+
+                if token_usage and token_usage.was_truncated:
+                    span.add_event("truncation_detected", attributes={
+                        "finish_reason": token_usage.finish_reason or "unknown",
+                        "output_tokens": token_usage.output or 0,
+                    })
 
                 # Set span status based on response
                 if response_text:
@@ -194,6 +235,10 @@ class TrackedAgentMixin:
                 logger.debug(f"Failed to emit insight: {e}")
 
         return response_text, response_time_ms, token_usage
+
+    def _get_genai_system(self) -> str:
+        """Return the gen_ai.system value for this agent."""
+        return self.GEN_AI_SYSTEM
 
     def with_task_context(
         self,
@@ -264,7 +309,8 @@ class TrackedClaudeAgent(TrackedAgentMixin, ClaudeAgent):
         # Each call emits a span
         response, time_ms, usage = await agent.agenerate("Hello, Claude!")
     """
-    pass
+
+    GEN_AI_SYSTEM = "anthropic"
 
 
 class TrackedGPT4Agent(TrackedAgentMixin, GPT4Agent):
@@ -282,7 +328,8 @@ class TrackedGPT4Agent(TrackedAgentMixin, GPT4Agent):
 
         response, time_ms, usage = await agent.agenerate("Hello, GPT!")
     """
-    pass
+
+    GEN_AI_SYSTEM = "openai"
 
 
 class TrackedGeminiAgent(TrackedAgentMixin, GeminiAgent):
@@ -300,7 +347,8 @@ class TrackedGeminiAgent(TrackedAgentMixin, GeminiAgent):
 
         response, time_ms, usage = await agent.agenerate("Hello, Gemini!")
     """
-    pass
+
+    GEN_AI_SYSTEM = "google"
 
 
 # Factory function for creating tracked agents
