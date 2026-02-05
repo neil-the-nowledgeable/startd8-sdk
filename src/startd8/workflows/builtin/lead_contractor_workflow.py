@@ -231,8 +231,25 @@ class LeadContractorWorkflow(WorkflowBase):
             "max_iterations": 3 - Max review cycles,
             "pass_threshold": 80 - Minimum score to pass (0-100),
             "output_format": "string - Expected output format (optional)",
-            "integration_instructions": "string - Final integration notes (optional)"
+            "integration_instructions": "string - Final integration notes (optional)",
+            "check_truncation": true - Enable truncation detection (default: true),
+            "fail_on_truncation": true - Fail workflow if truncation detected (default: true),
+            "strict_truncation": false - Use strict detection threshold (default: false)
         }
+
+    Truncation Protection:
+        By default, the workflow detects and fails on truncated drafter output.
+        This prevents incomplete implementations from being silently accepted.
+
+        - check_truncation (default: True): Enable/disable truncation detection
+        - fail_on_truncation (default: True): Raise error vs. warn on truncation
+        - strict_truncation (default: False): Lower confidence threshold for detection
+
+        To disable truncation protection (not recommended):
+            config={"check_truncation": False}
+
+        To warn but continue on truncation:
+            config={"fail_on_truncation": False}
 
     Recommended Lead Agents:
         - anthropic:claude-sonnet-4-20250514 (default - best for coding/agents)
@@ -331,6 +348,27 @@ class LeadContractorWorkflow(WorkflowBase):
                     required=False,
                     description="Instructions for final integration step"
                 ),
+                WorkflowInput(
+                    name="check_truncation",
+                    type="boolean",
+                    required=False,
+                    default=True,
+                    description="Enable truncation detection on drafter output (default: True)"
+                ),
+                WorkflowInput(
+                    name="fail_on_truncation",
+                    type="boolean",
+                    required=False,
+                    default=True,
+                    description="Fail workflow if truncation detected (default: True). If False, logs warning and continues."
+                ),
+                WorkflowInput(
+                    name="strict_truncation",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Use strict truncation detection with lower confidence threshold (default: False)"
+                ),
             ]
         )
 
@@ -377,7 +415,10 @@ class LeadContractorWorkflow(WorkflowBase):
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
         integration_instructions = config.get("integration_instructions", "")
-        fail_on_truncation = config.get("fail_on_truncation", True)  # Fail by default
+        # Truncation protection defaults - safe by default
+        check_truncation = config.get("check_truncation", True)
+        fail_on_truncation = config.get("fail_on_truncation", True)
+        strict_truncation = config.get("strict_truncation", False)
         
         # Extract ContextCore project context
         project_context = self._extract_project_context(config)
@@ -455,12 +496,14 @@ class LeadContractorWorkflow(WorkflowBase):
                     spec=spec,
                     feedback=review_feedback,
                     iteration=iteration,
+                    check_truncation=check_truncation,
+                    strict_truncation=strict_truncation,
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
 
                 # Check for truncation - fail fast if enabled
-                if draft.was_truncated:
+                if check_truncation and draft.was_truncated:
                     if fail_on_truncation:
                         error_msg = (
                             f"Draft was truncated at iteration {iteration}. "
@@ -691,8 +734,19 @@ class LeadContractorWorkflow(WorkflowBase):
         spec: ImplementationSpec,
         feedback: str,
         iteration: int,
+        check_truncation: bool = True,
+        strict_truncation: bool = False,
     ) -> DraftResult:
-        """Phase 2/4: Drafter creates implementation from spec."""
+        """Phase 2/4: Drafter creates implementation from spec.
+
+        Args:
+            drafter_agent: The agent to use for drafting
+            spec: The implementation specification
+            feedback: Review feedback from previous iteration (if any)
+            iteration: Current iteration number
+            check_truncation: Whether to run heuristic truncation detection (default: True)
+            strict_truncation: Use lower confidence threshold for detection (default: False)
+        """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
         prompt = DRAFT_PROMPT_TEMPLATE.format(
@@ -708,17 +762,21 @@ class LeadContractorWorkflow(WorkflowBase):
         # Check for truncation (API-level detection)
         was_truncated = token_usage.was_truncated if token_usage else False
 
-        # Also run heuristic detection for incomplete code
-        if not was_truncated and implementation_code:
+        # Also run heuristic detection for incomplete code (if enabled)
+        if check_truncation and not was_truncated and implementation_code:
+            # Use 0.5 threshold for strict mode, 0.7 for normal mode
+            confidence_threshold = 0.5 if strict_truncation else 0.7
             truncation_result = detect_truncation(
                 implementation_code,
                 original_input=prompt,
                 expected_sections=["def ", "class "],  # Expect code structures
+                strict_mode=strict_truncation,
             )
-            if truncation_result.is_truncated and truncation_result.confidence >= 0.7:
+            if truncation_result.is_truncated and truncation_result.confidence >= confidence_threshold:
                 was_truncated = True
                 logger.warning(
-                    f"Draft appears truncated (heuristic): {truncation_result.indicators[:3]}"
+                    f"Draft appears truncated (heuristic, confidence={truncation_result.confidence:.0%}): "
+                    f"{truncation_result.indicators[:3]}"
                 )
 
         draft = DraftResult(
@@ -865,7 +923,10 @@ class LeadContractorWorkflow(WorkflowBase):
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
         integration_instructions = config.get("integration_instructions", "")
+        # Truncation protection defaults - safe by default
+        check_truncation = config.get("check_truncation", True)
         fail_on_truncation = config.get("fail_on_truncation", True)
+        strict_truncation = config.get("strict_truncation", False)
 
         project_context = self._extract_project_context(config)
 
@@ -935,11 +996,13 @@ class LeadContractorWorkflow(WorkflowBase):
                     spec=spec,
                     feedback=review_feedback,
                     iteration=iteration,
+                    check_truncation=check_truncation,
+                    strict_truncation=strict_truncation,
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
 
-                if draft.was_truncated:
+                if check_truncation and draft.was_truncated:
                     if fail_on_truncation:
                         error_msg = (
                             f"Draft was truncated at iteration {iteration}. "
@@ -1158,8 +1221,19 @@ class LeadContractorWorkflow(WorkflowBase):
         spec: ImplementationSpec,
         feedback: str,
         iteration: int,
+        check_truncation: bool = True,
+        strict_truncation: bool = False,
     ) -> DraftResult:
-        """Phase 2/4 (async): Drafter creates implementation from spec."""
+        """Phase 2/4 (async): Drafter creates implementation from spec.
+
+        Args:
+            drafter_agent: The agent to use for drafting
+            spec: The implementation specification
+            feedback: Review feedback from previous iteration (if any)
+            iteration: Current iteration number
+            check_truncation: Whether to run heuristic truncation detection (default: True)
+            strict_truncation: Use lower confidence threshold for detection (default: False)
+        """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
         prompt = DRAFT_PROMPT_TEMPLATE.format(
@@ -1173,16 +1247,21 @@ class LeadContractorWorkflow(WorkflowBase):
 
         was_truncated = token_usage.was_truncated if token_usage else False
 
-        if not was_truncated and implementation_code:
+        # Also run heuristic detection for incomplete code (if enabled)
+        if check_truncation and not was_truncated and implementation_code:
+            # Use 0.5 threshold for strict mode, 0.7 for normal mode
+            confidence_threshold = 0.5 if strict_truncation else 0.7
             truncation_result = detect_truncation(
                 implementation_code,
                 original_input=prompt,
                 expected_sections=["def ", "class "],
+                strict_mode=strict_truncation,
             )
-            if truncation_result.is_truncated and truncation_result.confidence >= 0.7:
+            if truncation_result.is_truncated and truncation_result.confidence >= confidence_threshold:
                 was_truncated = True
                 logger.warning(
-                    f"Draft appears truncated (heuristic): {truncation_result.indicators[:3]}"
+                    f"Draft appears truncated (heuristic, confidence={truncation_result.confidence:.0%}): "
+                    f"{truncation_result.indicators[:3]}"
                 )
 
         draft = DraftResult(

@@ -185,6 +185,23 @@ class TestMetadata:
         assert "max_iterations" in input_names
         assert "pass_threshold" in input_names
 
+    def test_truncation_inputs_defined(self):
+        """Test truncation protection inputs are defined with correct defaults."""
+        workflow = LeadContractorWorkflow()
+        inputs_by_name = {i.name: i for i in workflow.metadata.inputs}
+
+        # check_truncation should exist and default to True
+        assert "check_truncation" in inputs_by_name
+        assert inputs_by_name["check_truncation"].default is True
+
+        # fail_on_truncation should exist and default to True
+        assert "fail_on_truncation" in inputs_by_name
+        assert inputs_by_name["fail_on_truncation"].default is True
+
+        # strict_truncation should exist and default to False
+        assert "strict_truncation" in inputs_by_name
+        assert inputs_by_name["strict_truncation"].default is False
+
 
 class TestScoreParsing:
     """Tests for review score parsing."""
