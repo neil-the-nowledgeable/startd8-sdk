@@ -297,6 +297,47 @@ def configure_otel(
     }
 
 
+def configure_otel_with_openllmetry(
+    config: OTelConfig,
+    enable_openllmetry: bool = True,
+) -> Dict[str, Any]:
+    """
+    Configure OTel and optionally initialize OpenLLMetry instrumentors.
+
+    Convenience wrapper that calls :func:`configure_otel` then
+    :func:`~startd8.openllmetry.initialize_openllmetry`. OpenLLMetry
+    instrumentors share the TracerProvider/MeterProvider set up by
+    ``configure_otel``, so child spans appear under TrackedAgentMixin
+    parent spans automatically.
+
+    Args:
+        config: OTelConfig with full configuration.
+        enable_openllmetry: If False, skip OpenLLMetry initialization
+            regardless of the ``STARTD8_OPENLLMETRY`` env var.
+
+    Returns:
+        Dict with 'tracer', 'meter', 'resource_attributes', and
+        'openllmetry_active' keys.
+    """
+    result = configure_otel(config)
+
+    openllmetry_active = False
+    if enable_openllmetry:
+        try:
+            from .openllmetry import initialize_openllmetry
+            openllmetry_active = initialize_openllmetry()
+        except ImportError:
+            pass
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning(
+                "OpenLLMetry initialization failed: %s", exc
+            )
+
+    result["openllmetry_active"] = openllmetry_active
+    return result
+
+
 def add_project_context_to_span(
     span: Any,
     project_context: ProjectContext,
@@ -343,5 +384,6 @@ __all__ = [
     "configure_tracing",
     "configure_metrics",
     "configure_otel",
+    "configure_otel_with_openllmetry",
     "add_project_context_to_span",
 ]

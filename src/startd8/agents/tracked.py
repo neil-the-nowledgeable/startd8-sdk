@@ -64,6 +64,18 @@ def _get_tracer():
     return _tracer
 
 
+def _is_openllmetry_active() -> bool:
+    """Check if OpenLLMetry instrumentors are active.
+
+    Lazy import avoids startup cost and handles missing package gracefully.
+    """
+    try:
+        from ..openllmetry import is_openllmetry_active
+        return is_openllmetry_active()
+    except ImportError:
+        return False
+
+
 class TrackedAgentMixin:
     """
     Mixin that adds OpenTelemetry span tracking to StartD8 agents.
@@ -149,6 +161,7 @@ class TrackedAgentMixin:
             mode = self._dual_emit.mode
             model_name = getattr(self, 'model', 'unknown')
             emit_genai = mode in (EmitMode.DUAL, EmitMode.OTEL)
+            openllmetry_active = _is_openllmetry_active()
 
             # Span name follows OTel GenAI spec in OTEL mode
             if mode == EmitMode.OTEL:
@@ -159,21 +172,26 @@ class TrackedAgentMixin:
             # Build initial attributes and transform
             init_attrs = {
                 "agent.id": self.name,
-                "agent.model": model_name,
                 "agent.prompt_length": len(prompt),
                 "task.id": task_id or "",
                 "project.id": self.project_id or "",
             }
+            # OpenLLMetry child span handles model identification
+            if not openllmetry_active:
+                init_attrs["agent.model"] = model_name
             span_attrs = self._dual_emit.transform(init_attrs)
 
-            # Add gen_ai-only attributes
-            if emit_genai:
+            # Add gen_ai-only attributes (OpenLLMetry child span handles these)
+            if emit_genai and not openllmetry_active:
                 span_attrs["gen_ai.system"] = self._get_genai_system()
                 span_attrs["gen_ai.operation.name"] = "chat"
 
+            # INTERNAL when orchestrating over OpenLLMetry child, CLIENT otherwise
+            span_kind = SpanKind.INTERNAL if openllmetry_active else SpanKind.CLIENT
+
             with tracer.start_as_current_span(
                 span_name,
-                kind=SpanKind.CLIENT,
+                kind=span_kind,
                 attributes=span_attrs,
             ) as span:
                 # Call parent implementation
@@ -187,11 +205,13 @@ class TrackedAgentMixin:
                     "agent.response_length": len(response_text),
                 }
                 if token_usage:
-                    resp_attrs["agent.tokens_input"] = token_usage.input or 0
-                    resp_attrs["agent.tokens_output"] = token_usage.output or 0
-                    resp_attrs["agent.tokens_total"] = (
-                        (token_usage.input or 0) + (token_usage.output or 0)
-                    )
+                    # OpenLLMetry child span handles token counts
+                    if not openllmetry_active:
+                        resp_attrs["agent.tokens_input"] = token_usage.input or 0
+                        resp_attrs["agent.tokens_output"] = token_usage.output or 0
+                        resp_attrs["agent.tokens_total"] = (
+                            (token_usage.input or 0) + (token_usage.output or 0)
+                        )
                     resp_attrs["agent.truncated"] = token_usage.was_truncated or False
 
                 resp_attrs = self._dual_emit.transform(resp_attrs)
@@ -200,12 +220,14 @@ class TrackedAgentMixin:
                     span.set_attribute(key, value)
 
                 # Add gen_ai.response.finish_reasons (array per OTel spec)
-                if emit_genai and token_usage and token_usage.finish_reason:
+                # OpenLLMetry child span handles this
+                if emit_genai and not openllmetry_active and token_usage and token_usage.finish_reason:
                     span.set_attribute(
                         "gen_ai.response.finish_reasons",
                         [token_usage.finish_reason],
                     )
 
+                # Truncation events always fire regardless of OpenLLMetry
                 if token_usage and token_usage.was_truncated:
                     span.add_event("truncation_detected", attributes={
                         "finish_reason": token_usage.finish_reason or "unknown",
