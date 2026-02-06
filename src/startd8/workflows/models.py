@@ -218,6 +218,7 @@ class WorkflowMetrics:
     total_cost: float = 0.0
     step_count: int = 0
     total_retries: int = 0  # FR-411
+    model: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -227,6 +228,7 @@ class WorkflowMetrics:
             "total_cost": self.total_cost,
             "step_count": self.step_count,
             "total_retries": self.total_retries,
+            "model": self.model,
         }
 
 

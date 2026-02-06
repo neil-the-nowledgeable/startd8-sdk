@@ -17,6 +17,8 @@ from .agent_resolution import (
     resolve_agents,
 )
 
+from .code_extraction import extract_code_from_response
+
 __all__ = [
     # Retry utilities
     "RetryConfig",
@@ -29,6 +31,8 @@ __all__ = [
     "resolve_agent_spec",
     "resolve_agent_specs",
     "resolve_agents",
+    # Code extraction
+    "extract_code_from_response",
 ]
 
 

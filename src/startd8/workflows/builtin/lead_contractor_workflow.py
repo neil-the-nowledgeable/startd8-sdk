@@ -44,6 +44,7 @@ from ..models import (
 )
 from ...agents import BaseAgent
 from ...utils.agent_resolution import resolve_agent_spec
+from ...utils.code_extraction import extract_code_from_response
 from ...logging_config import get_logger
 from ...costs.pricing import PricingService
 from ...truncation_detection import TruncationResult, detect_truncation
@@ -645,6 +646,7 @@ class LeadContractorWorkflow(WorkflowBase):
             output_tokens=result.lead_output_tokens + result.drafter_output_tokens,
             total_cost=result.total_cost,
             step_count=len(step_results),
+            model=lead_spec,
         )
 
         completed_at = datetime.now(timezone.utc)
@@ -1141,6 +1143,7 @@ class LeadContractorWorkflow(WorkflowBase):
             output_tokens=result.lead_output_tokens + result.drafter_output_tokens,
             total_cost=result.total_cost,
             step_count=len(step_results),
+            model=lead_spec,
         )
 
         completed_at = datetime.now(timezone.utc)
@@ -1444,60 +1447,10 @@ class LeadContractorWorkflow(WorkflowBase):
         """
         Extract code from markdown code blocks in LLM response.
 
-        Handles responses that include preamble text, code blocks, and
-        explanatory notes. Returns only the code content.
-
-        Supports:
-        - ```python ... ```
-        - ```yaml ... ```
-        - ``` ... ``` (generic)
-        - Multiple code blocks (returns first one)
-
-        Falls back to raw response if no code block found.
+        Delegates to the public utility ``extract_code_from_response``
+        in ``startd8.utils.code_extraction``.
         """
-        if not response:
-            return response
-
-        # Pattern to match code blocks with optional language specifier
-        # Captures content between ``` markers
-        pattern = r'```(?:\w+)?\s*\n(.*?)```'
-        matches = re.findall(pattern, response, re.DOTALL)
-
-        if matches:
-            # Return the first (and typically main) code block
-            extracted = matches[0].strip()
-
-            # If multiple code blocks, check if we should concatenate
-            # (e.g., for multi-file outputs). For now, return largest block.
-            if len(matches) > 1:
-                largest = max(matches, key=len).strip()
-                if len(largest) > len(extracted):
-                    extracted = largest
-
-            logger.debug(f"Extracted {len(extracted)} chars from code block (response was {len(response)} chars)")
-            return extracted
-
-        # No code blocks found - check if response looks like raw code
-        # (starts with shebang, import, def, class, etc.)
-        code_indicators = [
-            response.strip().startswith('#!/'),
-            response.strip().startswith('import '),
-            response.strip().startswith('from '),
-            response.strip().startswith('def '),
-            response.strip().startswith('class '),
-            response.strip().startswith('# ==='),  # Common header pattern
-        ]
-
-        if any(code_indicators):
-            logger.debug("Response appears to be raw code without markdown blocks")
-            return response.strip()
-
-        # Fallback: return as-is but log warning
-        logger.warning(
-            f"No code blocks found in response ({len(response)} chars). "
-            "Using raw response - may include commentary."
-        )
-        return response
+        return extract_code_from_response(response)
 
     # =========================================================================
     # Test Plan Generation Methods

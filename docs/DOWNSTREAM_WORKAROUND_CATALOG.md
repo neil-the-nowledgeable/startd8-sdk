@@ -189,10 +189,11 @@ safely access `result.metrics.total_cost` without `hasattr` guards.
 
 | Field | Value |
 |-------|-------|
-| **Status** | OPEN |
+| **Status** | FIXED |
 | **Project** | ContextCore, wayfinder |
 | **Files** | `ContextCore/scripts/lead_contractor/runner.py:121-131`, `wayfinder/scripts/lead_contractor/runner.py:121-131` |
 | **Type** | Defensive getattr() usage |
+| **Fixed in** | `WorkflowMetrics.model` field + `LeadContractorWorkflow` populates it |
 
 **Problem:** `WorkflowMetrics` fields accessed via `getattr(result.metrics, "input_tokens", 0)`,
 suggesting the object sometimes lacks expected attributes.
@@ -204,13 +205,12 @@ model = getattr(result.metrics, "model", "") or LEAD_AGENT
 ```
 
 **Assessment:** `WorkflowMetrics` is a dataclass with `input_tokens: int = 0` and
-`output_tokens: int = 0`, so these fields always exist. However, `model` is **not** a
-field on `WorkflowMetrics` — the consumers are reaching for a field that doesn't exist.
+`output_tokens: int = 0`, so these fields always exist. However, `model` was **not** a
+field on `WorkflowMetrics` — the consumers were reaching for a field that didn't exist.
 
-**Suggested SDK fix:** Either add `model: str = ""` to `WorkflowMetrics`, or document
-that model info lives in `WorkflowResult.metadata["lead_agent"]` / step-level
-`StepResult.agent_name`. The `or 0` guard after `getattr` suggests the field sometimes
-returns `None` even when present.
+**SDK fix applied:** Added `model: str = ""` to `WorkflowMetrics` dataclass and its
+`to_dict()` output. `LeadContractorWorkflow` now sets `model=lead_spec` in both sync
+and async execution paths. Downstream code can safely access `result.metrics.model`.
 
 ---
 
@@ -239,10 +239,11 @@ exists because these scripts run from repos that don't declare startd8 as a depe
 
 | Field | Value |
 |-------|-------|
-| **Status** | OPEN (partial) |
+| **Status** | FIXED |
 | **Project** | wayfinder |
 | **File** | `wayfinder/scripts/lead_contractor/integrate_backlog.py:880-904` |
 | **Type** | Post-processing cleanup function |
+| **Fixed in** | `startd8.utils.code_extraction.extract_code_from_response` public utility |
 
 **Problem:** Generated code sometimes arrives wrapped in markdown fences even after
 passing through the workflow.
@@ -258,15 +259,14 @@ def clean_markdown_code_blocks(content: str) -> str:
     return "\n".join(lines)
 ```
 
-**Assessment:** The SDK's `_extract_code_from_response()` (lead_contractor_workflow.py:1438-1495)
-already strips code fences from LLM responses. This workaround may be needed for code
-that bypasses the workflow's extraction (e.g., direct file reads of `generated/` output
-before the integration phase processes it), or for edge cases where the regex misses
-nested fences.
+**Assessment:** The SDK's `_extract_code_from_response()` already strips code fences
+from LLM responses. The workaround was needed because it was a private method.
 
-**Suggested SDK fix:** Audit whether `_extract_code_from_response` handles all edge
-cases (nested fences, fences without language specifier on same line as content,
-triple-backtick inside strings). Consider exposing it as a public utility.
+**SDK fix applied:** Extracted the code fence stripping logic into a public utility at
+`startd8.utils.code_extraction.extract_code_from_response()`. Available via
+`from startd8.utils import extract_code_from_response`. The private workflow method
+now delegates to this public function. Downstream code can call it directly instead of
+reimplementing fence stripping.
 
 ---
 
@@ -307,7 +307,7 @@ at confidence >= 70%. Controlled by `check_truncation` constructor param (defaul
 
 ## Summary: SDK Backlog by Priority
 
-### Already Fixed (commit `ebc9e66`)
+### All Fixed
 | ID | Description |
 |----|-------------|
 | W-001 | SafeCodeGenerator monkey-patch (truncation/token config) |
@@ -316,13 +316,9 @@ at confidence >= 70%. Controlled by `check_truncation` constructor param (defaul
 | W-004 | AST merge accumulation (silent corruption) |
 | W-005 | Relative target_files path ValueError |
 | W-006 | WorkflowResult.from_error() None metrics |
+| W-007 | Missing `model` field on WorkflowMetrics |
+| W-009 | Code fence extraction exposed as public utility |
 | W-010 | Pre-integration truncation check |
-
-### Medium Priority (OPEN)
-| ID | Description | Effort |
-|----|-------------|--------|
-| W-007 | Missing `model` field on WorkflowMetrics | Small — add field or document location |
-| W-009 | Code fence edge cases in extraction | Small — audit + expose as public utility |
 
 ### Won't Fix
 | ID | Description | Reason |
