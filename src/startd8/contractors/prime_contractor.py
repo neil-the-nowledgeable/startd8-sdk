@@ -92,6 +92,8 @@ class PrimeContractorWorkflow:
         # Size limits for proactive truncation prevention
         max_lines_per_feature: int = 150,
         max_tokens_per_feature: int = 500,
+        # Pre-integration truncation check
+        check_truncation: bool = True,
     ):
         """
         Initialize the Prime Contractor workflow.
@@ -112,6 +114,7 @@ class PrimeContractorWorkflow:
             on_checkpoint_failed: Callback when checkpoints fail
             max_lines_per_feature: Safe line limit for LLM output (default: 150)
             max_tokens_per_feature: Safe token limit for size estimation (default: 500)
+            check_truncation: Validate generated files for truncation before integration (default: True)
         """
         self.project_root = project_root or Path.cwd()
         self.dry_run = dry_run
@@ -122,6 +125,7 @@ class PrimeContractorWorkflow:
         self.auto_stash = auto_stash
         self.on_feature_complete = on_feature_complete
         self.on_checkpoint_failed = on_checkpoint_failed
+        self.check_truncation = check_truncation
 
         # Git safety: track stash reference for recovery
         self.stash_ref: Optional[str] = None
@@ -159,6 +163,13 @@ class PrimeContractorWorkflow:
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+
+    def _rel_display(self, path: Path) -> str:
+        """Safe relative path for display, falling back to the full path."""
+        try:
+            return str(path.relative_to(self.project_root))
+        except ValueError:
+            return str(path)
 
     # =========================================================================
     # Git Safety Methods
@@ -519,9 +530,11 @@ class PrimeContractorWorkflow:
         for i, source_file in enumerate(feature.generated_files):
             source_path = Path(source_file)
 
-            # Determine target path
+            # Determine target path (resolve relative paths against project_root)
             if i < len(feature.target_files):
                 target_path = Path(feature.target_files[i])
+                if not target_path.is_absolute():
+                    target_path = self.project_root / target_path
             else:
                 if not source_path.exists():
                     if self.dry_run:
@@ -534,10 +547,7 @@ class PrimeContractorWorkflow:
                     target_path = self.project_root / "src" / source_path.name
 
             if self.dry_run:
-                try:
-                    target_rel = target_path.relative_to(self.project_root)
-                except ValueError:
-                    target_rel = target_path
+                target_rel = self._rel_display(target_path)
                 if target_path.exists():
                     print(f"  [DRY RUN] Would update: {target_rel}")
                 else:
@@ -550,6 +560,25 @@ class PrimeContractorWorkflow:
                 print(f"  ✗ Source file not found: {source_path}")
                 continue
 
+            # Pre-integration truncation check (W-010)
+            if self.check_truncation and source_path.suffix == ".py":
+                from ..truncation_detection import detect_truncation
+                source_content = source_path.read_text(encoding="utf-8")
+                trunc_result = detect_truncation(
+                    source_content,
+                    expected_sections=["def ", "class "],
+                    strict_mode=False,
+                )
+                if trunc_result.is_truncated and trunc_result.confidence >= 0.7:
+                    print(
+                        f"  ✗ REJECTED {source_path.name}: "
+                        f"appears truncated (confidence={trunc_result.confidence:.0%})"
+                    )
+                    for indicator in trunc_result.indicators[:3]:
+                        print(f"      {indicator}")
+                    print("    Integration blocked to prevent corrupting target file.")
+                    continue
+
             # Target file protection
             if target_path.exists() and not self.allow_dirty:
                 if not self.protect_dirty_target(target_path):
@@ -560,7 +589,7 @@ class PrimeContractorWorkflow:
             if self.merge_strategy.can_merge(source_path, target_path):
                 result = self.merge_strategy.merge(source_path, target_path)
                 if result.status.value == "success":
-                    print(f"  ✓ Merged: {target_path.relative_to(self.project_root)}")
+                    print(f"  ✓ Merged: {self._rel_display(target_path)}")
                     integrated_files.append(target_path)
                 elif result.status.value == "conflict":
                     print(f"  ⚠ Merged with conflicts: {target_path.name}")
@@ -573,7 +602,7 @@ class PrimeContractorWorkflow:
                 # Simple copy if merge strategy can't handle
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target_path)
-                print(f"  ✓ Copied: {target_path.relative_to(self.project_root)}")
+                print(f"  ✓ Copied: {self._rel_display(target_path)}")
                 integrated_files.append(target_path)
 
         if not integrated_files:

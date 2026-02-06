@@ -334,7 +334,7 @@ class WorkflowResult:
             output=None,
             error=error,
             steps=steps or [],
-            metrics=metrics,
+            metrics=metrics or WorkflowMetrics(),
             metadata=metadata or {},
         )
 
