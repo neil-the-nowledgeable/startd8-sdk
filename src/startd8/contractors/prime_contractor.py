@@ -860,6 +860,30 @@ class PrimeContractorWorkflow:
         self.queue.save_state()
         print(f"\nReset {reset_count} failed/blocked feature(s)")
 
+    def full_reset(self, include_targets: bool = False) -> None:
+        """
+        Reset workflow state **and** clean generated artifacts.
+
+        Combines ``queue.reset()`` (reverts all features to PENDING) with
+        ``clean_workspace()`` (removes generated/, .backup, __pycache__).
+        This is the method that ``--reset-state`` should call instead of
+        just deleting the state JSON.
+
+        Args:
+            include_targets: If True, also delete target files listed in
+                the feature queue.  Use with caution.
+        """
+        # Delete persisted state file
+        if self.queue.state_file.exists():
+            self.queue.state_file.unlink()
+            print(f"  Removed state file: {self.queue.state_file.name}")
+
+        # Reset in-memory queue
+        self.queue.reset()
+
+        # Clean workspace artifacts
+        self.clean_workspace(include_targets=include_targets)
+
     def clean_workspace(self, include_targets: bool = False) -> int:
         """
         Remove generated artifacts from previous runs.

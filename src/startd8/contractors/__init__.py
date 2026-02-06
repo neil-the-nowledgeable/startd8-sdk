@@ -60,6 +60,7 @@ from .registry import (
     discover,
     get_registry,
 )
+from .cli_helpers import add_workflow_args, apply_workflow_args
 
 # Optional: Code generators (require workflow dependencies)
 try:
@@ -99,6 +100,9 @@ __all__ = [
     "ContractorRegistry",
     "get_registry",
     "discover",
+    # CLI helpers
+    "add_workflow_args",
+    "apply_workflow_args",
     # Generators (optional)
     "LeadContractorCodeGenerator",
 ]
