@@ -233,6 +233,30 @@ class WorkflowRegistry:
         except ImportError as e:
             logger.debug(f"IterativeDev workflow not available: {e}")
 
+        # Document review workflows (previously built but not registered by default)
+        try:
+            from .builtin.critical_review_workflow import CriticalReviewWorkflow
+            cls.register(CriticalReviewWorkflow())
+            logger.debug("Registered built-in CriticalReview workflow")
+        except ImportError as e:
+            logger.debug(f"CriticalReview workflow not available: {e}")
+
+        try:
+            from .builtin.doc_review_log_workflow import DocReviewLogWorkflow
+            cls.register(DocReviewLogWorkflow())
+            logger.debug("Registered built-in DocReviewLog workflow")
+        except ImportError as e:
+            logger.debug(f"DocReviewLog workflow not available: {e}")
+
+        try:
+            from .builtin.architectural_review_log_workflow import (
+                ArchitecturalReviewLogWorkflow,
+            )
+            cls.register(ArchitecturalReviewLogWorkflow())
+            logger.debug("Registered built-in ArchitecturalReviewLog workflow")
+        except ImportError as e:
+            logger.debug(f"ArchitecturalReviewLog workflow not available: {e}")
+
     @classmethod
     def get_workflow(cls, workflow_id: str) -> Optional[Workflow]:
         """

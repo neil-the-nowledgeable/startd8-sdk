@@ -25,6 +25,8 @@ __all__ = [
     "IterativeDevWorkflowWrapper",
     "DesignPolishWorkflow",
     "CriticalReviewWorkflow",
+    "DocReviewLogWorkflow",
+    "ArchitecturalReviewLogWorkflow",
     "LeadContractorWorkflow",
     "LeadContractorContextCoreWorkflow",
     "PolicyAnalysisWorkflow",
@@ -49,6 +51,12 @@ def __getattr__(name: str):
     elif name == "CriticalReviewWorkflow":
         from .critical_review_workflow import CriticalReviewWorkflow
         return CriticalReviewWorkflow
+    elif name == "DocReviewLogWorkflow":
+        from .doc_review_log_workflow import DocReviewLogWorkflow
+        return DocReviewLogWorkflow
+    elif name == "ArchitecturalReviewLogWorkflow":
+        from .architectural_review_log_workflow import ArchitecturalReviewLogWorkflow
+        return ArchitecturalReviewLogWorkflow
     elif name == "LeadContractorWorkflow":
         from .lead_contractor_workflow import LeadContractorWorkflow
         return LeadContractorWorkflow

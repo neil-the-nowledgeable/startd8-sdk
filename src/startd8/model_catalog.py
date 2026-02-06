@@ -84,6 +84,10 @@ class Models:
     # Flagship
     GPT4_LATEST = "openai:gpt-4o"
 
+    # Flagship (Code-focused)
+    # Note: This identifier must match your OpenAI provider's supported model name.
+    GPT5_2_CODEX_LATEST = "openai:gpt-5.2-codex"
+
     # Mini - Fast, cheap
     GPT4_MINI = "openai:gpt-4o-mini"
 
@@ -162,6 +166,12 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         model_id="gpt-4o",
         tier="flagship",
         capabilities={"text", "vision", "code", "reasoning"},
+    ),
+    "gpt-5.2-codex": ModelInfo(
+        provider="openai",
+        model_id="gpt-5.2-codex",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
     ),
     "gpt-4o-mini": ModelInfo(
         provider="openai",

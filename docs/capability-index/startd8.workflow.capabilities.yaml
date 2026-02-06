@@ -1,7 +1,7 @@
 # StartD8 Workflow Capabilities Manifest
 # Version: 2.0.0
 # Created: 2026-01-28
-# Updated: 2026-01-29
+# Updated: 2026-01-30
 #
 # PURPOSE: Capability design for StartD8 SDK workflow system.
 # Implements functional requirements from Phase 3 (startd8.workflow.functional-requirements.yaml).
@@ -11,10 +11,11 @@
 
 manifest_id: startd8.workflow.capabilities
 name: StartD8 Workflow System Capabilities
-version: "2.0.0"
+version: "2.1.0"
 description: |
   Capabilities for StartD8 SDK workflow system.
   Protocol-based multi-agent orchestration with cost tracking and observability.
+  v2.1.0: All 13 draft capabilities promoted to beta after Phase 1-4 implementation.
   v2.0.0: Updated from Phase 3 functional requirements with implementation details.
 
 owner: neilyashinsky
@@ -448,12 +449,12 @@ capabilities:
         ref: src/startd8/workflows/builtin/plain_language_workflow.py
 
   # ============================================================================
-  # PHASE 1 CAPABILITIES (Foundation - Draft)
+  # PHASE 1 CAPABILITIES (Foundation - Beta)
   # ============================================================================
 
   - capability_id: startd8.workflow.authoring.auto_validate
     category: validate
-    maturity: draft
+    maturity: beta
     summary: "Auto-generate validation from WorkflowInput definitions with optional JSON Schema"
 
     audiences: [workflow_developer]
@@ -502,7 +503,7 @@ capabilities:
 
   - capability_id: startd8.workflow.discovery.search
     category: query
-    maturity: draft
+    maturity: beta
     summary: "Search and filter workflows by capability, tag, or description text"
 
     audiences: [workflow_user, ai_agent]
@@ -559,7 +560,7 @@ capabilities:
 
   - capability_id: startd8.workflow.testing.assertions
     category: validate
-    maturity: draft
+    maturity: beta
     summary: "Pytest assertion helpers for WorkflowResult: success, steps, cost, order"
 
     audiences: [workflow_developer]
@@ -609,7 +610,7 @@ capabilities:
 
   - capability_id: startd8.workflow.execution.async_audit
     category: action
-    maturity: draft
+    maturity: beta
     summary: "Audit and add native _aexecute() to all builtin workflows"
 
     audiences: [workflow_developer, integration_developer]
@@ -650,12 +651,12 @@ capabilities:
       breaking_change: false
 
   # ============================================================================
-  # PHASE 2 CAPABILITIES (Core Orchestration - Draft)
+  # PHASE 2 CAPABILITIES (Core Orchestration - Beta)
   # ============================================================================
 
   - capability_id: startd8.workflow.execution.retry
     category: action
-    maturity: draft
+    maturity: beta
     summary: "Automatic retry with exponential backoff, jitter, and error classification"
 
     audiences: [workflow_user, ai_agent]
@@ -711,7 +712,7 @@ capabilities:
 
   - capability_id: startd8.workflow.execution.mixed_steps
     category: action
-    maturity: draft
+    maturity: beta
     summary: "Pipeline step-type dispatch enabling conditional, parallel, and workflow steps"
 
     audiences: [workflow_developer, sdk_architect]
@@ -759,7 +760,7 @@ capabilities:
 
   - capability_id: startd8.workflow.execution.conditional
     category: action
-    maturity: draft
+    maturity: beta
     summary: "Conditional branching based on predicate evaluation of intermediate results"
 
     audiences: [workflow_developer]
@@ -807,7 +808,7 @@ capabilities:
 
   - capability_id: startd8.workflow.execution.parallel
     category: action
-    maturity: draft
+    maturity: beta
     summary: "Concurrent agent execution with result aggregation and configurable failure policy"
 
     audiences: [workflow_developer, workflow_user]
@@ -850,7 +851,7 @@ capabilities:
 
   - capability_id: startd8.workflow.reusability.compose
     category: action
-    maturity: draft
+    maturity: beta
     summary: "Compose workflows from other workflows as Pipeline steps with metrics aggregation"
 
     audiences: [workflow_developer, sdk_architect]
@@ -894,12 +895,12 @@ capabilities:
       breaking_change: false
 
   # ============================================================================
-  # PHASE 3 CAPABILITIES (Observability & Simulation - Draft)
+  # PHASE 3 CAPABILITIES (Observability & Simulation - Beta)
   # ============================================================================
 
   - capability_id: startd8.workflow.execution.dry_run
     category: validate
-    maturity: draft
+    maturity: beta
     summary: "Simulate workflow execution without API calls, returning plan and cost estimate"
 
     audiences: [workflow_developer, ai_agent]
@@ -954,7 +955,7 @@ capabilities:
 
   - capability_id: startd8.workflow.observability.otel
     category: observe
-    maturity: draft
+    maturity: beta
     summary: "OpenTelemetry spans for workflow execution with ContextCore project linkage"
 
     audiences: [integration_developer, sdk_architect]
@@ -1006,7 +1007,7 @@ capabilities:
 
   - capability_id: startd8.workflow.observability.visualize
     category: generate
-    maturity: draft
+    maturity: beta
     summary: "Mermaid diagram export of workflow structure and post-execution results"
 
     audiences: [workflow_developer, workflow_user]
@@ -1062,12 +1063,12 @@ capabilities:
       breaking_change: false
 
   # ============================================================================
-  # PHASE 4 CAPABILITY (Enterprise - Draft)
+  # PHASE 4 CAPABILITY (Enterprise - Beta)
   # ============================================================================
 
   - capability_id: startd8.workflow.integration.http
     category: action
-    maturity: draft
+    maturity: beta
     summary: "HTTP server for webhook-triggered workflow execution with API key auth"
 
     audiences: [integration_developer]

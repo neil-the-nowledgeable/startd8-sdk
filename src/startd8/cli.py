@@ -1269,13 +1269,23 @@ def workflow_run(
         console.print(f"\n[red]✗ Workflow failed: {result.error}[/red]")
 
     # Show metrics
-    console.print(Panel(
-        f"[bold]Time:[/bold] {result.metrics.total_time_ms}ms\n"
-        f"[bold]Tokens:[/bold] {result.metrics.input_tokens + result.metrics.output_tokens}\n"
-        f"[bold]Cost:[/bold] ${result.metrics.total_cost:.4f}\n"
-        f"[bold]Steps:[/bold] {result.metrics.step_count}",
-        title="Metrics"
-    ))
+    if result.metrics is not None:
+        console.print(Panel(
+            f"[bold]Time:[/bold] {result.metrics.total_time_ms}ms\n"
+            f"[bold]Tokens:[/bold] {result.metrics.input_tokens + result.metrics.output_tokens}\n"
+            f"[bold]Cost:[/bold] ${result.metrics.total_cost:.4f}\n"
+            f"[bold]Steps:[/bold] {result.metrics.step_count}",
+            title="Metrics"
+        ))
+    else:
+        # Some failures return WorkflowResult.from_error(...) which does not populate metrics.
+        console.print(Panel(
+            f"[bold]Time:[/bold] n/a\n"
+            f"[bold]Tokens:[/bold] n/a\n"
+            f"[bold]Cost:[/bold] n/a\n"
+            f"[bold]Steps:[/bold] {len(result.steps) if result.steps is not None else 0}",
+            title="Metrics"
+        ))
 
     # Write output
     if output_file and result.output:

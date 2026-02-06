@@ -983,6 +983,11 @@ class ContextCoreTaskSource:
             if context:
                 config["context"] = context
 
+            # Pass through all original task attributes for consumer access
+            for key, value in attrs.items():
+                if key not in config:
+                    config[key] = value
+
             # Parse depends_on from task attributes
             depends_on = []
             if "task.depends_on" in attrs:

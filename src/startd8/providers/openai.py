@@ -222,7 +222,7 @@ class OpenAIProvider:
             name: Optional agent name (defaults to model-based name)
             **config: Configuration options
                 - api_key: OpenAI API key (or use OPENAI_API_KEY env var)
-                - max_tokens: Maximum tokens to generate (default 4096)
+                - max_tokens: Maximum tokens to generate (default 16384)
                 - cost_tracker: Optional cost tracker instance
                 - budget_manager: Optional budget manager instance
         """
@@ -244,7 +244,7 @@ class OpenAIProvider:
             name=name,
             model=model,
             api_key=config.get('api_key'),
-            max_tokens=config.get('max_tokens', 4096),
+            max_tokens=config.get('max_tokens', 16384),
             cost_tracker=config.get('cost_tracker'),
             budget_manager=config.get('budget_manager')
         )
@@ -271,9 +271,11 @@ class OpenAIProvider:
                 raise ConfigurationError(
                     f"max_tokens must be a positive integer, got: {max_tokens}"
                 )
-            if max_tokens > 4096:
+            # Many OpenAI models support >4k completion tokens; let API enforce exact limits.
+            # We keep a conservative-but-high cap to prevent accidental runaway configs.
+            if max_tokens > 16384:
                 raise ConfigurationError(
-                    f"max_tokens ({max_tokens}) exceeds maximum allowed (4096)"
+                    f"max_tokens ({max_tokens}) exceeds maximum allowed (16384)"
                 )
         
         return True

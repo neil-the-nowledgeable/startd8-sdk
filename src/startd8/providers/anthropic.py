@@ -251,9 +251,11 @@ class AnthropicProvider:
                 raise ConfigurationError(
                     f"max_tokens must be a positive integer, got: {max_tokens}"
                 )
-            if max_tokens > 8192:
+            # Claude models can support high completion token limits; let API enforce exact limits.
+            # Keep a high cap to prevent accidental runaway configs while avoiding needless truncation.
+            if max_tokens > 65536:
                 raise ConfigurationError(
-                    f"max_tokens ({max_tokens}) exceeds maximum allowed (8192)"
+                    f"max_tokens ({max_tokens}) exceeds maximum allowed (65536)"
                 )
         
         return True
