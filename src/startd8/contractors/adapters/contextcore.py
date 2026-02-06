@@ -197,6 +197,7 @@ class ASTMergeStrategy:
         self,
         backup_suffix: str = ".backup",
         warn_on_duplicate: bool = True,
+        merge_mode: str = "additive",
     ):
         """
         Initialize the AST merge strategy.
@@ -204,9 +205,12 @@ class ASTMergeStrategy:
         Args:
             backup_suffix: Suffix for backup files
             warn_on_duplicate: Whether to warn on duplicate definitions
+            merge_mode: "additive" (default) merges ASTs, "replace" overwrites
+                target with source content (like SimpleMergeStrategy)
         """
         self.backup_suffix = backup_suffix
         self.warn_on_duplicate = warn_on_duplicate
+        self.merge_mode = merge_mode
 
     def can_merge(
         self,
@@ -276,6 +280,35 @@ class ASTMergeStrategy:
                 return MergeResult(
                     status=MergeStatus.SUCCESS,
                     merged_content=source_content,
+                )
+
+            # Detect accumulation: warn if target has >= 2x the source's definitions
+            source_defs = sum(
+                1 for n in source_tree.body
+                if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+            target_defs = sum(
+                1 for n in target_tree.body
+                if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            )
+            if source_defs > 0 and target_defs >= 2 * source_defs:
+                logger.warning(
+                    f"Target {target.name} has {target_defs} top-level definitions "
+                    f"vs {source_defs} in source. This may indicate accumulated merge "
+                    f"layers from previous runs. Consider cleaning the workspace "
+                    f"before re-running."
+                )
+
+            # Replace mode: overwrite target with source (like SimpleMergeStrategy)
+            if self.merge_mode == "replace":
+                if backup:
+                    backup_path = target.with_suffix(target.suffix + self.backup_suffix)
+                    shutil.copy2(target, backup_path)
+                target.write_text(source_content, encoding="utf-8")
+                return MergeResult(
+                    status=MergeStatus.SUCCESS,
+                    merged_content=source_content,
+                    backup_path=backup_path if backup else None,
                 )
 
             # Create backup

@@ -89,6 +89,9 @@ class PrimeContractorWorkflow:
         # Callbacks
         on_feature_complete: Optional[FeatureCompleteCallback] = None,
         on_checkpoint_failed: Optional[CheckpointFailedCallback] = None,
+        # Size limits for proactive truncation prevention
+        max_lines_per_feature: int = 150,
+        max_tokens_per_feature: int = 500,
     ):
         """
         Initialize the Prime Contractor workflow.
@@ -107,6 +110,8 @@ class PrimeContractorWorkflow:
             merge_strategy: Custom merge strategy
             on_feature_complete: Callback when feature completes
             on_checkpoint_failed: Callback when checkpoints fail
+            max_lines_per_feature: Safe line limit for LLM output (default: 150)
+            max_tokens_per_feature: Safe token limit for size estimation (default: 500)
         """
         self.project_root = project_root or Path.cwd()
         self.dry_run = dry_run
@@ -147,8 +152,8 @@ class PrimeContractorWorkflow:
         self.files_modified_this_session: Dict[str, List[str]] = {}  # file -> [features]
 
         # Size limits for proactive truncation prevention
-        self.max_lines_per_feature = 150  # Safe limit for most LLMs
-        self.max_tokens_per_feature = 500
+        self.max_lines_per_feature = max_lines_per_feature
+        self.max_tokens_per_feature = max_tokens_per_feature
 
         # Cost tracking
         self.total_cost_usd: float = 0.0
@@ -825,3 +830,65 @@ class PrimeContractorWorkflow:
 
         self.queue.save_state()
         print(f"\nReset {reset_count} failed/blocked feature(s)")
+
+    def clean_workspace(self, include_targets: bool = False) -> int:
+        """
+        Remove generated artifacts from previous runs.
+
+        Deletes:
+        - generated/ staging directory (or configured output_dir)
+        - .backup files under project root
+        - __pycache__ directories under project root
+
+        Optionally (when include_targets=True):
+        - Target files listed in the feature queue
+
+        Args:
+            include_targets: If True, also delete target files from the queue.
+                Use with caution — target files may contain hand-written code.
+
+        Returns:
+            Count of items removed.
+        """
+        removed = 0
+
+        # Determine output directory from the code generator or default
+        output_dir = self.project_root / "generated"
+        if self.code_generator and hasattr(self.code_generator, "output_dir"):
+            output_dir = Path(self.code_generator.output_dir)
+            if not output_dir.is_absolute():
+                output_dir = self.project_root / output_dir
+
+        # Remove generated/ directory
+        if output_dir.exists() and output_dir.is_dir():
+            shutil.rmtree(output_dir)
+            print(f"  Removed directory: {output_dir}")
+            removed += 1
+
+        # Remove .backup files under project root
+        for backup_file in self.project_root.rglob("*.backup"):
+            backup_file.unlink()
+            print(f"  Removed backup: {backup_file.relative_to(self.project_root)}")
+            removed += 1
+
+        # Remove __pycache__ directories under project root
+        for pycache_dir in self.project_root.rglob("__pycache__"):
+            if pycache_dir.is_dir():
+                shutil.rmtree(pycache_dir)
+                print(f"  Removed: {pycache_dir.relative_to(self.project_root)}")
+                removed += 1
+
+        # Optionally remove target files listed in the feature queue
+        if include_targets:
+            for feature in self.queue.features.values():
+                for target_file in feature.target_files:
+                    target_path = Path(target_file)
+                    if not target_path.is_absolute():
+                        target_path = self.project_root / target_path
+                    if target_path.exists():
+                        target_path.unlink()
+                        print(f"  Removed target: {target_path.relative_to(self.project_root)}")
+                        removed += 1
+
+        print(f"\nCleaned {removed} item(s) from workspace")
+        return removed

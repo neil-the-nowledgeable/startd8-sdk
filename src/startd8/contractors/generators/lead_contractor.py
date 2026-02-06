@@ -40,6 +40,10 @@ class LeadContractorCodeGenerator:
         max_iterations: int = 3,
         pass_threshold: int = 80,
         output_dir: Optional[Path] = None,
+        max_tokens: Optional[int] = None,
+        fail_on_truncation: bool = True,
+        check_truncation: bool = True,
+        strict_truncation: bool = False,
     ):
         """
         Initialize the Lead Contractor code generator.
@@ -50,12 +54,20 @@ class LeadContractorCodeGenerator:
             max_iterations: Maximum draft/review iterations
             pass_threshold: Minimum score to pass review (0-100)
             output_dir: Directory for generated files
+            max_tokens: Override max_tokens for agent creation (None = provider default)
+            fail_on_truncation: Fail workflow if truncation detected (default: True)
+            check_truncation: Enable truncation detection (default: True)
+            strict_truncation: Use strict detection threshold (default: False)
         """
         self.lead_agent = lead_agent
         self.drafter_agent = drafter_agent
         self.max_iterations = max_iterations
         self.pass_threshold = pass_threshold
         self.output_dir = output_dir or Path("generated")
+        self.max_tokens = max_tokens
+        self.fail_on_truncation = fail_on_truncation
+        self.check_truncation = check_truncation
+        self.strict_truncation = strict_truncation
 
     def generate(
         self,
@@ -90,7 +102,12 @@ class LeadContractorCodeGenerator:
                 "drafter_agent": self.drafter_agent,
                 "max_iterations": self.max_iterations,
                 "pass_threshold": self.pass_threshold,
+                "fail_on_truncation": self.fail_on_truncation,
+                "check_truncation": self.check_truncation,
+                "strict_truncation": self.strict_truncation,
             }
+            if self.max_tokens is not None:
+                config["max_tokens"] = self.max_tokens
 
             # Run the workflow
             result = workflow.run(config=config)

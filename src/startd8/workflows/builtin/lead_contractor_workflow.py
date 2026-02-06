@@ -423,10 +423,12 @@ class LeadContractorWorkflow(WorkflowBase):
         # Extract ContextCore project context
         project_context = self._extract_project_context(config)
 
-        # Resolve agents
+        # Resolve agents (forward max_tokens if configured)
+        agent_max_tokens = config.get("max_tokens")
+        resolve_kwargs = {"max_tokens": agent_max_tokens} if agent_max_tokens else {}
         try:
-            lead_agent = resolve_agent_spec(lead_spec)
-            drafter_agent = resolve_agent_spec(drafter_spec)
+            lead_agent = resolve_agent_spec(lead_spec, **resolve_kwargs)
+            drafter_agent = resolve_agent_spec(drafter_spec, **resolve_kwargs)
         except Exception as e:
             return WorkflowResult.from_error(
                 self.metadata.workflow_id,
@@ -930,9 +932,12 @@ class LeadContractorWorkflow(WorkflowBase):
 
         project_context = self._extract_project_context(config)
 
+        # Resolve agents (forward max_tokens if configured)
+        agent_max_tokens = config.get("max_tokens")
+        resolve_kwargs = {"max_tokens": agent_max_tokens} if agent_max_tokens else {}
         try:
-            lead_agent = resolve_agent_spec(lead_spec)
-            drafter_agent = resolve_agent_spec(drafter_spec)
+            lead_agent = resolve_agent_spec(lead_spec, **resolve_kwargs)
+            drafter_agent = resolve_agent_spec(drafter_spec, **resolve_kwargs)
         except Exception as e:
             return WorkflowResult.from_error(
                 self.metadata.workflow_id,
