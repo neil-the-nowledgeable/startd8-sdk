@@ -6,6 +6,7 @@ Automatically sets up a default log file handler for error persistence.
 """
 
 import logging
+import os
 import sys
 import json
 from pathlib import Path
@@ -13,6 +14,9 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from .context import correlation_id as correlation_id_ctx
 from .paths import default_config_dir
+
+# Environment variable for log level control
+_ENV_LOG_LEVEL = os.environ.get("STARTD8_LOG_LEVEL", "").upper() or None
 
 # Backwards-compatible export: `startd8.logging_config.correlation_id`
 correlation_id = correlation_id_ctx
@@ -87,25 +91,28 @@ def setup_logging(
 ) -> logging.Logger:
     """
     Set up logging configuration
-    
+
     Args:
-        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+            Can also be set via STARTD8_LOG_LEVEL env var (env var takes precedence).
         json_format: Use JSON formatting (for production)
         log_file: Optional file to write logs to
         correlation_id: Optional correlation ID for request tracking
-    
+
     Returns:
         Configured logger
     """
+    # Environment variable overrides the argument
+    effective_level = _ENV_LOG_LEVEL or level.upper()
     logger = logging.getLogger("startd8")
-    logger.setLevel(getattr(logging, level.upper()))
+    logger.setLevel(getattr(logging, effective_level))
     
     # Remove existing handlers
     logger.handlers.clear()
     
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(logging, level.upper()))
+    console_handler.setLevel(getattr(logging, effective_level))
     
     if json_format:
         formatter = JSONFormatter()
@@ -202,8 +209,9 @@ def _ensure_default_log_file_handler():
     )
     
     if not has_console_handler:
+        console_level = getattr(logging, _ENV_LOG_LEVEL) if _ENV_LOG_LEVEL else logging.INFO
         console_handler = logging.StreamHandler(sys.stderr)
-        console_handler.setLevel(logging.INFO)  # Less verbose in console
+        console_handler.setLevel(console_level)
         console_formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
@@ -211,9 +219,10 @@ def _ensure_default_log_file_handler():
         console_handler.setFormatter(console_formatter)
         root_logger.addHandler(console_handler)
     
-    # Set root logger level
-    if root_logger.level == logging.NOTSET:
-        root_logger.setLevel(logging.INFO)
+    # Set root logger level (env var overrides default)
+    if root_logger.level == logging.NOTSET or _ENV_LOG_LEVEL:
+        root_level = getattr(logging, _ENV_LOG_LEVEL) if _ENV_LOG_LEVEL else logging.INFO
+        root_logger.setLevel(root_level)
     
     _default_logging_initialized = True
 

@@ -409,3 +409,264 @@ class TestGetExpectedSectionsForCode:
             f"TSX code confidence {result.confidence:.2f} >= 0.7: {result.indicators}"
         )
 
+
+class TestCodeMode:
+    """Tests for code_mode parameter — skips text-oriented heuristics."""
+
+    VALID_TS = (
+        "import { createClient } from '@supabase/supabase-js';\n"
+        "\n"
+        "const supabase = createClient(\n"
+        "  process.env.SUPABASE_URL!,\n"
+        "  process.env.SUPABASE_KEY!\n"
+        ");\n"
+        "\n"
+        "export async function seedCatalog(file: string): Promise<void> {\n"
+        "  const data = await readCSV(file);\n"
+        "  for (const row of data) {\n"
+        '    await supabase.from("products").upsert(row);\n'
+        "  }\n"
+        '  console.log(`Seeded ${data.length} products`);\n'
+        "}\n"
+        "\n"
+        "seedCatalog(process.argv[2]).catch(console.error);\n"
+    )
+
+    VALID_PYTHON = (
+        "import sys\n"
+        "from pathlib import Path\n"
+        "\n"
+        "def main():\n"
+        '    path = Path(sys.argv[1])\n'
+        '    data = path.read_text(encoding="utf-8")\n'
+        "    print(f'Read {len(data)} chars')\n"
+        "\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+
+    def test_valid_ts_not_flagged_in_code_mode(self):
+        """Valid TypeScript should not be flagged as truncated in code_mode."""
+        result = detect_truncation(self.VALID_TS, code_mode=True)
+        assert not result.is_truncated, (
+            f"Valid TS flagged as truncated: {result.indicators}"
+        )
+        assert result.confidence == 0.0
+
+    def test_valid_ts_would_be_flagged_in_prose_mode(self):
+        """Same TS triggers false positives without code_mode (the bug scenario)."""
+        result = detect_truncation(self.VALID_TS, code_mode=False)
+        # Mid-sentence and/or unclosed-string patterns should fire
+        assert result.confidence > 0.0, (
+            "Expected some heuristic hits on raw code in prose mode"
+        )
+
+    def test_valid_python_not_flagged_in_code_mode(self):
+        """Valid Python should not be flagged as truncated in code_mode."""
+        result = detect_truncation(self.VALID_PYTHON, code_mode=True)
+        assert not result.is_truncated, (
+            f"Valid Python flagged as truncated: {result.indicators}"
+        )
+
+    def test_code_mode_detects_unclosed_code_block_indicator(self):
+        """code_mode still detects unclosed ``` markers (LLM wrapper artifacts)."""
+        wrapped = "```typescript\n" + self.VALID_TS  # no closing ```
+        result = detect_truncation(wrapped, code_mode=True)
+        assert result.confidence >= 0.4
+        assert any("code block" in i for i in result.indicators)
+
+    def test_code_mode_detects_brace_imbalance_indicator(self):
+        """code_mode detects significant brace imbalance."""
+        truncated = (
+            "function a() {\n"
+            "  function b() {\n"
+            "    function c() {\n"
+            "      if (true) {\n"
+            "        const x = 1;\n"
+        )
+        result = detect_truncation(truncated, code_mode=True)
+        assert result.confidence >= 0.35
+        assert any("brace" in i.lower() for i in result.indicators)
+
+    def test_code_mode_flags_combined_structural_issues(self):
+        """Multiple structural issues combine to cross the truncation threshold."""
+        # Unclosed code block (0.4) + brace imbalance (0.35) = 0.75
+        truncated = (
+            "```typescript\n"
+            "function a() {\n"
+            "  function b() {\n"
+            "    function c() {\n"
+            "      if (true) {\n"
+            "        const x = 1;\n"
+        )
+        result = detect_truncation(truncated, code_mode=True)
+        assert result.is_truncated
+        assert result.confidence >= 0.7
+
+    def test_code_mode_tolerates_small_brace_imbalance(self):
+        """Small imbalance (1-2) from braces in strings should not trigger."""
+        code_with_string_brace = (
+            'const msg = "Use {name} for greeting";\n'
+            'const other = "another {placeholder}";\n'
+            "export default msg;\n"
+        )
+        result = detect_truncation(code_with_string_brace, code_mode=True)
+        assert not result.is_truncated, (
+            f"Small brace imbalance in strings flagged: {result.indicators}"
+        )
+
+    def test_code_mode_skips_mid_sentence_check(self):
+        """Code ending with semicolon should not trigger mid-sentence in code_mode."""
+        code = 'console.log("done");'
+        result = detect_truncation(code, code_mode=True)
+        assert not any("Mid-sentence" in i for i in result.indicators)
+
+    def test_code_mode_skips_truncation_patterns(self):
+        """Unclosed-string/backtick patterns should not fire in code_mode."""
+        code = (
+            "const url = `https://example.com/${id}`;\n"
+            'const name = "world";\n'
+            "export default url;\n"
+        )
+        result = detect_truncation(code, code_mode=True)
+        assert not any("Unclosed string" in i for i in result.indicators)
+        assert not any("Unclosed inline code" in i for i in result.indicators)
+
+    def test_code_mode_skips_markdown_checks(self):
+        """Markdown structure checks should not fire in code_mode."""
+        # Code that happens to contain pipe characters (like a template)
+        code = (
+            "const table = `| Name | Age |\\n| --- | --- |`;\n"
+            "export default table;\n"
+        )
+        result = detect_truncation(code, code_mode=True)
+        assert not any("table" in i.lower() for i in result.indicators)
+
+    def test_empty_output_still_detected_in_code_mode(self):
+        """Empty output is always detected regardless of mode."""
+        result = detect_truncation("", code_mode=True)
+        assert result.is_truncated
+        assert result.confidence == 1.0
+
+
+class TestAutoDetectCodeMode:
+    """Tests that code_mode auto-detects from content when not explicitly set.
+
+    This is the programmatic safeguard: callers don't need to remember to pass
+    code_mode=True because detect_truncation() inspects its own input.  Any
+    new call site added in the future gets the right behavior automatically.
+    """
+
+    # Representative samples from languages the SDK's drafters commonly produce.
+    # These MUST never trigger truncation — if a heuristic change causes any
+    # to fail, the change is introducing a false positive regression.
+
+    SAMPLES = {
+        "typescript": (
+            "import { createClient } from '@supabase/supabase-js';\n"
+            "\n"
+            "const supabase = createClient(\n"
+            "  process.env.SUPABASE_URL!,\n"
+            "  process.env.SUPABASE_KEY!\n"
+            ");\n"
+            "\n"
+            "export async function seedCatalog(file: string): Promise<void> {\n"
+            "  const data = await readCSV(file);\n"
+            "  for (const row of data) {\n"
+            '    await supabase.from("products").upsert(row);\n'
+            "  }\n"
+            '  console.log(`Seeded ${data.length} products`);\n'
+            "}\n"
+            "\n"
+            "seedCatalog(process.argv[2]).catch(console.error);\n"
+        ),
+        "python": (
+            "import sys\n"
+            "from pathlib import Path\n"
+            "\n"
+            "def main():\n"
+            '    path = Path(sys.argv[1])\n'
+            '    data = path.read_text(encoding="utf-8")\n'
+            "    print(f'Read {len(data)} chars')\n"
+            "\n"
+            'if __name__ == "__main__":\n'
+            "    main()\n"
+        ),
+        "tsx_component": (
+            "import React, { useState } from 'react';\n"
+            "import { AlertDialog } from '@/components/ui';\n\n"
+            "interface Props {\n"
+            "  items: string[];\n"
+            "  onDelete: (id: string) => void;\n"
+            "}\n\n"
+            "export const MigrationQueue: React.FC<Props> = ({ items, onDelete }) => {\n"
+            "  const [selected, setSelected] = useState<string | null>(null);\n"
+            "  return (\n"
+            "    <AlertDialog>\n"
+            "      <div>{items.length} items</div>\n"
+            "    </AlertDialog>\n"
+            "  );\n"
+            "};\n"
+        ),
+        "go": (
+            "package main\n\n"
+            "import (\n"
+            '    "fmt"\n'
+            '    "os"\n'
+            ")\n\n"
+            "func main() {\n"
+            '    if len(os.Args) < 2 {\n'
+            '        fmt.Fprintf(os.Stderr, "usage: %s <name>\\n", os.Args[0])\n'
+            '        os.Exit(1)\n'
+            "    }\n"
+            '    fmt.Printf("Hello, %s!\\n", os.Args[1])\n'
+            "}\n"
+        ),
+        "rust": (
+            "use std::env;\n\n"
+            "fn main() {\n"
+            "    let args: Vec<String> = env::args().collect();\n"
+            '    let name = args.get(1).map(|s| s.as_str()).unwrap_or("world");\n'
+            '    println!("Hello, {}!", name);\n'
+            "}\n"
+        ),
+    }
+
+    def test_auto_detect_no_false_positives(self):
+        """All representative code samples pass with default (auto-detect) mode."""
+        for lang, code in self.SAMPLES.items():
+            result = detect_truncation(code)  # No code_mode — auto-detect
+            assert not result.is_truncated, (
+                f"{lang}: auto-detect flagged valid code as truncated "
+                f"(confidence={result.confidence:.0%}): {result.indicators}"
+            )
+            assert result.confidence == 0.0, (
+                f"{lang}: expected 0% confidence, got {result.confidence:.0%}: "
+                f"{result.indicators}"
+            )
+
+    def test_auto_detect_enables_code_mode(self):
+        """Auto-detect sets code_mode=True for source code content."""
+        result = detect_truncation(self.SAMPLES["typescript"])
+        assert result.details.get("code_mode") is True
+
+    def test_auto_detect_disables_code_mode_for_prose(self):
+        """Auto-detect leaves code_mode=False for non-code content."""
+        prose = (
+            "# Document Title\n\n"
+            "This is a complete document with proper structure.\n\n"
+            "## Section 1\n\n"
+            "Some content here.\n"
+        )
+        result = detect_truncation(prose)
+        assert result.details.get("code_mode") is False
+
+    def test_explicit_override_respected(self):
+        """Explicit code_mode=False overrides auto-detection."""
+        ts_code = self.SAMPLES["typescript"]
+        # Auto-detect would enable code_mode, but explicit False forces prose mode
+        result_auto = detect_truncation(ts_code)
+        result_forced = detect_truncation(ts_code, code_mode=False)
+        # Forced prose mode should produce higher confidence (false positive)
+        assert result_forced.confidence >= result_auto.confidence
+

@@ -20,6 +20,7 @@ This module works standalone without ContextCore. When ContextCore is
 available, it provides enhanced observability via OpenTelemetry spans.
 """
 
+import logging
 import shutil
 import subprocess
 from datetime import datetime
@@ -39,6 +40,8 @@ from .protocols import (
 )
 from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
+
+logger = logging.getLogger(__name__)
 
 
 class PrimeContractorWorkflow:
@@ -246,8 +249,11 @@ class PrimeContractorWorkflow:
             return True
 
         if self.is_file_dirty(path):
-            print(f"  Target file has uncommitted changes: {path.name}")
-            print("     Commit or stash changes first, then retry")
+            logger.warning(
+                "Target file has uncommitted changes: %s — commit or stash first",
+                path.name,
+                extra={"file_path": str(path)},
+            )
             return False
 
         return True
@@ -287,7 +293,7 @@ class PrimeContractorWorkflow:
         for line in result.stdout.strip().split("\n"):
             if "prime-contractor-snapshot" in line:
                 stash_id = line.split(":")[0]
-                print(f"  Recovering from: {line}")
+                logger.info("Recovering from stash: %s", line)
 
                 pop_result = subprocess.run(
                     ["git", "stash", "pop", stash_id],
@@ -297,13 +303,13 @@ class PrimeContractorWorkflow:
                 )
 
                 if pop_result.returncode == 0:
-                    print("  Recovery successful")
+                    logger.info("Stash recovery successful")
                     return True
                 else:
-                    print(f"  Recovery failed: {pop_result.stderr}")
+                    logger.error("Stash recovery failed: %s", pop_result.stderr)
                     return False
 
-        print("  No prime-contractor stash found")
+        logger.warning("No prime-contractor stash found")
         return False
 
     def recover_file_from_backup(self, file_path: Path) -> bool:
@@ -311,11 +317,11 @@ class PrimeContractorWorkflow:
         backup_path = file_path.with_suffix(file_path.suffix + ".backup")
 
         if not backup_path.exists():
-            print(f"  No backup found: {backup_path}")
+            logger.warning("No backup found: %s", backup_path)
             return False
 
         shutil.copy2(backup_path, file_path)
-        print(f"  Restored: {file_path} from {backup_path.name}")
+        logger.info("Restored %s from %s", file_path, backup_path.name)
         return True
 
     # =========================================================================
@@ -361,10 +367,18 @@ class PrimeContractorWorkflow:
             },
         )
 
-        print(f"\n  Pre-flight size estimation:")
-        print(f"    Estimated lines: {estimate.lines}")
-        print(f"    Complexity: {estimate.complexity}")
-        print(f"    Confidence: {estimate.confidence:.0%}")
+        logger.info(
+            "Pre-flight size estimation: lines=%d, complexity=%s, confidence=%.0f%%",
+            estimate.lines,
+            estimate.complexity,
+            estimate.confidence * 100,
+            extra={
+                "feature_name": feature.name,
+                "estimated_lines": estimate.lines,
+                "complexity": estimate.complexity,
+                "confidence": estimate.confidence,
+            },
+        )
 
         if estimate.lines > self.max_lines_per_feature:
             self.instrumentor.emit_event(
@@ -375,10 +389,13 @@ class PrimeContractorWorkflow:
                 },
             )
 
-            print(
-                f"\n  WARNING: Estimated output ({estimate.lines} lines) exceeds safe limit ({self.max_lines_per_feature})"
+            logger.warning(
+                "Estimated output (%d lines) exceeds safe limit (%d) for feature '%s' — consider splitting",
+                estimate.lines,
+                self.max_lines_per_feature,
+                feature.name,
+                extra={"feature_name": feature.name, "estimated_lines": estimate.lines},
             )
-            print("    Consider splitting this feature into smaller tasks.")
 
             decomposition_info = {
                 "reason": f"Estimated {estimate.lines} lines exceeds limit of {self.max_lines_per_feature}",
@@ -428,7 +445,12 @@ class PrimeContractorWorkflow:
         if feature.status == FeatureStatus.GENERATED:
             return self.integrate_feature(feature)
 
-        print(f"  ⚠ Feature in unexpected state: {feature.status}")
+        logger.warning(
+            "Feature '%s' in unexpected state: %s",
+            feature.name,
+            feature.status,
+            extra={"feature_name": feature.name, "status": str(feature.status)},
+        )
         return False
 
     def _process_decomposed_feature(self, feature: FeatureSpec) -> bool:
@@ -444,7 +466,12 @@ class PrimeContractorWorkflow:
             True if all sub-features succeeded, False otherwise
         """
         n = len(feature.target_files)
-        print(f"\n  Auto-decomposing '{feature.name}' into {n} sub-features")
+        logger.info(
+            "Auto-decomposing '%s' into %d sub-features",
+            feature.name,
+            n,
+            extra={"feature_name": feature.name, "sub_feature_count": n},
+        )
 
         # Save and temporarily clear the callback so it only fires on the
         # last sub-feature (intermediate states may not build/pass tests).
@@ -480,7 +507,13 @@ class PrimeContractorWorkflow:
                 dependencies=feature.dependencies,
             )
 
-            print(f"\n  --- Sub-feature {i + 1}/{n}: {Path(target_file).name} ---")
+            logger.info(
+                "Sub-feature %d/%d: %s",
+                i + 1,
+                n,
+                Path(target_file).name,
+                extra={"feature_name": feature.name, "sub_index": i + 1, "target_file": target_file},
+            )
 
             # Only fire on_feature_complete for the last sub-feature
             self.on_feature_complete = saved_callback if is_last else None
@@ -500,7 +533,12 @@ class PrimeContractorWorkflow:
         # Restore callback and mark parent as complete
         self.on_feature_complete = saved_callback
         self.queue.complete_feature(feature.id)
-        print(f"\n✓ All {n} sub-features integrated for '{feature.name}'")
+        logger.info(
+            "All %d sub-features integrated for '%s'",
+            n,
+            feature.name,
+            extra={"feature_name": feature.name, "sub_feature_count": n},
+        )
         return True
 
     def develop_feature(self, feature: FeatureSpec) -> bool:
@@ -510,16 +548,23 @@ class PrimeContractorWorkflow:
         Returns:
             True if code generation succeeded, False otherwise
         """
-        print(f"\n{'='*70}")
-        print(f"DEVELOPING FEATURE: {feature.name}")
-        print(f"{'='*70}")
+        logger.info(
+            "DEVELOPING FEATURE: %s",
+            feature.name,
+            extra={"feature_name": feature.name, "feature_id": feature.id},
+        )
 
         # Pre-flight validation
         should_proceed, decomposition_info = self.pre_flight_validation(feature)
 
         if not should_proceed:
-            print("\n  PRE-FLIGHT FAILED: Feature may be too large")
-            print(f"    {decomposition_info.get('reason', 'Size exceeds safe limits')}")
+            reason = decomposition_info.get("reason", "Size exceeds safe limits")
+            logger.error(
+                "Pre-flight failed for '%s': %s",
+                feature.name,
+                reason,
+                extra={"feature_name": feature.name, "reason": reason},
+            )
             self.queue.fail_feature(
                 feature.id, f"Pre-flight failed: {decomposition_info.get('reason')}"
             )
@@ -529,8 +574,12 @@ class PrimeContractorWorkflow:
         self.queue.start_feature(feature.id)
 
         if self.dry_run:
-            print(f"  [DRY RUN] Would generate code for: {feature.name}")
-            print(f"  Task description: {feature.description[:100]}...")
+            logger.info(
+                "[DRY RUN] Would generate code for '%s': %s...",
+                feature.name,
+                feature.description[:100],
+                extra={"feature_name": feature.name, "dry_run": True},
+            )
             simulated_files = (
                 [f"generated/{feature.id}/{Path(t).name}" for t in feature.target_files]
                 if feature.target_files
@@ -542,11 +591,11 @@ class PrimeContractorWorkflow:
             return True
 
         if not self.code_generator:
-            print("  ERROR: No code generator configured")
+            logger.error("No code generator configured for feature '%s'", feature.name)
             self.queue.fail_feature(feature.id, "No code generator configured")
             return False
 
-        print("  Running code generation...")
+        logger.info("Running code generation for '%s'...", feature.name)
 
         try:
             result: GenerationResult = self.code_generator.generate(
@@ -637,6 +686,9 @@ class PrimeContractorWorkflow:
                 continue
 
             # Pre-integration truncation check (W-010)
+            # code_mode auto-detects from content — source code files get
+            # structural-only checks (brace balance, unclosed code blocks);
+            # prose/markdown files get the full heuristic suite.
             if self.check_truncation:
                 from ..truncation_detection import detect_truncation, get_expected_sections_for_code
                 source_content = source_path.read_text(encoding="utf-8")
@@ -655,6 +707,14 @@ class PrimeContractorWorkflow:
                         print(f"      {indicator}")
                     print("    Integration blocked to prevent corrupting target file.")
                     continue
+                elif trunc_result.is_truncated:
+                    print(
+                        f"  ⚠ WARNING {source_path.name}: "
+                        f"possible truncation (confidence={trunc_result.confidence:.0%})"
+                    )
+                    for indicator in trunc_result.indicators[:3]:
+                        print(f"      {indicator}")
+                    print("    Proceeding — review generated file if build fails.")
 
             # Target file protection
             if target_path.exists() and not self.allow_dirty:

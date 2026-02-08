@@ -63,6 +63,11 @@ class EventType(Enum):
     BENCHMARK_CREATED = auto()
     BENCHMARK_COMPLETED = auto()
     
+    # Truncation detection events
+    TRUNCATION_DETECTED = auto()
+    TRUNCATION_WARNING = auto()
+    TRUNCATION_PREFLIGHT_REJECT = auto()
+
     # System events
     SYSTEM_ERROR = auto()
     SYSTEM_WARNING = auto()

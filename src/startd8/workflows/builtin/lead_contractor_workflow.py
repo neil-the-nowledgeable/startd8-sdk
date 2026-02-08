@@ -780,6 +780,10 @@ class LeadContractorWorkflow(WorkflowBase):
         was_truncated = token_usage.was_truncated if token_usage else False
 
         # Also run heuristic detection for incomplete code (if enabled)
+        # Heuristic detection for incomplete code (supplements API-level check).
+        # Does NOT pass original_input because the prompt-to-code length ratio
+        # is always misleadingly low (a 20K-char spec producing 5K chars of
+        # code is normal, not truncated).  code_mode auto-detects from content.
         if check_truncation and not was_truncated and implementation_code:
             # Use 0.5 threshold for strict mode, 0.7 for normal mode
             confidence_threshold = 0.5 if strict_truncation else 0.7
@@ -787,7 +791,6 @@ class LeadContractorWorkflow(WorkflowBase):
             expected = get_expected_sections_for_code(implementation_code)
             truncation_result = detect_truncation(
                 implementation_code,
-                original_input=prompt,
                 expected_sections=expected,
                 strict_mode=strict_truncation,
             )
@@ -1284,7 +1287,8 @@ class LeadContractorWorkflow(WorkflowBase):
 
         was_truncated = token_usage.was_truncated if token_usage else False
 
-        # Also run heuristic detection for incomplete code (if enabled)
+        # Heuristic detection — see sync _create_draft for rationale.
+        # code_mode auto-detects from content.
         if check_truncation and not was_truncated and implementation_code:
             # Use 0.5 threshold for strict mode, 0.7 for normal mode
             confidence_threshold = 0.5 if strict_truncation else 0.7
@@ -1292,7 +1296,6 @@ class LeadContractorWorkflow(WorkflowBase):
             expected = get_expected_sections_for_code(implementation_code)
             truncation_result = detect_truncation(
                 implementation_code,
-                original_input=prompt,
                 expected_sections=expected,
                 strict_mode=strict_truncation,
             )
