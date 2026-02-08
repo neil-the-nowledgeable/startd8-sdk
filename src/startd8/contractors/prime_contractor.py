@@ -730,19 +730,33 @@ class PrimeContractorWorkflow:
                         feature_name=feature.name,
                         step_name="pre_integration",
                     )
-                    if trunc_result.confidence >= 0.7:
+                    # Use a higher reject threshold (0.9) when code_mode
+                    # didn't activate — prose heuristics may be producing
+                    # false positives on an unrecognized language.  When
+                    # code_mode IS active, 0.7 is safe because prose
+                    # indicators are suppressed and confidence ≈ 0.0 for
+                    # valid code.
+                    code_mode_active = trunc_result.details.get("code_mode", False)
+                    reject_threshold = 0.7 if code_mode_active else 0.9
+                    if trunc_result.confidence >= reject_threshold:
                         logger.error(
-                            "REJECTED %s: appears truncated (confidence=%.0f%%) — integration blocked",
+                            "REJECTED %s: appears truncated (confidence=%.0f%%, "
+                            "threshold=%.0f%%, code_mode=%s) — integration blocked",
                             source_path.name,
                             trunc_result.confidence * 100,
+                            reject_threshold * 100,
+                            code_mode_active,
                             extra={"feature_name": feature.name, "source_file": str(source_path)},
                         )
                         continue
                     else:
                         logger.warning(
-                            "Possible truncation in %s (confidence=%.0f%%) — proceeding, review if build fails",
+                            "Possible truncation in %s (confidence=%.0f%%, "
+                            "threshold=%.0f%%, code_mode=%s) — proceeding, review if build fails",
                             source_path.name,
                             trunc_result.confidence * 100,
+                            reject_threshold * 100,
+                            code_mode_active,
                             extra={"feature_name": feature.name, "source_file": str(source_path)},
                         )
 
