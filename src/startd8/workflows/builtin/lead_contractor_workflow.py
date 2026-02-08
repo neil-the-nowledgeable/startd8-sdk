@@ -47,7 +47,13 @@ from ...utils.agent_resolution import resolve_agent_spec
 from ...utils.code_extraction import extract_code_from_response
 from ...logging_config import get_logger
 from ...costs.pricing import PricingService
-from ...truncation_detection import TruncationResult, detect_truncation, get_expected_sections_for_code
+from ...truncation_detection import (
+    CONFIDENCE_HIGH,
+    CONFIDENCE_IS_TRUNCATED,
+    TruncationResult,
+    detect_truncation,
+    get_expected_sections_for_code,
+)
 
 from .lead_contractor_models import (
     LeadContractorConfig,
@@ -785,8 +791,8 @@ class LeadContractorWorkflow(WorkflowBase):
         # is always misleadingly low (a 20K-char spec producing 5K chars of
         # code is normal, not truncated).  code_mode auto-detects from content.
         if check_truncation and not was_truncated and implementation_code:
-            # Use 0.5 threshold for strict mode, 0.7 for normal mode
-            confidence_threshold = 0.5 if strict_truncation else 0.7
+            # Use CONFIDENCE_IS_TRUNCATED for strict mode, CONFIDENCE_HIGH for normal mode
+            confidence_threshold = CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
             # Infer language-appropriate structure markers (None skips the check)
             expected = get_expected_sections_for_code(implementation_code)
             truncation_result = detect_truncation(
@@ -1290,8 +1296,8 @@ class LeadContractorWorkflow(WorkflowBase):
         # Heuristic detection — see sync _create_draft for rationale.
         # code_mode auto-detects from content.
         if check_truncation and not was_truncated and implementation_code:
-            # Use 0.5 threshold for strict mode, 0.7 for normal mode
-            confidence_threshold = 0.5 if strict_truncation else 0.7
+            # Use CONFIDENCE_IS_TRUNCATED for strict mode, CONFIDENCE_HIGH for normal mode
+            confidence_threshold = CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
             # Infer language-appropriate structure markers (None skips the check)
             expected = get_expected_sections_for_code(implementation_code)
             truncation_result = detect_truncation(

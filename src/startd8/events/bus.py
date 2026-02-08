@@ -195,6 +195,8 @@ class EventBus:
             )
             # Log any exceptions from async handlers
             for i, result in enumerate(results):
+                if isinstance(result, BaseException) and not isinstance(result, Exception):
+                    raise result
                 if isinstance(result, Exception):
                     logger.error(
                         f"Async event handler failed for {event.type}: {result}",

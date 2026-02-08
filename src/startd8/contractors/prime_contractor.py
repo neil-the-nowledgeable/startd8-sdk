@@ -734,6 +734,8 @@ class PrimeContractorWorkflow:
             # prose/markdown files get the full heuristic suite.
             if self.check_truncation:
                 from ..truncation_detection import (
+                    CONFIDENCE_HIGH,
+                    CONFIDENCE_HIGH_PROSE,
                     detect_truncation,
                     get_expected_sections_for_code,
                     log_truncation_result,
@@ -759,7 +761,7 @@ class PrimeContractorWorkflow:
                     # indicators are suppressed and confidence ≈ 0.0 for
                     # valid code.
                     code_mode_active = trunc_result.details.get("code_mode", False)
-                    reject_threshold = 0.7 if code_mode_active else 0.9
+                    reject_threshold = CONFIDENCE_HIGH if code_mode_active else CONFIDENCE_HIGH_PROSE
                     if trunc_result.confidence >= reject_threshold:
                         logger.error(
                             "REJECTED %s: appears truncated (confidence=%.0f%%, "
@@ -1166,7 +1168,7 @@ class PrimeContractorWorkflow:
 
         # Determine output directory from the code generator or default
         output_dir = self.project_root / "generated"
-        if self.code_generator and hasattr(self.code_generator, "output_dir"):
+        if self.code_generator and hasattr(self.code_generator, "output_dir") and self.code_generator.output_dir is not None:
             output_dir = Path(self.code_generator.output_dir)
             if not output_dir.is_absolute():
                 output_dir = self.project_root / output_dir

@@ -17,6 +17,13 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# Truncation confidence thresholds — single source of truth.
+# Callers should import these rather than hard-coding values.
+CONFIDENCE_IS_TRUNCATED = 0.5        # Default gate for TruncationResult.is_truncated
+CONFIDENCE_IS_TRUNCATED_STRICT = 0.3 # Gate when strict_mode=True
+CONFIDENCE_HIGH = 0.7                # High-confidence truncation (triggers rejection/error)
+CONFIDENCE_HIGH_PROSE = 0.9          # Higher bar for prose heuristics (more false-positive prone)
+
 
 @dataclass
 class TruncationResult:
@@ -465,7 +472,7 @@ def detect_truncation(
     confidence = min(confidence, 1.0)
 
     # Determine if truncated based on confidence threshold
-    threshold = 0.3 if strict_mode else 0.5
+    threshold = CONFIDENCE_IS_TRUNCATED_STRICT if strict_mode else CONFIDENCE_IS_TRUNCATED
     is_truncated = confidence >= threshold
 
     return TruncationResult(
@@ -740,7 +747,7 @@ def log_truncation_result(
         "code_mode": result.details.get("code_mode"),
     }
 
-    if result.confidence >= 0.7:
+    if result.confidence >= CONFIDENCE_HIGH:
         logger.error(
             "Truncation detected (high confidence): %s — indicators: %s",
             source_file or "unknown",
@@ -762,12 +769,12 @@ def log_truncation_result(
 
             event_type = (
                 EventType.TRUNCATION_DETECTED
-                if result.confidence >= 0.7
+                if result.confidence >= CONFIDENCE_HIGH
                 else EventType.TRUNCATION_WARNING
             )
             priority = (
                 EventPriority.HIGH
-                if result.confidence >= 0.7
+                if result.confidence >= CONFIDENCE_HIGH
                 else EventPriority.NORMAL
             )
 

@@ -6,6 +6,7 @@ Automatically sets up a default log file handler for error persistence.
 """
 
 import logging
+import logging.handlers
 import os
 import sys
 import json
@@ -17,6 +18,10 @@ from .paths import default_config_dir
 
 # Environment variable for log level control
 _ENV_LOG_LEVEL = os.environ.get("STARTD8_LOG_LEVEL", "").upper() or None
+
+# Log rotation defaults: 5 MB per file, keep 3 backups (≈20 MB total)
+_DEFAULT_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+_DEFAULT_BACKUP_COUNT = 3
 
 # Backwards-compatible export: `startd8.logging_config.correlation_id`
 correlation_id = correlation_id_ctx
@@ -125,10 +130,15 @@ def setup_logging(
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
-    # File handler if specified
+    # File handler if specified (rotating to prevent unbounded growth)
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=_DEFAULT_MAX_BYTES,
+            backupCount=_DEFAULT_BACKUP_COUNT,
+            encoding="utf-8",
+        )
         file_handler.setLevel(logging.DEBUG)  # More verbose in files
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
@@ -162,9 +172,9 @@ def _ensure_default_log_file_handler():
     
     root_logger = logging.getLogger("startd8")
     
-    # Check if a file handler already exists
+    # Check if a file handler already exists (RotatingFileHandler is a FileHandler subclass)
     has_file_handler = any(
-        isinstance(handler, logging.FileHandler) 
+        isinstance(handler, logging.FileHandler)
         for handler in root_logger.handlers
     )
     
@@ -183,8 +193,14 @@ def _ensure_default_log_file_handler():
         # Create log directory if it doesn't exist
         log_dir.mkdir(parents=True, exist_ok=True)
         
-        # Set up file handler with JSON format (Loki-friendly)
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        # Set up rotating file handler with JSON format (Loki-friendly)
+        # 5 MB per file, 3 backups → ~20 MB max disk usage
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=_DEFAULT_MAX_BYTES,
+            backupCount=_DEFAULT_BACKUP_COUNT,
+            encoding="utf-8",
+        )
         file_handler.setLevel(logging.DEBUG)  # Capture all levels in file
         file_handler.setFormatter(JSONFormatter())
         
@@ -202,9 +218,11 @@ def _ensure_default_log_file_handler():
         )
         # Continue without file handler - console handler will still be set up below
     
-    # Also ensure console handler exists for stderr/stdout
+    # Also ensure console handler exists for stderr/stdout.
+    # FileHandler is a StreamHandler subclass, so exclude it explicitly.
     has_console_handler = any(
-        isinstance(handler, logging.StreamHandler) 
+        isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
         for handler in root_logger.handlers
     )
     

@@ -493,7 +493,7 @@ class WorkflowRegistry:
         with cls._lock:
             return [
                 w for w in cls._workflows.values()
-                if any(capability_lower in c.lower() for c in w.metadata.capabilities)
+                if any(capability_lower == c.lower() for c in w.metadata.capabilities)
             ]
 
     @classmethod

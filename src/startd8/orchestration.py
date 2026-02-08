@@ -660,6 +660,8 @@ class Pipeline:
 
         outputs = []
         for r in results:
+            if isinstance(r, BaseException) and not isinstance(r, Exception):
+                raise r
             if isinstance(r, Exception):
                 outputs.append(f"[ERROR: {r}]")
             else:
@@ -791,6 +793,8 @@ class Pipeline:
         # Filter out exceptions and log them
         successful_results = []
         for i, result in enumerate(results):
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
             if isinstance(result, Exception):
                 EventBus.emit(Event(
                     type=EventType.AGENT_CALL_ERROR,
