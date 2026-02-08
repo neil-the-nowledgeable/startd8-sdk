@@ -620,19 +620,40 @@ class PrimeContractorWorkflow:
                     {"feature_name": feature.name, "model": result.model},
                 )
 
-                print(f"\n✓ Code generated successfully!")
-                print(f"  Cost: ${result.cost_usd:.4f}")
-                print(f"  Tokens: {result.input_tokens} in / {result.output_tokens} out")
+                logger.info(
+                    "Code generated for '%s': cost=$%.4f, tokens=%d in / %d out",
+                    feature.name,
+                    result.cost_usd,
+                    result.input_tokens,
+                    result.output_tokens,
+                    extra={
+                        "feature_name": feature.name,
+                        "cost_usd": result.cost_usd,
+                        "input_tokens": result.input_tokens,
+                        "output_tokens": result.output_tokens,
+                        "model": result.model,
+                    },
+                )
                 return True
             else:
                 error_msg = result.error or "Code generation failed"
-                print(f"\n✗ Code generation failed: {error_msg}")
+                logger.error(
+                    "Code generation failed for '%s': %s",
+                    feature.name,
+                    error_msg,
+                    extra={"feature_name": feature.name, "error": error_msg},
+                )
                 self.queue.fail_feature(feature.id, error_msg)
                 return False
 
         except Exception as e:
             error_msg = f"Exception during code generation: {e}"
-            print(f"\n✗ {error_msg}")
+            logger.error(
+                "%s",
+                error_msg,
+                exc_info=True,
+                extra={"feature_name": feature.name},
+            )
             self.queue.fail_feature(feature.id, error_msg)
             return False
 
@@ -643,9 +664,11 @@ class PrimeContractorWorkflow:
         Returns:
             True if integration succeeded, False otherwise
         """
-        print(f"\n{'='*70}")
-        print(f"INTEGRATING FEATURE: {feature.name}")
-        print(f"{'='*70}")
+        logger.info(
+            "INTEGRATING FEATURE: %s",
+            feature.name,
+            extra={"feature_name": feature.name, "feature_id": feature.id},
+        )
 
         # Mark as integrating
         self.queue.start_integration(feature.id)
@@ -665,7 +688,7 @@ class PrimeContractorWorkflow:
                     if self.dry_run:
                         target_path = self.project_root / "src" / source_path.name
                     else:
-                        print(f"  ✗ Source file not found: {source_path}")
+                        logger.error("Source file not found: %s", source_path, extra={"feature_name": feature.name})
                         continue
                 else:
                     # Infer target from source
@@ -673,16 +696,14 @@ class PrimeContractorWorkflow:
 
             if self.dry_run:
                 target_rel = self._rel_display(target_path)
-                if target_path.exists():
-                    print(f"  [DRY RUN] Would update: {target_rel}")
-                else:
-                    print(f"  [DRY RUN] Would create: {target_rel}")
+                action = "update" if target_path.exists() else "create"
+                logger.info("[DRY RUN] Would %s: %s", action, target_rel, extra={"dry_run": True})
                 integrated_files.append(target_path)
                 continue
 
             # Live mode - check source exists
             if not source_path.exists():
-                print(f"  ✗ Source file not found: {source_path}")
+                logger.error("Source file not found: %s", source_path, extra={"feature_name": feature.name})
                 continue
 
             # Pre-integration truncation check (W-010)
@@ -690,7 +711,11 @@ class PrimeContractorWorkflow:
             # structural-only checks (brace balance, unclosed code blocks);
             # prose/markdown files get the full heuristic suite.
             if self.check_truncation:
-                from ..truncation_detection import detect_truncation, get_expected_sections_for_code
+                from ..truncation_detection import (
+                    detect_truncation,
+                    get_expected_sections_for_code,
+                    log_truncation_result,
+                )
                 source_content = source_path.read_text(encoding="utf-8")
                 expected = get_expected_sections_for_code(source_content)
                 trunc_result = detect_truncation(
@@ -698,48 +723,56 @@ class PrimeContractorWorkflow:
                     expected_sections=expected,
                     strict_mode=False,
                 )
-                if trunc_result.is_truncated and trunc_result.confidence >= 0.7:
-                    print(
-                        f"  ✗ REJECTED {source_path.name}: "
-                        f"appears truncated (confidence={trunc_result.confidence:.0%})"
+                if trunc_result.is_truncated:
+                    log_truncation_result(
+                        trunc_result,
+                        source_file=str(source_path),
+                        feature_name=feature.name,
+                        step_name="pre_integration",
                     )
-                    for indicator in trunc_result.indicators[:3]:
-                        print(f"      {indicator}")
-                    print("    Integration blocked to prevent corrupting target file.")
-                    continue
-                elif trunc_result.is_truncated:
-                    print(
-                        f"  ⚠ WARNING {source_path.name}: "
-                        f"possible truncation (confidence={trunc_result.confidence:.0%})"
-                    )
-                    for indicator in trunc_result.indicators[:3]:
-                        print(f"      {indicator}")
-                    print("    Proceeding — review generated file if build fails.")
+                    if trunc_result.confidence >= 0.7:
+                        logger.error(
+                            "REJECTED %s: appears truncated (confidence=%.0f%%) — integration blocked",
+                            source_path.name,
+                            trunc_result.confidence * 100,
+                            extra={"feature_name": feature.name, "source_file": str(source_path)},
+                        )
+                        continue
+                    else:
+                        logger.warning(
+                            "Possible truncation in %s (confidence=%.0f%%) — proceeding, review if build fails",
+                            source_path.name,
+                            trunc_result.confidence * 100,
+                            extra={"feature_name": feature.name, "source_file": str(source_path)},
+                        )
 
             # Target file protection
             if target_path.exists() and not self.allow_dirty:
                 if not self.protect_dirty_target(target_path):
-                    print(f"  Skipping {target_path.name} to protect uncommitted changes")
+                    logger.warning("Skipping %s to protect uncommitted changes", target_path.name)
                     continue
 
             # Use merge strategy
             if self.merge_strategy.can_merge(source_path, target_path):
                 result = self.merge_strategy.merge(source_path, target_path)
                 if result.status.value == "success":
-                    print(f"  ✓ Merged: {self._rel_display(target_path)}")
+                    logger.info("Merged: %s", self._rel_display(target_path), extra={"feature_name": feature.name})
                     integrated_files.append(target_path)
                 elif result.status.value == "conflict":
-                    print(f"  ⚠ Merged with conflicts: {target_path.name}")
-                    for conflict in result.conflicts[:3]:
-                        print(f"      {conflict}")
+                    logger.warning(
+                        "Merged with conflicts: %s — %s",
+                        target_path.name,
+                        "; ".join(result.conflicts[:3]),
+                        extra={"feature_name": feature.name, "conflicts": result.conflicts[:3]},
+                    )
                     integrated_files.append(target_path)
                 else:
-                    print(f"  ✗ Merge failed: {result.error}")
+                    logger.error("Merge failed for %s: %s", target_path.name, result.error, extra={"feature_name": feature.name})
             else:
                 # Simple copy if merge strategy can't handle
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target_path)
-                print(f"  ✓ Copied: {self._rel_display(target_path)}")
+                logger.info("Copied: %s", self._rel_display(target_path), extra={"feature_name": feature.name})
                 integrated_files.append(target_path)
 
         if not integrated_files:
@@ -762,7 +795,7 @@ class PrimeContractorWorkflow:
 
         # Run checkpoints
         if not self.dry_run:
-            print("\nRunning integration checkpoints...")
+            logger.info("Running integration checkpoints for '%s'...", feature.name)
             results = self.checkpoint.run_all_checkpoints(integrated_files, feature.name)
             all_passed = self.checkpoint.summarize_results(results)
 
@@ -785,7 +818,7 @@ class PrimeContractorWorkflow:
 
                 return False
         else:
-            print("\n[DRY RUN] Would run integration checkpoints")
+            logger.info("[DRY RUN] Would run integration checkpoints", extra={"dry_run": True})
 
         # Commit if auto-commit enabled
         if self.auto_commit and not self.dry_run:
@@ -814,7 +847,11 @@ class PrimeContractorWorkflow:
         if self.on_feature_complete:
             self.on_feature_complete(feature)
 
-        print(f"\n✓ Feature '{feature.name}' integrated successfully!")
+        logger.info(
+            "Feature '%s' integrated successfully",
+            feature.name,
+            extra={"feature_name": feature.name, "files_count": len(integrated_files)},
+        )
         return True
 
     def _commit_feature(self, feature: FeatureSpec, files: List[Path]):
@@ -837,9 +874,9 @@ class PrimeContractorWorkflow:
         )
 
         if result.returncode == 0:
-            print(f"  ✓ Committed: {feature.name}")
+            logger.info("Committed: %s", feature.name)
         else:
-            print(f"  ⚠ Commit failed: {result.stderr}")
+            logger.warning("Commit failed for '%s': %s", feature.name, result.stderr.strip())
 
     # =========================================================================
     # Main Workflow
@@ -860,27 +897,30 @@ class PrimeContractorWorkflow:
         Returns:
             Summary dict with results
         """
-        print("\n" + "=" * 70)
-        print("PRIME CONTRACTOR WORKFLOW")
-        print("=" * 70)
-        print(f"Mode: {'DRY RUN' if self.dry_run else 'LIVE'}")
-        print(f"Auto-commit: {self.auto_commit}")
-        print(f"Stop on failure: {stop_on_failure}")
+        logger.info(
+            "PRIME CONTRACTOR WORKFLOW started — mode=%s, auto_commit=%s, stop_on_failure=%s",
+            "DRY RUN" if self.dry_run else "LIVE",
+            self.auto_commit,
+            stop_on_failure,
+            extra={"dry_run": self.dry_run, "auto_commit": self.auto_commit},
+        )
 
         # Pre-flight check
         is_clean, dirty_files = self.check_git_status()
         if not is_clean:
-            print(f"\n{'='*70}")
             if self.auto_stash:
-                print("AUTO-STASH: Repository has uncommitted changes")
+                logger.info("Auto-stashing: repository has uncommitted changes")
                 stash_ref = self.create_safety_snapshot()
                 if stash_ref:
-                    print(f"  Stashed as: {stash_ref}")
+                    logger.info("Stashed as: %s", stash_ref)
             elif self.allow_dirty:
-                print("WARNING: Repository has uncommitted changes (--allow-dirty set)")
+                logger.warning("Repository has uncommitted changes (--allow-dirty set)")
             else:
-                print("BLOCKED: Repository has uncommitted changes")
-                print(f"  {len(dirty_files)} file(s) with uncommitted changes")
+                logger.error(
+                    "BLOCKED: Repository has %d file(s) with uncommitted changes",
+                    len(dirty_files),
+                    extra={"dirty_files": dirty_files[:10]},
+                )
                 return {
                     "processed": 0,
                     "succeeded": 0,
@@ -902,9 +942,9 @@ class PrimeContractorWorkflow:
 
         # Capture test baseline
         if not self.dry_run:
-            print("\nCapturing test baseline for regression detection...")
+            logger.info("Capturing test baseline for regression detection...")
             baseline = self.checkpoint.capture_test_baseline()
-            print(f"  Baseline: {len(baseline)} test(s)")
+            logger.info("Test baseline captured: %d test(s)", len(baseline))
 
         # Show queue status
         self.queue.print_status()
@@ -916,13 +956,13 @@ class PrimeContractorWorkflow:
 
         while True:
             if max_features and features_processed >= max_features:
-                print(f"\nReached max features limit ({max_features})")
+                logger.info("Reached max features limit (%d)", max_features)
                 break
 
             feature = self.queue.get_next_feature()
 
             if not feature:
-                print("\nNo more features to process")
+                logger.info("No more features to process")
                 break
 
             features_processed += 1
@@ -934,20 +974,32 @@ class PrimeContractorWorkflow:
                 features_failed += 1
 
                 if stop_on_failure:
-                    print(f"\n❌ STOPPING: Feature '{feature.name}' failed")
+                    logger.error(
+                        "STOPPING: Feature '%s' failed",
+                        feature.name,
+                        extra={"feature_name": feature.name},
+                    )
                     break
 
         # Final summary
-        print("\n" + "=" * 70)
-        print("WORKFLOW SUMMARY")
-        print("=" * 70)
-        print(f"  Features processed: {features_processed}")
-        print(f"  Succeeded: {features_succeeded}")
-        print(f"  Failed: {features_failed}")
-        print(f"  Progress: {self.queue.get_progress():.1f}%")
-        print(f"  Total cost: ${self.total_cost_usd:.4f}")
-        print(
-            f"  Total tokens: {self.total_input_tokens} in / {self.total_output_tokens} out"
+        logger.info(
+            "WORKFLOW SUMMARY: processed=%d, succeeded=%d, failed=%d, progress=%.1f%%, cost=$%.4f, tokens=%d in / %d out",
+            features_processed,
+            features_succeeded,
+            features_failed,
+            self.queue.get_progress(),
+            self.total_cost_usd,
+            self.total_input_tokens,
+            self.total_output_tokens,
+            extra={
+                "processed": features_processed,
+                "succeeded": features_succeeded,
+                "failed": features_failed,
+                "progress": self.queue.get_progress(),
+                "total_cost_usd": self.total_cost_usd,
+                "total_input_tokens": self.total_input_tokens,
+                "total_output_tokens": self.total_output_tokens,
+            },
         )
 
         self.instrumentor.emit_insight(
@@ -975,7 +1027,7 @@ class PrimeContractorWorkflow:
         """Run integration for a single specific feature."""
         feature = self.queue.features.get(feature_id)
         if not feature:
-            print(f"Feature not found: {feature_id}")
+            logger.warning("Feature not found: %s", feature_id)
             return False
 
         return self.integrate_feature(feature)
@@ -987,15 +1039,15 @@ class PrimeContractorWorkflow:
             if feature.status in (FeatureStatus.FAILED, FeatureStatus.BLOCKED):
                 if feature.generated_files:
                     feature.status = FeatureStatus.GENERATED
-                    print(f"  Reset {feature.name} -> GENERATED (has code)")
+                    logger.info("Reset %s -> GENERATED (has code)", feature.name)
                 else:
                     feature.status = FeatureStatus.PENDING
-                    print(f"  Reset {feature.name} -> PENDING (needs development)")
+                    logger.info("Reset %s -> PENDING (needs development)", feature.name)
                 feature.error_message = None
                 reset_count += 1
 
         self.queue.save_state()
-        print(f"\nReset {reset_count} failed/blocked feature(s)")
+        logger.info("Reset %d failed/blocked feature(s)", reset_count)
 
     def full_reset(self, include_targets: bool = False) -> None:
         """
@@ -1013,7 +1065,7 @@ class PrimeContractorWorkflow:
         # Delete persisted state file
         if self.queue.state_file.exists():
             self.queue.state_file.unlink()
-            print(f"  Removed state file: {self.queue.state_file.name}")
+            logger.info("Removed state file: %s", self.queue.state_file.name)
 
         # Reset in-memory queue
         self.queue.reset()
@@ -1052,20 +1104,20 @@ class PrimeContractorWorkflow:
         # Remove generated/ directory
         if output_dir.exists() and output_dir.is_dir():
             shutil.rmtree(output_dir)
-            print(f"  Removed directory: {output_dir}")
+            logger.info("Removed directory: %s", output_dir)
             removed += 1
 
         # Remove .backup files under project root
         for backup_file in self.project_root.rglob("*.backup"):
             backup_file.unlink()
-            print(f"  Removed backup: {backup_file.relative_to(self.project_root)}")
+            logger.debug("Removed backup: %s", backup_file.relative_to(self.project_root))
             removed += 1
 
         # Remove __pycache__ directories under project root
         for pycache_dir in self.project_root.rglob("__pycache__"):
             if pycache_dir.is_dir():
                 shutil.rmtree(pycache_dir)
-                print(f"  Removed: {pycache_dir.relative_to(self.project_root)}")
+                logger.debug("Removed: %s", pycache_dir.relative_to(self.project_root))
                 removed += 1
 
         # Optionally remove target files listed in the feature queue
@@ -1077,8 +1129,8 @@ class PrimeContractorWorkflow:
                         target_path = self.project_root / target_path
                     if target_path.exists():
                         target_path.unlink()
-                        print(f"  Removed target: {target_path.relative_to(self.project_root)}")
+                        logger.info("Removed target: %s", target_path.relative_to(self.project_root))
                         removed += 1
 
-        print(f"\nCleaned {removed} item(s) from workspace")
+        logger.info("Cleaned %d item(s) from workspace", removed)
         return removed

@@ -62,19 +62,45 @@ def extract_code_from_response(response: str, language: Optional[str] = None) ->
         )
         return extracted
 
-    # No code blocks found - check if response looks like raw code
+    # No code blocks found - check if response looks like raw code.
+    # These indicators must cover all languages the SDK's drafters produce,
+    # not just Python (context-blind heuristic anti-pattern).
+    stripped = response.strip()
+    first_line = stripped.split('\n', 1)[0] if stripped else ''
     code_indicators = [
-        response.strip().startswith('#!/'),
-        response.strip().startswith('import '),
-        response.strip().startswith('from '),
-        response.strip().startswith('def '),
-        response.strip().startswith('class '),
-        response.strip().startswith('# ==='),  # Common header pattern
+        # Universal
+        first_line.startswith('#!/'),
+        # Python
+        first_line.startswith('import '),
+        first_line.startswith('from '),
+        first_line.startswith('def '),
+        first_line.startswith('class '),
+        first_line.startswith('# ==='),  # Common header pattern
+        # TypeScript / JavaScript
+        first_line.startswith('export '),
+        first_line.startswith('const '),
+        first_line.startswith('let '),
+        first_line.startswith('function '),
+        first_line.startswith('async '),
+        first_line.startswith('interface '),
+        first_line.startswith('type '),
+        # Go
+        first_line.startswith('package '),
+        # Rust
+        first_line.startswith('use '),
+        first_line.startswith('fn '),
+        first_line.startswith('pub '),
+        first_line.startswith('mod '),
+        # C / C++
+        first_line.startswith('#include '),
+        # Common comment-header patterns (// file.ts, /* ... */)
+        first_line.startswith('// '),
+        first_line.startswith('/* '),
     ]
 
     if any(code_indicators):
         logger.debug("Response appears to be raw code without markdown blocks")
-        return response.strip()
+        return stripped
 
     # Fallback: return as-is but log warning
     logger.warning(
