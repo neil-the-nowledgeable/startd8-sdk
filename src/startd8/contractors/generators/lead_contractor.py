@@ -145,19 +145,28 @@ class LeadContractorCodeGenerator:
                         "Split implementation into %d per-file blocks",
                         len(per_file_code),
                     )
-                elif per_file_code:
+                else:
+                    # Drafter didn't produce distinct code for every target file.
+                    # Falling back to the full blob would write identical content
+                    # to multiple files (e.g. hook code into a component file).
+                    # Fail fast with a clear error instead of silent corruption.
                     matched = list(per_file_code.keys())
                     unmatched = [f for f in target_files if f not in per_file_code]
-                    logger.warning(
-                        "Partial split: matched %s, falling back to full blob for %s",
-                        matched,
-                        unmatched,
+                    error_msg = (
+                        f"Multi-file split failed: drafter output matched "
+                        f"{matched or 'no files'} but not {unmatched}. "
+                        f"The drafter must produce distinct code blocks for "
+                        f"each target file. Consider retrying or splitting "
+                        f"this feature into single-file tasks."
                     )
-                else:
-                    logger.warning(
-                        "Could not split implementation for %d target files; "
-                        "writing full blob to each file as fallback",
-                        len(target_files),
+                    logger.error(error_msg)
+                    return GenerationResult(
+                        success=False,
+                        error=error_msg,
+                        input_tokens=result.metrics.input_tokens if result.metrics else 0,
+                        output_tokens=result.metrics.output_tokens if result.metrics else 0,
+                        cost_usd=result.metrics.total_cost if result.metrics else 0.0,
+                        model=self.lead_agent,
                     )
 
             for target_file in target_files:
