@@ -17,7 +17,7 @@ from .agent_resolution import (
     resolve_agents,
 )
 
-from .code_extraction import extract_code_from_response
+from .code_extraction import extract_code_from_response, extract_multi_file_code
 
 __all__ = [
     # Retry utilities
@@ -33,6 +33,7 @@ __all__ = [
     "resolve_agents",
     # Code extraction
     "extract_code_from_response",
+    "extract_multi_file_code",
 ]
 
 

@@ -94,10 +94,14 @@ class LeadContractorCodeGenerator:
 
             workflow = LeadContractorWorkflow()
 
-            # Build config
+            # Build config — include target_files in context so spec mentions them
+            enriched_context = dict(context)
+            if len(target_files) > 1:
+                enriched_context["target_files"] = target_files
+
             config = {
                 "task_description": task,
-                "context": context,
+                "context": enriched_context,
                 "lead_agent": self.lead_agent,
                 "drafter_agent": self.drafter_agent,
                 "max_iterations": self.max_iterations,
@@ -127,10 +131,32 @@ class LeadContractorCodeGenerator:
 
             # Write to output files
             generated_files = []
-            for i, target_file in enumerate(target_files):
+
+            # For multi-file targets, try to split the output per file
+            per_file_code: dict = {}
+            if len(target_files) > 1:
+                from startd8.utils.code_extraction import extract_multi_file_code
+
+                per_file_code = extract_multi_file_code(
+                    final_implementation, target_files
+                )
+                if per_file_code:
+                    logger.info(
+                        "Split implementation into %d per-file blocks",
+                        len(per_file_code),
+                    )
+                else:
+                    logger.warning(
+                        "Could not split implementation for %d target files; "
+                        "writing full blob to each file as fallback",
+                        len(target_files),
+                    )
+
+            for target_file in target_files:
                 output_path = self.output_dir / Path(target_file).name
                 output_path.parent.mkdir(parents=True, exist_ok=True)
-                output_path.write_text(final_implementation, encoding="utf-8")
+                content = per_file_code.get(target_file, final_implementation)
+                output_path.write_text(content, encoding="utf-8")
                 generated_files.append(output_path)
                 logger.info(f"Generated: {output_path}")
 

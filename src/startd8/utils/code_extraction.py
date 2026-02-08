@@ -7,8 +7,9 @@ downstream integration pipelines.
 """
 
 import logging
+import os
 import re
-from typing import Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger("startd8.utils.code_extraction")
 
@@ -82,3 +83,141 @@ def extract_code_from_response(response: str, language: Optional[str] = None) ->
         len(response),
     )
     return response
+
+
+def extract_multi_file_code(
+    response: str, target_files: List[str]
+) -> Dict[str, str]:
+    """
+    Split an LLM response containing multiple file implementations into per-file code.
+
+    Tries two strategies in order:
+    1. **File-path comment markers** — looks for lines like ``// path/to/file.ts``
+       or ``# path/to/file.py`` that precede code blocks.
+    2. **Multiple fenced code blocks** — matches separate ````` blocks where the
+       filename appears in the language tag or as a first-line comment.
+
+    Args:
+        response: Raw LLM response (may contain markdown fencing, commentary, etc.)
+        target_files: Expected output file paths (used for basename matching)
+
+    Returns:
+        Dict mapping target filename → extracted code.
+        Returns an empty dict if splitting fails (caller handles fallback).
+    """
+    if not response or not target_files:
+        return {}
+
+    basenames = {os.path.basename(f): f for f in target_files}
+
+    # --- Strategy 1: file-path comment markers ---
+    # Matches lines like: // path/to/File.tsx  or  # path/to/file.py
+    # The code block follows until the next such marker or end of string.
+    marker_pattern = re.compile(
+        r'^(?://|#)\s*(\S+\.(?:ts|tsx|js|jsx|py|css|html|vue|svelte|go|rs|java|rb))\s*$',
+        re.MULTILINE,
+    )
+    markers = list(marker_pattern.finditer(response))
+    if markers:
+        result = _extract_by_markers(response, markers, basenames)
+        if result:
+            return result
+
+    # --- Strategy 2: multiple fenced code blocks with filename hints ---
+    # Pattern: ```lang or ```filename.ext  followed by code  followed by ```
+    block_pattern = re.compile(
+        r'```(\S*)\s*\n(.*?)```', re.DOTALL
+    )
+    blocks = list(block_pattern.finditer(response))
+    if len(blocks) >= 2:
+        result = _extract_by_fenced_blocks(response, blocks, basenames)
+        if result:
+            return result
+
+    return {}
+
+
+def _extract_by_markers(
+    response: str,
+    markers: list,
+    basenames: Dict[str, str],
+) -> Dict[str, str]:
+    """Extract code sections delimited by file-path comment markers."""
+    result: Dict[str, str] = {}
+
+    for i, marker in enumerate(markers):
+        marker_basename = os.path.basename(marker.group(1))
+        # Find which target file this marker refers to
+        matched_target = _match_basename(marker_basename, basenames)
+        if not matched_target:
+            continue
+
+        # Extract content from after this marker to before the next marker (or end)
+        start = marker.end()
+        end = markers[i + 1].start() if i + 1 < len(markers) else len(response)
+        section = response[start:end].strip()
+
+        # Strip fenced code block wrappers if present within the section
+        code = extract_code_from_response(section)
+        if code.strip():
+            result[matched_target] = code.strip()
+
+    # Only return if we found content for all target files
+    if len(result) == len(basenames):
+        return result
+    return {}
+
+
+def _extract_by_fenced_blocks(
+    response: str,
+    blocks: list,
+    basenames: Dict[str, str],
+) -> Dict[str, str]:
+    """Extract code from multiple fenced blocks matched to target files."""
+    result: Dict[str, str] = {}
+
+    for block in blocks:
+        lang_or_filename = block.group(1)
+        code_content = block.group(2).strip()
+        if not code_content:
+            continue
+
+        matched_target = None
+
+        # Check if the language tag IS a filename (e.g. ```MigrationQueue.tsx)
+        if '.' in lang_or_filename:
+            block_basename = os.path.basename(lang_or_filename)
+            matched_target = _match_basename(block_basename, basenames)
+
+        # Check first line of code for a file-path comment
+        if not matched_target:
+            first_line = code_content.split('\n', 1)[0].strip()
+            # Matches: // MigrationQueue.tsx  or  # useBatchMigration.ts
+            fname_comment = re.match(r'^(?://|#)\s*(\S+\.\w+)', first_line)
+            if fname_comment:
+                block_basename = os.path.basename(fname_comment.group(1))
+                matched_target = _match_basename(block_basename, basenames)
+                # Strip the filename comment from the code
+                if matched_target:
+                    _, _, rest = code_content.partition('\n')
+                    code_content = rest.strip()
+
+        if matched_target and code_content:
+            result[matched_target] = code_content
+
+    if len(result) == len(basenames):
+        return result
+    return {}
+
+
+def _match_basename(candidate: str, basenames: Dict[str, str]) -> Optional[str]:
+    """Match a candidate filename against target basenames (case-insensitive)."""
+    # Exact match first
+    if candidate in basenames:
+        return basenames[candidate]
+    # Case-insensitive fallback
+    candidate_lower = candidate.lower()
+    for basename, target in basenames.items():
+        if basename.lower() == candidate_lower:
+            return target
+    return None
