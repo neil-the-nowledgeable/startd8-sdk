@@ -415,6 +415,10 @@ class PrimeContractorWorkflow:
             ),
         )
 
+        # Auto-decompose multi-file features into sequential single-file tasks
+        if len(feature.target_files) > 1 and feature.status == FeatureStatus.PENDING:
+            return self._process_decomposed_feature(feature)
+
         # Step 1: Develop if needed
         if feature.status == FeatureStatus.PENDING:
             if not self.develop_feature(feature):
@@ -426,6 +430,78 @@ class PrimeContractorWorkflow:
 
         print(f"  ⚠ Feature in unexpected state: {feature.status}")
         return False
+
+    def _process_decomposed_feature(self, feature: FeatureSpec) -> bool:
+        """
+        Decompose a multi-file feature into sequential single-file sub-features.
+
+        Each sub-feature targets exactly one file, gets the full parent feature
+        description as context, and includes a directive to only produce code
+        for that file. Sub-features run sequentially so later ones see changes
+        from earlier ones on disk.
+
+        Returns:
+            True if all sub-features succeeded, False otherwise
+        """
+        n = len(feature.target_files)
+        print(f"\n  Auto-decomposing '{feature.name}' into {n} sub-features")
+
+        # Save and temporarily clear the callback so it only fires on the
+        # last sub-feature (intermediate states may not build/pass tests).
+        saved_callback = self.on_feature_complete
+
+        for i, target_file in enumerate(feature.target_files):
+            is_last = i == n - 1
+            sub_id = f"{feature.id}__part{i + 1}"
+            sub_name = f"{feature.name} ({Path(target_file).name})"
+
+            # Read current file content (includes prior sub-feature changes)
+            current_content = ""
+            target_path = self.project_root / target_file
+            if target_path.exists():
+                current_content = target_path.read_text(encoding="utf-8")
+
+            # Build sub-feature description with file-scoping directive
+            sub_description = (
+                f"{feature.description}\n\n"
+                f"---\n"
+                f"IMPORTANT: This is part {i + 1} of {n}. "
+                f"You MUST ONLY output code for the file: {target_file}\n"
+                f"Do NOT output code for any other file.\n\n"
+                f"CURRENT CONTENTS of {target_file}:\n"
+                f"```\n{current_content}\n```"
+            )
+
+            sub_feature = FeatureSpec(
+                id=sub_id,
+                name=sub_name,
+                description=sub_description,
+                target_files=[target_file],
+                dependencies=feature.dependencies,
+            )
+
+            print(f"\n  --- Sub-feature {i + 1}/{n}: {Path(target_file).name} ---")
+
+            # Only fire on_feature_complete for the last sub-feature
+            self.on_feature_complete = saved_callback if is_last else None
+
+            # Develop (generate code)
+            if not self.develop_feature(sub_feature):
+                self.on_feature_complete = saved_callback
+                self.queue.fail_feature(feature.id, f"Sub-feature {sub_id} generation failed")
+                return False
+
+            # Integrate (copy to target)
+            if not self.integrate_feature(sub_feature):
+                self.on_feature_complete = saved_callback
+                self.queue.fail_feature(feature.id, f"Sub-feature {sub_id} integration failed")
+                return False
+
+        # Restore callback and mark parent as complete
+        self.on_feature_complete = saved_callback
+        self.queue.complete_feature(feature.id)
+        print(f"\n✓ All {n} sub-features integrated for '{feature.name}'")
+        return True
 
     def develop_feature(self, feature: FeatureSpec) -> bool:
         """
