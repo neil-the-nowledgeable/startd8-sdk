@@ -140,10 +140,18 @@ class LeadContractorCodeGenerator:
                 per_file_code = extract_multi_file_code(
                     final_implementation, target_files
                 )
-                if per_file_code:
+                if len(per_file_code) == len(target_files):
                     logger.info(
                         "Split implementation into %d per-file blocks",
                         len(per_file_code),
+                    )
+                elif per_file_code:
+                    matched = list(per_file_code.keys())
+                    unmatched = [f for f in target_files if f not in per_file_code]
+                    logger.warning(
+                        "Partial split: matched %s, falling back to full blob for %s",
+                        matched,
+                        unmatched,
                     )
                 else:
                     logger.warning(

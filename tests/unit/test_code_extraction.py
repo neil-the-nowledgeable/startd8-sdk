@@ -133,8 +133,8 @@ class TestFallbackBehavior:
         result = extract_multi_file_code(response, ["a.py", "b.py"])
         assert result == {}
 
-    def test_partial_match_returns_empty(self):
-        """If only one of two target files is found, return empty dict."""
+    def test_partial_match_returns_matched_files(self):
+        """If only one of two target files is found, return the partial result."""
         response = (
             "// src/a.py\n"
             "```python\n"
@@ -142,7 +142,9 @@ class TestFallbackBehavior:
             "```\n"
         )
         result = extract_multi_file_code(response, ["src/a.py", "src/b.py"])
-        assert result == {}
+        assert len(result) == 1
+        assert "x = 1" in result["src/a.py"]
+        assert "src/b.py" not in result
 
     def test_single_target_file_returns_empty(self):
         """Single target file — function isn't designed for this case."""

@@ -110,6 +110,12 @@ def extract_multi_file_code(
 
     basenames = {os.path.basename(f): f for f in target_files}
 
+    # Try both strategies and return the one with the most matches.
+    # This avoids Strategy 1 (markers) short-circuiting Strategy 2 (fenced
+    # blocks) when markers appear inside fenced blocks and produce garbled results.
+
+    best: Dict[str, str] = {}
+
     # --- Strategy 1: file-path comment markers ---
     # Matches lines like: // path/to/File.tsx  or  # path/to/file.py
     # The code block follows until the next such marker or end of string.
@@ -120,8 +126,8 @@ def extract_multi_file_code(
     markers = list(marker_pattern.finditer(response))
     if markers:
         result = _extract_by_markers(response, markers, basenames)
-        if result:
-            return result
+        if len(result) > len(best):
+            best = result
 
     # --- Strategy 2: multiple fenced code blocks with filename hints ---
     # Pattern: ```lang or ```filename.ext  followed by code  followed by ```
@@ -131,10 +137,10 @@ def extract_multi_file_code(
     blocks = list(block_pattern.finditer(response))
     if len(blocks) >= 2:
         result = _extract_by_fenced_blocks(response, blocks, basenames)
-        if result:
-            return result
+        if len(result) > len(best):
+            best = result
 
-    return {}
+    return best
 
 
 def _extract_by_markers(
@@ -162,10 +168,8 @@ def _extract_by_markers(
         if code.strip():
             result[matched_target] = code.strip()
 
-    # Only return if we found content for all target files
-    if len(result) == len(basenames):
-        return result
-    return {}
+    # Return whatever we matched — caller handles unmatched files via fallback
+    return result
 
 
 def _extract_by_fenced_blocks(
@@ -205,9 +209,7 @@ def _extract_by_fenced_blocks(
         if matched_target and code_content:
             result[matched_target] = code_content
 
-    if len(result) == len(basenames):
-        return result
-    return {}
+    return result
 
 
 def _match_basename(candidate: str, basenames: Dict[str, str]) -> Optional[str]:
