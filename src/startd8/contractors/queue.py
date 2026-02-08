@@ -11,11 +11,16 @@ This module is now part of startd8-sdk and works without ContextCore.
 """
 
 import json
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
+
+from startd8.utils.file_operations import atomic_write_json
+
+logger = logging.getLogger(__name__)
 
 
 class FeatureStatus(Enum):
@@ -334,15 +339,23 @@ class FeatureQueue:
         return (completed / len(self.features)) * 100
 
     def save_state(self):
-        """Save queue state to file."""
+        """Save queue state to file (atomic write to prevent corruption)."""
         state = {
             "features": {fid: f.to_dict() for fid, f in self.features.items()},
             "order": self.order,
             "saved_at": datetime.now().isoformat(),
         }
 
-        with open(self.state_file, "w") as f:
-            json.dump(state, f, indent=2)
+        try:
+            atomic_write_json(Path(self.state_file), state, indent=2)
+        except Exception:
+            logger.warning(
+                "Atomic write failed for %s, falling back to direct write",
+                self.state_file,
+                exc_info=True,
+            )
+            with open(self.state_file, "w") as f:
+                json.dump(state, f, indent=2)
 
     def load_state(self) -> bool:
         """Load queue state from file."""

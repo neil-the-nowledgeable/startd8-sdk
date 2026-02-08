@@ -13,12 +13,15 @@ features are developed without integration validation.
 This module is now part of startd8-sdk and works without ContextCore.
 """
 
+import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set
+
+logger = logging.getLogger(__name__)
 
 
 class CheckpointStatus(Enum):
@@ -105,12 +108,18 @@ class IntegrationCheckpoint:
         This allows us to detect regressions (tests that were passing
         before but fail after integration).
         """
-        result = subprocess.run(
-            ["python3", "-m", "pytest", "--collect-only", "-q"],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-        )
+        try:
+            result = subprocess.run(
+                ["python3", "-m", "pytest", "--collect-only", "-q"],
+                capture_output=True,
+                text=True,
+                cwd=self.project_root,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("Test baseline collection timed out after 60s")
+            self._test_baseline = set()
+            return self._test_baseline
 
         passing_tests = set()
         for line in result.stdout.split("\n"):
@@ -163,12 +172,17 @@ class IntegrationCheckpoint:
                 continue
 
             checked += 1
-            result = subprocess.run(
-                ["python3", "-m", "py_compile", str(file_path)],
-                capture_output=True,
-                text=True,
-                cwd=self.project_root,
-            )
+            try:
+                result = subprocess.run(
+                    ["python3", "-m", "py_compile", str(file_path)],
+                    capture_output=True,
+                    text=True,
+                    cwd=self.project_root,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(f"{file_path.name}: syntax check timed out")
+                continue
 
             if result.returncode != 0:
                 errors.append(f"{file_path.name}: {result.stderr.strip()}")
@@ -217,16 +231,21 @@ class IntegrationCheckpoint:
                         if (self.project_root / d).exists()
                     )
 
-                    result = subprocess.run(
-                        ["python3", "-c", f"import {module_path}"],
-                        capture_output=True,
-                        text=True,
-                        cwd=self.project_root,
-                        env={
-                            **os.environ,
-                            "PYTHONPATH": pythonpath,
-                        },
-                    )
+                    try:
+                        result = subprocess.run(
+                            ["python3", "-c", f"import {module_path}"],
+                            capture_output=True,
+                            text=True,
+                            cwd=self.project_root,
+                            env={
+                                **os.environ,
+                                "PYTHONPATH": pythonpath,
+                            },
+                            timeout=30,
+                        )
+                    except subprocess.TimeoutExpired:
+                        errors.append(f"{file_path.name}: import check timed out")
+                        break
 
                     if result.returncode != 0:
                         error_msg = result.stderr.strip().split("\n")[-1]
@@ -279,12 +298,17 @@ class IntegrationCheckpoint:
             checked += 1
 
             # Try ruff if available
-            result = subprocess.run(
-                ["python3", "-m", "ruff", "check", str(file_path), "--select=E,F"],
-                capture_output=True,
-                text=True,
-                cwd=self.project_root,
-            )
+            try:
+                result = subprocess.run(
+                    ["python3", "-m", "ruff", "check", str(file_path), "--select=E,F"],
+                    capture_output=True,
+                    text=True,
+                    cwd=self.project_root,
+                    timeout=60,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(f"{file_path.name}: lint check timed out")
+                continue
 
             if result.returncode != 0:
                 # Parse ruff output for errors vs warnings
@@ -328,12 +352,21 @@ class IntegrationCheckpoint:
         now fails after integration.
         """
         # Run pytest
-        result = subprocess.run(
-            ["python3", "-m", "pytest", "-v", "--tb=short", "-q"],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-        )
+        try:
+            result = subprocess.run(
+                ["python3", "-m", "pytest", "-v", "--tb=short", "-q"],
+                capture_output=True,
+                text=True,
+                cwd=self.project_root,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            return CheckpointResult(
+                status=CheckpointStatus.FAILED,
+                name="Test Check",
+                message="Test suite timed out after 120s",
+                errors=["pytest timed out — tests may be hanging"],
+            )
 
         # Parse results
         output = result.stdout + result.stderr

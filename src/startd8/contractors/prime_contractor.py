@@ -27,6 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from ..security import sanitize_path
 from .checkpoint import CheckpointResult, CheckpointStatus, IntegrationCheckpoint
 from .protocols import (
     CheckpointFailedCallback,
@@ -42,6 +43,9 @@ from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
 
 logger = logging.getLogger(__name__)
+
+
+MAX_INTEGRATION_ATTEMPTS = 3
 
 
 class PrimeContractorWorkflow:
@@ -190,6 +194,7 @@ class PrimeContractorWorkflow:
             capture_output=True,
             text=True,
             cwd=self.project_root,
+            timeout=30,
         )
         dirty_files = [
             line.strip() for line in result.stdout.strip().split("\n") if line
@@ -211,6 +216,7 @@ class PrimeContractorWorkflow:
             capture_output=True,
             text=True,
             cwd=self.project_root,
+            timeout=30,
         )
 
         if "No local changes to save" in result.stdout:
@@ -229,12 +235,14 @@ class PrimeContractorWorkflow:
             capture_output=True,
             text=True,
             cwd=self.project_root,
+            timeout=30,
         )
         result_unstaged = subprocess.run(
             ["git", "diff", "--name-only", str(path)],
             capture_output=True,
             text=True,
             cwd=self.project_root,
+            timeout=30,
         )
         return bool(result_staged.stdout.strip() or result_unstaged.stdout.strip())
 
@@ -267,6 +275,7 @@ class PrimeContractorWorkflow:
             capture_output=True,
             text=True,
             cwd=self.project_root,
+            timeout=30,
         )
         stashes = [
             line
@@ -288,6 +297,7 @@ class PrimeContractorWorkflow:
             capture_output=True,
             text=True,
             cwd=self.project_root,
+            timeout=30,
         )
 
         for line in result.stdout.strip().split("\n"):
@@ -300,6 +310,7 @@ class PrimeContractorWorkflow:
                     capture_output=True,
                     text=True,
                     cwd=self.project_root,
+                    timeout=30,
                 )
 
                 if pop_result.returncode == 0:
@@ -680,9 +691,20 @@ class PrimeContractorWorkflow:
 
             # Determine target path (resolve relative paths against project_root)
             if i < len(feature.target_files):
-                target_path = Path(feature.target_files[i])
-                if not target_path.is_absolute():
-                    target_path = self.project_root / target_path
+                # Validate path from plan output (untrusted boundary)
+                try:
+                    sanitized = sanitize_path(
+                        feature.target_files[i], base_dir=self.project_root
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Path validation failed for '%s': %s",
+                        feature.target_files[i],
+                        e,
+                        extra={"feature_name": feature.name},
+                    )
+                    continue
+                target_path = sanitized
             else:
                 if not source_path.exists():
                     if self.dry_run:
@@ -875,6 +897,7 @@ class PrimeContractorWorkflow:
                 ["git", "add", str(file_path)],
                 cwd=self.project_root,
                 capture_output=True,
+                timeout=30,
             )
 
         commit_msg = (
@@ -885,6 +908,7 @@ class PrimeContractorWorkflow:
             cwd=self.project_root,
             capture_output=True,
             text=True,
+            timeout=30,
         )
 
         if result.returncode == 0:
@@ -900,6 +924,7 @@ class PrimeContractorWorkflow:
         self,
         max_features: Optional[int] = None,
         stop_on_failure: bool = True,
+        max_cost_usd: Optional[float] = None,
     ) -> Dict:
         """
         Run the Prime Contractor workflow.
@@ -907,6 +932,7 @@ class PrimeContractorWorkflow:
         Args:
             max_features: Maximum number of features to process (None = all)
             stop_on_failure: Stop processing if a feature fails
+            max_cost_usd: Hard ceiling on total workflow cost in USD (None = no limit)
 
         Returns:
             Summary dict with results
@@ -973,11 +999,41 @@ class PrimeContractorWorkflow:
                 logger.info("Reached max features limit (%d)", max_features)
                 break
 
+            # Cost guard: stop if total spend has reached the hard ceiling
+            if max_cost_usd is not None and self.total_cost_usd >= max_cost_usd:
+                logger.error(
+                    "Cost limit reached: $%.2f >= $%.2f — stopping workflow",
+                    self.total_cost_usd,
+                    max_cost_usd,
+                )
+                break
+
             feature = self.queue.get_next_feature()
 
             if not feature:
                 logger.info("No more features to process")
                 break
+
+            # Guard: skip features that have exceeded max integration attempts
+            if feature.integration_attempts >= MAX_INTEGRATION_ATTEMPTS:
+                logger.error(
+                    "Feature '%s' exceeded max integration attempts (%d)",
+                    feature.name,
+                    MAX_INTEGRATION_ATTEMPTS,
+                )
+                self.queue.fail_feature(
+                    feature.id, "Max integration attempts exceeded"
+                )
+                features_processed += 1
+                features_failed += 1
+                if stop_on_failure:
+                    logger.error(
+                        "STOPPING: Feature '%s' failed",
+                        feature.name,
+                        extra={"feature_name": feature.name},
+                    )
+                    break
+                continue
 
             features_processed += 1
             success = self.process_feature(feature)
