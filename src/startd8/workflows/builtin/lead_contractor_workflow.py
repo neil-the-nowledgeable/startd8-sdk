@@ -505,9 +505,37 @@ class LeadContractorWorkflow(WorkflowBase):
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
 
-                # Check for truncation - fail fast if enabled
+                step_results.append(StepResult(
+                    step_name=f"draft_iteration_{iteration}",
+                    agent_name=f"{drafter_agent.name}:{drafter_agent.model}",
+                    output=draft.implementation[:500] + "..." if len(draft.implementation) > 500 else draft.implementation,
+                    time_ms=draft.time_ms,
+                    input_tokens=draft.input_tokens,
+                    output_tokens=draft.output_tokens,
+                    cost=draft.cost,
+                    metadata={"phase": WorkflowPhase.DRAFTING.value, "iteration": iteration}
+                ))
+
+                result.drafter_input_tokens += draft.input_tokens
+                result.drafter_output_tokens += draft.output_tokens
+                result.drafter_cost += draft.cost
+
+                # Check for truncation
                 if check_truncation and draft.was_truncated:
-                    if fail_on_truncation:
+                    if fail_on_truncation and iteration < max_iterations:
+                        # Auto-retry: skip review, re-draft with continuation prompt
+                        logger.warning(
+                            f"Draft truncated at iteration {iteration} "
+                            f"({draft.output_tokens} tokens). Retrying with continuation prompt."
+                        )
+                        review_feedback = (
+                            "Your previous response was TRUNCATED — it was cut off before "
+                            "the code was complete. You MUST output the COMPLETE file in a "
+                            "single response. Do not add commentary — output ONLY the full "
+                            "source code for the file."
+                        )
+                        continue
+                    elif fail_on_truncation:
                         error_msg = (
                             f"Draft was truncated at iteration {iteration}. "
                             f"Output tokens: {draft.output_tokens}. "
@@ -525,21 +553,6 @@ class LeadContractorWorkflow(WorkflowBase):
                             f"Draft was truncated at iteration {iteration}, continuing anyway. "
                             f"Set fail_on_truncation=True to fail on truncation."
                         )
-
-                step_results.append(StepResult(
-                    step_name=f"draft_iteration_{iteration}",
-                    agent_name=f"{drafter_agent.name}:{drafter_agent.model}",
-                    output=draft.implementation[:500] + "..." if len(draft.implementation) > 500 else draft.implementation,
-                    time_ms=draft.time_ms,
-                    input_tokens=draft.input_tokens,
-                    output_tokens=draft.output_tokens,
-                    cost=draft.cost,
-                    metadata={"phase": WorkflowPhase.DRAFTING.value, "iteration": iteration}
-                ))
-
-                result.drafter_input_tokens += draft.input_tokens
-                result.drafter_output_tokens += draft.output_tokens
-                result.drafter_cost += draft.cost
 
                 # Review phase
                 current_step += 1
@@ -1011,8 +1024,37 @@ class LeadContractorWorkflow(WorkflowBase):
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
 
+                step_results.append(StepResult(
+                    step_name=f"draft_iteration_{iteration}",
+                    agent_name=f"{drafter_agent.name}:{drafter_agent.model}",
+                    output=draft.implementation[:500] + "..." if len(draft.implementation) > 500 else draft.implementation,
+                    time_ms=draft.time_ms,
+                    input_tokens=draft.input_tokens,
+                    output_tokens=draft.output_tokens,
+                    cost=draft.cost,
+                    metadata={"phase": WorkflowPhase.DRAFTING.value, "iteration": iteration}
+                ))
+
+                result.drafter_input_tokens += draft.input_tokens
+                result.drafter_output_tokens += draft.output_tokens
+                result.drafter_cost += draft.cost
+
+                # Check for truncation
                 if check_truncation and draft.was_truncated:
-                    if fail_on_truncation:
+                    if fail_on_truncation and iteration < max_iterations:
+                        # Auto-retry: skip review, re-draft with continuation prompt
+                        logger.warning(
+                            f"Draft truncated at iteration {iteration} "
+                            f"({draft.output_tokens} tokens). Retrying with continuation prompt."
+                        )
+                        review_feedback = (
+                            "Your previous response was TRUNCATED — it was cut off before "
+                            "the code was complete. You MUST output the COMPLETE file in a "
+                            "single response. Do not add commentary — output ONLY the full "
+                            "source code for the file."
+                        )
+                        continue
+                    elif fail_on_truncation:
                         error_msg = (
                             f"Draft was truncated at iteration {iteration}. "
                             f"Output tokens: {draft.output_tokens}. "
@@ -1030,21 +1072,6 @@ class LeadContractorWorkflow(WorkflowBase):
                             f"Draft was truncated at iteration {iteration}, continuing anyway. "
                             f"Set fail_on_truncation=True to fail on truncation."
                         )
-
-                step_results.append(StepResult(
-                    step_name=f"draft_iteration_{iteration}",
-                    agent_name=f"{drafter_agent.name}:{drafter_agent.model}",
-                    output=draft.implementation[:500] + "..." if len(draft.implementation) > 500 else draft.implementation,
-                    time_ms=draft.time_ms,
-                    input_tokens=draft.input_tokens,
-                    output_tokens=draft.output_tokens,
-                    cost=draft.cost,
-                    metadata={"phase": WorkflowPhase.DRAFTING.value, "iteration": iteration}
-                ))
-
-                result.drafter_input_tokens += draft.input_tokens
-                result.drafter_output_tokens += draft.output_tokens
-                result.drafter_cost += draft.cost
 
                 # Review phase
                 current_step += 1
