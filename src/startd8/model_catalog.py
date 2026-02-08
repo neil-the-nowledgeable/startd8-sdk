@@ -81,15 +81,20 @@ class Models:
     # OpenAI Models
     # ==========================================================================
 
-    # Flagship
-    GPT4_LATEST = "openai:gpt-4o"
+    # Flagship (Reasoning)
+    O3_LATEST = "openai:o3"
 
-    # Flagship (Code-focused)
-    # Note: This identifier must match your OpenAI provider's supported model name.
-    GPT5_2_CODEX_LATEST = "openai:gpt-5.2-codex"
+    # Balanced
+    GPT4_1_LATEST = "openai:gpt-4.1"
+
+    # Fast
+    GPT4_LATEST = "openai:gpt-4o"
 
     # Mini - Fast, cheap
     GPT4_MINI = "openai:gpt-4o-mini"
+
+    # Legacy aliases
+    GPT5_2_CODEX_LATEST = O3_LATEST
 
     # ==========================================================================
     # Recommended Defaults by Use Case
@@ -161,17 +166,23 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     ),
 
     # OpenAI
+    "o3": ModelInfo(
+        provider="openai",
+        model_id="o3",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "gpt-4.1": ModelInfo(
+        provider="openai",
+        model_id="gpt-4.1",
+        tier="balanced",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
     "gpt-4o": ModelInfo(
         provider="openai",
         model_id="gpt-4o",
-        tier="flagship",
+        tier="fast",
         capabilities={"text", "vision", "code", "reasoning"},
-    ),
-    "gpt-5.2-codex": ModelInfo(
-        provider="openai",
-        model_id="gpt-5.2-codex",
-        tier="flagship",
-        capabilities={"text", "code", "reasoning"},
     ),
     "gpt-4o-mini": ModelInfo(
         provider="openai",
@@ -239,9 +250,9 @@ def get_latest_model(
             "mini": Models.GEMINI_FLASH_LITE,
         },
         "openai": {
-            "flagship": Models.GPT4_LATEST,
-            "balanced": Models.GPT4_LATEST,
-            "fast": Models.GPT4_MINI,
+            "flagship": Models.O3_LATEST,
+            "balanced": Models.GPT4_1_LATEST,
+            "fast": Models.GPT4_LATEST,
             "mini": Models.GPT4_MINI,
         },
     }

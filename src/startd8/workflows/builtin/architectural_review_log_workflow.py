@@ -46,8 +46,9 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 
 - **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
 - **When proposing changes**: Append them to Appendix C using a unique suggestion ID (`R{round}-S{n}`).
-- **When validating**: For each suggestion, append a row to Appendix A (if applied) or Appendix B (if rejected) referencing the suggestion ID.
-- **If rejecting**: Record **why** (specific rationale) so future models don’t re-propose the same idea.
+- **When endorsing prior suggestions**: If you agree with an untriaged suggestion from a prior round, list it in an **Endorsements** section after your suggestion table. This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage.
+- **When validating**: For each suggestion, append a row to Appendix A (if applied) or Appendix B (if rejected) referencing the suggestion ID. Endorsement counts inform priority but do not auto-apply suggestions.
+- **If rejecting**: Record **why** (specific rationale) so future models don't re-propose the same idea.
 
 ### Appendix A: Applied Suggestions
 
@@ -195,13 +196,13 @@ def _select_default_agents(
 
     # For strategic architectural review, prefer an explicit high-quality trio by default.
     # IMPORTANT: Preserve this explicit ordering (do not sort it away), so the
-    # default run is: Opus -> Gemini Pro -> GPT-5.2 Codex.
+    # default run is: Opus -> Gemini Pro -> o3.
     preferred: List[str] = []
     if tier == "flagship":
         preferred = [
             Models.CLAUDE_OPUS_LATEST,
             Models.GEMINI_PRO_LATEST,
-            Models.GPT5_2_CODEX_LATEST,
+            Models.O3_LATEST,
         ]
 
     # Apply provider allowlist to preferred first (preserving order)
@@ -315,6 +316,10 @@ Required output format (append-only snippet):
   Rows must use IDs R{round_number}-S1..R{round_number}-S{max_suggestions} (you may output fewer rows).
   Area must be one of: Architecture, Interfaces, Data, Risks, Validation, Ops, Security.
   Severity must be one of: critical, high, medium, low.
+- After the table, if you agree with any untriaged suggestions from prior rounds (in Appendix C but NOT in Appendix A or B), add:
+  **Endorsements** (prior untriaged suggestions this reviewer agrees with):
+  - <ID>: <one-sentence reason you agree>
+  This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage. Only endorse suggestions you genuinely believe should be implemented. Do NOT endorse your own suggestions.
 
 Document (excluding the review appendix):
 ---
@@ -516,7 +521,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     name="fallback_openai_model",
                     type="string",
                     required=False,
-                    default="openai:gpt-4o",
+                    default="openai:gpt-4.1",
                     description=(
                         "If the configured OpenAI model is not available (e.g., access denied / model not found), "
                         "retry the round once with this fallback model."
@@ -569,7 +574,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
         warn_cost_usd = config.get("warn_cost_usd")
         max_cost_usd = config.get("max_cost_usd")
-        fallback_openai_model = str(config.get("fallback_openai_model") or "openai:gpt-4o").strip()
+        fallback_openai_model = str(config.get("fallback_openai_model") or "openai:gpt-4.1").strip()
         fallback_on_model_not_found = bool(config.get("fallback_on_model_not_found", True))
 
         default_state_path = doc_path.parent / ".startd8" / "architectural_review_state.json"
