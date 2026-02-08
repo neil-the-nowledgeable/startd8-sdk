@@ -12,6 +12,8 @@ from startd8.truncation_detection import (
     TruncationResult,
     get_truncation_warning_message,
     estimate_document_sections,
+    infer_code_language,
+    get_expected_sections_for_code,
 )
 from startd8.exceptions import TruncationError
 
@@ -283,4 +285,127 @@ Findings
         doc = "Just some plain text without any headers or structure."
         sections = estimate_document_sections(doc)
         assert len(sections) == 0
+
+
+class TestInferCodeLanguage:
+    """Tests for infer_code_language function."""
+
+    def test_detects_python(self):
+        code = "def main():\n    self.value = 42\n    print('hello')"
+        assert infer_code_language(code) == "python"
+
+    def test_detects_typescript(self):
+        code = (
+            "import React from 'react';\n"
+            "const App: React.FC = () => {\n"
+            "  const [count, setCount] = useState<number>(0);\n"
+            "  return <div>{count}</div>;\n"
+            "};\n"
+            "export default App;"
+        )
+        assert infer_code_language(code) == "typescript"
+
+    def test_detects_typescript_via_type_annotations(self):
+        code = (
+            "interface Props {\n"
+            "  name: string;\n"
+            "  age: number;\n"
+            "}\n"
+            "export function greet(props: Props): string {\n"
+            "  return `Hello ${props.name}`;\n"
+            "}"
+        )
+        assert infer_code_language(code) == "typescript"
+
+    def test_detects_javascript(self):
+        code = (
+            "import express from 'express';\n"
+            "const app = express();\n"
+            "export default app;"
+        )
+        assert infer_code_language(code) == "javascript"
+
+    def test_detects_go(self):
+        code = (
+            "package main\n\n"
+            "func main() {\n"
+            '    fmt.Println("hello")\n'
+            "}"
+        )
+        assert infer_code_language(code) == "go"
+
+    def test_detects_rust(self):
+        code = (
+            "fn main() {\n"
+            "    let mut v = vec![1, 2, 3];\n"
+            '    println!("{:?}", v);\n'
+            "}"
+        )
+        assert infer_code_language(code) == "rust"
+
+    def test_returns_none_for_empty(self):
+        assert infer_code_language("") is None
+        assert infer_code_language("   ") is None
+
+    def test_returns_none_for_ambiguous(self):
+        assert infer_code_language("hello world") is None
+
+
+class TestGetExpectedSectionsForCode:
+    """Tests for get_expected_sections_for_code function."""
+
+    def test_python_sections(self):
+        code = "def foo():\n    self.x = 1"
+        sections = get_expected_sections_for_code(code)
+        assert sections is not None
+        assert "def " in sections
+        assert "class " in sections
+
+    def test_typescript_sections(self):
+        code = (
+            "import React from 'react';\n"
+            "const App: React.FC = () => <div />;\n"
+            "export default App;"
+        )
+        sections = get_expected_sections_for_code(code)
+        assert sections is not None
+        assert "export " in sections
+        assert "const " in sections
+        assert "def " not in sections
+
+    def test_returns_none_for_unknown(self):
+        assert get_expected_sections_for_code("just some text") is None
+
+    def test_tsx_not_flagged_as_truncated_with_python_sections(self):
+        """Regression: TSX code should not reach the 0.7 workflow threshold.
+
+        With the old hardcoded ``["def ", "class "]``, the missing-sections
+        signal added +0.3 confidence on top of other heuristics, pushing
+        confidence above the 0.7 LeadContractor threshold.  With language-aware
+        sections the missing-sections penalty is reduced, keeping the total
+        below 0.7.
+        """
+        tsx_code = (
+            "import React, { useState } from 'react';\n"
+            "import { AlertDialog } from '@/components/ui';\n\n"
+            "export const MigrationQueue: React.FC = () => {\n"
+            "  const [items, setItems] = useState<string[]>([]);\n"
+            "  return (\n"
+            "    <AlertDialog>\n"
+            "      <div>{items.length} items</div>\n"
+            "    </AlertDialog>\n"
+            "  );\n"
+            "};\n"
+        )
+        # With the old hardcoded ["def ", "class "], this would add +0.3
+        # confidence for missing sections, risking a false positive.
+        sections = get_expected_sections_for_code(tsx_code)
+        assert sections is not None
+        assert "def " not in sections
+
+        result = detect_truncation(tsx_code, expected_sections=sections)
+        # Confidence should stay below the 0.7 workflow threshold
+        assert result.confidence < 0.7, (
+            f"TSX code confidence {result.confidence:.2f} >= 0.7: {result.indicators}"
+        )
 

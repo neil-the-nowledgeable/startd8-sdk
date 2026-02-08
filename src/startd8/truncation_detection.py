@@ -188,6 +188,71 @@ def estimate_output_size(
     )
 
 
+# Language-specific code structure markers for truncation detection.
+# Each language maps to keywords expected in non-trivial source files.
+_LANGUAGE_SECTIONS = {
+    "python": ["def ", "class "],
+    "typescript": ["function ", "const ", "export "],
+    "javascript": ["function ", "const ", "export "],
+    "go": ["func ", "type "],
+    "rust": ["fn ", "struct "],
+    "java": ["class ", "public "],
+    "ruby": ["def ", "class "],
+    "swift": ["func ", "struct "],
+    "kotlin": ["fun ", "class "],
+}
+
+
+def infer_code_language(code: str) -> Optional[str]:
+    """Infer programming language from code content using keyword heuristics.
+
+    Returns a language key (e.g. ``"python"``, ``"typescript"``) or ``None``
+    if the language cannot be determined.
+    """
+    if not code or not code.strip():
+        return None
+
+    # Strong single-keyword signals (order matters: check specific before generic)
+    strong_signals = [
+        ("typescript", ["interface ", ": string", ": number", ": boolean",
+                        "=> {", "React.", "<React", "useState(", "useEffect("]),
+        ("python", ["def ", "self.", "__init__", "elif ", "except ",
+                    "yield ", "async def "]),
+        ("go", ["func ", "package "]),
+        ("rust", ["fn ", "let mut ", "impl "]),
+        ("java", ["public class ", "private void ", "System.out"]),
+        ("ruby", ["def ", "end\n", "require "]),
+        ("kotlin", ["fun ", "val ", "data class "]),
+        ("swift", ["func ", "var ", "guard let "]),
+    ]
+
+    for lang, keywords in strong_signals:
+        if sum(1 for kw in keywords if kw in code) >= 2:
+            return lang
+
+    # Fallback: TypeScript vs JavaScript (both share const/export/function)
+    if any(kw in code for kw in ["import ", "export ", "const "]):
+        # Type annotations suggest TypeScript
+        if any(kw in code for kw in [": string", ": number", "interface ",
+                                      "<", "as ", "readonly "]):
+            return "typescript"
+        return "javascript"
+
+    return None
+
+
+def get_expected_sections_for_code(code: str) -> Optional[List[str]]:
+    """Return expected code structure markers based on inferred language.
+
+    Returns ``None`` when the language cannot be determined, signalling
+    that the ``expected_sections`` check should be skipped entirely.
+    """
+    language = infer_code_language(code)
+    if language is None:
+        return None
+    return _LANGUAGE_SECTIONS.get(language)
+
+
 def detect_truncation(
     output: str,
     original_input: Optional[str] = None,

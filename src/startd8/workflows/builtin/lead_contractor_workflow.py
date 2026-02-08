@@ -47,7 +47,7 @@ from ...utils.agent_resolution import resolve_agent_spec
 from ...utils.code_extraction import extract_code_from_response
 from ...logging_config import get_logger
 from ...costs.pricing import PricingService
-from ...truncation_detection import TruncationResult, detect_truncation
+from ...truncation_detection import TruncationResult, detect_truncation, get_expected_sections_for_code
 
 from .lead_contractor_models import (
     LeadContractorConfig,
@@ -770,10 +770,12 @@ class LeadContractorWorkflow(WorkflowBase):
         if check_truncation and not was_truncated and implementation_code:
             # Use 0.5 threshold for strict mode, 0.7 for normal mode
             confidence_threshold = 0.5 if strict_truncation else 0.7
+            # Infer language-appropriate structure markers (None skips the check)
+            expected = get_expected_sections_for_code(implementation_code)
             truncation_result = detect_truncation(
                 implementation_code,
                 original_input=prompt,
-                expected_sections=["def ", "class "],  # Expect code structures
+                expected_sections=expected,
                 strict_mode=strict_truncation,
             )
             if truncation_result.is_truncated and truncation_result.confidence >= confidence_threshold:

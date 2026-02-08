@@ -561,12 +561,13 @@ class PrimeContractorWorkflow:
                 continue
 
             # Pre-integration truncation check (W-010)
-            if self.check_truncation and source_path.suffix == ".py":
-                from ..truncation_detection import detect_truncation
+            if self.check_truncation:
+                from ..truncation_detection import detect_truncation, get_expected_sections_for_code
                 source_content = source_path.read_text(encoding="utf-8")
+                expected = get_expected_sections_for_code(source_content)
                 trunc_result = detect_truncation(
                     source_content,
-                    expected_sections=["def ", "class "],
+                    expected_sections=expected,
                     strict_mode=False,
                 )
                 if trunc_result.is_truncated and trunc_result.confidence >= 0.7:
