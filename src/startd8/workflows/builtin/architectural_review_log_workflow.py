@@ -233,13 +233,25 @@ def _build_prompt(
     reviewer_label: str,
     scope: str,
     template_override: Optional[str] = None,
+    context_content: str = "",
 ) -> str:
     """
     Build the reviewer prompt. Supports override template that must include:
     - {round_number}, {max_suggestions}, {applied_ids}, {rejected_ids}, {document}, {reviewer_label}, {scope}
+    - Optional: {context} (reference material block, empty string when no context provided)
     """
     applied_list = ", ".join(applied_ids[:50]) if applied_ids else "(none)"
     rejected_list = ", ".join(rejected_ids[:50]) if rejected_ids else "(none)"
+
+    context_block = ""
+    if context_content.strip():
+        context_block = (
+            "Reference material (institutional knowledge, lessons learned, prior decisions "
+            "— use these to ground your review in project-specific patterns and known issues):\n"
+            "---\n"
+            f"{context_content}\n"
+            "---\n\n"
+        )
 
     if template_override:
         return template_override.format(
@@ -250,24 +262,45 @@ def _build_prompt(
             document=document_without_appendix,
             reviewer_label=reviewer_label,
             scope=scope,
+            context=context_block,
         )
 
     cols = " | ".join(REQUIRED_COLUMNS)
     sep = " | ".join(["----"] * len(REQUIRED_COLUMNS))
 
-    return f"""You are an expert enterprise architect performing a strategic architectural review.
+    # Adapt iteration context based on whether prior rounds have been triaged
+    if applied_list != "(none)" or rejected_list != "(none)":
+        iteration_context = f"""Prior review rounds have already been triaged:
+- Applied (incorporated into the plan): {applied_list}
+- Rejected (with rationale — do NOT re-propose): {rejected_list}
 
-You are Review Round R{round_number}. You MUST output ONLY an appendable markdown snippet for Appendix C.
+Study the rejected rationale in Appendix B to understand WHY ideas were dismissed.
+Your job is to find what prior reviewers MISSED — go deeper, challenge assumptions, identify second-order risks, and surface gaps that only emerge after the obvious issues are resolved.
+If you want to revisit a rejected idea, explicitly reference its rejected ID and argue why the original rationale no longer applies."""
+    else:
+        iteration_context = f"""This is the first review pass. No prior suggestions have been triaged yet.
+- Applied IDs: {applied_list}
+- Rejected IDs: {rejected_list}"""
 
-Before proposing anything:
-- Applied IDs (do not repeat): {applied_list}
-- Rejected IDs (do not repeat): {rejected_list}
-- If you want to revisit a rejected idea, explicitly reference its rejected ID and argue why the original rationale no longer applies.
+    # Context-aware instructions
+    context_instruction = ""
+    if context_block:
+        context_instruction = (
+            "- If reference material is provided, ground your suggestions in project-specific patterns "
+            "and cite relevant lessons by name when applicable.\n"
+        )
 
-Your task:
-- Propose up to {max_suggestions} high-leverage improvements to this plan/document.
+    return f"""You are an expert enterprise architect performing Review Round R{round_number} of an iterative architectural review.
+
+This document undergoes multiple review passes. Each pass should be sharper than the last.
+
+{iteration_context}
+
+{context_block}Your task:
+- Propose up to {max_suggestions} high-leverage improvements not yet captured.
 - Focus on: architecture clarity, execution safety, risk management, validation completeness, and operational readiness.
-- Do NOT rewrite the document. Do NOT modify Appendix A or Appendix B.
+{context_instruction}- Do NOT rewrite the document. Do NOT modify Appendix A or Appendix B.
+- You MUST output ONLY an appendable markdown snippet for Appendix C.
 
 Required output format (append-only snippet):
 - Start with:
@@ -463,6 +496,23 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     description="Optional prompt template override (must include required placeholders)",
                 ),
                 WorkflowInput(
+                    name="context_files",
+                    type="array",
+                    required=False,
+                    description=(
+                        "List of file or directory paths to include as reference material in the reviewer prompt. "
+                        "Directories are scanned recursively for .md files. "
+                        "Use for lessons learned, design docs, or prior decisions."
+                    ),
+                ),
+                WorkflowInput(
+                    name="max_context_chars",
+                    type="number",
+                    required=False,
+                    default=200_000,
+                    description="Maximum total characters of context file content to include (default 200000)",
+                ),
+                WorkflowInput(
                     name="fallback_openai_model",
                     type="string",
                     required=False,
@@ -568,6 +618,32 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
             template_override = config.get("review_template")
 
+            # Load context files (lessons learned, design docs, prior decisions)
+            context_files = config.get("context_files") or []
+            context_content = ""
+            if context_files:
+                max_context_chars = int(config.get("max_context_chars", 200_000))
+                parts: List[str] = []
+                for cf in context_files:
+                    p = Path(str(cf)).expanduser().resolve()
+                    if p.is_file():
+                        try:
+                            parts.append(f"### {p.name}\n\n{p.read_text(encoding='utf-8')}")
+                        except Exception:
+                            pass
+                    elif p.is_dir():
+                        for md_file in sorted(p.glob("**/*.md")):
+                            try:
+                                parts.append(
+                                    f"### {md_file.relative_to(p)}\n\n"
+                                    f"{md_file.read_text(encoding='utf-8')}"
+                                )
+                            except Exception:
+                                pass
+                context_content = "\n\n".join(parts)
+                if len(context_content) > max_context_chars:
+                    context_content = context_content[:max_context_chars] + "\n\n[... truncated ...]"
+
             for i, agent in enumerate(resolved_agents):
                 round_number = next_round + i
                 step_name = f"architectural_review_R{round_number}"
@@ -584,6 +660,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     reviewer_label=reviewer_label,
                     scope=scope,
                     template_override=template_override,
+                    context_content=context_content,
                 )
 
                 # Execute generation with graceful error handling and OpenAI model fallback
