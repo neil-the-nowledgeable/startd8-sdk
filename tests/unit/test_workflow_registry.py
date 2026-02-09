@@ -234,12 +234,12 @@ class TestDiscoverySearch:
     def teardown_method(self):
         WorkflowRegistry.clear()
 
-    def test_find_by_capability_partial_match(self):
-        """FR-200: Partial/substring matching."""
+    def test_find_by_capability_exact_match_only(self):
+        """FR-200: Exact match only (substring no longer matches)."""
         WorkflowRegistry.register(SearchableWorkflow())
+        # Partial string "doc" should NOT match "document-enhancement"
         found = WorkflowRegistry.find_workflows_by_capability("doc")
-        assert len(found) >= 1
-        assert any(w.metadata.workflow_id == "searchable" for w in found)
+        assert len(found) == 0
 
     def test_find_by_capability_exact_still_works(self):
         """Exact match still works after partial match change."""

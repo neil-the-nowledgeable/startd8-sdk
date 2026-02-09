@@ -95,10 +95,10 @@ class TestTokenUsage:
         with pytest.raises(ValidationError):
             TokenUsage(input=-1, output=100, total=100)
     
-    def test_total_must_equal_sum(self):
-        """Test that total must equal input + output"""
-        with pytest.raises(ValidationError):
-            TokenUsage(input=100, output=200, total=250)
+    def test_total_normalized_to_sum(self):
+        """Test that mismatched total is normalized to input + output."""
+        usage = TokenUsage(input=100, output=200, total=250)
+        assert usage.total == 300  # normalized to input + output
     
     def test_cost_estimate(self):
         """Test cost estimation"""
