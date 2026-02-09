@@ -26,6 +26,40 @@ except ImportError:
     _otel_trace = None  # type: ignore[assignment]
     _tracer = None
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "spans": [
+        {
+            "name_pattern": "pipeline.{name}",
+            "kind": "INTERNAL",
+            "attributes": [
+                "pipeline.name",
+                "pipeline.id",
+                "step.count",
+                "pipeline.total_tokens",
+                "pipeline.total_cost",
+                "pipeline.total_time_ms",
+            ],
+            "events": [],
+        },
+        {
+            "name_pattern": "pipeline.{name}.step.{step_name}",
+            "kind": "INTERNAL",
+            "attributes": [
+                "step.name",
+                "step.index",
+                "agent.name",
+                "agent.model",
+                "tokens",
+                "cost",
+                "response_time_ms",
+                "retry_count",
+            ],
+            "events": [],
+        },
+    ],
+}
+
 try:
     from contextlib import nullcontext as _nullcontext
 except ImportError:

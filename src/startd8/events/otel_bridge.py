@@ -19,6 +19,20 @@ except ImportError:
     _otel_metrics = None  # type: ignore[assignment]
     _OTEL_AVAILABLE = False
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "metrics": [
+        {
+            "name": "startd8.events.total",
+            "instrument": "counter",
+            "unit": "events",
+            "description": "Total EventBus events emitted",
+            "meter": "startd8.events",
+            "labels": ["event_type"],
+        },
+    ],
+}
+
 
 class OTelEventBridge:
     """

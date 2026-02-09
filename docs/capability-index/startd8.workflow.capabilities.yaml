@@ -11,7 +11,7 @@
 
 manifest_id: startd8.workflow.capabilities
 name: StartD8 Workflow System Capabilities
-version: "2.1.0"
+version: "2.1.1"
 description: |
   Capabilities for StartD8 SDK workflow system.
   Protocol-based multi-agent orchestration with cost tracking and observability.
@@ -152,7 +152,7 @@ capabilities:
     evidence:
       - type: code
         ref: src/startd8/workflows/registry.py
-        description: "find_workflows_by_capability() and find_workflows_by_tag() (lines 449-491)"
+        description: "find_workflows_by_capability() with exact equality match and find_workflows_by_tag() (lines 449-491). Fixed from substring to exact match in v0.4.0."
 
   # ============================================================================
   # FILESYSTEM LAYER - Stable (Delivered)
@@ -241,14 +241,14 @@ capabilities:
   - capability_id: startd8.workflow.observability.events
     category: observe
     maturity: stable
-    summary: "EventBus for workflow lifecycle events (PIPELINE_START/STEP/COMPLETE/ERROR)"
+    summary: "EventBus for workflow lifecycle events (PIPELINE_START/STEP/COMPLETE/ERROR/TRUNCATION)"
     audiences: [integration_developer, sdk_architect]
     user_benefit: "Build real-time dashboards and integrations"
     delivers_benefit: workflow.observability.event_stream
     evidence:
       - type: code
         ref: src/startd8/events/types.py
-        description: "PIPELINE_START, PIPELINE_STEP_START, PIPELINE_STEP_COMPLETE, PIPELINE_COMPLETE, PIPELINE_ERROR"
+        description: "PIPELINE_START, PIPELINE_STEP_START, PIPELINE_STEP_COMPLETE, PIPELINE_COMPLETE, PIPELINE_ERROR, TRUNCATION_DETECTED, TRUNCATION_WARNING, TRUNCATION_PREFLIGHT_REJECT"
 
   - capability_id: startd8.workflow.observability.step_results
     category: query
@@ -1005,6 +1005,19 @@ capabilities:
       implements_frs: [FR-400, FR-401, FR-402, FR-403]
       breaking_change: false
 
+  - capability_id: startd8.observability.manifest
+    category: observe
+    maturity: beta
+    summary: "Machine-readable observability surface manifest"
+    audiences: [integration_developer, sdk_architect]
+    user_benefit: "Downstream tools discover telemetry surface without source inspection"
+    delivers_benefit: workflow.observability.manifest_discovery
+    evidence:
+      - type: doc
+        ref: docs/capability-index/startd8.observability.manifest.yaml
+      - type: code
+        ref: src/startd8/observability/manifest.py
+
   - capability_id: startd8.workflow.observability.visualize
     category: generate
     maturity: beta
@@ -1166,6 +1179,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "2.1.1"
+    date: "2026-02-08"
+    changes:
+      - "Updated observability.events evidence: added TRUNCATION_DETECTED, TRUNCATION_WARNING, TRUNCATION_PREFLIGHT_REJECT event types"
+      - "Updated registry.find_by_capability evidence: noted fix from substring to exact match"
   - version: "2.0.0"
     date: "2026-01-29"
     changes:

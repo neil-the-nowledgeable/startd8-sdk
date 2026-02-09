@@ -44,6 +44,33 @@ from ..genai_compat import DualEmitAttributes, EmitMode, get_emit_mode
 
 logger = logging.getLogger(__name__)
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "spans": [
+        {
+            "name_pattern": "agent.generate:{agent_name}",
+            "kind": "CLIENT",
+            "attributes": [
+                "agent.id",
+                "agent.model",
+                "agent.prompt_length",
+                "agent.response_time_ms",
+                "agent.response_length",
+                "agent.tokens_input",
+                "agent.tokens_output",
+                "agent.tokens_total",
+                "agent.truncated",
+                "task.id",
+                "project.id",
+                "gen_ai.system",
+                "gen_ai.operation.name",
+                "gen_ai.response.finish_reasons",
+            ],
+            "events": ["truncation_detected"],
+        },
+    ],
+}
+
 # Lazy-load OpenTelemetry to avoid hard dependency
 _tracer = None
 _OTEL_AVAILABLE = False

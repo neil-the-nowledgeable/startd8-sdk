@@ -24,6 +24,23 @@ except ImportError:
     _otel_trace = None  # type: ignore[assignment]
     _tracer = None
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "spans": [
+        {
+            "name_pattern": "workflow.{workflow_id}",
+            "kind": "INTERNAL",
+            "attributes": [
+                "workflow.id",
+                "workflow.name",
+                "workflow.version",
+                "workflow.success",
+            ],
+            "events": [],
+        },
+    ],
+}
+
 
 # Type alias for progress callbacks
 # Signature: (current_step: int, total_steps: int, message: str) -> None

@@ -26,6 +26,22 @@ from ..protocols import (
 
 logger = logging.getLogger("startd8.contractors.contextcore")
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "spans": [
+        {
+            "name_pattern": "{caller_defined_name}",
+            "kind": "INTERNAL",
+            "attributes_dynamic": True,
+            "attributes": [
+                "project.id",
+                "agent.id",
+            ],
+            "events": [],
+        },
+    ],
+}
+
 
 # ============================================================================
 # ContextCoreInstrumentor

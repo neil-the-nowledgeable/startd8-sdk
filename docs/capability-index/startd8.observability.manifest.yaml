@@ -1,0 +1,476 @@
+# StartD8 Observability Manifest
+# Version: 1.0.0
+# Generated: 2026-02-09
+#
+# PURPOSE: Machine-readable declaration of the SDK's full telemetry surface.
+# Consumed by ContextCore agents and Wayfinder to auto-generate dashboards,
+# alerts, and SLOs.
+#
+# Code-derived sections (metrics, spans, event_types, dashboards) are validated
+# against live SDK introspection by scripts/generate_observability_manifest.py.
+# Hand-authored sections (slo_templates, alert_templates, dashboard_hints) are
+# preserved during regeneration.
+
+manifest_id: startd8.observability
+version: "1.0.0"
+description: |
+  Observability surface manifest for the StartD8 SDK.
+  Declares all metrics, spans, events, dashboard references, SLO templates,
+  and alert templates emitted by the SDK's instrumented modules.
+
+resource_attributes:
+  - service.name
+  - service.version
+  - io.contextcore.project.id
+  - io.contextcore.project.name
+  - io.contextcore.task.id
+  - io.contextcore.sprint.id
+  - io.contextcore.business.criticality
+
+# ==============================================================================
+# METRICS (12 total — 7 session, 4 cost, 1 event bridge)
+# ==============================================================================
+
+metrics:
+
+  # --- Session tracking (underscore-separated, meter: startd8) ---------------
+
+  - name: startd8_active_sessions
+    instrument: up_down_counter
+    unit: sessions
+    description: "Number of active sessions"
+    meter: startd8
+    source_file: src/startd8/session_tracking.py
+    labels: [agent_name, model, project_id]
+    dashboard_hints:
+      panel_type: stat
+      query: "startd8_active_sessions"
+
+  - name: startd8_requests_total
+    instrument: counter
+    unit: requests
+    description: "Total number of requests"
+    meter: startd8
+    source_file: src/startd8/session_tracking.py
+    labels: [agent_name, model, project_id, status]
+    dashboard_hints:
+      panel_type: timeseries
+      query: "rate(startd8_requests_total[5m])"
+
+  - name: startd8_tokens_total
+    instrument: counter
+    unit: tokens
+    description: "Total tokens processed"
+    meter: startd8
+    source_file: src/startd8/session_tracking.py
+    labels: [agent_name, model, project_id, direction]
+    dashboard_hints:
+      panel_type: timeseries
+      query: "rate(startd8_tokens_total[5m])"
+
+  - name: startd8_response_time_ms
+    instrument: histogram
+    unit: ms
+    description: "Response time in milliseconds"
+    meter: startd8
+    source_file: src/startd8/session_tracking.py
+    labels: [agent_name, model, project_id]
+    dashboard_hints:
+      panel_type: histogram
+      query: "histogram_quantile(0.95, rate(startd8_response_time_ms_bucket[5m]))"
+
+  - name: startd8_context_usage_ratio
+    instrument: observable_gauge
+    unit: ratio
+    description: "Context window usage ratio (0-1)"
+    meter: startd8
+    source_file: src/startd8/session_tracking.py
+    labels: [session_id, agent_name, model, project_id]
+    dashboard_hints:
+      panel_type: gauge
+      query: "startd8_context_usage_ratio"
+
+  - name: startd8_truncations_total
+    instrument: counter
+    unit: events
+    description: "Total truncation events"
+    meter: startd8
+    source_file: src/startd8/session_tracking.py
+    labels: [agent_name, model, project_id]
+    dashboard_hints:
+      panel_type: timeseries
+      query: "rate(startd8_truncations_total[5m])"
+
+  - name: startd8_cost_total
+    instrument: counter
+    unit: USD
+    description: "Total cost in USD"
+    meter: startd8
+    source_file: src/startd8/session_tracking.py
+    labels: [agent_name, model, project_id]
+    dashboard_hints:
+      panel_type: stat
+      query: "sum(startd8_cost_total)"
+
+  # --- Cost tracking (dot-separated, meter: startd8.costs) -------------------
+
+  - name: startd8.cost.total
+    instrument: counter
+    unit: USD
+    description: "Total cost in USD across all API calls"
+    meter: startd8.costs
+    source_file: src/startd8/costs/otel_metrics.py
+    labels: [model, provider, project]
+    prometheus_name: startd8_cost_total
+    dashboard_hints:
+      panel_type: stat
+      query: "sum(startd8_cost_total)"
+
+  - name: startd8.cost.input_tokens
+    instrument: counter
+    unit: tokens
+    description: "Total input tokens consumed"
+    meter: startd8.costs
+    source_file: src/startd8/costs/otel_metrics.py
+    labels: [model, provider, project]
+    prometheus_name: startd8_cost_input_tokens
+    dashboard_hints:
+      panel_type: timeseries
+      query: "rate(startd8_cost_input_tokens[5m])"
+
+  - name: startd8.cost.output_tokens
+    instrument: counter
+    unit: tokens
+    description: "Total output tokens consumed"
+    meter: startd8.costs
+    source_file: src/startd8/costs/otel_metrics.py
+    labels: [model, provider, project]
+    prometheus_name: startd8_cost_output_tokens
+    dashboard_hints:
+      panel_type: timeseries
+      query: "rate(startd8_cost_output_tokens[5m])"
+
+  - name: startd8.cost.per_request
+    instrument: histogram
+    unit: USD
+    description: "Cost per individual request in USD"
+    meter: startd8.costs
+    source_file: src/startd8/costs/otel_metrics.py
+    labels: [model, provider, project]
+    prometheus_name: startd8_cost_per_request
+    dashboard_hints:
+      panel_type: histogram
+      query: "histogram_quantile(0.95, rate(startd8_cost_per_request_bucket[5m]))"
+
+  # --- Event bridge (dot-separated, meter: startd8.events) -------------------
+
+  - name: startd8.events.total
+    instrument: counter
+    unit: events
+    description: "Total EventBus events emitted"
+    meter: startd8.events
+    source_file: src/startd8/events/otel_bridge.py
+    labels: [event_type]
+    prometheus_name: startd8_events_total
+    dashboard_hints:
+      panel_type: timeseries
+      query: "rate(startd8_events_total[5m])"
+
+# ==============================================================================
+# SPANS (5 patterns)
+# ==============================================================================
+
+spans:
+
+  - name_pattern: "agent.generate:{agent_name}"
+    kind: CLIENT
+    source_file: src/startd8/agents/tracked.py
+    attributes:
+      - agent.id
+      - agent.model
+      - agent.prompt_length
+      - agent.response_time_ms
+      - agent.response_length
+      - agent.tokens_input
+      - agent.tokens_output
+      - agent.tokens_total
+      - agent.truncated
+      - task.id
+      - project.id
+      - gen_ai.system
+      - gen_ai.operation.name
+      - gen_ai.response.finish_reasons
+    events:
+      - truncation_detected
+
+  - name_pattern: "workflow.{workflow_id}"
+    kind: INTERNAL
+    source_file: src/startd8/workflows/base.py
+    attributes:
+      - workflow.id
+      - workflow.name
+      - workflow.version
+      - workflow.success
+
+  - name_pattern: "pipeline.{name}"
+    kind: INTERNAL
+    source_file: src/startd8/orchestration.py
+    attributes:
+      - pipeline.name
+      - pipeline.id
+      - step.count
+      - pipeline.total_tokens
+      - pipeline.total_cost
+      - pipeline.total_time_ms
+
+  - name_pattern: "pipeline.{name}.step.{step_name}"
+    kind: INTERNAL
+    source_file: src/startd8/orchestration.py
+    attributes:
+      - step.name
+      - step.index
+      - agent.name
+      - agent.model
+      - tokens
+      - cost
+      - response_time_ms
+      - retry_count
+
+  - name_pattern: "{caller_defined_name}"
+    kind: INTERNAL
+    source_file: src/startd8/contractors/adapters/contextcore.py
+    attributes_dynamic: true
+    attributes:
+      - project.id
+      - agent.id
+
+# ==============================================================================
+# EVENT TYPES (42 total)
+# ==============================================================================
+
+event_types:
+
+  # Agent events
+  - name: AGENT_CALL_START
+    category: agent
+    data_fields: [agent_name, model, prompt_preview]
+  - name: AGENT_CALL_COMPLETE
+    category: agent
+    data_fields: [agent_name, model, response_time_ms, tokens]
+  - name: AGENT_CALL_ERROR
+    category: agent
+    data_fields: [agent_name, model, error]
+  - name: AGENT_MANUAL_PAUSED
+    category: agent
+  - name: AGENT_AUTO_PAUSED
+    category: agent
+  - name: AGENT_MANUAL_RESUMED
+    category: agent
+  - name: AGENT_AUTO_RESUMED
+    category: agent
+
+  # Cost events
+  - name: COST_RECORDED
+    category: cost
+  - name: BUDGET_WARNING
+    category: cost
+  - name: BUDGET_EXCEEDED
+    category: cost
+  - name: BUDGET_CREATED
+    category: cost
+  - name: BUDGET_UPDATED
+    category: cost
+  - name: BUDGET_DELETED
+    category: cost
+
+  # Usage limit events
+  - name: USAGE_LIMIT_WARNING
+    category: usage
+  - name: USAGE_LIMIT_EXCEEDED
+    category: usage
+  - name: USAGE_LIMIT_CRITICAL
+    category: usage
+
+  # Pipeline events
+  - name: PIPELINE_START
+    category: pipeline
+    data_fields: [pipeline_id, pipeline_name, steps]
+  - name: PIPELINE_STEP_START
+    category: pipeline
+    data_fields: [pipeline_id, step_number, step_name, agent]
+  - name: PIPELINE_STEP_COMPLETE
+    category: pipeline
+    data_fields: [pipeline_id, step_number, step_name, response_time_ms, tokens]
+  - name: PIPELINE_COMPLETE
+    category: pipeline
+    data_fields: [pipeline_id, total_time_ms, total_tokens, total_cost, total_retries]
+  - name: PIPELINE_STEP_RETRY
+    category: pipeline
+    data_fields: [step_name, attempt_number, error, delay_seconds]
+  - name: PIPELINE_ERROR
+    category: pipeline
+    data_fields: [pipeline_id, error, error_type]
+
+  # Job queue events
+  - name: JOB_QUEUED
+    category: job
+  - name: JOB_PROCESSING_START
+    category: job
+  - name: JOB_PROCESSING_COMPLETE
+    category: job
+  - name: JOB_FAILED
+    category: job
+  - name: JOB_ARCHIVED
+    category: job
+
+  # Enhancement events
+  - name: ENHANCEMENT_START
+    category: enhancement
+  - name: ENHANCEMENT_STEP_START
+    category: enhancement
+  - name: ENHANCEMENT_STEP_COMPLETE
+    category: enhancement
+  - name: ENHANCEMENT_COMPLETE
+    category: enhancement
+
+  # Storage events
+  - name: PROMPT_CREATED
+    category: storage
+  - name: RESPONSE_RECORDED
+    category: storage
+  - name: BENCHMARK_CREATED
+    category: storage
+  - name: BENCHMARK_COMPLETED
+    category: storage
+
+  # Truncation events
+  - name: TRUNCATION_DETECTED
+    category: truncation
+  - name: TRUNCATION_WARNING
+    category: truncation
+  - name: TRUNCATION_PREFLIGHT_REJECT
+    category: truncation
+
+  # System events
+  - name: SYSTEM_ERROR
+    category: system
+  - name: SYSTEM_WARNING
+    category: system
+  - name: FRAMEWORK_INITIALIZED
+    category: system
+  - name: CACHE_CLEARED
+    category: system
+
+# ==============================================================================
+# DASHBOARDS (4 existing)
+# ==============================================================================
+
+dashboards:
+
+  - uid: startd8-sdk-metrics
+    title: "StartD8 SDK Metrics"
+    file_path: dashboards/startd8-metrics.json
+    datasources: [prometheus]
+    metrics_used:
+      - startd8_active_sessions
+      - startd8_requests_total
+      - startd8_tokens_total
+      - startd8_cost_total
+      - startd8_context_usage_ratio
+      - startd8_truncations_total
+      - startd8_response_time_ms_bucket
+
+  - uid: contextcore-beaver-lead-contractor-progress
+    title: "[BEAVER] Lead Contractor Progress"
+    file_path: dashboards/lead-contractor-progress.json
+    datasources: [tempo]
+    metrics_used: []
+
+  - uid: startd8-sdk-overview
+    title: "StartD8 SDK Overview"
+    file_path: dashboards/startd8-sdk-overview.json
+    datasources: [tempo, prometheus, loki]
+    metrics_used:
+      - startd8_cost_input_tokens
+      - startd8_cost_output_tokens
+      - startd8_cost_total
+      - startd8_active_sessions
+      - startd8_truncations_total
+
+  - uid: startd8-cost-tracking
+    title: "StartD8 Cost Tracking"
+    file_path: dashboards/startd8-cost-tracking.json
+    datasources: [prometheus, loki]
+    metrics_used:
+      - startd8_cost_total
+      - startd8_budget_limit
+      - startd8_cost_per_request_bucket
+      - startd8_cost_input_tokens
+      - startd8_cost_output_tokens
+
+# ==============================================================================
+# SLO TEMPLATES (hand-authored)
+# ==============================================================================
+
+slo_templates:
+
+  - name: availability
+    description: "Agent call success rate over a rolling window"
+    metric: startd8_requests_total
+    query: |
+      1 - (
+        sum(rate(startd8_requests_total{status="error"}[{{window}}]))
+        /
+        sum(rate(startd8_requests_total[{{window}}]))
+      )
+    target: 0.99
+    window: "30d"
+
+  - name: latency_p95
+    description: "95th percentile response time under threshold"
+    metric: startd8_response_time_ms
+    query: |
+      histogram_quantile(0.95, sum(rate(startd8_response_time_ms_bucket[{{window}}])) by (le))
+    target: 5000
+    window: "7d"
+
+  - name: cost_per_day
+    description: "Daily cost stays under budget"
+    metric: startd8_cost_total
+    query: |
+      sum(increase(startd8_cost_total[1d]))
+    target: 50.0
+    window: "1d"
+
+# ==============================================================================
+# ALERT TEMPLATES (hand-authored)
+# ==============================================================================
+
+alert_templates:
+
+  - name: high_truncation_rate
+    description: "Alert when truncation rate exceeds 10% of requests"
+    severity: warning
+    metric: startd8_truncations_total
+    expr: |
+      rate(startd8_truncations_total[5m])
+      /
+      rate(startd8_requests_total[5m])
+      > 0.10
+    for_duration: "5m"
+
+  - name: context_near_capacity
+    description: "Alert when any session exceeds 90% context usage"
+    severity: warning
+    metric: startd8_context_usage_ratio
+    expr: |
+      startd8_context_usage_ratio > 0.90
+    for_duration: "2m"
+
+  - name: budget_exceeded
+    description: "Alert when daily cost exceeds budget threshold"
+    severity: critical
+    metric: startd8_cost_total
+    expr: |
+      sum(increase(startd8_cost_total[1d])) > 100
+    for_duration: "1m"

@@ -14,6 +14,44 @@ except ImportError:
     _otel_metrics = None  # type: ignore[assignment]
     _OTEL_AVAILABLE = False
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "metrics": [
+        {
+            "name": "startd8.cost.total",
+            "instrument": "counter",
+            "unit": "USD",
+            "description": "Total cost in USD across all API calls",
+            "meter": "startd8.costs",
+            "labels": ["model", "provider", "project"],
+        },
+        {
+            "name": "startd8.cost.input_tokens",
+            "instrument": "counter",
+            "unit": "tokens",
+            "description": "Total input tokens consumed",
+            "meter": "startd8.costs",
+            "labels": ["model", "provider", "project"],
+        },
+        {
+            "name": "startd8.cost.output_tokens",
+            "instrument": "counter",
+            "unit": "tokens",
+            "description": "Total output tokens consumed",
+            "meter": "startd8.costs",
+            "labels": ["model", "provider", "project"],
+        },
+        {
+            "name": "startd8.cost.per_request",
+            "instrument": "histogram",
+            "unit": "USD",
+            "description": "Cost per individual request in USD",
+            "meter": "startd8.costs",
+            "labels": ["model", "provider", "project"],
+        },
+    ],
+}
+
 
 class CostMetrics:
     """
