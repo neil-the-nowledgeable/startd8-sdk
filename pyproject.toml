@@ -78,6 +78,7 @@ openai = "startd8.providers.openai:OpenAIProvider"
 ollama = "startd8.providers.openai:OllamaProvider"
 mock = "startd8.providers.mock:MockProvider"
 gemini = "startd8.providers.gemini:GeminiProvider"
+mistral = "startd8.providers.mistral:MistralProvider"
 
 [project.entry-points."startd8.workflows"]
 pipeline = "startd8.workflows.builtin.pipeline_workflow:PipelineWorkflow"

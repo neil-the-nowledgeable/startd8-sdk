@@ -97,6 +97,19 @@ class Models:
     GPT5_2_CODEX_LATEST = O3_LATEST
 
     # ==========================================================================
+    # Mistral AI Models
+    # ==========================================================================
+
+    # Flagship
+    MISTRAL_LARGE_LATEST = "mistral:mistral-large-latest"
+
+    # Balanced
+    MISTRAL_MEDIUM_LATEST = "mistral:mistral-medium-latest"
+
+    # Fast
+    MISTRAL_SMALL_LATEST = "mistral:mistral-small-latest"
+
+    # ==========================================================================
     # Recommended Defaults by Use Case
     # ==========================================================================
 
@@ -190,6 +203,26 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         tier="mini",
         capabilities={"text", "code"},
     ),
+
+    # Mistral AI
+    "mistral-large-latest": ModelInfo(
+        provider="mistral",
+        model_id="mistral-large-latest",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "mistral-medium-latest": ModelInfo(
+        provider="mistral",
+        model_id="mistral-medium-latest",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "mistral-small-latest": ModelInfo(
+        provider="mistral",
+        model_id="mistral-small-latest",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
 }
 
 
@@ -254,6 +287,12 @@ def get_latest_model(
             "balanced": Models.GPT4_1_LATEST,
             "fast": Models.GPT4_LATEST,
             "mini": Models.GPT4_MINI,
+        },
+        "mistral": {
+            "flagship": Models.MISTRAL_LARGE_LATEST,
+            "balanced": Models.MISTRAL_MEDIUM_LATEST,
+            "fast": Models.MISTRAL_SMALL_LATEST,
+            "mini": Models.MISTRAL_SMALL_LATEST,
         },
     }
 
