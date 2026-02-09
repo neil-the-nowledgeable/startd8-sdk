@@ -36,6 +36,7 @@ from ..models import (
 from ...agents import BaseAgent
 from ...utils.agent_resolution import resolve_agents
 from ...utils.file_operations import FileLock, atomic_write, atomic_write_json
+from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
 
 APPENDIX_HEADING = "## Appendix: Iterative Review Log (Applied / Rejected Suggestions)"
@@ -68,25 +69,6 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 """
-
-def _token_usage_input(token_usage: Any) -> int:
-    return int(getattr(token_usage, "input_tokens", getattr(token_usage, "input", 0)) or 0)
-
-
-def _token_usage_output(token_usage: Any) -> int:
-    return int(getattr(token_usage, "output_tokens", getattr(token_usage, "output", 0)) or 0)
-
-
-def _token_usage_cost(token_usage: Any) -> float:
-    if hasattr(token_usage, "cost") and getattr(token_usage, "cost") is not None:
-        return float(getattr(token_usage, "cost"))
-    if hasattr(token_usage, "cost_estimate"):
-        try:
-            return float(getattr(token_usage, "cost_estimate"))
-        except Exception:
-            return 0.0
-    return 0.0
-
 
 def _now_utc_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
@@ -403,9 +385,9 @@ class DocReviewLogWorkflow(WorkflowBase):
                     )
                     break
 
-                input_tokens = _token_usage_input(token_usage) if token_usage else 0
-                output_tokens = _token_usage_output(token_usage) if token_usage else 0
-                cost = _token_usage_cost(token_usage) if token_usage else 0.0
+                input_tokens = token_usage_input(token_usage) if token_usage else 0
+                output_tokens = token_usage_output(token_usage) if token_usage else 0
+                cost = token_usage_cost(token_usage) if token_usage else 0.0
 
                 ok, message, ids = _validate_snippet(response_text, round_number, max_suggestions)
                 if not ok:

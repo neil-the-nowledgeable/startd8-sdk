@@ -28,9 +28,25 @@ from ..models import (
     ValidationResult,
 )
 from ...agents import BaseAgent
+from ...exceptions import GeminiSafetyFilterError
 from ...model_catalog import Models, list_models_by_tier
 from ...utils.agent_resolution import resolve_agents
 from ...utils.file_operations import FileLock, atomic_write, atomic_write_json
+from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
+
+import logging
+
+_logger = logging.getLogger(__name__)
+
+# Relaxed safety settings for technical document review.
+# Architectural plans mention "risks", "vulnerabilities", "attack surfaces", etc.
+# which can trip Gemini's DANGEROUS_CONTENT filter on benign content.
+RELAXED_SAFETY_SETTINGS = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
 
 
 APPENDIX_HEADING = "## Appendix: Iterative Review Log (Applied / Rejected Suggestions)"
@@ -88,35 +104,14 @@ REQUIRED_COLUMNS = [
     "Validation Approach",
 ]
 
-def _token_usage_input(token_usage: Any) -> int:
-    """
-    Normalize token usage input count across SDK versions/providers.
-
-    StartD8 TokenUsage uses `input`/`output`. Some older callers used
-    `input_tokens`/`output_tokens`.
-    """
-    return int(getattr(token_usage, "input_tokens", getattr(token_usage, "input", 0)) or 0)
-
-
-def _token_usage_output(token_usage: Any) -> int:
-    return int(getattr(token_usage, "output_tokens", getattr(token_usage, "output", 0)) or 0)
-
-
-def _token_usage_cost(token_usage: Any) -> float:
-    # Prefer explicit cost if present, otherwise TokenUsage.cost_estimate property.
-    if hasattr(token_usage, "cost") and getattr(token_usage, "cost") is not None:
-        return float(getattr(token_usage, "cost"))
-    if hasattr(token_usage, "cost_estimate"):
-        try:
-            return float(getattr(token_usage, "cost_estimate"))
-        except Exception:
-            return 0.0
-    return 0.0
-
-
 def _is_openai_agent(agent: BaseAgent) -> bool:
     mod = getattr(agent.__class__, "__module__", "") or ""
     return ".agents.openai" in mod or mod.endswith("agents.openai")
+
+
+def _is_gemini_agent(agent: BaseAgent) -> bool:
+    mod = getattr(agent.__class__, "__module__", "") or ""
+    return ".agents.gemini" in mod or mod.endswith("agents.gemini")
 
 
 def _looks_like_model_not_found_error(exc: Exception) -> bool:
@@ -194,15 +189,15 @@ def _select_default_agents(
     """
     tier = (quality_tier or "flagship").strip().lower()
 
-    # For strategic architectural review, prefer an explicit high-quality trio by default.
-    # IMPORTANT: Preserve this explicit ordering (do not sort it away), so the
-    # default run is: Opus -> Gemini Pro -> o3.
+    # For strategic architectural review, default to Opus + Gemini Pro.
+    # OpenAI o3 removed from defaults due to org TPM limits vs large prompts.
+    # Users can add other models (e.g. mistral:mistral-large-latest) via
+    # the "agents" config or the "providers" allowlist.
     preferred: List[str] = []
     if tier == "flagship":
         preferred = [
             Models.CLAUDE_OPUS_LATEST,
             Models.GEMINI_PRO_LATEST,
-            Models.O3_LATEST,
         ]
 
     # Apply provider allowlist to preferred first (preserving order)
@@ -219,7 +214,7 @@ def _select_default_agents(
     if allowed is not None:
         remainder = [m for m in remainder if m.split(":", 1)[0].lower() in allowed]
 
-    priority = {"anthropic": 0, "gemini": 1, "openai": 2}
+    priority = {"anthropic": 0, "gemini": 1, "mistral": 2, "openai": 3}
     remainder.sort(key=lambda full: (priority.get(full.split(":", 1)[0].lower(), 99), full))
 
     return (preferred + remainder)[:reviewer_count]
@@ -452,7 +447,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     name="reviewer_count",
                     type="number",
                     required=False,
-                    default=3,
+                    default=2,
                     description="Number of default high-quality reviewers to run when agents not specified",
                 ),
                 WorkflowInput(
@@ -534,6 +529,16 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     default=True,
                     description="If true, retries OpenAI rounds with fallback_openai_model on model-not-found errors.",
                 ),
+                WorkflowInput(
+                    name="gemini_safety_settings",
+                    type="array",
+                    required=False,
+                    description=(
+                        "Custom Gemini safety_settings applied to all Gemini reviewers. "
+                        "Each entry: {category: 'HARM_CATEGORY_*', threshold: 'BLOCK_NONE'|'BLOCK_ONLY_HIGH'|...}. "
+                        "When not set, Gemini uses its default filters (with automatic relaxation on SAFETY retry)."
+                    ),
+                ),
             ],
         )
 
@@ -594,12 +599,19 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
         else:
             quality_tier = str(config.get("quality_tier") or "flagship")
             providers = config.get("providers")
-            reviewer_count = int(config.get("reviewer_count", 2))
+            reviewer_count = int(config.get("reviewer_count", 2))  # matches default in metadata
             default_specs = _select_default_agents(quality_tier, reviewer_count, providers)
             resolved_agents = resolve_agents(default_specs)
 
         if not resolved_agents:
             return WorkflowResult.from_error(self.metadata.workflow_id, "No agents available for architectural review")
+
+        # Apply caller-provided Gemini safety_settings to all Gemini agents
+        gemini_safety = config.get("gemini_safety_settings")
+        if gemini_safety:
+            for ag in resolved_agents:
+                if _is_gemini_agent(ag) and hasattr(ag, "safety_settings"):
+                    ag.safety_settings = gemini_safety
 
         step_results: List[StepResult] = []
         round_records: List[_RoundRecord] = []
@@ -668,11 +680,79 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     context_content=context_content,
                 )
 
-                # Execute generation with graceful error handling and OpenAI model fallback
+                # Execute generation with graceful error handling, Gemini SAFETY
+                # retry, and OpenAI model fallback.
                 try:
                     response_text, time_ms, token_usage = agent.generate(prompt)
+
+                except GeminiSafetyFilterError as safety_err:
+                    # ── Gemini SAFETY retry (Fix 3) ──────────────────────────
+                    # Attempt 1: retry with reduced prompt (no context files)
+                    # Attempt 2: retry with relaxed safety_settings + reduced prompt
+                    # Both failures → skip this reviewer, continue to next round
+                    _logger.warning(
+                        "Gemini SAFETY filter hit for R%d (%s); attempting reduced-context retry",
+                        round_number,
+                        reviewer_label,
+                    )
+                    self._emit_progress(
+                        on_progress, i, total_rounds,
+                        f"Gemini SAFETY filter on R{round_number}; retrying with reduced context",
+                    )
+
+                    reduced_prompt = _build_prompt(
+                        document_without_appendix=_strip_appendix_for_prompt(doc_text),
+                        applied_ids=applied_ids,
+                        rejected_ids=rejected_ids,
+                        round_number=round_number,
+                        max_suggestions=max_suggestions,
+                        reviewer_label=reviewer_label,
+                        scope=scope,
+                        template_override=template_override,
+                        context_content="",  # drop context files
+                    )
+
+                    try:
+                        response_text, time_ms, token_usage = agent.generate(reduced_prompt)
+                    except GeminiSafetyFilterError:
+                        # Attempt 2: rebuild agent with relaxed safety_settings
+                        _logger.warning(
+                            "Reduced-context retry still blocked; retrying with relaxed safety_settings",
+                        )
+                        self._emit_progress(
+                            on_progress, i, total_rounds,
+                            f"R{round_number}: retrying with relaxed safety settings",
+                        )
+                        try:
+                            if _is_gemini_agent(agent):
+                                agent.safety_settings = RELAXED_SAFETY_SETTINGS
+                            response_text, time_ms, token_usage = agent.generate(reduced_prompt)
+                        except (GeminiSafetyFilterError, Exception) as e3:
+                            # Give up on this reviewer, continue to next
+                            _logger.warning(
+                                "Gemini SAFETY retry exhausted for R%d; skipping reviewer",
+                                round_number,
+                            )
+                            self._emit_progress(
+                                on_progress, i, total_rounds,
+                                f"R{round_number}: skipping {reviewer_label} after repeated SAFETY blocks",
+                            )
+                            step_results.append(
+                                StepResult(
+                                    step_name=step_name,
+                                    agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
+                                    output="",
+                                    time_ms=0,
+                                    input_tokens=0,
+                                    output_tokens=0,
+                                    cost=0.0,
+                                    error=f"Gemini SAFETY filter (skipped): {e3}",
+                                )
+                            )
+                            continue  # ← skip, don't break — let remaining reviewers run
+
                 except Exception as e:
-                    # If OpenAI model is unavailable, retry once with a fallback model (default gpt-4o)
+                    # If OpenAI model is unavailable, retry once with a fallback model
                     if (
                         fallback_on_model_not_found
                         and fallback_openai_model
@@ -718,9 +798,9 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         )
                         break
 
-                input_tokens = _token_usage_input(token_usage) if token_usage else 0
-                output_tokens = _token_usage_output(token_usage) if token_usage else 0
-                cost = _token_usage_cost(token_usage) if token_usage else 0.0
+                input_tokens = token_usage_input(token_usage) if token_usage else 0
+                output_tokens = token_usage_output(token_usage) if token_usage else 0
+                cost = token_usage_cost(token_usage) if token_usage else 0.0
 
                 total_input_tokens += input_tokens
                 total_output_tokens += output_tokens

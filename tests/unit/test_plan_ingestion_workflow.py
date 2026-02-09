@@ -822,3 +822,25 @@ class TestEndToEnd:
         assert state_file.exists()
         state = json.loads(state_file.read_text())
         assert state["current_phase"] == "completed"
+
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_state_json_written_on_phase_error(self, mock_resolve, tmp_path):
+        """Verify state JSON is persisted even when a phase fails."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.return_value = _mock_generate_return("not json")
+        mock_resolve.return_value = agent
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+        })
+
+        assert not result.success
+        state_file = tmp_path / ".startd8" / "plan_ingestion_state.json"
+        assert state_file.exists()
+        state = json.loads(state_file.read_text())
+        assert state["current_phase"] == "failed"
+        assert state["error"] is not None

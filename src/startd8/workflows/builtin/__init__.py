@@ -14,6 +14,7 @@ Available workflows:
 - LeadContractorContextCoreWorkflow: Lead contractor with ContextCore task tracking
 - PolicyAnalysisWorkflow: Multi-agent critical policy analysis
 - PlainLanguageWorkflow: Simplifies complex content into plain language
+- PlanIngestionWorkflow: Parses, assesses, and transforms generic plans into SDK-native formats
 """
 
 # Imports are done lazily to avoid circular imports

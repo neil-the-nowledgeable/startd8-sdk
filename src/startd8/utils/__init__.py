@@ -19,6 +19,8 @@ from .agent_resolution import (
 
 from .code_extraction import extract_code_from_response, extract_multi_file_code
 
+from .token_usage import token_usage_input, token_usage_output, token_usage_cost
+
 __all__ = [
     # Retry utilities
     "RetryConfig",
@@ -34,6 +36,10 @@ __all__ = [
     # Code extraction
     "extract_code_from_response",
     "extract_multi_file_code",
+    # Token usage normalization
+    "token_usage_input",
+    "token_usage_output",
+    "token_usage_cost",
 ]
 
 

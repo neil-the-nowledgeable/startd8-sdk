@@ -15,11 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+import yaml
+
 from ..base import WorkflowBase, ProgressCallback
 from ..models import (
     AgentCount,
     StepResult,
-    ValidationResult,
     WorkflowInput,
     WorkflowMetadata,
     WorkflowMetrics,
@@ -30,6 +31,7 @@ from ...model_catalog import Models
 from ...utils.agent_resolution import resolve_agent_spec
 from ...utils.code_extraction import extract_code_from_response
 from ...utils.file_operations import atomic_write, atomic_write_json
+from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
 from .plan_ingestion_models import (
     ComplexityScore,
@@ -185,6 +187,14 @@ Use ## for top-level sections, ### for subsections.
 
 
 # ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+_INPUT_TRUNCATION = 200   # Max chars of prompt stored in StepResult.input
+_OUTPUT_TRUNCATION = 500  # Max chars of response stored in StepResult.output
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -192,25 +202,6 @@ def _extract_json_from_response(response: str) -> dict:
     """Extract JSON from an LLM response, handling code fences."""
     text = extract_code_from_response(response, language="json")
     return json.loads(text)
-
-
-def _token_usage_input(token_usage: Any) -> int:
-    return int(getattr(token_usage, "input_tokens", getattr(token_usage, "input", 0)) or 0)
-
-
-def _token_usage_output(token_usage: Any) -> int:
-    return int(getattr(token_usage, "output_tokens", getattr(token_usage, "output", 0)) or 0)
-
-
-def _token_usage_cost(token_usage: Any) -> float:
-    if hasattr(token_usage, "cost") and getattr(token_usage, "cost") is not None:
-        return float(getattr(token_usage, "cost"))
-    if hasattr(token_usage, "cost_estimate"):
-        try:
-            return float(getattr(token_usage, "cost_estimate"))
-        except Exception:
-            return 0.0
-    return 0.0
 
 
 def _parse_context_files(
@@ -376,9 +367,9 @@ class PlanIngestionWorkflow(WorkflowBase):
         response_text, time_ms, token_usage = agent.generate(prompt)
         elapsed_ms = int((time.time() - t0) * 1000)
 
-        in_tok = _token_usage_input(token_usage) if token_usage else 0
-        out_tok = _token_usage_output(token_usage) if token_usage else 0
-        cost = _token_usage_cost(token_usage) if token_usage else 0.0
+        in_tok = token_usage_input(token_usage) if token_usage else 0
+        out_tok = token_usage_output(token_usage) if token_usage else 0
+        cost = token_usage_cost(token_usage) if token_usage else 0.0
 
         try:
             data = _extract_json_from_response(response_text)
@@ -386,8 +377,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             return None, StepResult(
                 step_name="parse",
                 agent_name=agent.name,
-                input=prompt[:200],
-                output=response_text[:500],
+                input=prompt[:_INPUT_TRUNCATION],
+                output=response_text[:_OUTPUT_TRUNCATION],
                 time_ms=elapsed_ms,
                 input_tokens=in_tok,
                 output_tokens=out_tok,
@@ -422,8 +413,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         step = StepResult(
             step_name="parse",
             agent_name=agent.name,
-            input=prompt[:200],
-            output=response_text[:500],
+            input=prompt[:_INPUT_TRUNCATION],
+            output=response_text[:_OUTPUT_TRUNCATION],
             time_ms=elapsed_ms,
             input_tokens=in_tok,
             output_tokens=out_tok,
@@ -462,9 +453,9 @@ class PlanIngestionWorkflow(WorkflowBase):
         response_text, time_ms, token_usage = agent.generate(prompt)
         elapsed_ms = int((time.time() - t0) * 1000)
 
-        in_tok = _token_usage_input(token_usage) if token_usage else 0
-        out_tok = _token_usage_output(token_usage) if token_usage else 0
-        cost = _token_usage_cost(token_usage) if token_usage else 0.0
+        in_tok = token_usage_input(token_usage) if token_usage else 0
+        out_tok = token_usage_output(token_usage) if token_usage else 0
+        cost = token_usage_cost(token_usage) if token_usage else 0.0
 
         try:
             data = _extract_json_from_response(response_text)
@@ -472,8 +463,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             return None, StepResult(
                 step_name="assess",
                 agent_name=agent.name,
-                input=prompt[:200],
-                output=response_text[:500],
+                input=prompt[:_INPUT_TRUNCATION],
+                output=response_text[:_OUTPUT_TRUNCATION],
                 time_ms=elapsed_ms,
                 input_tokens=in_tok,
                 output_tokens=out_tok,
@@ -507,8 +498,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         step = StepResult(
             step_name="assess",
             agent_name=agent.name,
-            input=prompt[:200],
-            output=response_text[:500],
+            input=prompt[:_INPUT_TRUNCATION],
+            output=response_text[:_OUTPUT_TRUNCATION],
             time_ms=elapsed_ms,
             input_tokens=in_tok,
             output_tokens=out_tok,
@@ -560,9 +551,9 @@ class PlanIngestionWorkflow(WorkflowBase):
         response_text, time_ms, token_usage = agent.generate(prompt)
         elapsed_ms = int((time.time() - t0) * 1000)
 
-        in_tok = _token_usage_input(token_usage) if token_usage else 0
-        out_tok = _token_usage_output(token_usage) if token_usage else 0
-        cost = _token_usage_cost(token_usage) if token_usage else 0.0
+        in_tok = token_usage_input(token_usage) if token_usage else 0
+        out_tok = token_usage_output(token_usage) if token_usage else 0
+        cost = token_usage_cost(token_usage) if token_usage else 0.0
 
         # Extract content from potential code fences
         content = extract_code_from_response(
@@ -572,15 +563,14 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         # Validate output
         if route == ContractorRoute.PRIME:
-            import yaml
             try:
                 yaml.safe_load(content)
             except yaml.YAMLError as exc:
                 return None, StepResult(
                     step_name="transform",
                     agent_name=agent.name,
-                    input=prompt[:200],
-                    output=content[:500],
+                    input=prompt[:_INPUT_TRUNCATION],
+                    output=content[:_OUTPUT_TRUNCATION],
                     time_ms=elapsed_ms,
                     input_tokens=in_tok,
                     output_tokens=out_tok,
@@ -600,7 +590,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         step = StepResult(
             step_name="transform",
             agent_name=agent.name,
-            input=prompt[:200],
+            input=prompt[:_INPUT_TRUNCATION],
             output=f"Wrote {out_path}",
             time_ms=elapsed_ms,
             input_tokens=in_tok,
@@ -762,21 +752,35 @@ class PlanIngestionWorkflow(WorkflowBase):
                     state.total_cost, warn_cost_usd, label,
                 )
             if max_cost_usd is not None and state.total_cost > max_cost_usd:
-                state.current_phase = IngestionPhase.FAILED
-                state.error = (
+                return _fail(
                     f"Cost limit exceeded: ${state.total_cost:.4f} > "
                     f"${max_cost_usd:.2f} after {label}"
-                )
-                return WorkflowResult.from_error(
-                    self.metadata.workflow_id,
-                    state.error,
-                    steps=steps,
                 )
             return None
 
         # Save state for debugging
         state_dir = output_dir / ".startd8"
         state_dir.mkdir(parents=True, exist_ok=True)
+
+        def _save_state():
+            """Persist current state for post-mortem debugging."""
+            try:
+                atomic_write_json(
+                    state_dir / "plan_ingestion_state.json",
+                    state.to_dict(),
+                    indent=2,
+                )
+            except Exception:
+                pass
+
+        def _fail(error_msg: str) -> WorkflowResult:
+            """Record failure in state and return error result."""
+            state.current_phase = IngestionPhase.FAILED
+            state.error = error_msg
+            _save_state()
+            return WorkflowResult.from_error(
+                self.metadata.workflow_id, error_msg, steps=steps,
+            )
 
         try:
             # Read plan
@@ -791,9 +795,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             steps.append(parse_step)
             state.total_cost += parse_step.cost
             if parse_step.error:
-                return WorkflowResult.from_error(
-                    self.metadata.workflow_id, parse_step.error, steps=steps,
-                )
+                return _fail(parse_step.error)
             state.parsed_plan = parsed_plan
             logger.info(
                 "Parsed plan: '%s' with %d features",
@@ -814,9 +816,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             steps.append(assess_step)
             state.total_cost += assess_step.cost
             if assess_step.error:
-                return WorkflowResult.from_error(
-                    self.metadata.workflow_id, assess_step.error, steps=steps,
-                )
+                return _fail(assess_step.error)
             state.complexity = complexity
             state.route = complexity.route
             logger.info(
@@ -832,11 +832,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             route = complexity.route
             if route is None:
-                return WorkflowResult.from_error(
-                    self.metadata.workflow_id,
-                    "Assessment did not produce a route",
-                    steps=steps,
-                )
+                return _fail("Assessment did not produce a route")
 
             # --- TRANSFORM ---
             progress("Transforming plan")
@@ -849,9 +845,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             steps.append(transform_step)
             state.total_cost += transform_step.cost
             if transform_step.error:
-                return WorkflowResult.from_error(
-                    self.metadata.workflow_id, transform_step.error, steps=steps,
-                )
+                return _fail(transform_step.error)
             state.plan_document_path = str(doc_path)
 
             cost_err = _check_cost("transform")
@@ -899,11 +893,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.current_phase = IngestionPhase.COMPLETED
 
             # Save final state
-            atomic_write_json(
-                state_dir / "plan_ingestion_state.json",
-                state.to_dict(),
-                indent=2,
-            )
+            _save_state()
 
             completed_at = datetime.now(timezone.utc)
             total_ms = int((completed_at - started_at).total_seconds() * 1000)
@@ -931,22 +921,5 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
         except Exception as exc:
-            state.current_phase = IngestionPhase.FAILED
-            state.error = str(exc)
-
-            # Save error state
-            try:
-                atomic_write_json(
-                    state_dir / "plan_ingestion_state.json",
-                    state.to_dict(),
-                    indent=2,
-                )
-            except Exception:
-                pass
-
             logger.error("Plan ingestion failed: %s", exc, exc_info=True)
-            return WorkflowResult.from_error(
-                self.metadata.workflow_id,
-                str(exc),
-                steps=steps,
-            )
+            return _fail(str(exc))
