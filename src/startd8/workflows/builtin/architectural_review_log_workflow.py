@@ -11,6 +11,7 @@ This workflow is a strategic variation of doc-review-log:
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from dataclasses import dataclass
@@ -133,6 +134,15 @@ def _strip_code_fences(text: str) -> str:
     return stripped
 
 
+def _strip_json_fences(text: str) -> str:
+    """Strip ```json ``` fences from LLM output."""
+    stripped = text.strip()
+    if re.match(r"^```(?:json)?\s*\n", stripped, re.IGNORECASE):
+        stripped = re.sub(r"^```(?:json)?\s*\n", "", stripped, count=1, flags=re.IGNORECASE)
+        stripped = re.sub(r"\n```\s*$", "", stripped)
+    return stripped
+
+
 def _split_cells(row: str) -> List[str]:
     return [c.strip() for c in row.strip().strip("|").split("|")]
 
@@ -185,6 +195,428 @@ def _extract_table_ids(doc: str, section_heading: str) -> List[str]:
             continue
         ids.append(first)
     return ids
+
+
+def _extract_untriaged_suggestions(
+    doc: str,
+    applied_ids: List[str],
+    rejected_ids: List[str],
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """
+    Extract untriaged suggestions from Appendix C review round blocks.
+
+    Returns:
+        (suggestions, endorsement_counts) where suggestions is a list of dicts
+        with keys: id, area, severity, suggestion, rationale, placement, validation, round.
+        endorsement_counts maps suggestion ID -> number of endorsements.
+    """
+    triaged = set(applied_ids) | set(rejected_ids)
+    suggestions: List[Dict[str, Any]] = []
+    endorsement_counts: Dict[str, int] = {}
+
+    # Find Appendix C section
+    appendix_c_match = re.search(
+        r"^### Appendix C: Incoming Suggestions.*$",
+        doc,
+        re.MULTILINE,
+    )
+    if not appendix_c_match:
+        return suggestions, endorsement_counts
+
+    appendix_c_text = doc[appendix_c_match.end():]
+
+    # Split into review round blocks
+    round_blocks = re.split(r"(?=^#### Review Round R\d+)", appendix_c_text, flags=re.MULTILINE)
+
+    for block in round_blocks:
+        round_match = re.match(r"^#### Review Round R(\d+)", block)
+        if not round_match:
+            continue
+        round_num = int(round_match.group(1))
+
+        # Extract table rows
+        lines = block.splitlines()
+        in_table = False
+        header_seen = False
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("|") and "ID" in stripped and not header_seen:
+                in_table = True
+                header_seen = True
+                continue
+            if in_table and stripped.startswith("|") and stripped.startswith("| -"):
+                # Separator row
+                continue
+            if in_table and stripped.startswith("|"):
+                cells = _split_cells(stripped)
+                if len(cells) >= 7:
+                    sid = cells[0]
+                    if sid in triaged or sid.startswith("("):
+                        continue
+                    suggestions.append({
+                        "id": sid,
+                        "area": cells[1],
+                        "severity": cells[2],
+                        "suggestion": cells[3],
+                        "rationale": cells[4],
+                        "placement": cells[5],
+                        "validation": cells[6],
+                        "round": round_num,
+                    })
+            elif in_table and not stripped.startswith("|"):
+                in_table = False
+
+        # Parse endorsements
+        endorsement_match = re.search(
+            r"\*\*Endorsements\*\*.*?(?=\n####|\n###|\Z)",
+            block,
+            re.DOTALL,
+        )
+        if endorsement_match:
+            endorsement_text = endorsement_match.group(0)
+            for eid in re.findall(r"(R\d+-S\d+)", endorsement_text):
+                endorsement_counts[eid] = endorsement_counts.get(eid, 0) + 1
+
+    return suggestions, endorsement_counts
+
+
+def _build_triage_prompt(
+    document_without_appendix: str,
+    applied_ids: List[str],
+    rejected_ids: List[str],
+    untriaged_block: str,
+    endorsement_counts: Dict[str, int],
+) -> str:
+    """Build the triage prompt asking agent to classify each untriaged suggestion."""
+    applied_list = ", ".join(applied_ids[:50]) if applied_ids else "(none)"
+    rejected_list = ", ".join(rejected_ids[:50]) if rejected_ids else "(none)"
+
+    endorsement_info = ""
+    if endorsement_counts:
+        parts = [f"  - {sid}: {count} endorsement(s)" for sid, count in sorted(endorsement_counts.items())]
+        endorsement_info = "Endorsement counts (suggestions endorsed by multiple reviewers should be weighted higher):\n" + "\n".join(parts) + "\n\n"
+
+    return f"""You are an expert enterprise architect performing triage on architectural review suggestions.
+
+Your task: Evaluate every untriaged suggestion below and decide whether to ACCEPT or REJECT it.
+
+Context:
+- Previously applied suggestions: {applied_list}
+- Previously rejected suggestions: {rejected_list}
+
+{endorsement_info}Untriaged suggestions to evaluate:
+{untriaged_block}
+
+Document being reviewed (for context):
+---
+{document_without_appendix}
+---
+
+You MUST output a JSON array. Each element must have these fields:
+- "id": the suggestion ID (e.g. "R1-S1")
+- "decision": exactly "ACCEPT" or "REJECT"
+- "summary": a one-sentence summary of the suggestion
+- "rationale": why you are accepting or rejecting it
+- "area": one of: {', '.join(sorted(ALLOWED_AREAS))}
+
+Output ONLY the JSON array, no other text. Example:
+[
+  {{"id": "R1-S1", "decision": "ACCEPT", "summary": "Add circuit breakers", "rationale": "Critical for resilience", "area": "architecture"}},
+  {{"id": "R1-S2", "decision": "REJECT", "summary": "Use GraphQL", "rationale": "Not aligned with REST strategy", "area": "interfaces"}}
+]
+"""
+
+
+def _validate_triage_output(
+    raw_text: str,
+    untriaged_ids: List[str],
+) -> Tuple[bool, str, List[Dict[str, Any]], List[str]]:
+    """
+    Parse and validate triage JSON output.
+
+    Returns:
+        (ok, message, parsed_decisions, missing_ids)
+        Partial results are accepted — missing IDs stay untriaged.
+    """
+    cleaned = _strip_json_fences(raw_text.strip())
+
+    try:
+        data = json.loads(cleaned)
+    except json.JSONDecodeError as e:
+        return False, f"JSON parse error: {e}", [], list(untriaged_ids)
+
+    if not isinstance(data, list):
+        return False, "Expected a JSON array", [], list(untriaged_ids)
+
+    untriaged_set = set(untriaged_ids)
+    seen_ids: set = set()
+    decisions: List[Dict[str, Any]] = []
+    errors: List[str] = []
+
+    for i, entry in enumerate(data):
+        if not isinstance(entry, dict):
+            errors.append(f"Entry {i}: not an object")
+            continue
+
+        # Required fields
+        for field in ("id", "decision", "summary", "rationale", "area"):
+            if field not in entry:
+                errors.append(f"Entry {i}: missing field '{field}'")
+                break
+        else:
+            sid = entry["id"]
+            decision = entry["decision"]
+            area = entry["area"].strip().lower()
+
+            if sid not in untriaged_set:
+                errors.append(f"Entry {i}: unknown ID '{sid}'")
+                continue
+            if decision not in ("ACCEPT", "REJECT"):
+                errors.append(f"Entry {i}: invalid decision '{decision}' (must be ACCEPT or REJECT)")
+                continue
+            if area not in ALLOWED_AREAS:
+                errors.append(f"Entry {i}: invalid area '{area}' (allowed: {sorted(ALLOWED_AREAS)})")
+                continue
+
+            seen_ids.add(sid)
+            decisions.append({
+                "id": sid,
+                "decision": decision,
+                "summary": entry["summary"],
+                "rationale": entry["rationale"],
+                "area": area,
+            })
+
+    missing_ids = [sid for sid in untriaged_ids if sid not in seen_ids]
+
+    if not decisions and errors:
+        return False, "; ".join(errors), [], missing_ids
+
+    # Partial success: we have some valid decisions even if some entries had errors
+    msg = "ok" if not errors else f"Partial: {'; '.join(errors)}"
+    return True, msg, decisions, missing_ids
+
+
+def _apply_triage_decisions(
+    doc: str,
+    decisions: List[Dict[str, Any]],
+    reviewer_sources: Dict[str, str],
+) -> str:
+    """
+    Apply triage decisions by inserting rows into Appendix A (ACCEPT) and Appendix B (REJECT).
+
+    reviewer_sources maps suggestion ID -> reviewer label string.
+    """
+    date_str = _now_utc()
+
+    accepted = [d for d in decisions if d["decision"] == "ACCEPT"]
+    rejected = [d for d in decisions if d["decision"] == "REJECT"]
+
+    if accepted:
+        doc = _insert_appendix_rows(
+            doc,
+            "### Appendix A: Applied Suggestions",
+            [(d["id"], d["summary"], reviewer_sources.get(d["id"], ""), d["rationale"], date_str) for d in accepted],
+        )
+
+    if rejected:
+        doc = _insert_appendix_rows(
+            doc,
+            "### Appendix B: Rejected Suggestions (with Rationale)",
+            [(d["id"], d["summary"], reviewer_sources.get(d["id"], ""), d["rationale"], date_str) for d in rejected],
+        )
+
+    return doc
+
+
+def _insert_appendix_rows(
+    doc: str,
+    section_heading: str,
+    rows: List[Tuple[str, str, str, str, str]],
+) -> str:
+    """
+    Insert rows into an appendix table. Each row is (id, summary, source, notes, date).
+    Removes the '(none yet)' placeholder if present.
+    """
+    m = re.search(rf"^{re.escape(section_heading)}\s*$", doc, re.MULTILINE)
+    if not m:
+        return doc
+
+    tail = doc[m.end():]
+    lines = tail.splitlines(keepends=True)
+
+    # Find the table end (last | line before a non-| line)
+    table_end_idx = -1
+    in_table = False
+    for i, line in enumerate(lines):
+        if line.strip().startswith("|"):
+            in_table = True
+            table_end_idx = i
+        elif in_table:
+            break
+
+    if table_end_idx == -1:
+        return doc
+
+    # Check for (none yet) placeholder in the last table line
+    last_table_line = lines[table_end_idx]
+    if "(none yet)" in last_table_line:
+        # Replace the placeholder line with actual rows
+        new_rows = "".join(
+            f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} | {r[4]} |\n"
+            for r in rows
+        )
+        lines[table_end_idx] = new_rows
+    else:
+        # Append after last table line
+        new_rows = "".join(
+            f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} | {r[4]} |\n"
+            for r in rows
+        )
+        lines.insert(table_end_idx + 1, new_rows)
+
+    return doc[: m.end()] + "".join(lines)
+
+
+def _compute_substantially_addressed(
+    applied_with_area: List[Tuple[str, str]],
+    threshold: int,
+) -> Dict[str, List[str]]:
+    """
+    Group accepted IDs by area and return areas with >= threshold accepted suggestions.
+
+    applied_with_area: list of (suggestion_id, area) tuples.
+    Returns: {area: [id1, id2, ...]} for areas meeting the threshold.
+    """
+    area_ids: Dict[str, List[str]] = {}
+    for sid, area in applied_with_area:
+        area_key = area.strip().lower()
+        area_ids.setdefault(area_key, []).append(sid)
+
+    return {area: ids for area, ids in area_ids.items() if len(ids) >= threshold}
+
+
+def _compute_substantially_addressed_from_doc(
+    doc: str,
+    threshold: int,
+) -> Dict[str, List[str]]:
+    """
+    Extract applied suggestions from Appendix A and compute substantially addressed areas.
+    Parses the Area from Appendix C for each applied ID.
+    """
+    applied_ids = _extract_table_ids(doc, "### Appendix A: Applied Suggestions")
+    if not applied_ids:
+        return {}
+
+    # Build ID → area mapping from Appendix C
+    id_to_area: Dict[str, str] = {}
+    appendix_c_match = re.search(
+        r"^### Appendix C: Incoming Suggestions.*$",
+        doc,
+        re.MULTILINE,
+    )
+    if appendix_c_match:
+        appendix_c_text = doc[appendix_c_match.end():]
+        for line in appendix_c_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("|") and not stripped.startswith("| -") and "ID" not in stripped:
+                cells = _split_cells(stripped)
+                if len(cells) >= 2 and re.match(r"R\d+-S\d+", cells[0]):
+                    id_to_area[cells[0]] = cells[1].strip().lower()
+
+    applied_with_area = [(sid, id_to_area.get(sid, "unknown")) for sid in applied_ids]
+    return _compute_substantially_addressed(applied_with_area, threshold)
+
+
+def _insert_substantially_addressed_section(
+    doc: str,
+    addressed_areas: Dict[str, List[str]],
+) -> str:
+    """
+    Insert or update '### Areas Substantially Addressed' section
+    between Reviewer Instructions and Appendix A.
+    """
+    section_heading = "### Areas Substantially Addressed"
+
+    # Build section content
+    lines_out = [f"{section_heading}\n\n"]
+    for area in sorted(addressed_areas.keys()):
+        ids = addressed_areas[area]
+        lines_out.append(f"- **{area}**: {len(ids)} suggestions applied ({', '.join(ids)})\n")
+    lines_out.append("\n")
+    section_text = "".join(lines_out)
+
+    # Check if section already exists
+    existing_match = re.search(
+        rf"^{re.escape(section_heading)}\s*\n",
+        doc,
+        re.MULTILINE,
+    )
+    if existing_match:
+        # Find extent: from heading to next ### heading
+        rest = doc[existing_match.start():]
+        next_heading = re.search(r"^### (?!Areas Substantially Addressed)", rest, re.MULTILINE)
+        if next_heading:
+            end_pos = existing_match.start() + next_heading.start()
+        else:
+            end_pos = len(doc)
+        return doc[: existing_match.start()] + section_text + doc[end_pos:]
+
+    # Insert before Appendix A
+    appendix_a_match = re.search(r"^### Appendix A:", doc, re.MULTILINE)
+    if appendix_a_match:
+        return doc[: appendix_a_match.start()] + section_text + doc[appendix_a_match.start():]
+
+    return doc
+
+
+def _build_untriaged_block(suggestions: List[Dict[str, Any]]) -> str:
+    """Format untriaged suggestions as a readable block for the triage prompt."""
+    if not suggestions:
+        return "(none)"
+
+    lines = ["| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |",
+             "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |"]
+    for s in suggestions:
+        lines.append(
+            f"| {s['id']} | {s['area']} | {s['severity']} | {s['suggestion']} "
+            f"| {s['rationale']} | {s['placement']} | {s['validation']} |"
+        )
+    return "\n".join(lines)
+
+
+def _extract_reviewer_sources(doc: str) -> Dict[str, str]:
+    """
+    Extract a mapping of suggestion ID -> reviewer label from Appendix C round blocks.
+    """
+    sources: Dict[str, str] = {}
+    appendix_c_match = re.search(
+        r"^### Appendix C: Incoming Suggestions.*$",
+        doc,
+        re.MULTILINE,
+    )
+    if not appendix_c_match:
+        return sources
+
+    appendix_c_text = doc[appendix_c_match.end():]
+    round_blocks = re.split(r"(?=^#### Review Round R\d+)", appendix_c_text, flags=re.MULTILINE)
+
+    for block in round_blocks:
+        round_match = re.match(r"^#### Review Round R(\d+)", block)
+        if not round_match:
+            continue
+
+        # Extract reviewer label
+        reviewer_match = re.search(r"\*\*Reviewer\*\*:\s*(.+)", block)
+        reviewer_label = reviewer_match.group(1).strip() if reviewer_match else "Unknown"
+
+        # Extract suggestion IDs
+        for sid in re.findall(r"(R\d+-S\d+)", block):
+            # Only set if we haven't seen it (first occurrence = definition)
+            if sid not in sources:
+                sources[sid] = reviewer_label
+
+    return sources
 
 
 def _select_default_agents(
@@ -240,6 +672,7 @@ def _build_prompt(
     scope: str,
     template_override: Optional[str] = None,
     context_content: str = "",
+    substantially_addressed_areas: Optional[Dict[str, List[str]]] = None,
 ) -> str:
     """
     Build the reviewer prompt. Supports override template that must include:
@@ -287,6 +720,16 @@ If you want to revisit a rejected idea, explicitly reference its rejected ID and
         iteration_context = f"""This is the first review pass. No prior suggestions have been triaged yet.
 - Applied IDs: {applied_list}
 - Rejected IDs: {rejected_list}"""
+
+    # Substantially addressed areas — tell the reviewer to focus elsewhere
+    if substantially_addressed_areas:
+        addressed_lines = []
+        for area in sorted(substantially_addressed_areas.keys()):
+            ids = substantially_addressed_areas[area]
+            addressed_lines.append(f"  - **{area}**: {len(ids)} suggestions applied ({', '.join(ids)})")
+        iteration_context += "\n\nAreas substantially addressed (focus your review elsewhere):\n"
+        iteration_context += "\n".join(addressed_lines)
+        iteration_context += "\nDo NOT rehash these areas unless you identify a genuine gap the accepted suggestions missed."
 
     # Context-aware instructions
     context_instruction = ""
@@ -549,6 +992,20 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         "When not set, Gemini uses its default filters (with automatic relaxation on SAFETY retry)."
                     ),
                 ),
+                WorkflowInput(
+                    name="enable_triage",
+                    type="boolean",
+                    required=False,
+                    default=True,
+                    description="Enable automated triage step after all reviewers to classify suggestions as ACCEPT/REJECT",
+                ),
+                WorkflowInput(
+                    name="substantially_addressed_threshold",
+                    type="number",
+                    required=False,
+                    default=3,
+                    description="Minimum accepted suggestions per area to mark it as 'substantially addressed'",
+                ),
             ],
         )
 
@@ -671,6 +1128,10 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 if len(context_content) > max_context_chars:
                     context_content = context_content[:max_context_chars] + "\n\n[... truncated ...]"
 
+            # Compute substantially addressed areas from existing Appendix A
+            sa_threshold = int(config.get("substantially_addressed_threshold", 3))
+            substantially_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold)
+
             for i, agent in enumerate(resolved_agents):
                 round_number = next_round + i
                 step_name = f"architectural_review_R{round_number}"
@@ -688,6 +1149,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     scope=scope,
                     template_override=template_override,
                     context_content=context_content,
+                    substantially_addressed_areas=substantially_addressed,
                 )
 
                 # Execute generation with graceful error handling, Gemini SAFETY
@@ -999,8 +1461,205 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
                 self._emit_progress(on_progress, i + 1, total_rounds, f"Appended Round R{round_number}")
 
+            # ── Automated Triage Step ──────────────────────────────────────
+            enable_triage = bool(config.get("enable_triage", True))
+            triage_info: Dict[str, Any] = {
+                "enabled": enable_triage,
+                "accepted": 0,
+                "rejected": 0,
+                "untriaged_remaining": [],
+                "substantially_addressed_areas": [],
+            }
+
+            if enable_triage and round_records and resolved_agents:
+                triage_agent = resolved_agents[0]
+
+                # Re-extract applied/rejected (may have changed during rounds)
+                applied_ids = _extract_table_ids(doc_text, "### Appendix A: Applied Suggestions")
+                rejected_ids = _extract_table_ids(doc_text, "### Appendix B: Rejected Suggestions (with Rationale)")
+
+                untriaged, endorsements = _extract_untriaged_suggestions(doc_text, applied_ids, rejected_ids)
+
+                if untriaged:
+                    self._emit_progress(on_progress, total_rounds, total_rounds, "Running automated triage")
+                    untriaged_ids = [s["id"] for s in untriaged]
+                    untriaged_block = _build_untriaged_block(untriaged)
+                    reviewer_sources = _extract_reviewer_sources(doc_text)
+
+                    triage_prompt = _build_triage_prompt(
+                        document_without_appendix=_strip_appendix_for_prompt(doc_text),
+                        applied_ids=applied_ids,
+                        rejected_ids=rejected_ids,
+                        untriaged_block=untriaged_block,
+                        endorsement_counts=endorsements,
+                    )
+
+                    # Execute triage with same error handling pattern
+                    triage_ok = False
+                    triage_decisions: List[Dict[str, Any]] = []
+                    triage_missing: List[str] = []
+
+                    try:
+                        triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt)
+                    except GeminiSafetyFilterError:
+                        _logger.warning("Triage blocked by Gemini SAFETY filter; retrying with relaxed settings")
+                        original_safety = getattr(triage_agent, "safety_settings", None)
+                        try:
+                            if _is_gemini_agent(triage_agent):
+                                triage_agent.safety_settings = RELAXED_SAFETY_SETTINGS
+                            triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt)
+                        except Exception as triage_err:
+                            _logger.warning("Triage failed after retry: %s", triage_err)
+                            step_results.append(StepResult(
+                                step_name="triage",
+                                agent_name=f"{triage_agent.name}:{getattr(triage_agent, 'model', '')}",
+                                output="",
+                                time_ms=0,
+                                input_tokens=0,
+                                output_tokens=0,
+                                cost=0.0,
+                                error=f"Triage failed: {triage_err}",
+                            ))
+                            triage_text = None
+                            triage_time_ms = 0
+                            triage_token_usage = None
+                        finally:
+                            if _is_gemini_agent(triage_agent):
+                                triage_agent.safety_settings = original_safety
+                    except Exception as triage_err:
+                        _logger.warning("Triage failed: %s", triage_err)
+                        step_results.append(StepResult(
+                            step_name="triage",
+                            agent_name=f"{triage_agent.name}:{getattr(triage_agent, 'model', '')}",
+                            output="",
+                            time_ms=0,
+                            input_tokens=0,
+                            output_tokens=0,
+                            cost=0.0,
+                            error=f"Triage failed: {triage_err}",
+                        ))
+                        triage_text = None
+                        triage_time_ms = 0
+                        triage_token_usage = None
+
+                    if triage_text is not None:
+                        triage_input_tokens = token_usage_input(triage_token_usage) if triage_token_usage else 0
+                        triage_output_tokens = token_usage_output(triage_token_usage) if triage_token_usage else 0
+                        triage_cost = token_usage_cost(triage_token_usage) if triage_token_usage else 0.0
+
+                        total_input_tokens += triage_input_tokens
+                        total_output_tokens += triage_output_tokens
+                        total_cost += triage_cost
+                        total_time_ms += triage_time_ms
+
+                        triage_ok, triage_msg, triage_decisions, triage_missing = _validate_triage_output(
+                            triage_text, untriaged_ids
+                        )
+
+                        if not triage_ok:
+                            _logger.warning("Triage validation failed: %s", triage_msg)
+                            # Try one retry with targeted re-prompt
+                            retry_prompt = (
+                                f"Your previous triage response failed validation: {triage_msg}\n\n"
+                                f"Please output ONLY a JSON array with entries for each suggestion. "
+                                f"Required fields: id, decision (ACCEPT or REJECT), summary, rationale, "
+                                f"area (one of: {', '.join(sorted(ALLOWED_AREAS))}).\n\n"
+                                f"Suggestions to triage:\n{untriaged_block}"
+                            )
+                            try:
+                                retry_text, retry_time_ms, retry_token_usage = triage_agent.generate(retry_prompt)
+                                retry_input = token_usage_input(retry_token_usage) if retry_token_usage else 0
+                                retry_output = token_usage_output(retry_token_usage) if retry_token_usage else 0
+                                retry_cost = token_usage_cost(retry_token_usage) if retry_token_usage else 0.0
+                                total_input_tokens += retry_input
+                                total_output_tokens += retry_output
+                                total_cost += retry_cost
+                                total_time_ms += retry_time_ms
+                                triage_input_tokens += retry_input
+                                triage_output_tokens += retry_output
+                                triage_cost += retry_cost
+                                triage_time_ms += retry_time_ms
+
+                                triage_ok, triage_msg, triage_decisions, triage_missing = _validate_triage_output(
+                                    retry_text, untriaged_ids
+                                )
+                                if not triage_ok:
+                                    _logger.warning("Triage retry also failed: %s", triage_msg)
+                            except Exception as retry_err:
+                                _logger.warning("Triage retry call failed: %s", retry_err)
+
+                        if triage_decisions:
+                            doc_text = _apply_triage_decisions(doc_text, triage_decisions, reviewer_sources)
+
+                            # Compute substantially addressed areas
+                            applied_with_area = [(d["id"], d["area"]) for d in triage_decisions if d["decision"] == "ACCEPT"]
+                            # Also include previously applied suggestions
+                            prev_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold)
+                            # Merge with new accepts
+                            for area, ids in prev_addressed.items():
+                                for sid in ids:
+                                    if (sid, area) not in applied_with_area:
+                                        applied_with_area.append((sid, area))
+                            addressed = _compute_substantially_addressed(applied_with_area, sa_threshold)
+
+                            if addressed:
+                                doc_text = _insert_substantially_addressed_section(doc_text, addressed)
+                                triage_info["substantially_addressed_areas"] = list(addressed.keys())
+
+                            # Persist document
+                            atomic_write(doc_path, doc_text, mode="w", backup=True)
+
+                            accepted_count = sum(1 for d in triage_decisions if d["decision"] == "ACCEPT")
+                            rejected_count = sum(1 for d in triage_decisions if d["decision"] == "REJECT")
+                            triage_info["accepted"] = accepted_count
+                            triage_info["rejected"] = rejected_count
+                            triage_info["untriaged_remaining"] = triage_missing
+
+                        step_results.append(StepResult(
+                            step_name="triage",
+                            agent_name=f"{triage_agent.name}:{getattr(triage_agent, 'model', '')}",
+                            output=f"Accepted: {triage_info['accepted']}, Rejected: {triage_info['rejected']}, Remaining: {len(triage_missing)}",
+                            time_ms=triage_time_ms,
+                            input_tokens=triage_input_tokens,
+                            output_tokens=triage_output_tokens,
+                            cost=triage_cost,
+                            error=None if triage_decisions else f"Triage validation failed: {triage_msg}",
+                            metadata={
+                                "accepted": triage_info["accepted"],
+                                "rejected": triage_info["rejected"],
+                                "untriaged_remaining": triage_missing,
+                            },
+                        ))
+
+                    # Update state file with triage info
+                    try:
+                        applied_ids = _extract_table_ids(doc_text, "### Appendix A: Applied Suggestions")
+                        rejected_ids = _extract_table_ids(doc_text, "### Appendix B: Rejected Suggestions (with Rationale)")
+                        state = {
+                            "document_path": str(doc_path),
+                            "updated_at_utc": _now_utc(),
+                            "applied_ids": applied_ids,
+                            "rejected_ids": rejected_ids,
+                            "rounds": [
+                                {
+                                    "round": r.round_number,
+                                    "agent": r.agent,
+                                    "model": r.model,
+                                    "ids": r.ids,
+                                    "appended_at_utc": r.appended_at_utc,
+                                    "cost": r.cost,
+                                }
+                                for r in round_records
+                            ],
+                            "cumulative_cost_usd": total_cost,
+                            "triage": triage_info,
+                        }
+                        atomic_write_json(state_path, state, indent=2, sort_keys=False)
+                    except Exception:
+                        pass
+
         completed_at = datetime.now(timezone.utc)
-        success = bool(round_records) and all(s.error is None for s in step_results)
+        success = bool(round_records) and all(s.error is None for s in step_results if s.step_name != "triage")
 
         metrics = WorkflowMetrics(
             total_time_ms=total_time_ms,
@@ -1019,6 +1678,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 "round_numbers": [r.round_number for r in round_records],
                 "state_path": str(state_path),
                 "cumulative_cost_usd": total_cost,
+                "triage": triage_info,
             },
             metrics=metrics,
             steps=step_results,

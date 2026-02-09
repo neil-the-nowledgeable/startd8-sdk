@@ -340,7 +340,7 @@ class TestArchitecturalReviewSafetyRetry:
 
         workflow = ArchitecturalReviewLogWorkflow()
         result = workflow._execute(
-            config={"document_path": str(doc_path)},
+            config={"document_path": str(doc_path), "enable_triage": False},
             agents=[agent],
             on_progress=None,
         )
@@ -722,7 +722,7 @@ class TestValidationFailureHandling:
 
         workflow = ArchitecturalReviewLogWorkflow()
         result = workflow._execute(
-            config={"document_path": str(doc_path)},
+            config={"document_path": str(doc_path), "enable_triage": False},
             agents=[agent],
             on_progress=None,
         )
@@ -818,7 +818,7 @@ class TestValidationFailureHandling:
 
         workflow = ArchitecturalReviewLogWorkflow()
         result = workflow._execute(
-            config={"document_path": str(doc_path)},
+            config={"document_path": str(doc_path), "enable_triage": False},
             agents=[agent],
             on_progress=None,
         )
