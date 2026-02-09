@@ -91,6 +91,7 @@ lead-contractor = "startd8.workflows.builtin.lead_contractor_workflow:LeadContra
 lead-contractor-contextcore = "startd8.workflows.builtin.lead_contractor_contextcore_workflow:LeadContractorContextCoreWorkflow"
 policy-analysis = "startd8.workflows.builtin.policy_analysis_workflow:PolicyAnalysisWorkflow"
 plain-language = "startd8.workflows.builtin.plain_language_workflow:PlainLanguageWorkflow"
+plan-ingestion = "startd8.workflows.builtin.plan_ingestion_workflow:PlanIngestionWorkflow"
 
 # Prime Contractor entry points for plugin discovery
 [project.entry-points."startd8.contractors.instrumentors"]

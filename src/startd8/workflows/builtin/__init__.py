@@ -31,6 +31,7 @@ __all__ = [
     "LeadContractorContextCoreWorkflow",
     "PolicyAnalysisWorkflow",
     "PlainLanguageWorkflow",
+    "PlanIngestionWorkflow",
 ]
 
 
@@ -69,4 +70,7 @@ def __getattr__(name: str):
     elif name == "PlainLanguageWorkflow":
         from .plain_language_workflow import PlainLanguageWorkflow
         return PlainLanguageWorkflow
+    elif name == "PlanIngestionWorkflow":
+        from .plan_ingestion_workflow import PlanIngestionWorkflow
+        return PlanIngestionWorkflow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

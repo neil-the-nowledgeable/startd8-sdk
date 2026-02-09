@@ -257,6 +257,13 @@ class WorkflowRegistry:
         except ImportError as e:
             logger.debug(f"ArchitecturalReviewLog workflow not available: {e}")
 
+        try:
+            from .builtin.plan_ingestion_workflow import PlanIngestionWorkflow
+            cls.register(PlanIngestionWorkflow())
+            logger.debug("Registered built-in PlanIngestion workflow")
+        except ImportError as e:
+            logger.debug(f"PlanIngestion workflow not available: {e}")
+
     @classmethod
     def get_workflow(cls, workflow_id: str) -> Optional[Workflow]:
         """
