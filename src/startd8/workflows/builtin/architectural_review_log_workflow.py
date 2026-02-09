@@ -721,15 +721,58 @@ If you want to revisit a rejected idea, explicitly reference its rejected ID and
 - Applied IDs: {applied_list}
 - Rejected IDs: {rejected_list}"""
 
-    # Substantially addressed areas — tell the reviewer to focus elsewhere
+    # Substantially addressed areas — two-tier priority guidance
+    focus_line = "- Focus on: architecture clarity, execution safety, risk management, validation completeness, and operational readiness."
     if substantially_addressed_areas:
+        covered = set(substantially_addressed_areas.keys())
+        uncovered = sorted(ALLOWED_AREAS - covered)
         addressed_lines = []
-        for area in sorted(substantially_addressed_areas.keys()):
+        for area in sorted(covered):
             ids = substantially_addressed_areas[area]
             addressed_lines.append(f"  - **{area}**: {len(ids)} suggestions applied ({', '.join(ids)})")
-        iteration_context += "\n\nAreas substantially addressed (focus your review elsewhere):\n"
-        iteration_context += "\n".join(addressed_lines)
-        iteration_context += "\nDo NOT rehash these areas unless you identify a genuine gap the accepted suggestions missed."
+        total_applied = sum(len(v) for v in substantially_addressed_areas.values())
+
+        if uncovered:
+            # Tier 1: uncovered areas as explicit priorities
+            iteration_context += (
+                f"\n\n**Priority areas NOT yet substantially addressed — start your analysis here:**\n"
+                f"  {', '.join(f'**{a}**' for a in uncovered)}\n"
+                f"Exhaust these areas first. Allocate at least {max(1, max_suggestions - 1)} of your "
+                f"{max_suggestions} suggestion slots to these priority areas before considering addressed areas."
+            )
+            # Tier 2: covered areas (secondary)
+            iteration_context += (
+                f"\n\nAreas already substantially addressed — only propose if you find a genuine gap "
+                f"the {total_applied} accepted suggestions missed:\n"
+            )
+            iteration_context += "\n".join(addressed_lines)
+            # Dynamic focus line
+            focus_line = (
+                f"- Prioritize: {', '.join(uncovered)}. "
+                f"Only revisit {', '.join(sorted(covered))} if you find a gap the "
+                f"{total_applied} accepted suggestions missed."
+            )
+        else:
+            # All areas substantially addressed — gap-hunting mode
+            iteration_context += (
+                f"\n\nAll {len(ALLOWED_AREAS)} review areas are substantially addressed "
+                f"({total_applied} suggestions accepted). Your job is to find genuine gaps "
+                f"the prior reviewers missed — second-order risks, unstated assumptions, "
+                f"or interactions between accepted suggestions that create new issues.\n"
+            )
+            iteration_context += "\n".join(addressed_lines)
+            iteration_context += (
+                f"\n\nDo NOT rehash areas already well-covered. Instead, look for:\n"
+                f"  1. Gaps *between* areas (e.g., an ops process that contradicts an architecture decision)\n"
+                f"  2. Assumptions that were never validated\n"
+                f"  3. Second-order effects of accepted suggestions\n"
+                f"  4. Edge cases or failure modes not yet addressed"
+            )
+            focus_line = (
+                f"- All areas have substantial coverage. Focus exclusively on genuine gaps, "
+                f"cross-cutting concerns, and second-order risks the prior {total_applied} "
+                f"accepted suggestions may have introduced or missed."
+            )
 
     # Context-aware instructions
     context_instruction = ""
@@ -747,7 +790,7 @@ This document undergoes multiple review passes. Each pass should be sharper than
 
 {context_block}Your task:
 - Propose up to {max_suggestions} high-leverage improvements not yet captured.
-- Focus on: architecture clarity, execution safety, risk management, validation completeness, and operational readiness.
+{focus_line}
 {context_instruction}- Do NOT rewrite the document. Do NOT modify Appendix A or Appendix B.
 - You MUST output ONLY an appendable markdown snippet for Appendix C.
 

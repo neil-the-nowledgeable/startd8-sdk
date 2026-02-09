@@ -26,6 +26,7 @@ from startd8.workflows.builtin.architectural_review_log_workflow import (
     _compute_substantially_addressed,
     _insert_substantially_addressed_section,
     _build_triage_prompt,
+    _build_prompt,
     _build_untriaged_block,
     _extract_reviewer_sources,
     _compute_substantially_addressed_from_doc,
@@ -380,6 +381,94 @@ class TestBuildTriagePrompt:
         prompt = _build_triage_prompt("doc", [], [], "block", endorsements)
         assert "R1-S1: 2 endorsement" in prompt
         assert "R1-S3: 1 endorsement" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _build_prompt two-tier priority tests
+# ---------------------------------------------------------------------------
+
+class TestBuildPromptPriority:
+    """Tests for two-tier area prioritization in reviewer prompts."""
+
+    def _call(self, substantially_addressed_areas=None, max_suggestions=5):
+        return _build_prompt(
+            document_without_appendix="# Test Plan\n\nSome content.",
+            applied_ids=["R1-S1"],
+            rejected_ids=["R1-S2"],
+            round_number=3,
+            max_suggestions=max_suggestions,
+            reviewer_label="test-agent (test-model)",
+            scope="Test review",
+            substantially_addressed_areas=substantially_addressed_areas,
+        )
+
+    def test_no_substantially_addressed_uses_generic_focus(self):
+        """Without substantially_addressed, the generic focus line is used."""
+        prompt = self._call(substantially_addressed_areas=None)
+        assert "architecture clarity, execution safety" in prompt
+        assert "Priority areas NOT yet" not in prompt
+
+    def test_uncovered_areas_listed_as_priority(self):
+        """When some areas are uncovered, they appear as Tier 1 priorities."""
+        # Only cover 3 of 7 areas
+        addressed = {
+            "architecture": ["R1-S1", "R2-S1", "R3-S1"],
+            "validation": ["R1-S3", "R2-S3", "R3-S3"],
+            "ops": ["R1-S4", "R2-S4", "R3-S4"],
+        }
+        prompt = self._call(substantially_addressed_areas=addressed)
+        assert "Priority areas NOT yet substantially addressed" in prompt
+        # Uncovered areas should be named
+        for area in sorted(ALLOWED_AREAS - {"architecture", "validation", "ops"}):
+            assert f"**{area}**" in prompt
+        # Dynamic focus line should name uncovered areas
+        assert "Prioritize:" in prompt
+        # Should NOT use the generic focus line
+        assert "architecture clarity, execution safety" not in prompt
+
+    def test_uncovered_areas_allocation_instruction(self):
+        """Prompt tells the reviewer to allocate most slots to uncovered areas."""
+        addressed = {"architecture": ["R1-S1", "R2-S1", "R3-S1"]}
+        prompt = self._call(substantially_addressed_areas=addressed, max_suggestions=5)
+        assert "at least 4 of your 5 suggestion slots" in prompt
+
+    def test_covered_areas_shown_as_secondary(self):
+        """Covered areas appear with counts as the secondary tier."""
+        addressed = {
+            "architecture": ["R1-S1", "R2-S1", "R3-S1"],
+        }
+        prompt = self._call(substantially_addressed_areas=addressed)
+        assert "already substantially addressed" in prompt
+        assert "**architecture**: 3 suggestions applied" in prompt
+
+    def test_all_areas_covered_enters_gap_hunting_mode(self):
+        """When all 7 areas are covered, prompt switches to gap-hunting mode."""
+        addressed = {area: [f"R1-{area[:2]}"] for area in ALLOWED_AREAS}
+        prompt = self._call(substantially_addressed_areas=addressed)
+        assert f"All {len(ALLOWED_AREAS)} review areas are substantially addressed" in prompt
+        assert "genuine gaps" in prompt
+        assert "second-order" in prompt.lower()
+        # Should NOT use the generic focus line
+        assert "architecture clarity, execution safety" not in prompt
+        # Should NOT say "Priority areas NOT yet"
+        assert "Priority areas NOT yet" not in prompt
+
+    def test_all_areas_covered_lists_specific_gap_strategies(self):
+        """Gap-hunting mode provides concrete search strategies."""
+        addressed = {area: [f"R1-{area[:2]}"] for area in ALLOWED_AREAS}
+        prompt = self._call(substantially_addressed_areas=addressed)
+        assert "Gaps *between* areas" in prompt
+        assert "Assumptions that were never validated" in prompt
+        assert "Second-order effects" in prompt
+
+    def test_dynamic_focus_references_correct_total(self):
+        """The dynamic focus line includes the correct total of applied suggestions."""
+        addressed = {
+            "architecture": ["R1-S1", "R2-S1", "R3-S1"],
+            "validation": ["R1-S3", "R2-S3"],  # below threshold but still passed in
+        }
+        prompt = self._call(substantially_addressed_areas=addressed)
+        assert "5 accepted suggestions missed" in prompt
 
 
 # ---------------------------------------------------------------------------
