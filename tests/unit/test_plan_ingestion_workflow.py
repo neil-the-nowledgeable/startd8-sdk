@@ -23,6 +23,7 @@ from startd8.workflows.builtin.plan_ingestion_models import (
 from startd8.workflows.builtin.plan_ingestion_workflow import (
     PlanIngestionWorkflow,
     _extract_json_from_response,
+    _parse_context_files,
 )
 
 
@@ -183,7 +184,6 @@ class TestPlanIngestionModels:
         p = ParsedPlan(title="Test Plan")
         assert p.goals == []
         assert p.features == []
-        assert p.sections == []
         assert p.dependency_graph == {}
         assert p.mentioned_files == []
         assert p.raw_text == ""
@@ -206,6 +206,29 @@ class TestPlanIngestionModels:
         state = IngestionState(route=ContractorRoute.PRIME)
         d = state.to_dict()
         assert d["route"] == "prime"
+
+    def test_ingestion_state_to_dict_with_plan_and_complexity(self):
+        state = IngestionState(
+            parsed_plan=ParsedPlan(
+                title="My Plan",
+                features=[
+                    ParsedFeature(feature_id="F-001", name="A"),
+                    ParsedFeature(feature_id="F-002", name="B"),
+                ],
+            ),
+            complexity=ComplexityScore(composite=55, route=ContractorRoute.ARTISAN),
+        )
+        d = state.to_dict()
+        assert d["parsed_plan_title"] == "My Plan"
+        assert d["parsed_plan_feature_count"] == 2
+        assert d["complexity_composite"] == 55
+        assert d["complexity_route"] == "artisan"
+
+    def test_ingestion_state_to_dict_without_plan_omits_keys(self):
+        state = IngestionState()
+        d = state.to_dict()
+        assert "parsed_plan_title" not in d
+        assert "complexity_composite" not in d
 
     def test_plan_ingestion_result_defaults(self):
         r = PlanIngestionResult(success=True)
@@ -630,6 +653,37 @@ class TestEmitPhase:
 
 
 # ---------------------------------------------------------------------------
+# TestParseContextFiles
+# ---------------------------------------------------------------------------
+
+class TestParseContextFiles:
+    def test_none_returns_none(self):
+        assert _parse_context_files(None) is None
+
+    def test_empty_string_returns_none(self):
+        assert _parse_context_files("") is None
+
+    def test_empty_list_returns_none(self):
+        assert _parse_context_files([]) is None
+
+    def test_comma_separated_string(self):
+        result = _parse_context_files("src/a.py, src/b.py")
+        assert result == ["src/a.py", "src/b.py"]
+
+    def test_single_string(self):
+        result = _parse_context_files("src/a.py")
+        assert result == ["src/a.py"]
+
+    def test_list_passthrough(self):
+        result = _parse_context_files(["src/a.py", "src/b.py"])
+        assert result == ["src/a.py", "src/b.py"]
+
+    def test_strips_whitespace(self):
+        result = _parse_context_files("  src/a.py ,  src/b.py  , ")
+        assert result == ["src/a.py", "src/b.py"]
+
+
+# ---------------------------------------------------------------------------
 # TestEndToEnd
 # ---------------------------------------------------------------------------
 
@@ -822,6 +876,40 @@ class TestEndToEnd:
         assert state_file.exists()
         state = json.loads(state_file.read_text())
         assert state["current_phase"] == "completed"
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_warn_cost_logs_but_continues(self, mock_resolve, MockReviewWf, tmp_path):
+        """warn_cost_usd logs a warning but does not fail the workflow."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.50),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.01),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.01),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.0)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "warn_cost_usd": 0.10,  # Exceeded after parse ($0.50)
+            "review_rounds": 0,
+        })
+
+        # Warn doesn't stop the workflow — it still succeeds
+        assert result.success
 
     @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
     def test_state_json_written_on_phase_error(self, mock_resolve, tmp_path):

@@ -472,12 +472,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                 error=f"Failed to parse assessment JSON: {exc}",
             )
 
-        # Determine route
+        # Determine route from composite score (don't trust LLM's route suggestion)
         if force_route:
             route = ContractorRoute(force_route)
         else:
             composite = int(data.get("composite", 50))
             route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
+            llm_route = data.get("route", "").lower()
+            if llm_route and llm_route != route.value:
+                logger.info(
+                    "LLM suggested route '%s' but composite %d with threshold %d → '%s'",
+                    llm_route, composite, threshold, route.value,
+                )
 
         score = ComplexityScore(
             feature_count=int(data.get("feature_count", 0)),

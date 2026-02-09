@@ -56,7 +56,6 @@ class ParsedPlan:
     title: str
     goals: List[str] = field(default_factory=list)
     features: List[ParsedFeature] = field(default_factory=list)
-    sections: List[str] = field(default_factory=list)
     dependency_graph: Dict[str, List[str]] = field(default_factory=dict)
     mentioned_files: List[str] = field(default_factory=list)
     raw_text: str = ""
@@ -103,7 +102,7 @@ class IngestionState:
     error: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "current_phase": self.current_phase.value,
             "route": self.route.value if self.route else None,
             "plan_document_path": self.plan_document_path,
@@ -111,6 +110,13 @@ class IngestionState:
             "total_cost": self.total_cost,
             "error": self.error,
         }
+        if self.parsed_plan:
+            d["parsed_plan_title"] = self.parsed_plan.title
+            d["parsed_plan_feature_count"] = len(self.parsed_plan.features)
+        if self.complexity:
+            d["complexity_composite"] = self.complexity.composite
+            d["complexity_route"] = self.complexity.route.value if self.complexity.route else None
+        return d
 
 
 @dataclass
