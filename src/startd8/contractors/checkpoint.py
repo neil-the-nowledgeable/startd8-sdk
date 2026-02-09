@@ -13,7 +13,6 @@ features are developed without integration validation.
 This module is now part of startd8-sdk and works without ContextCore.
 """
 
-import logging
 import os
 import subprocess
 from dataclasses import dataclass, field
@@ -21,7 +20,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-logger = logging.getLogger(__name__)
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 class CheckpointStatus(Enum):

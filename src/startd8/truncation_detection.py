@@ -10,12 +10,13 @@ This module provides utilities to detect truncation and prevent corrupted
 outputs from being saved or passed to subsequent pipeline steps.
 """
 
-import logging
 import re
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 
-logger = logging.getLogger(__name__)
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # Truncation confidence thresholds — single source of truth.
 # Callers should import these rather than hard-coding values.

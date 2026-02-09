@@ -17,6 +17,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from ...logging_config import get_logger
 from ..protocols import (
     Instrumentor,
     MergeResult,
@@ -28,7 +29,7 @@ from ..protocols import (
 )
 
 
-logger = logging.getLogger("startd8.contractors")
+logger = get_logger("startd8.contractors")
 
 
 # ============================================================================

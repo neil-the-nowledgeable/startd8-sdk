@@ -10,11 +10,11 @@ Only available when ContextCore is installed.
 """
 
 import ast
-import logging
 import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from ...logging_config import get_logger
 from ..protocols import (
     Instrumentor,
     MergeResult,
@@ -24,7 +24,7 @@ from ..protocols import (
 )
 
 
-logger = logging.getLogger("startd8.contractors.contextcore")
+logger = get_logger("startd8.contractors.contextcore")
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
 _OTEL_DESCRIPTORS = {

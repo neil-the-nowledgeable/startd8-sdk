@@ -121,6 +121,11 @@ from .exceptions import (
     GeminiSafetyFilterError,
 )
 from .logging_config import get_logger, setup_logging, correlation_id
+
+# Eagerly initialize OTel log bridge so that modules using raw
+# logging.getLogger(__name__) still propagate to Loki.
+from .logging_config import _ensure_default_log_file_handler
+_ensure_default_log_file_handler()
 from .events import EventBus, Event, EventType, EventPriority
 from .costs import (
     CostTracker,

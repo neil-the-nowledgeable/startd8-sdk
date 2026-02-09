@@ -1,52 +1,18 @@
-"""
-Prime Contractor Workflow - Continuous Integration Wrapper for Code Generation.
-
-The Prime Contractor ensures that code is integrated immediately after each
-feature is developed, preventing the "backlog integration nightmare" where
-multiple features developed in isolation create merge conflicts and regressions.
-
-Key Principles:
-1. INTEGRATE IMMEDIATELY: Each feature is integrated right after generation
-2. CHECKPOINT VALIDATION: Code must pass all checks before next feature starts
-3. FAIL FAST: Stop the pipeline if integration fails, don't accumulate problems
-4. MAINLINE ALWAYS WORKS: The main codebase is always in a working state
-
-This is the "general contractor" pattern - just as a general contractor
-coordinates subcontractors and ensures each phase is complete before the
-next begins, the Prime Contractor coordinates code generation tasks and
-ensures each feature is integrated before moving on.
-
-This module works standalone without ContextCore. When ContextCore is
-available, it provides enhanced observability via OpenTelemetry spans.
-"""
-
 import logging
 import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
-
+from ..logging_config import get_logger
 from ..security import sanitize_path
 from .checkpoint import CheckpointResult, CheckpointStatus, IntegrationCheckpoint
-from .protocols import (
-    CheckpointFailedCallback,
-    CodeGenerator,
-    FeatureCompleteCallback,
-    GenerationResult,
-    Instrumentor,
-    MergeStrategy,
-    ProgressCallback,
-    SizeEstimator,
-)
+from .protocols import CheckpointFailedCallback, CodeGenerator, FeatureCompleteCallback, GenerationResult, Instrumentor, MergeStrategy, ProgressCallback, SizeEstimator
 from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
-
-logger = logging.getLogger(__name__)
-
-
-MAX_INTEGRATION_ATTEMPTS = 3
-
+import re
+from datetime import datetime, timezone
+from typing import Dict, Any, List, Optional
 
 class PrimeContractorWorkflow:
     """
@@ -79,29 +45,7 @@ class PrimeContractorWorkflow:
         result = workflow.run()  # Emits spans to Tempo
     """
 
-    def __init__(
-        self,
-        project_root: Optional[Path] = None,
-        dry_run: bool = False,
-        auto_commit: bool = False,
-        strict_checkpoints: bool = False,
-        max_retries: int = 2,
-        allow_dirty: bool = False,
-        auto_stash: bool = False,
-        # Protocol adapters (optional - defaults to standalone)
-        code_generator: Optional[CodeGenerator] = None,
-        instrumentor: Optional[Instrumentor] = None,
-        size_estimator: Optional[SizeEstimator] = None,
-        merge_strategy: Optional[MergeStrategy] = None,
-        # Callbacks
-        on_feature_complete: Optional[FeatureCompleteCallback] = None,
-        on_checkpoint_failed: Optional[CheckpointFailedCallback] = None,
-        # Size limits for proactive truncation prevention
-        max_lines_per_feature: int = 150,
-        max_tokens_per_feature: int = 500,
-        # Pre-integration truncation check
-        check_truncation: bool = True,
-    ):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=2, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True):
         """
         Initialize the Prime Contractor workflow.
 
@@ -133,40 +77,19 @@ class PrimeContractorWorkflow:
         self.on_feature_complete = on_feature_complete
         self.on_checkpoint_failed = on_checkpoint_failed
         self.check_truncation = check_truncation
-
-        # Git safety: track stash reference for recovery
         self.stash_ref: Optional[str] = None
-
-        # Initialize queue
         self.queue = FeatureQueue(project_root=self.project_root)
-
-        # Initialize checkpoint runner
-        self.checkpoint = IntegrationCheckpoint(
-            project_root=self.project_root,
-            run_tests=True,
-            strict_mode=strict_checkpoints,
-        )
-
-        # Initialize adapters (use defaults if not provided)
+        self.checkpoint = IntegrationCheckpoint(project_root=self.project_root, run_tests=True, strict_mode=strict_checkpoints)
         registry = get_registry()
         registry.discover()
-
         self.code_generator = code_generator
         self.instrumentor = instrumentor or registry.get_default_instrumentor()()
         self.size_estimator = size_estimator or registry.get_default_size_estimator()()
-        self.merge_strategy = merge_strategy or registry.get_default_merge_strategy(
-            for_python=True
-        )()
-
-        # Track integration history for conflict detection
+        self.merge_strategy = merge_strategy or registry.get_default_merge_strategy(for_python=True)()
         self.integration_history: List[Dict] = []
-        self.files_modified_this_session: Dict[str, List[str]] = {}  # file -> [features]
-
-        # Size limits for proactive truncation prevention
+        self.files_modified_this_session: Dict[str, List[str]] = {}
         self.max_lines_per_feature = max_lines_per_feature
         self.max_tokens_per_feature = max_tokens_per_feature
-
-        # Cost tracking
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
@@ -178,10 +101,6 @@ class PrimeContractorWorkflow:
         except ValueError:
             return str(path)
 
-    # =========================================================================
-    # Git Safety Methods
-    # =========================================================================
-
     def check_git_status(self) -> Tuple[bool, List[str]]:
         """
         Check if git repo is clean (no uncommitted changes).
@@ -189,17 +108,9 @@ class PrimeContractorWorkflow:
         Returns:
             Tuple of (is_clean, dirty_files)
         """
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-            timeout=30,
-        )
-        dirty_files = [
-            line.strip() for line in result.stdout.strip().split("\n") if line
-        ]
-        return len(dirty_files) == 0, dirty_files
+        result = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        dirty_files = [line.strip() for line in result.stdout.strip().split('\n') if line]
+        return (len(dirty_files) == 0, dirty_files)
 
     def create_safety_snapshot(self) -> Optional[str]:
         """
@@ -208,42 +119,20 @@ class PrimeContractorWorkflow:
         Returns:
             Stash reference name if created, None if nothing to stash
         """
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        stash_message = f"prime-contractor-snapshot-{timestamp}"
-
-        result = subprocess.run(
-            ["git", "stash", "push", "-m", stash_message],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-            timeout=30,
-        )
-
-        if "No local changes to save" in result.stdout:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        stash_message = f'prime-contractor-snapshot-{timestamp}'
+        result = subprocess.run(['git', 'stash', 'push', '-m', stash_message], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        if 'No local changes to save' in result.stdout:
             return None
-
         if result.returncode == 0:
             self.stash_ref = stash_message
             return stash_message
-
         return None
 
     def is_file_dirty(self, path: Path) -> bool:
         """Check if a specific file has uncommitted changes."""
-        result_staged = subprocess.run(
-            ["git", "diff", "--cached", "--name-only", str(path)],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-            timeout=30,
-        )
-        result_unstaged = subprocess.run(
-            ["git", "diff", "--name-only", str(path)],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-            timeout=30,
-        )
+        result_staged = subprocess.run(['git', 'diff', '--cached', '--name-only', str(path)], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        result_unstaged = subprocess.run(['git', 'diff', '--name-only', str(path)], capture_output=True, text=True, cwd=self.project_root, timeout=30)
         return bool(result_staged.stdout.strip() or result_unstaged.stdout.strip())
 
     def protect_dirty_target(self, path: Path) -> bool:
@@ -255,93 +144,46 @@ class PrimeContractorWorkflow:
         """
         if not path.exists():
             return True
-
         if self.is_file_dirty(path):
-            logger.warning(
-                "Target file has uncommitted changes: %s — commit or stash first",
-                path.name,
-                extra={"file_path": str(path)},
-            )
+            logger.warning('Target file has uncommitted changes: %s — commit or stash first', path.name, extra={'file_path': str(path)})
             return False
-
         return True
 
     def get_recovery_status(self) -> Dict:
         """Get current recovery status information."""
-        backup_files = list(self.project_root.glob("**/*.backup"))
-
-        result = subprocess.run(
-            ["git", "stash", "list"],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-            timeout=30,
-        )
-        stashes = [
-            line
-            for line in result.stdout.strip().split("\n")
-            if line and "prime-contractor-snapshot" in line
-        ]
-
-        return {
-            "stash_ref": self.stash_ref,
-            "stashes": stashes,
-            "backup_files": [str(f) for f in backup_files],
-            "has_recovery_options": bool(stashes or backup_files),
-        }
+        backup_files = list(self.project_root.glob('**/*.backup'))
+        result = subprocess.run(['git', 'stash', 'list'], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        stashes = [line for line in result.stdout.strip().split('\n') if line and 'prime-contractor-snapshot' in line]
+        return {'stash_ref': self.stash_ref, 'stashes': stashes, 'backup_files': [str(f) for f in backup_files], 'has_recovery_options': bool(stashes or backup_files)}
 
     def recover_from_stash(self) -> bool:
         """Recover from the most recent prime-contractor stash."""
-        result = subprocess.run(
-            ["git", "stash", "list"],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-            timeout=30,
-        )
-
-        for line in result.stdout.strip().split("\n"):
-            if "prime-contractor-snapshot" in line:
-                stash_id = line.split(":")[0]
-                logger.info("Recovering from stash: %s", line)
-
-                pop_result = subprocess.run(
-                    ["git", "stash", "pop", stash_id],
-                    capture_output=True,
-                    text=True,
-                    cwd=self.project_root,
-                    timeout=30,
-                )
-
+        result = subprocess.run(['git', 'stash', 'list'], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        for line in result.stdout.strip().split('\n'):
+            if 'prime-contractor-snapshot' in line:
+                stash_id = line.split(':')[0]
+                logger.info('Recovering from stash: %s', line)
+                pop_result = subprocess.run(['git', 'stash', 'pop', stash_id], capture_output=True, text=True, cwd=self.project_root, timeout=30)
                 if pop_result.returncode == 0:
-                    logger.info("Stash recovery successful")
+                    logger.info('Stash recovery successful')
                     return True
                 else:
-                    logger.error("Stash recovery failed: %s", pop_result.stderr)
+                    logger.error('Stash recovery failed: %s', pop_result.stderr)
                     return False
-
-        logger.warning("No prime-contractor stash found")
+        logger.warning('No prime-contractor stash found')
         return False
 
     def recover_file_from_backup(self, file_path: Path) -> bool:
         """Recover a specific file from its .backup copy."""
-        backup_path = file_path.with_suffix(file_path.suffix + ".backup")
-
+        backup_path = file_path.with_suffix(file_path.suffix + '.backup')
         if not backup_path.exists():
-            logger.warning("No backup found: %s", backup_path)
+            logger.warning('No backup found: %s', backup_path)
             return False
-
         shutil.copy2(backup_path, file_path)
-        logger.info("Restored %s from %s", file_path, backup_path.name)
+        logger.info('Restored %s from %s', file_path, backup_path.name)
         return True
 
-    # =========================================================================
-    # Pre-flight Validation
-    # =========================================================================
-
-    def pre_flight_validation(
-        self, feature: FeatureSpec
-    ) -> Tuple[bool, Optional[Dict]]:
+    def pre_flight_validation(self, feature: FeatureSpec) -> Tuple[bool, Optional[Dict]]:
         """
         Perform pre-flight size estimation BEFORE code generation.
 
@@ -351,77 +193,17 @@ class PrimeContractorWorkflow:
         Returns:
             Tuple of (should_proceed, decomposition_info)
         """
-        ctx = self.instrumentor.emit_span(
-            "code_generation.preflight",
-            {
-                "gen_ai.code.feature_name": feature.name,
-                "gen_ai.code.max_lines_allowed": self.max_lines_per_feature,
-            },
-        )
-
-        # Estimate output size
-        estimate = self.size_estimator.estimate(
-            task=feature.description,
-            inputs={
-                "target_files": feature.target_files,
-                "required_exports": [],
-            },
-        )
-
-        self.instrumentor.emit_event(
-            "preflight_estimate",
-            {
-                "estimated_lines": estimate.lines,
-                "estimated_tokens": estimate.tokens,
-                "complexity": estimate.complexity,
-                "confidence": estimate.confidence,
-            },
-        )
-
-        logger.info(
-            "Pre-flight size estimation: lines=%d, complexity=%s, confidence=%.0f%%",
-            estimate.lines,
-            estimate.complexity,
-            estimate.confidence * 100,
-            extra={
-                "feature_name": feature.name,
-                "estimated_lines": estimate.lines,
-                "complexity": estimate.complexity,
-                "confidence": estimate.confidence,
-            },
-        )
-
+        ctx = self.instrumentor.emit_span('code_generation.preflight', {'gen_ai.code.feature_name': feature.name, 'gen_ai.code.max_lines_allowed': self.max_lines_per_feature})
+        estimate = self.size_estimator.estimate(task=feature.description, inputs={'target_files': feature.target_files, 'required_exports': []})
+        self.instrumentor.emit_event('preflight_estimate', {'estimated_lines': estimate.lines, 'estimated_tokens': estimate.tokens, 'complexity': estimate.complexity, 'confidence': estimate.confidence})
+        logger.info('Pre-flight size estimation: lines=%d, complexity=%s, confidence=%.0f%%', estimate.lines, estimate.complexity, estimate.confidence * 100, extra={'feature_name': feature.name, 'estimated_lines': estimate.lines, 'complexity': estimate.complexity, 'confidence': estimate.confidence})
         if estimate.lines > self.max_lines_per_feature:
-            self.instrumentor.emit_event(
-                "preflight_decision",
-                {
-                    "decision": "DECOMPOSE_REQUIRED",
-                    "reason": f"Estimated {estimate.lines} lines exceeds safe limit of {self.max_lines_per_feature}",
-                },
-            )
-
-            logger.warning(
-                "Estimated output (%d lines) exceeds safe limit (%d) for feature '%s' — consider splitting",
-                estimate.lines,
-                self.max_lines_per_feature,
-                feature.name,
-                extra={"feature_name": feature.name, "estimated_lines": estimate.lines},
-            )
-
-            decomposition_info = {
-                "reason": f"Estimated {estimate.lines} lines exceeds limit of {self.max_lines_per_feature}",
-                "estimated_lines": estimate.lines,
-                "suggested_action": "Split into multiple smaller features",
-            }
-
+            self.instrumentor.emit_event('preflight_decision', {'decision': 'DECOMPOSE_REQUIRED', 'reason': f'Estimated {estimate.lines} lines exceeds safe limit of {self.max_lines_per_feature}'})
+            logger.warning("Estimated output (%d lines) exceeds safe limit (%d) for feature '%s' — consider splitting", estimate.lines, self.max_lines_per_feature, feature.name, extra={'feature_name': feature.name, 'estimated_lines': estimate.lines})
+            decomposition_info = {'reason': f'Estimated {estimate.lines} lines exceeds limit of {self.max_lines_per_feature}', 'estimated_lines': estimate.lines, 'suggested_action': 'Split into multiple smaller features'}
             if self.strict_checkpoints:
-                return False, decomposition_info
-
-        return True, None
-
-    # =========================================================================
-    # Feature Processing
-    # =========================================================================
+                return (False, decomposition_info)
+        return (True, None)
 
     def process_feature(self, feature: FeatureSpec) -> bool:
         """
@@ -430,38 +212,15 @@ class PrimeContractorWorkflow:
         Returns:
             True if the feature was fully processed, False otherwise
         """
-        self.instrumentor.emit_insight(
-            insight_type="feature_selected",
-            summary=f"Processing feature: {feature.name}",
-            confidence=1.0,
-            feature_id=feature.id,
-            feature_name=feature.name,
-            current_status=(
-                feature.status.value
-                if hasattr(feature.status, "value")
-                else str(feature.status)
-            ),
-        )
-
-        # Auto-decompose multi-file features into sequential single-file tasks
+        self.instrumentor.emit_insight(insight_type='feature_selected', summary=f'Processing feature: {feature.name}', confidence=1.0, feature_id=feature.id, feature_name=feature.name, current_status=feature.status.value if hasattr(feature.status, 'value') else str(feature.status))
         if len(feature.target_files) > 1 and feature.status == FeatureStatus.PENDING:
             return self._process_decomposed_feature(feature)
-
-        # Step 1: Develop if needed
         if feature.status == FeatureStatus.PENDING:
             if not self.develop_feature(feature):
                 return False
-
-        # Step 2: Integrate
         if feature.status == FeatureStatus.GENERATED:
             return self.integrate_feature(feature)
-
-        logger.warning(
-            "Feature '%s' in unexpected state: %s",
-            feature.name,
-            feature.status,
-            extra={"feature_name": feature.name, "status": str(feature.status)},
-        )
+        logger.warning("Feature '%s' in unexpected state: %s", feature.name, feature.status, extra={'feature_name': feature.name, 'status': str(feature.status)})
         return False
 
     def _process_decomposed_feature(self, feature: FeatureSpec) -> bool:
@@ -477,79 +236,31 @@ class PrimeContractorWorkflow:
             True if all sub-features succeeded, False otherwise
         """
         n = len(feature.target_files)
-        logger.info(
-            "Auto-decomposing '%s' into %d sub-features",
-            feature.name,
-            n,
-            extra={"feature_name": feature.name, "sub_feature_count": n},
-        )
-
-        # Save and temporarily clear the callback so it only fires on the
-        # last sub-feature (intermediate states may not build/pass tests).
+        logger.info("Auto-decomposing '%s' into %d sub-features", feature.name, n, extra={'feature_name': feature.name, 'sub_feature_count': n})
         saved_callback = self.on_feature_complete
-
         for i, target_file in enumerate(feature.target_files):
             is_last = i == n - 1
-            sub_id = f"{feature.id}__part{i + 1}"
-            sub_name = f"{feature.name} ({Path(target_file).name})"
-
-            # Read current file content (includes prior sub-feature changes)
-            current_content = ""
+            sub_id = f'{feature.id}__part{i + 1}'
+            sub_name = f'{feature.name} ({Path(target_file).name})'
+            current_content = ''
             target_path = self.project_root / target_file
             if target_path.exists():
-                current_content = target_path.read_text(encoding="utf-8")
-
-            # Build sub-feature description with file-scoping directive
-            sub_description = (
-                f"{feature.description}\n\n"
-                f"---\n"
-                f"IMPORTANT: This is part {i + 1} of {n}. "
-                f"You MUST ONLY output code for the file: {target_file}\n"
-                f"Do NOT output code for any other file.\n\n"
-                f"CURRENT CONTENTS of {target_file}:\n"
-                f"```\n{current_content}\n```"
-            )
-
-            sub_feature = FeatureSpec(
-                id=sub_id,
-                name=sub_name,
-                description=sub_description,
-                target_files=[target_file],
-                dependencies=feature.dependencies,
-            )
-
-            logger.info(
-                "Sub-feature %d/%d: %s",
-                i + 1,
-                n,
-                Path(target_file).name,
-                extra={"feature_name": feature.name, "sub_index": i + 1, "target_file": target_file},
-            )
-
-            # Only fire on_feature_complete for the last sub-feature
+                current_content = target_path.read_text(encoding='utf-8')
+            sub_description = f'{feature.description}\n\n---\nIMPORTANT: This is part {i + 1} of {n}. You MUST ONLY output code for the file: {target_file}\nDo NOT output code for any other file.\n\nCURRENT CONTENTS of {target_file}:\n```\n{current_content}\n```'
+            sub_feature = FeatureSpec(id=sub_id, name=sub_name, description=sub_description, target_files=[target_file], dependencies=feature.dependencies)
+            logger.info('Sub-feature %d/%d: %s', i + 1, n, Path(target_file).name, extra={'feature_name': feature.name, 'sub_index': i + 1, 'target_file': target_file})
             self.on_feature_complete = saved_callback if is_last else None
-
-            # Develop (generate code)
             if not self.develop_feature(sub_feature):
                 self.on_feature_complete = saved_callback
-                self.queue.fail_feature(feature.id, f"Sub-feature {sub_id} generation failed")
+                self.queue.fail_feature(feature.id, f'Sub-feature {sub_id} generation failed')
                 return False
-
-            # Integrate (copy to target)
             if not self.integrate_feature(sub_feature):
                 self.on_feature_complete = saved_callback
-                self.queue.fail_feature(feature.id, f"Sub-feature {sub_id} integration failed")
+                self.queue.fail_feature(feature.id, f'Sub-feature {sub_id} integration failed')
                 return False
-
-        # Restore callback and mark parent as complete
         self.on_feature_complete = saved_callback
         self.queue.complete_feature(feature.id)
-        logger.info(
-            "All %d sub-features integrated for '%s'",
-            n,
-            feature.name,
-            extra={"feature_name": feature.name, "sub_feature_count": n},
-        )
+        logger.info("All %d sub-features integrated for '%s'", n, feature.name, extra={'feature_name': feature.name, 'sub_feature_count': n})
         return True
 
     def develop_feature(self, feature: FeatureSpec) -> bool:
@@ -559,112 +270,46 @@ class PrimeContractorWorkflow:
         Returns:
             True if code generation succeeded, False otherwise
         """
-        logger.info(
-            "DEVELOPING FEATURE: %s",
-            feature.name,
-            extra={"feature_name": feature.name, "feature_id": feature.id},
-        )
-
-        # Pre-flight validation
+        logger.info('DEVELOPING FEATURE: %s', feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id})
         should_proceed, decomposition_info = self.pre_flight_validation(feature)
-
         if not should_proceed:
-            reason = decomposition_info.get("reason", "Size exceeds safe limits")
-            logger.error(
-                "Pre-flight failed for '%s': %s",
-                feature.name,
-                reason,
-                extra={"feature_name": feature.name, "reason": reason},
-            )
-            self.queue.fail_feature(
-                feature.id, f"Pre-flight failed: {decomposition_info.get('reason')}"
-            )
+            reason = decomposition_info.get('reason', 'Size exceeds safe limits')
+            logger.error("Pre-flight failed for '%s': %s", feature.name, reason, extra={'feature_name': feature.name, 'reason': reason})
+            self.queue.fail_feature(feature.id, f"Pre-flight failed: {decomposition_info.get('reason')}")
             return False
-
-        # Mark as developing
         self.queue.start_feature(feature.id)
-
         if self.dry_run:
-            logger.info(
-                "[DRY RUN] Would generate code for '%s': %s...",
-                feature.name,
-                feature.description[:100],
-                extra={"feature_name": feature.name, "dry_run": True},
-            )
-            simulated_files = (
-                [f"generated/{feature.id}/{Path(t).name}" for t in feature.target_files]
-                if feature.target_files
-                else [f"generated/{feature.id}/code.py"]
-            )
+            logger.info("[DRY RUN] Would generate code for '%s': %s...", feature.name, feature.description[:100], extra={'feature_name': feature.name, 'dry_run': True})
+            simulated_files = [f'generated/{feature.id}/{Path(t).name}' for t in feature.target_files] if feature.target_files else [f'generated/{feature.id}/code.py']
             feature.generated_files = simulated_files
             feature.status = FeatureStatus.GENERATED
             self.queue.save_state()
             return True
-
         if not self.code_generator:
             logger.error("No code generator configured for feature '%s'", feature.name)
-            self.queue.fail_feature(feature.id, "No code generator configured")
+            self.queue.fail_feature(feature.id, 'No code generator configured')
             return False
-
         logger.info("Running code generation for '%s'...", feature.name)
-
         try:
-            result: GenerationResult = self.code_generator.generate(
-                task=feature.description,
-                context={"feature_name": feature.name},
-                target_files=feature.target_files,
-            )
-
+            result: GenerationResult = self.code_generator.generate(task=feature.description, context={'feature_name': feature.name}, target_files=feature.target_files)
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]
                 feature.status = FeatureStatus.GENERATED
                 self.queue.save_state()
-
-                # Track costs
                 self.total_cost_usd += result.cost_usd
                 self.total_input_tokens += result.input_tokens
                 self.total_output_tokens += result.output_tokens
-
-                self.instrumentor.emit_metric(
-                    "prime_contractor.feature_cost",
-                    result.cost_usd,
-                    {"feature_name": feature.name, "model": result.model},
-                )
-
-                logger.info(
-                    "Code generated for '%s': cost=$%.4f, tokens=%d in / %d out",
-                    feature.name,
-                    result.cost_usd,
-                    result.input_tokens,
-                    result.output_tokens,
-                    extra={
-                        "feature_name": feature.name,
-                        "cost_usd": result.cost_usd,
-                        "input_tokens": result.input_tokens,
-                        "output_tokens": result.output_tokens,
-                        "model": result.model,
-                    },
-                )
+                self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
+                logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model})
                 return True
             else:
-                error_msg = result.error or "Code generation failed"
-                logger.error(
-                    "Code generation failed for '%s': %s",
-                    feature.name,
-                    error_msg,
-                    extra={"feature_name": feature.name, "error": error_msg},
-                )
+                error_msg = result.error or 'Code generation failed'
+                logger.error("Code generation failed for '%s': %s", feature.name, error_msg, extra={'feature_name': feature.name, 'error': error_msg})
                 self.queue.fail_feature(feature.id, error_msg)
                 return False
-
         except Exception as e:
-            error_msg = f"Exception during code generation: {e}"
-            logger.error(
-                "%s",
-                error_msg,
-                exc_info=True,
-                extra={"feature_name": feature.name},
-            )
+            error_msg = f'Exception during code generation: {e}'
+            logger.error('%s', error_msg, exc_info=True, extra={'feature_name': feature.name})
             self.queue.fail_feature(feature.id, error_msg)
             return False
 
@@ -675,259 +320,114 @@ class PrimeContractorWorkflow:
         Returns:
             True if integration succeeded, False otherwise
         """
-        logger.info(
-            "INTEGRATING FEATURE: %s",
-            feature.name,
-            extra={"feature_name": feature.name, "feature_id": feature.id},
-        )
-
-        # Mark as integrating
+        logger.info('INTEGRATING FEATURE: %s', feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id})
         self.queue.start_integration(feature.id)
-
         integrated_files = []
-
         for i, source_file in enumerate(feature.generated_files):
             source_path = Path(source_file)
-
-            # Determine target path (resolve relative paths against project_root)
             if i < len(feature.target_files):
-                # Validate path from plan output (untrusted boundary)
                 try:
-                    sanitized = sanitize_path(
-                        feature.target_files[i], base_dir=self.project_root
-                    )
+                    sanitized = sanitize_path(feature.target_files[i], base_dir=self.project_root)
                 except Exception as e:
-                    logger.error(
-                        "Path validation failed for '%s': %s",
-                        feature.target_files[i],
-                        e,
-                        extra={"feature_name": feature.name},
-                    )
+                    logger.error("Path validation failed for '%s': %s", feature.target_files[i], e, extra={'feature_name': feature.name})
                     continue
                 target_path = sanitized
-            else:
-                if not source_path.exists():
-                    if self.dry_run:
-                        target_path = self.project_root / "src" / source_path.name
-                    else:
-                        logger.error("Source file not found: %s", source_path, extra={"feature_name": feature.name})
-                        continue
+            elif not source_path.exists():
+                if self.dry_run:
+                    target_path = self.project_root / 'src' / source_path.name
                 else:
-                    # Infer target from source
-                    target_path = self.project_root / "src" / source_path.name
-
+                    logger.error('Source file not found: %s', source_path, extra={'feature_name': feature.name})
+                    continue
+            else:
+                target_path = self.project_root / 'src' / source_path.name
             if self.dry_run:
                 target_rel = self._rel_display(target_path)
-                action = "update" if target_path.exists() else "create"
-                logger.info("[DRY RUN] Would %s: %s", action, target_rel, extra={"dry_run": True})
+                action = 'update' if target_path.exists() else 'create'
+                logger.info('[DRY RUN] Would %s: %s', action, target_rel, extra={'dry_run': True})
                 integrated_files.append(target_path)
                 continue
-
-            # Live mode - check source exists
             if not source_path.exists():
-                logger.error("Source file not found: %s", source_path, extra={"feature_name": feature.name})
+                logger.error('Source file not found: %s', source_path, extra={'feature_name': feature.name})
                 continue
-
-            # Pre-integration truncation check (W-010)
-            # code_mode auto-detects from content — source code files get
-            # structural-only checks (brace balance, unclosed code blocks);
-            # prose/markdown files get the full heuristic suite.
             if self.check_truncation:
-                from ..truncation_detection import (
-                    CONFIDENCE_HIGH,
-                    CONFIDENCE_HIGH_PROSE,
-                    detect_truncation,
-                    get_expected_sections_for_code,
-                    log_truncation_result,
-                )
-                source_content = source_path.read_text(encoding="utf-8")
+                from ..truncation_detection import CONFIDENCE_HIGH, CONFIDENCE_HIGH_PROSE, detect_truncation, get_expected_sections_for_code, log_truncation_result
+                source_content = source_path.read_text(encoding='utf-8')
                 expected = get_expected_sections_for_code(source_content)
-                trunc_result = detect_truncation(
-                    source_content,
-                    expected_sections=expected,
-                    strict_mode=False,
-                )
+                trunc_result = detect_truncation(source_content, expected_sections=expected, strict_mode=False)
                 if trunc_result.is_truncated:
-                    log_truncation_result(
-                        trunc_result,
-                        source_file=str(source_path),
-                        feature_name=feature.name,
-                        step_name="pre_integration",
-                    )
-                    # Use a higher reject threshold (0.9) when code_mode
-                    # didn't activate — prose heuristics may be producing
-                    # false positives on an unrecognized language.  When
-                    # code_mode IS active, 0.7 is safe because prose
-                    # indicators are suppressed and confidence ≈ 0.0 for
-                    # valid code.
-                    code_mode_active = trunc_result.details.get("code_mode", False)
+                    log_truncation_result(trunc_result, source_file=str(source_path), feature_name=feature.name, step_name='pre_integration')
+                    code_mode_active = trunc_result.details.get('code_mode', False)
                     reject_threshold = CONFIDENCE_HIGH if code_mode_active else CONFIDENCE_HIGH_PROSE
                     if trunc_result.confidence >= reject_threshold:
-                        logger.error(
-                            "REJECTED %s: appears truncated (confidence=%.0f%%, "
-                            "threshold=%.0f%%, code_mode=%s) — integration blocked",
-                            source_path.name,
-                            trunc_result.confidence * 100,
-                            reject_threshold * 100,
-                            code_mode_active,
-                            extra={"feature_name": feature.name, "source_file": str(source_path)},
-                        )
+                        logger.error('REJECTED %s: appears truncated (confidence=%.0f%%, threshold=%.0f%%, code_mode=%s) — integration blocked', source_path.name, trunc_result.confidence * 100, reject_threshold * 100, code_mode_active, extra={'feature_name': feature.name, 'source_file': str(source_path)})
                         continue
                     else:
-                        logger.warning(
-                            "Possible truncation in %s (confidence=%.0f%%, "
-                            "threshold=%.0f%%, code_mode=%s) — proceeding, review if build fails",
-                            source_path.name,
-                            trunc_result.confidence * 100,
-                            reject_threshold * 100,
-                            code_mode_active,
-                            extra={"feature_name": feature.name, "source_file": str(source_path)},
-                        )
-
-            # Target file protection
-            if target_path.exists() and not self.allow_dirty:
+                        logger.warning('Possible truncation in %s (confidence=%.0f%%, threshold=%.0f%%, code_mode=%s) — proceeding, review if build fails', source_path.name, trunc_result.confidence * 100, reject_threshold * 100, code_mode_active, extra={'feature_name': feature.name, 'source_file': str(source_path)})
+            if target_path.exists() and (not self.allow_dirty):
                 if not self.protect_dirty_target(target_path):
-                    logger.warning("Skipping %s to protect uncommitted changes", target_path.name)
+                    logger.warning('Skipping %s to protect uncommitted changes', target_path.name)
                     continue
-
-            # Use merge strategy
             if self.merge_strategy.can_merge(source_path, target_path):
                 result = self.merge_strategy.merge(source_path, target_path)
-                if result.status.value == "success":
-                    logger.info("Merged: %s", self._rel_display(target_path), extra={"feature_name": feature.name})
+                if result.status.value == 'success':
+                    logger.info('Merged: %s', self._rel_display(target_path), extra={'feature_name': feature.name})
                     integrated_files.append(target_path)
-                elif result.status.value == "conflict":
-                    logger.warning(
-                        "Merged with conflicts: %s — %s",
-                        target_path.name,
-                        "; ".join(result.conflicts[:3]),
-                        extra={"feature_name": feature.name, "conflicts": result.conflicts[:3]},
-                    )
+                elif result.status.value == 'conflict':
+                    logger.warning('Merged with conflicts: %s — %s', target_path.name, '; '.join(result.conflicts[:3]), extra={'feature_name': feature.name, 'conflicts': result.conflicts[:3]})
                     integrated_files.append(target_path)
                 else:
-                    logger.error("Merge failed for %s: %s", target_path.name, result.error, extra={"feature_name": feature.name})
+                    logger.error('Merge failed for %s: %s', target_path.name, result.error, extra={'feature_name': feature.name})
             else:
-                # Simple copy if merge strategy can't handle
                 target_path.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source_path, target_path)
-                logger.info("Copied: %s", self._rel_display(target_path), extra={"feature_name": feature.name})
+                logger.info('Copied: %s', self._rel_display(target_path), extra={'feature_name': feature.name})
                 integrated_files.append(target_path)
-
         if not integrated_files:
-            error_msg = "No files were integrated"
+            error_msg = 'No files were integrated'
             self.queue.fail_feature(feature.id, error_msg)
-            self.instrumentor.emit_insight(
-                insight_type="integration_failed",
-                summary=f"Feature '{feature.name}' failed: no files integrated",
-                confidence=1.0,
-                feature_id=feature.id,
-            )
+            self.instrumentor.emit_insight(insight_type='integration_failed', summary=f"Feature '{feature.name}' failed: no files integrated", confidence=1.0, feature_id=feature.id)
             return False
-
-        # Track modified files
         for file_path in integrated_files:
             file_str = str(file_path)
             if file_str not in self.files_modified_this_session:
                 self.files_modified_this_session[file_str] = []
             self.files_modified_this_session[file_str].append(feature.name)
-
-        # Run checkpoints
         if not self.dry_run:
             logger.info("Running integration checkpoints for '%s'...", feature.name)
             results = self.checkpoint.run_all_checkpoints(integrated_files, feature.name)
             all_passed = self.checkpoint.summarize_results(results)
-
             if not all_passed:
                 failed_checks = [r for r in results if r.status == CheckpointStatus.FAILED]
-                error_msg = "; ".join(r.message for r in failed_checks)
-
+                error_msg = '; '.join((r.message for r in failed_checks))
                 self.queue.fail_feature(feature.id, error_msg)
-
-                self.instrumentor.emit_insight(
-                    insight_type="integration_failed",
-                    summary=f"Feature '{feature.name}' failed checkpoints",
-                    confidence=1.0,
-                    feature_id=feature.id,
-                    failed_checks=[r.name for r in failed_checks],
-                )
-
+                self.instrumentor.emit_insight(insight_type='integration_failed', summary=f"Feature '{feature.name}' failed checkpoints", confidence=1.0, feature_id=feature.id, failed_checks=[r.name for r in failed_checks])
                 if self.on_checkpoint_failed:
                     self.on_checkpoint_failed(feature, results)
-
                 return False
         else:
-            logger.info("[DRY RUN] Would run integration checkpoints", extra={"dry_run": True})
-
-        # Commit if auto-commit enabled
-        if self.auto_commit and not self.dry_run:
+            logger.info('[DRY RUN] Would run integration checkpoints', extra={'dry_run': True})
+        if self.auto_commit and (not self.dry_run):
             self._commit_feature(feature, integrated_files)
-
-        # Mark complete
         self.queue.complete_feature(feature.id)
-
-        # Record in history
-        self.integration_history.append(
-            {
-                "feature": feature.name,
-                "files": [str(f) for f in integrated_files],
-                "timestamp": datetime.now().isoformat(),
-            }
-        )
-
-        self.instrumentor.emit_insight(
-            insight_type="integration_success",
-            summary=f"Feature '{feature.name}' integrated successfully",
-            confidence=1.0,
-            feature_id=feature.id,
-            files_count=len(integrated_files),
-        )
-
+        self.integration_history.append({'feature': feature.name, 'files': [str(f) for f in integrated_files], 'timestamp': datetime.now().isoformat()})
+        self.instrumentor.emit_insight(insight_type='integration_success', summary=f"Feature '{feature.name}' integrated successfully", confidence=1.0, feature_id=feature.id, files_count=len(integrated_files))
         if self.on_feature_complete:
             self.on_feature_complete(feature)
-
-        logger.info(
-            "Feature '%s' integrated successfully",
-            feature.name,
-            extra={"feature_name": feature.name, "files_count": len(integrated_files)},
-        )
+        logger.info("Feature '%s' integrated successfully", feature.name, extra={'feature_name': feature.name, 'files_count': len(integrated_files)})
         return True
 
     def _commit_feature(self, feature: FeatureSpec, files: List[Path]):
         """Commit the integrated feature to git."""
         for file_path in files:
-            subprocess.run(
-                ["git", "add", str(file_path)],
-                cwd=self.project_root,
-                capture_output=True,
-                timeout=30,
-            )
-
-        commit_msg = (
-            f"feat: Integrate {feature.name}\n\nIntegrated via Prime Contractor workflow"
-        )
-        result = subprocess.run(
-            ["git", "commit", "-m", commit_msg],
-            cwd=self.project_root,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-
+            subprocess.run(['git', 'add', str(file_path)], cwd=self.project_root, capture_output=True, timeout=30)
+        commit_msg = f'feat: Integrate {feature.name}\n\nIntegrated via Prime Contractor workflow'
+        result = subprocess.run(['git', 'commit', '-m', commit_msg], cwd=self.project_root, capture_output=True, text=True, timeout=30)
         if result.returncode == 0:
-            logger.info("Committed: %s", feature.name)
+            logger.info('Committed: %s', feature.name)
         else:
             logger.warning("Commit failed for '%s': %s", feature.name, result.stderr.strip())
 
-    # =========================================================================
-    # Main Workflow
-    # =========================================================================
-
-    def run(
-        self,
-        max_features: Optional[int] = None,
-        stop_on_failure: bool = True,
-        max_cost_usd: Optional[float] = None,
-    ) -> Dict:
+    def run(self, max_features: Optional[int]=None, stop_on_failure: bool=True, max_cost_usd: Optional[float]=None) -> Dict:
         """
         Run the Prime Contractor workflow.
 
@@ -939,169 +439,67 @@ class PrimeContractorWorkflow:
         Returns:
             Summary dict with results
         """
-        logger.info(
-            "PRIME CONTRACTOR WORKFLOW started — mode=%s, auto_commit=%s, stop_on_failure=%s",
-            "DRY RUN" if self.dry_run else "LIVE",
-            self.auto_commit,
-            stop_on_failure,
-            extra={"dry_run": self.dry_run, "auto_commit": self.auto_commit},
-        )
-
-        # Pre-flight check
+        logger.info('PRIME CONTRACTOR WORKFLOW started — mode=%s, auto_commit=%s, stop_on_failure=%s', 'DRY RUN' if self.dry_run else 'LIVE', self.auto_commit, stop_on_failure, extra={'dry_run': self.dry_run, 'auto_commit': self.auto_commit})
         is_clean, dirty_files = self.check_git_status()
         if not is_clean:
             if self.auto_stash:
-                logger.info("Auto-stashing: repository has uncommitted changes")
+                logger.info('Auto-stashing: repository has uncommitted changes')
                 stash_ref = self.create_safety_snapshot()
                 if stash_ref:
-                    logger.info("Stashed as: %s", stash_ref)
+                    logger.info('Stashed as: %s', stash_ref)
             elif self.allow_dirty:
-                logger.warning("Repository has uncommitted changes (--allow-dirty set)")
+                logger.warning('Repository has uncommitted changes (--allow-dirty set)')
             else:
-                logger.error(
-                    "BLOCKED: Repository has %d file(s) with uncommitted changes",
-                    len(dirty_files),
-                    extra={"dirty_files": dirty_files[:10]},
-                )
-                return {
-                    "processed": 0,
-                    "succeeded": 0,
-                    "failed": 0,
-                    "progress": self.queue.get_progress(),
-                    "history": [],
-                    "total_cost_usd": 0.0,
-                    "aborted": True,
-                    "abort_reason": "uncommitted_changes",
-                }
-
-        self.instrumentor.emit_insight(
-            insight_type="workflow_started",
-            summary=f"Starting workflow with {len(self.queue.features)} features",
-            confidence=1.0,
-            mode="dry_run" if self.dry_run else "live",
-            feature_count=len(self.queue.features),
-        )
-
-        # Capture test baseline
+                logger.error('BLOCKED: Repository has %d file(s) with uncommitted changes', len(dirty_files), extra={'dirty_files': dirty_files[:10]})
+                return {'processed': 0, 'succeeded': 0, 'failed': 0, 'progress': self.queue.get_progress(), 'history': [], 'total_cost_usd': 0.0, 'aborted': True, 'abort_reason': 'uncommitted_changes'}
+        self.instrumentor.emit_insight(insight_type='workflow_started', summary=f'Starting workflow with {len(self.queue.features)} features', confidence=1.0, mode='dry_run' if self.dry_run else 'live', feature_count=len(self.queue.features))
         if not self.dry_run:
-            logger.info("Capturing test baseline for regression detection...")
+            logger.info('Capturing test baseline for regression detection...')
             baseline = self.checkpoint.capture_test_baseline()
-            logger.info("Test baseline captured: %d test(s)", len(baseline))
-
-        # Show queue status
+            logger.info('Test baseline captured: %d test(s)', len(baseline))
         self.queue.print_status()
-
-        # Process features
         features_processed = 0
         features_succeeded = 0
         features_failed = 0
-
         while True:
             if max_features and features_processed >= max_features:
-                logger.info("Reached max features limit (%d)", max_features)
+                logger.info('Reached max features limit (%d)', max_features)
                 break
-
-            # Cost guard: stop if total spend has reached the hard ceiling
             if max_cost_usd is not None and self.total_cost_usd >= max_cost_usd:
-                logger.error(
-                    "Cost limit reached: $%.2f >= $%.2f — stopping workflow",
-                    self.total_cost_usd,
-                    max_cost_usd,
-                )
+                logger.error('Cost limit reached: $%.2f >= $%.2f — stopping workflow', self.total_cost_usd, max_cost_usd)
                 break
-
             feature = self.queue.get_next_feature()
-
             if not feature:
-                logger.info("No more features to process")
+                logger.info('No more features to process')
                 break
-
-            # Guard: skip features that have exceeded max integration attempts
             if feature.integration_attempts >= MAX_INTEGRATION_ATTEMPTS:
-                logger.error(
-                    "Feature '%s' exceeded max integration attempts (%d)",
-                    feature.name,
-                    MAX_INTEGRATION_ATTEMPTS,
-                )
-                self.queue.fail_feature(
-                    feature.id, "Max integration attempts exceeded"
-                )
+                logger.error("Feature '%s' exceeded max integration attempts (%d)", feature.name, MAX_INTEGRATION_ATTEMPTS)
+                self.queue.fail_feature(feature.id, 'Max integration attempts exceeded')
                 features_processed += 1
                 features_failed += 1
                 if stop_on_failure:
-                    logger.error(
-                        "STOPPING: Feature '%s' failed",
-                        feature.name,
-                        extra={"feature_name": feature.name},
-                    )
+                    logger.error("STOPPING: Feature '%s' failed", feature.name, extra={'feature_name': feature.name})
                     break
                 continue
-
             features_processed += 1
             success = self.process_feature(feature)
-
             if success:
                 features_succeeded += 1
             else:
                 features_failed += 1
-
                 if stop_on_failure:
-                    logger.error(
-                        "STOPPING: Feature '%s' failed",
-                        feature.name,
-                        extra={"feature_name": feature.name},
-                    )
+                    logger.error("STOPPING: Feature '%s' failed", feature.name, extra={'feature_name': feature.name})
                     break
-
-        # Final summary
-        logger.info(
-            "WORKFLOW SUMMARY: processed=%d, succeeded=%d, failed=%d, progress=%.1f%%, cost=$%.4f, tokens=%d in / %d out",
-            features_processed,
-            features_succeeded,
-            features_failed,
-            self.queue.get_progress(),
-            self.total_cost_usd,
-            self.total_input_tokens,
-            self.total_output_tokens,
-            extra={
-                "processed": features_processed,
-                "succeeded": features_succeeded,
-                "failed": features_failed,
-                "progress": self.queue.get_progress(),
-                "total_cost_usd": self.total_cost_usd,
-                "total_input_tokens": self.total_input_tokens,
-                "total_output_tokens": self.total_output_tokens,
-            },
-        )
-
-        self.instrumentor.emit_insight(
-            insight_type="workflow_completed",
-            summary=f"Workflow complete: {features_succeeded}/{features_processed} succeeded",
-            confidence=1.0,
-            processed=features_processed,
-            succeeded=features_succeeded,
-            failed=features_failed,
-            total_cost_usd=self.total_cost_usd,
-        )
-
-        return {
-            "processed": features_processed,
-            "succeeded": features_succeeded,
-            "failed": features_failed,
-            "progress": self.queue.get_progress(),
-            "history": self.integration_history,
-            "total_cost_usd": self.total_cost_usd,
-            "total_input_tokens": self.total_input_tokens,
-            "total_output_tokens": self.total_output_tokens,
-        }
+        logger.info('WORKFLOW SUMMARY: processed=%d, succeeded=%d, failed=%d, progress=%.1f%%, cost=$%.4f, tokens=%d in / %d out', features_processed, features_succeeded, features_failed, self.queue.get_progress(), self.total_cost_usd, self.total_input_tokens, self.total_output_tokens, extra={'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens})
+        self.instrumentor.emit_insight(insight_type='workflow_completed', summary=f'Workflow complete: {features_succeeded}/{features_processed} succeeded', confidence=1.0, processed=features_processed, succeeded=features_succeeded, failed=features_failed, total_cost_usd=self.total_cost_usd)
+        return {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
 
     def run_single_feature(self, feature_id: str) -> bool:
         """Run integration for a single specific feature."""
         feature = self.queue.features.get(feature_id)
         if not feature:
-            logger.warning("Feature not found: %s", feature_id)
+            logger.warning('Feature not found: %s', feature_id)
             return False
-
         return self.integrate_feature(feature)
 
     def reset_failed_features(self):
@@ -1111,17 +509,16 @@ class PrimeContractorWorkflow:
             if feature.status in (FeatureStatus.FAILED, FeatureStatus.BLOCKED):
                 if feature.generated_files:
                     feature.status = FeatureStatus.GENERATED
-                    logger.info("Reset %s -> GENERATED (has code)", feature.name)
+                    logger.info('Reset %s -> GENERATED (has code)', feature.name)
                 else:
                     feature.status = FeatureStatus.PENDING
-                    logger.info("Reset %s -> PENDING (needs development)", feature.name)
+                    logger.info('Reset %s -> PENDING (needs development)', feature.name)
                 feature.error_message = None
                 reset_count += 1
-
         self.queue.save_state()
-        logger.info("Reset %d failed/blocked feature(s)", reset_count)
+        logger.info('Reset %d failed/blocked feature(s)', reset_count)
 
-    def full_reset(self, include_targets: bool = False) -> None:
+    def full_reset(self, include_targets: bool=False) -> None:
         """
         Reset workflow state **and** clean generated artifacts.
 
@@ -1134,18 +531,13 @@ class PrimeContractorWorkflow:
             include_targets: If True, also delete target files listed in
                 the feature queue.  Use with caution.
         """
-        # Delete persisted state file
         if self.queue.state_file.exists():
             self.queue.state_file.unlink()
-            logger.info("Removed state file: %s", self.queue.state_file.name)
-
-        # Reset in-memory queue
+            logger.info('Removed state file: %s', self.queue.state_file.name)
         self.queue.reset()
-
-        # Clean workspace artifacts
         self.clean_workspace(include_targets=include_targets)
 
-    def clean_workspace(self, include_targets: bool = False) -> int:
+    def clean_workspace(self, include_targets: bool=False) -> int:
         """
         Remove generated artifacts from previous runs.
 
@@ -1165,34 +557,24 @@ class PrimeContractorWorkflow:
             Count of items removed.
         """
         removed = 0
-
-        # Determine output directory from the code generator or default
-        output_dir = self.project_root / "generated"
-        if self.code_generator and hasattr(self.code_generator, "output_dir") and self.code_generator.output_dir is not None:
+        output_dir = self.project_root / 'generated'
+        if self.code_generator and hasattr(self.code_generator, 'output_dir') and (self.code_generator.output_dir is not None):
             output_dir = Path(self.code_generator.output_dir)
             if not output_dir.is_absolute():
                 output_dir = self.project_root / output_dir
-
-        # Remove generated/ directory
         if output_dir.exists() and output_dir.is_dir():
             shutil.rmtree(output_dir)
-            logger.info("Removed directory: %s", output_dir)
+            logger.info('Removed directory: %s', output_dir)
             removed += 1
-
-        # Remove .backup files under project root
-        for backup_file in self.project_root.rglob("*.backup"):
+        for backup_file in self.project_root.rglob('*.backup'):
             backup_file.unlink()
-            logger.debug("Removed backup: %s", backup_file.relative_to(self.project_root))
+            logger.debug('Removed backup: %s', backup_file.relative_to(self.project_root))
             removed += 1
-
-        # Remove __pycache__ directories under project root
-        for pycache_dir in self.project_root.rglob("__pycache__"):
+        for pycache_dir in self.project_root.rglob('__pycache__'):
             if pycache_dir.is_dir():
                 shutil.rmtree(pycache_dir)
-                logger.debug("Removed: %s", pycache_dir.relative_to(self.project_root))
+                logger.debug('Removed: %s', pycache_dir.relative_to(self.project_root))
                 removed += 1
-
-        # Optionally remove target files listed in the feature queue
         if include_targets:
             for feature in self.queue.features.values():
                 for target_file in feature.target_files:
@@ -1201,8 +583,382 @@ class PrimeContractorWorkflow:
                         target_path = self.project_root / target_path
                     if target_path.exists():
                         target_path.unlink()
-                        logger.info("Removed target: %s", target_path.relative_to(self.project_root))
+                        logger.info('Removed target: %s', target_path.relative_to(self.project_root))
                         removed += 1
-
-        logger.info("Cleaned %d item(s) from workspace", removed)
+        logger.info('Cleaned %d item(s) from workspace', removed)
         return removed
+
+class FeatureProcessor:
+    """
+    Processes decomposed features according to enterprise requirements.
+    
+    This processor implements a five-stage pipeline:
+    1. Input Validation - Ensures data integrity
+    2. Normalization - Standardizes format
+    3. Enrichment - Adds metadata and context
+    4. Analysis - Derives insights (type, dependencies, complexity)
+    5. Finalization - Returns processed feature
+    
+    Thread-safe for concurrent processing scenarios.
+    """
+    FEATURE_TYPES = ['frontend', 'backend', 'data', 'testing', 'devops', 'general']
+    REQUIRED_FIELDS = ['id', 'description', 'parent_feature_id']
+    COMPLEXITY_KEYWORDS = ['integrate', 'complex', 'multiple', 'various', 'comprehensive', 'advanced', 'sophisticated', 'intricate', 'elaborate', 'extensive']
+    TYPE_KEYWORDS = {'frontend': ['ui', 'interface', 'display', 'view', 'component', 'screen', 'frontend'], 'backend': ['api', 'endpoint', 'service', 'backend', 'server', 'microservice'], 'data': ['database', 'schema', 'migration', 'query', 'storage', 'data'], 'testing': ['test', 'validation', 'verify', 'check', 'assert', 'quality'], 'devops': ['deploy', 'infrastructure', 'configuration', 'pipeline', 'ci/cd']}
+    VERSION = '1.0.0'
+    MAX_DESCRIPTION_LENGTH = 1000
+    PRIORITY_MIN = 1
+    PRIORITY_MAX = 5
+    COMPLEXITY_MIN = 1
+    COMPLEXITY_MAX = 10
+
+    def __init__(self):
+        """Initialize the FeatureProcessor."""
+        logger.info(f'FeatureProcessor initialized (version {self.VERSION})')
+
+    def _process_decomposed_feature(self, feature: Dict[str, Any], parent_context: Optional[Dict[str, Any]]=None) -> Dict[str, Any]:
+        """
+        Process a single decomposed feature with comprehensive validation and enrichment.
+
+        Args:
+            feature: Raw decomposed feature dictionary containing:
+                - id (str): Unique identifier
+                - description (str): Feature description text
+                - parent_feature_id (str): ID of parent feature
+                - type (str, optional): Feature type
+                - priority (int, optional): Priority level (1-5)
+            parent_context: Optional context from parent feature for inheritance.
+                Expected to contain fields like "tags", "category".
+
+        Returns:
+            Dict[str, Any]: Processed feature with all enrichments applied:
+                - All original fields (normalized)
+                - metadata: Processing information and status
+                - dependencies: Extracted feature dependencies
+                - complexity_score: Calculated complexity (1-10)
+                - type: Inferred or validated feature type
+
+        Raises:
+            ValueError: If required fields are missing or validation fails
+            TypeError: If field types are incorrect
+
+        Example:
+            >>> processor = FeatureProcessor()
+            >>> feature = {
+            ...     "id": "FEAT-001",
+            ...     "description": "Create API endpoint",
+            ...     "parent_feature_id": "EPIC-100"
+            ... }
+            >>> result = processor._process_decomposed_feature(feature)
+        """
+        if parent_context is None:
+            parent_context = {}
+        processed_feature = feature.copy()
+        original_id = processed_feature.get('id', 'N/A')
+        warnings = []
+        try:
+            logger.debug(f"Processing feature '{original_id}': Stage 1 - Validation")
+            self._validate_feature_fields(processed_feature)
+            if not processed_feature.get('description', '').strip():
+                raise ValueError(f"Feature '{original_id}': Description cannot be empty")
+            parent_id = processed_feature.get('parent_feature_id')
+            if not isinstance(parent_id, str) or not parent_id.strip():
+                raise ValueError(f"Feature '{original_id}': Invalid or empty parent_feature_id")
+            additional_fields = {}
+            standard_fields = {'id', 'description', 'type', 'parent_feature_id', 'priority'}
+            keys_to_remove = []
+            for key, value in processed_feature.items():
+                if key not in standard_fields:
+                    additional_fields[key] = value
+                    keys_to_remove.append(key)
+            for key in keys_to_remove:
+                del processed_feature[key]
+            if additional_fields:
+                processed_feature['additional_fields'] = additional_fields
+                logger.debug(f"Feature '{original_id}': Moved {len(additional_fields)} extra fields")
+            logger.debug(f"Processing feature '{original_id}': Stage 2 - Normalization")
+            processed_feature['description'] = self._normalize_description(processed_feature['description'])
+            logger.debug(f"Processing feature '{original_id}': Stage 3 - Enrichment")
+            processed_feature['metadata'] = {'processed_at': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'), 'processing_status': 'success', 'version': self.VERSION, 'warnings': warnings}
+            for key, value in parent_context.items():
+                if key not in processed_feature or processed_feature[key] is None:
+                    processed_feature[key] = value
+                    logger.debug(f"Feature '{original_id}': Inherited '{key}' from parent context")
+            processed_feature = self._process_priority(processed_feature, original_id, warnings)
+            logger.debug(f"Processing feature '{original_id}': Stage 4 - Analysis")
+            processed_feature = self._process_feature_type(processed_feature, original_id, warnings)
+            dependencies = self._extract_dependencies(processed_feature['description'])
+            processed_feature['dependencies'] = dependencies
+            if dependencies:
+                logger.info(f"Feature '{original_id}': Found {len(dependencies)} dependencies")
+                if original_id in dependencies:
+                    warning_msg = f"Feature '{original_id}' has a circular dependency on itself"
+                    warnings.append(warning_msg)
+                    logger.warning(warning_msg)
+            complexity_score = self._calculate_complexity_score(processed_feature['description'], dependencies)
+            processed_feature['complexity_score'] = complexity_score
+            logger.info(f"Feature '{original_id}': Complexity score = {complexity_score}")
+            processed_feature['metadata']['warnings'] = warnings
+            logger.info(f"Feature '{original_id}': Successfully processed")
+        except (ValueError, TypeError) as e:
+            logger.error(f"Feature '{original_id}': Processing failed - {e}")
+            processed_feature = self._create_error_response(processed_feature, feature, original_id, str(e))
+            raise
+        except Exception as e:
+            logger.error(f"Feature '{original_id}': Unexpected error - {e}", exc_info=True)
+            processed_feature = self._create_error_response(processed_feature, feature, original_id, f'Unexpected error: {str(e)}')
+            raise
+        return processed_feature
+
+    def _validate_feature_fields(self, feature: Dict[str, Any]) -> None:
+        """
+        Validate required fields exist and have correct types.
+
+        Args:
+            feature: Feature dictionary to validate
+
+        Raises:
+            ValueError: If required field is missing or invalid
+            TypeError: If field has incorrect type
+        """
+        feature_id = feature.get('id', 'N/A')
+        for field in self.REQUIRED_FIELDS:
+            if field not in feature or feature[field] is None:
+                raise ValueError(f"Feature '{feature_id}': Missing required field '{field}'")
+        if not isinstance(feature['id'], str):
+            raise TypeError(f"Feature '{feature_id}': Field 'id' must be a string")
+        if not isinstance(feature['description'], str):
+            raise TypeError(f"Feature '{feature_id}': Field 'description' must be a string")
+        if not isinstance(feature['parent_feature_id'], str):
+            raise TypeError(f"Feature '{feature_id}': Field 'parent_feature_id' must be a string")
+        if 'priority' in feature and feature['priority'] is not None:
+            if not isinstance(feature['priority'], int):
+                try:
+                    int(feature['priority'])
+                except (ValueError, TypeError):
+                    raise TypeError(f"Feature '{feature_id}': Field 'priority' must be an integer")
+        if len(feature['description']) > self.MAX_DESCRIPTION_LENGTH:
+            logger.warning(f"Feature '{feature_id}': Description exceeds {self.MAX_DESCRIPTION_LENGTH} characters")
+
+    def _normalize_description(self, description: str) -> str:
+        """
+        Normalize feature description text.
+
+        - Trims leading/trailing whitespace
+        - Replaces multiple spaces with single space
+        - Preserves original casing for domain-specific terms
+
+        Args:
+            description: Raw description text
+
+        Returns:
+            str: Normalized description
+        """
+        description = description.strip()
+        description = re.sub('\\s+', ' ', description)
+        return description
+
+    def _process_priority(self, feature: Dict[str, Any], feature_id: str, warnings: List[str]) -> Dict[str, Any]:
+        """
+        Process and validate priority field.
+
+        Args:
+            feature: Feature dictionary
+            feature_id: Feature identifier for logging
+            warnings: List to append warnings to
+
+        Returns:
+            Dict[str, Any]: Feature with processed priority
+        """
+        if 'priority' not in feature or feature['priority'] is None:
+            feature['priority'] = 3
+            logger.info(f"Feature '{feature_id}': Priority defaulted to 3")
+        else:
+            priority = feature['priority']
+            if not isinstance(priority, int):
+                try:
+                    priority = int(priority)
+                except (ValueError, TypeError):
+                    raise TypeError(f"Feature '{feature_id}': Priority must be an integer")
+            if not self.PRIORITY_MIN <= priority <= self.PRIORITY_MAX:
+                clamped = max(self.PRIORITY_MIN, min(priority, self.PRIORITY_MAX))
+                warning_msg = f'Priority {priority} out of range ({self.PRIORITY_MIN}-{self.PRIORITY_MAX}), clamped to {clamped}'
+                warnings.append(warning_msg)
+                feature['priority'] = clamped
+                logger.warning(f"Feature '{feature_id}': {warning_msg}")
+            else:
+                feature['priority'] = priority
+        return feature
+
+    def _process_feature_type(self, feature: Dict[str, Any], feature_id: str, warnings: List[str]) -> Dict[str, Any]:
+        """
+        Process and validate feature type field.
+
+        Args:
+            feature: Feature dictionary
+            feature_id: Feature identifier for logging
+            warnings: List to append warnings to
+
+        Returns:
+            Dict[str, Any]: Feature with processed type
+        """
+        if 'type' not in feature or not feature['type']:
+            inferred_type = self._infer_feature_type(feature['description'])
+            feature['type'] = inferred_type
+            if inferred_type == 'general':
+                warnings.append("Feature type could not be inferred, defaulted to 'general'")
+                logger.info(f"Feature '{feature_id}': Type defaulted to 'general'")
+            else:
+                logger.info(f"Feature '{feature_id}': Type inferred as '{inferred_type}'")
+        elif feature['type'] not in self.FEATURE_TYPES:
+            warning_msg = f"Provided type '{feature['type']}' is not recognized, defaulted to 'general'"
+            warnings.append(warning_msg)
+            feature['type'] = 'general'
+            logger.warning(f"Feature '{feature_id}': {warning_msg}")
+        else:
+            logger.info(f"Feature '{feature_id}': Using provided type '{feature['type']}'")
+        return feature
+
+    def _infer_feature_type(self, description: str) -> str:
+        """
+        Infer feature type from description using keyword matching.
+
+        Uses case-insensitive word boundary matching to identify feature type
+        based on domain-specific keywords.
+
+        Args:
+            description: Feature description text
+
+        Returns:
+            str: Inferred feature type (one of FEATURE_TYPES)
+        """
+        description_lower = description.lower()
+        type_scores = {ftype: 0 for ftype in self.FEATURE_TYPES}
+        for ftype, keywords in self.TYPE_KEYWORDS.items():
+            for keyword in keywords:
+                if re.search('\\b' + re.escape(keyword) + '\\b', description_lower):
+                    type_scores[ftype] += 1
+        max_score = max(type_scores.values())
+        if max_score == 0:
+            return 'general'
+        for ftype in self.FEATURE_TYPES:
+            if type_scores.get(ftype, 0) == max_score:
+                return ftype
+        return 'general'
+
+    def _extract_dependencies(self, description: str) -> List[str]:
+        """
+        Extract dependency references from description.
+
+        Identifies dependencies through:
+        - Explicit phrases: "depends on", "requires", "integrates with", etc.
+        - Capitalized component names: "Analytics API", "Database Migration"
+
+        Args:
+            description: Feature description text
+
+        Returns:
+            List[str]: List of unique dependency identifiers
+        """
+        dependencies = []
+        description_lower = description.lower()
+        explicit_patterns = ['depends on ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))', 'requires ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))', 'integrates with ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))', 'uses ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))', 'built on ([\\w\\s-]+?)(?:\\.|,|$|\\s(?:and|or|to|for))']
+        for pattern in explicit_patterns:
+            matches = re.findall(pattern, description_lower)
+            for match in matches:
+                dep_name = match.strip()
+                if dep_name and dep_name not in dependencies:
+                    dependencies.append(dep_name)
+        potential_deps = re.findall('\\b([A-Z][a-z]+(?:[\\s-]+[A-Z][a-z]+)*)\\b', description)
+        exclude_words = {'a', 'an', 'the', 'for', 'with', 'and', 'or', 'this', 'that', 'create', 'build', 'implement', 'add', 'update', 'feature'}
+        for dep in potential_deps:
+            cleaned_dep = dep.strip()
+            if cleaned_dep and cleaned_dep not in dependencies and (cleaned_dep.lower() not in exclude_words) and (len(cleaned_dep) > 2):
+                dependencies.append(cleaned_dep)
+        seen = set()
+        unique_deps = []
+        for dep in dependencies:
+            dep_lower = dep.lower()
+            if dep_lower not in seen:
+                seen.add(dep_lower)
+                unique_deps.append(dep.strip())
+        return unique_deps
+
+    def _count_complexity_keywords(self, description: str) -> int:
+        """
+        Count complexity-indicating keywords in description.
+
+        Args:
+            description: Feature description text
+
+        Returns:
+            int: Count of complexity keywords found
+        """
+        count = 0
+        description_lower = description.lower()
+        for keyword in self.COMPLEXITY_KEYWORDS:
+            if re.search('\\b' + re.escape(keyword) + '\\b', description_lower):
+                count += 1
+        return count
+
+    def _calculate_complexity_score(self, description: str, dependencies: List[str]) -> int:
+        """
+        Calculate complexity score on 1-10 scale.
+
+        Scoring factors:
+        - Description length (up to 5 points)
+        - Dependency count (up to 3 points)
+        - Complexity keywords (up to 2 points)
+
+        Args:
+            description: Feature description text
+            dependencies: List of feature dependencies
+
+        Returns:
+            int: Complexity score (1-10)
+        """
+        base_score = min(len(description) / 20, 5)
+        dependency_score = min(len(dependencies) * 0.5, 3)
+        keyword_count = self._count_complexity_keywords(description)
+        keyword_score = min(keyword_count * 0.5, 2)
+        total_score = base_score + dependency_score + keyword_score
+        final_score = max(self.COMPLEXITY_MIN, min(round(total_score), self.COMPLEXITY_MAX))
+        return final_score
+
+    def _create_error_response(self, processed_feature: Dict[str, Any], original_feature: Dict[str, Any], feature_id: str, error_message: str) -> Dict[str, Any]:
+        """
+        Create consistent error response structure.
+
+        Args:
+            processed_feature: Partially processed feature
+            original_feature: Original input feature
+            feature_id: Feature identifier
+            error_message: Error description
+
+        Returns:
+            Dict[str, Any]: Feature with error metadata
+        """
+        if 'metadata' not in processed_feature:
+            processed_feature['metadata'] = {}
+        processed_feature['metadata'].update({'processing_status': 'failed', 'error': error_message, 'processed_at': datetime.now(timezone.utc).isoformat(timespec='seconds').replace('+00:00', 'Z'), 'version': self.VERSION, 'warnings': []})
+        processed_feature.setdefault('id', feature_id)
+        processed_feature.setdefault('description', original_feature.get('description'))
+        processed_feature.setdefault('parent_feature_id', original_feature.get('parent_feature_id'))
+        processed_feature.setdefault('type', 'general')
+        processed_feature.setdefault('priority', 3)
+        processed_feature.setdefault('dependencies', [])
+        processed_feature.setdefault('complexity_score', 0)
+        return processed_feature
+'\nPrime Contractor Workflow - Continuous Integration Wrapper for Code Generation.\n\nThe Prime Contractor ensures that code is integrated immediately after each\nfeature is developed, preventing the "backlog integration nightmare" where\nmultiple features developed in isolation create merge conflicts and regressions.\n\nKey Principles:\n1. INTEGRATE IMMEDIATELY: Each feature is integrated right after generation\n2. CHECKPOINT VALIDATION: Code must pass all checks before next feature starts\n3. FAIL FAST: Stop the pipeline if integration fails, don\'t accumulate problems\n4. MAINLINE ALWAYS WORKS: The main codebase is always in a working state\n\nThis is the "general contractor" pattern - just as a general contractor\ncoordinates subcontractors and ensures each phase is complete before the\nnext begins, the Prime Contractor coordinates code generation tasks and\nensures each feature is integrated before moving on.\n\nThis module works standalone without ContextCore. When ContextCore is\navailable, it provides enhanced observability via OpenTelemetry spans.\n'
+logger = get_logger(__name__)
+MAX_INTEGRATION_ATTEMPTS = 3
+'\nFeature Processor Module\n\nThis module provides robust processing capabilities for decomposed features,\nincluding validation, normalization, enrichment, and analysis.\n\nVersion: 1.0.0\nAuthor: Development Team\nLast Updated: 2024\n'
+if __name__ == '__main__':
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    processor = FeatureProcessor()
+    feature = {'id': 'FEAT-001', 'description': 'Create API endpoint for user authentication that integrates with Database', 'parent_feature_id': 'EPIC-100', 'priority': 5}
+    try:
+        result = processor._process_decomposed_feature(feature)
+        logger.info(f"Processing complete: {result['id']}")
+    except Exception as e:
+        logger.error(f'Processing failed: {e}')

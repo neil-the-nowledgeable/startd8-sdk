@@ -11,7 +11,6 @@ This module is now part of startd8-sdk and works without ContextCore.
 """
 
 import json
-import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from enum import Enum
@@ -19,8 +18,9 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from startd8.utils.file_operations import atomic_write_json
+from ..logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class FeatureStatus(Enum):
