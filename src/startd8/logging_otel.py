@@ -12,6 +12,7 @@ Both are no-ops if OTel is not available.
 """
 
 import logging
+import time
 from typing import Optional
 
 # OTel severity mapping (Python level → OTel severity number)
@@ -158,6 +159,11 @@ class _OTelLogRecord:
         self.severity_text = severity_text
         self.severity_number = severity_number
         self.attributes = attributes or {}
+
+        # Timestamps required by OTel SDK 1.39+ log encoder
+        self.timestamp = int(time.time() * 1e9)
+        self.observed_timestamp = self.timestamp
+        self.event_name = None
 
         # Extract trace/span IDs for the OTel log record
         self.trace_id = 0
