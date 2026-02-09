@@ -617,3 +617,285 @@ class TestSafetyDiagnosticLogging:
 
         debug_msgs = [r.message for r in caplog.records if r.levelno == logging.DEBUG]
         assert any("SAFETY-blocked prompt sample" in m for m in debug_msgs)
+
+
+# ---------------------------------------------------------------------------
+# Code-fence stripping tests
+# ---------------------------------------------------------------------------
+
+class TestStripCodeFences:
+    """Test _strip_code_fences helper."""
+
+    def test_strip_markdown_fence(self):
+        from startd8.workflows.builtin.architectural_review_log_workflow import _strip_code_fences
+        text = "```markdown\n#### Review Round R1\nContent here\n```"
+        result = _strip_code_fences(text)
+        assert result == "#### Review Round R1\nContent here"
+
+    def test_strip_md_fence(self):
+        from startd8.workflows.builtin.architectural_review_log_workflow import _strip_code_fences
+        text = "```md\n#### Review Round R1\n```"
+        result = _strip_code_fences(text)
+        assert result == "#### Review Round R1"
+
+    def test_strip_bare_fence(self):
+        from startd8.workflows.builtin.architectural_review_log_workflow import _strip_code_fences
+        text = "```\n#### Review Round R1\nContent\n```"
+        result = _strip_code_fences(text)
+        assert result == "#### Review Round R1\nContent"
+
+    def test_no_fence_passthrough(self):
+        from startd8.workflows.builtin.architectural_review_log_workflow import _strip_code_fences
+        text = "#### Review Round R1\nContent"
+        result = _strip_code_fences(text)
+        assert result == text
+
+    def test_case_insensitive_fence(self):
+        from startd8.workflows.builtin.architectural_review_log_workflow import _strip_code_fences
+        text = "```Markdown\n#### Review Round R1\n```"
+        result = _strip_code_fences(text)
+        assert result == "#### Review Round R1"
+
+
+# ---------------------------------------------------------------------------
+# Validation failure handling tests
+# ---------------------------------------------------------------------------
+
+class TestValidationFailureHandling:
+    """Test validation failure retry, continue-not-break, and logging."""
+
+    def _make_valid_snippet(self, round_number):
+        return f"""#### Review Round R{round_number}
+
+- **Reviewer**: test-agent (test-model)
+- **Date**: 2026-02-09 00:00:00 UTC
+- **Scope**: Architecture-focused review
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R{round_number}-S1 | Architecture | high | Test suggestion | Test rationale | Section 1 | Manual review |
+"""
+
+    def _make_invalid_snippet(self, round_number):
+        """Snippet with wrong column count to trigger validation failure."""
+        return f"""#### Review Round R{round_number}
+
+- **Reviewer**: test-agent (test-model)
+- **Date**: 2026-02-09 00:00:00 UTC
+- **Scope**: Architecture-focused review
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement |
+| ---- | ---- | ---- | ---- | ---- | ---- |
+| R{round_number}-S1 | Architecture | high | Test | Rationale | Section 1 |
+"""
+
+    def _make_mock_agent(self, name="gemini-test", model="gemini-2.5-pro", is_gemini=True):
+        agent = MagicMock()
+        agent.name = name
+        agent.model = model
+        agent.safety_settings = None
+        if is_gemini:
+            agent.__class__.__module__ = "startd8.agents.gemini"
+        else:
+            agent.__class__.__module__ = "startd8.agents.claude"
+        return agent
+
+    def test_validation_failure_retries_once(self, tmp_path):
+        """Validation failure should trigger one retry with targeted re-prompt."""
+        from startd8.workflows.builtin.architectural_review_log_workflow import (
+            ArchitecturalReviewLogWorkflow,
+        )
+
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content here.\n")
+
+        invalid_snippet = self._make_invalid_snippet(1)
+        valid_snippet = self._make_valid_snippet(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="gemini-2.5-pro")
+
+        agent = self._make_mock_agent()
+        # First call returns invalid, retry returns valid
+        agent.generate.side_effect = [
+            (invalid_snippet, 500, token_usage),
+            (valid_snippet, 300, token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path)},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        assert result.output["rounds_appended"] == 1
+        assert agent.generate.call_count == 2
+        # Retry prompt should contain validation error
+        retry_prompt = agent.generate.call_args_list[1][0][0]
+        assert "failed validation" in retry_prompt
+        assert "Table header mismatch" in retry_prompt
+
+    def test_validation_failure_after_retry_continues(self, tmp_path):
+        """If retry also fails validation, skip reviewer (continue, not break)."""
+        from startd8.workflows.builtin.architectural_review_log_workflow import (
+            ArchitecturalReviewLogWorkflow,
+        )
+
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content here.\n")
+
+        invalid_snippet = self._make_invalid_snippet(1)
+        valid_snippet_r2 = self._make_valid_snippet(2)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+
+        gemini_agent = self._make_mock_agent(name="gemini", model="gemini-2.5-pro", is_gemini=True)
+        # Both calls return invalid
+        gemini_agent.generate.side_effect = [
+            (invalid_snippet, 500, token_usage),
+            (invalid_snippet, 300, token_usage),
+        ]
+
+        claude_agent = self._make_mock_agent(name="claude", model="claude-opus", is_gemini=False)
+        claude_agent.generate.return_value = (valid_snippet_r2, 800, token_usage)
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path)},
+            agents=[gemini_agent, claude_agent],
+            on_progress=None,
+        )
+
+        # Gemini skipped (validation failed twice), Claude succeeded
+        assert result.output["rounds_appended"] == 1
+        assert any(s.error is None for s in result.steps)  # Claude step succeeded
+        assert any("Invalid snippet after retry" in (s.error or "") for s in result.steps)
+
+    def test_validation_failure_logs_warning(self, tmp_path, caplog):
+        """Validation failure should produce a WARNING log."""
+        from startd8.workflows.builtin.architectural_review_log_workflow import (
+            ArchitecturalReviewLogWorkflow,
+        )
+
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content here.\n")
+
+        invalid_snippet = self._make_invalid_snippet(1)
+        valid_snippet = self._make_valid_snippet(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="gemini-2.5-pro")
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (invalid_snippet, 500, token_usage),
+            (valid_snippet, 300, token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        with caplog.at_level(logging.WARNING, logger="startd8.workflows.builtin.architectural_review_log_workflow"):
+            result = workflow._execute(
+                config={"document_path": str(doc_path)},
+                agents=[agent],
+                on_progress=None,
+            )
+
+        assert result.success is True
+        assert any("Validation failed for R1" in r.message for r in caplog.records)
+
+    def test_code_fence_stripped_before_validation(self, tmp_path):
+        """Response wrapped in code fences should still pass validation."""
+        from startd8.workflows.builtin.architectural_review_log_workflow import (
+            ArchitecturalReviewLogWorkflow,
+        )
+
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content here.\n")
+
+        valid_snippet = self._make_valid_snippet(1)
+        fenced_snippet = f"```markdown\n{valid_snippet}```"
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="gemini-2.5-pro")
+
+        agent = self._make_mock_agent()
+        agent.generate.return_value = (fenced_snippet, 500, token_usage)
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path)},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        assert result.output["rounds_appended"] == 1
+        # Should only need one call (fence stripped, no retry needed)
+        assert agent.generate.call_count == 1
+
+    def test_retry_prompt_includes_format_requirements(self, tmp_path):
+        """Retry prompt should include column names and enum values."""
+        from startd8.workflows.builtin.architectural_review_log_workflow import (
+            ArchitecturalReviewLogWorkflow,
+            REQUIRED_COLUMNS,
+            ALLOWED_AREAS,
+            ALLOWED_SEVERITIES,
+        )
+
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content here.\n")
+
+        invalid_snippet = self._make_invalid_snippet(1)
+        valid_snippet = self._make_valid_snippet(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="gemini-2.5-pro")
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (invalid_snippet, 500, token_usage),
+            (valid_snippet, 300, token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path)},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        retry_prompt = agent.generate.call_args_list[1][0][0]
+        # Should include column names
+        for col in REQUIRED_COLUMNS:
+            assert col in retry_prompt
+        # Should include allowed areas and severities
+        for area in ALLOWED_AREAS:
+            assert area in retry_prompt
+        for sev in ALLOWED_SEVERITIES:
+            assert sev in retry_prompt
+
+    def test_retry_api_error_continues(self, tmp_path):
+        """If the retry API call itself fails, skip reviewer and continue."""
+        from startd8.workflows.builtin.architectural_review_log_workflow import (
+            ArchitecturalReviewLogWorkflow,
+        )
+
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content here.\n")
+
+        invalid_snippet = self._make_invalid_snippet(1)
+        valid_snippet_r2 = self._make_valid_snippet(2)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+
+        gemini_agent = self._make_mock_agent(name="gemini", model="gemini-2.5-pro", is_gemini=True)
+        gemini_agent.generate.side_effect = [
+            (invalid_snippet, 500, token_usage),
+            RuntimeError("API error on retry"),
+        ]
+
+        claude_agent = self._make_mock_agent(name="claude", model="claude-opus", is_gemini=False)
+        claude_agent.generate.return_value = (valid_snippet_r2, 800, token_usage)
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path)},
+            agents=[gemini_agent, claude_agent],
+            on_progress=None,
+        )
+
+        # Gemini skipped (retry errored), Claude succeeded
+        assert result.output["rounds_appended"] == 1
+        assert any("Validation retry failed" in (s.error or "") for s in result.steps)

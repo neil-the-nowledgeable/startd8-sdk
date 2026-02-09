@@ -122,6 +122,17 @@ def _now_utc() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+def _strip_code_fences(text: str) -> str:
+    """Strip markdown code-block fences (```markdown ... ```) from LLM output."""
+    stripped = text.strip()
+    # Match ```markdown, ```md, or bare ``` at start
+    if re.match(r"^```(?:markdown|md)?\s*\n", stripped, re.IGNORECASE):
+        stripped = re.sub(r"^```(?:markdown|md)?\s*\n", "", stripped, count=1, flags=re.IGNORECASE)
+        # Remove trailing ``` (possibly with trailing whitespace)
+        stripped = re.sub(r"\n```\s*$", "", stripped)
+    return stripped
+
+
 def _split_cells(row: str) -> List[str]:
     return [c.strip() for c in row.strip().strip("|").split("|")]
 
@@ -838,21 +849,98 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     )
                     break
 
+                # Strip code-block fences (Gemini sometimes wraps output)
+                response_text = _strip_code_fences(response_text)
+
                 ok, message, ids = _validate_snippet(response_text, round_number, max_suggestions)
                 if not ok:
-                    step_results.append(
-                        StepResult(
-                            step_name=step_name,
-                            agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
-                            output=response_text[:500] + "..." if len(response_text) > 500 else response_text,
-                            time_ms=time_ms,
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                            cost=cost,
-                            error=f"Invalid snippet: {message}",
-                        )
+                    _logger.warning(
+                        "Validation failed for R%d (%s): %s",
+                        round_number,
+                        reviewer_label,
+                        message,
                     )
-                    break
+
+                    # ── Validation retry (1 attempt with targeted re-prompt) ──
+                    retry_prompt = (
+                        f"Your previous response failed validation: {message}\n\n"
+                        f"Please regenerate the review snippet for Round R{round_number}. "
+                        f"Requirements:\n"
+                        f"- Start with: #### Review Round R{round_number}\n"
+                        f"- Table columns EXACTLY: {' | '.join(REQUIRED_COLUMNS)}\n"
+                        f"- IDs: R{round_number}-S1, R{round_number}-S2, etc.\n"
+                        f"- Area must be one of: {', '.join(sorted(ALLOWED_AREAS))}\n"
+                        f"- Severity must be one of: {', '.join(sorted(ALLOWED_SEVERITIES))}\n"
+                        f"- Do NOT wrap output in code blocks (no ```)\n\n"
+                        f"Original prompt:\n{prompt}"
+                    )
+                    self._emit_progress(
+                        on_progress, i, total_rounds,
+                        f"R{round_number}: validation failed ({message}); retrying",
+                    )
+                    try:
+                        retry_text, retry_time_ms, retry_token_usage = agent.generate(retry_prompt)
+                        retry_text = _strip_code_fences(retry_text)
+                        retry_input = token_usage_input(retry_token_usage) if retry_token_usage else 0
+                        retry_output = token_usage_output(retry_token_usage) if retry_token_usage else 0
+                        retry_cost = token_usage_cost(retry_token_usage) if retry_token_usage else 0.0
+                        total_input_tokens += retry_input
+                        total_output_tokens += retry_output
+                        total_cost += retry_cost
+                        total_time_ms += retry_time_ms
+
+                        ok2, message2, ids = _validate_snippet(retry_text, round_number, max_suggestions)
+                        if ok2:
+                            _logger.info(
+                                "Validation retry succeeded for R%d (%s)",
+                                round_number,
+                                reviewer_label,
+                            )
+                            response_text = retry_text
+                            time_ms += retry_time_ms
+                            input_tokens += retry_input
+                            output_tokens += retry_output
+                            cost += retry_cost
+                        else:
+                            _logger.warning(
+                                "Validation retry also failed for R%d (%s): %s; skipping reviewer",
+                                round_number,
+                                reviewer_label,
+                                message2,
+                            )
+                            step_results.append(
+                                StepResult(
+                                    step_name=step_name,
+                                    agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
+                                    output=retry_text[:500] + "..." if len(retry_text) > 500 else retry_text,
+                                    time_ms=time_ms + retry_time_ms,
+                                    input_tokens=input_tokens + retry_input,
+                                    output_tokens=output_tokens + retry_output,
+                                    cost=cost + retry_cost,
+                                    error=f"Invalid snippet after retry: {message2}",
+                                )
+                            )
+                            continue  # skip reviewer, let remaining reviewers run
+                    except Exception as retry_err:
+                        _logger.warning(
+                            "Validation retry call failed for R%d (%s): %s; skipping reviewer",
+                            round_number,
+                            reviewer_label,
+                            retry_err,
+                        )
+                        step_results.append(
+                            StepResult(
+                                step_name=step_name,
+                                agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
+                                output=response_text[:500] + "..." if len(response_text) > 500 else response_text,
+                                time_ms=time_ms,
+                                input_tokens=input_tokens,
+                                output_tokens=output_tokens,
+                                cost=cost,
+                                error=f"Validation retry failed: {retry_err}",
+                            )
+                        )
+                        continue  # skip reviewer, let remaining reviewers run
 
                 # Append snippet and persist
                 doc_text = doc_text.rstrip() + "\n\n" + response_text.strip() + "\n"
