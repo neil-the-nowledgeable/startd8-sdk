@@ -242,7 +242,42 @@ def _ensure_default_log_file_handler():
         root_level = getattr(logging, _ENV_LOG_LEVEL) if _ENV_LOG_LEVEL else logging.INFO
         root_logger.setLevel(root_level)
     
+    # Add OTel log handler and trace context filter if OTel LoggerProvider is available
+    _attach_otel_handlers(root_logger)
+
     _default_logging_initialized = True
+
+
+def _attach_otel_handlers(logger: logging.Logger) -> None:
+    """Attach OTel log handler and trace context filter if OTel is configured."""
+    try:
+        from .logging_otel import OTelLogHandler, OTelTraceContextFilter
+
+        # Avoid duplicate handlers
+        if any(isinstance(h, OTelLogHandler) for h in logger.handlers):
+            return
+
+        # Check if OTel LoggerProvider is available
+        try:
+            from opentelemetry._logs import get_logger_provider
+            provider = get_logger_provider()
+            if provider is None:
+                return
+        except (ImportError, Exception):
+            return
+
+        # Add OTel log handler
+        otel_handler = OTelLogHandler()
+        otel_handler.setLevel(logging.DEBUG)
+        logger.addHandler(otel_handler)
+
+        # Add trace context filter to all existing handlers
+        trace_filter = OTelTraceContextFilter()
+        for handler in logger.handlers:
+            handler.addFilter(trace_filter)
+
+    except ImportError:
+        pass
 
 
 def get_logger(name: str = "startd8") -> logging.Logger:

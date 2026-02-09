@@ -19,6 +19,7 @@ Standard OTel Semantic Conventions:
     - deployment.environment
 """
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
@@ -125,7 +126,8 @@ class OTelConfig:
     # Feature flags
     enable_traces: bool = True
     enable_metrics: bool = True
-    
+    enable_logs: bool = True
+
     # Export settings
     trace_batch_size: int = 512
     metrics_export_interval_ms: int = 60000  # 1 minute
@@ -287,14 +289,26 @@ def configure_otel(
         tracer = otel['tracer']
         meter = otel['meter']
     """
-    return {
+    result = {
         "tracer": configure_tracing(config),
         "meter": configure_metrics(config),
         "resource_attributes": (
-            config.project_context.to_resource_attributes() 
+            config.project_context.to_resource_attributes()
             if config.project_context else {}
         ),
     }
+
+    # Configure OTel log bridge (Phase 3)
+    configure_logging(config)
+
+    # Activate EventBus→OTel bridge (Phase 2)
+    try:
+        from .events.otel_bridge import OTelEventBridge
+        OTelEventBridge.activate()
+    except ImportError:
+        pass
+
+    return result
 
 
 def configure_otel_with_openllmetry(
@@ -338,6 +352,88 @@ def configure_otel_with_openllmetry(
     return result
 
 
+# Module-level guard to prevent double-init
+_configured: bool = False
+
+
+def configure_logging(config: OTelConfig) -> None:
+    """
+    Configure OTel LoggerProvider for exporting Python logs via OTLP.
+
+    Creates a LoggerProvider with the same Resource as traces/metrics,
+    adds a BatchLogRecordProcessor with an OTLP exporter, and sets it
+    as the global LoggerProvider.
+
+    Args:
+        config: OTelConfig with service and project context
+    """
+    if not OTEL_AVAILABLE or not config.enable_logs:
+        return
+
+    try:
+        from opentelemetry._logs import set_logger_provider
+        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+        from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
+    except ImportError:
+        return
+
+    resource = create_resource(
+        service_name=config.service_name,
+        service_version=config.service_version,
+        deployment_environment=config.deployment_environment,
+        project_context=config.project_context,
+    )
+
+    logger_provider = LoggerProvider(resource=resource)
+    log_exporter = OTLPLogExporter(
+        endpoint=config.otlp_endpoint,
+        headers=config.otlp_headers or None,
+    )
+    logger_provider.add_log_record_processor(
+        BatchLogRecordProcessor(log_exporter)
+    )
+    set_logger_provider(logger_provider)
+
+
+def auto_configure_otel() -> Dict[str, Any]:
+    """
+    Auto-configure OTel based on the STARTD8_OTEL environment variable.
+
+    Modes:
+        - ``enabled``: Always configure OTel with default endpoint.
+        - ``auto``: Configure only if OTel packages are installed (silent no-op otherwise).
+        - ``disabled`` or unset: Do nothing.
+
+    The OTLP endpoint is read from ``OTEL_EXPORTER_OTLP_ENDPOINT`` or
+    defaults to ``http://localhost:4317``.
+
+    Returns:
+        Dict with 'tracer', 'meter', 'resource_attributes' keys (values may be None).
+    """
+    global _configured
+    if _configured:
+        return {"tracer": None, "meter": None, "resource_attributes": {}}
+
+    mode = os.getenv("STARTD8_OTEL", "").lower().strip()
+
+    if mode == "disabled" or not mode:
+        if mode != "auto":
+            return {"tracer": None, "meter": None, "resource_attributes": {}}
+
+    if mode == "auto" and not OTEL_AVAILABLE:
+        return {"tracer": None, "meter": None, "resource_attributes": {}}
+
+    if mode not in ("enabled", "auto"):
+        return {"tracer": None, "meter": None, "resource_attributes": {}}
+
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+    config = OTelConfig(otlp_endpoint=endpoint)
+    result = configure_otel(config)
+    _configured = True
+    return result
+
+
 def add_project_context_to_span(
     span: Any,
     project_context: ProjectContext,
@@ -372,7 +468,7 @@ __all__ = [
     # Constants
     "OTEL_AVAILABLE",
     "CONTEXTCORE_PROJECT_ID",
-    "CONTEXTCORE_PROJECT_NAME", 
+    "CONTEXTCORE_PROJECT_NAME",
     "CONTEXTCORE_TASK_ID",
     "CONTEXTCORE_SPRINT_ID",
     "CONTEXTCORE_BUSINESS_CRITICALITY",
@@ -383,7 +479,9 @@ __all__ = [
     "create_resource",
     "configure_tracing",
     "configure_metrics",
+    "configure_logging",
     "configure_otel",
     "configure_otel_with_openllmetry",
+    "auto_configure_otel",
     "add_project_context_to_span",
 ]

@@ -1,0 +1,600 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_TEMPO",
+      "label": "Tempo",
+      "description": "Tempo datasource for traces",
+      "type": "datasource",
+      "pluginId": "tempo",
+      "pluginName": "Tempo"
+    },
+    {
+      "name": "DS_MIMIR",
+      "label": "Mimir",
+      "description": "Mimir/Prometheus datasource for metrics",
+      "type": "datasource",
+      "pluginId": "prometheus",
+      "pluginName": "Prometheus"
+    },
+    {
+      "name": "DS_LOKI",
+      "label": "Loki",
+      "description": "Loki datasource for logs",
+      "type": "datasource",
+      "pluginId": "loki",
+      "pluginName": "Loki"
+    }
+  ],
+  "__requires": [
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "tempo",
+      "name": "Tempo",
+      "version": "1.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "prometheus",
+      "name": "Prometheus",
+      "version": "1.0.0"
+    },
+    {
+      "type": "datasource",
+      "id": "loki",
+      "name": "Loki",
+      "version": "1.0.0"
+    },
+    {
+      "type": "panel",
+      "id": "timeseries",
+      "name": "Time series",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "barchart",
+      "name": "Bar chart",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "gauge",
+      "name": "Gauge",
+      "version": ""
+    },
+    {
+      "type": "panel",
+      "id": "logs",
+      "name": "Logs",
+      "version": ""
+    }
+  ],
+  "uid": "startd8-sdk-overview",
+  "title": "StartD8 SDK Overview",
+  "description": "Unified overview of StartD8 SDK request rate, latency, token usage, cost, sessions, truncations, errors, and logs across Tempo, Mimir, and Loki datasources.",
+  "tags": ["startd8", "sdk", "overview", "tempo", "mimir", "loki"],
+  "editable": true,
+  "refresh": "30s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "DS_TEMPO",
+        "type": "datasource",
+        "query": "tempo",
+        "current": {
+          "text": "Tempo",
+          "value": "tempo"
+        },
+        "hide": 0,
+        "label": "Tempo Datasource"
+      },
+      {
+        "name": "DS_MIMIR",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {
+          "text": "Mimir",
+          "value": "prometheus"
+        },
+        "hide": 0,
+        "label": "Mimir Datasource"
+      },
+      {
+        "name": "DS_LOKI",
+        "type": "datasource",
+        "query": "loki",
+        "current": {
+          "text": "Loki",
+          "value": "loki"
+        },
+        "hide": 0,
+        "label": "Loki Datasource"
+      },
+      {
+        "name": "service_name",
+        "label": "Service Name",
+        "type": "custom",
+        "query": "startd8-sdk",
+        "current": {
+          "text": "startd8-sdk",
+          "value": "startd8-sdk"
+        },
+        "hide": 0,
+        "includeAll": false,
+        "multi": false
+      },
+      {
+        "name": "model",
+        "label": "Model",
+        "type": "query",
+        "datasource": "${DS_MIMIR}",
+        "query": "label_values(startd8_cost_total{service_name=~\"$service_name\"}, model)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0
+      },
+      {
+        "name": "project_id",
+        "label": "Project",
+        "type": "query",
+        "datasource": "${DS_MIMIR}",
+        "query": "label_values(startd8_active_sessions{service_name=~\"$service_name\"}, project_id)",
+        "refresh": 2,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "hide": 0
+      }
+    ]
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Traces & Performance",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 1 },
+      "collapsed": false,
+      "id": 100
+    },
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Request Rate",
+      "description": "Rate of agent.generate spans from Tempo, representing SDK request throughput.",
+      "gridPos": { "x": 0, "y": 1, "w": 12, "h": 8 },
+      "datasource": {
+        "type": "tempo",
+        "uid": "${DS_TEMPO}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${DS_TEMPO}"
+          },
+          "queryType": "traceqlMetrics",
+          "query": "{ name = \"agent.generate\" && resource.service.name = \"$service_name\" } | rate()",
+          "legendFormat": "req/s"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20,
+            "gradientMode": "scheme",
+            "spanNulls": false,
+            "showPoints": "never",
+            "axisLabel": "requests/sec"
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Latency P50 / P95 / P99",
+      "description": "Response latency percentiles derived from the agent.response_time_ms span attribute in Tempo.",
+      "gridPos": { "x": 12, "y": 1, "w": 12, "h": 8 },
+      "datasource": {
+        "type": "tempo",
+        "uid": "${DS_TEMPO}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${DS_TEMPO}"
+          },
+          "queryType": "traceqlMetrics",
+          "query": "{ name = \"agent.generate\" && resource.service.name = \"$service_name\" } | quantile_over_time(span.agent.response_time_ms, 0.50) by (resource.service.name)",
+          "legendFormat": "P50"
+        },
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${DS_TEMPO}"
+          },
+          "queryType": "traceqlMetrics",
+          "query": "{ name = \"agent.generate\" && resource.service.name = \"$service_name\" } | quantile_over_time(span.agent.response_time_ms, 0.95) by (resource.service.name)",
+          "legendFormat": "P95"
+        },
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${DS_TEMPO}"
+          },
+          "queryType": "traceqlMetrics",
+          "query": "{ name = \"agent.generate\" && resource.service.name = \"$service_name\" } | quantile_over_time(span.agent.response_time_ms, 0.99) by (resource.service.name)",
+          "legendFormat": "P99"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "spanNulls": false,
+            "showPoints": "never"
+          },
+          "unit": "ms"
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "P50" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "P95" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "yellow", "mode": "fixed" } }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "P99" },
+            "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }]
+          }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "title": "Tokens & Cost",
+      "gridPos": { "x": 0, "y": 9, "w": 24, "h": 1 },
+      "collapsed": false,
+      "id": 101
+    },
+    {
+      "id": 3,
+      "type": "barchart",
+      "title": "Token Usage by Model",
+      "description": "Input and output tokens stacked by model from Mimir/Prometheus (startd8_cost_input_tokens + startd8_cost_output_tokens).",
+      "gridPos": { "x": 0, "y": 10, "w": 12, "h": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "expr": "sum by (model) (increase(startd8_cost_input_tokens{service_name=~\"$service_name\", model=~\"$model\", project_id=~\"$project_id\"}[$__range]))",
+          "legendFormat": "{{model}} input",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "expr": "sum by (model) (increase(startd8_cost_output_tokens{service_name=~\"$service_name\", model=~\"$model\", project_id=~\"$project_id\"}[$__range]))",
+          "legendFormat": "{{model}} output",
+          "refId": "B"
+        }
+      ],
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "normal",
+        "groupWidth": 0.7,
+        "barWidth": 0.8,
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "locale",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Cost Accumulation",
+      "description": "Cumulative cost over time by model from Mimir/Prometheus (sum of startd8_cost_total).",
+      "gridPos": { "x": 12, "y": 10, "w": 12, "h": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "expr": "sum by (model) (increase(startd8_cost_total{service_name=~\"$service_name\", model=~\"$model\", project_id=~\"$project_id\"}[1h]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["sum", "lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 25,
+            "gradientMode": "scheme",
+            "stacking": { "mode": "normal" },
+            "spanNulls": false,
+            "showPoints": "never"
+          },
+          "unit": "currencyUSD",
+          "decimals": 4
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Health & Reliability",
+      "gridPos": { "x": 0, "y": 18, "w": 24, "h": 1 },
+      "collapsed": false,
+      "id": 102
+    },
+    {
+      "id": 5,
+      "type": "gauge",
+      "title": "Active Sessions",
+      "description": "Current number of active SDK sessions from Mimir/Prometheus (startd8_active_sessions).",
+      "gridPos": { "x": 0, "y": 19, "w": 12, "h": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "expr": "sum(startd8_active_sessions{service_name=~\"$service_name\", model=~\"$model\", project_id=~\"$project_id\"})",
+          "legendFormat": "Active Sessions",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true,
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
+        "orientation": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 5 },
+              { "color": "orange", "value": 10 },
+              { "color": "red", "value": 20 }
+            ]
+          },
+          "unit": "short",
+          "min": 0,
+          "max": 30
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "Truncation Rate",
+      "description": "Rate of response truncation events per second from Mimir/Prometheus (rate of startd8_truncations_total over 5m).",
+      "gridPos": { "x": 12, "y": 19, "w": 12, "h": 8 },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_MIMIR}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_MIMIR}"
+          },
+          "expr": "sum by (model) (rate(startd8_truncations_total{service_name=~\"$service_name\", model=~\"$model\", project_id=~\"$project_id\"}[5m]))",
+          "legendFormat": "{{model}}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["mean", "max", "sum"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "orange", "mode": "fixed" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "spanNulls": false,
+            "showPoints": "never"
+          },
+          "unit": "ops",
+          "decimals": 4
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "Errors & Logs",
+      "gridPos": { "x": 0, "y": 27, "w": 24, "h": 1 },
+      "collapsed": false,
+      "id": 103
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Error Rate",
+      "description": "Rate of spans with otel.status_code=ERROR from Tempo, representing SDK error throughput.",
+      "gridPos": { "x": 0, "y": 28, "w": 12, "h": 8 },
+      "datasource": {
+        "type": "tempo",
+        "uid": "${DS_TEMPO}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "tempo",
+            "uid": "${DS_TEMPO}"
+          },
+          "queryType": "traceqlMetrics",
+          "query": "{ resource.service.name = \"$service_name\" && status = error } | rate()",
+          "legendFormat": "errors/s"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "calcs": ["mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "fixedColor": "red", "mode": "fixed" },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 30,
+            "gradientMode": "none",
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "spanNulls": false,
+            "showPoints": "never"
+          },
+          "unit": "ops",
+          "decimals": 4
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "type": "logs",
+      "title": "Recent Logs",
+      "description": "Live log stream from Loki for the startd8-sdk service.",
+      "gridPos": { "x": 12, "y": 28, "w": 12, "h": 8 },
+      "datasource": {
+        "type": "loki",
+        "uid": "${DS_LOKI}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "loki",
+            "uid": "${DS_LOKI}"
+          },
+          "expr": "{service_name=\"$service_name\"}",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": true,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "sortOrder": "Descending",
+        "dedupStrategy": "none"
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1,
+  "links": [
+    {
+      "title": "StartD8 SDK Metrics (detailed)",
+      "url": "/d/startd8-sdk-metrics/startd8-sdk-metrics",
+      "type": "link",
+      "icon": "external link",
+      "tooltip": "Open the detailed StartD8 SDK Metrics dashboard",
+      "targetBlank": true
+    }
+  ]
+}

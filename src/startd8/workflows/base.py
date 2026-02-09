@@ -281,77 +281,61 @@ class WorkflowBase:
         if dry_run:
             return self._build_dry_run_result(config, agents)
 
-        # OTel parent span (FR-400)
-        span = None
-        if _tracer:
-            span = _tracer.start_span(
-                f"workflow.{self.metadata.workflow_id}",
-                attributes={
-                    "workflow.id": self.metadata.workflow_id,
-                    "workflow.name": self.metadata.name,
-                    "workflow.version": self.metadata.version,
-                },
-            )
-            # Attach ProjectContext labels (FR-402)
-            project_ctx = self._extract_project_context(config)
-            if not project_ctx.is_empty():
-                for key, value in project_ctx.to_labels().items():
-                    span.set_attribute(f"io.contextcore.{key}", value)
+        # OTel parent span via start_as_current_span so child spans nest (FR-400)
+        with self._create_workflow_span(config) as span:
+            self._enrich_span_with_project_context(span, config)
 
-        try:
-            # Check if _execute is overridden (not the base class version)
-            has_sync = (
-                hasattr(self, '_execute') and
-                type(self)._execute is not WorkflowBase._execute
-            )
-            has_async = (
-                hasattr(self, '_aexecute') and
-                type(self)._aexecute is not WorkflowBase._aexecute
-            )
+            try:
+                # Check if _execute is overridden (not the base class version)
+                has_sync = (
+                    hasattr(self, '_execute') and
+                    type(self)._execute is not WorkflowBase._execute
+                )
+                has_async = (
+                    hasattr(self, '_aexecute') and
+                    type(self)._aexecute is not WorkflowBase._aexecute
+                )
 
-            # Prefer sync execution if available
-            if has_sync:
-                result = self._execute(config, agents, on_progress)
-                if span:
-                    span.set_attribute("workflow.success", result.success)
-                return result
+                # Prefer sync execution if available
+                if has_sync:
+                    result = self._execute(config, agents, on_progress)
+                    if span:
+                        span.set_attribute("workflow.success", result.success)
+                    return result
 
-            # Fall back to async wrapped synchronously
-            if has_async:
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
+                # Fall back to async wrapped synchronously
+                if has_async:
+                    try:
+                        loop = asyncio.get_event_loop()
+                    except RuntimeError:
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
 
-                if loop.is_running():
-                    import concurrent.futures
-                    with concurrent.futures.ThreadPoolExecutor() as pool:
-                        future = pool.submit(
-                            asyncio.run,
+                    if loop.is_running():
+                        import concurrent.futures
+                        with concurrent.futures.ThreadPoolExecutor() as pool:
+                            future = pool.submit(
+                                asyncio.run,
+                                self._aexecute(config, agents, on_progress)
+                            )
+                            result = future.result()
+                    else:
+                        result = loop.run_until_complete(
                             self._aexecute(config, agents, on_progress)
                         )
-                        result = future.result()
-                else:
-                    result = loop.run_until_complete(
-                        self._aexecute(config, agents, on_progress)
-                    )
-                if span:
-                    span.set_attribute("workflow.success", result.success)
-                return result
+                    if span:
+                        span.set_attribute("workflow.success", result.success)
+                    return result
 
-            # Neither implemented
-            raise NotImplementedError(
-                "Subclasses must implement _execute or _aexecute"
-            )
-        except Exception as e:
-            if span:
-                span.set_status(_otel_trace.StatusCode.ERROR, str(e))
-                span.record_exception(e)
-            raise
-        finally:
-            if span:
-                span.end()
+                # Neither implemented
+                raise NotImplementedError(
+                    "Subclasses must implement _execute or _aexecute"
+                )
+            except Exception as e:
+                if span and _otel_trace:
+                    span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                    span.record_exception(e)
+                raise
 
     async def arun(
         self,
@@ -373,32 +357,44 @@ class WorkflowBase:
                 f"Validation failed: {'; '.join(validation.errors)}"
             )
 
-        # Check if methods are overridden (not the base class version)
-        has_sync = (
-            hasattr(self, '_execute') and
-            type(self)._execute is not WorkflowBase._execute
-        )
-        has_async = (
-            hasattr(self, '_aexecute') and
-            type(self)._aexecute is not WorkflowBase._aexecute
-        )
+        # OTel parent span via start_as_current_span so child spans nest
+        with self._create_workflow_span(config) as span:
+            self._enrich_span_with_project_context(span, config)
 
-        # Prefer async execution if available
-        if has_async:
-            return await self._aexecute(config, agents, on_progress)
+            try:
+                # Check if methods are overridden (not the base class version)
+                has_sync = (
+                    hasattr(self, '_execute') and
+                    type(self)._execute is not WorkflowBase._execute
+                )
+                has_async = (
+                    hasattr(self, '_aexecute') and
+                    type(self)._aexecute is not WorkflowBase._aexecute
+                )
 
-        # Fall back to sync in executor
-        if has_sync:
-            loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(
-                None,
-                lambda: self._execute(config, agents, on_progress)
-            )
+                # Prefer async execution if available
+                if has_async:
+                    result = await self._aexecute(config, agents, on_progress)
+                elif has_sync:
+                    # Fall back to sync in executor
+                    loop = asyncio.get_event_loop()
+                    result = await loop.run_in_executor(
+                        None,
+                        lambda: self._execute(config, agents, on_progress)
+                    )
+                else:
+                    raise NotImplementedError(
+                        "Subclasses must implement _execute or _aexecute"
+                    )
 
-        # Neither implemented
-        raise NotImplementedError(
-            "Subclasses must implement _execute or _aexecute"
-        )
+                if span:
+                    span.set_attribute("workflow.success", result.success)
+                return result
+            except Exception as e:
+                if span and _otel_trace:
+                    span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                    span.record_exception(e)
+                raise
 
     def _execute(
         self,
@@ -494,6 +490,34 @@ class WorkflowBase:
                 total += tokens["input"] * 3.0 / 1_000_000
                 total += tokens["output"] * 15.0 / 1_000_000
             return total
+
+    def _create_workflow_span(self, config: Dict[str, Any]):
+        """Create and configure an OTel span for this workflow execution.
+
+        Returns a context manager that yields the span (or None if OTel unavailable).
+        """
+        if not _tracer:
+            from contextlib import nullcontext
+            return nullcontext(None)
+
+        span_ctx = _tracer.start_as_current_span(
+            f"workflow.{self.metadata.workflow_id}",
+            attributes={
+                "workflow.id": self.metadata.workflow_id,
+                "workflow.name": self.metadata.name,
+                "workflow.version": self.metadata.version,
+            },
+        )
+        return span_ctx
+
+    def _enrich_span_with_project_context(self, span, config: Dict[str, Any]) -> None:
+        """Attach ProjectContext labels to a span (FR-402)."""
+        if span is None:
+            return
+        project_ctx = self._extract_project_context(config)
+        if not project_ctx.is_empty():
+            for key, value in project_ctx.to_labels().items():
+                span.set_attribute(f"io.contextcore.{key}", value)
 
     def _emit_progress(
         self,

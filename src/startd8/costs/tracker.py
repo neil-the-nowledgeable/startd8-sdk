@@ -118,9 +118,12 @@ class CostTracker:
         self.pricing = pricing_service
         self.enabled = enabled
         self._lock = threading.RLock()
-        
+
         # In-memory cache for fast aggregations
         self._running_totals: Dict[str, float] = {}  # period_key -> total
+
+        # Lazy-initialized OTel cost metrics
+        self._otel_metrics = None
     
     def record_cost(
         self,
@@ -231,7 +234,17 @@ class CostTracker:
             },
             correlation_id=record.correlation_id
         ))
-        
+
+        # Record OTel cost metrics (lazy-init on first call)
+        if self._otel_metrics is None:
+            try:
+                from .otel_metrics import CostMetrics
+                self._otel_metrics = CostMetrics()
+            except ImportError:
+                self._otel_metrics = False  # Prevent retrying
+        if self._otel_metrics:
+            self._otel_metrics.record(record)
+
         logger.debug(
             f"Recorded cost: ${total_cost:.6f} for {model}",
             extra={

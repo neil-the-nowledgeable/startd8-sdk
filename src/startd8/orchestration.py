@@ -26,6 +26,15 @@ except ImportError:
     _otel_trace = None  # type: ignore[assignment]
     _tracer = None
 
+try:
+    from contextlib import nullcontext as _nullcontext
+except ImportError:
+    from contextlib import contextmanager as _cm
+
+    @_cm
+    def _nullcontext(enter_result=None):
+        yield enter_result
+
 
 @dataclass
 class PipelineStep:
@@ -330,108 +339,134 @@ class Pipeline:
         tracking_prompt_id = prompt_id or f"prompt-{uuid.uuid4().hex[:12]}"
         completed_steps: List[int] = []  # FR-302: checkpoint tracking
 
-        try:
-            # Execute each step — dispatch by type (FR-310)
-            for i, step in enumerate(self.steps):
-                if isinstance(step, PipelineStep):
-                    output, step_data, tokens, cost, retries = await self._execute_sequential_step(
-                        step, i, current_input, pipeline_id, tracking_prompt_id,
-                        prompt_id, store, retry_policy,
-                    )
-                elif isinstance(step, ConditionalStep):
-                    output, step_data, tokens, cost, retries = await self._execute_conditional_step(
-                        step, i, current_input, pipeline_id, tracking_prompt_id,
-                        prompt_id, store, retry_policy,
-                    )
-                elif isinstance(step, ParallelStep):
-                    output, step_data, tokens, cost, retries = await self._execute_parallel_step(
-                        step, i, current_input, pipeline_id, tracking_prompt_id,
-                        prompt_id, store, retry_policy,
-                    )
-                elif isinstance(step, WorkflowStep):
-                    output, step_data, tokens, cost, retries = await self._execute_workflow_step(
-                        step, i, current_input, pipeline_id,
-                    )
-                else:
-                    raise TypeError(f"Unknown step type: {type(step)}")
-
-                current_input = output
-                step_results.extend(step_data if isinstance(step_data, list) else [step_data])
-                total_tokens += tokens
-                total_cost += cost
-                total_retries += retries
-                completed_steps.append(i)
-
-            end_time = time.time()
-            total_time_ms = int((end_time - start_time) * 1000)
-
-            result = PipelineResult(
-                steps=step_results,
-                final_output=current_input,
-                total_time_ms=total_time_ms,
-                total_tokens=total_tokens,
-                total_cost=total_cost,
-                pipeline_id=pipeline_id,
-                timestamp=datetime.now(timezone.utc)
-            )
-
-            EventBus.emit(Event(
-                type=EventType.PIPELINE_COMPLETE,
-                source="Pipeline",
-                data={
-                    "pipeline_id": pipeline_id,
-                    "total_time_ms": total_time_ms,
-                    "total_tokens": total_tokens,
-                    "total_cost": total_cost,
-                    "total_retries": total_retries,
+        # OTel parent span wrapping entire pipeline (child step spans nest under this)
+        _span_ctx = (
+            _tracer.start_as_current_span(
+                f"pipeline.{self.name}",
+                attributes={
+                    "pipeline.name": self.name,
+                    "pipeline.id": pipeline_id,
+                    "step.count": len(self.steps),
                 },
-                correlation_id=pipeline_id
-            ))
-
-            return result
-
-        except (AgentError, APIError, ConfigurationError) as e:
-            from .logging_config import get_logger
-            logger = get_logger(__name__)
-            logger.error(
-                f"Pipeline '{self.name}' failed: {e}",
-                exc_info=True,
-                extra={
-                    "pipeline_id": pipeline_id,
-                    "pipeline_name": self.name,
-                    "error_type": type(e).__name__,
-                    "pipeline_error": str(e)
-                }
             )
-            raise
-        except Exception as e:
-            from .logging_config import get_logger
-            logger = get_logger(__name__)
-            logger.error(
-                f"Unexpected error in pipeline '{self.name}': {e}",
-                exc_info=True,
-                extra={
-                    "pipeline_id": pipeline_id,
-                    "pipeline_name": self.name,
-                    "error_type": type(e).__name__,
-                    "steps": [getattr(s, 'name', str(s)) for s in self.steps]
-                }
-            )
-            EventBus.emit(Event(
-                type=EventType.PIPELINE_ERROR,
-                source="Pipeline",
-                data={
-                    "pipeline_id": pipeline_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                correlation_id=pipeline_id
-            ))
-            raise AgentError(
-                f"Unexpected error in pipeline '{self.name}': {e}",
-                agent_name=getattr(e, 'agent_name', None),
-                original_error=e
-            ) from e
+            if _tracer
+            else _nullcontext()
+        )
+
+        with _span_ctx as pipeline_span:
+            try:
+                # Execute each step — dispatch by type (FR-310)
+                for i, step in enumerate(self.steps):
+                    if isinstance(step, PipelineStep):
+                        output, step_data, tokens, cost, retries = await self._execute_sequential_step(
+                            step, i, current_input, pipeline_id, tracking_prompt_id,
+                            prompt_id, store, retry_policy,
+                        )
+                    elif isinstance(step, ConditionalStep):
+                        output, step_data, tokens, cost, retries = await self._execute_conditional_step(
+                            step, i, current_input, pipeline_id, tracking_prompt_id,
+                            prompt_id, store, retry_policy,
+                        )
+                    elif isinstance(step, ParallelStep):
+                        output, step_data, tokens, cost, retries = await self._execute_parallel_step(
+                            step, i, current_input, pipeline_id, tracking_prompt_id,
+                            prompt_id, store, retry_policy,
+                        )
+                    elif isinstance(step, WorkflowStep):
+                        output, step_data, tokens, cost, retries = await self._execute_workflow_step(
+                            step, i, current_input, pipeline_id,
+                        )
+                    else:
+                        raise TypeError(f"Unknown step type: {type(step)}")
+
+                    current_input = output
+                    step_results.extend(step_data if isinstance(step_data, list) else [step_data])
+                    total_tokens += tokens
+                    total_cost += cost
+                    total_retries += retries
+                    completed_steps.append(i)
+
+                end_time = time.time()
+                total_time_ms = int((end_time - start_time) * 1000)
+
+                if pipeline_span:
+                    pipeline_span.set_attribute("pipeline.total_tokens", total_tokens)
+                    pipeline_span.set_attribute("pipeline.total_cost", total_cost)
+                    pipeline_span.set_attribute("pipeline.total_time_ms", total_time_ms)
+
+                result = PipelineResult(
+                    steps=step_results,
+                    final_output=current_input,
+                    total_time_ms=total_time_ms,
+                    total_tokens=total_tokens,
+                    total_cost=total_cost,
+                    pipeline_id=pipeline_id,
+                    timestamp=datetime.now(timezone.utc)
+                )
+
+                EventBus.emit(Event(
+                    type=EventType.PIPELINE_COMPLETE,
+                    source="Pipeline",
+                    data={
+                        "pipeline_id": pipeline_id,
+                        "total_time_ms": total_time_ms,
+                        "total_tokens": total_tokens,
+                        "total_cost": total_cost,
+                        "total_retries": total_retries,
+                    },
+                    correlation_id=pipeline_id
+                ))
+
+                return result
+
+            except (AgentError, APIError, ConfigurationError) as e:
+                if pipeline_span and _otel_trace:
+                    pipeline_span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                    pipeline_span.record_exception(e)
+                from .logging_config import get_logger
+                logger = get_logger(__name__)
+                logger.error(
+                    f"Pipeline '{self.name}' failed: {e}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": pipeline_id,
+                        "pipeline_name": self.name,
+                        "error_type": type(e).__name__,
+                        "pipeline_error": str(e)
+                    }
+                )
+                raise
+            except Exception as e:
+                if pipeline_span and _otel_trace:
+                    pipeline_span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                    pipeline_span.record_exception(e)
+                from .logging_config import get_logger
+                logger = get_logger(__name__)
+                logger.error(
+                    f"Unexpected error in pipeline '{self.name}': {e}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": pipeline_id,
+                        "pipeline_name": self.name,
+                        "error_type": type(e).__name__,
+                        "steps": [getattr(s, 'name', str(s)) for s in self.steps]
+                    }
+                )
+                EventBus.emit(Event(
+                    type=EventType.PIPELINE_ERROR,
+                    source="Pipeline",
+                    data={
+                        "pipeline_id": pipeline_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__
+                    },
+                    correlation_id=pipeline_id
+                ))
+                raise AgentError(
+                    f"Unexpected error in pipeline '{self.name}': {e}",
+                    agent_name=getattr(e, 'agent_name', None),
+                    original_error=e
+                ) from e
 
     # =========================================================================
     # Private step execution methods (FR-310 extract-method refactoring)
@@ -471,11 +506,10 @@ class Pipeline:
             **{k: v for k, v in step.metadata.items() if k in valid_metadata_fields}
         }
 
-        # OTel child span (FR-401)
-        step_span = None
-        if _tracer:
-            step_span = _tracer.start_span(
-                f"workflow.{self.name}.step.{step.name}",
+        # OTel child span using start_as_current_span for proper nesting (FR-401)
+        _step_span_ctx = (
+            _tracer.start_as_current_span(
+                f"pipeline.{self.name}.step.{step.name}",
                 attributes={
                     "step.name": step.name,
                     "step.index": step_index,
@@ -483,87 +517,88 @@ class Pipeline:
                     "agent.model": step.agent.model,
                 },
             )
+            if _tracer
+            else _nullcontext()
+        )
 
-        try:
-            # Retry loop (FR-300)
-            max_attempts = 1 + (retry_policy.max_retries if retry_policy else 0)
-            retry_count = 0
-            last_error = None
+        with _step_span_ctx as step_span:
+            try:
+                # Retry loop (FR-300)
+                max_attempts = 1 + (retry_policy.max_retries if retry_policy else 0)
+                retry_count = 0
+                last_error = None
 
-            for attempt in range(max_attempts):
-                try:
-                    agent_response = await step.agent.acreate_response(
-                        prompt_id=tracking_prompt_id,
-                        prompt=step_input,
-                        metadata=step_metadata,
-                        tags=[self.name, "pipeline", step.name],
-                        pipeline_id=pipeline_id
-                    )
-                    break
-                except Exception as e:
-                    if not retry_policy or not is_retryable(
-                        e, retry_policy.retryable_status_codes
-                    ):
-                        raise
-                    last_error = e
-                    retry_count = attempt + 1
-                    delay = min(
-                        retry_policy.backoff_base * (2 ** attempt),
-                        retry_policy.backoff_max
-                    )
-                    if retry_policy.jitter:
-                        delay += random.uniform(0, delay * 0.1)
+                for attempt in range(max_attempts):
+                    try:
+                        agent_response = await step.agent.acreate_response(
+                            prompt_id=tracking_prompt_id,
+                            prompt=step_input,
+                            metadata=step_metadata,
+                            tags=[self.name, "pipeline", step.name],
+                            pipeline_id=pipeline_id
+                        )
+                        break
+                    except Exception as e:
+                        if not retry_policy or not is_retryable(
+                            e, retry_policy.retryable_status_codes
+                        ):
+                            raise
+                        last_error = e
+                        retry_count = attempt + 1
+                        delay = min(
+                            retry_policy.backoff_base * (2 ** attempt),
+                            retry_policy.backoff_max
+                        )
+                        if retry_policy.jitter:
+                            delay += random.uniform(0, delay * 0.1)
 
-                    # Emit retry event (FR-410)
-                    EventBus.emit(Event(
-                        type=EventType.PIPELINE_STEP_RETRY,
-                        source="Pipeline",
-                        data={
-                            "step_name": step.name,
-                            "attempt_number": retry_count,
-                            "error": str(e),
-                            "delay_seconds": delay,
-                        },
-                        correlation_id=pipeline_id
-                    ))
-                    await asyncio.sleep(delay)
-            else:
-                raise last_error  # type: ignore[misc]
+                        # Emit retry event (FR-410)
+                        EventBus.emit(Event(
+                            type=EventType.PIPELINE_STEP_RETRY,
+                            source="Pipeline",
+                            data={
+                                "step_name": step.name,
+                                "attempt_number": retry_count,
+                                "error": str(e),
+                                "delay_seconds": delay,
+                            },
+                            correlation_id=pipeline_id
+                        ))
+                        await asyncio.sleep(delay)
+                else:
+                    raise last_error  # type: ignore[misc]
 
-            response_text = agent_response.response
-            response_time_ms = agent_response.response_time_ms
-            token_usage = agent_response.token_usage
+                response_text = agent_response.response
+                response_time_ms = agent_response.response_time_ms
+                token_usage = agent_response.token_usage
 
-            tokens = token_usage.total if token_usage else 0
-            cost = token_usage.cost_estimate if token_usage else 0
+                tokens = token_usage.total if token_usage else 0
+                cost = token_usage.cost_estimate if token_usage else 0
 
-            # Set span metrics (FR-401)
-            if step_span:
-                step_span.set_attribute("tokens", tokens)
-                step_span.set_attribute("cost", cost)
-                step_span.set_attribute("response_time_ms", response_time_ms)
-                step_span.set_attribute("retry_count", retry_count)
+                # Set span metrics (FR-401)
+                if step_span:
+                    step_span.set_attribute("tokens", tokens)
+                    step_span.set_attribute("cost", cost)
+                    step_span.set_attribute("response_time_ms", response_time_ms)
+                    step_span.set_attribute("retry_count", retry_count)
 
-            step_result = {
-                "step_number": step_index + 1,
-                "step_name": step.name,
-                "agent": step.agent.name,
-                "model": step.agent.model,
-                "input": step_input[:200] + "..." if len(step_input) > 200 else step_input,
-                "output": response_text,
-                "response_time_ms": response_time_ms,
-                "tokens": tokens,
-                "cost": cost,
-                "metadata": {**step.metadata, "retry_count": retry_count},
-            }
-        except Exception as e:
-            if step_span:
-                step_span.set_status(_otel_trace.StatusCode.ERROR, str(e))
-                step_span.record_exception(e)
-            raise
-        finally:
-            if step_span:
-                step_span.end()
+                step_result = {
+                    "step_number": step_index + 1,
+                    "step_name": step.name,
+                    "agent": step.agent.name,
+                    "model": step.agent.model,
+                    "input": step_input[:200] + "..." if len(step_input) > 200 else step_input,
+                    "output": response_text,
+                    "response_time_ms": response_time_ms,
+                    "tokens": tokens,
+                    "cost": cost,
+                    "metadata": {**step.metadata, "retry_count": retry_count},
+                }
+            except Exception as e:
+                if step_span and _otel_trace:
+                    step_span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                    step_span.record_exception(e)
+                raise
 
         EventBus.emit(Event(
             type=EventType.PIPELINE_STEP_COMPLETE,
