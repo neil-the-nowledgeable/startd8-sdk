@@ -240,23 +240,31 @@ class LeadContractorWorkflow(WorkflowBase):
             "output_format": "string - Expected output format (optional)",
             "integration_instructions": "string - Final integration notes (optional)",
             "check_truncation": true - Enable truncation detection (default: true),
-            "fail_on_truncation": true - Fail workflow if truncation detected (default: true),
+            "fail_on_api_truncation": true - Fail on API truncation (default: true),
+            "fail_on_heuristic_truncation": false - Fail on heuristic truncation (default: false),
+            "fail_on_truncation": true - Legacy flag, controls both (backward compat),
             "strict_truncation": false - Use strict detection threshold (default: false)
         }
 
     Truncation Protection:
-        By default, the workflow detects and fails on truncated drafter output.
-        This prevents incomplete implementations from being silently accepted.
+        The workflow detects two types of truncation:
 
-        - check_truncation (default: True): Enable/disable truncation detection
-        - fail_on_truncation (default: True): Raise error vs. warn on truncation
-        - strict_truncation (default: False): Lower confidence threshold for detection
+        1. **API truncation**: Model hit max_tokens (finish_reason="max_tokens").
+           Default: fail (fail_on_api_truncation=True).
+        2. **Heuristic truncation**: Output appears structurally incomplete.
+           Default: warn (fail_on_heuristic_truncation=False).
 
-        To disable truncation protection (not recommended):
-            config={"check_truncation": False}
+        Config keys:
+        - check_truncation (default: True): Enable/disable heuristic detection
+        - fail_on_api_truncation (default: True): Fail on API truncation
+        - fail_on_heuristic_truncation (default: False): Fail on heuristic truncation
+        - fail_on_truncation: Legacy flag — controls both (backward compat)
+        - strict_truncation (default: False): Lower confidence threshold for heuristics
 
-        To warn but continue on truncation:
-            config={"fail_on_truncation": False}
+        Recommended settings by use case:
+        - Code generation: fail_on_api_truncation=True, fail_on_heuristic_truncation=True
+        - Config/data generation: fail_on_api_truncation=True, fail_on_heuristic_truncation=False
+        - Exploratory: fail_on_api_truncation=False, fail_on_heuristic_truncation=False
 
     Recommended Lead Agents:
         - anthropic:claude-sonnet-4-20250514 (default - best for coding/agents)
@@ -363,11 +371,25 @@ class LeadContractorWorkflow(WorkflowBase):
                     description="Enable truncation detection on drafter output (default: True)"
                 ),
                 WorkflowInput(
-                    name="fail_on_truncation",
+                    name="fail_on_api_truncation",
                     type="boolean",
                     required=False,
                     default=True,
-                    description="Fail workflow if truncation detected (default: True). If False, logs warning and continues."
+                    description="Fail workflow if API truncation detected (finish_reason=max_tokens). Default: True."
+                ),
+                WorkflowInput(
+                    name="fail_on_heuristic_truncation",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Fail workflow if heuristic truncation detected (incomplete code structure). Default: False."
+                ),
+                WorkflowInput(
+                    name="fail_on_truncation",
+                    type="boolean",
+                    required=False,
+                    default=None,
+                    description="Legacy flag: controls both API and heuristic truncation failure. Granular flags take precedence."
                 ),
                 WorkflowInput(
                     name="strict_truncation",
@@ -424,9 +446,20 @@ class LeadContractorWorkflow(WorkflowBase):
         integration_instructions = config.get("integration_instructions", "")
         # Truncation protection defaults - safe by default
         check_truncation = config.get("check_truncation", True)
-        fail_on_truncation = config.get("fail_on_truncation", True)
         strict_truncation = config.get("strict_truncation", False)
-        
+
+        # Granular truncation failure control
+        # Legacy flag for backward compatibility
+        legacy_fail_on_truncation = config.get("fail_on_truncation")
+        if legacy_fail_on_truncation is not None:
+            # Legacy mode: single flag controls both, but granular flags take precedence
+            fail_on_api_truncation = config.get("fail_on_api_truncation", legacy_fail_on_truncation)
+            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", legacy_fail_on_truncation)
+        else:
+            # New mode: separate control (safe defaults)
+            fail_on_api_truncation = config.get("fail_on_api_truncation", True)
+            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", False)
+
         # Extract ContextCore project context
         project_context = self._extract_project_context(config)
 
@@ -528,11 +561,18 @@ class LeadContractorWorkflow(WorkflowBase):
 
                 # Check for truncation
                 if check_truncation and draft.was_truncated:
-                    if fail_on_truncation and iteration < max_iterations:
+                    is_api = draft.truncation_source == "api"
+                    should_fail = (
+                        (is_api and fail_on_api_truncation)
+                        or (not is_api and fail_on_heuristic_truncation)
+                    )
+
+                    if should_fail and iteration < max_iterations:
                         # Auto-retry: skip review, re-draft with continuation prompt
                         logger.warning(
                             f"Draft truncated at iteration {iteration} "
-                            f"({draft.output_tokens} tokens). Retrying with continuation prompt."
+                            f"(source: {draft.truncation_source}, "
+                            f"{draft.output_tokens} tokens). Retrying with continuation prompt."
                         )
                         review_feedback = (
                             "Your previous response was TRUNCATED — it was cut off before "
@@ -541,13 +581,22 @@ class LeadContractorWorkflow(WorkflowBase):
                             "source code for the file."
                         )
                         continue
-                    elif fail_on_truncation:
+                    elif should_fail:
                         error_msg = (
-                            f"Draft was truncated at iteration {iteration}. "
+                            f"Draft was truncated at iteration {iteration} "
+                            f"(source: {draft.truncation_source}). "
                             f"Output tokens: {draft.output_tokens}. "
-                            "Consider: (1) increasing max_tokens, (2) decomposing the task, "
-                            "or (3) setting fail_on_truncation=False to continue anyway."
                         )
+                        if is_api:
+                            error_msg += (
+                                "Consider: (1) increasing max_tokens, (2) decomposing the task, "
+                                "or (3) setting fail_on_api_truncation=False to continue anyway."
+                            )
+                        else:
+                            error_msg += (
+                                "Heuristic detection flagged incomplete code structure. "
+                                "Consider setting fail_on_heuristic_truncation=False if this is a false positive."
+                            )
                         logger.error(error_msg)
                         return WorkflowResult.from_error(
                             self.metadata.workflow_id,
@@ -556,8 +605,8 @@ class LeadContractorWorkflow(WorkflowBase):
                         )
                     else:
                         logger.warning(
-                            f"Draft was truncated at iteration {iteration}, continuing anyway. "
-                            f"Set fail_on_truncation=True to fail on truncation."
+                            f"Draft truncation detected at iteration {iteration} "
+                            f"(source: {draft.truncation_source}), continuing anyway."
                         )
 
                 # Review phase
@@ -783,14 +832,15 @@ class LeadContractorWorkflow(WorkflowBase):
         implementation_code = self._extract_code_from_response(response_text)
 
         # Check for truncation (API-level detection)
-        was_truncated = token_usage.was_truncated if token_usage else False
+        api_truncated = token_usage.was_truncated if token_usage else False
+        truncation_source = "api" if api_truncated else None
 
-        # Also run heuristic detection for incomplete code (if enabled)
         # Heuristic detection for incomplete code (supplements API-level check).
         # Does NOT pass original_input because the prompt-to-code length ratio
         # is always misleadingly low (a 20K-char spec producing 5K chars of
         # code is normal, not truncated).  code_mode auto-detects from content.
-        if check_truncation and not was_truncated and implementation_code:
+        heuristic_truncated = False
+        if check_truncation and not api_truncated and implementation_code:
             # Use CONFIDENCE_IS_TRUNCATED for strict mode, CONFIDENCE_HIGH for normal mode
             confidence_threshold = CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
             # Infer language-appropriate structure markers (None skips the check)
@@ -801,11 +851,14 @@ class LeadContractorWorkflow(WorkflowBase):
                 strict_mode=strict_truncation,
             )
             if truncation_result.is_truncated and truncation_result.confidence >= confidence_threshold:
-                was_truncated = True
+                heuristic_truncated = True
+                truncation_source = "heuristic"
                 logger.warning(
                     f"Draft appears truncated (heuristic, confidence={truncation_result.confidence:.0%}): "
                     f"{truncation_result.indicators[:3]}"
                 )
+
+        was_truncated = api_truncated or heuristic_truncated
 
         draft = DraftResult(
             draft_id=draft_id,
@@ -817,7 +870,8 @@ class LeadContractorWorkflow(WorkflowBase):
             input_tokens=token_usage.input if token_usage else 0,
             output_tokens=token_usage.output if token_usage else 0,
             time_ms=response_time_ms,
-            was_truncated=was_truncated,  # Track truncation status
+            was_truncated=was_truncated,
+            truncation_source=truncation_source,
         )
 
         draft.cost = self._pricing.calculate_total_cost(
@@ -953,8 +1007,16 @@ class LeadContractorWorkflow(WorkflowBase):
         integration_instructions = config.get("integration_instructions", "")
         # Truncation protection defaults - safe by default
         check_truncation = config.get("check_truncation", True)
-        fail_on_truncation = config.get("fail_on_truncation", True)
         strict_truncation = config.get("strict_truncation", False)
+
+        # Granular truncation failure control
+        legacy_fail_on_truncation = config.get("fail_on_truncation")
+        if legacy_fail_on_truncation is not None:
+            fail_on_api_truncation = config.get("fail_on_api_truncation", legacy_fail_on_truncation)
+            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", legacy_fail_on_truncation)
+        else:
+            fail_on_api_truncation = config.get("fail_on_api_truncation", True)
+            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", False)
 
         project_context = self._extract_project_context(config)
 
@@ -1050,11 +1112,18 @@ class LeadContractorWorkflow(WorkflowBase):
 
                 # Check for truncation
                 if check_truncation and draft.was_truncated:
-                    if fail_on_truncation and iteration < max_iterations:
+                    is_api = draft.truncation_source == "api"
+                    should_fail = (
+                        (is_api and fail_on_api_truncation)
+                        or (not is_api and fail_on_heuristic_truncation)
+                    )
+
+                    if should_fail and iteration < max_iterations:
                         # Auto-retry: skip review, re-draft with continuation prompt
                         logger.warning(
                             f"Draft truncated at iteration {iteration} "
-                            f"({draft.output_tokens} tokens). Retrying with continuation prompt."
+                            f"(source: {draft.truncation_source}, "
+                            f"{draft.output_tokens} tokens). Retrying with continuation prompt."
                         )
                         review_feedback = (
                             "Your previous response was TRUNCATED — it was cut off before "
@@ -1063,13 +1132,22 @@ class LeadContractorWorkflow(WorkflowBase):
                             "source code for the file."
                         )
                         continue
-                    elif fail_on_truncation:
+                    elif should_fail:
                         error_msg = (
-                            f"Draft was truncated at iteration {iteration}. "
+                            f"Draft was truncated at iteration {iteration} "
+                            f"(source: {draft.truncation_source}). "
                             f"Output tokens: {draft.output_tokens}. "
-                            "Consider: (1) increasing max_tokens, (2) decomposing the task, "
-                            "or (3) setting fail_on_truncation=False to continue anyway."
                         )
+                        if is_api:
+                            error_msg += (
+                                "Consider: (1) increasing max_tokens, (2) decomposing the task, "
+                                "or (3) setting fail_on_api_truncation=False to continue anyway."
+                            )
+                        else:
+                            error_msg += (
+                                "Heuristic detection flagged incomplete code structure. "
+                                "Consider setting fail_on_heuristic_truncation=False if this is a false positive."
+                            )
                         logger.error(error_msg)
                         return WorkflowResult.from_error(
                             self.metadata.workflow_id,
@@ -1078,8 +1156,8 @@ class LeadContractorWorkflow(WorkflowBase):
                         )
                     else:
                         logger.warning(
-                            f"Draft was truncated at iteration {iteration}, continuing anyway. "
-                            f"Set fail_on_truncation=True to fail on truncation."
+                            f"Draft truncation detected at iteration {iteration} "
+                            f"(source: {draft.truncation_source}), continuing anyway."
                         )
 
                 # Review phase
@@ -1291,11 +1369,14 @@ class LeadContractorWorkflow(WorkflowBase):
 
         implementation_code = self._extract_code_from_response(response_text)
 
-        was_truncated = token_usage.was_truncated if token_usage else False
+        # Check for truncation (API-level detection)
+        api_truncated = token_usage.was_truncated if token_usage else False
+        truncation_source = "api" if api_truncated else None
 
         # Heuristic detection — see sync _create_draft for rationale.
         # code_mode auto-detects from content.
-        if check_truncation and not was_truncated and implementation_code:
+        heuristic_truncated = False
+        if check_truncation and not api_truncated and implementation_code:
             # Use CONFIDENCE_IS_TRUNCATED for strict mode, CONFIDENCE_HIGH for normal mode
             confidence_threshold = CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
             # Infer language-appropriate structure markers (None skips the check)
@@ -1306,11 +1387,14 @@ class LeadContractorWorkflow(WorkflowBase):
                 strict_mode=strict_truncation,
             )
             if truncation_result.is_truncated and truncation_result.confidence >= confidence_threshold:
-                was_truncated = True
+                heuristic_truncated = True
+                truncation_source = "heuristic"
                 logger.warning(
                     f"Draft appears truncated (heuristic, confidence={truncation_result.confidence:.0%}): "
                     f"{truncation_result.indicators[:3]}"
                 )
+
+        was_truncated = api_truncated or heuristic_truncated
 
         draft = DraftResult(
             draft_id=draft_id,
@@ -1323,6 +1407,7 @@ class LeadContractorWorkflow(WorkflowBase):
             output_tokens=token_usage.output if token_usage else 0,
             time_ms=response_time_ms,
             was_truncated=was_truncated,
+            truncation_source=truncation_source,
         )
 
         draft.cost = self._pricing.calculate_total_cost(

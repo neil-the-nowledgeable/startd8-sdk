@@ -194,9 +194,16 @@ class TestMetadata:
         assert "check_truncation" in inputs_by_name
         assert inputs_by_name["check_truncation"].default is True
 
-        # fail_on_truncation should exist and default to True
+        # Granular truncation flags
+        assert "fail_on_api_truncation" in inputs_by_name
+        assert inputs_by_name["fail_on_api_truncation"].default is True
+
+        assert "fail_on_heuristic_truncation" in inputs_by_name
+        assert inputs_by_name["fail_on_heuristic_truncation"].default is False
+
+        # Legacy flag should exist with None default (backward compat)
         assert "fail_on_truncation" in inputs_by_name
-        assert inputs_by_name["fail_on_truncation"].default is True
+        assert inputs_by_name["fail_on_truncation"].default is None
 
         # strict_truncation should exist and default to False
         assert "strict_truncation" in inputs_by_name
