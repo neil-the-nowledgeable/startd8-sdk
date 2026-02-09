@@ -25,6 +25,8 @@ from startd8.workflows.builtin.architectural_review_log_workflow import (
     _apply_triage_decisions,
     _compute_substantially_addressed,
     _insert_substantially_addressed_section,
+    _compute_area_coverage,
+    _insert_areas_needing_review_section,
     _build_triage_prompt,
     _build_prompt,
     _build_untriaged_block,
@@ -363,6 +365,148 @@ class TestInsertSubstantiallyAddressedSection:
 
 
 # ---------------------------------------------------------------------------
+# _compute_area_coverage tests
+# ---------------------------------------------------------------------------
+
+class TestComputeAreaCoverage:
+
+    def test_returns_all_allowed_areas(self):
+        """Coverage dict has an entry for every ALLOWED_AREA, even with no data."""
+        result = _compute_area_coverage(SAMPLE_DOC_WITH_SUGGESTIONS, threshold=3)
+        assert set(result.keys()) == ALLOWED_AREAS
+
+    def test_counts_and_gaps(self):
+        """Accepted counts and gaps are computed correctly from Appendix A/C."""
+        result = _compute_area_coverage(SAMPLE_DOC_WITH_SUGGESTIONS, threshold=3)
+        # SAMPLE_DOC has R1-S1(Architecture), R1-S2(Security), R1-S3(Data),
+        # R2-S1(Ops), R2-S2(Validation) — none applied (empty Appendix A placeholder)
+        for area in ALLOWED_AREAS:
+            assert result[area]["accepted_count"] == 0
+            assert result[area]["gap"] == 3
+            assert result[area]["addressed"] is False
+
+    def test_with_applied_suggestions(self):
+        """Areas with applied suggestions show correct counts."""
+        # SAMPLE_DOC areas: R1-S1=Architecture, R1-S2=Security, R1-S3=Architecture,
+        #                   R2-S1=Architecture, R2-S2=Data
+        # Replace the (none yet) placeholder with actual applied IDs
+        doc = SAMPLE_DOC_WITH_SUGGESTIONS.replace(
+            "| (none yet) |  |  |  |  |\n",
+            "| R1-S2 | Test | Test | Notes | 2026-01-01 |\n"
+            "| R2-S2 | Test | Test | Notes | 2026-01-01 |\n",
+            1,  # only first occurrence (Appendix A)
+        )
+        result = _compute_area_coverage(doc, threshold=2)
+        # R1-S2 is Security, R2-S2 is Data
+        assert result["security"]["accepted_count"] == 1
+        assert result["security"]["gap"] == 1
+        assert result["security"]["addressed"] is False
+        assert result["data"]["accepted_count"] == 1
+        assert result["data"]["gap"] == 1
+
+    def test_addressed_flag(self):
+        """Areas meeting threshold have addressed=True and gap=0."""
+        # R1-S1=Architecture, R1-S3=Architecture, R2-S1=Architecture → 3 arch suggestions
+        doc = SAMPLE_DOC_WITH_SUGGESTIONS.replace(
+            "| (none yet) |  |  |  |  |\n",
+            "| R1-S1 | Test | Test | Notes | 2026-01-01 |\n"
+            "| R1-S3 | Test | Test | Notes | 2026-01-01 |\n"
+            "| R2-S1 | Test | Test | Notes | 2026-01-01 |\n",
+            1,  # only first occurrence (Appendix A)
+        )
+        result = _compute_area_coverage(doc, threshold=1)
+        # All 3 are Architecture
+        assert result["architecture"]["addressed"] is True
+        assert result["architecture"]["gap"] == 0
+        assert result["architecture"]["accepted_count"] == 3
+        # Other areas still 0
+        assert result["security"]["addressed"] is False
+        assert result["data"]["addressed"] is False
+
+
+# ---------------------------------------------------------------------------
+# _insert_areas_needing_review_section tests
+# ---------------------------------------------------------------------------
+
+class TestInsertAreasNeedingReviewSection:
+
+    def test_inserts_underserved_areas(self):
+        """Section lists areas below threshold with gap details."""
+        coverage = {
+            area: {"accepted_count": 0, "accepted_ids": [], "addressed": False, "gap": 3}
+            for area in ALLOWED_AREAS
+        }
+        coverage["architecture"] = {
+            "accepted_count": 5, "accepted_ids": ["R1-S1", "R2-S1", "R3-S1", "R4-S1", "R5-S1"],
+            "addressed": True, "gap": 0,
+        }
+        result = _insert_areas_needing_review_section(SAMPLE_DOC_WITH_SUGGESTIONS, coverage, threshold=3)
+        assert "### Areas Needing Further Review" in result
+        # Underserved areas should be listed
+        assert "**security**" in result.split("### Areas Needing Further Review")[1].split("###")[0]
+        # Addressed areas should NOT be listed as needing review
+        needing_section = result.split("### Areas Needing Further Review")[1].split("###")[0]
+        assert "**architecture**: 5 accepted" not in needing_section
+
+    def test_all_addressed_shows_message(self):
+        """When all areas are addressed, shows 'all areas reached threshold' message."""
+        coverage = {
+            area: {"accepted_count": 3, "accepted_ids": [f"R1-{area[:2]}"], "addressed": True, "gap": 0}
+            for area in ALLOWED_AREAS
+        }
+        result = _insert_areas_needing_review_section(SAMPLE_DOC_WITH_SUGGESTIONS, coverage, threshold=3)
+        assert "All areas have reached the substantially addressed threshold" in result
+
+    def test_shows_existing_ids_for_partial_coverage(self):
+        """Areas with some accepted suggestions show the existing IDs."""
+        coverage = {
+            area: {"accepted_count": 0, "accepted_ids": [], "addressed": False, "gap": 3}
+            for area in ALLOWED_AREAS
+        }
+        coverage["security"] = {
+            "accepted_count": 2, "accepted_ids": ["R2-S4", "R6-S4"],
+            "addressed": False, "gap": 1,
+        }
+        result = _insert_areas_needing_review_section(SAMPLE_DOC_WITH_SUGGESTIONS, coverage, threshold=3)
+        needing_section = result.split("### Areas Needing Further Review")[1].split("###")[0]
+        assert "R2-S4, R6-S4" in needing_section
+        assert "needs 1 more" in needing_section
+
+    def test_placed_after_substantially_addressed(self):
+        """Section is inserted after 'Areas Substantially Addressed'."""
+        # First insert SA section
+        addressed = {"architecture": ["R1-S1", "R2-S1", "R3-S1"]}
+        doc = _insert_substantially_addressed_section(SAMPLE_DOC_WITH_SUGGESTIONS, addressed)
+        # Then insert needing review section
+        coverage = {
+            area: {"accepted_count": 0, "accepted_ids": [], "addressed": False, "gap": 3}
+            for area in ALLOWED_AREAS
+        }
+        result = _insert_areas_needing_review_section(doc, coverage, threshold=3)
+        sa_pos = result.index("### Areas Substantially Addressed")
+        nr_pos = result.index("### Areas Needing Further Review")
+        appendix_a_pos = result.index("### Appendix A")
+        assert sa_pos < nr_pos < appendix_a_pos
+
+    def test_update_existing_section(self):
+        """Repeated calls update the section rather than duplicating it."""
+        coverage1 = {
+            area: {"accepted_count": 0, "accepted_ids": [], "addressed": False, "gap": 3}
+            for area in ALLOWED_AREAS
+        }
+        doc = _insert_areas_needing_review_section(SAMPLE_DOC_WITH_SUGGESTIONS, coverage1, threshold=3)
+        assert doc.count("### Areas Needing Further Review") == 1
+
+        coverage2 = {
+            area: {"accepted_count": 3, "accepted_ids": [], "addressed": True, "gap": 0}
+            for area in ALLOWED_AREAS
+        }
+        result = _insert_areas_needing_review_section(doc, coverage2, threshold=3)
+        assert result.count("### Areas Needing Further Review") == 1
+        assert "All areas have reached" in result
+
+
+# ---------------------------------------------------------------------------
 # _build_triage_prompt tests
 # ---------------------------------------------------------------------------
 
@@ -390,7 +534,7 @@ class TestBuildTriagePrompt:
 class TestBuildPromptPriority:
     """Tests for two-tier area prioritization in reviewer prompts."""
 
-    def _call(self, substantially_addressed_areas=None, max_suggestions=5):
+    def _call(self, substantially_addressed_areas=None, max_suggestions=5, area_coverage=None):
         return _build_prompt(
             document_without_appendix="# Test Plan\n\nSome content.",
             applied_ids=["R1-S1"],
@@ -400,6 +544,7 @@ class TestBuildPromptPriority:
             reviewer_label="test-agent (test-model)",
             scope="Test review",
             substantially_addressed_areas=substantially_addressed_areas,
+            area_coverage=area_coverage,
         )
 
     def test_no_substantially_addressed_uses_generic_focus(self):
@@ -469,6 +614,58 @@ class TestBuildPromptPriority:
         }
         prompt = self._call(substantially_addressed_areas=addressed)
         assert "5 accepted suggestions missed" in prompt
+
+    def test_area_coverage_shows_gap_details(self):
+        """When area_coverage is provided, Tier 1 shows per-area gap details."""
+        addressed = {"architecture": ["R1-S1", "R2-S1", "R3-S1"]}
+        coverage = {
+            area: {"accepted_count": 0, "accepted_ids": [], "addressed": False, "gap": 3}
+            for area in ALLOWED_AREAS
+        }
+        coverage["architecture"] = {
+            "accepted_count": 3, "accepted_ids": ["R1-S1", "R2-S1", "R3-S1"],
+            "addressed": True, "gap": 0,
+        }
+        coverage["security"] = {
+            "accepted_count": 2, "accepted_ids": ["R2-S4", "R6-S4"],
+            "addressed": False, "gap": 1,
+        }
+        prompt = self._call(
+            substantially_addressed_areas=addressed,
+            area_coverage=coverage,
+        )
+        # Should show per-area gap details for uncovered areas
+        assert "**security**: 2 accepted (R2-S4, R6-S4)" in prompt
+        assert "needs 1 more" in prompt
+
+    def test_area_coverage_shows_zero_count_areas(self):
+        """Areas with no accepted suggestions show 'no accepted suggestions yet'."""
+        addressed = {"architecture": ["R1-S1", "R2-S1", "R3-S1"]}
+        coverage = {
+            area: {"accepted_count": 0, "accepted_ids": [], "addressed": False, "gap": 3}
+            for area in ALLOWED_AREAS
+        }
+        coverage["architecture"] = {
+            "accepted_count": 3, "accepted_ids": ["R1-S1", "R2-S1", "R3-S1"],
+            "addressed": True, "gap": 0,
+        }
+        prompt = self._call(
+            substantially_addressed_areas=addressed,
+            area_coverage=coverage,
+        )
+        assert "no accepted suggestions yet" in prompt
+
+    def test_without_area_coverage_falls_back_to_names(self):
+        """Without area_coverage, uncovered areas are listed by name only."""
+        addressed = {"architecture": ["R1-S1", "R2-S1", "R3-S1"]}
+        prompt = self._call(
+            substantially_addressed_areas=addressed,
+            area_coverage=None,
+        )
+        # Should still list uncovered areas by name
+        assert "Priority areas NOT yet substantially addressed" in prompt
+        # But should NOT show gap details
+        assert "needs" not in prompt.split("Priority areas")[1].split("Exhaust")[0]
 
 
 # ---------------------------------------------------------------------------

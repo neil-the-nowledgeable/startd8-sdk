@@ -352,7 +352,11 @@ class PlanIngestionWorkflow(WorkflowBase):
 
     def _resolve_transformer_agent(self, config: Dict[str, Any]) -> BaseAgent:
         spec = config.get("transformer_agent") or Models.CLAUDE_SONNET_LATEST
-        return resolve_agent_spec(str(spec), name="plan-transformer")
+        agent = resolve_agent_spec(str(spec), name="plan-transformer")
+        # Transform phase generates large YAML/markdown; bump token limit
+        if hasattr(agent, "max_tokens") and agent.max_tokens < 64000:
+            agent.max_tokens = 64000
+        return agent
 
     # ------------------------------------------------------------------
     # Phase: PARSE

@@ -464,7 +464,7 @@ class TestWorkflowExecution:
         # Create mock agents
         mock_lead = Mock()
         mock_lead.name = "claude"
-        mock_lead.model = "claude-sonnet-4-5-20250927"
+        mock_lead.model = "claude-sonnet-4-5-20250929"
         mock_lead.generate.return_value = (
             "### Score: 90\n### Verdict: PASS\n### Strengths\n- Good code",
             1000,
@@ -522,7 +522,7 @@ class TestWorkflowExecution:
 
         mock_lead = Mock()
         mock_lead.name = "claude"
-        mock_lead.model = "claude-sonnet-4-5-20250927"
+        mock_lead.model = "claude-sonnet-4-5-20250929"
 
         # First review fails, second passes
         mock_lead.generate.side_effect = [

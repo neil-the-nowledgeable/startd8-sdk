@@ -13,6 +13,8 @@ from .registry import get_registry
 import re
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
+import uuid
+from typing import Dict, Any, Optional, List
 
 class PrimeContractorWorkflow:
     """
@@ -84,6 +86,12 @@ class PrimeContractorWorkflow:
         registry.discover()
         self.code_generator = code_generator
         self.instrumentor = instrumentor or registry.get_default_instrumentor()()
+        # Ensure OTel is configured so logs/traces/metrics reach the collector.
+        # Defaults to enabled; callers can set STARTD8_OTEL=disabled to opt out.
+        import os as _os
+        _os.environ.setdefault("STARTD8_OTEL", "enabled")
+        from ..otel import auto_configure_otel
+        auto_configure_otel()
         self.size_estimator = size_estimator or registry.get_default_size_estimator()()
         self.merge_strategy = merge_strategy or registry.get_default_merge_strategy(for_python=True)()
         self.integration_history: List[Dict] = []
@@ -291,7 +299,16 @@ class PrimeContractorWorkflow:
             return False
         logger.info("Running code generation for '%s'...", feature.name)
         try:
-            result: GenerationResult = self.code_generator.generate(task=feature.description, context={'feature_name': feature.name}, target_files=feature.target_files)
+            gen_context: dict = {'feature_name': feature.name}
+            if feature.target_files:
+                gen_context['target_file'] = feature.target_files[0]
+                gen_context['output_constraint'] = (
+                    'IMPORTANT: Output a single Python module, NOT a package '
+                    'with multiple files. All classes, enums, and functions must '
+                    'be defined in one file. Do NOT use relative imports '
+                    '(from .module import ...) — everything lives in this file.'
+                )
+            result: GenerationResult = self.code_generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]
                 feature.status = FeatureStatus.GENERATED
@@ -503,10 +520,10 @@ class PrimeContractorWorkflow:
         return self.integrate_feature(feature)
 
     def reset_failed_features(self):
-        """Reset all failed features to appropriate status for retry."""
+        """Reset all failed/stuck features to appropriate status for retry."""
         reset_count = 0
         for feature in self.queue.features.values():
-            if feature.status in (FeatureStatus.FAILED, FeatureStatus.BLOCKED):
+            if feature.status in (FeatureStatus.FAILED, FeatureStatus.BLOCKED, FeatureStatus.INTEGRATING, FeatureStatus.DEVELOPING):
                 if feature.generated_files:
                     feature.status = FeatureStatus.GENERATED
                     logger.info('Reset %s -> GENERATED (has code)', feature.name)
@@ -962,3 +979,40 @@ if __name__ == '__main__':
         logger.info(f"Processing complete: {result['id']}")
     except Exception as e:
         logger.error(f'Processing failed: {e}')
+'\nFeature Decomposition Processor Module\n\nThis module provides robust processing and validation capabilities for decomposed \nfeature components within a feature decomposition engine. It ensures data quality,\nconsistency, and traceability throughout the decomposition pipeline.\n\nAuthor: Lead Contractor\nVersion: 1.0.0\nStatus: Production Ready\n'
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
+REQUIRED_FIELDS = ['feature_type', 'description', 'attributes']
+OPTIONAL_FIELDS = ['priority', 'dependencies', 'complexity']
+METADATA_FIELDS = ['processed_at', 'feature_id', 'parent_feature_id', 'component_index', 'status']
+if __name__ == '__main__':
+    processor = FeatureProcessor()
+    print('=' * 80)
+    print('PRODUCTION EXAMPLES: Feature Decomposition Processor')
+    print('=' * 80)
+    print('\n[Example 1] Successful Feature Processing')
+    print('-' * 80)
+    successful_feature = {'feature_type': 'authentication', 'description': 'User login with email and password', 'attributes': {'auth_method': 'email_password', 'requires_2fa': False}, 'priority': 'high'}
+    result_1 = processor._process_decomposed_feature(decomposed_feature=successful_feature, parent_feature_id='FEAT-001', index=0)
+    print(f'Result: {result_1}')
+    print('\n[Example 2] Validation Failure (Missing Required Field)')
+    print('-' * 80)
+    invalid_feature = {'description': 'Incomplete feature', 'attributes': {}}
+    result_2 = processor._process_decomposed_feature(decomposed_feature=invalid_feature, parent_feature_id='FEAT-002', index=1)
+    print(f'Result: {result_2}')
+    print('\n[Example 3] Complete Decomposition Workflow')
+    print('-' * 80)
+    complex_feature = {'id': 'FEAT-COMPLEX-001', 'type': 'complex_user_profile', 'description': 'Comprehensive user profile system', 'attributes': {'version': '2.0'}}
+    components = processor.decompose_feature(complex_feature)
+    print(f'Processed {len(components)} components:')
+    for comp in components:
+        print(f"  - {comp.get('feature_id')}: {comp.get('feature_type')}")
+    print('\n[Example 4] Edge Case Handling')
+    print('-' * 80)
+    edge_cases = [('Empty Dict', {}), ('None Input', None), ('Invalid Type', 'not_a_dict')]
+    for case_name, case_input in edge_cases:
+        result = processor._process_decomposed_feature(decomposed_feature=case_input, parent_feature_id='FEAT-EDGE', index=0)
+        print(f'{case_name}: {result}')
+    print('\n' + '=' * 80)
+    print('All examples completed successfully')
+    print('=' * 80)

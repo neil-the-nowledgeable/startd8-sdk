@@ -528,6 +528,123 @@ def _compute_substantially_addressed_from_doc(
     return _compute_substantially_addressed(applied_with_area, threshold)
 
 
+def _compute_area_coverage(
+    doc: str,
+    threshold: int,
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Compute coverage status for every area in ALLOWED_AREAS.
+
+    Returns: {area: {"accepted_count": N, "accepted_ids": [...], "addressed": bool, "gap": M}}
+    where gap = max(0, threshold - accepted_count).
+    """
+    applied_ids = _extract_table_ids(doc, "### Appendix A: Applied Suggestions")
+
+    # Build ID → area mapping from Appendix C
+    id_to_area: Dict[str, str] = {}
+    appendix_c_match = re.search(
+        r"^### Appendix C: Incoming Suggestions.*$",
+        doc,
+        re.MULTILINE,
+    )
+    if appendix_c_match:
+        appendix_c_text = doc[appendix_c_match.end():]
+        for line in appendix_c_text.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("|") and not stripped.startswith("| -") and "ID" not in stripped:
+                cells = _split_cells(stripped)
+                if len(cells) >= 2 and re.match(r"R\d+-S\d+", cells[0]):
+                    id_to_area[cells[0]] = cells[1].strip().lower()
+
+    # Group applied IDs by area
+    area_ids: Dict[str, List[str]] = {area: [] for area in ALLOWED_AREAS}
+    for sid in applied_ids:
+        area = id_to_area.get(sid, "unknown")
+        if area in area_ids:
+            area_ids[area].append(sid)
+
+    return {
+        area: {
+            "accepted_count": len(ids),
+            "accepted_ids": ids,
+            "addressed": len(ids) >= threshold,
+            "gap": max(0, threshold - len(ids)),
+        }
+        for area, ids in area_ids.items()
+    }
+
+
+def _insert_areas_needing_review_section(
+    doc: str,
+    area_coverage: Dict[str, Dict[str, Any]],
+    threshold: int,
+) -> str:
+    """
+    Insert or update '### Areas Needing Further Review' section
+    after 'Areas Substantially Addressed' and before Appendix A.
+    """
+    section_heading = "### Areas Needing Further Review"
+
+    underserved = {
+        area: info for area, info in area_coverage.items()
+        if not info["addressed"]
+    }
+
+    # Build section content
+    lines_out = [f"{section_heading}\n\n"]
+    if underserved:
+        for area in sorted(underserved.keys()):
+            info = underserved[area]
+            count = info["accepted_count"]
+            gap = info["gap"]
+            if count > 0:
+                ids_str = ", ".join(info["accepted_ids"])
+                lines_out.append(
+                    f"- **{area}**: {count} accepted ({ids_str}) — "
+                    f"needs {gap} more to reach threshold of {threshold}\n"
+                )
+            else:
+                lines_out.append(
+                    f"- **{area}**: no accepted suggestions yet — "
+                    f"needs {threshold} to reach threshold\n"
+                )
+    else:
+        lines_out.append("All areas have reached the substantially addressed threshold.\n")
+    lines_out.append("\n")
+    section_text = "".join(lines_out)
+
+    # Check if section already exists
+    existing_match = re.search(
+        rf"^{re.escape(section_heading)}\s*\n",
+        doc,
+        re.MULTILINE,
+    )
+    if existing_match:
+        rest = doc[existing_match.start():]
+        next_heading = re.search(r"^### (?!Areas Needing Further Review)", rest, re.MULTILINE)
+        if next_heading:
+            end_pos = existing_match.start() + next_heading.start()
+        else:
+            end_pos = len(doc)
+        return doc[: existing_match.start()] + section_text + doc[end_pos:]
+
+    # Insert after "Areas Substantially Addressed" if it exists, else before Appendix A
+    sa_match = re.search(r"^### Areas Substantially Addressed\s*\n", doc, re.MULTILINE)
+    if sa_match:
+        # Find the end of the SA section (next ### heading)
+        rest = doc[sa_match.start():]
+        next_heading = re.search(r"^### (?!Areas Substantially Addressed)", rest, re.MULTILINE)
+        if next_heading:
+            insert_pos = sa_match.start() + next_heading.start()
+            return doc[:insert_pos] + section_text + doc[insert_pos:]
+
+    appendix_a_match = re.search(r"^### Appendix A:", doc, re.MULTILINE)
+    if appendix_a_match:
+        return doc[: appendix_a_match.start()] + section_text + doc[appendix_a_match.start():]
+
+    return doc
+
+
 def _insert_substantially_addressed_section(
     doc: str,
     addressed_areas: Dict[str, List[str]],
@@ -673,6 +790,7 @@ def _build_prompt(
     template_override: Optional[str] = None,
     context_content: str = "",
     substantially_addressed_areas: Optional[Dict[str, List[str]]] = None,
+    area_coverage: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
     """
     Build the reviewer prompt. Supports override template that must include:
@@ -733,10 +851,31 @@ If you want to revisit a rejected idea, explicitly reference its rejected ID and
         total_applied = sum(len(v) for v in substantially_addressed_areas.values())
 
         if uncovered:
-            # Tier 1: uncovered areas as explicit priorities
+            # Tier 1: uncovered areas as explicit priorities with gap details
             iteration_context += (
                 f"\n\n**Priority areas NOT yet substantially addressed — start your analysis here:**\n"
-                f"  {', '.join(f'**{a}**' for a in uncovered)}\n"
+            )
+            if area_coverage:
+                # Show per-area gap details: count, existing IDs, how many more needed
+                for area in uncovered:
+                    info = area_coverage.get(area, {})
+                    count = info.get("accepted_count", 0)
+                    gap = info.get("gap", 0)
+                    ids = info.get("accepted_ids", [])
+                    if count > 0:
+                        ids_str = ", ".join(ids)
+                        iteration_context += (
+                            f"  - **{area}**: {count} accepted ({ids_str}) — "
+                            f"needs {gap} more to reach threshold\n"
+                        )
+                    else:
+                        iteration_context += (
+                            f"  - **{area}**: no accepted suggestions yet — "
+                            f"needs {gap} to reach threshold\n"
+                        )
+            else:
+                iteration_context += f"  {', '.join(f'**{a}**' for a in uncovered)}\n"
+            iteration_context += (
                 f"Exhaust these areas first. Allocate at least {max(1, max_suggestions - 1)} of your "
                 f"{max_suggestions} suggestion slots to these priority areas before considering addressed areas."
             )
@@ -1171,9 +1310,10 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 if len(context_content) > max_context_chars:
                     context_content = context_content[:max_context_chars] + "\n\n[... truncated ...]"
 
-            # Compute substantially addressed areas from existing Appendix A
+            # Compute substantially addressed areas and per-area coverage from existing Appendix A
             sa_threshold = int(config.get("substantially_addressed_threshold", 3))
             substantially_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold)
+            coverage = _compute_area_coverage(doc_text, sa_threshold)
 
             for i, agent in enumerate(resolved_agents):
                 round_number = next_round + i
@@ -1193,6 +1333,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     template_override=template_override,
                     context_content=context_content,
                     substantially_addressed_areas=substantially_addressed,
+                    area_coverage=coverage,
                 )
 
                 # Execute generation with graceful error handling, Gemini SAFETY
@@ -1512,6 +1653,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 "rejected": 0,
                 "untriaged_remaining": [],
                 "substantially_addressed_areas": [],
+                "areas_needing_review": [],
             }
 
             if enable_triage and round_records and resolved_agents:
@@ -1648,6 +1790,15 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             if addressed:
                                 doc_text = _insert_substantially_addressed_section(doc_text, addressed)
                                 triage_info["substantially_addressed_areas"] = list(addressed.keys())
+
+                            # Compute and insert areas needing further review
+                            post_triage_coverage = _compute_area_coverage(doc_text, sa_threshold)
+                            doc_text = _insert_areas_needing_review_section(doc_text, post_triage_coverage, sa_threshold)
+                            areas_needing = [
+                                area for area, info in post_triage_coverage.items()
+                                if not info["addressed"]
+                            ]
+                            triage_info["areas_needing_review"] = sorted(areas_needing)
 
                             # Persist document
                             atomic_write(doc_path, doc_text, mode="w", backup=True)

@@ -48,10 +48,13 @@ class Models:
     # ==========================================================================
 
     # Flagship - Best quality, highest cost
-    CLAUDE_OPUS_LATEST = "anthropic:claude-opus-4-5-20251101"
+    CLAUDE_OPUS_LATEST = "anthropic:claude-opus-4-6"
+
+    # Previous flagship
+    CLAUDE_OPUS_45 = "anthropic:claude-opus-4-5-20251101"
 
     # Balanced - Good quality/cost tradeoff (recommended for most use cases)
-    CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-5-20250927"
+    CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-5-20250929"
 
     # Fast - Quick responses, lower cost
     CLAUDE_HAIKU_LATEST = "anthropic:claude-haiku-4-5-20251008"
@@ -133,21 +136,33 @@ class Models:
 # Model registry with full metadata
 _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # Anthropic
+    "claude-opus-4-6": ModelInfo(
+        provider="anthropic",
+        model_id="claude-opus-4-6",
+        tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
     "claude-opus-4-5-20251101": ModelInfo(
         provider="anthropic",
         model_id="claude-opus-4-5-20251101",
         tier="flagship",
         capabilities={"text", "vision", "code", "reasoning"},
     ),
-    "claude-sonnet-4-5-20250927": ModelInfo(
+    "claude-sonnet-4-5-20250929": ModelInfo(
         provider="anthropic",
-        model_id="claude-sonnet-4-5-20250927",
+        model_id="claude-sonnet-4-5-20250929",
         tier="balanced",
         capabilities={"text", "vision", "code", "reasoning"},
     ),
     "claude-haiku-4-5-20251008": ModelInfo(
         provider="anthropic",
         model_id="claude-haiku-4-5-20251008",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "claude-haiku-4-5-20251001": ModelInfo(
+        provider="anthropic",
+        model_id="claude-haiku-4-5-20251001",
         tier="fast",
         capabilities={"text", "code"},
     ),

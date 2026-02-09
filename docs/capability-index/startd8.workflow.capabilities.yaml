@@ -11,10 +11,12 @@
 
 manifest_id: startd8.workflow.capabilities
 name: StartD8 Workflow System Capabilities
-version: "2.1.1"
+version: "2.3.0"
 description: |
   Capabilities for StartD8 SDK workflow system.
   Protocol-based multi-agent orchestration with cost tracking and observability.
+  v2.3.0: Added architectural_review_log builtin workflow with automated triage + two-tier prompt steering.
+  v2.2.0: Added plan_ingestion builtin workflow capability.
   v2.1.0: All 13 draft capabilities promoted to beta after Phase 1-4 implementation.
   v2.0.0: Updated from Phase 3 functional requirements with implementation details.
 
@@ -447,6 +449,67 @@ capabilities:
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/plain_language_workflow.py
+
+  - capability_id: startd8.workflow.builtin.plan_ingestion
+    category: action
+    maturity: beta
+    summary: "Parse generic plans → assess complexity → route to Prime/Artisan → refine via review"
+    audiences: [workflow_user, ai_agent, workflow_developer]
+    user_benefit: "Automate plan-to-SDK-format conversion with LLM complexity scoring"
+    delivers_benefit: workflow.execution.validated_run
+    description:
+      developer: |
+        PlanIngestionWorkflow: 5-phase pipeline (parse → assess → transform → refine → emit).
+        LLM extracts features/deps, scores 7 complexity dimensions 0-100, routes to Prime (≤40)
+        or Artisan (>40). Transforms to task YAML or plan markdown. Refines via N rounds of
+        ArchitecturalReviewLogWorkflow. Emits review-config.json. Cost tracking with warn/max limits.
+      user: |
+        Convert any plan.md into SDK-native format:
+        startd8 workflow run plan-ingestion --plan_path plan.md --output_dir ./out
+      agent: |
+        workflow_id: "plan-ingestion". Config: {plan_path, output_dir, review_rounds, force_route,
+        complexity_threshold, assessor_agent, transformer_agent}. Returns PlanIngestionResult.
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/plan_ingestion_workflow.py
+        description: "PlanIngestionWorkflow class with 5-phase pipeline"
+      - type: code
+        ref: src/startd8/workflows/builtin/plan_ingestion_models.py
+        description: "Data models: ParsedPlan, ComplexityScore, IngestionState, PlanIngestionResult"
+      - type: test
+        ref: tests/unit/test_plan_ingestion_workflow.py
+        description: "55 unit tests covering all phases, routing, cost limits, context_files"
+
+  - capability_id: startd8.workflow.builtin.architectural_review_log
+    category: action
+    maturity: stable
+    summary: "Iterative multi-agent architectural review with append-only structured triage"
+    audiences: [workflow_user, ai_agent, workflow_developer]
+    user_benefit: "Automated multi-round design review with persistent acceptance/rejection tracking"
+    delivers_benefit: workflow.execution.validated_run
+    description:
+      developer: |
+        ArchitecturalReviewLogWorkflow: N reviewer agents append suggestions to Appendix C,
+        automated triage classifies as ACCEPT/REJECT into Appendix A/B, computes per-area
+        coverage, and inserts "Areas Substantially Addressed" + "Areas Needing Further Review"
+        sections. Two-tier prompt steering prioritizes uncovered areas with quantified gap data.
+      user: |
+        Run iterative architectural review with automated triage:
+        startd8 workflow run architectural-review-log --document_path plan.md --reviewer_count 2
+      agent: |
+        workflow_id: "architectural-review-log". Config: {document_path, reviewer_count,
+        max_suggestions, scope, enable_triage, substantially_addressed_threshold, max_cost_usd,
+        warn_cost_usd, context_files, gemini_safety_settings}. Triage output in result.output["triage"].
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+        description: "ArchitecturalReviewLogWorkflow with automated triage + two-tier prompt steering"
+      - type: test
+        ref: tests/unit/test_architectural_review_triage.py
+        description: "64 unit tests covering triage helpers, area coverage, prompt priority, integration"
+      - type: test
+        ref: tests/unit/test_gemini_safety_filter.py
+        description: "29 tests for Gemini SAFETY retry, validation retry, code fence stripping"
 
   # ============================================================================
   # PHASE 1 CAPABILITIES (Foundation - Beta)
@@ -1158,13 +1221,13 @@ risk_flags:
 # ==============================================================================
 
 summary:
-  total_capabilities: 38
+  total_capabilities: 40
   by_maturity:
-    stable: 24
-    beta: 3
+    stable: 25
+    beta: 4
     draft: 11
   by_phase:
-    delivered: 27  # stable + beta
+    delivered: 28  # stable + beta
     phase_1: 4     # auto_validate, search, assertions, async_audit
     phase_2: 5     # retry, mixed_steps, conditional, parallel, compose
     phase_3: 3     # dry_run, otel, visualize
@@ -1179,6 +1242,16 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "2.3.0"
+    date: "2026-02-09"
+    changes:
+      - "Added startd8.workflow.builtin.architectural_review_log: multi-agent review with automated triage, two-tier prompt steering, area coverage tracking (stable)"
+      - "Total capabilities: 40 (was 39)"
+  - version: "2.2.0"
+    date: "2026-02-09"
+    changes:
+      - "Added startd8.workflow.builtin.plan_ingestion: 5-phase plan ingestion workflow (beta)"
+      - "Total capabilities: 39 (was 38)"
   - version: "2.1.1"
     date: "2026-02-08"
     changes:
