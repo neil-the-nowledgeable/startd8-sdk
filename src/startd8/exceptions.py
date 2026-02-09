@@ -68,6 +68,36 @@ class AgentError(Startd8Error):
         self.original_error = original_error
 
 
+class GeminiSafetyFilterError(APIError):
+    """Gemini refused to generate due to content safety filter.
+
+    Raised when finish_reason is SAFETY, indicating the prompt or expected
+    response tripped Gemini's content classifier.  This is distinct from
+    rate-limit or server errors and may be recoverable by reducing context
+    or adjusting safety_settings.
+
+    Attributes:
+        prompt_tokens: Approximate input token count of the blocked prompt.
+        safety_ratings: Raw safety ratings from the Gemini response, if available.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        provider: str = "gemini",
+        prompt_tokens: int = None,
+        safety_ratings: list = None,
+        original_error: Exception = None,
+    ):
+        super().__init__(
+            message,
+            provider=provider,
+            original_error=original_error,
+        )
+        self.prompt_tokens = prompt_tokens
+        self.safety_ratings = safety_ratings or []
+
+
 class TruncationError(Startd8Error):
     """
     Exception raised when a response is detected as truncated.

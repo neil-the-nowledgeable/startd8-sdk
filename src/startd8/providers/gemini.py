@@ -246,7 +246,8 @@ class GeminiProvider:
                 max_tokens=config.get('max_tokens', 16384),  # Increased from 4096 to prevent truncation
                 temperature=config.get('temperature', 0.7),
                 cost_tracker=config.get('cost_tracker'),
-                budget_manager=config.get('budget_manager')
+                budget_manager=config.get('budget_manager'),
+                safety_settings=config.get('safety_settings'),
             )
         except ImportError as e:
             # Provide helpful installation instructions

@@ -118,6 +118,7 @@ from .exceptions import (
     APIError,
     ConfigurationError,
     AgentError,
+    GeminiSafetyFilterError,
 )
 from .logging_config import get_logger, setup_logging, correlation_id
 from .events import EventBus, Event, EventType, EventPriority
