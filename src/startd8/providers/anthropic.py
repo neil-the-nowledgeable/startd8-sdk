@@ -18,8 +18,10 @@ class AnthropicProvider:
     
     # Official Claude models (hardcoded baseline)
     HARDCODED_MODELS = [
-        # Claude 4.5 family (Latest - November 2025)
-        "claude-opus-4-5-20251101",   # Claude Opus 4.5 - most intelligent model
+        # Claude 4.6 family (Latest - February 2026)
+        "claude-opus-4-6",            # Claude Opus 4.6 - most intelligent model
+        # Claude 4.5 family (November 2025)
+        "claude-opus-4-5-20251101",   # Claude Opus 4.5
         "claude-sonnet-4-5-20250927", # Claude Sonnet 4.5 - best for complex agents/coding
         "claude-haiku-4-5-20251008",  # Claude Haiku 4.5 - fastest with near-frontier performance
         # Claude 4.x family
@@ -226,7 +228,11 @@ class AnthropicProvider:
             api_key=config.get('api_key'),
             max_tokens=config.get('max_tokens', 16384),  # Claude 4.5 supports up to 64K output tokens
             cost_tracker=config.get('cost_tracker'),
-            budget_manager=config.get('budget_manager')
+            budget_manager=config.get('budget_manager'),
+            timeout_config=config.get('timeout_config'),
+            retry_config=config.get('retry_config'),
+            enable_retry=config.get('enable_retry', False),
+            use_connection_pool=config.get('use_connection_pool', False),
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:

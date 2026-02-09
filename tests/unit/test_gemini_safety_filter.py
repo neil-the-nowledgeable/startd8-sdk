@@ -445,7 +445,7 @@ class TestArchitecturalReviewSafetyRetry:
         assert "Important lesson here" not in retry_prompt
 
     def test_relaxed_safety_settings_applied_on_second_retry(self, tmp_path):
-        """On second SAFETY retry, agent.safety_settings should be set to RELAXED."""
+        """On second SAFETY retry, relaxed settings are applied during the call then restored."""
         from startd8.workflows.builtin.architectural_review_log_workflow import (
             ArchitecturalReviewLogWorkflow,
             RELAXED_SAFETY_SETTINGS,
@@ -457,13 +457,27 @@ class TestArchitecturalReviewSafetyRetry:
         snippet = self._make_valid_snippet(1)
         token_usage = TokenUsage(input=100, output=50, total=150, model_name="gemini-2.5-pro")
 
+        # Track what safety_settings were active when generate() was called
+        settings_during_calls = []
+
         agent = self._make_mock_agent()
-        # First two calls raise SAFETY, third succeeds
-        agent.generate.side_effect = [
+        original_side_effects = [
             GeminiSafetyFilterError("blocked"),
             GeminiSafetyFilterError("blocked again"),
             (snippet, 500, token_usage),
         ]
+        call_idx = 0
+
+        def _capture_and_dispatch(prompt):
+            nonlocal call_idx
+            settings_during_calls.append(agent.safety_settings)
+            effect = original_side_effects[call_idx]
+            call_idx += 1
+            if isinstance(effect, Exception):
+                raise effect
+            return effect
+
+        agent.generate = _capture_and_dispatch
 
         workflow = ArchitecturalReviewLogWorkflow()
         result = workflow._execute(
@@ -473,8 +487,10 @@ class TestArchitecturalReviewSafetyRetry:
         )
 
         assert result.success is True
-        # After second SAFETY, relaxed settings should have been applied
-        assert agent.safety_settings == RELAXED_SAFETY_SETTINGS
+        # Third call (the successful one) should have had RELAXED settings active
+        assert settings_during_calls[2] == RELAXED_SAFETY_SETTINGS
+        # After completion, original settings should be restored
+        assert agent.safety_settings is None
 
     def test_gemini_safety_settings_from_config(self, tmp_path):
         """gemini_safety_settings config should be applied to Gemini agents before execution."""

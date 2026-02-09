@@ -200,7 +200,7 @@ class GeminiAgent(BaseAgent):
             config_kwargs["safety_settings"] = self.safety_settings
         generation_config = genai_types.GenerateContentConfig(**config_kwargs)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             lambda: self.client.models.generate_content(
@@ -224,7 +224,8 @@ class GeminiAgent(BaseAgent):
             Tuple of (response_text, response_time_ms, token_usage)
 
         Raises:
-            RuntimeError: If Gemini API call fails
+            GeminiSafetyFilterError: If Gemini's content safety filter blocks the response
+            RuntimeError: If Gemini API call fails for other reasons
             APIError: For API errors
             RetryError: If all retry attempts are exhausted (when retry enabled)
         """

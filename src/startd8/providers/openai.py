@@ -246,7 +246,11 @@ class OpenAIProvider:
             api_key=config.get('api_key'),
             max_tokens=config.get('max_tokens', 16384),
             cost_tracker=config.get('cost_tracker'),
-            budget_manager=config.get('budget_manager')
+            budget_manager=config.get('budget_manager'),
+            timeout_config=config.get('timeout_config'),
+            retry_config=config.get('retry_config'),
+            enable_retry=config.get('enable_retry', False),
+            use_connection_pool=config.get('use_connection_pool', False),
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:
@@ -357,7 +361,11 @@ class OllamaProvider:
             base_url=base_url,
             max_tokens=config.get('max_tokens', 4096),
             cost_tracker=config.get('cost_tracker'),
-            budget_manager=config.get('budget_manager')
+            budget_manager=config.get('budget_manager'),
+            timeout_config=config.get('timeout_config'),
+            retry_config=config.get('retry_config'),
+            enable_retry=config.get('enable_retry', False),
+            use_connection_pool=config.get('use_connection_pool', False),
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:

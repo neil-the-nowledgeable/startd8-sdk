@@ -11,6 +11,7 @@ This workflow is a strategic variation of doc-review-log:
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -33,8 +34,6 @@ from ...model_catalog import Models, list_models_by_tier
 from ...utils.agent_resolution import resolve_agents
 from ...utils.file_operations import FileLock, atomic_write, atomic_write_json
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
-
-import logging
 
 _logger = logging.getLogger(__name__)
 
@@ -691,9 +690,13 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     # Attempt 2: retry with relaxed safety_settings + reduced prompt
                     # Both failures → skip this reviewer, continue to next round
                     _logger.warning(
-                        "Gemini SAFETY filter hit for R%d (%s); attempting reduced-context retry",
+                        "Gemini SAFETY filter hit for R%d (%s); "
+                        "prompt_tokens=%s, safety_ratings=%s; "
+                        "attempting reduced-context retry",
                         round_number,
                         reviewer_label,
+                        safety_err.prompt_tokens,
+                        safety_err.safety_ratings,
                     )
                     self._emit_progress(
                         on_progress, i, total_rounds,
@@ -715,7 +718,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     try:
                         response_text, time_ms, token_usage = agent.generate(reduced_prompt)
                     except GeminiSafetyFilterError:
-                        # Attempt 2: rebuild agent with relaxed safety_settings
+                        # Attempt 2: temporarily apply relaxed safety_settings
                         _logger.warning(
                             "Reduced-context retry still blocked; retrying with relaxed safety_settings",
                         )
@@ -723,11 +726,12 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             on_progress, i, total_rounds,
                             f"R{round_number}: retrying with relaxed safety settings",
                         )
+                        original_safety = getattr(agent, "safety_settings", None)
                         try:
                             if _is_gemini_agent(agent):
                                 agent.safety_settings = RELAXED_SAFETY_SETTINGS
                             response_text, time_ms, token_usage = agent.generate(reduced_prompt)
-                        except (GeminiSafetyFilterError, Exception) as e3:
+                        except Exception as e3:
                             # Give up on this reviewer, continue to next
                             _logger.warning(
                                 "Gemini SAFETY retry exhausted for R%d; skipping reviewer",
@@ -750,6 +754,10 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 )
                             )
                             continue  # ← skip, don't break — let remaining reviewers run
+                        finally:
+                            # Restore original settings so they don't leak to later operations
+                            if _is_gemini_agent(agent):
+                                agent.safety_settings = original_safety
 
                 except Exception as e:
                     # If OpenAI model is unavailable, retry once with a fallback model
