@@ -407,11 +407,13 @@ class TestPromptTemplates:
         """Test spec prompt template can be formatted."""
         prompt = SPEC_PROMPT_TEMPLATE.format(
             task_description="Implement feature X",
-            context="Context info"
+            context="Context info",
+            domain_constraints="(No domain-specific constraints)",
         )
         assert "Implement feature X" in prompt
         assert "Context info" in prompt
         assert "Implementation Specification" not in prompt  # That's in draft prompt
+        assert "Domain Constraints" in prompt
 
     def test_draft_prompt_template_format(self):
         """Test draft prompt template can be formatted."""

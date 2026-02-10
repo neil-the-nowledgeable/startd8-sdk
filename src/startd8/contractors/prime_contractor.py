@@ -104,6 +104,8 @@ class PrimeContractorWorkflow:
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
         self._pre_integration_snapshots: Dict[str, Optional[Path]] = {}
+        self._domain_checklist = None  # lazy-init DomainChecklist
+        self._current_enrichment = None  # per-feature enrichment cache
 
     def _rel_display(self, path: Path) -> str:
         """Safe relative path for display, falling back to the full path."""
@@ -383,9 +385,17 @@ class PrimeContractorWorkflow:
         logger.info("Running code generation for '%s'...", feature.name)
         try:
             gen_context: dict = {'feature_name': feature.name}
+            self._current_enrichment = None
             if feature.target_files:
                 gen_context['target_file'] = feature.target_files[0]
-                gen_context['output_constraint'] = 'IMPORTANT: Output a single Python module, NOT a package with multiple files. All classes, enums, and functions must be defined in one file. Do NOT use relative imports (from .module import ...) — everything lives in this file.'
+                # Try domain-aware constraints via DomainChecklist
+                enrichment = self._get_domain_enrichment(feature)
+                if enrichment is not None:
+                    self._current_enrichment = enrichment
+                    gen_context['domain_constraints'] = enrichment.prompt_constraints
+                    logger.info("Domain constraints applied for '%s': %d constraints (domain=%s)", feature.name, len(enrichment.prompt_constraints), enrichment.domain.value, extra={'feature_name': feature.name, 'domain': enrichment.domain.value})
+                else:
+                    gen_context['output_constraint'] = 'IMPORTANT: Output a single Python module, NOT a package with multiple files. All classes, enums, and functions must be defined in one file. Do NOT use relative imports (from .module import ...) — everything lives in this file.'
             if prior_error:
                 gen_context['prior_error_feedback'] = f'CRITICAL: A previous attempt to generate this code FAILED integration checks. You MUST fix the following issues in your output:\n\n{prior_error}\n\nDo NOT repeat these mistakes. Address each error explicitly.'
             result: GenerationResult = self.code_generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
@@ -409,6 +419,24 @@ class PrimeContractorWorkflow:
             logger.error('%s', error_msg, exc_info=True, extra={'feature_name': feature.name})
             self.queue.fail_feature(feature.id, error_msg)
             return False
+
+    def _get_domain_enrichment(self, feature: FeatureSpec):
+        """Lazy-init DomainChecklist and return enrichment for a feature."""
+        if self._domain_checklist is None:
+            try:
+                from .artisan_phases.domain_checklist import DomainChecklist
+                self._domain_checklist = DomainChecklist(project_root=self.project_root)
+            except Exception as exc:
+                logger.debug("DomainChecklist unavailable: %s", exc)
+                self._domain_checklist = False  # sentinel: don't retry
+                return None
+        if self._domain_checklist is False:
+            return None
+        try:
+            return self._domain_checklist.get_enrichment(feature.id, feature.target_files)
+        except Exception as exc:
+            logger.debug("Domain enrichment failed for '%s': %s", feature.name, exc)
+            return None
 
     def integrate_feature(self, feature: FeatureSpec) -> bool:
         """
@@ -436,6 +464,19 @@ class PrimeContractorWorkflow:
                     self.queue.fail_feature(feature.id, error_msg)
                     return False
                 logger.info('Pre-merge validation passed for %s', feature.name, extra={'feature_name': feature.name})
+                # Domain post-validation (if enrichment is available)
+                if self._current_enrichment is not None:
+                    for gen_path in gen_paths:
+                        code = gen_path.read_text(encoding='utf-8')
+                        from .artisan_phases.domain_checklist import validate_generated_code
+                        domain_result = validate_generated_code(code, self._current_enrichment)
+                        if not domain_result.passed:
+                            issue_lines = [f"  - [{iss.validator}] {iss.message}" + (f" (line {iss.line})" if iss.line else "") for iss in domain_result.issues]
+                            error_msg = f"Domain validation failed for {gen_path.name}:\n" + "\n".join(issue_lines)
+                            logger.error('Domain validation failed for %s: %d issues', feature.name, len(domain_result.issues), extra={'feature_name': feature.name})
+                            self.queue.fail_feature(feature.id, error_msg)
+                            return False
+                        logger.info('Domain validation passed for %s', feature.name, extra={'feature_name': feature.name})
         integrated_files = []
         for i, source_file in enumerate(feature.generated_files):
             source_path = Path(source_file)

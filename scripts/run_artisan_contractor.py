@@ -48,6 +48,7 @@ from startd8.contractors.cli_helpers import add_workflow_args, apply_workflow_ar
 from startd8.contractors.generators.lead_contractor import LeadContractorCodeGenerator
 from startd8.contractors.prime_contractor import PrimeContractorWorkflow
 from startd8.contractors.queue import FeatureSpec
+from startd8.utils.prime_task_enrichment import extract_target_files
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -94,12 +95,14 @@ def load_tasks_from_ingestion_yaml(path: Path) -> list[dict]:
     result = []
     for t in tasks:
         config = t.get("config", {})
+        description = config.get("task_description", t.get("title", ""))
+        target_files = extract_target_files(description)
         result.append({
             "id": t["task_id"],
             "name": t["title"],
-            "description": config.get("task_description", t.get("title", "")),
+            "description": description,
             "dependencies": t.get("depends_on", []),
-            "target_files": [],  # Not available in raw format
+            "target_files": target_files,
             "estimated_loc": 0,
             "priority": t.get("priority", "medium"),
             "phase": "",

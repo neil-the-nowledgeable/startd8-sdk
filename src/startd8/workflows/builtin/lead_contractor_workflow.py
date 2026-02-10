@@ -84,6 +84,9 @@ SPEC_PROMPT_TEMPLATE = """You are a senior software architect acting as the Lead
 ## Context
 {context}
 
+## Domain Constraints
+{domain_constraints}
+
 ## Your Role
 Create a detailed implementation specification that a junior developer (or AI model) can follow precisely.
 Be explicit, thorough, and leave no ambiguity.
@@ -762,13 +765,23 @@ class LeadContractorWorkflow(WorkflowBase):
         """Phase 1: Lead creates implementation specification."""
         spec_id = f"spec-{uuid.uuid4().hex[:8]}"
 
+        # Extract domain constraints before serialising the rest of context
+        raw_constraints = context.pop("domain_constraints", None)
+        if raw_constraints and isinstance(raw_constraints, list):
+            domain_constraints_str = "\n".join(f"- {c}" for c in raw_constraints)
+        elif raw_constraints and isinstance(raw_constraints, str):
+            domain_constraints_str = raw_constraints
+        else:
+            domain_constraints_str = "(No domain-specific constraints)"
+
         context_str = json.dumps(context, indent=2) if context else "No additional context provided."
         if output_format:
             context_str += f"\n\nExpected Output Format:\n{output_format}"
 
         prompt = SPEC_PROMPT_TEMPLATE.format(
             task_description=task_description,
-            context=context_str
+            context=context_str,
+            domain_constraints=domain_constraints_str,
         )
 
         response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
@@ -1303,13 +1316,23 @@ class LeadContractorWorkflow(WorkflowBase):
         """Phase 1 (async): Lead creates implementation specification."""
         spec_id = f"spec-{uuid.uuid4().hex[:8]}"
 
+        # Extract domain constraints before serialising the rest of context
+        raw_constraints = context.pop("domain_constraints", None)
+        if raw_constraints and isinstance(raw_constraints, list):
+            domain_constraints_str = "\n".join(f"- {c}" for c in raw_constraints)
+        elif raw_constraints and isinstance(raw_constraints, str):
+            domain_constraints_str = raw_constraints
+        else:
+            domain_constraints_str = "(No domain-specific constraints)"
+
         context_str = json.dumps(context, indent=2) if context else "No additional context provided."
         if output_format:
             context_str += f"\n\nExpected Output Format:\n{output_format}"
 
         prompt = SPEC_PROMPT_TEMPLATE.format(
             task_description=task_description,
-            context=context_str
+            context=context_str,
+            domain_constraints=domain_constraints_str,
         )
 
         response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
