@@ -16,6 +16,7 @@ __all__ = [
     "ParsedFeature",
     "ParsedPlan",
     "ComplexityScore",
+    "ArtisanContextSeed",
     "IngestionState",
     "PlanIngestionResult",
 ]
@@ -65,6 +66,27 @@ class ParsedPlan:
     output_tokens: int = 0
     cost: float = 0.0
 
+    def to_seed_dict(self) -> Dict[str, Any]:
+        """Serialize to a plain dict for the artisan context seed."""
+        return {
+            "title": self.title,
+            "goals": list(self.goals),
+            "features": [
+                {
+                    "feature_id": f.feature_id,
+                    "name": f.name,
+                    "description": f.description,
+                    "target_files": list(f.target_files),
+                    "dependencies": list(f.dependencies),
+                    "estimated_loc": f.estimated_loc,
+                    "labels": list(f.labels),
+                }
+                for f in self.features
+            ],
+            "dependency_graph": dict(self.dependency_graph),
+            "mentioned_files": list(self.mentioned_files),
+        }
+
 
 @dataclass
 class ComplexityScore:
@@ -88,6 +110,48 @@ class ComplexityScore:
     output_tokens: int = 0
     cost: float = 0.0
 
+    def to_seed_dict(self) -> Dict[str, Any]:
+        """Serialize to a plain dict for the artisan context seed."""
+        return {
+            "composite": self.composite,
+            "dimensions": {
+                "feature_count": self.feature_count,
+                "cross_file_deps": self.cross_file_deps,
+                "api_surface": self.api_surface,
+                "test_complexity": self.test_complexity,
+                "integration_depth": self.integration_depth,
+                "domain_novelty": self.domain_novelty,
+                "ambiguity": self.ambiguity,
+            },
+            "reasoning": self.reasoning,
+            "route": self.route.value if self.route else None,
+        }
+
+
+@dataclass
+class ArtisanContextSeed:
+    """Structured context seed for the ArtisanContractor pipeline."""
+    version: str = "1.0.0"
+    generated_at: str = ""
+    generator: str = "plan-ingestion"
+    plan: Optional[Dict[str, Any]] = None
+    complexity: Optional[Dict[str, Any]] = None
+    tasks: List[Dict[str, Any]] = field(default_factory=list)
+    artifacts: Dict[str, str] = field(default_factory=dict)
+    ingestion_metrics: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "version": self.version,
+            "generated_at": self.generated_at,
+            "generator": self.generator,
+            "plan": self.plan,
+            "complexity": self.complexity,
+            "tasks": list(self.tasks),
+            "artifacts": dict(self.artifacts),
+            "ingestion_metrics": dict(self.ingestion_metrics),
+        }
+
 
 @dataclass
 class IngestionState:
@@ -98,6 +162,7 @@ class IngestionState:
     route: Optional[ContractorRoute] = None
     plan_document_path: Optional[str] = None
     review_config_path: Optional[str] = None
+    context_seed_path: Optional[str] = None
     total_cost: float = 0.0
     error: Optional[str] = None
 
@@ -107,6 +172,7 @@ class IngestionState:
             "route": self.route.value if self.route else None,
             "plan_document_path": self.plan_document_path,
             "review_config_path": self.review_config_path,
+            "context_seed_path": self.context_seed_path,
             "total_cost": self.total_cost,
             "error": self.error,
         }

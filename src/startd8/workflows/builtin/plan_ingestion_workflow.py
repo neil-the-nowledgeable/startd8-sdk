@@ -34,6 +34,7 @@ from ...utils.file_operations import atomic_write, atomic_write_json
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
 from .plan_ingestion_models import (
+    ArtisanContextSeed,
     ComplexityScore,
     ContractorRoute,
     IngestionPhase,
@@ -675,6 +676,81 @@ class PlanIngestionWorkflow(WorkflowBase):
         return rounds_completed, refine_steps, review_cost
 
     # ------------------------------------------------------------------
+    # Artisan context seed helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _estimate_story_points(estimated_loc: int) -> int:
+        """Map estimated LOC to story points."""
+        if estimated_loc <= 20:
+            return 1
+        if estimated_loc <= 50:
+            return 2
+        if estimated_loc <= 100:
+            return 3
+        if estimated_loc <= 200:
+            return 5
+        return 8
+
+    @staticmethod
+    def _derive_tasks_from_features(
+        features: List[ParsedFeature],
+        dependency_graph: Dict[str, List[str]],
+    ) -> List[Dict[str, Any]]:
+        """Convert ParsedFeatures into task dicts matching prime-route schema."""
+        # Build a mapping from feature_id to task_id
+        fid_to_tid: Dict[str, str] = {}
+        for idx, feat in enumerate(features, start=1):
+            fid_to_tid[feat.feature_id] = f"PI-{idx:03d}"
+
+        tasks: List[Dict[str, Any]] = []
+        for idx, feat in enumerate(features, start=1):
+            tid = fid_to_tid[feat.feature_id]
+            sp = PlanIngestionWorkflow._estimate_story_points(feat.estimated_loc)
+
+            # Resolve dependency feature IDs → task IDs
+            deps = []
+            for dep_fid in feat.dependencies:
+                dep_tid = fid_to_tid.get(dep_fid)
+                if dep_tid:
+                    deps.append(dep_tid)
+
+            # Also include edges from the dependency graph
+            for dep_fid in dependency_graph.get(feat.feature_id, []):
+                dep_tid = fid_to_tid.get(dep_fid)
+                if dep_tid and dep_tid not in deps:
+                    deps.append(dep_tid)
+
+            # Priority: first third high, second third medium, rest low
+            third = max(len(features) // 3, 1)
+            if idx <= third:
+                priority = "high"
+            elif idx <= 2 * third:
+                priority = "medium"
+            else:
+                priority = "low"
+
+            tasks.append({
+                "task_id": tid,
+                "title": feat.name,
+                "task_type": "task",
+                "story_points": sp,
+                "priority": priority,
+                "labels": list(feat.labels),
+                "depends_on": deps,
+                "config": {
+                    "task_description": feat.description,
+                    "context": {
+                        "feature_id": feat.feature_id,
+                        "target_files": list(feat.target_files),
+                        "estimated_loc": feat.estimated_loc,
+                    },
+                },
+            })
+
+        return tasks
+
+    # ------------------------------------------------------------------
     # Phase: EMIT
     # ------------------------------------------------------------------
 
@@ -690,7 +766,9 @@ class PlanIngestionWorkflow(WorkflowBase):
         context_files: Optional[List[str]],
         warn_cost_usd: Optional[float],
         max_cost_usd: Optional[float],
-    ) -> Tuple[Path, dict]:
+        parsed_plan: Optional[ParsedPlan] = None,
+        step_costs: Optional[Dict[str, float]] = None,
+    ) -> Tuple[Path, dict, Optional[Path]]:
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
             "quality_tier": review_quality_tier,
@@ -718,7 +796,36 @@ class PlanIngestionWorkflow(WorkflowBase):
         config_path = output_dir / "review-config.json"
         atomic_write_json(config_path, review_config, indent=2)
 
-        return config_path, review_config
+        # Artisan route: also emit context seed JSON
+        context_seed_path: Optional[Path] = None
+        if route == ContractorRoute.ARTISAN and parsed_plan is not None:
+            costs = step_costs or {}
+            total_cost = sum(costs.values())
+
+            tasks = self._derive_tasks_from_features(
+                parsed_plan.features,
+                parsed_plan.dependency_graph,
+            )
+
+            seed = ArtisanContextSeed(
+                generated_at=datetime.now(timezone.utc).isoformat(),
+                plan=parsed_plan.to_seed_dict(),
+                complexity=complexity.to_seed_dict(),
+                tasks=tasks,
+                artifacts={
+                    "plan_document_path": str(doc_path),
+                    "review_config_path": str(config_path),
+                },
+                ingestion_metrics={
+                    **{f"{k}_cost": v for k, v in costs.items()},
+                    "total_cost": total_cost,
+                },
+            )
+
+            context_seed_path = output_dir / "artisan-context-seed.json"
+            atomic_write_json(context_seed_path, seed.to_dict(), indent=2)
+
+        return config_path, review_config, context_seed_path
 
     # ------------------------------------------------------------------
     # Main execution
@@ -795,6 +902,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         try:
             # Read plan
             plan_text = plan_path.read_text(encoding="utf-8")
+            step_costs: Dict[str, float] = {}
 
             # --- PARSE ---
             progress("Parsing plan")
@@ -804,6 +912,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             parsed_plan, parse_step = self._phase_parse(plan_text, assessor)
             steps.append(parse_step)
             state.total_cost += parse_step.cost
+            step_costs["parse"] = parse_step.cost
             if parse_step.error:
                 return _fail(parse_step.error)
             state.parsed_plan = parsed_plan
@@ -825,6 +934,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
             steps.append(assess_step)
             state.total_cost += assess_step.cost
+            step_costs["assess"] = assess_step.cost
             if assess_step.error:
                 return _fail(assess_step.error)
             state.complexity = complexity
@@ -854,6 +964,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
             steps.append(transform_step)
             state.total_cost += transform_step.cost
+            step_costs["transform"] = transform_step.cost
             if transform_step.error:
                 return _fail(transform_step.error)
             state.plan_document_path = str(doc_path)
@@ -877,6 +988,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
             steps.extend(refine_steps)
             state.total_cost += refine_cost
+            step_costs["refine"] = refine_cost
 
             cost_err = _check_cost("refine")
             if cost_err:
@@ -886,16 +998,23 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Emitting review config")
             state.current_phase = IngestionPhase.EMIT
 
-            config_path, review_config_data = self._phase_emit(
+            config_path, review_config_data, context_seed_path = self._phase_emit(
                 doc_path, route, complexity, output_dir,
                 review_rounds, review_quality_tier, scope, context_files,
                 warn_cost_usd, max_cost_usd,
+                parsed_plan=parsed_plan,
+                step_costs=step_costs,
             )
             state.review_config_path = str(config_path)
+            if context_seed_path is not None:
+                state.context_seed_path = str(context_seed_path)
 
+            emit_output = f"Wrote {config_path}"
+            if context_seed_path is not None:
+                emit_output += f", {context_seed_path}"
             emit_step = StepResult(
                 step_name="emit",
-                output=f"Wrote {config_path}",
+                output=emit_output,
             )
             steps.append(emit_step)
 
@@ -908,16 +1027,20 @@ class PlanIngestionWorkflow(WorkflowBase):
             completed_at = datetime.now(timezone.utc)
             total_ms = int((completed_at - started_at).total_seconds() * 1000)
 
+            output: Dict[str, Any] = {
+                "route": route.value,
+                "plan_document_path": str(doc_path),
+                "review_config_path": str(config_path),
+                "complexity_score": complexity.composite,
+                "refine_rounds_completed": rounds_completed,
+            }
+            if context_seed_path is not None:
+                output["context_seed_path"] = str(context_seed_path)
+
             return WorkflowResult(
                 workflow_id=self.metadata.workflow_id,
                 success=True,
-                output={
-                    "route": route.value,
-                    "plan_document_path": str(doc_path),
-                    "review_config_path": str(config_path),
-                    "complexity_score": complexity.composite,
-                    "refine_rounds_completed": rounds_completed,
-                },
+                output=output,
                 metrics=WorkflowMetrics(
                     total_time_ms=total_ms,
                     input_tokens=sum(s.input_tokens for s in steps),

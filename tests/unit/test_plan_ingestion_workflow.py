@@ -12,6 +12,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from startd8.workflows.builtin.plan_ingestion_models import (
+    ArtisanContextSeed,
     ComplexityScore,
     ContractorRoute,
     IngestionPhase,
@@ -606,7 +607,7 @@ class TestEmitPhase:
         doc_path.write_text("# Plan")
         complexity = ComplexityScore(composite=45, reasoning="Medium")
 
-        config_path, data = self.wf._phase_emit(
+        config_path, data, _ = self.wf._phase_emit(
             doc_path,
             ContractorRoute.ARTISAN,
             complexity,
@@ -636,7 +637,7 @@ class TestEmitPhase:
         doc_path.write_text("project: {}")
         complexity = ComplexityScore(composite=20)
 
-        config_path, data = self.wf._phase_emit(
+        config_path, data, _ = self.wf._phase_emit(
             doc_path,
             ContractorRoute.PRIME,
             complexity,
@@ -933,3 +934,419 @@ class TestEndToEnd:
         state = json.loads(state_file.read_text())
         assert state["current_phase"] == "failed"
         assert state["error"] is not None
+
+
+# ---------------------------------------------------------------------------
+# TestArtisanContextSeed
+# ---------------------------------------------------------------------------
+
+class TestArtisanContextSeed:
+    def test_defaults(self):
+        seed = ArtisanContextSeed()
+        assert seed.version == "1.0.0"
+        assert seed.generator == "plan-ingestion"
+        assert seed.tasks == []
+        assert seed.artifacts == {}
+
+    def test_to_dict_roundtrip(self):
+        seed = ArtisanContextSeed(
+            generated_at="2026-02-10T12:00:00Z",
+            plan={"title": "Test"},
+            complexity={"composite": 65},
+            tasks=[{"task_id": "PI-001", "title": "Do stuff"}],
+            artifacts={"plan_document_path": "/tmp/plan.md"},
+            ingestion_metrics={"parse_cost": 0.01, "total_cost": 0.01},
+        )
+        d = seed.to_dict()
+        assert d["version"] == "1.0.0"
+        assert d["generated_at"] == "2026-02-10T12:00:00Z"
+        assert d["plan"]["title"] == "Test"
+        assert d["complexity"]["composite"] == 65
+        assert len(d["tasks"]) == 1
+        assert d["tasks"][0]["task_id"] == "PI-001"
+        assert d["artifacts"]["plan_document_path"] == "/tmp/plan.md"
+        assert d["ingestion_metrics"]["total_cost"] == 0.01
+
+    def test_to_dict_is_json_serializable(self):
+        seed = ArtisanContextSeed(
+            plan={"title": "T"},
+            tasks=[{"id": 1}],
+        )
+        text = json.dumps(seed.to_dict())
+        assert "T" in text
+
+
+# ---------------------------------------------------------------------------
+# TestParsedPlanToSeedDict
+# ---------------------------------------------------------------------------
+
+class TestParsedPlanToSeedDict:
+    def test_basic_serialization(self):
+        plan = ParsedPlan(
+            title="My Plan",
+            goals=["G1", "G2"],
+            features=[
+                ParsedFeature(
+                    feature_id="F-001",
+                    name="Feat 1",
+                    description="Do things",
+                    target_files=["a.py"],
+                    dependencies=["F-002"],
+                    estimated_loc=50,
+                    labels=["core"],
+                ),
+            ],
+            dependency_graph={"F-001": ["F-002"]},
+            mentioned_files=["a.py", "b.py"],
+        )
+        d = plan.to_seed_dict()
+        assert d["title"] == "My Plan"
+        assert d["goals"] == ["G1", "G2"]
+        assert len(d["features"]) == 1
+        assert d["features"][0]["feature_id"] == "F-001"
+        assert d["features"][0]["target_files"] == ["a.py"]
+        assert d["dependency_graph"] == {"F-001": ["F-002"]}
+        assert d["mentioned_files"] == ["a.py", "b.py"]
+
+    def test_excludes_llm_metrics(self):
+        plan = ParsedPlan(
+            title="T", input_tokens=500, output_tokens=200, cost=0.05,
+        )
+        d = plan.to_seed_dict()
+        assert "input_tokens" not in d
+        assert "output_tokens" not in d
+        assert "cost" not in d
+        assert "raw_text" not in d
+
+
+# ---------------------------------------------------------------------------
+# TestComplexityScoreToSeedDict
+# ---------------------------------------------------------------------------
+
+class TestComplexityScoreToSeedDict:
+    def test_basic_serialization(self):
+        score = ComplexityScore(
+            feature_count=60,
+            cross_file_deps=55,
+            api_surface=50,
+            test_complexity=65,
+            integration_depth=70,
+            domain_novelty=50,
+            ambiguity=55,
+            composite=65,
+            reasoning="Complex",
+            route=ContractorRoute.ARTISAN,
+        )
+        d = score.to_seed_dict()
+        assert d["composite"] == 65
+        assert d["dimensions"]["feature_count"] == 60
+        assert d["dimensions"]["ambiguity"] == 55
+        assert d["reasoning"] == "Complex"
+        assert d["route"] == "artisan"
+
+    def test_none_route(self):
+        score = ComplexityScore()
+        d = score.to_seed_dict()
+        assert d["route"] is None
+
+    def test_excludes_llm_metrics(self):
+        score = ComplexityScore(input_tokens=100, output_tokens=50, cost=0.02)
+        d = score.to_seed_dict()
+        assert "input_tokens" not in d
+        assert "cost" not in d
+
+
+# ---------------------------------------------------------------------------
+# TestEstimateStoryPoints
+# ---------------------------------------------------------------------------
+
+class TestEstimateStoryPoints:
+    def test_thresholds(self):
+        sp = PlanIngestionWorkflow._estimate_story_points
+        assert sp(0) == 1
+        assert sp(10) == 1
+        assert sp(20) == 1
+        assert sp(21) == 2
+        assert sp(50) == 2
+        assert sp(51) == 3
+        assert sp(100) == 3
+        assert sp(101) == 5
+        assert sp(200) == 5
+        assert sp(201) == 8
+        assert sp(1000) == 8
+
+
+# ---------------------------------------------------------------------------
+# TestDeriveTasksFromFeatures
+# ---------------------------------------------------------------------------
+
+class TestDeriveTasksFromFeatures:
+    def test_basic_derivation(self):
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Core",
+                description="Core impl", target_files=["a.py"],
+                estimated_loc=50, labels=["core"],
+            ),
+            ParsedFeature(
+                feature_id="F-002", name="Tests",
+                description="Test impl", target_files=["test_a.py"],
+                dependencies=["F-001"], estimated_loc=30,
+                labels=["tests"],
+            ),
+        ]
+        dep_graph = {"F-002": ["F-001"]}
+
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, dep_graph)
+
+        assert len(tasks) == 2
+        assert tasks[0]["task_id"] == "PI-001"
+        assert tasks[0]["title"] == "Core"
+        assert tasks[0]["story_points"] == 2  # 50 LOC → 2
+        assert tasks[0]["depends_on"] == []
+
+        assert tasks[1]["task_id"] == "PI-002"
+        assert tasks[1]["title"] == "Tests"
+        assert tasks[1]["story_points"] == 2  # 30 LOC → 2
+        assert "PI-001" in tasks[1]["depends_on"]
+
+    def test_dependency_deduplication(self):
+        """If both feature.dependencies and dep_graph point to same dep, no dupes."""
+        features = [
+            ParsedFeature(feature_id="F-001", name="A"),
+            ParsedFeature(feature_id="F-002", name="B", dependencies=["F-001"]),
+        ]
+        dep_graph = {"F-002": ["F-001"]}
+
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, dep_graph)
+        assert tasks[1]["depends_on"] == ["PI-001"]
+
+    def test_unknown_dep_skipped(self):
+        features = [
+            ParsedFeature(feature_id="F-001", name="A", dependencies=["F-999"]),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        assert tasks[0]["depends_on"] == []
+
+    def test_priority_assignment(self):
+        features = [
+            ParsedFeature(feature_id=f"F-{i:03d}", name=f"F{i}")
+            for i in range(1, 10)
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        priorities = [t["priority"] for t in tasks]
+        # First third (3) = high, second third (3) = medium, rest (3) = low
+        assert priorities[:3] == ["high", "high", "high"]
+        assert priorities[3:6] == ["medium", "medium", "medium"]
+        assert priorities[6:] == ["low", "low", "low"]
+
+    def test_config_context(self):
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="X",
+                description="Do X", target_files=["x.py"],
+                estimated_loc=150,
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        cfg = tasks[0]["config"]
+        assert cfg["task_description"] == "Do X"
+        assert cfg["context"]["feature_id"] == "F-001"
+        assert cfg["context"]["target_files"] == ["x.py"]
+        assert cfg["context"]["estimated_loc"] == 150
+
+
+# ---------------------------------------------------------------------------
+# TestEmitPhaseArtisanRoute
+# ---------------------------------------------------------------------------
+
+class TestEmitPhaseArtisanRoute:
+    def setup_method(self):
+        self.wf = PlanIngestionWorkflow()
+
+    def test_artisan_emits_context_seed(self, tmp_path):
+        doc_path = tmp_path / "PLAN-ingested.md"
+        doc_path.write_text("# Plan")
+        complexity = ComplexityScore(
+            composite=65, reasoning="Complex",
+            route=ContractorRoute.ARTISAN,
+        )
+        parsed_plan = ParsedPlan(
+            title="Test Plan",
+            goals=["G1"],
+            features=[
+                ParsedFeature(
+                    feature_id="F-001", name="Feat",
+                    description="Do it", target_files=["a.py"],
+                    estimated_loc=80, labels=["core"],
+                ),
+            ],
+            dependency_graph={},
+            mentioned_files=["a.py"],
+        )
+
+        config_path, _, seed_path = self.wf._phase_emit(
+            doc_path, ContractorRoute.ARTISAN, complexity, tmp_path,
+            review_rounds=2, review_quality_tier="flagship",
+            scope=None, context_files=None,
+            warn_cost_usd=None, max_cost_usd=None,
+            parsed_plan=parsed_plan,
+            step_costs={"parse": 0.01, "assess": 0.02, "transform": 0.10},
+        )
+
+        assert seed_path is not None
+        assert seed_path.name == "artisan-context-seed.json"
+        assert seed_path.exists()
+
+        data = json.loads(seed_path.read_text())
+        assert data["version"] == "1.0.0"
+        assert data["generator"] == "plan-ingestion"
+        assert data["plan"]["title"] == "Test Plan"
+        assert data["complexity"]["composite"] == 65
+        assert len(data["tasks"]) == 1
+        assert data["tasks"][0]["task_id"] == "PI-001"
+        assert data["artifacts"]["plan_document_path"] == str(doc_path)
+        assert data["ingestion_metrics"]["parse_cost"] == 0.01
+        assert data["ingestion_metrics"]["total_cost"] == pytest.approx(0.13)
+
+    def test_prime_does_not_emit_context_seed(self, tmp_path):
+        doc_path = tmp_path / "plan-ingestion-tasks.yaml"
+        doc_path.write_text("project: {}")
+        complexity = ComplexityScore(composite=20, route=ContractorRoute.PRIME)
+        parsed_plan = ParsedPlan(title="Simple", features=[])
+
+        config_path, _, seed_path = self.wf._phase_emit(
+            doc_path, ContractorRoute.PRIME, complexity, tmp_path,
+            review_rounds=1, review_quality_tier="flagship",
+            scope=None, context_files=None,
+            warn_cost_usd=None, max_cost_usd=None,
+            parsed_plan=parsed_plan,
+        )
+
+        assert seed_path is None
+        assert not (tmp_path / "artisan-context-seed.json").exists()
+
+    def test_artisan_without_parsed_plan_skips_seed(self, tmp_path):
+        doc_path = tmp_path / "PLAN-ingested.md"
+        doc_path.write_text("# Plan")
+        complexity = ComplexityScore(
+            composite=65, route=ContractorRoute.ARTISAN,
+        )
+
+        config_path, _, seed_path = self.wf._phase_emit(
+            doc_path, ContractorRoute.ARTISAN, complexity, tmp_path,
+            review_rounds=1, review_quality_tier="flagship",
+            scope=None, context_files=None,
+            warn_cost_usd=None, max_cost_usd=None,
+        )
+
+        assert seed_path is None
+
+
+# ---------------------------------------------------------------------------
+# TestIngestionStateContextSeedPath
+# ---------------------------------------------------------------------------
+
+class TestIngestionStateContextSeedPath:
+    def test_default_is_none(self):
+        state = IngestionState()
+        assert state.context_seed_path is None
+        d = state.to_dict()
+        assert d["context_seed_path"] is None
+
+    def test_set_path(self):
+        state = IngestionState(context_seed_path="/tmp/seed.json")
+        d = state.to_dict()
+        assert d["context_seed_path"] == "/tmp/seed.json"
+
+
+# ---------------------------------------------------------------------------
+# TestEndToEndArtisanContextSeed
+# ---------------------------------------------------------------------------
+
+class TestEndToEndArtisanContextSeed:
+    def setup_method(self):
+        self.wf = PlanIngestionWorkflow()
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_artisan_flow_produces_context_seed(self, mock_resolve, MockReviewWf, tmp_path):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_ARTISAN, cost=0.02),
+            _mock_generate_return(TRANSFORM_MARKDOWN, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.05)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 1,
+        })
+
+        assert result.success
+        assert result.output["route"] == "artisan"
+        assert "context_seed_path" in result.output
+
+        seed_path = Path(result.output["context_seed_path"])
+        assert seed_path.exists()
+        assert seed_path.name == "artisan-context-seed.json"
+
+        data = json.loads(seed_path.read_text())
+        assert data["version"] == "1.0.0"
+        assert data["plan"]["title"] == "My Sample Plan"
+        assert len(data["tasks"]) == 2
+        assert data["tasks"][0]["task_id"] == "PI-001"
+        assert data["tasks"][1]["task_id"] == "PI-002"
+        # F-002 depends on F-001
+        assert "PI-001" in data["tasks"][1]["depends_on"]
+        assert data["complexity"]["composite"] == 65
+        assert data["artifacts"]["plan_document_path"] == str(tmp_path / "PLAN-ingested.md")
+        assert data["ingestion_metrics"]["total_cost"] > 0
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_prime_flow_no_context_seed(self, mock_resolve, MockReviewWf, tmp_path):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.02),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.05)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 1,
+        })
+
+        assert result.success
+        assert result.output["route"] == "prime"
+        assert "context_seed_path" not in result.output
+        assert not (tmp_path / "artisan-context-seed.json").exists()
