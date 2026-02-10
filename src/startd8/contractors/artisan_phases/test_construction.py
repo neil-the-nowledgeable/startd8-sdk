@@ -4,16 +4,34 @@ Test Construction Phase - TDD test generation from design documents.
 This module implements the Test Construction phase of the Artisan contractor
 pattern. It generates pytest test files and implementation stubs from a
 design document, then validates pytest can collect all tests.
+
+Two generation strategies are supported:
+
+1. **Template-based** (default) — mechanical boilerplate from parsed
+   ``ClassSpec``/``FunctionSpec`` objects.  Fast, deterministic, but produces
+   skeleton tests with ``# TODO`` placeholders.
+2. **LLM-driven** (when ``agent_spec`` is provided) — an LLM reads the
+   design document (and optionally implementation code) and produces
+   tests with real assertions, meaningful fixtures, and discovered edge
+   cases.  Falls back to template-based generation on failure.
 """
+
+from __future__ import annotations
 
 import enum
 import logging
 import os
+import re
 import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from startd8.contractors.artisan_phases.design_documentation import (
+        DesignDocument as DesignPhaseDocument,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -150,6 +168,15 @@ class PhaseResult:
     collection_result: Optional[CollectionResult] = None
     errors: List[str] = field(default_factory=list)
     output_dir: Optional[str] = None
+
+    total_cost_usd: float = 0.0
+    """Total LLM cost in USD across all generation calls."""
+
+    total_input_tokens: int = 0
+    """Total input tokens consumed across all generation calls."""
+
+    total_output_tokens: int = 0
+    """Total output tokens generated across all generation calls."""
 
 
 # ============================================================================
@@ -966,19 +993,594 @@ def validate_pytest_collection(
 
 
 # ============================================================================
+# LLM PROMPT TEMPLATES
+# ============================================================================
+
+_LLM_TEST_SYSTEM_PROMPT = """\
+You are an expert Python test engineer. You write thorough, production-quality
+pytest test suites.
+
+Rules:
+- Output ONLY valid Python source code inside a single markdown ```python
+  code fence.
+- Use pytest idioms: fixtures, parametrize, marks, clear AAA structure.
+- Every assertion must test a concrete, meaningful property — never use
+  ``assert result is not None`` as the sole assertion.
+- Include ``import pytest`` and any necessary standard-library imports at the
+  top.
+- Import the module under test with ``from <module_path> import *`` where
+  <module_path> is provided in the spec.
+- Group tests for the same class inside ``class Test<ClassName>:``.
+- Mark async tests with ``@pytest.mark.asyncio``.
+- Provide realistic @pytest.fixture definitions for non-trivial setup.
+- Cover happy-path, error-path (pytest.raises), and edge-case scenarios.
+- Do NOT include implementation stubs — only test code.
+- Do NOT include explanatory prose outside the code fence.
+"""
+
+_LLM_TEST_FROM_DESIGN_PROMPT = """\
+Generate a comprehensive pytest test suite for the following feature.
+
+## Feature: {feature_name}
+
+{feature_description}
+
+## Design Document
+
+{design_content}
+
+## Module Paths
+
+{module_paths}
+
+## Requirements
+
+1. Write tests for every class, method, and function described in the design.
+2. Include meaningful fixtures that construct objects with realistic data.
+3. Discover and test edge cases implied by the design (boundary values,
+   empty inputs, concurrent access, type errors, etc.).
+4. Each test must have at least one concrete assertion beyond ``is not None``.
+5. Group tests by class using ``class Test<ClassName>:`` blocks.
+6. Standalone function tests are top-level ``def test_…()`` functions.
+"""
+
+_LLM_TEST_FROM_IMPL_PROMPT = """\
+Generate a comprehensive pytest test suite that verifies the following
+implementation meets its design specification.
+
+## Feature: {feature_name}
+
+{feature_description}
+
+## Design Document
+
+{design_content}
+
+## Implementation Code
+
+```python
+{implementation_code}
+```
+
+## Module Paths
+
+{module_paths}
+
+## Requirements
+
+1. Write tests that verify the implementation against the design contract.
+2. Test actual return values, side effects, and state changes — not just
+   ``is not None``.
+3. Include fixtures that construct objects matching the implementation's
+   constructor signatures.
+4. Test error paths: feed invalid inputs and assert specific exceptions.
+5. Cover edge cases visible in the implementation (empty collections,
+   boundary values, None parameters, concurrent calls for async code).
+6. Group tests by class using ``class Test<ClassName>:`` blocks.
+"""
+
+_LLM_TEST_RETRY_PROMPT = """\
+The previously generated test code failed pytest collection with the
+following errors.  Please fix the issues and regenerate the complete test
+file.
+
+## Previous Test Code
+
+```python
+{previous_code}
+```
+
+## Collection Errors
+
+{collection_errors}
+
+## Instructions
+
+- Fix all import errors, syntax errors, and name resolution issues.
+- Preserve the test intent — do not remove tests, only fix problems.
+- Output the complete, corrected test file inside a single ```python fence.
+"""
+
+
+# ============================================================================
+# LLM TEST GENERATOR
+# ============================================================================
+
+
+class LLMTestGenerator:
+    """LLM-driven test generator that produces meaningful pytest suites.
+
+    Replaces the mechanical template generator when an LLM agent is
+    available.  The LLM reads the design document (and optionally the
+    implementation code) and writes tests with real assertions,
+    meaningful fixtures, and discovered edge cases.
+
+    Follows the same lazy-resolution, cost-tracking patterns as
+    :class:`~startd8.contractors.artisan_phases.development.LLMChunkExecutor`
+    and :class:`~startd8.contractors.artisan_phases.design_documentation.AgentLLMBackend`.
+
+    Args:
+        agent_spec: Agent specification string (e.g.
+            ``"anthropic:claude-haiku-4-5-20251001"``).
+        max_tokens: ``max_tokens`` override for the agent.
+        max_retries: Maximum error-informed retry attempts when pytest
+            collection fails (default ``2``).
+
+    Example::
+
+        gen = LLMTestGenerator("anthropic:claude-haiku-4-5-20251001")
+        modules = await gen.generate_tests(design_doc)
+        print(modules[0].filename)
+    """
+
+    def __init__(
+        self,
+        agent_spec: str,
+        max_tokens: int = 64000,
+        max_retries: int = 2,
+    ) -> None:
+        self._agent_spec = agent_spec
+        self._max_tokens = max_tokens
+        self._max_retries = max_retries
+
+        # Lazily resolved agent (cached after first call)
+        self._agent: Optional[Any] = None
+
+        # Accumulated cost metrics
+        self.total_cost_usd: float = 0.0
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+
+        self.logger = logging.getLogger("startd8.test_construction.llm_gen")
+
+    # ------------------------------------------------------------------
+    # Agent resolution (lazy, cached)
+    # ------------------------------------------------------------------
+
+    def _resolve_agent(self) -> Any:
+        """Resolve the agent spec to a BaseAgent (cached)."""
+        if self._agent is not None:
+            return self._agent
+
+        from startd8.utils.agent_resolution import resolve_agent_spec
+
+        self.logger.info("Resolving test-gen agent: %s", self._agent_spec)
+        self._agent = resolve_agent_spec(
+            self._agent_spec,
+            name="test-generator",
+            max_tokens=self._max_tokens,
+        )
+        return self._agent
+
+    # ------------------------------------------------------------------
+    # Prompt building
+    # ------------------------------------------------------------------
+
+    def _build_design_content(
+        self,
+        design: DesignDocument,
+        design_phase_doc: Optional["DesignPhaseDocument"] = None,
+    ) -> str:
+        """Build the design content string for the prompt.
+
+        Uses the rich markdown from the design documentation phase when
+        available (Option A bridging), falling back to a structured
+        rendering of the parsed ``DesignDocument`` specs.
+
+        Args:
+            design: Parsed test-construction ``DesignDocument``.
+            design_phase_doc: Optional design-phase ``DesignDocument``
+                with rich markdown sections.
+
+        Returns:
+            Formatted design content string.
+        """
+        # Option A: use raw markdown from the design documentation phase
+        if design_phase_doc is not None and design_phase_doc.raw_text:
+            return design_phase_doc.raw_text
+
+        # Fallback: structured rendering from parsed specs
+        parts: List[str] = []
+        if design.description:
+            parts.append(f"**Description:** {design.description}")
+
+        if design.classes:
+            parts.append("\n### Classes\n")
+            for cls in design.classes:
+                parts.append(f"**{cls.name}** (`{cls.module_path}`)")
+                if cls.description:
+                    parts.append(f"  {cls.description}")
+                if cls.base_classes:
+                    parts.append(
+                        f"  Inherits: {', '.join(cls.base_classes)}"
+                    )
+                if cls.init_params:
+                    param_strs = [
+                        f"{p['name']}: {p.get('type', 'Any')}"
+                        for p in cls.init_params
+                    ]
+                    parts.append(f"  __init__({', '.join(param_strs)})")
+                for meth in cls.methods:
+                    async_kw = "async " if meth.is_async else ""
+                    param_strs = [
+                        f"{p['name']}: {p.get('type', 'Any')}"
+                        for p in meth.parameters
+                    ]
+                    sig = f"{async_kw}{meth.name}({', '.join(param_strs)}) -> {meth.return_type}"
+                    parts.append(f"  - `{sig}`")
+                    if meth.description:
+                        parts.append(f"    {meth.description}")
+                    if meth.raises:
+                        parts.append(
+                            f"    Raises: {', '.join(meth.raises)}"
+                        )
+
+        if design.functions:
+            parts.append("\n### Functions\n")
+            for fn in design.functions:
+                async_kw = "async " if fn.is_async else ""
+                param_strs = [
+                    f"{p['name']}: {p.get('type', 'Any')}"
+                    for p in fn.parameters
+                ]
+                sig = f"{async_kw}{fn.name}({', '.join(param_strs)}) -> {fn.return_type}"
+                parts.append(f"**`{sig}`** (`{fn.module_path}`)")
+                if fn.description:
+                    parts.append(f"  {fn.description}")
+                if fn.raises:
+                    parts.append(f"  Raises: {', '.join(fn.raises)}")
+
+        if design.edge_cases:
+            parts.append("\n### Edge Cases\n")
+            for ec in design.edge_cases:
+                desc = ec.get("description", "")
+                target = ec.get("target", "")
+                expected = ec.get("expected", "")
+                parts.append(f"- **{target}**: {desc} → {expected}")
+
+        return "\n".join(parts)
+
+    def _collect_module_paths(self, design: DesignDocument) -> str:
+        """Collect unique module paths from the design for import hints."""
+        paths: Dict[str, None] = {}
+        for cls in design.classes:
+            paths[cls.module_path] = None
+        for fn in design.functions:
+            paths[fn.module_path] = None
+        if not paths:
+            fallback = design.feature_name.replace(" ", "_").lower()
+            paths[fallback] = None
+        lines = [f"- `{p}`" for p in paths]
+        return "\n".join(lines)
+
+    def _build_generation_prompt(
+        self,
+        design: DesignDocument,
+        implementation_code: Optional[str] = None,
+        design_phase_doc: Optional["DesignPhaseDocument"] = None,
+    ) -> str:
+        """Build the full user prompt for test generation.
+
+        When *implementation_code* is provided the prompt asks the LLM
+        to verify the implementation against the design.  Otherwise it
+        generates tests from the design spec alone.
+
+        Args:
+            design: Parsed test-construction ``DesignDocument``.
+            implementation_code: Optional source code from the
+                development phase.
+            design_phase_doc: Optional rich design-phase document.
+
+        Returns:
+            Formatted prompt string.
+        """
+        design_content = self._build_design_content(
+            design, design_phase_doc
+        )
+        module_paths = self._collect_module_paths(design)
+
+        if implementation_code:
+            return _LLM_TEST_FROM_IMPL_PROMPT.format(
+                feature_name=design.feature_name,
+                feature_description=design.description or "(no description)",
+                design_content=design_content,
+                implementation_code=implementation_code,
+                module_paths=module_paths,
+            )
+        return _LLM_TEST_FROM_DESIGN_PROMPT.format(
+            feature_name=design.feature_name,
+            feature_description=design.description or "(no description)",
+            design_content=design_content,
+            module_paths=module_paths,
+        )
+
+    def _build_retry_prompt(
+        self,
+        previous_code: str,
+        collection_errors: List[str],
+    ) -> str:
+        """Build the retry prompt when pytest collection fails."""
+        return _LLM_TEST_RETRY_PROMPT.format(
+            previous_code=previous_code,
+            collection_errors="\n".join(collection_errors),
+        )
+
+    # ------------------------------------------------------------------
+    # Response parsing
+    # ------------------------------------------------------------------
+
+    def _extract_code(self, response: str) -> str:
+        """Extract Python code from the LLM response.
+
+        Uses the SDK's :func:`extract_code_from_response` utility.
+        """
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        return extract_code_from_response(response, language="python")
+
+    def _parse_into_test_modules(
+        self,
+        code: str,
+        design: DesignDocument,
+    ) -> List[TestModule]:
+        """Parse extracted code into ``TestModule`` objects.
+
+        For simplicity, the LLM-generated code is wrapped in a single
+        ``TestModule`` with the source stored directly.  The module's
+        ``test_cases`` list receives a single synthetic ``TestCase``
+        whose ``test_body`` is the full rendered source, allowing the
+        phase to still inspect it structurally if needed.
+
+        Multiple-module output (one per module_path) is attempted by
+        scanning for ``# --- module: <path> ---`` markers the LLM may
+        emit; otherwise everything goes into one module.
+        """
+        modules: List[TestModule] = []
+
+        # Attempt multi-module split via markers
+        marker_pattern = r"# ---\s*module:\s*(\S+)\s*---"
+        marker_splits = re.split(marker_pattern, code)
+
+        if len(marker_splits) > 1:
+            # marker_splits = [preamble, mod1_path, mod1_code, mod2_path, ...]
+            preamble = marker_splits[0].strip()
+            for i in range(1, len(marker_splits), 2):
+                mod_path = marker_splits[i]
+                mod_code = (
+                    marker_splits[i + 1].strip()
+                    if i + 1 < len(marker_splits)
+                    else ""
+                )
+                if preamble:
+                    mod_code = preamble + "\n\n" + mod_code
+                basename = mod_path.split(".")[-1]
+                filename = f"test_{basename}.py"
+                modules.append(
+                    TestModule(
+                        filename=filename,
+                        imports=[],
+                        test_cases=[
+                            TestCase(
+                                test_name="__llm_generated__",
+                                test_type=TestType.UNIT,
+                                target_name=mod_path,
+                                target_method=None,
+                                description="LLM-generated test suite",
+                                test_body=mod_code,
+                            )
+                        ],
+                        fixtures=[],
+                    )
+                )
+            return modules
+
+        # Single module — derive filename from the first module_path
+        module_paths: List[str] = []
+        for cls in design.classes:
+            if cls.module_path not in module_paths:
+                module_paths.append(cls.module_path)
+        for fn in design.functions:
+            if fn.module_path not in module_paths:
+                module_paths.append(fn.module_path)
+
+        if module_paths:
+            basename = module_paths[0].split(".")[-1]
+        else:
+            basename = design.feature_name.replace(" ", "_").lower()
+        filename = f"test_{basename}.py"
+
+        modules.append(
+            TestModule(
+                filename=filename,
+                imports=[],
+                test_cases=[
+                    TestCase(
+                        test_name="__llm_generated__",
+                        test_type=TestType.UNIT,
+                        target_name=design.feature_name,
+                        target_method=None,
+                        description="LLM-generated test suite",
+                        test_body=code,
+                    )
+                ],
+                fixtures=[],
+            )
+        )
+        return modules
+
+    # ------------------------------------------------------------------
+    # Core generation
+    # ------------------------------------------------------------------
+
+    async def generate_tests(
+        self,
+        design: DesignDocument,
+        implementation_code: Optional[str] = None,
+        design_phase_doc: Optional["DesignPhaseDocument"] = None,
+    ) -> List[TestModule]:
+        """Generate a test suite via the LLM.
+
+        Args:
+            design: Parsed test-construction ``DesignDocument``.
+            implementation_code: Optional implementation source code.
+                When provided the LLM writes tests that verify the
+                implementation against the design contract.
+            design_phase_doc: Optional rich ``DesignDocument`` from the
+                design documentation phase (provides full markdown
+                sections for richer context).
+
+        Returns:
+            List of ``TestModule`` objects containing LLM-generated tests.
+
+        Raises:
+            RuntimeError: If the LLM returns empty code after extraction.
+        """
+        agent = self._resolve_agent()
+
+        prompt = self._build_generation_prompt(
+            design, implementation_code, design_phase_doc
+        )
+
+        self.logger.info(
+            "Generating tests via LLM for '%s' (prompt %d chars, "
+            "has implementation: %s)",
+            design.feature_name,
+            len(prompt),
+            implementation_code is not None,
+        )
+
+        # Prepend system prompt to user prompt (same pattern as
+        # AgentLLMBackend — BaseAgent.agenerate has no system_prompt param)
+        full_prompt = f"{_LLM_TEST_SYSTEM_PROMPT}\n\n---\n\n{prompt}"
+
+        response_text, time_ms, token_usage = await agent.agenerate(
+            full_prompt
+        )
+
+        # Accumulate cost metrics
+        self.total_cost_usd += token_usage.cost_estimate
+        self.total_input_tokens += token_usage.input
+        self.total_output_tokens += token_usage.output
+
+        self.logger.info(
+            "LLM test generation for '%s': %dms, %d in / %d out tokens, "
+            "$%.4f",
+            design.feature_name,
+            time_ms,
+            token_usage.input,
+            token_usage.output,
+            token_usage.cost_estimate,
+        )
+
+        code = self._extract_code(response_text)
+        if not code or not code.strip():
+            raise RuntimeError(
+                f"LLM returned empty test code for '{design.feature_name}'"
+            )
+
+        return self._parse_into_test_modules(code, design)
+
+    async def retry_with_errors(
+        self,
+        previous_code: str,
+        collection_errors: List[str],
+        design: DesignDocument,
+    ) -> List[TestModule]:
+        """Re-generate tests incorporating pytest collection errors.
+
+        Args:
+            previous_code: The test code that failed collection.
+            collection_errors: Error messages from pytest collection.
+            design: The design document (for module path derivation).
+
+        Returns:
+            List of corrected ``TestModule`` objects.
+        """
+        agent = self._resolve_agent()
+
+        prompt = self._build_retry_prompt(previous_code, collection_errors)
+        full_prompt = f"{_LLM_TEST_SYSTEM_PROMPT}\n\n---\n\n{prompt}"
+
+        self.logger.info(
+            "Retrying test generation for '%s' with %d collection errors",
+            design.feature_name,
+            len(collection_errors),
+        )
+
+        response_text, time_ms, token_usage = await agent.agenerate(
+            full_prompt
+        )
+
+        self.total_cost_usd += token_usage.cost_estimate
+        self.total_input_tokens += token_usage.input
+        self.total_output_tokens += token_usage.output
+
+        self.logger.info(
+            "LLM retry for '%s': %dms, $%.4f",
+            design.feature_name,
+            time_ms,
+            token_usage.cost_estimate,
+        )
+
+        code = self._extract_code(response_text)
+        if not code or not code.strip():
+            raise RuntimeError(
+                "LLM returned empty test code on retry for "
+                f"'{design.feature_name}'"
+            )
+
+        return self._parse_into_test_modules(code, design)
+
+
+# ============================================================================
 # PHASE CLASS
 # ============================================================================
 
 
 class TestConstructionPhase:
-    """
-    Artisan phase that generates tests from a design document.
+    """Artisan phase that generates tests from a design document.
+
+    Supports two generation strategies:
+
+    - **Template-based** (default, synchronous) — produces mechanical
+      boilerplate from parsed specs.  Use via :meth:`execute`.
+    - **LLM-driven** (when ``agent_spec`` is provided, async) — an LLM
+      generates meaningful tests with real assertions, fixtures, and
+      discovered edge cases.  Use via :meth:`execute_async`.
 
     Usage::
 
+        # Template-based (original behaviour)
         phase = TestConstructionPhase(design_doc=my_design_dict)
         result = phase.execute()
-        assert result.status == PhaseStatus.SUCCESS
+
+        # LLM-driven
+        phase = TestConstructionPhase(
+            design_doc=my_design_dict,
+            agent_spec="anthropic:claude-haiku-4-5-20251001",
+            implementation_code=src_code,
+        )
+        result = await phase.execute_async()
     """
 
     def __init__(
@@ -986,28 +1588,219 @@ class TestConstructionPhase:
         design_doc: Dict[str, Any],
         output_dir: Optional[Path] = None,
         validate: bool = True,
+        agent_spec: Optional[str] = None,
+        implementation_code: Optional[str] = None,
+        design_phase_doc: Optional["DesignPhaseDocument"] = None,
+        max_retries: int = 2,
     ):
         """
         Initialize the Test Construction Phase.
 
         Args:
             design_doc: Raw design document as a dictionary.
-            output_dir: Where to write generated files.  Defaults to a temp
-                        directory.
+            output_dir: Where to write generated files.  Defaults to a
+                temp directory.
             validate: Whether to run pytest collection validation after
-                      generation.
+                generation.
+            agent_spec: Optional LLM agent specification.  When set the
+                phase uses :class:`LLMTestGenerator` for intelligent
+                test authoring instead of the template generator.
+            implementation_code: Optional source code from the
+                development phase.  Passed to the LLM for writing tests
+                that verify the implementation against the design.
+            design_phase_doc: Optional rich ``DesignDocument`` from the
+                design documentation phase (the one with 7 markdown
+                sections).  Provides richer context to the LLM.
+            max_retries: Maximum error-informed retry attempts when
+                pytest collection fails (LLM path only).
         """
         self.raw_design = design_doc
         self.output_dir = output_dir or Path(
             tempfile.mkdtemp(prefix="test_construction_")
         )
         self.validate = validate
+        self.agent_spec = agent_spec
+        self.implementation_code = implementation_code
+        self.design_phase_doc = design_phase_doc
+        self.max_retries = max_retries
         self.status = PhaseStatus.NOT_STARTED
         self._result: Optional[PhaseResult] = None
 
-    def execute(self) -> PhaseResult:
+    # ------------------------------------------------------------------
+    # Shared helpers
+    # ------------------------------------------------------------------
+
+    def _parse_design(self, result: PhaseResult) -> Optional[DesignDocument]:
+        """Parse the raw design document.  Mutates *result* on failure."""
+        logger.info("Step 1: Parsing design document")
+        try:
+            return parse_design_document(self.raw_design)
+        except ValueError as exc:
+            logger.error("Failed to parse design document: %s", exc)
+            result.status = PhaseStatus.FAILED
+            result.errors.append(f"Design document parsing failed: {exc}")
+            return None
+
+    def _build_stubs(
+        self, design: DesignDocument
+    ) -> List[StubModule]:
+        """Build stub modules from the parsed design."""
+        logger.info("Step 5: Building stub modules")
+        stubs_by_module: Dict[str, Dict[str, list]] = {}
+        for cls_spec in design.classes:
+            stubs_by_module.setdefault(
+                cls_spec.module_path, {"classes": [], "functions": []}
+            )["classes"].append(cls_spec)
+        for fn_spec in design.functions:
+            stubs_by_module.setdefault(
+                fn_spec.module_path, {"classes": [], "functions": []}
+            )["functions"].append(fn_spec)
+
+        stub_modules: List[StubModule] = []
+        for mod_path, specs in stubs_by_module.items():
+            sm = build_stub_module(
+                mod_path, specs["classes"], specs["functions"]
+            )
+            stub_modules.append(sm)
+        return stub_modules
+
+    def _write_to_disk(
+        self,
+        test_modules: List[TestModule],
+        stub_modules: List[StubModule],
+        result: PhaseResult,
+    ) -> bool:
+        """Write modules to disk.  Returns False on failure."""
+        logger.info("Step 6: Writing modules to disk")
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+            write_modules_to_disk(
+                test_modules, stub_modules, self.output_dir
+            )
+            return True
+        except SyntaxError as exc:
+            logger.error("Syntax error in generated code: %s", exc)
+            result.status = PhaseStatus.FAILED
+            result.errors.append(f"Syntax error in generated code: {exc}")
+            return False
+        except OSError as exc:
+            logger.error("Filesystem error: %s", exc)
+            result.status = PhaseStatus.FAILED
+            result.errors.append(f"Filesystem error: {exc}")
+            return False
+
+    def _validate_collection(self, result: PhaseResult) -> None:
+        """Run pytest collection validation.  Mutates *result*."""
+        if not self.validate:
+            logger.info("Pytest validation skipped")
+            result.status = PhaseStatus.SUCCESS
+            return
+
+        logger.info("Step 7: Validating pytest collection")
+        test_dir = self.output_dir / "tests"
+        stub_dir = self.output_dir / "src"
+        collection = validate_pytest_collection(test_dir, stub_dir)
+        result.collection_result = collection
+
+        if not collection.success:
+            logger.warning(
+                "Pytest collection had issues: %s", collection.errors
+            )
+            result.status = PhaseStatus.PARTIAL
+            result.errors.extend(collection.errors)
+        else:
+            logger.info(
+                "Pytest collection OK: %d tests",
+                collection.collected_count,
+            )
+            result.status = PhaseStatus.SUCCESS
+
+    # ------------------------------------------------------------------
+    # LLM helpers
+    # ------------------------------------------------------------------
+
+    def _render_llm_modules(
+        self, test_modules: List[TestModule]
+    ) -> List[TestModule]:
+        """Ensure LLM-generated modules use a direct-render path.
+
+        For LLM modules the ``test_body`` of the single synthetic
+        ``TestCase`` IS the complete source.  We tag them so
+        ``render_test_module`` can detect and short-circuit.
         """
-        Execute the test construction phase.
+        return test_modules
+
+    def _render_llm_module_source(self, module: TestModule) -> str:
+        """Render an LLM-generated module to source code.
+
+        If the module was produced by ``LLMTestGenerator`` it contains
+        a single ``TestCase`` whose ``test_body`` is the entire file.
+        """
+        if (
+            len(module.test_cases) == 1
+            and module.test_cases[0].test_name == "__llm_generated__"
+        ):
+            return module.test_cases[0].test_body
+        return render_test_module(module)
+
+    def _write_llm_modules_to_disk(
+        self,
+        test_modules: List[TestModule],
+        stub_modules: List[StubModule],
+        result: PhaseResult,
+    ) -> bool:
+        """Write LLM-generated test modules and stubs to disk.
+
+        LLM modules bypass ``render_test_module`` because the test_body
+        is already complete Python source.
+        """
+        logger.info("Step 6: Writing LLM-generated modules to disk")
+        try:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
+
+            # Write stubs first
+            stub_dir = self.output_dir / "src"
+            for stub_module in stub_modules:
+                stub_path = stub_dir / stub_module.filepath
+                stub_path.parent.mkdir(parents=True, exist_ok=True)
+                current = stub_path.parent
+                while current >= stub_dir:
+                    _ensure_init_py(current)
+                    if current == stub_dir:
+                        break
+                    current = current.parent
+                compile(stub_module.content, str(stub_path), "exec")
+                stub_path.write_text(stub_module.content)
+                logger.info("Wrote stub module %s", stub_path)
+
+            # Write test modules
+            test_dir = self.output_dir / "tests"
+            _ensure_init_py(test_dir)
+            for module in test_modules:
+                test_path = test_dir / module.filename
+                code = self._render_llm_module_source(module)
+                compile(code, str(test_path), "exec")
+                test_path.write_text(code)
+                logger.info("Wrote test module %s", test_path)
+
+            return True
+        except SyntaxError as exc:
+            logger.error("Syntax error in generated code: %s", exc)
+            result.status = PhaseStatus.FAILED
+            result.errors.append(f"Syntax error in generated code: {exc}")
+            return False
+        except OSError as exc:
+            logger.error("Filesystem error: %s", exc)
+            result.status = PhaseStatus.FAILED
+            result.errors.append(f"Filesystem error: {exc}")
+            return False
+
+    # ------------------------------------------------------------------
+    # Synchronous execute (template path — original behaviour)
+    # ------------------------------------------------------------------
+
+    def execute(self) -> PhaseResult:
+        """Execute the test construction phase (template-based).
 
         Steps:
             1. Parse design document
@@ -1029,13 +1822,8 @@ class TestConstructionPhase:
 
         try:
             # 1. Parse design document
-            logger.info("Step 1: Parsing design document")
-            try:
-                design = parse_design_document(self.raw_design)
-            except ValueError as exc:
-                logger.error("Failed to parse design document: %s", exc)
-                result.status = PhaseStatus.FAILED
-                result.errors.append(f"Design document parsing failed: {exc}")
+            design = self._parse_design(result)
+            if design is None:
                 self.status = result.status
                 self._result = result
                 return result
@@ -1059,7 +1847,6 @@ class TestConstructionPhase:
 
             # 4. Build test modules (group by module_path)
             logger.info("Step 4: Building test modules")
-            # Build a lookup: target_name -> module_path
             target_to_module: Dict[str, str] = {}
             for cls_spec in design.classes:
                 target_to_module[cls_spec.name] = cls_spec.module_path
@@ -1070,7 +1857,6 @@ class TestConstructionPhase:
             for tc in all_test_cases:
                 mod_path = target_to_module.get(tc.target_name)
                 if mod_path is None:
-                    # Edge case with unknown target — put in a default module
                     mod_path = design.feature_name.replace(" ", "_").lower()
                 tests_by_module.setdefault(mod_path, []).append(tc)
 
@@ -1082,66 +1868,17 @@ class TestConstructionPhase:
             result.test_modules = test_modules
 
             # 5. Build stub modules
-            logger.info("Step 5: Building stub modules")
-            stubs_by_module: Dict[str, Dict[str, list]] = {}
-            for cls_spec in design.classes:
-                stubs_by_module.setdefault(
-                    cls_spec.module_path, {"classes": [], "functions": []}
-                )["classes"].append(cls_spec)
-            for fn_spec in design.functions:
-                stubs_by_module.setdefault(
-                    fn_spec.module_path, {"classes": [], "functions": []}
-                )["functions"].append(fn_spec)
-
-            stub_modules: List[StubModule] = []
-            for mod_path, specs in stubs_by_module.items():
-                sm = build_stub_module(mod_path, specs["classes"], specs["functions"])
-                stub_modules.append(sm)
-
+            stub_modules = self._build_stubs(design)
             result.stub_modules = stub_modules
 
             # 6. Write to disk
-            logger.info("Step 6: Writing modules to disk")
-            try:
-                self.output_dir.mkdir(parents=True, exist_ok=True)
-                write_modules_to_disk(test_modules, stub_modules, self.output_dir)
-            except SyntaxError as exc:
-                logger.error("Syntax error in generated code: %s", exc)
-                result.status = PhaseStatus.FAILED
-                result.errors.append(f"Syntax error in generated code: {exc}")
-                self.status = result.status
-                self._result = result
-                return result
-            except OSError as exc:
-                logger.error("Filesystem error: %s", exc)
-                result.status = PhaseStatus.FAILED
-                result.errors.append(f"Filesystem error: {exc}")
+            if not self._write_to_disk(test_modules, stub_modules, result):
                 self.status = result.status
                 self._result = result
                 return result
 
             # 7. Validate pytest collection
-            if self.validate:
-                logger.info("Step 7: Validating pytest collection")
-                test_dir = self.output_dir / "tests"
-                stub_dir = self.output_dir / "src"
-                collection = validate_pytest_collection(test_dir, stub_dir)
-                result.collection_result = collection
-
-                if not collection.success:
-                    logger.warning(
-                        "Pytest collection had issues: %s", collection.errors
-                    )
-                    result.status = PhaseStatus.PARTIAL
-                    result.errors.extend(collection.errors)
-                else:
-                    logger.info(
-                        "Pytest collection OK: %d tests", collection.collected_count
-                    )
-                    result.status = PhaseStatus.SUCCESS
-            else:
-                logger.info("Pytest validation skipped")
-                result.status = PhaseStatus.SUCCESS
+            self._validate_collection(result)
 
         except Exception as exc:
             logger.exception("Unexpected error during phase execution")
@@ -1150,7 +1887,173 @@ class TestConstructionPhase:
 
         self.status = result.status
         self._result = result
-        logger.info("Test Construction Phase completed: %s", result.status.value)
+        logger.info(
+            "Test Construction Phase completed: %s", result.status.value
+        )
+        return result
+
+    # ------------------------------------------------------------------
+    # Async execute (LLM path)
+    # ------------------------------------------------------------------
+
+    async def execute_async(self) -> PhaseResult:
+        """Execute the test construction phase with LLM-driven generation.
+
+        When ``agent_spec`` was provided at construction time the phase
+        uses :class:`LLMTestGenerator` for intelligent test authoring.
+        If no ``agent_spec`` is set this falls back to the synchronous
+        template-based ``execute()`` wrapped in the event loop.
+
+        Steps:
+            1. Parse design document
+            2. Generate tests via LLM (with optional implementation code)
+            3. Build stub modules
+            4. Write all modules to disk
+            5. Validate pytest collection
+            6. Error-informed retry (if collection failed, up to
+               ``max_retries`` times)
+
+        Returns:
+            PhaseResult with status, generated artifacts, and cost
+            metrics.
+        """
+        if self.agent_spec is None:
+            # No LLM — fall back to template path
+            return self.execute()
+
+        self.status = PhaseStatus.IN_PROGRESS
+        result = PhaseResult(
+            status=PhaseStatus.NOT_STARTED,
+            output_dir=str(self.output_dir),
+        )
+
+        try:
+            # 1. Parse design document
+            design = self._parse_design(result)
+            if design is None:
+                self.status = result.status
+                self._result = result
+                return result
+
+            # 2. Generate tests via LLM
+            logger.info("Step 2: Generating tests via LLM (%s)", self.agent_spec)
+            llm_gen = LLMTestGenerator(
+                agent_spec=self.agent_spec,
+                max_retries=self.max_retries,
+            )
+
+            try:
+                test_modules = await llm_gen.generate_tests(
+                    design=design,
+                    implementation_code=self.implementation_code,
+                    design_phase_doc=self.design_phase_doc,
+                )
+            except Exception as gen_exc:
+                logger.warning(
+                    "LLM test generation failed (%s), falling back to "
+                    "template generator",
+                    gen_exc,
+                )
+                result.errors.append(
+                    f"LLM generation failed (falling back to templates): "
+                    f"{gen_exc}"
+                )
+                # Fall back to synchronous template path
+                return self.execute()
+
+            result.test_modules = test_modules
+
+            # 3. Build stub modules
+            stub_modules = self._build_stubs(design)
+            result.stub_modules = stub_modules
+
+            # 4. Write to disk (LLM path)
+            if not self._write_llm_modules_to_disk(
+                test_modules, stub_modules, result
+            ):
+                self.status = result.status
+                self._result = result
+                return result
+
+            # 5. Validate pytest collection
+            self._validate_collection(result)
+
+            # 6. Error-informed retry loop
+            retries = 0
+            while (
+                self.validate
+                and result.collection_result is not None
+                and not result.collection_result.success
+                and retries < self.max_retries
+            ):
+                retries += 1
+                logger.info(
+                    "Error-informed retry %d/%d for '%s'",
+                    retries,
+                    self.max_retries,
+                    design.feature_name,
+                )
+
+                # Gather the code that failed
+                previous_code_parts: List[str] = []
+                for mod in test_modules:
+                    previous_code_parts.append(
+                        self._render_llm_module_source(mod)
+                    )
+                previous_code = "\n\n".join(previous_code_parts)
+
+                try:
+                    test_modules = await llm_gen.retry_with_errors(
+                        previous_code=previous_code,
+                        collection_errors=result.collection_result.errors,
+                        design=design,
+                    )
+                except Exception as retry_exc:
+                    logger.warning(
+                        "Retry %d failed: %s", retries, retry_exc
+                    )
+                    result.errors.append(
+                        f"Retry {retries} failed: {retry_exc}"
+                    )
+                    break
+
+                result.test_modules = test_modules
+
+                # Re-write and re-validate
+                if not self._write_llm_modules_to_disk(
+                    test_modules, stub_modules, result
+                ):
+                    break
+
+                # Clear prior collection errors before re-validating
+                result.errors = [
+                    e
+                    for e in result.errors
+                    if not e.startswith("Pytest collection")
+                ]
+                result.collection_result = None
+                self._validate_collection(result)
+
+            # Populate cost metrics
+            result.total_cost_usd = llm_gen.total_cost_usd
+            result.total_input_tokens = llm_gen.total_input_tokens
+            result.total_output_tokens = llm_gen.total_output_tokens
+
+        except Exception as exc:
+            logger.exception("Unexpected error during async phase execution")
+            result.status = PhaseStatus.FAILED
+            result.errors.append(f"Unexpected error: {exc}")
+
+        self.status = result.status
+        self._result = result
+        logger.info(
+            "Test Construction Phase (LLM) completed: %s "
+            "(cost: $%.4f, tokens: %d in / %d out)",
+            result.status.value,
+            result.total_cost_usd,
+            result.total_input_tokens,
+            result.total_output_tokens,
+        )
         return result
 
     @property
