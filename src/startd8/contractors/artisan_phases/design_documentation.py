@@ -405,6 +405,14 @@ REVISION_USER_PROMPT_TEMPLATE = (
 
 
 # ============================================================================
+# FEEDBACK TRUNCATION LIMITS
+# ============================================================================
+
+_REVIEWER_FEEDBACK_LIMIT = 3
+_MERGED_FEEDBACK_LIMIT = 5
+
+
+# ============================================================================
 # PARSING UTILITIES
 # ============================================================================
 
@@ -708,7 +716,7 @@ class AutoResolutionCallback:
                     f"significantly higher than Arbiter "
                     f"({arbiter.confidence:.2f}). Accepting Reviewer verdict. "
                     f"Arbiter concerns to note: "
-                    f"{'; '.join(arbiter.concerns[:3]) or 'none'}."
+                    f"{'; '.join(arbiter.concerns[:_REVIEWER_FEEDBACK_LIMIT]) or 'none'}."
                 ),
                 decided_by="auto",
                 decided_at=datetime.now(timezone.utc),
@@ -722,7 +730,7 @@ class AutoResolutionCallback:
                     f"significantly higher than Reviewer "
                     f"({reviewer.confidence:.2f}). Accepting Arbiter verdict. "
                     f"Reviewer concerns to note: "
-                    f"{'; '.join(reviewer.concerns[:3]) or 'none'}."
+                    f"{'; '.join(reviewer.concerns[:_REVIEWER_FEEDBACK_LIMIT]) or 'none'}."
                 ),
                 decided_by="auto",
                 decided_at=datetime.now(timezone.utc),
@@ -741,9 +749,9 @@ class AutoResolutionCallback:
                 f"Confidence is comparable (Reviewer: {reviewer.confidence:.2f}"
                 f", Arbiter: {arbiter.confidence:.2f}). Merging feedback. "
                 f"Combined concerns: "
-                f"{'; '.join(all_concerns[:5]) or 'none'}. "
+                f"{'; '.join(all_concerns[:_MERGED_FEEDBACK_LIMIT]) or 'none'}. "
                 f"Suggestions: "
-                f"{'; '.join(all_suggestions[:5]) or 'none'}."
+                f"{'; '.join(all_suggestions[:_MERGED_FEEDBACK_LIMIT]) or 'none'}."
             ),
             decided_by="auto",
             decided_at=datetime.now(timezone.utc),

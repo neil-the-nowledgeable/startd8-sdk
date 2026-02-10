@@ -249,7 +249,7 @@ def _topological_sort(tasks: list[SeedTask]) -> list[SeedTask]:
         logger.warning(
             "Dependency cycle detected among tasks: %s — "
             "falling back to original seed order",
-            " → ".join(reversed(cycle_members)),
+            " → ".join(cycle_members),
         )
         return list(tasks)
 
@@ -688,7 +688,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         prior_results: Dict[str, GenerationResult] = {}
 
         for task in tasks:
-            env_issues = self._check_environment(task)
+            env_checks = self._check_environment(task)
 
             if dry_run:
                 # --- Dry-run path (unchanged from original) ---
@@ -704,15 +704,15 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     "validators": task.post_generation_validators,
                     "status": "dry_run_skipped",
                 }
-                if env_issues:
-                    task_report["environment_issues"] = env_issues
+                if env_checks:
+                    task_report["environment_issues"] = env_checks
                 task_reports.append(task_report)
                 continue
 
             # --- Real-mode path ---
 
             # Skip tasks with blocking environment failures
-            if any(c.get("status") == "fail" for c in env_issues):
+            if any(c.get("status") == "fail" for c in env_checks):
                 logger.warning(
                     "IMPLEMENT: skipping task %s due to environment failures",
                     task.task_id,
@@ -721,7 +721,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     "task_id": task.task_id,
                     "title": task.title,
                     "status": "env_blocked",
-                    "environment_issues": env_issues,
+                    "environment_issues": env_checks,
                 })
                 continue
 

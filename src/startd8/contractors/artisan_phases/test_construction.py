@@ -677,7 +677,7 @@ def render_test_module(test_module: TestModule) -> str:
     for tc in standalone_tests:
         for m in tc.markers:
             lines.append(f"@pytest.mark.{m}")
-        if tc.markers and "asyncio" in tc.markers:
+        if "asyncio" in tc.markers:
             lines.append(f"async def {tc.test_name}():")
         else:
             lines.append(f"def {tc.test_name}():")
@@ -696,7 +696,7 @@ def render_test_module(test_module: TestModule) -> str:
         for tc in cases:
             for m in tc.markers:
                 lines.append(f"    @pytest.mark.{m}")
-            if tc.markers and "asyncio" in tc.markers:
+            if "asyncio" in tc.markers:
                 lines.append(f"    async def {tc.test_name}(self):")
             else:
                 lines.append(f"    def {tc.test_name}(self):")
