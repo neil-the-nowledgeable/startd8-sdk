@@ -12,6 +12,7 @@ Verifies:
 """
 
 import os
+import sys
 import pytest
 from unittest.mock import MagicMock, patch, AsyncMock
 
@@ -404,10 +405,20 @@ class TestGracefulDegradation:
         mock_mod = MagicMock()
         mock_mod.AnthropicInstrumentor = mock_cls
 
+        # Also block the OpenAI instrumentor so only the failing Anthropic
+        # path is exercised — otherwise the real OpenAI package succeeds
+        # and the function returns True.
+        openai_sentinel = object()
+        openai_key = "opentelemetry.instrumentation.openai"
+        prev = sys.modules.get(openai_key, openai_sentinel)
+
         with patch.dict(os.environ, {"STARTD8_OPENLLMETRY": "auto"}), \
              patch.dict(
                  "sys.modules",
-                 {"opentelemetry.instrumentation.anthropic": mock_mod},
+                 {
+                     "opentelemetry.instrumentation.anthropic": mock_mod,
+                     openai_key: None,  # triggers ImportError
+                 },
              ):
             # Should not raise in auto mode
             result = initialize_openllmetry()
