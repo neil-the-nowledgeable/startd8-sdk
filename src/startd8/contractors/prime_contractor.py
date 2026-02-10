@@ -101,6 +101,7 @@ class PrimeContractorWorkflow:
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        self._pre_integration_snapshots: Dict[str, Optional[Path]] = {}
 
     def _rel_display(self, path: Path) -> str:
         """Safe relative path for display, falling back to the full path."""
@@ -160,9 +161,10 @@ class PrimeContractorWorkflow:
     def get_recovery_status(self) -> Dict:
         """Get current recovery status information."""
         backup_files = list(self.project_root.glob('**/*.backup'))
+        snapshot_files = list(self.project_root.rglob('*.pre_integration'))
         result = subprocess.run(['git', 'stash', 'list'], capture_output=True, text=True, cwd=self.project_root, timeout=30)
         stashes = [line for line in result.stdout.strip().split('\n') if line and 'prime-contractor-snapshot' in line]
-        return {'stash_ref': self.stash_ref, 'stashes': stashes, 'backup_files': [str(f) for f in backup_files], 'has_recovery_options': bool(stashes or backup_files)}
+        return {'stash_ref': self.stash_ref, 'stashes': stashes, 'backup_files': [str(f) for f in backup_files], 'snapshot_files': [str(f) for f in snapshot_files], 'has_recovery_options': bool(stashes or backup_files or snapshot_files)}
 
     def recover_from_stash(self) -> bool:
         """Recover from the most recent prime-contractor stash."""
@@ -190,6 +192,67 @@ class PrimeContractorWorkflow:
         shutil.copy2(backup_path, file_path)
         logger.info('Restored %s from %s', file_path, backup_path.name)
         return True
+
+    def _snapshot_target(self, target_path: Path) -> None:
+        """Save a copy of the target file before the first merge attempt.
+
+        If the target already has a snapshot, this is a no-op (idempotent).
+        If the target does not exist yet, ``None`` is stored so that
+        ``_restore_target`` knows to delete the file on rollback.
+        """
+        key = str(target_path)
+        if key in self._pre_integration_snapshots:
+            return  # already snapshotted
+        if target_path.exists():
+            snapshot_path = target_path.with_suffix(target_path.suffix + '.pre_integration')
+            shutil.copy2(target_path, snapshot_path)
+            self._pre_integration_snapshots[key] = snapshot_path
+            logger.debug('Snapshot saved: %s', self._rel_display(snapshot_path))
+        else:
+            self._pre_integration_snapshots[key] = None
+            logger.debug('Snapshot recorded (file absent): %s', self._rel_display(target_path))
+
+    def _restore_target(self, target_path: Path) -> bool:
+        """Restore a target file from its pre-integration snapshot.
+
+        Returns True if the restore succeeded, False if no snapshot was found.
+        """
+        key = str(target_path)
+        snapshot = self._pre_integration_snapshots.get(key)
+        if key not in self._pre_integration_snapshots:
+            logger.warning('No pre-integration snapshot for %s', self._rel_display(target_path))
+            return False
+        if snapshot is None:
+            # File didn't exist before — remove whatever was written
+            if target_path.exists():
+                target_path.unlink()
+                logger.info('Deleted (no original): %s', self._rel_display(target_path))
+            return True
+        shutil.copy2(snapshot, target_path)
+        logger.info('Restored from snapshot: %s', self._rel_display(target_path))
+        return True
+
+    def _cleanup_snapshots(self, target_paths: Optional[List[Path]] = None) -> int:
+        """Remove ``.pre_integration`` snapshot files.
+
+        Args:
+            target_paths: Specific targets to clean up.  ``None`` cleans all.
+
+        Returns:
+            Number of snapshot files removed.
+        """
+        removed = 0
+        if target_paths is None:
+            keys = list(self._pre_integration_snapshots.keys())
+        else:
+            keys = [str(p) for p in target_paths]
+        for key in keys:
+            snapshot = self._pre_integration_snapshots.pop(key, None)
+            if snapshot is not None and snapshot.exists():
+                snapshot.unlink()
+                removed += 1
+                logger.debug('Cleaned snapshot: %s', self._rel_display(snapshot))
+        return removed
 
     def pre_flight_validation(self, feature: FeatureSpec) -> Tuple[bool, Optional[Dict]]:
         """
@@ -372,6 +435,25 @@ class PrimeContractorWorkflow:
         """
         logger.info('INTEGRATING FEATURE: %s', feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id})
         self.queue.start_integration(feature.id)
+        # --- Clean-slate retry: restore targets from pre-integration snapshots ---
+        if feature.integration_attempts > 1:
+            for tf in feature.target_files:
+                tp = sanitize_path(tf, base_dir=self.project_root)
+                if self._restore_target(tp):
+                    logger.info('Retry %d: restored %s from snapshot', feature.integration_attempts, self._rel_display(tp))
+        # --- Pre-merge validation: reject broken generated code early ---
+        if not self.dry_run:
+            gen_paths = [Path(f) for f in feature.generated_files if Path(f).exists() and Path(f).suffix == '.py']
+            if gen_paths:
+                pre_result = self.checkpoint.pre_validate(gen_paths)
+                if pre_result.status == CheckpointStatus.FAILED:
+                    error_msg = pre_result.message
+                    if pre_result.errors:
+                        error_msg += ': ' + '; '.join(pre_result.errors[:5])
+                    logger.error('Pre-merge validation failed for %s: %s', feature.name, error_msg, extra={'feature_name': feature.name})
+                    self.queue.fail_feature(feature.id, error_msg)
+                    return False
+                logger.info('Pre-merge validation passed for %s', feature.name, extra={'feature_name': feature.name})
         integrated_files = []
         for i, source_file in enumerate(feature.generated_files):
             source_path = Path(source_file)
@@ -417,6 +499,9 @@ class PrimeContractorWorkflow:
                 if not self.protect_dirty_target(target_path):
                     logger.warning('Skipping %s to protect uncommitted changes', target_path.name)
                     continue
+            # Snapshot target before first merge so retries can restore it
+            if feature.integration_attempts == 1:
+                self._snapshot_target(target_path)
             if self.merge_strategy.can_merge(source_path, target_path):
                 result = self.merge_strategy.merge(source_path, target_path)
                 if result.status.value == 'success':
@@ -467,6 +552,7 @@ class PrimeContractorWorkflow:
         if self.auto_commit and (not self.dry_run):
             self._commit_feature(feature, integrated_files)
         self.queue.complete_feature(feature.id)
+        self._cleanup_snapshots(integrated_files)
         self.integration_history.append({'feature': feature.name, 'files': [str(f) for f in integrated_files], 'timestamp': datetime.now().isoformat()})
         self.instrumentor.emit_insight(insight_type='integration_success', summary=f"Feature '{feature.name}' integrated successfully", confidence=1.0, feature_id=feature.id, files_count=len(integrated_files))
         if self.on_feature_complete:
@@ -634,6 +720,11 @@ class PrimeContractorWorkflow:
             backup_file.unlink()
             logger.debug('Removed backup: %s', backup_file.relative_to(self.project_root))
             removed += 1
+        for snapshot_file in self.project_root.rglob('*.pre_integration'):
+            snapshot_file.unlink()
+            logger.debug('Removed snapshot: %s', snapshot_file.relative_to(self.project_root))
+            removed += 1
+        self._pre_integration_snapshots.clear()
         for pycache_dir in self.project_root.rglob('__pycache__'):
             if pycache_dir.is_dir():
                 shutil.rmtree(pycache_dir)

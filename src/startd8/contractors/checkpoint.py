@@ -347,6 +347,45 @@ class IntegrationCheckpoint:
             details={"files_checked": checked},
         )
 
+    def pre_validate(self, generated_files: List[Path]) -> CheckpointResult:
+        """Validate generated files BEFORE merging into targets.
+
+        Runs syntax and lint checks on the raw generated files.  Import
+        checks are excluded because they require the file to be under a
+        ``src_dirs`` path for module-path resolution — those still run
+        post-merge via ``run_all_checkpoints``.
+
+        Args:
+            generated_files: Paths to generated Python files.
+
+        Returns:
+            Aggregated ``CheckpointResult``: PASSED or FAILED.
+        """
+        all_errors: List[str] = []
+
+        syntax_result = self.check_syntax(generated_files)
+        if syntax_result.status == CheckpointStatus.FAILED:
+            all_errors.extend(syntax_result.errors)
+
+        lint_result = self.check_lint(generated_files)
+        if lint_result.status == CheckpointStatus.FAILED:
+            all_errors.extend(lint_result.errors)
+
+        if all_errors:
+            return CheckpointResult(
+                status=CheckpointStatus.FAILED,
+                name="Pre-Merge Validation",
+                message=f"{len(all_errors)} error(s) in generated files",
+                errors=all_errors[:10],
+            )
+
+        return CheckpointResult(
+            status=CheckpointStatus.PASSED,
+            name="Pre-Merge Validation",
+            message=f"{len(generated_files)} generated file(s) passed pre-merge validation",
+            details={"files_checked": len(generated_files)},
+        )
+
     def check_tests(self, feature_name: str) -> CheckpointResult:
         """
         Run tests and check for regressions.
