@@ -37,6 +37,7 @@ from typing import Any, Dict, List, Optional, Set
 
 class Severity(Enum):
     """Severity level of a finding."""
+
     ERROR = "error"
     WARNING = "warning"
     INFO = "info"
@@ -44,6 +45,7 @@ class Severity(Enum):
 
 class FindingCategory(Enum):
     """Category of finding from reconciliation, work-item, or quality checks."""
+
     DESIGN_MISSING_CLASS = "design_missing_class"
     DESIGN_MISSING_FUNCTION = "design_missing_function"
     DESIGN_MISSING_METHOD = "design_missing_method"
@@ -67,6 +69,7 @@ class FindingCategory(Enum):
 
 class WorkItemStatus(Enum):
     """Status of a work item."""
+
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETE = "complete"
@@ -75,6 +78,7 @@ class WorkItemStatus(Enum):
 
 class Verdict(Enum):
     """Overall verdict of the reconciliation report."""
+
     PASS = "pass"
     FAIL = "fail"
     PASS_WITH_WARNINGS = "pass_with_warnings"
@@ -88,6 +92,7 @@ class Verdict(Enum):
 @dataclass
 class Finding:
     """Represents a single finding from the reconciliation process."""
+
     category: FindingCategory
     severity: Severity
     message: str
@@ -110,6 +115,7 @@ class Finding:
 @dataclass
 class WorkItem:
     """Represents a work item to be validated."""
+
     id: str
     description: str
     status: WorkItemStatus
@@ -140,6 +146,7 @@ class WorkItem:
 @dataclass
 class DesignElement:
     """Describes one expected element in the design specification."""
+
     kind: str  # "class", "function", "method", "attribute"
     name: str
     parent: Optional[str] = None  # For methods, the owning class name
@@ -163,6 +170,7 @@ class DesignElement:
 @dataclass
 class DesignSpec:
     """Full design specification for a single source file."""
+
     file_path: str
     elements: List[DesignElement] = field(default_factory=list)
 
@@ -176,6 +184,7 @@ class DesignSpec:
 @dataclass
 class QualityConfig:
     """Configuration knobs for code quality checks."""
+
     max_function_length: int = 50
     require_docstrings: bool = True
     check_type_hints: bool = True
@@ -201,6 +210,7 @@ class QualityConfig:
 @dataclass
 class ReconciliationReport:
     """Final reconciliation report aggregating all findings and verdict."""
+
     timestamp: str  # ISO 8601
     verdict: Verdict
     total_findings: int
@@ -334,8 +344,7 @@ class DesignReconciler:
                             "line": item.lineno,
                             "parameters": self._extract_parameters(item),
                             "decorators": [
-                                self._get_decorator_name(d)
-                                for d in item.decorator_list
+                                self._get_decorator_name(d) for d in item.decorator_list
                             ],
                         }
 
@@ -543,9 +552,7 @@ class QualityChecker(ast.NodeVisitor):
     - Mutable default argument values
     """
 
-    def __init__(
-        self, config: QualityConfig, file_path: str = "<unknown>"
-    ) -> None:
+    def __init__(self, config: QualityConfig, file_path: str = "<unknown>") -> None:
         """Initialize quality checker."""
         self.config = config
         self.file_path = file_path
@@ -662,9 +669,7 @@ class QualityChecker(ast.NodeVisitor):
     def _check_function_quality(self, node: ast.FunctionDef) -> None:
         """Run all function-level quality checks."""
         qualified_name = (
-            f"{self._current_class}.{node.name}"
-            if self._current_class
-            else node.name
+            f"{self._current_class}.{node.name}" if self._current_class else node.name
         )
 
         if self.config.require_docstrings:
@@ -678,9 +683,7 @@ class QualityChecker(ast.NodeVisitor):
         if self.config.check_mutable_defaults:
             self._check_mutable_defaults(node, qualified_name)
 
-    def _check_docstring(
-        self, node: ast.FunctionDef, qualified_name: str
-    ) -> None:
+    def _check_docstring(self, node: ast.FunctionDef, qualified_name: str) -> None:
         """Emit a warning when a public function lacks a docstring."""
         if node.name.startswith("_"):
             return
@@ -719,9 +722,7 @@ class QualityChecker(ast.NodeVisitor):
                 )
             )
 
-    def _check_type_hints(
-        self, node: ast.FunctionDef, qualified_name: str
-    ) -> None:
+    def _check_type_hints(self, node: ast.FunctionDef, qualified_name: str) -> None:
         """Emit a warning for public functions with un-annotated parameters."""
         if node.name.startswith("_"):
             return
@@ -772,8 +773,7 @@ class QualityChecker(ast.NodeVisitor):
                         category=FindingCategory.QUALITY_MUTABLE_DEFAULT,
                         severity=Severity.WARNING,
                         message=(
-                            f"Function '{qualified_name}' has mutable "
-                            f"default argument"
+                            f"Function '{qualified_name}' has mutable default argument"
                         ),
                         file_path=self.file_path,
                         line_number=node.lineno,
@@ -956,17 +956,14 @@ class FinalAssemblyPhase:
                         category=FindingCategory.DESIGN_PARSE_ERROR,
                         severity=Severity.ERROR,
                         message=(
-                            f"Could not read source file: "
-                            f"{design_spec.file_path}"
+                            f"Could not read source file: {design_spec.file_path}"
                         ),
                         file_path=design_spec.file_path,
                     )
                 )
             else:
                 reconciler = DesignReconciler(file_path=design_spec.file_path)
-                all_findings.extend(
-                    reconciler.reconcile(source_code, design_spec)
-                )
+                all_findings.extend(reconciler.reconcile(source_code, design_spec))
 
         # ---- step 3: work-item validation ----
         work_items: List[WorkItem] = []
@@ -1003,15 +1000,9 @@ class FinalAssemblyPhase:
                 all_findings.extend(checker.check(source_code))
 
         # ---- step 5: aggregate & report ----
-        error_count = sum(
-            1 for f in all_findings if f.severity == Severity.ERROR
-        )
-        warning_count = sum(
-            1 for f in all_findings if f.severity == Severity.WARNING
-        )
-        info_count = sum(
-            1 for f in all_findings if f.severity == Severity.INFO
-        )
+        error_count = sum(1 for f in all_findings if f.severity == Severity.ERROR)
+        warning_count = sum(1 for f in all_findings if f.severity == Severity.WARNING)
+        info_count = sum(1 for f in all_findings if f.severity == Severity.INFO)
         verdict = self._compute_verdict(all_findings)
         work_items_complete = sum(
             1 for item in work_items if item.status == WorkItemStatus.COMPLETE

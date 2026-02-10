@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 # ENUMS
 # ============================================================================
 
+
 class PhaseStatus(enum.Enum):
     """Status of a phase execution."""
+
     NOT_STARTED = "not_started"
     IN_PROGRESS = "in_progress"
     SUCCESS = "success"
@@ -33,6 +35,7 @@ class PhaseStatus(enum.Enum):
 
 class TestType(enum.Enum):
     """Type of test to generate."""
+
     UNIT = "unit"
     INTEGRATION = "integration"
     EDGE_CASE = "edge_case"
@@ -42,9 +45,11 @@ class TestType(enum.Enum):
 # DATACLASSES
 # ============================================================================
 
+
 @dataclass
 class MethodSpec:
     """Specification for a single method/function to be tested."""
+
     name: str
     parameters: List[Dict[str, str]] = field(default_factory=list)
     return_type: str = "None"
@@ -58,6 +63,7 @@ class MethodSpec:
 @dataclass
 class ClassSpec:
     """Specification for a class to be tested."""
+
     name: str
     module_path: str
     methods: List[MethodSpec] = field(default_factory=list)
@@ -69,6 +75,7 @@ class ClassSpec:
 @dataclass
 class FunctionSpec:
     """Specification for a standalone function to be tested."""
+
     name: str
     module_path: str
     parameters: List[Dict[str, str]] = field(default_factory=list)
@@ -81,6 +88,7 @@ class FunctionSpec:
 @dataclass
 class TestCase:
     """A single generated test case."""
+
     test_name: str
     test_type: TestType
     target_name: str
@@ -95,6 +103,7 @@ class TestCase:
 @dataclass
 class TestModule:
     """A generated test module (file)."""
+
     filename: str
     imports: List[str] = field(default_factory=list)
     test_cases: List[TestCase] = field(default_factory=list)
@@ -104,6 +113,7 @@ class TestModule:
 @dataclass
 class StubModule:
     """A generated implementation stub module."""
+
     filepath: str
     content: str
 
@@ -111,6 +121,7 @@ class StubModule:
 @dataclass
 class DesignDocument:
     """Parsed design document containing all specs."""
+
     feature_name: str
     description: str = ""
     classes: List[ClassSpec] = field(default_factory=list)
@@ -121,6 +132,7 @@ class DesignDocument:
 @dataclass
 class CollectionResult:
     """Result of pytest collection validation."""
+
     success: bool
     collected_count: int
     errors: List[str] = field(default_factory=list)
@@ -131,6 +143,7 @@ class CollectionResult:
 @dataclass
 class PhaseResult:
     """Result of the Test Construction phase execution."""
+
     status: PhaseStatus
     test_modules: List[TestModule] = field(default_factory=list)
     stub_modules: List[StubModule] = field(default_factory=list)
@@ -142,6 +155,7 @@ class PhaseResult:
 # ============================================================================
 # PARSING
 # ============================================================================
+
 
 def parse_design_document(raw: Dict[str, Any]) -> DesignDocument:
     """
@@ -212,7 +226,10 @@ def parse_design_document(raw: Dict[str, Any]) -> DesignDocument:
 
     logger.info(
         "Parsed design document '%s' with %d classes, %d functions, %d edge cases",
-        feature_name, len(classes), len(functions), len(edge_cases),
+        feature_name,
+        len(classes),
+        len(functions),
+        len(edge_cases),
     )
 
     return DesignDocument(
@@ -228,6 +245,7 @@ def parse_design_document(raw: Dict[str, Any]) -> DesignDocument:
 # HELPERS
 # ============================================================================
 
+
 def _sanitize_name(name: str) -> str:
     """
     Sanitize a name for use in test function / identifier names.
@@ -239,12 +257,13 @@ def _sanitize_name(name: str) -> str:
     return name.lstrip("_") or name
 
 
-def _make_init_call(class_name: str, init_params: List[Dict[str, str]]) -> Tuple[str, str]:
+def _make_init_call(
+    class_name: str, init_params: List[Dict[str, str]]
+) -> Tuple[str, str]:
     """Return (arrange_lines, instance_creation_line) for a class."""
     if init_params:
         assigns = [
-            f"{p['name']} = None  # TODO: provide valid value"
-            for p in init_params
+            f"{p['name']} = None  # TODO: provide valid value" for p in init_params
         ]
         arrange = "\n    ".join(assigns)
         args = ", ".join(p["name"] for p in init_params)
@@ -252,7 +271,9 @@ def _make_init_call(class_name: str, init_params: List[Dict[str, str]]) -> Tuple
     return "", f"instance = {class_name}()"
 
 
-def _make_method_call(method_spec: MethodSpec, instance_var: str = "instance") -> Tuple[str, str]:
+def _make_method_call(
+    method_spec: MethodSpec, instance_var: str = "instance"
+) -> Tuple[str, str]:
     """Return (arrange_lines, call_expression) for a method."""
     if method_spec.parameters:
         assigns = [
@@ -294,6 +315,7 @@ def _indent(text: str, prefix: str = "    ") -> str:
 # TEST CASE GENERATION
 # ============================================================================
 
+
 def generate_test_cases_for_class(class_spec: ClassSpec) -> List[TestCase]:
     """
     Generate test cases for a given class specification.
@@ -319,15 +341,17 @@ def generate_test_cases_for_class(class_spec: ClassSpec) -> List[TestCase]:
     body_parts.append("# Assert")
     body_parts.append("assert instance is not None")
 
-    test_cases.append(TestCase(
-        test_name=f"test_{san_cls}_instantiation",
-        test_type=TestType.UNIT,
-        target_name=cls,
-        target_method=None,
-        description=f"Verify {cls} can be instantiated",
-        test_body="\n    ".join(body_parts),
-        _is_class_test=True,
-    ))
+    test_cases.append(
+        TestCase(
+            test_name=f"test_{san_cls}_instantiation",
+            test_type=TestType.UNIT,
+            target_name=cls,
+            target_method=None,
+            description=f"Verify {cls} can be instantiated",
+            test_body="\n    ".join(body_parts),
+            _is_class_test=True,
+        )
+    )
 
     # ---- Per-method tests ----
     for meth in class_spec.methods:
@@ -353,16 +377,18 @@ def generate_test_cases_for_class(class_spec: ClassSpec) -> List[TestCase]:
         body_parts.append("assert result is not None  # TODO: assert specific value")
 
         markers = ["asyncio"] if meth.is_async else []
-        test_cases.append(TestCase(
-            test_name=f"test_{san_cls}_{san_meth}_returns",
-            test_type=TestType.UNIT,
-            target_name=cls,
-            target_method=meth.name,
-            description=f"Verify {cls}.{meth.name} returns expected result",
-            test_body="\n    ".join(body_parts),
-            markers=markers,
-            _is_class_test=True,
-        ))
+        test_cases.append(
+            TestCase(
+                test_name=f"test_{san_cls}_{san_meth}_returns",
+                test_type=TestType.UNIT,
+                target_name=cls,
+                target_method=meth.name,
+                description=f"Verify {cls}.{meth.name} returns expected result",
+                test_body="\n    ".join(body_parts),
+                markers=markers,
+                _is_class_test=True,
+            )
+        )
 
         # -- exception tests --
         for exc in meth.raises:
@@ -381,16 +407,18 @@ def generate_test_cases_for_class(class_spec: ClassSpec) -> List[TestCase]:
             else:
                 body_parts.append(f"    {meth_call}")
 
-            test_cases.append(TestCase(
-                test_name=f"test_{san_cls}_{san_meth}_raises_{san_exc}",
-                test_type=TestType.UNIT,
-                target_name=cls,
-                target_method=meth.name,
-                description=f"Verify {cls}.{meth.name} raises {exc}",
-                test_body="\n    ".join(body_parts),
-                markers=markers,
-                _is_class_test=True,
-            ))
+            test_cases.append(
+                TestCase(
+                    test_name=f"test_{san_cls}_{san_meth}_raises_{san_exc}",
+                    test_type=TestType.UNIT,
+                    target_name=cls,
+                    target_method=meth.name,
+                    description=f"Verify {cls}.{meth.name} raises {exc}",
+                    test_body="\n    ".join(body_parts),
+                    markers=markers,
+                    _is_class_test=True,
+                )
+            )
 
     return test_cases
 
@@ -410,15 +438,17 @@ def generate_test_cases_for_function(func_spec: FunctionSpec) -> List[TestCase]:
     markers = ["asyncio"] if func_spec.is_async else []
 
     # -- callable test --
-    test_cases.append(TestCase(
-        test_name=f"test_{san_fn}_callable",
-        test_type=TestType.UNIT,
-        target_name=fn,
-        target_method=None,
-        description=f"Verify {fn} is callable",
-        test_body=f"assert callable({fn})",
-        markers=list(markers),
-    ))
+    test_cases.append(
+        TestCase(
+            test_name=f"test_{san_fn}_callable",
+            test_type=TestType.UNIT,
+            target_name=fn,
+            target_method=None,
+            description=f"Verify {fn} is callable",
+            test_body=f"assert callable({fn})",
+            markers=list(markers),
+        )
+    )
 
     # -- returns test --
     func_arrange, func_call = _make_func_call(func_spec)
@@ -435,15 +465,17 @@ def generate_test_cases_for_function(func_spec: FunctionSpec) -> List[TestCase]:
     body_parts.append("# Assert")
     body_parts.append("assert result is not None  # TODO: assert specific value")
 
-    test_cases.append(TestCase(
-        test_name=f"test_{san_fn}_returns",
-        test_type=TestType.UNIT,
-        target_name=fn,
-        target_method=None,
-        description=f"Verify {fn} returns expected result",
-        test_body="\n    ".join(body_parts),
-        markers=list(markers),
-    ))
+    test_cases.append(
+        TestCase(
+            test_name=f"test_{san_fn}_returns",
+            test_type=TestType.UNIT,
+            target_name=fn,
+            target_method=None,
+            description=f"Verify {fn} returns expected result",
+            test_body="\n    ".join(body_parts),
+            markers=list(markers),
+        )
+    )
 
     # -- exception tests --
     for exc in func_spec.raises:
@@ -459,15 +491,17 @@ def generate_test_cases_for_function(func_spec: FunctionSpec) -> List[TestCase]:
         else:
             body_parts.append(f"    {func_call}")
 
-        test_cases.append(TestCase(
-            test_name=f"test_{san_fn}_raises_{san_exc}",
-            test_type=TestType.UNIT,
-            target_name=fn,
-            target_method=None,
-            description=f"Verify {fn} raises {exc}",
-            test_body="\n    ".join(body_parts),
-            markers=list(markers),
-        ))
+        test_cases.append(
+            TestCase(
+                test_name=f"test_{san_fn}_raises_{san_exc}",
+                test_type=TestType.UNIT,
+                target_name=fn,
+                target_method=None,
+                description=f"Verify {fn} raises {exc}",
+                test_body="\n    ".join(body_parts),
+                markers=list(markers),
+            )
+        )
 
     return test_cases
 
@@ -522,15 +556,17 @@ def generate_edge_case_tests(
         # Determine whether this is a class test
         is_class = target_method is not None
 
-        test_cases.append(TestCase(
-            test_name=test_name,
-            test_type=TestType.EDGE_CASE,
-            target_name=target_name,
-            target_method=target_method,
-            description=description,
-            test_body=body,
-            _is_class_test=is_class,
-        ))
+        test_cases.append(
+            TestCase(
+                test_name=test_name,
+                test_type=TestType.EDGE_CASE,
+                target_name=target_name,
+                target_method=target_method,
+                description=description,
+                test_body=body,
+                _is_class_test=is_class,
+            )
+        )
 
     return test_cases
 
@@ -538,6 +574,7 @@ def generate_edge_case_tests(
 # ============================================================================
 # TEST MODULE BUILDING
 # ============================================================================
+
 
 def build_test_module(
     module_path: str,
@@ -648,6 +685,7 @@ def render_test_module(test_module: TestModule) -> str:
 # STUB GENERATION
 # ============================================================================
 
+
 def generate_stub_for_class(class_spec: ClassSpec) -> str:
     """
     Generate a stub class implementation.
@@ -708,7 +746,7 @@ def generate_stub_for_class(class_spec: ClassSpec) -> str:
             lines.append(f'        """{meth.description}"""')
 
         lines.append(
-            f'        raise NotImplementedError('
+            f"        raise NotImplementedError("
             f'"{class_spec.name}.{meth.name} is not yet implemented")'
         )
         lines.append("")
@@ -728,10 +766,14 @@ def generate_stub_for_function(func_spec: FunctionSpec) -> str:
     )
 
     lines: List[str] = []
-    lines.append(f"{async_kw}def {func_spec.name}({params}) -> {func_spec.return_type}:")
+    lines.append(
+        f"{async_kw}def {func_spec.name}({params}) -> {func_spec.return_type}:"
+    )
     if func_spec.description:
         lines.append(f'    """{func_spec.description}"""')
-    lines.append(f'    raise NotImplementedError("{func_spec.name} is not yet implemented")')
+    lines.append(
+        f'    raise NotImplementedError("{func_spec.name} is not yet implemented")'
+    )
 
     return "\n".join(lines)
 
@@ -784,6 +826,7 @@ def build_stub_module(
 # ============================================================================
 # FILESYSTEM OPERATIONS
 # ============================================================================
+
 
 def _ensure_init_py(directory: Path) -> None:
     """Create ``__init__.py`` in *directory* if it doesn't exist."""
@@ -852,6 +895,7 @@ def write_modules_to_disk(
 # PYTEST VALIDATION
 # ============================================================================
 
+
 def validate_pytest_collection(
     test_dir: Path,
     stub_dir: Optional[Path] = None,
@@ -895,8 +939,11 @@ def validate_pytest_collection(
             plugins=[plugin],
         )
 
-        success = (exit_code == 0 or exit_code == _pytest.ExitCode.NO_TESTS_COLLECTED
-                    if hasattr(exit_code, 'value') else exit_code == 0) and len(plugin.errors) == 0
+        success = (
+            exit_code == 0 or exit_code == _pytest.ExitCode.NO_TESTS_COLLECTED
+            if hasattr(exit_code, "value")
+            else exit_code == 0
+        ) and len(plugin.errors) == 0
         # Simpler: just check exit code 0 and no errors
         success = exit_code == 0 and len(plugin.errors) == 0
         collected_count = len(plugin.collected)
@@ -904,7 +951,8 @@ def validate_pytest_collection(
 
         logger.info(
             "Pytest collection: %s, collected %d tests",
-            "SUCCESS" if success else "FAILED", collected_count,
+            "SUCCESS" if success else "FAILED",
+            collected_count,
         )
 
         return CollectionResult(
@@ -920,6 +968,7 @@ def validate_pytest_collection(
 # ============================================================================
 # PHASE CLASS
 # ============================================================================
+
 
 class TestConstructionPhase:
     """
@@ -949,7 +998,9 @@ class TestConstructionPhase:
                       generation.
         """
         self.raw_design = design_doc
-        self.output_dir = output_dir or Path(tempfile.mkdtemp(prefix="test_construction_"))
+        self.output_dir = output_dir or Path(
+            tempfile.mkdtemp(prefix="test_construction_")
+        )
         self.validate = validate
         self.status = PhaseStatus.NOT_STARTED
         self._result: Optional[PhaseResult] = None
@@ -1099,9 +1150,7 @@ class TestConstructionPhase:
 
         self.status = result.status
         self._result = result
-        logger.info(
-            "Test Construction Phase completed: %s", result.status.value
-        )
+        logger.info("Test Construction Phase completed: %s", result.status.value)
         return result
 
     @property

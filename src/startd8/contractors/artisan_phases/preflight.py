@@ -488,7 +488,10 @@ class PreFlightChecker:
                         name=f"{category.value}:unexpected_error",
                         status=CheckStatus.FAIL,
                         message=f"Unexpected error in {category.value} checks: {exc}",
-                        details={"error": str(exc), "traceback": traceback.format_exc()},
+                        details={
+                            "error": str(exc),
+                            "traceback": traceback.format_exc(),
+                        },
                     )
                 )
 
@@ -529,7 +532,11 @@ class PreFlightChecker:
             if self._should_stop(results):
                 break
             try:
-                fn = self._check_cli_tool if spec.is_cli_tool else self._check_python_dependency
+                fn = (
+                    self._check_cli_tool
+                    if spec.is_cli_tool
+                    else self._check_python_dependency
+                )
                 results.append(fn(spec))
             except Exception as exc:
                 results.append(
@@ -555,7 +562,10 @@ class PreFlightChecker:
                 category=CheckCategory.DEPENDENCY,
                 name=check_name,
                 status=_status_for(spec.required),
-                message=f"Package '{spec.name}' not found (not installed or not importable)",
+                message=(
+                    f"Package '{spec.name}' not found"
+                    " (not installed or not importable)"
+                ),
                 duration_ms=_elapsed_ms(start),
             )
 
@@ -581,7 +591,10 @@ class PreFlightChecker:
                 category=CheckCategory.DEPENDENCY,
                 name=check_name,
                 status=CheckStatus.PASS,
-                message=f"Package '{spec.name}' is importable (version metadata unavailable)",
+                message=(
+                    f"Package '{spec.name}' is importable"
+                    " (version metadata unavailable)"
+                ),
                 details={"package": spec.name},
                 duration_ms=_elapsed_ms(start),
             )
@@ -590,7 +603,10 @@ class PreFlightChecker:
                 category=CheckCategory.DEPENDENCY,
                 name=check_name,
                 status=CheckStatus.WARN,
-                message=f"Package '{spec.name}' imported but version check failed: {exc}",
+                message=(
+                    f"Package '{spec.name}' imported"
+                    f" but version check failed: {exc}"
+                ),
                 duration_ms=_elapsed_ms(start),
             )
 
@@ -601,7 +617,11 @@ class PreFlightChecker:
                     category=CheckCategory.DEPENDENCY,
                     name=check_name,
                     status=CheckStatus.PASS,
-                    message=f"Package '{spec.name}' v{installed_version} >= {spec.min_version}",
+                    message=(
+                        f"Package '{spec.name}'"
+                        f" v{installed_version}"
+                        f" >= {spec.min_version}"
+                    ),
                     details={
                         "installed_version": installed_version,
                         "required_version": spec.min_version,
@@ -654,7 +674,9 @@ class PreFlightChecker:
         base_details: Dict[str, Any] = {"tool": spec.name, "path": tool_path}
 
         if spec.min_version and version:
-            base_details.update(installed_version=version, required_version=spec.min_version)
+            base_details.update(
+                installed_version=version, required_version=spec.min_version
+            )
             if _compare_versions(version, spec.min_version):
                 return CheckResult(
                     category=CheckCategory.DEPENDENCY,
@@ -848,7 +870,11 @@ class PreFlightChecker:
                 name=f"endpoint:{label}",
                 status=_status_for(spec.required),
                 message=f"TCP timeout to {host}:{port} after {spec.timeout_seconds}s",
-                details={"host": host, "port": port, "timeout_seconds": spec.timeout_seconds},
+                details={
+                    "host": host,
+                    "port": port,
+                    "timeout_seconds": spec.timeout_seconds,
+                },
                 duration_ms=_elapsed_ms(start),
             )
         except (socket.error, ConnectionRefusedError, OSError) as exc:
@@ -958,7 +984,11 @@ class PreFlightChecker:
                 name=f"model:{spec.model_id}",
                 status=_status_for(spec.required),
                 message=f"API request failed: HTTP {exc.code}",
-                details={"model": spec.model_id, "provider": "openai", "http_error": exc.code},
+                details={
+                    "model": spec.model_id,
+                    "provider": "openai",
+                    "http_error": exc.code,
+                },
                 duration_ms=_elapsed_ms(start),
             )
         except (socket.timeout, TimeoutError):
@@ -976,7 +1006,11 @@ class PreFlightChecker:
                 name=f"model:{spec.model_id}",
                 status=_status_for(spec.required),
                 message=f"API request error: {exc}",
-                details={"model": spec.model_id, "provider": "openai", "error": str(exc)},
+                details={
+                    "model": spec.model_id,
+                    "provider": "openai",
+                    "error": str(exc),
+                },
                 duration_ms=_elapsed_ms(start),
             )
 
@@ -1020,7 +1054,10 @@ class PreFlightChecker:
                 category=CheckCategory.MODEL,
                 name=f"model:{spec.model_id}",
                 status=CheckStatus.PASS,
-                message=f"Model '{spec.model_id}' matches a known Anthropic model family",
+                message=(
+                    f"Model '{spec.model_id}' matches"
+                    " a known Anthropic model family"
+                ),
                 details={"model": spec.model_id, "provider": "anthropic"},
                 duration_ms=_elapsed_ms(start),
             )
@@ -1089,7 +1126,11 @@ class PreFlightChecker:
                 name=f"model:{spec.model_id}",
                 status=_status_for(spec.required),
                 message=f"Error checking Ollama: {exc}",
-                details={"model": spec.model_id, "provider": "ollama", "error": str(exc)},
+                details={
+                    "model": spec.model_id,
+                    "provider": "ollama",
+                    "error": str(exc),
+                },
                 duration_ms=_elapsed_ms(start),
             )
 
@@ -1098,7 +1139,11 @@ class PreFlightChecker:
         file_path = Path(spec.model_id)
 
         if file_path.exists():
-            size_mb = file_path.stat().st_size / (1024 * 1024) if file_path.is_file() else None
+            size_mb = (
+                file_path.stat().st_size / (1024 * 1024)
+                if file_path.is_file()
+                else None
+            )
             return CheckResult(
                 category=CheckCategory.MODEL,
                 name=f"model:{spec.model_id}",
@@ -1250,13 +1295,17 @@ class PreFlightChecker:
                     category=CheckCategory.WORKSPACE,
                     name="workspace:disk_space",
                     status=CheckStatus.PASS,
-                    message=f"Sufficient disk space: {free_gb:.1f} GB free (>= {min_mb} MB required)",
+                    message=(
+                        f"Sufficient disk space:"
+                        f" {free_gb:.1f} GB free"
+                        f" (>= {min_mb} MB required)"
+                    ),
                     details={
                         "path": abs_path,
                         "free_mb": round(free_mb, 2),
                         "free_gb": round(free_gb, 2),
                         "required_mb": min_mb,
-                        "total_gb": round(usage.total / (1024 ** 3), 2),
+                        "total_gb": round(usage.total / (1024**3), 2),
                     },
                     duration_ms=_elapsed_ms(start),
                 )
@@ -1264,7 +1313,11 @@ class PreFlightChecker:
                 category=CheckCategory.WORKSPACE,
                 name="workspace:disk_space",
                 status=CheckStatus.FAIL,
-                message=f"Insufficient disk space: {free_mb:.1f} MB free < {min_mb} MB required",
+                message=(
+                    f"Insufficient disk space:"
+                    f" {free_mb:.1f} MB free"
+                    f" < {min_mb} MB required"
+                ),
                 details={
                     "path": abs_path,
                     "free_mb": round(free_mb, 2),
@@ -1302,7 +1355,9 @@ class PreFlightChecker:
 
         # Branch check
         if git_spec.require_branch:
-            results.append(self._check_git_branch(git_spec.path, git_spec.require_branch))
+            results.append(
+                self._check_git_branch(git_spec.path, git_spec.require_branch)
+            )
             if self._should_stop(results):
                 return results
 

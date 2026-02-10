@@ -7,7 +7,10 @@ All types, enums, exceptions, and the runner are defined here with no relative i
 
 Usage::
 
-    from phase_runner import PhaseRunner, PhaseConfig, PhaseOutput, PhaseType, RetryPolicy
+    from phase_runner import (
+        PhaseRunner, PhaseConfig, PhaseOutput,
+        PhaseType, RetryPolicy,
+    )
 
     class DraftPhase:
         @property
@@ -309,7 +312,8 @@ class PhaseRunner:
         Args:
             phases: Sequence of :class:`PhaseConfig` instances defining the pipeline.
             budget: Maximum cumulative cost allowed. Defaults to infinity (no limit).
-            tracer: OpenTelemetry Tracer instance. If ``None``, acquires the default tracer.
+            tracer: OpenTelemetry Tracer instance.
+                If ``None``, acquires the default tracer.
             logger_instance: Logger instance. If ``None``, uses the module-level logger.
 
         Raises:

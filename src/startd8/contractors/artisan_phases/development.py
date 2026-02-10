@@ -9,7 +9,8 @@ This module implements an iterative development phase that:
 - Supports configurable retry logic with exponential backoff option
 
 Architecture:
-    DevelopmentPlan -> validate -> topological_sort -> tier execution -> DevelopmentResult
+    DevelopmentPlan -> validate -> topological_sort
+    -> tier execution -> DevelopmentResult
 
     Each tier contains chunks whose dependencies are fully satisfied.
     Chunks within a tier execute concurrently (bounded by max_parallel).
@@ -68,6 +69,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 # ENUMS
 # ============================================================================
 
+
 class ChunkStatus(str, Enum):
     """Lifecycle states for a development chunk.
 
@@ -82,6 +84,7 @@ class ChunkStatus(str, Enum):
                                        v
                                     FAILED -> SKIPPED (dependents)
     """
+
     PENDING = "pending"
     QUEUED = "queued"
     RUNNING = "running"
@@ -95,18 +98,22 @@ class ChunkStatus(str, Enum):
 # EXCEPTIONS
 # ============================================================================
 
+
 class DevelopmentPhaseError(Exception):
     """Base exception for development phase errors."""
+
     pass
 
 
 class CyclicDependencyError(DevelopmentPhaseError):
     """Raised when chunk dependencies contain a cycle."""
+
     pass
 
 
 class MissingDependencyError(DevelopmentPhaseError):
     """Raised when a chunk depends on a non-existent chunk_id."""
+
     pass
 
 
@@ -137,6 +144,7 @@ class ChunkExecutionError(DevelopmentPhaseError):
 # ============================================================================
 # DATA CLASSES
 # ============================================================================
+
 
 @dataclass
 class DevelopmentChunk:
@@ -259,6 +267,7 @@ class DevelopmentResult:
 # ABSTRACT BASE CLASSES
 # ============================================================================
 
+
 class ChunkExecutor(ABC):
     """Abstract base for executing a chunk's implementation work.
 
@@ -332,9 +341,7 @@ class StateStore(ABC):
         ...
 
     @abstractmethod
-    async def save_state(
-        self, plan_id: str, states: Dict[str, ChunkState]
-    ) -> None:
+    async def save_state(self, plan_id: str, states: Dict[str, ChunkState]) -> None:
         """
         Persist the current state of all chunks.
 
@@ -360,6 +367,7 @@ class StateStore(ABC):
 # ============================================================================
 # DEFAULT IMPLEMENTATIONS
 # ============================================================================
+
 
 class DefaultChunkExecutor(ChunkExecutor):
     """Default executor that runs a chunk via callback or dry-run mode.
@@ -391,8 +399,7 @@ class DefaultChunkExecutor(ChunkExecutor):
 
         if self.callback is None:
             self.logger.debug(
-                f"[NO-OP] No callback provided for {chunk.chunk_id}, "
-                "returning success"
+                f"[NO-OP] No callback provided for {chunk.chunk_id}, returning success"
             )
             return True, "No callback: implementation logged"
 
@@ -462,9 +469,7 @@ class DefaultTestRunner(TestRunner):
                 except asyncio.TimeoutError:
                     proc.kill()
                     await proc.wait()
-                    return False, (
-                        f"Test timeout after {self.timeout}s: {cmd}"
-                    )
+                    return False, (f"Test timeout after {self.timeout}s: {cmd}")
 
                 stdout_text = stdout.decode(errors="replace")
                 stderr_text = stderr.decode(errors="replace")
@@ -514,9 +519,7 @@ class JsonFileStateStore(StateStore):
     def _get_state_path(self, plan_id: str) -> Path:
         """Get the file path for a plan's state."""
         # Sanitize plan_id for safe filesystem use
-        safe_id = "".join(
-            c if c.isalnum() or c in "-_." else "_" for c in plan_id
-        )
+        safe_id = "".join(c if c.isalnum() or c in "-_." else "_" for c in plan_id)
         return self.directory / f"{safe_id}_state.json"
 
     async def load_state(self, plan_id: str) -> Dict[str, ChunkState]:
@@ -544,32 +547,25 @@ class JsonFileStateStore(StateStore):
                 )
 
             self.logger.debug(
-                f"Loaded state for plan {plan_id}: "
-                f"{len(states)} chunk(s)"
+                f"Loaded state for plan {plan_id}: {len(states)} chunk(s)"
             )
             return states
 
         except json.JSONDecodeError as e:
             self.logger.warning(
-                f"Corrupted state file for plan {plan_id}: {e}. "
-                "Starting fresh."
+                f"Corrupted state file for plan {plan_id}: {e}. Starting fresh."
             )
             return {}
         except (KeyError, ValueError) as e:
             self.logger.warning(
-                f"Invalid state data for plan {plan_id}: {e}. "
-                "Starting fresh."
+                f"Invalid state data for plan {plan_id}: {e}. Starting fresh."
             )
             return {}
         except Exception as e:
-            self.logger.error(
-                f"Error loading state for plan {plan_id}: {e}"
-            )
+            self.logger.error(f"Error loading state for plan {plan_id}: {e}")
             return {}
 
-    async def save_state(
-        self, plan_id: str, states: Dict[str, ChunkState]
-    ) -> None:
+    async def save_state(self, plan_id: str, states: Dict[str, ChunkState]) -> None:
         """Save state to a JSON file atomically."""
         state_path = self._get_state_path(plan_id)
 
@@ -621,14 +617,13 @@ class JsonFileStateStore(StateStore):
                 state_path.unlink()
                 self.logger.debug(f"Cleared state for plan {plan_id}")
         except Exception as e:
-            self.logger.error(
-                f"Error clearing state for plan {plan_id}: {e}"
-            )
+            self.logger.error(f"Error clearing state for plan {plan_id}: {e}")
 
 
 # ============================================================================
 # VALIDATION AND SORTING
 # ============================================================================
+
 
 def validate_plan(plan: DevelopmentPlan) -> List[str]:
     """
@@ -674,8 +669,7 @@ def validate_plan(plan: DevelopmentPlan) -> List[str]:
         for dep in chunk.dependencies:
             if dep not in chunk_ids_seen:
                 errors.append(
-                    f"Chunk {chunk.chunk_id} depends on non-existent "
-                    f"chunk {dep}"
+                    f"Chunk {chunk.chunk_id} depends on non-existent chunk {dep}"
                 )
 
     # Check for cycles using DFS (only if no structural errors found)
@@ -705,9 +699,7 @@ def validate_plan(plan: DevelopmentPlan) -> List[str]:
         for chunk_id in chunk_ids_seen:
             if chunk_id not in visited:
                 if _has_cycle(chunk_id):
-                    errors.append(
-                        "Cyclic dependency detected in chunk graph"
-                    )
+                    errors.append("Cyclic dependency detected in chunk graph")
                     break
 
     return errors
@@ -748,16 +740,13 @@ def topological_sort(chunks: List[DevelopmentChunk]) -> List[List[str]]:
         for dep in chunk.dependencies:
             if dep not in chunk_map:
                 raise MissingDependencyError(
-                    f"Chunk {chunk.chunk_id} depends on non-existent "
-                    f"chunk {dep}"
+                    f"Chunk {chunk.chunk_id} depends on non-existent chunk {dep}"
                 )
             adj_list[dep].append(chunk.chunk_id)
             in_degree[chunk.chunk_id] += 1
 
     # Start with all zero-in-degree nodes
-    queue = deque(
-        sorted(cid for cid in chunk_map if in_degree[cid] == 0)
-    )
+    queue = deque(sorted(cid for cid in chunk_map if in_degree[cid] == 0))
     tiers: List[List[str]] = []
     processed_count = 0
 
@@ -777,9 +766,7 @@ def topological_sort(chunks: List[DevelopmentChunk]) -> List[List[str]]:
 
     # If we didn't process all nodes, there's a cycle
     if processed_count != len(chunks):
-        remaining = [
-            cid for cid, deg in in_degree.items() if deg > 0
-        ]
+        remaining = [cid for cid, deg in in_degree.items() if deg > 0]
         raise CyclicDependencyError(
             f"Cyclic dependency detected involving chunks: "
             f"{', '.join(sorted(remaining))}"
@@ -791,6 +778,7 @@ def topological_sort(chunks: List[DevelopmentChunk]) -> List[List[str]]:
 # ============================================================================
 # MAIN DEVELOPMENT PHASE CLASS
 # ============================================================================
+
 
 class DevelopmentPhase:
     """
@@ -880,9 +868,7 @@ class DevelopmentPhase:
         # --- Handle empty plan ---
         if not plan.chunks:
             self.logger.info("Plan has no chunks; returning success")
-            duration = (
-                datetime.now(timezone.utc) - start_time
-            ).total_seconds()
+            duration = (datetime.now(timezone.utc) - start_time).total_seconds()
             return DevelopmentResult(
                 plan_id=plan.plan_id,
                 success=True,
@@ -923,8 +909,7 @@ class DevelopmentPhase:
         # --- Execute tiers ---
         for tier_idx, tier_chunk_ids in enumerate(execution_order):
             self.logger.info(
-                f"=== Tier {tier_idx + 1}/{len(execution_order)}: "
-                f"{tier_chunk_ids} ==="
+                f"=== Tier {tier_idx + 1}/{len(execution_order)}: {tier_chunk_ids} ==="
             )
 
             states = await self._execute_tier(
@@ -987,9 +972,7 @@ class DevelopmentPhase:
                 if prev.status == ChunkStatus.PASSED:
                     # Keep — don't re-execute successful chunks
                     states[cid] = prev
-                    self.logger.debug(
-                        f"Chunk {cid}: already PASSED, preserving"
-                    )
+                    self.logger.debug(f"Chunk {cid}: already PASSED, preserving")
                 elif prev.status in (
                     ChunkStatus.RUNNING,
                     ChunkStatus.TESTING,
@@ -1010,8 +993,7 @@ class DevelopmentPhase:
                         status=ChunkStatus.PENDING,
                     )
                     self.logger.debug(
-                        f"Chunk {cid}: was FAILED, resetting to PENDING "
-                        "for retry"
+                        f"Chunk {cid}: was FAILED, resetting to PENDING for retry"
                     )
                 elif prev.status == ChunkStatus.SKIPPED:
                     # Reset skipped — dependency might succeed this time
@@ -1019,9 +1001,7 @@ class DevelopmentPhase:
                         chunk_id=cid,
                         status=ChunkStatus.PENDING,
                     )
-                    self.logger.debug(
-                        f"Chunk {cid}: was SKIPPED, resetting to PENDING"
-                    )
+                    self.logger.debug(f"Chunk {cid}: was SKIPPED, resetting to PENDING")
                 else:
                     # PENDING, QUEUED — reset cleanly
                     states[cid] = ChunkState(
@@ -1080,7 +1060,8 @@ class DevelopmentPhase:
             # Verify all dependencies have PASSED
             chunk = chunk_map[chunk_id]
             unsatisfied = [
-                dep for dep in chunk.dependencies
+                dep
+                for dep in chunk.dependencies
                 if states[dep].status != ChunkStatus.PASSED
             ]
 
@@ -1090,12 +1071,10 @@ class DevelopmentPhase:
                     f"{unsatisfied}; marking SKIPPED"
                 )
                 states[chunk_id].status = ChunkStatus.SKIPPED
-                states[chunk_id].last_error = (
-                    f"Unsatisfied dependencies: {', '.join(unsatisfied)}"
-                )
-                states[chunk_id].completed_at = (
-                    datetime.now(timezone.utc).isoformat()
-                )
+                states[
+                    chunk_id
+                ].last_error = f"Unsatisfied dependencies: {', '.join(unsatisfied)}"
+                states[chunk_id].completed_at = datetime.now(timezone.utc).isoformat()
                 continue
 
             eligible.append(chunk_id)
@@ -1105,8 +1084,7 @@ class DevelopmentPhase:
             return states
 
         self.logger.info(
-            f"Executing {len(eligible)} eligible chunk(s) "
-            f"(max_parallel={max_parallel})"
+            f"Executing {len(eligible)} eligible chunk(s) (max_parallel={max_parallel})"
         )
 
         semaphore = asyncio.Semaphore(max_parallel)
@@ -1115,13 +1093,9 @@ class DevelopmentPhase:
             async with semaphore:
                 chunk = chunk_map[cid]
                 state = states[cid]
-                states[cid] = await self._execute_chunk(
-                    chunk, state, context
-                )
+                states[cid] = await self._execute_chunk(chunk, state, context)
 
-        await asyncio.gather(
-            *[_run_with_semaphore(cid) for cid in eligible]
-        )
+        await asyncio.gather(*[_run_with_semaphore(cid) for cid in eligible])
 
         return states
 
@@ -1159,9 +1133,7 @@ class DevelopmentPhase:
             state.attempts += 1
             attempt_label = f"{state.attempts}/{max_attempts}"
 
-            self.logger.info(
-                f"Chunk {chunk.chunk_id}: attempt {attempt_label}"
-            )
+            self.logger.info(f"Chunk {chunk.chunk_id}: attempt {attempt_label}")
 
             # --- QUEUED ---
             state.status = ChunkStatus.QUEUED
@@ -1170,9 +1142,7 @@ class DevelopmentPhase:
             # --- RUNNING: Execute implementation ---
             state.status = ChunkStatus.RUNNING
             try:
-                exec_success, exec_output = await self.executor.execute(
-                    chunk, context
-                )
+                exec_success, exec_output = await self.executor.execute(chunk, context)
                 if not exec_success:
                     self.logger.warning(
                         f"Chunk {chunk.chunk_id}: execution failed "
@@ -1181,9 +1151,7 @@ class DevelopmentPhase:
                     state.last_error = exec_output
                     continue
 
-                self.logger.debug(
-                    f"Chunk {chunk.chunk_id}: execution succeeded"
-                )
+                self.logger.debug(f"Chunk {chunk.chunk_id}: execution succeeded")
 
             except Exception as e:
                 self.logger.exception(
@@ -1208,9 +1176,7 @@ class DevelopmentPhase:
                     state.last_error = f"Tests failed: {test_output}"
                     continue
 
-                self.logger.info(
-                    f"Chunk {chunk.chunk_id}: tests passed"
-                )
+                self.logger.info(f"Chunk {chunk.chunk_id}: tests passed")
 
             except Exception as e:
                 self.logger.exception(
@@ -1223,8 +1189,7 @@ class DevelopmentPhase:
             state.status = ChunkStatus.PASSED
             state.completed_at = datetime.now(timezone.utc).isoformat()
             self.logger.info(
-                f"Chunk {chunk.chunk_id}: PASSED "
-                f"(attempt {attempt_label})"
+                f"Chunk {chunk.chunk_id}: PASSED (attempt {attempt_label})"
             )
             return state
 
@@ -1275,9 +1240,7 @@ class DevelopmentPhase:
                             f"Skipped: dependency '{dep_id}' is "
                             f"{dep_state.status.value}"
                         )
-                        state.completed_at = (
-                            datetime.now(timezone.utc).isoformat()
-                        )
+                        state.completed_at = datetime.now(timezone.utc).isoformat()
                         self.logger.info(
                             f"Chunk {chunk.chunk_id}: SKIPPED due to "
                             f"dependency '{dep_id}' ({dep_state.status.value})"
@@ -1306,15 +1269,9 @@ class DevelopmentPhase:
         Returns:
             DevelopmentResult instance.
         """
-        passed = sum(
-            1 for s in states.values() if s.status == ChunkStatus.PASSED
-        )
-        failed = sum(
-            1 for s in states.values() if s.status == ChunkStatus.FAILED
-        )
-        skipped = sum(
-            1 for s in states.values() if s.status == ChunkStatus.SKIPPED
-        )
+        passed = sum(1 for s in states.values() if s.status == ChunkStatus.PASSED)
+        failed = sum(1 for s in states.values() if s.status == ChunkStatus.FAILED)
+        skipped = sum(1 for s in states.values() if s.status == ChunkStatus.SKIPPED)
         total = len(states)
 
         success = (total > 0 and passed == total) or total == 0
@@ -1328,8 +1285,7 @@ class DevelopmentPhase:
 
         if failed > 0:
             failed_ids = [
-                cid for cid, s in states.items()
-                if s.status == ChunkStatus.FAILED
+                cid for cid, s in states.items() if s.status == ChunkStatus.FAILED
             ]
             summary_parts.append(f"Failed chunks: {', '.join(failed_ids)}.")
 
@@ -1348,6 +1304,7 @@ class DevelopmentPhase:
 # ============================================================================
 # CONVENIENCE FUNCTION
 # ============================================================================
+
 
 async def run_development_phase(
     plan: DevelopmentPlan,

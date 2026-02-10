@@ -268,9 +268,7 @@ class LLMBackend(Protocol):
     signature can serve as the LLM backend — no inheritance required.
     """
 
-    async def generate(
-        self, prompt: str, system_prompt: str | None = None
-    ) -> str:
+    async def generate(self, prompt: str, system_prompt: str | None = None) -> str:
         """Generate text from the LLM.
 
         Args:
@@ -334,13 +332,13 @@ DESIGN_GENERATION_USER_PROMPT_TEMPLATE = (
 )
 
 _REVIEW_JSON_SCHEMA = (
-    '{{\n'
+    "{{\n"
     '    "approved": true or false,\n'
     '    "confidence": 0.0 to 1.0,\n'
     '    "concerns": ["concern1", "concern2", ...],\n'
     '    "suggestions": ["suggestion1", "suggestion2", ...],\n'
     '    "summary": "Brief summary of your review"\n'
-    '}}'
+    "}}"
 )
 
 REVIEWER_SYSTEM_PROMPT = (

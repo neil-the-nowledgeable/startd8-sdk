@@ -12,13 +12,23 @@ All implementation uses Python stdlib only (no external dependencies).
 
 Usage:
     >>> provider = InMemoryLessonsProvider([
-    ...     Lesson(id="1", title="Use type hints", description="Always add type hints to Python code",
-    ...            tags=["coding", "python"], phase="implementation"),
+    ...     Lesson(
+    ...         id="1", title="Use type hints",
+    ...         description="Always add type hints",
+    ...         tags=["coding", "python"],
+    ...         phase="implementation",
+    ...     ),
     ... ])
-    >>> discovery = LessonsDiscovery(provider=provider, threshold=0.1)
-    >>> result = discovery.discover(workflow_id="wf-001", context="python coding best practices")
+    >>> discovery = LessonsDiscovery(
+    ...     provider=provider, threshold=0.1,
+    ... )
+    >>> result = discovery.discover(
+    ...     workflow_id="wf-001",
+    ...     context="python coding best practices",
+    ... )
     >>> for sl in result.ranked_lessons:
-    ...     print(f"{sl.lesson.title}: {sl.relevance_score:.2f} ({sl.assigned_phase.value})")
+    ...     print(f"{sl.lesson.title}: "
+    ...           f"{sl.relevance_score:.2f}")
 """
 
 from __future__ import annotations
@@ -208,38 +218,149 @@ class RelevanceScorer:
     # Common English stop-words excluded during tokenization.
     STOPWORDS: ClassVar[frozenset] = frozenset(
         {
-            "a", "an", "the", "and", "or", "but", "in", "on", "at", "to",
-            "for", "of", "with", "by", "from", "is", "it", "as", "be",
-            "was", "were", "are", "been", "being", "have", "has", "had",
-            "do", "does", "did", "will", "would", "could", "should", "may",
-            "might", "shall", "can", "this", "that", "these", "those", "we",
-            "they", "he", "she", "i", "you", "my", "your", "his", "her",
-            "its", "our", "their", "not", "no", "if", "then", "else",
-            "when", "where", "how", "what", "which", "who", "whom", "all",
-            "each", "every", "both", "few", "more", "most", "other", "some",
-            "such", "than", "too", "very", "just", "about", "need", "also",
-            "up", "out", "so",
+            "a",
+            "an",
+            "the",
+            "and",
+            "or",
+            "but",
+            "in",
+            "on",
+            "at",
+            "to",
+            "for",
+            "of",
+            "with",
+            "by",
+            "from",
+            "is",
+            "it",
+            "as",
+            "be",
+            "was",
+            "were",
+            "are",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "shall",
+            "can",
+            "this",
+            "that",
+            "these",
+            "those",
+            "we",
+            "they",
+            "he",
+            "she",
+            "i",
+            "you",
+            "my",
+            "your",
+            "his",
+            "her",
+            "its",
+            "our",
+            "their",
+            "not",
+            "no",
+            "if",
+            "then",
+            "else",
+            "when",
+            "where",
+            "how",
+            "what",
+            "which",
+            "who",
+            "whom",
+            "all",
+            "each",
+            "every",
+            "both",
+            "few",
+            "more",
+            "most",
+            "other",
+            "some",
+            "such",
+            "than",
+            "too",
+            "very",
+            "just",
+            "about",
+            "need",
+            "also",
+            "up",
+            "out",
+            "so",
         }
     )
 
     # Phase-specific keywords for phase inference.
     PHASE_KEYWORDS: ClassVar[Dict[WorkflowPhase, Set[str]]] = {
         WorkflowPhase.PLANNING: {
-            "plan", "design", "architect", "architecture", "requirement",
-            "requirements", "scope", "estimate", "strategy",
+            "plan",
+            "design",
+            "architect",
+            "architecture",
+            "requirement",
+            "requirements",
+            "scope",
+            "estimate",
+            "strategy",
         },
         WorkflowPhase.IMPLEMENTATION: {
-            "implement", "implementation", "code", "coding", "develop",
-            "development", "build", "building", "refactor", "refactoring",
-            "integrate", "integration", "feature",
+            "implement",
+            "implementation",
+            "code",
+            "coding",
+            "develop",
+            "development",
+            "build",
+            "building",
+            "refactor",
+            "refactoring",
+            "integrate",
+            "integration",
+            "feature",
         },
         WorkflowPhase.TESTING: {
-            "test", "testing", "qa", "quality", "bug", "regression",
-            "validation", "validate", "verify", "verification", "check",
+            "test",
+            "testing",
+            "qa",
+            "quality",
+            "bug",
+            "regression",
+            "validation",
+            "validate",
+            "verify",
+            "verification",
+            "check",
         },
         WorkflowPhase.DEPLOYMENT: {
-            "deploy", "deployment", "release", "ci/cd", "cicd", "pipeline",
-            "infrastructure", "rollback", "production", "prod", "launch",
+            "deploy",
+            "deployment",
+            "release",
+            "ci/cd",
+            "cicd",
+            "pipeline",
+            "infrastructure",
+            "rollback",
+            "production",
+            "prod",
+            "launch",
         },
     }
 
@@ -390,9 +511,7 @@ class WorkflowCache:
     def _evict_expired(self) -> None:
         """Remove all entries whose TTL has elapsed."""
         now = time.time()
-        expired = [
-            k for k, (ts, _) in self._store.items() if (now - ts) > self._ttl
-        ]
+        expired = [k for k, (ts, _) in self._store.items() if (now - ts) > self._ttl]
         for k in expired:
             del self._store[k]
         if expired:
@@ -453,7 +572,9 @@ class WorkflowCache:
         for k in keys:
             del self._store[k]
         if keys:
-            logger.debug("Invalidated %d entries for workflow %s", len(keys), workflow_id)
+            logger.debug(
+                "Invalidated %d entries for workflow %s", len(keys), workflow_id
+            )
         return len(keys)
 
     def clear_all(self) -> None:

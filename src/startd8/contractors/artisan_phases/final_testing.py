@@ -46,6 +46,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 class PhaseStatus(enum.Enum):
     """Enumeration of phase execution statuses."""
+
     PASSED = "passed"
     FAILED = "failed"
     ERROR = "error"
@@ -54,6 +55,7 @@ class PhaseStatus(enum.Enum):
 
 class StepName(enum.Enum):
     """Named steps in the final testing phase."""
+
     RUFF_LINT = "ruff_lint"
     PYTEST_RUN = "pytest_run"
     COVERAGE_PARSE = "coverage_parse"
@@ -68,6 +70,7 @@ class StepName(enum.Enum):
 @dataclass
 class LintViolation:
     """Represents a single linting violation from ruff."""
+
     file: str
     line: int
     column: int
@@ -90,6 +93,7 @@ class LintViolation:
 @dataclass
 class FailureDetail:
     """Represents details of a single test failure."""
+
     node_id: str  # e.g., "tests/test_foo.py::test_bar"
     test_name: str
     file: str
@@ -114,6 +118,7 @@ class FailureDetail:
 @dataclass
 class TestSuiteResult:
     """Aggregated results from pytest execution."""
+
     total: int = 0
     passed: int = 0
     failed: int = 0
@@ -148,6 +153,7 @@ class TestSuiteResult:
 @dataclass
 class CoverageReport:
     """Coverage metrics collected during test run."""
+
     total_statements: int = 0
     covered_statements: int = 0
     missing_statements: int = 0
@@ -172,6 +178,7 @@ class CoverageReport:
 @dataclass
 class StepResult:
     """Result of a single phase step (ruff, pytest, coverage parse, report)."""
+
     step: str
     status: PhaseStatus
     duration_seconds: float = 0.0
@@ -190,6 +197,7 @@ class StepResult:
 @dataclass
 class FinalTestingReport:
     """Complete report for the final testing phase."""
+
     phase_name: str = "final_testing"
     status: PhaseStatus = PhaseStatus.PASSED
     is_rerun: bool = False
@@ -251,6 +259,7 @@ class FinalTestingConfig:
         verbose: Enable verbose output.
         max_output_size: Maximum captured output size before truncation (bytes).
     """
+
     project_root: Path = field(default_factory=lambda: Path.cwd())
     source_dirs: List[str] = field(default_factory=lambda: ["src"])
     test_dirs: List[str] = field(default_factory=lambda: ["tests"])
@@ -473,8 +482,10 @@ class FinalTestingPhase:
         Re-run only the tests that previously failed.
 
         Args:
-            prior_report: A prior ``FinalTestingReport`` to extract failed test IDs from.
-            failed_node_ids: Explicit list of test node IDs to run (overrides prior_report).
+            prior_report: A prior ``FinalTestingReport`` to extract
+                failed test IDs from.
+            failed_node_ids: Explicit list of test node IDs to run
+                (overrides prior_report).
             attempt: Which re-run attempt this is (for reporting).
 
         Returns:
@@ -674,13 +685,15 @@ class FinalTestingPhase:
         self.logger.debug("Starting pytest execution")
 
         if json_report_path is None:
-            json_report_path = Path(tempfile.gettempdir()) / f"pytest_report_{os.getpid()}.json"
+            json_report_path = (
+                Path(tempfile.gettempdir()) / f"pytest_report_{os.getpid()}.json"
+            )
         if coverage_json_path is None:
-            coverage_json_path = Path(tempfile.gettempdir()) / f"coverage_{os.getpid()}.json"
+            coverage_json_path = (
+                Path(tempfile.gettempdir()) / f"coverage_{os.getpid()}.json"
+            )
 
-        cmd = self._build_pytest_command(
-            json_report_path, coverage_json_path, node_ids
-        )
+        cmd = self._build_pytest_command(json_report_path, coverage_json_path, node_ids)
 
         exit_code, stdout, stderr, duration = self._run_command(
             cmd,
@@ -697,9 +710,7 @@ class FinalTestingPhase:
             step_status = PhaseStatus.ERROR
             detail = "pytest not installed"
         elif exit_code == _EXIT_TIMEOUT:
-            self.logger.error(
-                "pytest timed out after %ds", self.config.pytest_timeout
-            )
+            self.logger.error("pytest timed out after %ds", self.config.pytest_timeout)
             test_result = TestSuiteResult(errors=1, raw_exit_code=exit_code)
             step_status = PhaseStatus.ERROR
             detail = f"pytest timed out after {self.config.pytest_timeout}s"
@@ -774,19 +785,23 @@ class FinalTestingPhase:
 
         # JSON report (if enabled and plugin is expected to be available)
         if self.config.json_report_enabled:
-            cmd.extend([
-                "--json-report",
-                f"--json-report-file={json_report_path}",
-            ])
+            cmd.extend(
+                [
+                    "--json-report",
+                    f"--json-report-file={json_report_path}",
+                ]
+            )
 
         # Coverage (if enabled)
         if self.config.collect_coverage:
             for source_dir in self.config.source_dirs:
                 cmd.append(f"--cov={source_dir}")
-            cmd.extend([
-                f"--cov-report=json:{coverage_json_path}",
-                "--cov-report=term",
-            ])
+            cmd.extend(
+                [
+                    f"--cov-report=json:{coverage_json_path}",
+                    "--cov-report=term",
+                ]
+            )
 
         # Extra user-supplied args
         cmd.extend(self.config.extra_pytest_args)
@@ -992,9 +1007,7 @@ class FinalTestingPhase:
         detail: Optional[str] = None
 
         if not coverage_json_path.exists():
-            self.logger.warning(
-                "Coverage JSON file not found: %s", coverage_json_path
-            )
+            self.logger.warning("Coverage JSON file not found: %s", coverage_json_path)
             step_status = PhaseStatus.ERROR
             detail = "coverage.json not found (pytest-cov may not be installed)"
         else:
@@ -1123,9 +1136,7 @@ class FinalTestingPhase:
         if test_results and test_results.failures:
             failed_node_ids = [f.node_id for f in test_results.failures]
 
-        overall_status = self._determine_overall_status(
-            test_results, coverage, steps
-        )
+        overall_status = self._determine_overall_status(test_results, coverage, steps)
 
         report = FinalTestingReport(
             phase_name="final_testing",
@@ -1176,11 +1187,7 @@ class FinalTestingPhase:
             return PhaseStatus.FAILED
 
         # Check coverage threshold (only when there are statements to cover)
-        if (
-            coverage
-            and coverage.total_statements > 0
-            and not coverage.meets_threshold
-        ):
+        if coverage and coverage.total_statements > 0 and not coverage.meets_threshold:
             return PhaseStatus.FAILED
 
         return PhaseStatus.PASSED

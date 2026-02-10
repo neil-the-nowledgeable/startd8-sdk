@@ -193,15 +193,10 @@ class RetrospectiveReport:
         return {
             "report_id": self.report_id,
             "phase_name": self.phase_name,
-            "retro_items": [
-                dataclasses.asdict(item) for item in self.retro_items
-            ],
-            "lessons": [
-                dataclasses.asdict(lesson) for lesson in self.lessons
-            ],
+            "retro_items": [dataclasses.asdict(item) for item in self.retro_items],
+            "lessons": [dataclasses.asdict(lesson) for lesson in self.lessons],
             "anti_pattern_findings": [
-                dataclasses.asdict(finding)
-                for finding in self.anti_pattern_findings
+                dataclasses.asdict(finding) for finding in self.anti_pattern_findings
             ],
             "summary": self.summary,
             "created_at": self.created_at,
@@ -264,14 +259,12 @@ class Sanitizer:
             ),
             SanitizationRule(
                 name="email",
-                pattern=re.compile(
-                    r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+'
-                ),
+                pattern=re.compile(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+"),
                 replacement="[REDACTED_EMAIL]",
             ),
             SanitizationRule(
                 name="aws_secret_key",
-                pattern=re.compile(r'(?:AKIA|sk-)[A-Za-z0-9/+=]{16,}'),
+                pattern=re.compile(r"(?:AKIA|sk-)[A-Za-z0-9/+=]{16,}"),
                 replacement="[REDACTED_SECRET_KEY]",
             ),
             SanitizationRule(
@@ -284,29 +277,29 @@ class Sanitizer:
             ),
             SanitizationRule(
                 name="unix_home_path",
-                pattern=re.compile(r'/(?:home|Users)/[a-zA-Z0-9_.\-]+'),
+                pattern=re.compile(r"/(?:home|Users)/[a-zA-Z0-9_.\-]+"),
                 replacement="[REDACTED_PATH]",
             ),
             SanitizationRule(
                 name="windows_user_path",
-                pattern=re.compile(r'C:\\\\Users\\\\[a-zA-Z0-9_.\-]+'),
+                pattern=re.compile(r"C:\\\\Users\\\\[a-zA-Z0-9_.\-]+"),
                 replacement="[REDACTED_PATH]",
             ),
             SanitizationRule(
                 name="phone_number",
                 pattern=re.compile(
-                    r'(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}'
+                    r"(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}"
                 ),
                 replacement="[REDACTED_PHONE]",
             ),
             SanitizationRule(
                 name="ipv4_address",
-                pattern=re.compile(r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b'),
+                pattern=re.compile(r"\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b"),
                 replacement="[REDACTED_IP]",
             ),
             SanitizationRule(
                 name="bearer_token",
-                pattern=re.compile(r'[Bb]earer\s+[A-Za-z0-9\-._~+/]+=*'),
+                pattern=re.compile(r"[Bb]earer\s+[A-Za-z0-9\-._~+/]+=*"),
                 replacement="[REDACTED_BEARER_TOKEN]",
             ),
             SanitizationRule(
@@ -319,7 +312,7 @@ class Sanitizer:
             ),
             SanitizationRule(
                 name="ssn",
-                pattern=re.compile(r'\b\d{3}-\d{2}-\d{4}\b'),
+                pattern=re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
                 replacement="[REDACTED_SSN]",
             ),
         ]
@@ -461,9 +454,7 @@ class AntiPatternDetector:
 
         return findings
 
-    def _detect_in_code(
-        self, filename: str, content: str
-    ) -> List[AntiPatternFinding]:
+    def _detect_in_code(self, filename: str, content: str) -> List[AntiPatternFinding]:
         """
         Run code-level anti-pattern detections.
 
@@ -508,20 +499,16 @@ class AntiPatternDetector:
         Returns:
             AntiPatternFinding if god class detected, None otherwise.
         """
-        method_count = len(re.findall(r'^\s+def\s+', content, re.MULTILINE))
-        line_count = content.count('\n')
+        method_count = len(re.findall(r"^\s+def\s+", content, re.MULTILINE))
+        line_count = content.count("\n")
 
         if method_count > 15 or line_count > 300:
             severity = Severity.CRITICAL if method_count > 25 else Severity.HIGH
             return AntiPatternFinding(
                 finding_id=str(uuid.uuid4()),
                 pattern_type=AntiPatternType.GOD_CLASS,
-                description=(
-                    f"Class in '{filename}' has excessive responsibilities"
-                ),
-                evidence=(
-                    f"Method count: {method_count}, Line count: {line_count}"
-                ),
+                description=(f"Class in '{filename}' has excessive responsibilities"),
+                evidence=(f"Method count: {method_count}, Line count: {line_count}"),
                 location=filename,
                 severity=severity,
                 recommendation=(
@@ -549,7 +536,7 @@ class AntiPatternDetector:
         max_indent = 0
         deep_indent_count = 0
 
-        for text_line in content.split('\n'):
+        for text_line in content.split("\n"):
             if not text_line.strip():
                 continue
             indent = (len(text_line) - len(text_line.lstrip())) // 4
@@ -591,8 +578,8 @@ class AntiPatternDetector:
             AntiPatternFinding if magic numbers detected, None otherwise.
         """
         magic_pattern = re.compile(
-            r'(?<![a-zA-Z0-9_])[2-9]\d*(?![a-zA-Z0-9_])|'
-            r'(?<![a-zA-Z0-9_])-[2-9]\d*(?![a-zA-Z0-9_])'
+            r"(?<![a-zA-Z0-9_])[2-9]\d*(?![a-zA-Z0-9_])|"
+            r"(?<![a-zA-Z0-9_])-[2-9]\d*(?![a-zA-Z0-9_])"
         )
         matches = magic_pattern.findall(content)
 
@@ -633,7 +620,7 @@ class AntiPatternDetector:
                 r'(?:password|passwd|pwd)\s*[=:]\s*["\']([^\s"\']{3,})',
                 re.IGNORECASE,
             ),
-            re.compile(r'(?:AKIA|sk-)[A-Za-z0-9/+=]{16,}'),
+            re.compile(r"(?:AKIA|sk-)[A-Za-z0-9/+=]{16,}"),
         ]
 
         for secret_pat in secret_patterns:
@@ -641,12 +628,8 @@ class AntiPatternDetector:
                 return AntiPatternFinding(
                     finding_id=str(uuid.uuid4()),
                     pattern_type=AntiPatternType.HARDCODED_SECRETS,
-                    description=(
-                        f"File '{filename}' contains hardcoded secrets"
-                    ),
-                    evidence=(
-                        "Detected patterns matching API keys or passwords"
-                    ),
+                    description=(f"File '{filename}' contains hardcoded secrets"),
+                    evidence=("Detected patterns matching API keys or passwords"),
                     location=filename,
                     severity=Severity.CRITICAL,
                     recommendation=(
@@ -669,16 +652,12 @@ class AntiPatternDetector:
         Returns:
             AntiPatternFinding if bare except clauses found, None otherwise.
         """
-        if re.search(r'except\s*:', content):
+        if re.search(r"except\s*:", content):
             return AntiPatternFinding(
                 finding_id=str(uuid.uuid4()),
                 pattern_type=AntiPatternType.MISSING_ERROR_HANDLING,
-                description=(
-                    f"File '{filename}' contains bare except clause(s)"
-                ),
-                evidence=(
-                    "Detected one or more 'except:' without exception type"
-                ),
+                description=(f"File '{filename}' contains bare except clause(s)"),
+                evidence=("Detected one or more 'except:' without exception type"),
                 location=filename,
                 severity=Severity.HIGH,
                 recommendation=(
@@ -703,16 +682,14 @@ class AntiPatternDetector:
         Returns:
             AntiPatternFinding if copy-paste detected, None otherwise.
         """
-        lines = content.split('\n')
+        lines = content.split("\n")
         line_counts: Dict[str, int] = {}
         for text_line in lines:
             stripped = text_line.strip()
             if stripped and len(stripped) > 10:
                 line_counts[stripped] = line_counts.get(stripped, 0) + 1
 
-        duplicated = [
-            dup_line for dup_line, cnt in line_counts.items() if cnt >= 3
-        ]
+        duplicated = [dup_line for dup_line, cnt in line_counts.items() if cnt >= 3]
         if len(duplicated) > 2:
             return AntiPatternFinding(
                 finding_id=str(uuid.uuid4()),
@@ -741,9 +718,7 @@ class AntiPatternDetector:
         Returns:
             AntiPatternFinding if missing documentation detected, None otherwise.
         """
-        func_count = len(
-            re.findall(r'^\s*def\s+(?!_)[a-zA-Z]', content, re.MULTILINE)
-        )
+        func_count = len(re.findall(r"^\s*def\s+(?!_)[a-zA-Z]", content, re.MULTILINE))
         docstring_count = len(re.findall(r'"""', content))
 
         if func_count > 3 and docstring_count < func_count // 2:
@@ -766,9 +741,7 @@ class AntiPatternDetector:
             )
         return None
 
-    def _detect_in_process(
-        self, process_log: List[str]
-    ) -> List[AntiPatternFinding]:
+    def _detect_in_process(self, process_log: List[str]) -> List[AntiPatternFinding]:
         """
         Detect process-level anti-patterns from log entries.
 
@@ -801,8 +774,12 @@ class AntiPatternDetector:
             AntiPatternFinding if scope creep detected, None otherwise.
         """
         scope_keywords = [
-            'additional scope', 'changed requirements', 'reworked',
-            'scope expanded', 'extra features', 'added functionality',
+            "additional scope",
+            "changed requirements",
+            "reworked",
+            "scope expanded",
+            "extra features",
+            "added functionality",
         ]
 
         creep_count = 0
@@ -829,9 +806,7 @@ class AntiPatternDetector:
             )
         return None
 
-    def finding_to_lesson(
-        self, finding: AntiPatternFinding, phase_name: str
-    ) -> Lesson:
+    def finding_to_lesson(self, finding: AntiPatternFinding, phase_name: str) -> Lesson:
         """
         Convert an AntiPatternFinding to a Lesson.
 
@@ -853,9 +828,7 @@ class AntiPatternDetector:
             lesson_id=str(uuid.uuid4()),
             title=f"Anti-pattern: {finding.pattern_type.value}",
             description=finding.description,
-            category=severity_to_category.get(
-                finding.severity, LessonCategory.GENERAL
-            ),
+            category=severity_to_category.get(finding.severity, LessonCategory.GENERAL),
             severity=finding.severity,
             tags=["anti-pattern", finding.pattern_type.value],
             source_phase=phase_name,
@@ -906,8 +879,7 @@ class LessonCapture:
         items.extend(process_items)
 
         went_poorly = [
-            item for item in items
-            if item.item_type == RetroItemType.WENT_POORLY
+            item for item in items if item.item_type == RetroItemType.WENT_POORLY
         ]
         if went_poorly:
             action_items = self._generate_action_items(went_poorly)
@@ -928,8 +900,8 @@ class LessonCapture:
         items: List[RetroItem] = []
 
         for artifact_name, content in artifacts.items():
-            line_count = content.count('\n')
-            complexity_score = content.count('if ') + content.count('for ')
+            line_count = content.count("\n")
+            complexity_score = content.count("if ") + content.count("for ")
 
             if line_count > 500:
                 items.append(
@@ -977,8 +949,14 @@ class LessonCapture:
             return items
 
         positive_keywords = [
-            'successfully', 'completed', 'passed', 'resolved',
-            'improved', 'optimized', 'clean', 'good',
+            "successfully",
+            "completed",
+            "passed",
+            "resolved",
+            "improved",
+            "optimized",
+            "clean",
+            "good",
         ]
 
         for log_entry in process_log:
@@ -990,9 +968,7 @@ class LessonCapture:
                             item_type=RetroItemType.WENT_WELL,
                             description=log_entry,
                             tags=["process"],
-                            created_at=(
-                                datetime.datetime.utcnow().isoformat()
-                            ),
+                            created_at=(datetime.datetime.utcnow().isoformat()),
                         )
                     )
                     break
@@ -1311,9 +1287,7 @@ class RetrospectivePhase:
         Returns:
             RetrospectiveReport with all findings, lessons, and summary.
         """
-        self.logger.info(
-            "Starting retrospective for phase: %s", context.phase_name
-        )
+        self.logger.info("Starting retrospective for phase: %s", context.phase_name)
 
         # Step 1: Capture retro items
         retro_items = self.capture.capture(context)
@@ -1323,9 +1297,7 @@ class RetrospectivePhase:
         items_lessons = self.capture.extract_lessons_from_items(
             retro_items, context.phase_name
         )
-        self.logger.debug(
-            "Extracted %d lessons from items", len(items_lessons)
-        )
+        self.logger.debug("Extracted %d lessons from items", len(items_lessons))
 
         # Step 3: Detect anti-patterns
         findings = self.detector.detect(context)
@@ -1336,33 +1308,25 @@ class RetrospectivePhase:
             self.detector.finding_to_lesson(finding, context.phase_name)
             for finding in findings
         ]
-        self.logger.debug(
-            "Converted %d findings to lessons", len(finding_lessons)
-        )
+        self.logger.debug("Converted %d findings to lessons", len(finding_lessons))
 
         # Step 5: Merge all lessons
         all_lessons = items_lessons + finding_lessons
-        self.logger.debug(
-            "Total lessons before sanitization: %d", len(all_lessons)
-        )
+        self.logger.debug("Total lessons before sanitization: %d", len(all_lessons))
 
         # Step 6: Sanitize all data
         sanitized_retro_items = [
-            self.sanitizer.sanitize_retro_item(item)
-            for item in retro_items
+            self.sanitizer.sanitize_retro_item(item) for item in retro_items
         ]
         sanitized_lessons = self.sanitizer.sanitize_lessons(all_lessons)
         sanitized_findings = [
-            self.sanitizer.sanitize_finding(finding)
-            for finding in findings
+            self.sanitizer.sanitize_finding(finding) for finding in findings
         ]
         self.logger.debug("Data sanitization complete")
 
         # Step 7: Ingest sanitized lessons
         ingested_count = self.lessons_provider.ingest(sanitized_lessons)
-        self.logger.info(
-            "Ingested %d lessons into provider", ingested_count
-        )
+        self.logger.info("Ingested %d lessons into provider", ingested_count)
 
         # Step 8: Generate report
         summary = self._generate_summary(
@@ -1379,9 +1343,7 @@ class RetrospectivePhase:
             sanitized=True,
         )
 
-        self.logger.info(
-            "Retrospective complete for phase: %s", context.phase_name
-        )
+        self.logger.info("Retrospective complete for phase: %s", context.phase_name)
         return report
 
     def _generate_summary(
@@ -1402,21 +1364,17 @@ class RetrospectivePhase:
             Multi-line summary text.
         """
         went_well_count = sum(
-            1 for item in retro_items
-            if item.item_type == RetroItemType.WENT_WELL
+            1 for item in retro_items if item.item_type == RetroItemType.WENT_WELL
         )
         went_poorly_count = sum(
-            1 for item in retro_items
-            if item.item_type == RetroItemType.WENT_POORLY
+            1 for item in retro_items if item.item_type == RetroItemType.WENT_POORLY
         )
 
         critical_findings = sum(
-            1 for finding in findings
-            if finding.severity == Severity.CRITICAL
+            1 for finding in findings if finding.severity == Severity.CRITICAL
         )
         high_findings = sum(
-            1 for finding in findings
-            if finding.severity == Severity.HIGH
+            1 for finding in findings if finding.severity == Severity.HIGH
         )
 
         summary_parts = [
@@ -1430,18 +1388,15 @@ class RetrospectivePhase:
 
         if critical_findings > 0:
             summary_parts.append(
-                "  \u26a0\ufe0f  Critical issues found"
-                " - immediate action required"
+                "  \u26a0\ufe0f  Critical issues found - immediate action required"
             )
         if went_poorly_count > went_well_count:
             summary_parts.append(
-                "  \u26a0\ufe0f  More issues than successes"
-                " - consider process review"
+                "  \u26a0\ufe0f  More issues than successes - consider process review"
             )
         if len(lessons) == 0:
             summary_parts.append(
-                "  \u2139\ufe0f  No lessons captured"
-                " - consider more detailed analysis"
+                "  \u2139\ufe0f  No lessons captured - consider more detailed analysis"
             )
 
         return "\n".join(summary_parts)

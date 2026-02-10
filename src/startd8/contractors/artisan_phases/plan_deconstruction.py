@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 
 class WorkItemStatus(enum.Enum):
     """Status of a WorkItem through its lifecycle."""
+
     DRAFT = "draft"
     VALIDATED = "validated"
     REJECTED = "rejected"
@@ -32,6 +33,7 @@ class WorkItemStatus(enum.Enum):
 
 class ComplexityLevel(enum.Enum):
     """Estimated complexity of a WorkItem."""
+
     TRIVIAL = "trivial"
     LOW = "low"
     MEDIUM = "medium"
@@ -44,21 +46,25 @@ class ComplexityLevel(enum.Enum):
 
 class PlanDeconstructionError(Exception):
     """Base exception for plan deconstruction errors."""
+
     pass
 
 
 class CycleDetectedError(PlanDeconstructionError):
     """Raised when a cycle is detected in the dependency graph."""
+
     pass
 
 
 class ValidationError(PlanDeconstructionError):
     """Raised when WorkItem validation fails."""
+
     pass
 
 
 class InvalidPlanError(PlanDeconstructionError):
     """Raised when the input plan is invalid or malformed."""
+
     pass
 
 
@@ -68,6 +74,7 @@ class InvalidPlanError(PlanDeconstructionError):
 @dataclasses.dataclass
 class AcceptanceCriterion:
     """A single acceptance criterion for a WorkItem."""
+
     id: str
     description: str
     verifiable: bool = True
@@ -86,6 +93,7 @@ class WorkItem:
     Follows a draft->validate lifecycle: items are created as DRAFT,
     then transition to VALIDATED or REJECTED after validation.
     """
+
     id: str
     title: str
     description: str
@@ -108,11 +116,12 @@ class WorkItem:
 @dataclasses.dataclass
 class DeconstructionResult:
     """Result of the plan deconstruction process."""
-    work_items: List[WorkItem]          # Validated items only
-    rejected_items: List[WorkItem]      # Rejected items with reasons
-    dependency_graph: "DependencyGraph" # DAG of dependencies
-    execution_order: List[str]          # Topologically sorted WorkItem IDs
-    summary: Dict[str, Any]             # Statistics and metadata
+
+    work_items: List[WorkItem]  # Validated items only
+    rejected_items: List[WorkItem]  # Rejected items with reasons
+    dependency_graph: "DependencyGraph"  # DAG of dependencies
+    execution_order: List[str]  # Topologically sorted WorkItem IDs
+    summary: Dict[str, Any]  # Statistics and metadata
 
 
 # ─── Dependency Graph ───
@@ -244,16 +253,12 @@ class DependencyGraph:
     def get_roots(self) -> List[str]:
         """Get items with no dependencies (can start immediately)."""
         return sorted(
-            node for node in self._all_nodes
-            if not self._adjacency.get(node, set())
+            node for node in self._all_nodes if not self._adjacency.get(node, set())
         )
 
     def get_leaves(self) -> List[str]:
         """Get items that no other item depends on (final deliverables)."""
-        return sorted(
-            node for node in self._all_nodes
-            if not self.get_dependents(node)
-        )
+        return sorted(node for node in self._all_nodes if not self.get_dependents(node))
 
     @property
     def nodes(self) -> Set[str]:
@@ -271,10 +276,7 @@ class DependencyGraph:
 
     def to_dict(self) -> Dict[str, List[str]]:
         """Export adjacency list as a plain dictionary."""
-        return {
-            node: sorted(list(deps))
-            for node, deps in self._adjacency.items()
-        }
+        return {node: sorted(list(deps)) for node, deps in self._adjacency.items()}
 
 
 # ─── Validation ───
@@ -325,7 +327,9 @@ class WorkItemValidator:
             if reason:
                 logger.warning(
                     "WorkItem '%s' (id=%s) rejected: %s",
-                    work_item.title, work_item.id, reason
+                    work_item.title,
+                    work_item.id,
+                    reason,
                 )
                 return dataclasses.replace(
                     work_item,
@@ -364,10 +368,7 @@ class WorkItemValidator:
         """All listed dependencies must reference known WorkItem IDs."""
         for dep_id in wi.dependencies:
             if dep_id not in self.known_item_ids:
-                return (
-                    f"Dependency '{dep_id}' does not reference "
-                    f"a known WorkItem"
-                )
+                return f"Dependency '{dep_id}' does not reference a known WorkItem"
         return None
 
 
@@ -435,7 +436,8 @@ class PlanDeconstructor:
         validated_items, rejected_items = self._validate_work_items(draft_items)
         logger.info(
             "Validation complete: %d validated, %d rejected",
-            len(validated_items), len(rejected_items)
+            len(validated_items),
+            len(rejected_items),
         )
 
         # Step 3: Build dependency graph from validated items only
@@ -473,9 +475,7 @@ class PlanDeconstructor:
         if not plan:
             raise InvalidPlanError("Plan cannot be empty")
         if "tasks" not in plan and "phases" not in plan:
-            raise InvalidPlanError(
-                'Plan must contain "tasks" or "phases" or both'
-            )
+            raise InvalidPlanError('Plan must contain "tasks" or "phases" or both')
 
     def _extract_work_items(self, plan: Dict[str, Any]) -> List[WorkItem]:
         """
@@ -502,9 +502,7 @@ class PlanDeconstructor:
                     if not isinstance(phase, dict):
                         logger.warning("Phase %d is not a dict, skipping", phase_idx)
                         continue
-                    phase_name = str(
-                        phase.get("name") or f"Phase {phase_idx}"
-                    ).strip()
+                    phase_name = str(phase.get("name") or f"Phase {phase_idx}").strip()
                     phase_tasks = phase.get("tasks", [])
                     if isinstance(phase_tasks, list):
                         for task in phase_tasks:
@@ -519,7 +517,9 @@ class PlanDeconstructor:
                         all_raw_tasks.append((task, "standalone"))
 
         # First pass: assign IDs and build title map
-        task_entries: List[Tuple[Dict[str, Any], str, str]] = []  # (task, parent_key, id)
+        task_entries: List[
+            Tuple[Dict[str, Any], str, str]
+        ] = []  # (task, parent_key, id)
 
         for task, parent_key in all_raw_tasks:
             task_id = str(uuid.uuid4())
@@ -551,9 +551,7 @@ class PlanDeconstructor:
             for phase_idx, phase in enumerate(plan["phases"]):
                 if not isinstance(phase, dict):
                     continue
-                phase_name = str(
-                    phase.get("name") or f"Phase {phase_idx}"
-                ).strip()
+                phase_name = str(phase.get("name") or f"Phase {phase_idx}").strip()
                 phase_tasks = phase.get("tasks", [])
                 if isinstance(phase_tasks, list):
                     for task in phase_tasks:
@@ -603,8 +601,8 @@ class PlanDeconstructor:
                     # Could be an ID directly
                     resolved_deps.append(dep_str)
                     logger.debug(
-                        "Dependency '%s' not found in title map; "
-                        "keeping as raw ID", dep_str
+                        "Dependency '%s' not found in title map; keeping as raw ID",
+                        dep_str,
                     )
 
             # Add inter-phase dependencies
@@ -625,8 +623,12 @@ class PlanDeconstructor:
             # Copy non-internal fields from original task
             for key, value in task.items():
                 if key not in (
-                    "title", "description", "complexity", "depends_on",
-                    "acceptance_criteria", "_generated_id"
+                    "title",
+                    "description",
+                    "complexity",
+                    "depends_on",
+                    "acceptance_criteria",
+                    "_generated_id",
                 ):
                     metadata[key] = deepcopy(value)
 
@@ -645,7 +647,9 @@ class PlanDeconstructor:
 
             logger.debug(
                 "Created draft WorkItem: '%s' (id=%s, deps=%d)",
-                title, task_id, len(resolved_deps)
+                title,
+                task_id,
+                len(resolved_deps),
             )
             draft_items.append(work_item)
 
@@ -746,7 +750,8 @@ class PlanDeconstructor:
                 # Should not happen, but handle gracefully
                 logger.warning(
                     "WorkItem '%s' remained in %s after validation",
-                    item.title, result.status
+                    item.title,
+                    result.status,
                 )
                 rejected.append(
                     dataclasses.replace(
@@ -796,8 +801,7 @@ class PlanDeconstructor:
                 )
             else:
                 logger.warning(
-                    "Cycle detected in dependency graph; "
-                    "continuing in non-strict mode"
+                    "Cycle detected in dependency graph; continuing in non-strict mode"
                 )
 
         return graph
@@ -832,9 +836,7 @@ class PlanDeconstructor:
         roots = graph.get_roots()
         leaves = graph.get_leaves()
 
-        total_criteria = sum(
-            len(item.acceptance_criteria) for item in validated
-        )
+        total_criteria = sum(len(item.acceptance_criteria) for item in validated)
 
         summary: Dict[str, Any] = {
             "total_drafted": len(validated) + len(rejected),
