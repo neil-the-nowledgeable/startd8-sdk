@@ -16,10 +16,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from ...logging_config import get_logger
 from ..protocols import (
-    Instrumentor,
     MergeResult,
     MergeStatus,
-    MergeStrategy,
     SpanContext,
 )
 

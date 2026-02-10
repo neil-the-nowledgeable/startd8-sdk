@@ -1,20 +1,16 @@
-import logging
 import shutil
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from ..logging_config import get_logger
 from ..security import sanitize_path
-from .checkpoint import CheckpointResult, CheckpointStatus, IntegrationCheckpoint
-from .protocols import CheckpointFailedCallback, CodeGenerator, FeatureCompleteCallback, GenerationResult, Instrumentor, MergeStrategy, ProgressCallback, SizeEstimator
+from .checkpoint import CheckpointStatus, IntegrationCheckpoint
+from .protocols import CheckpointFailedCallback, CodeGenerator, FeatureCompleteCallback, GenerationResult, Instrumentor, MergeStrategy, SizeEstimator
 from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
 import re
-from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
-import uuid
-from typing import Dict, Any, Optional, List
+from datetime import timezone
 
 class PrimeContractorWorkflow:
     """
@@ -264,7 +260,7 @@ class PrimeContractorWorkflow:
         Returns:
             Tuple of (should_proceed, decomposition_info)
         """
-        ctx = self.instrumentor.emit_span('code_generation.preflight', {'gen_ai.code.feature_name': feature.name, 'gen_ai.code.max_lines_allowed': self.max_lines_per_feature})
+        self.instrumentor.emit_span('code_generation.preflight', {'gen_ai.code.feature_name': feature.name, 'gen_ai.code.max_lines_allowed': self.max_lines_per_feature})
         estimate = self.size_estimator.estimate(task=feature.description, inputs={'target_files': feature.target_files, 'required_exports': []})
         self.instrumentor.emit_event('preflight_estimate', {'estimated_lines': estimate.lines, 'estimated_tokens': estimate.tokens, 'complexity': estimate.complexity, 'confidence': estimate.confidence})
         logger.info('Pre-flight size estimation: lines=%d, complexity=%s, confidence=%.0f%%', estimate.lines, estimate.complexity, estimate.confidence * 100, extra={'feature_name': feature.name, 'estimated_lines': estimate.lines, 'complexity': estimate.complexity, 'confidence': estimate.confidence})
@@ -1104,53 +1100,7 @@ class FeatureProcessor:
         processed_feature.setdefault('dependencies', [])
         processed_feature.setdefault('complexity_score', 0)
         return processed_feature
-'\nPrime Contractor Workflow - Continuous Integration Wrapper for Code Generation.\n\nThe Prime Contractor ensures that code is integrated immediately after each\nfeature is developed, preventing the "backlog integration nightmare" where\nmultiple features developed in isolation create merge conflicts and regressions.\n\nKey Principles:\n1. INTEGRATE IMMEDIATELY: Each feature is integrated right after generation\n2. CHECKPOINT VALIDATION: Code must pass all checks before next feature starts\n3. FAIL FAST: Stop the pipeline if integration fails, don\'t accumulate problems\n4. MAINLINE ALWAYS WORKS: The main codebase is always in a working state\n\nThis is the "general contractor" pattern - just as a general contractor\ncoordinates subcontractors and ensures each phase is complete before the\nnext begins, the Prime Contractor coordinates code generation tasks and\nensures each feature is integrated before moving on.\n\nThis module works standalone without ContextCore. When ContextCore is\navailable, it provides enhanced observability via OpenTelemetry spans.\n'
+
+
 logger = get_logger(__name__)
 MAX_INTEGRATION_ATTEMPTS = 6
-'\nFeature Processor Module\n\nThis module provides robust processing capabilities for decomposed features,\nincluding validation, normalization, enrichment, and analysis.\n\nVersion: 1.0.0\nAuthor: Development Team\nLast Updated: 2024\n'
-if __name__ == '__main__':
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    processor = FeatureProcessor()
-    feature = {'id': 'FEAT-001', 'description': 'Create API endpoint for user authentication that integrates with Database', 'parent_feature_id': 'EPIC-100', 'priority': 5}
-    try:
-        result = processor._process_decomposed_feature(feature)
-        logger.info(f"Processing complete: {result['id']}")
-    except Exception as e:
-        logger.error(f'Processing failed: {e}')
-'\nFeature Decomposition Processor Module\n\nThis module provides robust processing and validation capabilities for decomposed \nfeature components within a feature decomposition engine. It ensures data quality,\nconsistency, and traceability throughout the decomposition pipeline.\n\nAuthor: Lead Contractor\nVersion: 1.0.0\nStatus: Production Ready\n'
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
-REQUIRED_FIELDS = ['feature_type', 'description', 'attributes']
-OPTIONAL_FIELDS = ['priority', 'dependencies', 'complexity']
-METADATA_FIELDS = ['processed_at', 'feature_id', 'parent_feature_id', 'component_index', 'status']
-if __name__ == '__main__':
-    processor = FeatureProcessor()
-    print('=' * 80)
-    print('PRODUCTION EXAMPLES: Feature Decomposition Processor')
-    print('=' * 80)
-    print('\n[Example 1] Successful Feature Processing')
-    print('-' * 80)
-    successful_feature = {'feature_type': 'authentication', 'description': 'User login with email and password', 'attributes': {'auth_method': 'email_password', 'requires_2fa': False}, 'priority': 'high'}
-    result_1 = processor._process_decomposed_feature(decomposed_feature=successful_feature, parent_feature_id='FEAT-001', index=0)
-    print(f'Result: {result_1}')
-    print('\n[Example 2] Validation Failure (Missing Required Field)')
-    print('-' * 80)
-    invalid_feature = {'description': 'Incomplete feature', 'attributes': {}}
-    result_2 = processor._process_decomposed_feature(decomposed_feature=invalid_feature, parent_feature_id='FEAT-002', index=1)
-    print(f'Result: {result_2}')
-    print('\n[Example 3] Complete Decomposition Workflow')
-    print('-' * 80)
-    complex_feature = {'id': 'FEAT-COMPLEX-001', 'type': 'complex_user_profile', 'description': 'Comprehensive user profile system', 'attributes': {'version': '2.0'}}
-    components = processor.decompose_feature(complex_feature)
-    print(f'Processed {len(components)} components:')
-    for comp in components:
-        print(f"  - {comp.get('feature_id')}: {comp.get('feature_type')}")
-    print('\n[Example 4] Edge Case Handling')
-    print('-' * 80)
-    edge_cases = [('Empty Dict', {}), ('None Input', None), ('Invalid Type', 'not_a_dict')]
-    for case_name, case_input in edge_cases:
-        result = processor._process_decomposed_feature(decomposed_feature=case_input, parent_feature_id='FEAT-EDGE', index=0)
-        print(f'{case_name}: {result}')
-    print('\n' + '=' * 80)
-    print('All examples completed successfully')
-    print('=' * 80)

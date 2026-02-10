@@ -18,7 +18,7 @@ __all__ = [
 
 # Conditional imports for ContextCore adapters
 try:
-    from .contextcore import (
+    from .contextcore import (  # noqa: F401
         ContextCoreInstrumentor,
         ASTMergeStrategy,
     )

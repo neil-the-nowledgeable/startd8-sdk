@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...logging_config import get_logger
-from ..protocols import CodeGenerator, GenerationResult
+from ..protocols import GenerationResult
 
 logger = get_logger("startd8.contractors.generators")
 
