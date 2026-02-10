@@ -95,6 +95,10 @@ plan-ingestion = "startd8.workflows.builtin.plan_ingestion_workflow:PlanIngestio
 domain-preflight = "startd8.workflows.builtin.domain_preflight_workflow:DomainPreflightWorkflow"
 
 # Prime Contractor entry points for plugin discovery
+[project.entry-points."startd8.preflight_rules"]
+# Third-party preflight rules can register here:
+# my_rule = "my_package.rules:MyRule"
+
 [project.entry-points."startd8.contractors.instrumentors"]
 logging = "startd8.contractors.adapters.standalone:LoggingInstrumentor"
 

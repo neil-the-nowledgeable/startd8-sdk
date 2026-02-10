@@ -55,6 +55,14 @@ from startd8.contractors.artisan_phases.preflight import (
     CheckCategory,
 )
 
+# Re-export domain checklist adapter
+from startd8.contractors.artisan_phases.domain_checklist import (
+    DomainChecklist,
+    PostValidationIssue,
+    PostValidationResult,
+    validate_generated_code,
+)
+
 __all__ = [
     # Runner
     "PhaseRunner",
@@ -83,4 +91,9 @@ __all__ = [
     "CheckResult",
     "CheckStatus",
     "CheckCategory",
+    # Domain Checklist
+    "DomainChecklist",
+    "PostValidationIssue",
+    "PostValidationResult",
+    "validate_generated_code",
 ]

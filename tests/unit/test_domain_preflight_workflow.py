@@ -24,6 +24,12 @@ from startd8.workflows.builtin.domain_preflight_models import (
 from startd8.workflows.builtin.domain_preflight_workflow import (
     DomainPreflightWorkflow,
     _normalize_dep_name,
+    _parse_relative_imports,
+    _file_has_pattern,
+    _scan_optional_dep_guards,
+    _scan_patch_paths,
+    _STANDALONE_SCRIPT_DIRS,
+    _LOGGER_RESERVED_FIELDS,
 )
 
 
@@ -196,6 +202,122 @@ class TestNormalizeDepName:
 
 
 # ===================================================================
+# Helper function tests
+# ===================================================================
+
+
+class TestParseRelativeImports:
+    def test_finds_relative_imports(self, tmp_path):
+        f = tmp_path / "module.py"
+        f.write_text("from .base import BaseClass\nfrom .utils import helper\nimport os\n")
+        result = _parse_relative_imports(f)
+        assert result == ["base", "utils"]
+
+    def test_empty_on_no_relative_imports(self, tmp_path):
+        f = tmp_path / "module.py"
+        f.write_text("import os\nfrom pathlib import Path\n")
+        assert _parse_relative_imports(f) == []
+
+    def test_empty_on_missing_file(self, tmp_path):
+        assert _parse_relative_imports(tmp_path / "nonexistent.py") == []
+
+
+class TestFileHasPattern:
+    def test_finds_pattern(self, tmp_path):
+        f = tmp_path / "module.py"
+        f.write_text("import threading\nclass Worker(threading.Thread): pass\n")
+        assert _file_has_pattern(f, r"\bthreading\b") is True
+
+    def test_no_match(self, tmp_path):
+        f = tmp_path / "module.py"
+        f.write_text("import os\n")
+        assert _file_has_pattern(f, r"\bthreading\b") is False
+
+    def test_missing_file(self, tmp_path):
+        assert _file_has_pattern(tmp_path / "nonexistent.py", r"\bfoo\b") is False
+
+
+class TestScanOptionalDepGuards:
+    def test_finds_guarded_imports(self, tmp_path):
+        f = tmp_path / "module.py"
+        f.write_text(textwrap.dedent("""\
+            try:
+                import tiktoken
+            except ImportError:
+                tiktoken = None
+
+            try:
+                from opentelemetry import trace
+            except ImportError:
+                trace = None
+        """))
+        result = _scan_optional_dep_guards(f)
+        assert "tiktoken" in result
+        assert "opentelemetry" in result
+
+    def test_empty_on_no_guards(self, tmp_path):
+        f = tmp_path / "module.py"
+        f.write_text("import os\nimport sys\n")
+        assert _scan_optional_dep_guards(f) == []
+
+    def test_empty_on_missing_file(self, tmp_path):
+        assert _scan_optional_dep_guards(tmp_path / "nonexistent.py") == []
+
+
+class TestScanPatchPaths:
+    def test_finds_patch_decorators(self, tmp_path):
+        f = tmp_path / "test_foo.py"
+        f.write_text(textwrap.dedent("""\
+            from unittest.mock import patch
+
+            @patch("myapp.models.SomeClass.method")
+            def test_something(mock_method):
+                pass
+
+            @patch("myapp.utils.helper")
+            def test_other(mock_helper):
+                pass
+        """))
+        result = _scan_patch_paths(f)
+        assert "myapp.models.SomeClass.method" in result
+        assert "myapp.utils.helper" in result
+
+    def test_finds_mock_patch_call(self, tmp_path):
+        f = tmp_path / "test_foo.py"
+        f.write_text(textwrap.dedent("""\
+            from unittest import mock
+
+            def test_it():
+                with mock.patch("myapp.service.run") as m:
+                    pass
+        """))
+        result = _scan_patch_paths(f)
+        assert "myapp.service.run" in result
+
+    def test_empty_on_missing_file(self, tmp_path):
+        assert _scan_patch_paths(tmp_path / "nonexistent.py") == []
+
+
+class TestStandaloneScriptDirs:
+    def test_known_dirs(self):
+        assert "scripts" in _STANDALONE_SCRIPT_DIRS
+        assert "bin" in _STANDALONE_SCRIPT_DIRS
+        assert "tools" in _STANDALONE_SCRIPT_DIRS
+        assert "examples" in _STANDALONE_SCRIPT_DIRS
+
+    def test_src_not_included(self):
+        assert "src" not in _STANDALONE_SCRIPT_DIRS
+
+
+class TestLoggerReservedFields:
+    def test_common_fields_present(self):
+        assert "name" in _LOGGER_RESERVED_FIELDS
+        assert "message" in _LOGGER_RESERVED_FIELDS
+        assert "levelname" in _LOGGER_RESERVED_FIELDS
+        assert "funcName" in _LOGGER_RESERVED_FIELDS
+
+
+# ===================================================================
 # Scan tests
 # ===================================================================
 
@@ -317,6 +439,60 @@ class TestClassifyDomain:
         result = DomainPreflightWorkflow._classify_domain("Makefile", tmp_path)
         assert result.domain == TaskDomain.UNKNOWN
 
+    def test_scripts_dir_is_single_module(self, tmp_path):
+        """Files in scripts/ with many siblings but no __init__.py → single module."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "run_pipeline.py").touch()
+        (scripts_dir / "setup_data.py").touch()
+        (scripts_dir / "validate.py").touch()
+        # No __init__.py
+
+        result = DomainPreflightWorkflow._classify_domain(
+            "scripts/run_pipeline.py", tmp_path,
+        )
+        assert result.domain == TaskDomain.PYTHON_SINGLE_MODULE
+        assert "standalone script" in result.reasoning.lower()
+
+    def test_scripts_dir_with_init_is_package(self, tmp_path):
+        """If scripts/ has __init__.py, treat as package module."""
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "__init__.py").touch()
+        (scripts_dir / "run_pipeline.py").touch()
+        (scripts_dir / "setup_data.py").touch()
+
+        result = DomainPreflightWorkflow._classify_domain(
+            "scripts/run_pipeline.py", tmp_path,
+        )
+        assert result.domain == TaskDomain.PYTHON_PACKAGE_MODULE
+
+    def test_examples_dir_is_single_module(self, tmp_path):
+        """Examples dir also treated as standalone scripts."""
+        examples_dir = tmp_path / "examples"
+        examples_dir.mkdir()
+        (examples_dir / "demo1.py").touch()
+        (examples_dir / "demo2.py").touch()
+        (examples_dir / "demo3.py").touch()
+
+        result = DomainPreflightWorkflow._classify_domain(
+            "examples/demo1.py", tmp_path,
+        )
+        assert result.domain == TaskDomain.PYTHON_SINGLE_MODULE
+
+    def test_tools_dir_is_single_module(self, tmp_path):
+        """Tools dir also treated as standalone scripts."""
+        tools_dir = tmp_path / "tools"
+        tools_dir.mkdir()
+        (tools_dir / "lint.py").touch()
+        (tools_dir / "format.py").touch()
+        (tools_dir / "check.py").touch()
+
+        result = DomainPreflightWorkflow._classify_domain(
+            "tools/lint.py", tmp_path,
+        )
+        assert result.domain == TaskDomain.PYTHON_SINGLE_MODULE
+
 
 # ===================================================================
 # Environment check tests
@@ -436,6 +612,129 @@ class TestRunEnvironmentChecks:
         format_check = next(c for c in checks if c.check_name == "config_format_valid")
         assert format_check.status == CheckStatus.PASS
 
+    def test_circular_import_detection(self, tmp_path):
+        """Detect circular relative imports between siblings."""
+        pkg_dir = tmp_path / "src" / "pkg"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "__init__.py").touch()
+        # module_a imports from .module_b AND module_b imports from .module_a
+        (pkg_dir / "module_a.py").write_text("from .module_b import foo\n")
+        (pkg_dir / "module_b.py").write_text("from .module_a import bar\n")
+        (tmp_path / "src" / "__init__.py").touch()
+
+        checks = DomainPreflightWorkflow._run_environment_checks(
+            TaskDomain.PYTHON_PACKAGE_MODULE, "src/pkg/module_a.py",
+            tmp_path, self._make_deps(),
+        )
+        circ_checks = [c for c in checks if c.check_name == "circular_imports"]
+        assert len(circ_checks) == 1
+        assert circ_checks[0].status == CheckStatus.WARN
+        assert "module_b" in circ_checks[0].message
+
+    def test_no_circular_import_when_one_way(self, tmp_path):
+        """One-way relative import is not circular."""
+        pkg_dir = tmp_path / "src" / "pkg"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "__init__.py").touch()
+        (pkg_dir / "module_a.py").write_text("from .module_b import foo\n")
+        (pkg_dir / "module_b.py").write_text("import os\n")
+        (tmp_path / "src" / "__init__.py").touch()
+
+        checks = DomainPreflightWorkflow._run_environment_checks(
+            TaskDomain.PYTHON_PACKAGE_MODULE, "src/pkg/module_a.py",
+            tmp_path, self._make_deps(),
+        )
+        circ_checks = [c for c in checks if c.check_name == "circular_imports"]
+        assert len(circ_checks) == 0
+
+    def test_optional_dep_guard_detection(self, tmp_path):
+        """Detect optional imports not in project deps."""
+        (tmp_path / "src").mkdir()
+        target = tmp_path / "src" / "module.py"
+        target.write_text(textwrap.dedent("""\
+            try:
+                import tiktoken
+            except ImportError:
+                tiktoken = None
+        """))
+
+        deps = self._make_deps()
+        checks = DomainPreflightWorkflow._run_environment_checks(
+            TaskDomain.PYTHON_SINGLE_MODULE, "src/module.py",
+            tmp_path, deps,
+        )
+        guard_checks = [c for c in checks if c.check_name == "optional_dep_guards"]
+        assert len(guard_checks) == 1
+        assert guard_checks[0].status == CheckStatus.WARN
+        assert "tiktoken" in guard_checks[0].message
+
+    def test_patch_path_validation(self, tmp_path):
+        """Detect stale mock.patch targets."""
+        test_dir = tmp_path / "tests"
+        test_dir.mkdir()
+        test_file = test_dir / "test_foo.py"
+        test_file.write_text(textwrap.dedent("""\
+            from unittest.mock import patch
+
+            @patch("nonexistent.module.SomeClass")
+            def test_something(mock_cls):
+                pass
+        """))
+
+        checks = DomainPreflightWorkflow._run_environment_checks(
+            TaskDomain.PYTHON_TEST, "tests/test_foo.py",
+            tmp_path, self._make_deps(),
+        )
+        patch_checks = [c for c in checks if c.check_name == "patch_path_valid"]
+        assert len(patch_checks) == 1
+        assert patch_checks[0].status == CheckStatus.WARN
+
+    def test_thread_aware_teardown(self, tmp_path):
+        """Detect when source module uses threading."""
+        src_dir = tmp_path / "src" / "mylib"
+        src_dir.mkdir(parents=True)
+        (src_dir / "__init__.py").touch()
+        (src_dir / "worker.py").write_text("import threading\nclass Worker(threading.Thread): pass\n")
+
+        test_dir = tmp_path / "tests"
+        test_dir.mkdir()
+
+        checks = DomainPreflightWorkflow._run_environment_checks(
+            TaskDomain.PYTHON_TEST, "tests/test_worker.py",
+            tmp_path, self._make_deps(),
+        )
+        thread_checks = [c for c in checks if c.check_name == "thread_aware_teardown"]
+        assert len(thread_checks) == 1
+        assert thread_checks[0].status == CheckStatus.WARN
+        assert "threading" in thread_checks[0].message
+
+    def test_entry_point_reinstall(self, tmp_path):
+        """pyproject.toml gets entry point reinstall warning."""
+        (tmp_path / "pyproject.toml").write_text("[project]\nname='test'\n")
+
+        checks = DomainPreflightWorkflow._run_environment_checks(
+            TaskDomain.CONFIG_TOML, "pyproject.toml",
+            tmp_path, self._make_deps(),
+        )
+        ep_checks = [c for c in checks if c.check_name == "entry_point_reinstall"]
+        assert len(ep_checks) == 1
+        assert ep_checks[0].status == CheckStatus.WARN
+        assert "pip install" in ep_checks[0].message
+
+    def test_logger_reserved_fields_check(self, tmp_path):
+        """Python files using logging get reserved field constraint."""
+        (tmp_path / "src").mkdir()
+        target = tmp_path / "src" / "module.py"
+        target.write_text("import logging\nlogger = logging.getLogger(__name__)\n")
+
+        checks = DomainPreflightWorkflow._run_environment_checks(
+            TaskDomain.PYTHON_SINGLE_MODULE, "src/module.py",
+            tmp_path, self._make_deps(),
+        )
+        logger_checks = [c for c in checks if c.check_name == "logger_reserved_fields"]
+        assert len(logger_checks) == 1
+        assert logger_checks[0].status == CheckStatus.PASS
+
 
 # ===================================================================
 # Enrichment tests
@@ -462,6 +761,7 @@ class TestBuildEnrichment:
         assert "no_relative_imports" in enrichment.post_generation_validators
         assert "deps_available" in enrichment.post_generation_validators
         assert "definition_ordering" in enrichment.post_generation_validators
+        assert "no_markdown_fences" in enrichment.post_generation_validators
 
     def test_package_module_constraints(self, tmp_path):
         pkg_dir = tmp_path / "src" / "pkg"
@@ -479,6 +779,22 @@ class TestBuildEnrichment:
         assert "base" in enrichment.available_siblings
         assert "utils" in enrichment.available_siblings
         assert "relative_imports_valid" in enrichment.post_generation_validators
+        assert "no_markdown_fences" in enrichment.post_generation_validators
+
+    def test_package_module_pydantic_property_warning(self, tmp_path):
+        """Sibling with @property triggers Pydantic confusion constraint."""
+        pkg_dir = tmp_path / "src" / "pkg"
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "__init__.py").touch()
+        (pkg_dir / "base.py").write_text("class Base:\n    @property\n    def name(self): return self._name\n")
+        (pkg_dir / "utils.py").touch()
+
+        enrichment = DomainPreflightWorkflow._build_enrichment(
+            "PI-002b", TaskDomain.PYTHON_PACKAGE_MODULE,
+            "Package module", "src/pkg/models.py",
+            tmp_path, self._make_deps(), [],
+        )
+        assert any("@property" in c and "Pydantic" in c for c in enrichment.prompt_constraints)
 
     def test_test_constraints(self, tmp_path):
         test_dir = tmp_path / "tests"
@@ -490,8 +806,11 @@ class TestBuildEnrichment:
             tmp_path, self._make_deps(), [],
         )
         assert any("pytest" in c.lower() for c in enrichment.prompt_constraints)
+        assert any("==" in c and "tag" in c.lower() for c in enrichment.prompt_constraints)
         assert "imports_resolve" in enrichment.post_generation_validators
         assert "test_naming" in enrichment.post_generation_validators
+        assert "no_markdown_fences" in enrichment.post_generation_validators
+        assert "no_substring_tag_matching" in enrichment.post_generation_validators
 
     def test_config_constraints(self, tmp_path):
         enrichment = DomainPreflightWorkflow._build_enrichment(
@@ -501,6 +820,63 @@ class TestBuildEnrichment:
         )
         assert any("Preserve" in c for c in enrichment.prompt_constraints)
         assert "valid_format" in enrichment.post_generation_validators
+
+    def test_config_toml_entry_point_constraint(self, tmp_path):
+        """pyproject.toml gets entry point reinstall constraint."""
+        enrichment = DomainPreflightWorkflow._build_enrichment(
+            "PI-004b", TaskDomain.CONFIG_TOML,
+            "Config file", "pyproject.toml",
+            tmp_path, self._make_deps(), [],
+        )
+        assert any("pip install" in c for c in enrichment.prompt_constraints)
+
+    def test_logger_reserved_fields_constraint(self, tmp_path):
+        """Python file using logging gets reserved field constraint."""
+        (tmp_path / "src").mkdir()
+        target = tmp_path / "src" / "foo.py"
+        target.write_text("import logging\nlogger = logging.getLogger(__name__)\n")
+
+        enrichment = DomainPreflightWorkflow._build_enrichment(
+            "PI-LR", TaskDomain.PYTHON_SINGLE_MODULE,
+            "Module with logging", "src/foo.py",
+            tmp_path, self._make_deps(), [],
+        )
+        assert any("LogRecord" in c and "reserved" in c.lower() for c in enrichment.prompt_constraints)
+
+    def test_optional_dep_guard_constraint(self, tmp_path):
+        """File with try/except import gets guard preservation constraint."""
+        (tmp_path / "src").mkdir()
+        target = tmp_path / "src" / "foo.py"
+        target.write_text(textwrap.dedent("""\
+            try:
+                import tiktoken
+            except ImportError:
+                tiktoken = None
+        """))
+
+        enrichment = DomainPreflightWorkflow._build_enrichment(
+            "PI-OD", TaskDomain.PYTHON_SINGLE_MODULE,
+            "Module with optional dep", "src/foo.py",
+            tmp_path, self._make_deps(), [],
+        )
+        assert any("optional dependency" in c.lower() and "tiktoken" in c for c in enrichment.prompt_constraints)
+
+    def test_test_thread_teardown_constraint(self, tmp_path):
+        """Test file for threaded source gets teardown constraint."""
+        src_dir = tmp_path / "src" / "mylib"
+        src_dir.mkdir(parents=True)
+        (src_dir / "__init__.py").touch()
+        (src_dir / "worker.py").write_text("import threading\nclass Worker(threading.Thread): pass\n")
+
+        test_dir = tmp_path / "tests"
+        test_dir.mkdir()
+
+        enrichment = DomainPreflightWorkflow._build_enrichment(
+            "PI-TT", TaskDomain.PYTHON_TEST,
+            "Test for threaded module", "tests/test_worker.py",
+            tmp_path, self._make_deps(), [],
+        )
+        assert any("threading" in c and "teardown" in c.lower() for c in enrichment.prompt_constraints)
 
     def test_existing_content_hash(self, tmp_path):
         target = tmp_path / "src" / "foo.py"
@@ -658,7 +1034,7 @@ class TestEndToEndDomainPreflight:
         # Check structure
         assert enriched["version"] == "1.0.0"
         assert "_preflight" in enriched
-        assert enriched["_preflight"]["workflow_version"] == "1.0.0"
+        assert enriched["_preflight"]["workflow_version"] == "1.2.0"
         assert "check_summary" in enriched["_preflight"]
 
         # Check tasks have _enrichment
@@ -734,7 +1110,7 @@ class TestEndToEndDomainPreflight:
         meta = wf.metadata
         assert meta.workflow_id == "domain-preflight"
         assert meta.requires_agents is False
-        assert meta.version == "1.0.0"
+        assert meta.version == "1.2.0"
 
     def test_progress_callback(self, tmp_path):
         """Progress callback is called for each phase."""

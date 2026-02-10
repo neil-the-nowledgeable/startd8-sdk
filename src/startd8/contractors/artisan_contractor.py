@@ -242,6 +242,7 @@ class WorkflowConfig:
     drafter_model: str = DRAFT_MODEL_CLAUDE_HAIKU.model_id
     validator_model: str = VALIDATE_MODEL_CLAUDE_SONNET.model_id
     reviewer_model: str = REVIEW_MODEL_CLAUDE_OPUS.model_id
+    project_root: Optional[str] = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -632,6 +633,12 @@ class ArtisanContractorWorkflow:
         context.setdefault("drafter_model", self.config.drafter_model)
         context.setdefault("validator_model", self.config.validator_model)
         context.setdefault("reviewer_model", self.config.reviewer_model)
+
+        # Inject project_root for domain-aware checklist
+        if self.config.project_root:
+            context.setdefault("project_root", self.config.project_root)
+        else:
+            context.setdefault("project_root", str(Path.cwd()))
 
         config = self.config
         cost_tracker = _CostTracker(budget=config.cost_budget)

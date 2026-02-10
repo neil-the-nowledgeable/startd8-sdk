@@ -809,6 +809,7 @@ class DevelopmentPhase:
         state_store: Optional[StateStore] = None,
         max_parallel: int = 4,
         logger: Optional[logging.Logger] = None,
+        domain_checklist: Optional[Any] = None,
     ):
         """
         Initialize the development phase.
@@ -824,6 +825,8 @@ class DevelopmentPhase:
                 Must be >= 1.
             logger: Logger instance.
                 Default: logging.getLogger("startd8.development").
+            domain_checklist: Optional DomainChecklist instance for injecting
+                domain-aware prompt constraints into chunk execution context.
         """
         if max_parallel < 1:
             raise ValueError("max_parallel must be >= 1")
@@ -833,6 +836,7 @@ class DevelopmentPhase:
         self.state_store = state_store or JsonFileStateStore()
         self.max_parallel = max_parallel
         self.logger = logger or logging.getLogger("startd8.development")
+        self.domain_checklist = domain_checklist
 
     async def run(self, plan: DevelopmentPlan) -> DevelopmentResult:
         """
@@ -1093,7 +1097,8 @@ class DevelopmentPhase:
             async with semaphore:
                 chunk = chunk_map[cid]
                 state = states[cid]
-                states[cid] = await self._execute_chunk(chunk, state, context)
+                chunk_context = dict(context)  # Per-chunk copy to avoid race conditions
+                states[cid] = await self._execute_chunk(chunk, state, chunk_context)
 
         await asyncio.gather(*[_run_with_semaphore(cid) for cid in eligible])
 
@@ -1139,6 +1144,27 @@ class DevelopmentPhase:
             state.status = ChunkStatus.QUEUED
             state.started_at = datetime.now(timezone.utc).isoformat()
 
+            # --- Domain pre-flight: inject constraints if checklist is configured ---
+            if self.domain_checklist is not None:
+                try:
+                    enrichment = self.domain_checklist.get_enrichment(
+                        chunk.chunk_id, chunk.file_targets
+                    )
+                    if enrichment is not None:
+                        context["domain_constraints"] = enrichment.prompt_constraints
+                        context["domain"] = enrichment.domain.value
+                        context["post_generation_validators"] = enrichment.post_generation_validators
+                        self.logger.info(
+                            "Chunk %s: domain=%s, %d constraints injected",
+                            chunk.chunk_id, enrichment.domain.value,
+                            len(enrichment.prompt_constraints),
+                        )
+                except Exception as e:
+                    self.logger.warning(
+                        "Chunk %s: domain checklist failed (non-fatal): %s",
+                        chunk.chunk_id, e,
+                    )
+
             # --- RUNNING: Execute implementation ---
             state.status = ChunkStatus.RUNNING
             try:
@@ -1152,6 +1178,26 @@ class DevelopmentPhase:
                     continue
 
                 self.logger.debug(f"Chunk {chunk.chunk_id}: execution succeeded")
+
+                # Advisory post-generation validation
+                if (self.domain_checklist is not None
+                        and "post_generation_validators" in context):
+                    try:
+                        from .domain_checklist import validate_generated_code
+                        enrichment = self.domain_checklist.get_enrichment(
+                            chunk.chunk_id, chunk.file_targets
+                        )
+                        if enrichment is not None:
+                            result = validate_generated_code(exec_output, enrichment)
+                            if not result.passed:
+                                for issue in result.issues:
+                                    self.logger.warning(
+                                        "Chunk %s: post-gen %s: %s (line %s)",
+                                        chunk.chunk_id, issue.validator,
+                                        issue.message, issue.line,
+                                    )
+                    except Exception as e:
+                        self.logger.debug("Post-validation skipped: %s", e)
 
             except Exception as e:
                 self.logger.exception(
@@ -1312,6 +1358,7 @@ async def run_development_phase(
     test_runner: Optional[TestRunner] = None,
     state_store: Optional[StateStore] = None,
     max_parallel: int = 4,
+    domain_checklist: Optional[Any] = None,
 ) -> DevelopmentResult:
     """
     Convenience function to execute a development phase.
@@ -1326,6 +1373,7 @@ async def run_development_phase(
         test_runner: Test runner (optional; defaults to DefaultTestRunner).
         state_store: State storage (optional; defaults to JsonFileStateStore).
         max_parallel: Maximum concurrent chunk executions (default: 4).
+        domain_checklist: Optional DomainChecklist for domain-aware constraints.
 
     Returns:
         DevelopmentResult with execution outcomes.
@@ -1347,5 +1395,6 @@ async def run_development_phase(
         test_runner=test_runner,
         state_store=state_store,
         max_parallel=max_parallel,
+        domain_checklist=domain_checklist,
     )
     return await phase.run(plan)

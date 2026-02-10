@@ -43,62 +43,53 @@ from .domain_preflight_models import (
     TaskEnrichment,
 )
 
+from .preflight_rules import PreflightRuleRegistry, RuleContext
+from .preflight_rules._helpers import (
+    STDLIB_FALLBACK as _STDLIB_FALLBACK_SET,
+    STANDALONE_SCRIPT_DIRS as _STANDALONE_SCRIPT_DIRS_SET,
+    LOGGER_RESERVED_FIELDS as _LOGGER_RESERVED_FIELDS_SET,
+    parse_relative_imports as _parse_relative_imports_impl,
+    file_has_pattern as _file_has_pattern_impl,
+    scan_optional_dep_guards as _scan_optional_dep_guards_impl,
+    scan_patch_paths as _scan_patch_paths_impl,
+    normalize_dep_name as _normalize_dep_name_impl,
+)
+
 logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Stdlib fallback for Python < 3.10
+# Backward-compatible re-exports (existing tests import these names)
 # ---------------------------------------------------------------------------
 
-_STDLIB_FALLBACK: Set[str] = {
-    "abc", "aifc", "argparse", "array", "ast", "asynchat", "asyncio",
-    "asyncore", "atexit", "audioop", "base64", "bdb", "binascii",
-    "binhex", "bisect", "builtins", "bz2", "calendar", "cgi", "cgitb",
-    "chunk", "cmath", "cmd", "code", "codecs", "codeop", "collections",
-    "colorsys", "compileall", "concurrent", "configparser", "contextlib",
-    "contextvars", "copy", "copyreg", "cProfile", "crypt", "csv",
-    "ctypes", "curses", "dataclasses", "datetime", "dbm", "decimal",
-    "difflib", "dis", "distutils", "doctest", "email", "encodings",
-    "enum", "errno", "faulthandler", "fcntl", "filecmp", "fileinput",
-    "fnmatch", "fractions", "ftplib", "functools", "gc", "getopt",
-    "getpass", "gettext", "glob", "graphlib", "grp", "gzip", "hashlib",
-    "heapq", "hmac", "html", "http", "idlelib", "imaplib", "imghdr",
-    "imp", "importlib", "inspect", "io", "ipaddress", "itertools",
-    "json", "keyword", "lib2to3", "linecache", "locale", "logging",
-    "lzma", "mailbox", "mailcap", "marshal", "math", "mimetypes",
-    "mmap", "modulefinder", "multiprocessing", "netrc", "nis", "nntplib",
-    "numbers", "operator", "optparse", "os", "ossaudiodev", "pathlib",
-    "pdb", "pickle", "pickletools", "pipes", "pkgutil", "platform",
-    "plistlib", "poplib", "posix", "posixpath", "pprint", "profile",
-    "pstats", "pty", "pwd", "py_compile", "pyclbr", "pydoc",
-    "queue", "quopri", "random", "re", "readline", "reprlib",
-    "resource", "rlcompleter", "runpy", "sched", "secrets", "select",
-    "selectors", "shelve", "shlex", "shutil", "signal", "site",
-    "smtpd", "smtplib", "sndhdr", "socket", "socketserver", "spwd",
-    "sqlite3", "sre_compile", "sre_constants", "sre_parse", "ssl",
-    "stat", "statistics", "string", "stringprep", "struct", "subprocess",
-    "sunau", "symtable", "sys", "sysconfig", "syslog", "tabnanny",
-    "tarfile", "telnetlib", "tempfile", "termios", "test", "textwrap",
-    "threading", "time", "timeit", "tkinter", "token", "tokenize",
-    "tomllib", "trace", "traceback", "tracemalloc", "tty", "turtle",
-    "turtledemo", "types", "typing", "unicodedata", "unittest", "urllib",
-    "uu", "uuid", "venv", "warnings", "wave", "weakref", "webbrowser",
-    "winreg", "winsound", "wsgiref", "xdrlib", "xml", "xmlrpc",
-    "zipapp", "zipfile", "zipimport", "zlib", "zoneinfo",
-}
+_STDLIB_FALLBACK: Set[str] = _STDLIB_FALLBACK_SET
+_STANDALONE_SCRIPT_DIRS: Set[str] = _STANDALONE_SCRIPT_DIRS_SET
+_LOGGER_RESERVED_FIELDS: Set[str] = _LOGGER_RESERVED_FIELDS_SET
 
 
-# ---------------------------------------------------------------------------
-# Dep name normalisation (PEP 503)
-# ---------------------------------------------------------------------------
+def _parse_relative_imports(file_path: Path) -> List[str]:
+    """Backward-compatible re-export."""
+    return _parse_relative_imports_impl(file_path)
+
+
+def _file_has_pattern(file_path: Path, pattern: str) -> bool:
+    """Backward-compatible re-export."""
+    return _file_has_pattern_impl(file_path, pattern)
+
+
+def _scan_optional_dep_guards(file_path: Path) -> List[str]:
+    """Backward-compatible re-export."""
+    return _scan_optional_dep_guards_impl(file_path)
+
+
+def _scan_patch_paths(file_path: Path) -> List[str]:
+    """Backward-compatible re-export."""
+    return _scan_patch_paths_impl(file_path)
+
 
 def _normalize_dep_name(name: str) -> str:
-    """Normalize a dependency name: strip version specs, lowercase, replace - with _."""
-    # Strip extras like [dev]
-    name = re.split(r"\[", name, maxsplit=1)[0]
-    # Strip version specs
-    name = re.split(r"[><=!~;]", name, maxsplit=1)[0]
-    return name.strip().lower().replace("-", "_")
+    """Backward-compatible re-export."""
+    return _normalize_dep_name_impl(name)
 
 
 # ---------------------------------------------------------------------------
@@ -125,11 +116,12 @@ class DomainPreflightWorkflow(WorkflowBase):
                 "environment and emit an enriched seed with domain "
                 "classification, prompt constraints, and validator specs."
             ),
-            version="1.0.0",
+            version="1.2.0",
             capabilities=[
                 "domain-classification",
                 "environment-analysis",
                 "prompt-constraint-generation",
+                "preflight-rule-registry",
             ],
             tags=["preflight", "artisan", "domain"],
             requires_agents=False,
@@ -304,6 +296,21 @@ class DomainPreflightWorkflow(WorkflowBase):
                 f.name for f in target_dir.iterdir()
                 if f.suffix == ".py" and f.name != p.name and f.name != "__init__.py"
             ]
+
+            # Override: conventional standalone script directories
+            # (scripts/, bin/, tools/, examples/) are NOT packages
+            # even with many .py siblings — they contain executables.
+            dir_name = target_dir.name.lower()
+            if dir_name in _STANDALONE_SCRIPT_DIRS and not has_init:
+                return DomainClassification(
+                    task_id="", target_file=target_file,
+                    domain=TaskDomain.PYTHON_SINGLE_MODULE,
+                    reasoning=(
+                        f"Standalone script directory '{dir_name}' "
+                        f"(no __init__.py, {len(py_siblings)} siblings)"
+                    ),
+                )
+
             if has_init or len(py_siblings) >= 2:
                 return DomainClassification(
                     task_id="", target_file=target_file,
@@ -321,7 +328,7 @@ class DomainPreflightWorkflow(WorkflowBase):
         )
 
     # ------------------------------------------------------------------
-    # Phase: CHECK
+    # Phase: CHECK  (delegated to PreflightRuleRegistry)
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -331,184 +338,21 @@ class DomainPreflightWorkflow(WorkflowBase):
         project_root: Path,
         available_deps: AvailableDeps,
     ) -> List[EnvironmentCheck]:
-        """Run per-domain environment readiness checks."""
-        checks: List[EnvironmentCheck] = []
+        """Run per-domain environment readiness checks via the rule registry."""
         target_path = project_root / target_file
-        target_dir = target_path.parent
-
-        # All domains: parent directory exists
-        if target_dir.exists():
-            checks.append(EnvironmentCheck(
-                check_name="parent_dir_exists",
-                status=CheckStatus.PASS,
-                message=f"Parent directory exists: {target_dir}",
-            ))
-        else:
-            checks.append(EnvironmentCheck(
-                check_name="parent_dir_exists",
-                status=CheckStatus.WARN,
-                message=f"Parent directory does not exist: {target_dir}",
-                detail="Directory will need to be created before code generation",
-            ))
-
-        if domain == TaskDomain.PYTHON_SINGLE_MODULE:
-            # Verify target is NOT inside a package
-            init_path = target_dir / "__init__.py"
-            if init_path.exists():
-                checks.append(EnvironmentCheck(
-                    check_name="not_in_package",
-                    status=CheckStatus.WARN,
-                    message="Target dir has __init__.py — may need package-module treatment",
-                    detail=str(init_path),
-                ))
-            else:
-                checks.append(EnvironmentCheck(
-                    check_name="not_in_package",
-                    status=CheckStatus.PASS,
-                    message="Target is not inside a Python package (no __init__.py)",
-                ))
-
-        elif domain == TaskDomain.PYTHON_PACKAGE_MODULE:
-            # __init__.py exists in target dir
-            init_path = target_dir / "__init__.py"
-            if init_path.exists():
-                checks.append(EnvironmentCheck(
-                    check_name="init_py_exists",
-                    status=CheckStatus.PASS,
-                    message="__init__.py exists in target directory",
-                ))
-            else:
-                checks.append(EnvironmentCheck(
-                    check_name="init_py_exists",
-                    status=CheckStatus.FAIL,
-                    message="Missing __init__.py in target directory",
-                    detail=f"Expected at: {init_path}",
-                ))
-
-            # Parent package importable
-            parent_init = target_dir.parent / "__init__.py"
-            if target_dir.parent == project_root or parent_init.exists():
-                checks.append(EnvironmentCheck(
-                    check_name="parent_package_importable",
-                    status=CheckStatus.PASS,
-                    message="Parent package is importable",
-                ))
-            else:
-                checks.append(EnvironmentCheck(
-                    check_name="parent_package_importable",
-                    status=CheckStatus.WARN,
-                    message="Parent package may not be importable (no __init__.py)",
-                    detail=str(target_dir.parent),
-                ))
-
-        elif domain == TaskDomain.PYTHON_TEST:
-            # Source module under test exists
-            # Heuristic: test_foo.py → foo.py in src/
-            test_name = Path(target_file).stem
-            if test_name.startswith("test_"):
-                source_name = test_name[5:]  # strip test_ prefix
-                # Search for source module
-                src_dir = project_root / "src"
-                found = False
-                if src_dir.is_dir():
-                    for match in src_dir.rglob(f"{source_name}.py"):
-                        found = True
-                        checks.append(EnvironmentCheck(
-                            check_name="source_module_exists",
-                            status=CheckStatus.PASS,
-                            message=f"Source module found: {match.relative_to(project_root)}",
-                        ))
-                        break
-                if not found:
-                    checks.append(EnvironmentCheck(
-                        check_name="source_module_exists",
-                        status=CheckStatus.WARN,
-                        message=f"Source module '{source_name}.py' not found in src/",
-                        detail="May be a new module being created in this batch",
-                    ))
-
-            # Test directory exists
-            if target_dir.exists():
-                checks.append(EnvironmentCheck(
-                    check_name="test_dir_exists",
-                    status=CheckStatus.PASS,
-                    message=f"Test directory exists: {target_dir}",
-                ))
-            else:
-                checks.append(EnvironmentCheck(
-                    check_name="test_dir_exists",
-                    status=CheckStatus.WARN,
-                    message=f"Test directory does not exist: {target_dir}",
-                ))
-
-            # conftest.py scannable
-            conftest = target_dir / "conftest.py"
-            if conftest.exists():
-                checks.append(EnvironmentCheck(
-                    check_name="conftest_scannable",
-                    status=CheckStatus.PASS,
-                    message="conftest.py found in test directory",
-                ))
-            else:
-                checks.append(EnvironmentCheck(
-                    check_name="conftest_scannable",
-                    status=CheckStatus.SKIP,
-                    message="No conftest.py in test directory",
-                ))
-
-        elif domain in (
-            TaskDomain.CONFIG_TOML,
-            TaskDomain.CONFIG_YAML,
-            TaskDomain.CONFIG_JSON,
-        ):
-            # Current file exists and is valid format
-            if target_path.exists():
-                checks.append(EnvironmentCheck(
-                    check_name="config_file_exists",
-                    status=CheckStatus.PASS,
-                    message=f"Config file exists: {target_file}",
-                ))
-                # Validate format
-                try:
-                    content = target_path.read_text(encoding="utf-8")
-                    if domain == TaskDomain.CONFIG_JSON:
-                        json.loads(content)
-                    elif domain == TaskDomain.CONFIG_TOML:
-                        try:
-                            import tomllib
-                        except ImportError:
-                            try:
-                                import tomli as tomllib  # type: ignore[no-redef]
-                            except ImportError:
-                                tomllib = None  # type: ignore[assignment]
-                        if tomllib is not None:
-                            with open(target_path, "rb") as f:
-                                tomllib.load(f)
-                    elif domain == TaskDomain.CONFIG_YAML:
-                        import yaml
-                        yaml.safe_load(content)
-                    checks.append(EnvironmentCheck(
-                        check_name="config_format_valid",
-                        status=CheckStatus.PASS,
-                        message="Existing config file is valid",
-                    ))
-                except Exception as exc:
-                    checks.append(EnvironmentCheck(
-                        check_name="config_format_valid",
-                        status=CheckStatus.WARN,
-                        message=f"Existing config file has format issues: {exc}",
-                    ))
-            else:
-                checks.append(EnvironmentCheck(
-                    check_name="config_file_exists",
-                    status=CheckStatus.SKIP,
-                    message="Config file does not exist yet (will be created)",
-                ))
-
-        return checks
+        ctx = RuleContext(
+            target_file=target_file,
+            target_path=target_path,
+            target_dir=target_path.parent,
+            project_root=project_root,
+            domain=domain,
+            available_deps=available_deps,
+        )
+        contribution = PreflightRuleRegistry.evaluate_all(ctx)
+        return contribution.checks
 
     # ------------------------------------------------------------------
-    # Phase: ENRICH
+    # Phase: ENRICH  (delegated to PreflightRuleRegistry)
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -522,98 +366,38 @@ class DomainPreflightWorkflow(WorkflowBase):
         checks: List[EnvironmentCheck],
     ) -> TaskEnrichment:
         """Build prompt constraints and validator specs for a task."""
+        target_path = project_root / target_file
+        ctx = RuleContext(
+            target_file=target_file,
+            target_path=target_path,
+            target_dir=target_path.parent,
+            project_root=project_root,
+            domain=domain,
+            available_deps=available_deps,
+        )
+        contribution = PreflightRuleRegistry.evaluate_all(ctx)
+
         enrichment = TaskEnrichment(
             task_id=task_id,
             domain=domain,
             domain_reasoning=domain_reasoning,
             environment_checks=checks,
+            prompt_constraints=list(contribution.constraints),
+            post_generation_validators=list(contribution.validators),
         )
 
-        target_path = project_root / target_file
-        target_dir = target_path.parent
-
-        # Domain-specific prompt constraints
-        if domain == TaskDomain.PYTHON_SINGLE_MODULE:
-            enrichment.prompt_constraints = [
-                "Output a single Python module -- not a package",
-                "Do not use relative imports (from .module import ...)",
-                f"Only import from: {', '.join(sorted(available_deps.all_importable)[:50])}",
-                "Define utility functions before classes that reference them",
-            ]
-            enrichment.post_generation_validators = [
-                "no_relative_imports",
-                "deps_available",
-                "definition_ordering",
-            ]
-
-        elif domain == TaskDomain.PYTHON_PACKAGE_MODULE:
-            # Determine package name from path
-            parts = Path(target_file).parts
-            package_name = parts[-2] if len(parts) >= 2 else "unknown"
-
-            # Collect siblings
-            siblings: List[str] = []
+        # For package-module domain, populate available_siblings from
+        # the PackageModuleConstraintsRule's constraint text.
+        if domain == TaskDomain.PYTHON_PACKAGE_MODULE:
+            target_dir = target_path.parent
             if target_dir.is_dir():
-                siblings = [
+                target_name = Path(target_file).name
+                enrichment.available_siblings = sorted([
                     f.stem for f in target_dir.iterdir()
                     if f.suffix == ".py"
-                    and f.name != Path(target_file).name
+                    and f.name != target_name
                     and f.name != "__init__.py"
-                ]
-            enrichment.available_siblings = sorted(siblings)
-
-            sibling_list = ", ".join(enrichment.available_siblings[:20]) or "(none)"
-            enrichment.prompt_constraints = [
-                f"This file is part of the {package_name} package",
-                f"Use relative imports for siblings: {sibling_list}",
-                "Use absolute imports for SDK modules",
-            ]
-            enrichment.post_generation_validators = [
-                "relative_imports_valid",
-                "deps_available",
-                "no_circular_imports",
-            ]
-
-        elif domain == TaskDomain.PYTHON_TEST:
-            # Scan conftest for fixtures
-            fixtures: List[str] = []
-            conftest = target_dir / "conftest.py"
-            if conftest.exists():
-                try:
-                    content = conftest.read_text(encoding="utf-8")
-                    # Simple regex to find fixture names
-                    fixtures = re.findall(
-                        r"@pytest\.fixture[^)]*\)\s*\ndef\s+(\w+)",
-                        content,
-                    )
-                except Exception:
-                    pass
-
-            fixture_list = ", ".join(fixtures[:20]) or "(none found)"
-            enrichment.prompt_constraints = [
-                "Use pytest conventions (functions starting with test_, classes with Test)",
-                f"Available fixtures: {fixture_list}",
-                "Mock external dependencies -- do not make real API calls",
-            ]
-            enrichment.post_generation_validators = [
-                "imports_resolve",
-                "test_naming",
-                "no_hardcoded_secrets",
-            ]
-
-        elif domain in (
-            TaskDomain.CONFIG_TOML,
-            TaskDomain.CONFIG_YAML,
-            TaskDomain.CONFIG_JSON,
-        ):
-            constraints = ["Preserve existing sections"]
-            if target_path.exists():
-                constraints.append("Current content provided as context")
-            enrichment.prompt_constraints = constraints
-            enrichment.post_generation_validators = [
-                "valid_format",
-                "existing_keys_preserved",
-            ]
+                ])
 
         # Hash existing content if target file exists
         if target_path.exists() and target_path.is_file():
