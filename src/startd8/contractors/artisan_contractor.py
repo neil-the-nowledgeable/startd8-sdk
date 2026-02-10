@@ -85,7 +85,20 @@ logger = logging.getLogger(__name__)
 
 
 class WorkflowPhase(enum.Enum):
-    """Ordered workflow phases."""
+    """Ordered workflow phases (generic orchestration layer).
+
+    These six phases are an *abstract* orchestration grouping, not
+    a 1-to-1 mapping to the 9-phase artisan pipeline defined in
+    ``artisan_phases/``.  Concrete handler registrations should map
+    them as follows:
+
+        PLAN      → Phase 0 (Preflight) + Phase 1 (Plan Deconstruction)
+        SCAFFOLD  → Phase 2 (Lessons Discovery) + Phase 3 (Design Docs)
+        IMPLEMENT → Phase 4 (Test Construction) + Phase 5 (Development)
+        TEST      → Phase 7 (Final Testing)
+        REVIEW    → Phase 6 (Final Assembly & Validation)
+        FINALIZE  → Phase 8 (Retrospective & Lessons)
+    """
 
     PLAN = "plan"
     SCAFFOLD = "scaffold"
@@ -1056,6 +1069,23 @@ class ArtisanContractorWorkflow:
         timeout: Optional[float],
     ) -> dict[str, Any]:
         """Run ``handler.execute()`` with optional thread-based timeout.
+
+        .. warning::
+
+            Timeouts are enforced via :class:`ThreadPoolExecutor`.  When a
+            timeout fires, the handler thread is *abandoned*, not forcibly
+            terminated — ``future.cancel()`` has no effect on an already-
+            running task.  The thread continues executing until the handler
+            returns naturally.
+
+            **Implications:**
+
+            * Side effects (API calls, file writes) continue after timeout.
+            * At most one orphaned thread exists per timeout (bounded).
+            * Retry attempts may overlap with a still-running prior attempt.
+
+            Keep handlers fast and responsive.  For cooperative cancellation,
+            check a ``threading.Event`` passed via the *context* dict.
 
         Raises:
             FuturesTimeoutError: If timeout exceeded.

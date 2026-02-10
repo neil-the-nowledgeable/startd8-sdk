@@ -188,15 +188,6 @@ class WorkItem(BaseAppModel):
             raise ValueError('completed_at can only be set when status is COMPLETED')
         return v
 
-    @field_validator('actual_hours')
-    @classmethod
-    def validate_actual_hours(cls, v: Optional[float], info: ValidationInfo) -> Optional[float]:
-        if v is not None and 'estimated_hours' in info.data:
-            estimated = info.data['estimated_hours']
-            if estimated is not None and v > estimated * 3:
-                pass
-        return v
-
 
 class LessonLearned(BaseAppModel):
     """Represents a lesson learned during workflow execution."""
