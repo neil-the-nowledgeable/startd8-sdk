@@ -8,10 +8,20 @@ implementations for each WorkflowPhase.
 WorkflowPhase mapping (from artisan_contractor.py docstring):
     PLAN      → Load seed + validate + build task plan
     SCAFFOLD  → Verify target directories + resolve dependencies
-    IMPLEMENT → Process tasks (dry-run reports what would be done)
-    TEST      → Validate post-generation constraints
-    REVIEW    → Quality review checklist
-    FINALIZE  → Generate summary + write output artifacts
+    IMPLEMENT → Generate code per task via LeadContractorCodeGenerator
+    TEST      → Run post-generation validators against generated code
+    REVIEW    → LLM-based quality review of generated implementations
+    FINALIZE  → Collect artifacts + write comprehensive execution report
+
+Implementation Passes:
+    Pass 1 (this commit): Scaffold all handler interfaces, __init__ params,
+        private helper stubs, and factory config propagation.  Dry-run mode
+        continues to work as before.  Real-mode stubs log clear messages and
+        set status to ``"awaiting_implementation"``.
+    Pass 2: Wire ImplementPhaseHandler to LeadContractorCodeGenerator.
+    Pass 3: Wire TestPhaseHandler to subprocess validators + ReviewPhaseHandler
+        to LLM review agent.
+    Pass 4: Polish FinalizePhaseHandler artifact collection and diff generation.
 
 Usage::
 
@@ -25,6 +35,8 @@ Usage::
 
     handlers = ContextSeedHandlers.create_all(
         enriched_seed_path="out/artisan-context-seed-enriched.json",
+        lead_agent="anthropic:claude-sonnet-4-5-20250927",
+        drafter_agent="gemini:gemini-2.5-flash-lite",
     )
     for phase, handler in handlers.items():
         workflow.register_handler(phase, handler)
@@ -36,20 +48,23 @@ from __future__ import annotations
 
 import json
 import logging
+import subprocess
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from startd8.contractors.artisan_contractor import (
     AbstractPhaseHandler,
     WorkflowPhase,
 )
+from startd8.contractors.protocols import CodeGenerator, GenerationResult
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "HandlerConfig",
     "ContextSeedHandlers",
     "PlanPhaseHandler",
     "ScaffoldPhaseHandler",
@@ -58,6 +73,40 @@ __all__ = [
     "ReviewPhaseHandler",
     "FinalizePhaseHandler",
 ]
+
+
+# ============================================================================
+# Handler configuration
+# ============================================================================
+
+
+@dataclass
+class HandlerConfig:
+    """Shared configuration propagated to all phase handlers.
+
+    Attributes:
+        lead_agent: Agent spec for architect/reviewer (e.g. ``"anthropic:claude-sonnet-4-5-20250927"``).
+        drafter_agent: Agent spec for drafter (e.g. ``"gemini:gemini-2.5-flash-lite"``).
+        max_iterations: Maximum draft → review iterations per task.
+        pass_threshold: Minimum review score (0-100) to pass.
+        max_tokens: Override max_tokens for agent creation (None = provider default).
+        fail_on_truncation: Fail workflow on detected truncation.
+        check_truncation: Enable heuristic truncation detection.
+        strict_truncation: Use strict detection threshold.
+        test_timeout_seconds: Timeout for each validator subprocess.
+        review_temperature: Temperature for LLM review calls.
+    """
+
+    lead_agent: str = "anthropic:claude-sonnet-4-5-20250927"
+    drafter_agent: str = "gemini:gemini-2.5-flash-lite"
+    max_iterations: int = 3
+    pass_threshold: int = 80
+    max_tokens: Optional[int] = None
+    fail_on_truncation: bool = True
+    check_truncation: bool = True
+    strict_truncation: bool = False
+    test_timeout_seconds: int = 120
+    review_temperature: float = 0.0
 
 
 # ============================================================================
@@ -403,11 +452,210 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
 
 
 class ImplementPhaseHandler(AbstractPhaseHandler):
-    """IMPLEMENT phase: Process tasks in dependency order.
+    """IMPLEMENT phase: Generate code per task in dependency order.
 
-    In dry-run mode: reports what would be implemented per task.
-    In real mode: would orchestrate LLM code generation (future work).
+    In dry-run mode: reports what would be implemented per task (unchanged).
+    In real mode: invokes :class:`LeadContractorCodeGenerator` for each task,
+    writing generated files to ``project_root / target_file``.
+
+    Wires to :class:`LeadContractorCodeGenerator` for actual code generation:
+        * ``_resolve_generator`` lazily creates the generator (or uses an injected one).
+        * ``_build_task_context`` assembles the prompt context dict for a task,
+          including existing file contents and dependency outputs.
+        * ``_generate_for_task`` calls ``generator.generate()`` and returns the report.
+        * ``execute`` orchestrates the full loop with env-check, dep-check, and
+          cost aggregation.
     """
+
+    def __init__(
+        self,
+        handler_config: Optional[HandlerConfig] = None,
+        code_generator: Optional[CodeGenerator] = None,
+    ) -> None:
+        self.config = handler_config or HandlerConfig()
+        self._generator = code_generator  # None → auto-created via _resolve_generator()
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _resolve_generator(self, project_root: Path) -> CodeGenerator:
+        """Resolve the code generator, creating one if not injected.
+
+        Returns the injected generator if set, otherwise creates a
+        :class:`LeadContractorCodeGenerator` from ``self.config``.
+
+        A new generator is created per call when ``project_root`` differs
+        from the cached instance's ``output_dir``, since
+        ``LeadContractorCodeGenerator`` binds ``output_dir`` at init time.
+
+        Args:
+            project_root: The project root, used as the generator's output
+                directory so files land in the correct location.
+
+        Returns:
+            A ``CodeGenerator`` instance ready to use.
+        """
+        if self._generator is not None:
+            return self._generator
+
+        from startd8.contractors.generators.lead_contractor import LeadContractorCodeGenerator
+
+        self._generator = LeadContractorCodeGenerator(
+            lead_agent=self.config.lead_agent,
+            drafter_agent=self.config.drafter_agent,
+            max_iterations=self.config.max_iterations,
+            pass_threshold=self.config.pass_threshold,
+            output_dir=project_root,
+            max_tokens=self.config.max_tokens,
+            fail_on_truncation=self.config.fail_on_truncation,
+            check_truncation=self.config.check_truncation,
+            strict_truncation=self.config.strict_truncation,
+        )
+        return self._generator
+
+    #: Maximum bytes to read from an existing file before truncating.
+    #: Keeps the LLM context window manageable for large files.
+    _MAX_EXISTING_FILE_BYTES: int = 60_000
+
+    def _build_task_context(
+        self,
+        task: SeedTask,
+        project_root: Path,
+        prior_results: Dict[str, GenerationResult],
+    ) -> Dict[str, Any]:
+        """Build the context dict for a single task's code generation.
+
+        Includes:
+        - Task description and constraints
+        - Target file paths and existing content (if any)
+        - Outputs of dependency tasks (for cross-task awareness)
+        - Enrichment metadata (domain, environment checks)
+
+        Args:
+            task: The seed task to build context for.
+            project_root: Root of the target project.
+            prior_results: Map of task_id → GenerationResult for completed deps.
+
+        Returns:
+            Context dict suitable for ``CodeGenerator.generate()``.
+        """
+        ctx: Dict[str, Any] = {
+            "task_id": task.task_id,
+            "feature_id": task.feature_id,
+            "domain": task.domain,
+            "target_files": task.target_files,
+            "estimated_loc": task.estimated_loc,
+            "prompt_constraints": task.prompt_constraints,
+            "environment_checks": task.environment_checks,
+            "project_root": str(project_root),
+        }
+
+        # Read existing file contents for modify-in-place tasks
+        for target in task.target_files:
+            target_path = project_root / target
+            if target_path.exists():
+                try:
+                    content = target_path.read_text(encoding="utf-8")
+                    if len(content) > self._MAX_EXISTING_FILE_BYTES:
+                        content = (
+                            content[: self._MAX_EXISTING_FILE_BYTES]
+                            + f"\n\n# ... truncated ({len(content)} bytes total)"
+                        )
+                    ctx.setdefault("existing_files", {})[target] = content
+                except (UnicodeDecodeError, OSError) as exc:
+                    logger.warning(
+                        "IMPLEMENT: could not read existing file %s: %s",
+                        target_path, exc,
+                    )
+
+        # Inject real dependency outputs for cross-task context
+        dep_outputs: Dict[str, Any] = {}
+        for dep_id in task.depends_on:
+            dep_result = prior_results.get(dep_id)
+            if dep_result and dep_result.success:
+                dep_files: Dict[str, str] = {}
+                for gen_file in dep_result.generated_files:
+                    try:
+                        if gen_file.exists():
+                            content = gen_file.read_text(encoding="utf-8")
+                            if len(content) > self._MAX_EXISTING_FILE_BYTES:
+                                content = (
+                                    content[: self._MAX_EXISTING_FILE_BYTES]
+                                    + f"\n\n# ... truncated ({len(content)} bytes total)"
+                                )
+                            dep_files[str(gen_file)] = content
+                    except (UnicodeDecodeError, OSError) as exc:
+                        logger.warning(
+                            "IMPLEMENT: could not read dep output %s: %s",
+                            gen_file, exc,
+                        )
+                dep_outputs[dep_id] = dep_files
+        if dep_outputs:
+            ctx["dependency_outputs"] = dep_outputs
+
+        return ctx
+
+    def _generate_for_task(
+        self,
+        task: SeedTask,
+        context: Dict[str, Any],
+        project_root: Path,
+        generator: CodeGenerator,
+    ) -> Tuple[Dict[str, Any], GenerationResult]:
+        """Run code generation for a single task and return report + result.
+
+        Args:
+            task: The seed task.
+            context: Task context from ``_build_task_context``.
+            project_root: Root directory for output.
+            generator: The code generator to invoke.
+
+        Returns:
+            Tuple of (task_report dict, GenerationResult).
+        """
+        task_report: Dict[str, Any] = {
+            "task_id": task.task_id,
+            "feature_id": task.feature_id,
+            "title": task.title,
+            "domain": task.domain,
+            "target_files": task.target_files,
+            "estimated_loc": task.estimated_loc,
+            "depends_on": task.depends_on,
+            "prompt_constraints_count": len(task.prompt_constraints),
+            "validators": task.post_generation_validators,
+        }
+
+        result = generator.generate(
+            task=task.description,
+            context=context,
+            target_files=task.target_files,
+        )
+        task_report["status"] = "generated" if result.success else "generation_failed"
+        task_report["cost"] = result.cost_usd
+        task_report["tokens"] = {
+            "input": result.input_tokens,
+            "output": result.output_tokens,
+        }
+        task_report["iterations"] = result.iterations
+        if result.error:
+            task_report["error"] = result.error
+
+        return task_report, result
+
+    def _check_environment(self, task: SeedTask) -> List[Dict[str, Any]]:
+        """Check environment readiness for a task.
+
+        Returns list of environment issues (fail/warn checks).
+        """
+        return [
+            c for c in task.environment_checks
+            if c.get("status") in ("fail", "warn")
+        ]
+
+    # ------------------------------------------------------------------
+    # Public execute
+    # ------------------------------------------------------------------
 
     def execute(
         self,
@@ -423,33 +671,75 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
 
         task_reports: list[dict[str, Any]] = []
         total_cost = 0.0
+        prior_results: Dict[str, GenerationResult] = {}
 
         for task in tasks:
-            task_report = {
-                "task_id": task.task_id,
-                "feature_id": task.feature_id,
-                "title": task.title,
-                "domain": task.domain,
-                "target_files": task.target_files,
-                "estimated_loc": task.estimated_loc,
-                "depends_on": task.depends_on,
-                "prompt_constraints_count": len(task.prompt_constraints),
-                "validators": task.post_generation_validators,
-                "status": "dry_run_skipped" if dry_run else "pending",
-            }
+            env_issues = self._check_environment(task)
 
-            if not dry_run:
-                task_report["status"] = "not_implemented"
+            if dry_run:
+                # --- Dry-run path (unchanged from original) ---
+                task_report: Dict[str, Any] = {
+                    "task_id": task.task_id,
+                    "feature_id": task.feature_id,
+                    "title": task.title,
+                    "domain": task.domain,
+                    "target_files": task.target_files,
+                    "estimated_loc": task.estimated_loc,
+                    "depends_on": task.depends_on,
+                    "prompt_constraints_count": len(task.prompt_constraints),
+                    "validators": task.post_generation_validators,
+                    "status": "dry_run_skipped",
+                }
+                if env_issues:
+                    task_report["environment_issues"] = env_issues
+                task_reports.append(task_report)
+                continue
 
-            # Check environment readiness
-            env_issues = [
-                c for c in task.environment_checks
-                if c.get("status") in ("fail", "warn")
+            # --- Real-mode path ---
+
+            # Skip tasks with blocking environment failures
+            if any(c.get("status") == "fail" for c in env_issues):
+                logger.warning(
+                    "IMPLEMENT: skipping task %s due to environment failures",
+                    task.task_id,
+                )
+                task_reports.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "status": "env_blocked",
+                    "environment_issues": env_issues,
+                })
+                continue
+
+            # Skip tasks whose dependencies failed
+            failed_deps = [
+                dep_id for dep_id in task.depends_on
+                if dep_id in prior_results and not prior_results[dep_id].success
             ]
-            if env_issues:
-                task_report["environment_issues"] = env_issues
+            if failed_deps:
+                logger.warning(
+                    "IMPLEMENT: skipping task %s — deps failed: %s",
+                    task.task_id, failed_deps,
+                )
+                task_reports.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "status": "dep_blocked",
+                    "failed_dependencies": failed_deps,
+                })
+                continue
 
-            task_reports.append(task_report)
+            # Build context and generate
+            task_ctx = self._build_task_context(task, project_root, prior_results)
+
+            generator = self._resolve_generator(project_root)
+            report, result = self._generate_for_task(
+                task, task_ctx, project_root, generator,
+            )
+
+            prior_results[task.task_id] = result
+            total_cost += result.cost_usd
+            task_reports.append(report)
 
         # Group by domain for summary
         domain_tasks: dict[str, list[str]] = defaultdict(list)
@@ -462,25 +752,188 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
             "total_estimated_loc": sum(t.estimated_loc for t in tasks),
             "total_cost": total_cost,
+            "generation_results": {
+                tid: {"success": r.success, "error": r.error, "cost": r.cost_usd}
+                for tid, r in prior_results.items()
+            },
         }
 
         context["implementation"] = output
+        context["generation_results"] = prior_results  # for TEST phase
         duration = time.monotonic() - start
 
         logger.info(
-            "IMPLEMENT phase complete: %d tasks processed (%.2fs)",
-            len(task_reports), duration,
+            "IMPLEMENT phase complete: %d tasks processed, $%.4f cost (%.2fs)",
+            len(task_reports), total_cost, duration,
         )
 
         return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
 
 
 class TestPhaseHandler(AbstractPhaseHandler):
-    """TEST phase: Validate post-generation constraints.
+    """TEST phase: Run post-generation validators against generated code.
 
-    In dry-run mode: reports the test plan per task.
-    In real mode: would run validators against generated code.
+    In dry-run mode: reports the test plan per task (unchanged).
+    In real mode: executes validator commands (pytest, mypy, ruff, etc.)
+    as subprocesses and collects pass/fail results.
+
+    Pass 1 scaffold:
+        * ``__init__`` accepts :class:`HandlerConfig`.
+        * ``_resolve_validator_command`` maps validator names to CLI commands.
+        * ``_run_validator`` executes a single validator subprocess.
+        * ``_run_validators_for_task`` runs all validators for one task.
+        * Real-mode ``execute`` calls helpers but falls through to
+          ``"awaiting_implementation"`` until Pass 3 wires subprocess execution.
     """
+
+    def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
+        self.config = handler_config or HandlerConfig()
+
+    # ------------------------------------------------------------------
+    # Validator command mapping
+    # ------------------------------------------------------------------
+
+    #: Known validator names → CLI command templates.
+    #: ``{project_root}`` and ``{target_files}`` are substituted at runtime.
+    VALIDATOR_COMMANDS: Dict[str, str] = {
+        "pytest": "python -m pytest {target_files} --tb=short -q",
+        "mypy": "python -m mypy {target_files} --ignore-missing-imports",
+        "ruff": "python -m ruff check {target_files}",
+        "ruff_format": "python -m ruff format --check {target_files}",
+        "black": "python -m black --check {target_files}",
+        "pylint": "python -m pylint {target_files}",
+        "import_check": "python -c \"import {module}\"",
+        "syntax_check": "python -m py_compile {target_files}",
+    }
+
+    def _resolve_validator_command(
+        self,
+        validator_name: str,
+        target_files: List[str],
+        project_root: Path,
+    ) -> Optional[str]:
+        """Resolve a validator name to a runnable CLI command.
+
+        Args:
+            validator_name: Name from ``task.post_generation_validators``.
+            target_files: List of file paths (relative to project_root).
+            project_root: The project root directory.
+
+        Returns:
+            Formatted command string, or None if validator is unknown.
+
+        TODO: Pass 3 — support custom validator commands from seed config.
+        """
+        template = self.VALIDATOR_COMMANDS.get(validator_name)
+        if template is None:
+            logger.warning("TEST: unknown validator %r — skipping", validator_name)
+            return None
+
+        files_str = " ".join(str(project_root / f) for f in target_files)
+        return template.format(
+            target_files=files_str,
+            project_root=str(project_root),
+            module=target_files[0].replace("/", ".").replace(".py", "") if target_files else "",
+        )
+
+    def _run_validator(
+        self,
+        command: str,
+        project_root: Path,
+        timeout: int,
+    ) -> Dict[str, Any]:
+        """Execute a single validator command as a subprocess.
+
+        Args:
+            command: The CLI command to run.
+            project_root: Working directory for the subprocess.
+            timeout: Timeout in seconds.
+
+        Returns:
+            Dict with keys: ``passed``, ``returncode``, ``stdout``, ``stderr``, ``timed_out``.
+
+        TODO: Pass 3 — implement subprocess execution.
+        """
+        # Pass 3: replace with actual subprocess call
+        #   try:
+        #       proc = subprocess.run(
+        #           command, shell=True, cwd=str(project_root),
+        #           capture_output=True, text=True, timeout=timeout,
+        #       )
+        #       return {
+        #           "passed": proc.returncode == 0,
+        #           "returncode": proc.returncode,
+        #           "stdout": proc.stdout[-2000:],  # truncate for report
+        #           "stderr": proc.stderr[-2000:],
+        #           "timed_out": False,
+        #       }
+        #   except subprocess.TimeoutExpired:
+        #       return {"passed": False, "returncode": -1, "stdout": "", "stderr": "timeout", "timed_out": True}
+
+        return {
+            "passed": False,
+            "returncode": -1,
+            "stdout": "",
+            "stderr": "Validator execution not yet wired (Pass 3)",
+            "timed_out": False,
+            "awaiting_implementation": True,
+        }
+
+    def _run_validators_for_task(
+        self,
+        task: SeedTask,
+        project_root: Path,
+        generation_result: Optional[GenerationResult],
+    ) -> Dict[str, Any]:
+        """Run all validators for a single task.
+
+        Args:
+            task: The seed task.
+            project_root: Project root directory.
+            generation_result: The generation result from IMPLEMENT phase (if any).
+
+        Returns:
+            Dict with per-validator results and overall pass/fail.
+
+        TODO: Pass 3 — only run validators if generation_result.success is True.
+        """
+        validator_results: List[Dict[str, Any]] = []
+        all_passed = True
+
+        for validator_name in task.post_generation_validators:
+            command = self._resolve_validator_command(
+                validator_name, task.target_files, project_root,
+            )
+            if command is None:
+                validator_results.append({
+                    "validator": validator_name,
+                    "skipped": True,
+                    "reason": "unknown_validator",
+                })
+                continue
+
+            result = self._run_validator(
+                command, project_root, self.config.test_timeout_seconds,
+            )
+            result["validator"] = validator_name
+            result["command"] = command
+            validator_results.append(result)
+
+            if not result.get("passed", False):
+                all_passed = False
+
+        return {
+            "task_id": task.task_id,
+            "title": task.title,
+            "domain": task.domain,
+            "validators_run": len(validator_results),
+            "all_passed": all_passed,
+            "results": validator_results,
+        }
+
+    # ------------------------------------------------------------------
+    # Public execute
+    # ------------------------------------------------------------------
 
     def execute(
         self,
@@ -490,51 +943,279 @@ class TestPhaseHandler(AbstractPhaseHandler):
     ) -> dict[str, Any]:
         start = time.monotonic()
         tasks: list[SeedTask] = _ensure_context_loaded(context)
+        project_root = Path(context.get("project_root", "."))
+        generation_results: Dict[str, GenerationResult] = context.get("generation_results", {})
 
-        logger.info("TEST phase: building test plan for %d tasks (dry_run=%s)", len(tasks), dry_run)
+        logger.info("TEST phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
         test_plan: list[dict[str, Any]] = []
         validator_counts: dict[str, int] = defaultdict(int)
+        total_passed = 0
+        total_failed = 0
 
         for task in tasks:
             validators = task.post_generation_validators
             for v in validators:
                 validator_counts[v] += 1
 
-            test_entry = {
-                "task_id": task.task_id,
-                "title": task.title,
-                "domain": task.domain,
-                "validators": validators,
-                "validator_count": len(validators),
-                "status": "dry_run_planned" if dry_run else "not_run",
-            }
-            test_plan.append(test_entry)
+            if dry_run:
+                # --- Dry-run path (unchanged) ---
+                test_entry = {
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "domain": task.domain,
+                    "validators": validators,
+                    "validator_count": len(validators),
+                    "status": "dry_run_planned",
+                }
+                test_plan.append(test_entry)
+                continue
+
+            # --- Real-mode path (scaffolded — wired in Pass 3) ---
+            gen_result = generation_results.get(task.task_id)
+
+            # Skip tasks that were not generated
+            if gen_result is None or not gen_result.success:
+                test_plan.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "domain": task.domain,
+                    "validators": validators,
+                    "validator_count": len(validators),
+                    "status": "skipped_no_generation",
+                })
+                continue
+
+            # Run validators
+            task_test_result = self._run_validators_for_task(
+                task, project_root, gen_result,
+            )
+            task_test_result["status"] = (
+                "passed" if task_test_result["all_passed"] else "failed"
+            )
+            test_plan.append(task_test_result)
+
+            if task_test_result["all_passed"]:
+                total_passed += 1
+            else:
+                total_failed += 1
 
         output = {
             "test_plan": test_plan,
             "total_validators": sum(len(t.post_generation_validators) for t in tasks),
             "unique_validators": dict(validator_counts),
-            "tasks_with_tests": len([t for t in test_plan if t["validator_count"] > 0]),
+            "tasks_with_tests": len([t for t in test_plan if t.get("validator_count", 0) > 0 or t.get("validators_run", 0) > 0]),
+            "total_passed": total_passed,
+            "total_failed": total_failed,
         }
 
         context["test_results"] = output
         duration = time.monotonic() - start
 
         logger.info(
-            "TEST phase complete: %d validators across %d tasks (%.2fs)",
-            output["total_validators"], len(test_plan), duration,
+            "TEST phase complete: %d validators across %d tasks, %d passed, %d failed (%.2fs)",
+            output["total_validators"], len(test_plan), total_passed, total_failed, duration,
         )
 
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
 
 class ReviewPhaseHandler(AbstractPhaseHandler):
-    """REVIEW phase: Quality review checklist.
+    """REVIEW phase: LLM-based quality review of generated implementations.
 
-    In dry-run mode: reports review checklist.
-    In real mode: would run code quality analysis.
+    In dry-run mode: reports review checklist (unchanged).
+    In real mode: sends generated code to a review agent (Claude) for
+    quality scoring, then aggregates pass/fail verdicts.
+
+    Pass 1 scaffold:
+        * ``__init__`` accepts :class:`HandlerConfig`.
+        * ``_resolve_review_agent`` lazily creates the review LLM agent.
+        * ``_build_review_prompt`` assembles the review prompt for a task.
+        * ``_parse_review_response`` extracts score/verdict from LLM output.
+        * ``_review_task`` orchestrates a single task review.
+        * Real-mode ``execute`` calls helpers but falls through to
+          ``"awaiting_implementation"`` until Pass 3 wires the LLM call.
     """
+
+    def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
+        self.config = handler_config or HandlerConfig()
+        self._review_agent: Any = None  # Pass 3: BaseAgent instance
+
+    # ------------------------------------------------------------------
+    # Review prompt template
+    # ------------------------------------------------------------------
+
+    REVIEW_PROMPT_TEMPLATE = """You are reviewing generated code for quality and correctness.
+
+## Task
+**ID:** {task_id}
+**Title:** {title}
+**Domain:** {domain}
+
+## Task Description
+{description}
+
+## Prompt Constraints
+{constraints}
+
+## Generated Code
+```
+{generated_code}
+```
+
+## Test Results
+{test_results}
+
+## Review Instructions
+Evaluate the implementation against the task description and constraints.
+
+## Required Output Format
+
+### Score: [0-100]
+
+### Verdict: [PASS/FAIL]
+PASS if score >= {pass_threshold} and no blocking issues.
+
+### Strengths
+- [What was done well]
+
+### Issues
+- [severity: BLOCKING/MAJOR/MINOR] [description]
+
+### Suggestions
+- [Specific improvements]
+"""
+
+    def _resolve_review_agent(self) -> Any:
+        """Lazily resolve the review agent from config.
+
+        Creates a :class:`BaseAgent` instance using the lead_agent spec
+        with low temperature for consistent reviews.
+
+        Returns:
+            A BaseAgent instance.
+
+        TODO: Pass 3 — instantiate via ``resolve_agent_spec``.
+        """
+        if self._review_agent is not None:
+            return self._review_agent
+
+        # Pass 3: replace with actual agent resolution
+        #   from startd8.utils.agent_resolution import resolve_agent_spec
+        #   self._review_agent = resolve_agent_spec(
+        #       self.config.lead_agent,
+        #       temperature=self.config.review_temperature,
+        #   )
+        #   return self._review_agent
+        raise NotImplementedError(
+            "Review agent not yet wired (Pass 3)"
+        )
+
+    def _build_review_prompt(
+        self,
+        task: SeedTask,
+        generated_code: str,
+        test_results: Dict[str, Any],
+    ) -> str:
+        """Build the review prompt for a single task.
+
+        Args:
+            task: The seed task.
+            generated_code: The code that was generated.
+            test_results: Test results from the TEST phase.
+
+        Returns:
+            Formatted review prompt string.
+        """
+        constraints_str = "\n".join(
+            f"- {c}" for c in task.prompt_constraints
+        ) or "None specified"
+
+        test_str = json.dumps(test_results, indent=2, default=str) if test_results else "No tests run"
+
+        return self.REVIEW_PROMPT_TEMPLATE.format(
+            task_id=task.task_id,
+            title=task.title,
+            domain=task.domain,
+            description=task.description,
+            constraints=constraints_str,
+            generated_code=generated_code[:8000],  # truncate for prompt
+            test_results=test_str[:2000],
+            pass_threshold=self.config.pass_threshold,
+        )
+
+    def _parse_review_response(self, response: str) -> Dict[str, Any]:
+        """Parse score, verdict, and issues from the LLM review response.
+
+        Args:
+            response: Raw LLM output.
+
+        Returns:
+            Dict with ``score``, ``verdict``, ``strengths``, ``issues``, ``suggestions``.
+
+        TODO: Pass 3 — robust parsing with regex fallbacks.
+        """
+        import re
+
+        score = 0
+        verdict = "FAIL"
+
+        # Extract score
+        score_match = re.search(r"###\s*Score:\s*(\d+)", response)
+        if score_match:
+            score = min(100, max(0, int(score_match.group(1))))
+
+        # Extract verdict
+        verdict_match = re.search(r"###\s*Verdict:\s*(PASS|FAIL)", response, re.IGNORECASE)
+        if verdict_match:
+            verdict = verdict_match.group(1).upper()
+
+        return {
+            "score": score,
+            "verdict": verdict,
+            "passed": verdict == "PASS" and score >= self.config.pass_threshold,
+            "raw_response": response[:4000],  # truncate for storage
+        }
+
+    def _review_task(
+        self,
+        task: SeedTask,
+        generated_code: str,
+        test_results: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Conduct LLM review for a single task.
+
+        Args:
+            task: The seed task.
+            generated_code: Code to review.
+            test_results: Test results for context.
+
+        Returns:
+            Review result dict with score, verdict, cost.
+
+        TODO: Pass 3 — call review agent and parse response.
+        """
+        # Pass 3: replace with actual LLM call
+        #   agent = self._resolve_review_agent()
+        #   prompt = self._build_review_prompt(task, generated_code, test_results)
+        #   response_text, token_count, token_usage = agent.generate(prompt)
+        #   review = self._parse_review_response(response_text)
+        #   review["cost"] = <calculate from token_usage>
+        #   review["tokens"] = {"input": token_usage.input_tokens, "output": token_usage.output_tokens}
+        #   return review
+
+        return {
+            "task_id": task.task_id,
+            "score": 0,
+            "verdict": "NOT_REVIEWED",
+            "passed": False,
+            "cost": 0.0,
+            "status": "awaiting_implementation",
+        }
+
+    # ------------------------------------------------------------------
+    # Public execute
+    # ------------------------------------------------------------------
 
     def execute(
         self,
@@ -545,17 +1226,22 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
         start = time.monotonic()
         tasks: list[SeedTask] = _ensure_context_loaded(context)
         preflight_summary = context.get("preflight_summary", {})
+        generation_results: Dict[str, GenerationResult] = context.get("generation_results", {})
+        test_results_ctx: Dict[str, Any] = context.get("test_results", {})
+        test_plan = test_results_ctx.get("test_plan", [])
+        test_by_task = {t["task_id"]: t for t in test_plan if isinstance(t, dict)}
 
-        logger.info("REVIEW phase: building review checklist (dry_run=%s)", dry_run)
+        logger.info("REVIEW phase: reviewing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
-        # Build review checklist from enrichment data
         review_items: list[dict[str, Any]] = []
         constraint_coverage: dict[str, int] = defaultdict(int)
+        total_cost = 0.0
+        total_passed = 0
+        total_failed = 0
 
         for task in tasks:
-            # Count constraint types
+            # Count constraint types (always, for coverage report)
             for constraint in task.prompt_constraints:
-                # Extract constraint category from first few words
                 key = constraint.split("(")[0].strip()[:60]
                 constraint_coverage[key] += 1
 
@@ -568,15 +1254,55 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
                 if c.get("status") == "warn"
             ]
 
-            review_items.append({
-                "task_id": task.task_id,
-                "title": task.title,
-                "domain": task.domain,
-                "constraint_count": len(task.prompt_constraints),
-                "env_failures": len(env_fails),
-                "env_warnings": len(env_warns),
-                "review_status": "dry_run_pending" if dry_run else "not_reviewed",
-            })
+            if dry_run:
+                # --- Dry-run path (unchanged) ---
+                review_items.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "domain": task.domain,
+                    "constraint_count": len(task.prompt_constraints),
+                    "env_failures": len(env_fails),
+                    "env_warnings": len(env_warns),
+                    "review_status": "dry_run_pending",
+                })
+                continue
+
+            # --- Real-mode path (scaffolded — wired in Pass 3) ---
+            gen_result = generation_results.get(task.task_id)
+
+            # Skip tasks that were not generated successfully
+            if gen_result is None or not gen_result.success:
+                review_items.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "domain": task.domain,
+                    "constraint_count": len(task.prompt_constraints),
+                    "env_failures": len(env_fails),
+                    "env_warnings": len(env_warns),
+                    "review_status": "skipped_no_generation",
+                })
+                continue
+
+            # Read generated code for review
+            # Pass 3: read actual file contents from gen_result.generated_files
+            generated_code = "# TODO: Pass 3 — read generated files"
+            task_test = test_by_task.get(task.task_id, {})
+
+            review = self._review_task(task, generated_code, task_test)
+            review["title"] = task.title
+            review["domain"] = task.domain
+            review["constraint_count"] = len(task.prompt_constraints)
+            review["env_failures"] = len(env_fails)
+            review["env_warnings"] = len(env_warns)
+            review["review_status"] = review.get("status", "awaiting_implementation")
+
+            total_cost += review.get("cost", 0.0)
+            if review.get("passed", False):
+                total_passed += 1
+            else:
+                total_failed += 1
+
+            review_items.append(review)
 
         output = {
             "review_items": review_items,
@@ -584,29 +1310,149 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
             "constraint_coverage": dict(constraint_coverage),
             "tasks_with_env_issues": len([
                 r for r in review_items
-                if r["env_failures"] > 0 or r["env_warnings"] > 0
+                if r.get("env_failures", 0) > 0 or r.get("env_warnings", 0) > 0
             ]),
+            "total_cost": total_cost,
+            "total_passed": total_passed,
+            "total_failed": total_failed,
         }
 
         context["review_results"] = output
         duration = time.monotonic() - start
 
         logger.info(
-            "REVIEW phase complete: %d items reviewed (%.2fs)",
-            len(review_items), duration,
+            "REVIEW phase complete: %d items, %d passed, %d failed, $%.4f cost (%.2fs)",
+            len(review_items), total_passed, total_failed, total_cost, duration,
         )
 
-        return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
+        return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
 
 
 class FinalizePhaseHandler(AbstractPhaseHandler):
-    """FINALIZE phase: Generate summary and write output artifacts.
+    """FINALIZE phase: Collect artifacts and write comprehensive execution report.
 
-    Produces a workflow execution report with all phase results.
+    Produces a workflow execution report aggregating all phase results,
+    lists generated files, and optionally writes a manifest of changes.
+
+    Pass 1 scaffold:
+        * ``__init__`` accepts output_dir + :class:`HandlerConfig`.
+        * ``_collect_generated_artifacts`` inventories files from IMPLEMENT phase.
+        * ``_build_cost_summary`` aggregates costs across all phases.
+        * ``_write_manifest`` writes a machine-readable manifest of changes.
+        * Enhanced ``execute`` includes richer summaries from scaffolded phases.
     """
 
-    def __init__(self, output_dir: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        output_dir: Optional[str] = None,
+        handler_config: Optional[HandlerConfig] = None,
+    ) -> None:
         self.output_dir = output_dir
+        self.config = handler_config or HandlerConfig()
+
+    # ------------------------------------------------------------------
+    # Private helpers (scaffolded — bodies filled in Pass 4)
+    # ------------------------------------------------------------------
+
+    def _collect_generated_artifacts(
+        self,
+        context: dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Inventory all files generated during the IMPLEMENT phase.
+
+        Reads ``context["generation_results"]`` and lists output files
+        with sizes and paths.
+
+        Args:
+            context: Shared workflow context.
+
+        Returns:
+            List of artifact dicts (path, size_bytes, task_id).
+
+        TODO: Pass 4 — read actual file stats from GenerationResult.generated_files.
+        """
+        artifacts: List[Dict[str, Any]] = []
+        generation_results: Dict[str, GenerationResult] = context.get("generation_results", {})
+
+        for task_id, result in generation_results.items():
+            if result.success:
+                for fpath in result.generated_files:
+                    artifact = {
+                        "task_id": task_id,
+                        "path": str(fpath),
+                        "exists": fpath.exists() if hasattr(fpath, "exists") else False,
+                    }
+                    # Pass 4: add size_bytes, line_count, hash
+                    if hasattr(fpath, "exists") and fpath.exists():
+                        artifact["size_bytes"] = fpath.stat().st_size
+                    artifacts.append(artifact)
+
+        return artifacts
+
+    def _build_cost_summary(self, context: dict[str, Any]) -> Dict[str, Any]:
+        """Aggregate costs across all phases.
+
+        Args:
+            context: Shared workflow context.
+
+        Returns:
+            Dict with per-phase and total cost breakdowns.
+        """
+        implementation = context.get("implementation", {})
+        review_results = context.get("review_results", {})
+
+        impl_cost = implementation.get("total_cost", 0.0)
+        review_cost = review_results.get("total_cost", 0.0)
+        total = impl_cost + review_cost
+
+        return {
+            "implementation_cost": impl_cost,
+            "review_cost": review_cost,
+            "total_cost": total,
+            "currency": "USD",
+        }
+
+    def _write_manifest(
+        self,
+        artifacts: List[Dict[str, Any]],
+        summary: Dict[str, Any],
+        output_dir: Path,
+    ) -> Optional[Path]:
+        """Write a machine-readable manifest of all changes.
+
+        Args:
+            artifacts: List of generated artifact dicts.
+            summary: The full workflow summary.
+            output_dir: Directory to write the manifest.
+
+        Returns:
+            Path to the manifest file, or None if no artifacts.
+
+        TODO: Pass 4 — include file diffs, checksums, etc.
+        """
+        if not artifacts:
+            return None
+
+        manifest = {
+            "workflow_version": "0.4.0",
+            "artifacts": artifacts,
+            "summary": {
+                "plan_title": summary.get("plan_title", ""),
+                "task_count": summary.get("task_count", 0),
+                "total_cost": summary.get("cost_summary", {}).get("total_cost", 0.0),
+            },
+        }
+
+        manifest_path = output_dir / "generation-manifest.json"
+        manifest_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(manifest_path, "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2, default=str)
+        logger.info("Wrote generation manifest to %s", manifest_path)
+        return manifest_path
+
+    # ------------------------------------------------------------------
+    # Public execute
+    # ------------------------------------------------------------------
 
     def execute(
         self,
@@ -626,7 +1472,11 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         test_results = context.get("test_results", {})
         review_results = context.get("review_results", {})
 
-        summary = {
+        # Collect artifacts and costs
+        artifacts = self._collect_generated_artifacts(context)
+        cost_summary = self._build_cost_summary(context)
+
+        summary: Dict[str, Any] = {
             "plan_title": plan_title,
             "task_count": len(tasks),
             "domain_summary": domain_summary,
@@ -639,18 +1489,27 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             "implementation_summary": {
                 "tasks_processed": implementation.get("tasks_processed", 0),
                 "total_estimated_loc": implementation.get("total_estimated_loc", 0),
+                "generation_results": implementation.get("generation_results", {}),
             },
             "test_summary": {
                 "total_validators": test_results.get("total_validators", 0),
                 "tasks_with_tests": test_results.get("tasks_with_tests", 0),
+                "total_passed": test_results.get("total_passed", 0),
+                "total_failed": test_results.get("total_failed", 0),
             },
             "review_summary": {
                 "tasks_with_env_issues": review_results.get("tasks_with_env_issues", 0),
+                "total_passed": review_results.get("total_passed", 0),
+                "total_failed": review_results.get("total_failed", 0),
+                "total_cost": review_results.get("total_cost", 0.0),
             },
+            "cost_summary": cost_summary,
+            "generated_artifacts": artifacts,
+            "artifact_count": len(artifacts),
             "dry_run": dry_run,
         }
 
-        # Write summary artifact if output_dir specified
+        # Write report and manifest
         if self.output_dir and not dry_run:
             output_path = Path(self.output_dir) / "workflow-execution-report.json"
             output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -659,10 +1518,20 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             logger.info("Wrote execution report to %s", output_path)
             summary["report_path"] = str(output_path)
 
+            # Write manifest of generated files
+            manifest_path = self._write_manifest(
+                artifacts, summary, Path(self.output_dir),
+            )
+            if manifest_path:
+                summary["manifest_path"] = str(manifest_path)
+
         context["workflow_summary"] = summary
         duration = time.monotonic() - start
 
-        logger.info("FINALIZE phase complete (%.2fs)", duration)
+        logger.info(
+            "FINALIZE phase complete: %d artifacts, $%.4f total cost (%.2fs)",
+            len(artifacts), cost_summary.get("total_cost", 0.0), duration,
+        )
 
         return {"output": summary, "cost": 0.0, "metadata": {"duration": duration}}
 
@@ -673,27 +1542,84 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
 
 class ContextSeedHandlers:
-    """Factory for creating all phase handlers from an enriched context seed."""
+    """Factory for creating all phase handlers from an enriched context seed.
+
+    Accepts optional agent configuration that is propagated to all handlers
+    requiring LLM access (IMPLEMENT, TEST, REVIEW) and artifact generation
+    (FINALIZE).
+
+    Example::
+
+        handlers = ContextSeedHandlers.create_all(
+            enriched_seed_path="out/artisan-context-seed-enriched.json",
+            lead_agent="anthropic:claude-sonnet-4-5-20250927",
+            drafter_agent="gemini:gemini-2.5-flash-lite",
+            output_dir="out/artifacts",
+        )
+    """
 
     @staticmethod
     def create_all(
         enriched_seed_path: str,
         output_dir: Optional[str] = None,
+        *,
+        # Agent configuration (keyword-only)
+        lead_agent: str = "anthropic:claude-sonnet-4-5-20250927",
+        drafter_agent: str = "gemini:gemini-2.5-flash-lite",
+        max_iterations: int = 3,
+        pass_threshold: int = 80,
+        max_tokens: Optional[int] = None,
+        fail_on_truncation: bool = True,
+        check_truncation: bool = True,
+        strict_truncation: bool = False,
+        test_timeout_seconds: int = 120,
+        review_temperature: float = 0.0,
+        code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all six workflow phases.
 
         Args:
             enriched_seed_path: Path to the enriched context seed JSON.
             output_dir: Optional output directory for artifacts.
+            lead_agent: Agent spec for architect/reviewer.
+            drafter_agent: Agent spec for drafter.
+            max_iterations: Maximum draft → review iterations per task.
+            pass_threshold: Minimum review score (0-100) to pass.
+            max_tokens: Override max_tokens for agent creation.
+            fail_on_truncation: Fail workflow on detected truncation.
+            check_truncation: Enable heuristic truncation detection.
+            strict_truncation: Use strict detection threshold.
+            test_timeout_seconds: Timeout for each validator subprocess.
+            review_temperature: Temperature for LLM review calls.
+            code_generator: Optional pre-configured CodeGenerator instance.
 
         Returns:
             Dict mapping WorkflowPhase → handler instance.
         """
+        config = HandlerConfig(
+            lead_agent=lead_agent,
+            drafter_agent=drafter_agent,
+            max_iterations=max_iterations,
+            pass_threshold=pass_threshold,
+            max_tokens=max_tokens,
+            fail_on_truncation=fail_on_truncation,
+            check_truncation=check_truncation,
+            strict_truncation=strict_truncation,
+            test_timeout_seconds=test_timeout_seconds,
+            review_temperature=review_temperature,
+        )
+
         return {
             WorkflowPhase.PLAN: PlanPhaseHandler(enriched_seed_path),
             WorkflowPhase.SCAFFOLD: ScaffoldPhaseHandler(),
-            WorkflowPhase.IMPLEMENT: ImplementPhaseHandler(),
-            WorkflowPhase.TEST: TestPhaseHandler(),
-            WorkflowPhase.REVIEW: ReviewPhaseHandler(),
-            WorkflowPhase.FINALIZE: FinalizePhaseHandler(output_dir=output_dir),
+            WorkflowPhase.IMPLEMENT: ImplementPhaseHandler(
+                handler_config=config,
+                code_generator=code_generator,
+            ),
+            WorkflowPhase.TEST: TestPhaseHandler(handler_config=config),
+            WorkflowPhase.REVIEW: ReviewPhaseHandler(handler_config=config),
+            WorkflowPhase.FINALIZE: FinalizePhaseHandler(
+                output_dir=output_dir,
+                handler_config=config,
+            ),
         }
