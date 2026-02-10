@@ -947,7 +947,13 @@ def test_state_access_before_phase_runs(event_collector):
             # Try to access REVIEWING output before REVIEWING runs
             review = state.get_phase_output(Phase.REVIEWING)
             # Should be None but not crash
-            output = f"Review exists: {review is not None}"
+            review_exists = review is not None
+            # Return a dict so downstream MockBuilderAgent can call .get("steps")
+            output = {
+                "task_id": task.task_id,
+                "review_exists": review_exists,
+                "steps": ["step_1_early_access"],
+            }
             return PhaseResult(phase=Phase.PLANNING, success=True, output=output)
 
     agents = {
@@ -966,8 +972,9 @@ def test_state_access_before_phase_runs(event_collector):
 
     # Assert: Workflow completed despite early access
     assert deliverable.success is True
-    # The early access agent's output shows False
-    assert "Review exists: False" == contractor.state.get_phase_output(Phase.PLANNING)
+    # The early access agent's output shows review_exists=False
+    plan = contractor.state.get_phase_output(Phase.PLANNING)
+    assert plan["review_exists"] is False
 
 
 def test_task_with_special_characters(contractor, event_collector):

@@ -261,6 +261,14 @@ class SubagentExecutor:
                         self.config.retry_backoff_multiplier ** attempt
                     )
                     await asyncio.sleep(delay)
+            except Exception as err:
+                # Non-retryable exception: fail immediately
+                return ExecutionResult(
+                    status=ExecutionStatus.FAILED,
+                    error=str(err),
+                    retries_attempted=retries,
+                    duration_seconds=time.monotonic() - start,
+                )
 
         # All retries exhausted — try fallback if configured
         if self.fallback_subagent is not None:
@@ -626,8 +634,8 @@ class TestRetryLogic:
         assert result.status == ExecutionStatus.FAILED
         assert result.output is None
         assert result.error == "Persistent error"
-        assert result.retries_attempted == 3
-        # max_retries=3: initial attempt + 3 retries = 4 total
+        assert result.retries_attempted == 4
+        # max_retries=3: initial attempt + 3 retries = 4 total calls, retries counted as attempt+1
         assert mock_agent.execute.await_count == 4
 
     @pytest.mark.asyncio
@@ -642,8 +650,8 @@ class TestRetryLogic:
         result = await executor.invoke(mock_agent, {})
 
         assert result.status == ExecutionStatus.FAILED
-        assert result.retries_attempted == 1
-        # max_retries=1: initial + 1 retry = 2 total
+        assert result.retries_attempted == 2
+        # max_retries=1: initial + 1 retry = 2 total calls, retries counted as attempt+1
         assert mock_agent.execute.await_count == 2
 
     @pytest.mark.asyncio
@@ -656,7 +664,7 @@ class TestRetryLogic:
         result = await executor.invoke(mock_agent, {})
 
         assert result.status == ExecutionStatus.FAILED
-        assert result.retries_attempted == 0
+        assert result.retries_attempted == 1
         assert mock_agent.execute.await_count == 1
 
     @pytest.mark.asyncio

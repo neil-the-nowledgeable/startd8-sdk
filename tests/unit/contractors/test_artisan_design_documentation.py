@@ -1304,31 +1304,44 @@ class TestArbiterResolution:
         sample_design_document,
         mock_notification_service,
     ):
-        """LLM returns more resolution items than critiques — uses last critique."""
-        single_critique = [
+        """LLM returns more resolution items than critiques — uses last critique.
+
+        When there are two critiques with *different* descriptions the LLM path
+        is taken.  The mock LLM returns three resolutions (one more than the two
+        critiques), so the extra item falls back to the last critique.
+        """
+        two_critiques = [
             CritiqueItem(
                 section="overview",
                 severity=CritiqueSeverity.MINOR,
-                description="Unique desc",
-                suggestion="Fix",
+                description="Unique desc A",
+                suggestion="Fix A",
                 reviewer_id="r1",
+            ),
+            CritiqueItem(
+                section="approach",
+                severity=CritiqueSeverity.MINOR,
+                description="Unique desc B",
+                suggestion="Fix B",
+                reviewer_id="r2",
             ),
         ]
         mock_llm_client.generate.return_value = json.dumps(
             [
                 {"status": "accepted", "justification": "First"},
-                {"status": "rejected", "justification": "Second (extra)"},
+                {"status": "rejected", "justification": "Second"},
+                {"status": "modified", "justification": "Third (extra)"},
             ]
         )
         arbiter = ArbiterResolver(
             llm_client=mock_llm_client, notification_service=mock_notification_service
         )
 
-        resolutions = arbiter.resolve(single_critique, sample_design_document)
+        resolutions = arbiter.resolve(two_critiques, sample_design_document)
 
-        assert len(resolutions) == 2
-        # The extra resolution should reference the last (only) critique.
-        assert resolutions[1].critique.section == "overview"
+        assert len(resolutions) == 3
+        # The extra resolution should reference the last critique.
+        assert resolutions[2].critique.section == "approach"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1690,7 +1703,12 @@ class TestEndToEndWorkflow:
         mock_notification_service.notify.assert_called_once()
 
     def test_full_workflow_retry_then_success(self, mock_notification_service):
-        """Test workflow with retry: generate → review → fail → retry → success."""
+        """Test workflow with retry: generate → review → fail → retry → success.
+
+        Two critiques with *different* descriptions are needed so the arbiter
+        takes the LLM-resolution path (a single critique, or multiple with
+        identical descriptions, would be auto-accepted without an LLM call).
+        """
         llm = MagicMock()
 
         design_response = json.dumps(
@@ -1712,11 +1730,18 @@ class TestEndToEndWorkflow:
                     "description": "Add roles",
                     "suggestion": "Add RBAC",
                 },
+                {
+                    "section": "api_contracts",
+                    "severity": "minor",
+                    "description": "Add rate limiting",
+                    "suggestion": "Add rate limit endpoint",
+                },
             ]
         )
         resolution_response = json.dumps(
             [
                 {"status": "accepted", "justification": "RBAC is important"},
+                {"status": "accepted", "justification": "Rate limiting is good"},
             ]
         )
 
@@ -1744,7 +1769,7 @@ class TestEndToEndWorkflow:
 
         # Second attempt succeeds.
         resolutions = arbiter.resolve(critiques, doc)
-        assert len(resolutions) == 1
+        assert len(resolutions) == 2
         assert resolutions[0].status == ResolutionStatus.ACCEPTED
         assert not arbiter.is_escalated
 

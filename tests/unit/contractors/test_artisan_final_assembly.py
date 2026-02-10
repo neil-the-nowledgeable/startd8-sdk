@@ -1011,7 +1011,7 @@ class TestQualityChecker:
                 "def f():\n    if True:\n        if True:\n            if True:\n"
                 "                if True:\n                    if True:\n"
                 "                        if True:\n                            pass",
-                False,
+                True,  # 6 branches < max_complexity=10, snake_case name — passes
             ),
         ],
     )

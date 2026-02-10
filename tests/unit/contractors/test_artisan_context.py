@@ -37,6 +37,8 @@ class TokenCounter:
         if not text:
             return 0
         words = len(text.split())
+        if words == 0:
+            return 0
         return max(1, int(words / self.words_per_token))
 
     def count_messages(self, messages: list) -> int:
@@ -203,23 +205,23 @@ class ContextBuilder:
                 self._sections.pop(0)
 
         elif strategy == "tail":
-            if self._sections:
+            while self._sections and self.is_over_budget():
                 last_section = self._sections[-1]
                 words = last_section.content.split()
                 while words and self.is_over_budget():
                     words.pop()
                 last_section.content = " ".join(words)
-                if not words and self.is_over_budget():
+                if not words or self.is_over_budget():
                     self._sections.pop()
 
         elif strategy == "head":
-            if self._sections:
+            while self._sections and self.is_over_budget():
                 first_section = self._sections[0]
                 words = first_section.content.split()
                 while words and self.is_over_budget():
                     words.pop(0)
                 first_section.content = " ".join(words)
-                if not words and self.is_over_budget():
+                if not words or self.is_over_budget():
                     self._sections.pop(0)
 
         return self
@@ -674,7 +676,7 @@ class TestTruncation:
         self, token_counter: TokenCounter
     ):
         """Priority truncation should remove lowest-priority sections first."""
-        builder = ContextBuilder(max_tokens=15, token_counter=token_counter)
+        builder = ContextBuilder(max_tokens=5, token_counter=token_counter)
         high = ContextSection(
             name="high",
             content="important important important important",
@@ -743,7 +745,7 @@ class TestTruncation:
         self, strategy: str, token_counter: TokenCounter
     ):
         """All truncation strategies should bring builder under budget."""
-        builder = ContextBuilder(max_tokens=15, token_counter=token_counter)
+        builder = ContextBuilder(max_tokens=10, token_counter=token_counter)
         s1 = ContextSection(name="s1", content="w1 w2 w3 w4", priority=10)
         s2 = ContextSection(name="s2", content="w5 w6 w7 w8", priority=5)
         s3 = ContextSection(name="s3", content="w9 w10 w11 w12", priority=1)
@@ -1087,7 +1089,7 @@ class TestContextBuilderIntegration:
 
     def test_full_assembly_truncation_flow(self, token_counter: TokenCounter):
         """Full flow: assembly -> overflow detect -> truncate -> verify fit."""
-        builder = ContextBuilder(max_tokens=30, token_counter=token_counter)
+        builder = ContextBuilder(max_tokens=10, token_counter=token_counter)
 
         s1 = ContextSection(
             name="system",
@@ -1119,7 +1121,7 @@ class TestContextBuilderIntegration:
 
     def test_full_assembly_compression_flow(self, token_counter: TokenCounter):
         """Full flow: assembly -> overflow detect -> compress -> verify fit."""
-        builder = ContextBuilder(max_tokens=20, token_counter=token_counter)
+        builder = ContextBuilder(max_tokens=10, token_counter=token_counter)
 
         s1 = ContextSection(
             name="main",

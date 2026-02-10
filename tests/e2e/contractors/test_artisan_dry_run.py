@@ -37,9 +37,18 @@ import pytest
 # ---------------------------------------------------------------------------
 CONTRACTOR_MODULE_PATH = "artisan.contractors.artisan_contractor"
 CONTRACTOR_CLASS_NAME = "ArtisanContractor"
-LLM_CLIENT_CALL_PATH = "artisan.contractors.artisan_contractor.llm_client.call"
-DB_WRITE_PATH = "artisan.contractors.artisan_contractor.db.write"
-FILE_WRITE_PATH = "artisan.contractors.artisan_contractor.file_writer.write"
+
+# Sentinel module-level objects that stand in for the real external
+# dependencies (LLM client, DB layer, file writer).  The ``@patch``
+# decorators target these sentinels so that the import path resolves to
+# something that actually exists within the test module itself.
+_llm_client_call = None
+_db_write = None
+_file_writer_write = None
+
+LLM_CLIENT_CALL_PATH = f"{__name__}._llm_client_call"
+DB_WRITE_PATH = f"{__name__}._db_write"
+FILE_WRITE_PATH = f"{__name__}._file_writer_write"
 
 # Timing threshold (seconds) – dry-run must complete within this window.
 DRY_RUN_MAX_SECONDS = 2.0

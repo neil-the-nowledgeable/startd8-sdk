@@ -750,7 +750,7 @@ class TestArtisanTimeout:
             results["a"] = engine.execute("wf-concurrent-a", steps_a, timeout_seconds=0.7)
 
         def run_b() -> None:
-            results["b"] = engine.execute("wf-concurrent-b", steps_b, timeout_seconds=0.6)
+            results["b"] = engine.execute("wf-concurrent-b", steps_b, timeout_seconds=0.3)
 
         thread_a = threading.Thread(target=run_a, daemon=False)
         thread_b = threading.Thread(target=run_b, daemon=False)

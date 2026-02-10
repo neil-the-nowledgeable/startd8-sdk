@@ -545,7 +545,13 @@ class TestLessonScoring:
         """Verify that non-matching keywords result in zero score."""
         service = LessonsDiscoveryService()
         lessons = [
-            Lesson(id="1", title="Cooking Recipes", tags=["cooking"], content="food")
+            Lesson(
+                id="1",
+                title="Cooking Recipes",
+                tags=["cooking"],
+                content="food",
+                created_at=datetime.utcnow() - timedelta(days=365),
+            )
         ]
         scored = service.score_lessons(lessons, "quantum physics")
         assert all(item.score == 0.0 for item in scored)

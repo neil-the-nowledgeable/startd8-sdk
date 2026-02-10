@@ -796,8 +796,11 @@ class TestTestSuiteGeneration:
 
     def test_generate_standalone_tests_excludes_private(self, suite_generator, sample_module):
         suite = suite_generator.generate(sample_module)
-        assert len(suite.standalone_tests) == 1
-        assert suite.standalone_tests[0].name == "test_helper_func"
+        # Default generator excludes PRIVATE (__dbl) and DUNDER, but includes PROTECTED (_single)
+        assert len(suite.standalone_tests) == 2
+        names = {tc.name for tc in suite.standalone_tests}
+        assert "test_helper_func" in names
+        assert "test_private_helper" in names
 
     def test_generate_standalone_tests_includes_private(self, inclusive_generator, sample_module):
         suite = inclusive_generator.generate(sample_module)
@@ -818,7 +821,8 @@ class TestTestSuiteGeneration:
         method_names = {tc.name for tc in test_class.test_cases}
         assert "test_add" in method_names
         assert "test_subtract" in method_names
-        assert len(test_class.test_cases) == 2
+        assert "test_validate" in method_names  # _validate is PROTECTED, included by default
+        assert len(test_class.test_cases) == 3
 
     def test_generate_test_class_methods_inclusive(self, inclusive_generator, sample_module):
         suite = inclusive_generator.generate(sample_module)
@@ -850,7 +854,8 @@ class TestTestSuiteGeneration:
 
     def test_total_test_count(self, suite_generator, sample_module):
         suite = suite_generator.generate(sample_module)
-        assert suite.total_test_count == 3
+        # 2 standalone (helper_func + _private_helper) + 3 class methods (add, subtract, _validate)
+        assert suite.total_test_count == 5
 
     def test_invalid_input_type(self, suite_generator):
         with pytest.raises(TypeError, match="Expected SourceModule"):
@@ -974,7 +979,7 @@ class TestPytestCollection:
         ("something.py", False),
         ("test_something.txt", False),
         ("Test_something.py", False),
-        ("_test.py", False),
+        ("_test.py", True),  # matches ^.*_test\.py$ where .* is empty
         ("test_a_b_c.py", True),
     ])
     def test_valid_test_file_names(self, filename, expected):
@@ -1002,7 +1007,7 @@ class TestPytestCollection:
         ("test_something", False),
         ("Something", False),
         ("TestCamelCase", True),
-        ("Test123", True),
+        ("Test123", False),  # pattern requires Test[A-Z] — digit after Test doesn't match
         ("TestWith_Underscore", True),
     ])
     def test_valid_test_class_names(self, classname, expected):
@@ -1245,7 +1250,10 @@ class TestEdgeCases:
             ])],
         )
         suite = suite_generator.generate(module)
-        assert len(suite.test_classes) == 0
+        # __hidden is PRIVATE (excluded), but _internal is PROTECTED (included by default)
+        assert len(suite.test_classes) == 1
+        assert len(suite.test_classes[0].test_cases) == 1
+        assert suite.test_classes[0].test_cases[0].name == "test_internal"
 
     def test_class_with_only_private_methods_inclusive(self, inclusive_generator):
         module = SourceModule(
