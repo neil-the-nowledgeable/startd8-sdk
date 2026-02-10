@@ -10,10 +10,10 @@ Provides automatic discovery of:
 Uses Python entry points for plugin discovery.
 """
 
-import logging
 from importlib.metadata import entry_points
 from typing import Dict, List, Optional, Type
 
+from ..logging_config import get_logger
 from .protocols import (
     CodeGenerator,
     Instrumentor,
@@ -27,7 +27,7 @@ from .adapters import (
 )
 
 
-logger = logging.getLogger("startd8.contractors.registry")
+logger = get_logger("startd8.contractors.registry")
 
 
 # Entry point group names

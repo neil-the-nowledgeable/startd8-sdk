@@ -20,6 +20,10 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class CheckpointStatus(Enum):
     """Status of an integration checkpoint."""
@@ -105,12 +109,18 @@ class IntegrationCheckpoint:
         This allows us to detect regressions (tests that were passing
         before but fail after integration).
         """
-        result = subprocess.run(
-            ["python3", "-m", "pytest", "--collect-only", "-q"],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-        )
+        try:
+            result = subprocess.run(
+                ["python3", "-m", "pytest", "--collect-only", "-q"],
+                capture_output=True,
+                text=True,
+                cwd=self.project_root,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("Test baseline collection timed out after 60s")
+            self._test_baseline = set()
+            return self._test_baseline
 
         passing_tests = set()
         for line in result.stdout.split("\n"):
@@ -163,12 +173,17 @@ class IntegrationCheckpoint:
                 continue
 
             checked += 1
-            result = subprocess.run(
-                ["python3", "-m", "py_compile", str(file_path)],
-                capture_output=True,
-                text=True,
-                cwd=self.project_root,
-            )
+            try:
+                result = subprocess.run(
+                    ["python3", "-m", "py_compile", str(file_path)],
+                    capture_output=True,
+                    text=True,
+                    cwd=self.project_root,
+                    timeout=30,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(f"{file_path.name}: syntax check timed out")
+                continue
 
             if result.returncode != 0:
                 errors.append(f"{file_path.name}: {result.stderr.strip()}")
@@ -217,16 +232,21 @@ class IntegrationCheckpoint:
                         if (self.project_root / d).exists()
                     )
 
-                    result = subprocess.run(
-                        ["python3", "-c", f"import {module_path}"],
-                        capture_output=True,
-                        text=True,
-                        cwd=self.project_root,
-                        env={
-                            **os.environ,
-                            "PYTHONPATH": pythonpath,
-                        },
-                    )
+                    try:
+                        result = subprocess.run(
+                            ["python3", "-c", f"import {module_path}"],
+                            capture_output=True,
+                            text=True,
+                            cwd=self.project_root,
+                            env={
+                                **os.environ,
+                                "PYTHONPATH": pythonpath,
+                            },
+                            timeout=30,
+                        )
+                    except subprocess.TimeoutExpired:
+                        errors.append(f"{file_path.name}: import check timed out")
+                        break
 
                     if result.returncode != 0:
                         error_msg = result.stderr.strip().split("\n")[-1]
@@ -266,8 +286,15 @@ class IntegrationCheckpoint:
             details={"files_checked": checked},
         )
 
-    def check_lint(self, files: List[Path]) -> CheckpointResult:
-        """Run basic lint checks on the files."""
+    def check_lint(self, files: List[Path], ignore_codes: Optional[List[str]] = None) -> CheckpointResult:
+        """Run basic lint checks on the files.
+
+        Args:
+            files: List of file paths to lint.
+            ignore_codes: Optional list of ruff rule codes to ignore
+                (e.g. ``["F401"]`` to skip unused-import checks on
+                partial files destined for AST merge).
+        """
         errors = []
         warnings = []
         checked = 0
@@ -279,18 +306,28 @@ class IntegrationCheckpoint:
             checked += 1
 
             # Try ruff if available
-            result = subprocess.run(
-                ["python3", "-m", "ruff", "check", str(file_path), "--select=E,F"],
-                capture_output=True,
-                text=True,
-                cwd=self.project_root,
-            )
+            cmd = ["python3", "-m", "ruff", "check", str(file_path), "--select=E7,E9,F", "--output-format=concise"]
+            if ignore_codes:
+                cmd.extend(["--ignore", ",".join(ignore_codes)])
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=self.project_root,
+                    timeout=60,
+                )
+            except subprocess.TimeoutExpired:
+                errors.append(f"{file_path.name}: lint check timed out")
+                continue
 
             if result.returncode != 0:
                 # Parse ruff output for errors vs warnings
+                # Include all error codes (E=pycodestyle, F=pyflakes) for
+                # actionable feedback in error-informed retries.
                 for line in result.stdout.strip().split("\n"):
                     if line.strip():
-                        if ": F" in line or ": E9" in line:  # Fatal errors
+                        if ": F" in line or ": E" in line:
                             errors.append(line)
                         else:
                             warnings.append(line)
@@ -320,6 +357,48 @@ class IntegrationCheckpoint:
             details={"files_checked": checked},
         )
 
+    def pre_validate(self, generated_files: List[Path]) -> CheckpointResult:
+        """Validate generated files BEFORE merging into targets.
+
+        Runs syntax and lint checks on the raw generated files.  Import
+        checks are excluded because they require the file to be under a
+        ``src_dirs`` path for module-path resolution — those still run
+        post-merge via ``run_all_checkpoints``.
+
+        Args:
+            generated_files: Paths to generated Python files.
+
+        Returns:
+            Aggregated ``CheckpointResult``: PASSED or FAILED.
+        """
+        all_errors: List[str] = []
+
+        syntax_result = self.check_syntax(generated_files)
+        if syntax_result.status == CheckpointStatus.FAILED:
+            all_errors.extend(syntax_result.errors)
+
+        # Ignore F401 (unused imports) in pre-merge validation because
+        # generated files are partial — the AST merge will combine them
+        # with the full target file where those imports are used.
+        lint_result = self.check_lint(generated_files, ignore_codes=["F401"])
+        if lint_result.status == CheckpointStatus.FAILED:
+            all_errors.extend(lint_result.errors)
+
+        if all_errors:
+            return CheckpointResult(
+                status=CheckpointStatus.FAILED,
+                name="Pre-Merge Validation",
+                message=f"{len(all_errors)} error(s) in generated files",
+                errors=all_errors[:10],
+            )
+
+        return CheckpointResult(
+            status=CheckpointStatus.PASSED,
+            name="Pre-Merge Validation",
+            message=f"{len(generated_files)} generated file(s) passed pre-merge validation",
+            details={"files_checked": len(generated_files)},
+        )
+
     def check_tests(self, feature_name: str) -> CheckpointResult:
         """
         Run tests and check for regressions.
@@ -328,12 +407,21 @@ class IntegrationCheckpoint:
         now fails after integration.
         """
         # Run pytest
-        result = subprocess.run(
-            ["python3", "-m", "pytest", "-v", "--tb=short", "-q"],
-            capture_output=True,
-            text=True,
-            cwd=self.project_root,
-        )
+        try:
+            result = subprocess.run(
+                ["python3", "-m", "pytest", "-v", "--tb=short", "-q"],
+                capture_output=True,
+                text=True,
+                cwd=self.project_root,
+                timeout=120,
+            )
+        except subprocess.TimeoutExpired:
+            return CheckpointResult(
+                status=CheckpointStatus.FAILED,
+                name="Test Check",
+                message="Test suite timed out after 120s",
+                errors=["pytest timed out — tests may be hanging"],
+            )
 
         # Parse results
         output = result.stdout + result.stderr

@@ -35,6 +35,68 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "metrics": [
+        {
+            "name": "startd8_active_sessions",
+            "instrument": "up_down_counter",
+            "unit": "sessions",
+            "description": "Number of active sessions",
+            "meter": "startd8",
+            "labels": ["agent_name", "model", "project_id"],
+        },
+        {
+            "name": "startd8_requests_total",
+            "instrument": "counter",
+            "unit": "requests",
+            "description": "Total number of requests",
+            "meter": "startd8",
+            "labels": ["agent_name", "model", "project_id", "status"],
+        },
+        {
+            "name": "startd8_tokens_total",
+            "instrument": "counter",
+            "unit": "tokens",
+            "description": "Total tokens processed",
+            "meter": "startd8",
+            "labels": ["agent_name", "model", "project_id", "direction"],
+        },
+        {
+            "name": "startd8_response_time_ms",
+            "instrument": "histogram",
+            "unit": "ms",
+            "description": "Response time in milliseconds",
+            "meter": "startd8",
+            "labels": ["agent_name", "model", "project_id"],
+        },
+        {
+            "name": "startd8_context_usage_ratio",
+            "instrument": "observable_gauge",
+            "unit": "ratio",
+            "description": "Context window usage ratio (0-1)",
+            "meter": "startd8",
+            "labels": ["session_id", "agent_name", "model", "project_id"],
+        },
+        {
+            "name": "startd8_truncations_total",
+            "instrument": "counter",
+            "unit": "events",
+            "description": "Total truncation events",
+            "meter": "startd8",
+            "labels": ["agent_name", "model", "project_id"],
+        },
+        {
+            "name": "startd8_cost_total",
+            "instrument": "counter",
+            "unit": "USD",
+            "description": "Total cost in USD",
+            "meter": "startd8",
+            "labels": ["agent_name", "model", "project_id"],
+        },
+    ],
+}
+
 # Lazy-load OpenTelemetry to avoid hard dependency
 _otel_metrics = None
 

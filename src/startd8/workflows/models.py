@@ -198,6 +198,18 @@ class WorkflowMetadata:
 
 
 @dataclass
+class RetryPolicy:
+    """Configuration for automatic retry on transient failures (FR-100)."""
+    max_retries: int = 3
+    backoff_base: float = 1.0       # seconds
+    backoff_max: float = 60.0       # seconds
+    jitter: bool = True
+    retryable_status_codes: List[int] = field(
+        default_factory=lambda: [429, 500, 502, 503, 504]
+    )
+
+
+@dataclass
 class WorkflowMetrics:
     """Metrics collected during workflow execution."""
     total_time_ms: int = 0
@@ -205,6 +217,8 @@ class WorkflowMetrics:
     output_tokens: int = 0
     total_cost: float = 0.0
     step_count: int = 0
+    total_retries: int = 0  # FR-411
+    model: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -213,6 +227,8 @@ class WorkflowMetrics:
             "output_tokens": self.output_tokens,
             "total_cost": self.total_cost,
             "step_count": self.step_count,
+            "total_retries": self.total_retries,
+            "model": self.model,
         }
 
 
@@ -320,9 +336,26 @@ class WorkflowResult:
             output=None,
             error=error,
             steps=steps or [],
-            metrics=metrics,
+            metrics=metrics or WorkflowMetrics(),
             metadata=metadata or {},
         )
+
+
+@dataclass
+class DryRunResult:
+    """Result of a dry-run simulation (FR-102)."""
+    execution_plan: List[Dict[str, Any]]
+    estimated_tokens: Dict[str, Any]
+    estimated_cost: float
+    step_order: List[str]
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "execution_plan": self.execution_plan,
+            "estimated_tokens": self.estimated_tokens,
+            "estimated_cost": self.estimated_cost,
+            "step_order": self.step_order,
+        }
 
 
 @dataclass

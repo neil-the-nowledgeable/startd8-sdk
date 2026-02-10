@@ -1,0 +1,351 @@
+# Auto-Decompose Feature — Task Definitions for PrimeContractor Workflow
+#
+# Implements auto-decomposition of multi-file features into sequential
+# single-file sub-features in the PrimeContractor.
+#
+# Usage:
+#   # Standalone runner
+#   python3 scripts/run_auto_decompose.py --dry-run
+#
+#   # Via shared runner
+#   python3 scripts/run_contextcore_workflow.py \
+#     --tasks-file scripts/auto_decompose_tasks.yaml \
+#     --project-id startd8-sdk \
+#     --sprint-id sprint-auto-decompose
+#
+# Dependency graph:
+#   AD-001 (core method) ──┬──> AD-002 (entry guard)  ──┐
+#                          └──> AD-003 (callback guard) ─┤
+#                                                        ↓
+#                                                 AD-004 (unit tests)
+#                                                        ↓
+#                                                 AD-005 (integration tests)
+
+project:
+  id: startd8-sdk
+  name: StartD8 SDK Development
+  sprint_id: sprint-auto-decompose
+
+tasks:
+  # ──────────────────────────────────────────────────────────────────────
+  # AD-001: Core decomposition method
+  # ──────────────────────────────────────────────────────────────────────
+  - task_id: AD-001
+    title: "Add _process_decomposed_feature() method"
+    task_type: task
+    story_points: 5
+    priority: high
+    labels:
+      - auto-decompose
+      - prime-contractor
+      - core
+    config:
+      task_description: |
+        Add a new private method `_process_decomposed_feature(self, feature: FeatureSpec) -> bool`
+        to the `PrimeContractorWorkflow` class in `src/startd8/contractors/prime_contractor.py`.
+
+        ## Algorithm
+
+        1. Log the decomposition: `logger.info("Auto-decomposing '%s' into %d sub-features", ...)`
+        2. Save `self.on_feature_complete` to a local variable so it can be restored.
+        3. For each `target_file` in `feature.target_files` (enumerate with index `i`):
+           a. Determine `is_last = (i == n - 1)`.
+           b. Build sub-feature ID: `f"{feature.id}__part{i + 1}"`.
+           c. Build sub-feature name: `f"{feature.name} ({Path(target_file).name})"`.
+           d. Read current file content from disk (`self.project_root / target_file`).
+           e. Build `sub_description` that includes:
+              - The full parent feature description
+              - A separator and file-scoping directive:
+                `"IMPORTANT: This is part {i+1} of {n}. You MUST ONLY output code for the file: {target_file}"`
+              - The current contents of the target file in a fenced code block.
+           f. Create a transient `FeatureSpec(id=sub_id, name=sub_name, description=sub_description,
+              target_files=[target_file], dependencies=feature.dependencies)`.
+           g. Set `self.on_feature_complete = saved_callback if is_last else None`.
+           h. Call `self.develop_feature(sub_feature)`. On failure: restore callback,
+              call `self.queue.fail_feature(feature.id, ...)`, return False.
+           i. Call `self.integrate_feature(sub_feature)`. On failure: restore callback,
+              call `self.queue.fail_feature(feature.id, ...)`, return False.
+        4. After loop: restore `self.on_feature_complete`.
+        5. Call `self.queue.complete_feature(feature.id)`.
+        6. Log success. Return True.
+
+        ## Existing method signatures used
+
+        - `self.develop_feature(feature: FeatureSpec) -> bool`
+        - `self.integrate_feature(feature: FeatureSpec) -> bool`
+        - `self.queue.complete_feature(feature_id: str) -> bool`
+        - `self.queue.fail_feature(feature_id: str, error_message: str) -> bool`
+
+        ## FeatureSpec dataclass fields (from queue.py)
+
+        ```python
+        @dataclass
+        class FeatureSpec:
+            id: str
+            name: str
+            description: str = ""
+            dependencies: List[str] = field(default_factory=list)
+            target_files: List[str] = field(default_factory=list)
+            status: FeatureStatus = FeatureStatus.PENDING
+            started_at: Optional[str] = None
+            completed_at: Optional[str] = None
+            error_message: Optional[str] = None
+            integration_attempts: int = 0
+            generated_files: List[str] = field(default_factory=list)
+        ```
+
+        ## Acceptance criteria
+
+        - Method exists on PrimeContractorWorkflow
+        - Iterates over `feature.target_files` creating one sub-feature per file
+        - Each sub-feature has `target_files=[single_file]`
+        - Current file content is read from disk and included in description
+        - `on_feature_complete` callback fires only on the last sub-feature
+        - On sub-feature failure, parent is marked failed via `queue.fail_feature()`
+        - On all success, parent is marked complete via `queue.complete_feature()`
+        - Callback is always restored even on failure paths
+      context:
+        file: src/startd8/contractors/prime_contractor.py
+        language: Python
+        file_to_edit: src/startd8/contractors/prime_contractor.py
+        merge_mode: true
+
+  # ──────────────────────────────────────────────────────────────────────
+  # AD-002: Entry guard in process_feature()
+  # ──────────────────────────────────────────────────────────────────────
+  - task_id: AD-002
+    title: "Add len(target_files) > 1 guard to process_feature()"
+    task_type: task
+    story_points: 1
+    priority: high
+    depends_on:
+      - AD-001
+    labels:
+      - auto-decompose
+      - prime-contractor
+      - guard
+    config:
+      task_description: |
+        Modify `PrimeContractorWorkflow.process_feature()` in
+        `src/startd8/contractors/prime_contractor.py` to auto-decompose multi-file features.
+
+        ## Change
+
+        At the top of `process_feature()`, after the `emit_insight` call, add:
+
+        ```python
+        # Auto-decompose multi-file features into sequential single-file tasks
+        if len(feature.target_files) > 1 and feature.status == FeatureStatus.PENDING:
+            return self._process_decomposed_feature(feature)
+        ```
+
+        This must come BEFORE the existing `if feature.status == FeatureStatus.PENDING:` block.
+
+        ## Guard conditions
+
+        - Only decompose when `len(feature.target_files) > 1`
+        - Only decompose PENDING features (not GENERATED ones that already have code)
+        - Single-file and zero-file features follow the existing code path unchanged
+
+        ## Acceptance criteria
+
+        - Multi-file PENDING features are routed to `_process_decomposed_feature()`
+        - Single-file features still use the existing `develop_feature()` → `integrate_feature()` path
+        - GENERATED features (with existing code) bypass decomposition
+      context:
+        file: src/startd8/contractors/prime_contractor.py
+        language: Python
+        file_to_edit: src/startd8/contractors/prime_contractor.py
+        merge_mode: true
+
+  # ──────────────────────────────────────────────────────────────────────
+  # AD-003: Callback guard for sub-features
+  # ──────────────────────────────────────────────────────────────────────
+  - task_id: AD-003
+    title: "Only fire on_feature_complete on last sub-feature"
+    task_type: task
+    story_points: 2
+    priority: high
+    depends_on:
+      - AD-001
+    labels:
+      - auto-decompose
+      - prime-contractor
+      - callback
+    config:
+      task_description: |
+        Ensure `on_feature_complete` fires only on the LAST sub-feature within
+        `_process_decomposed_feature()` in `src/startd8/contractors/prime_contractor.py`.
+
+        ## Problem
+
+        `integrate_feature()` calls `self.on_feature_complete(feature)` on success (line ~885).
+        During decomposition, intermediate sub-features may produce code that doesn't
+        build alone (e.g., file A exports something that file B imports). Running
+        tests/builds after each intermediate sub-feature would fail.
+
+        ## Solution
+
+        In `_process_decomposed_feature()`:
+        1. Save the callback: `saved_callback = self.on_feature_complete`
+        2. Before each sub-feature, set:
+           `self.on_feature_complete = saved_callback if is_last else None`
+        3. On any failure path, restore: `self.on_feature_complete = saved_callback`
+        4. After the loop, restore: `self.on_feature_complete = saved_callback`
+
+        ## Acceptance criteria
+
+        - `on_feature_complete` is called exactly once, after the last sub-feature succeeds
+        - Intermediate sub-features do NOT trigger `on_feature_complete`
+        - The callback is restored even if a sub-feature fails (no leaked state)
+        - The callback receives the last sub-feature's FeatureSpec (not the parent)
+      context:
+        file: src/startd8/contractors/prime_contractor.py
+        language: Python
+        file_to_edit: src/startd8/contractors/prime_contractor.py
+        merge_mode: true
+
+  # ──────────────────────────────────────────────────────────────────────
+  # AD-004: Unit tests for decomposition logic
+  # ──────────────────────────────────────────────────────────────────────
+  - task_id: AD-004
+    title: "Unit tests for decomposition logic"
+    task_type: task
+    story_points: 3
+    priority: medium
+    depends_on:
+      - AD-001
+      - AD-002
+      - AD-003
+    labels:
+      - auto-decompose
+      - prime-contractor
+      - testing
+      - unit
+    config:
+      task_description: |
+        Add unit tests for the auto-decompose feature to
+        `tests/contractors/test_contractors.py`.
+
+        ## Tests to add (in a new `TestAutoDecompose` class)
+
+        ### test_single_file_bypasses_decomposition
+        - Create a workflow with dry_run=True and a LoggingInstrumentor
+        - Add a feature with target_files=["single.py"]
+        - Run the workflow
+        - Assert: feature completes without calling _process_decomposed_feature
+
+        ### test_multi_file_triggers_decomposition
+        - Create a workflow with dry_run=True and a LoggingInstrumentor
+        - Add a feature with target_files=["file_a.py", "file_b.py"]
+        - Run the workflow
+        - Assert: result["processed"] == 1, result["succeeded"] == 1
+
+        ### test_sub_feature_ids_are_correct
+        - Create a feature with id="feat-1", target_files=["a.py", "b.py", "c.py"]
+        - Verify sub-feature IDs would be "feat-1__part1", "feat-1__part2", "feat-1__part3"
+
+        ### test_callback_fires_only_on_last_sub_feature
+        - Create a workflow with dry_run=True and a LoggingInstrumentor
+        - Set up a mock on_feature_complete callback
+        - Add a feature with target_files=["a.py", "b.py"]
+        - Run the workflow
+        - Assert: callback was called exactly once
+
+        ### test_failure_in_sub_feature_marks_parent_failed
+        - Mock develop_feature to fail on the second sub-feature
+        - Add a feature with target_files=["a.py", "b.py"]
+        - Assert: parent feature status is FAILED
+
+        ## Existing patterns to follow
+
+        ```python
+        from startd8.contractors import PrimeContractorWorkflow, FeatureSpec, FeatureStatus
+        from startd8.contractors.adapters import LoggingInstrumentor
+
+        class TestAutoDecompose:
+            def test_xxx(self, tmp_path):
+                workflow = PrimeContractorWorkflow(
+                    project_root=tmp_path,
+                    dry_run=True,
+                    instrumentor=LoggingInstrumentor(),
+                )
+                workflow.queue.add_feature(...)
+                result = workflow.run()
+        ```
+
+        ## Acceptance criteria
+
+        - All 5 tests pass with `pytest tests/contractors/test_contractors.py -v`
+        - Tests use tmp_path fixture, dry_run=True, LoggingInstrumentor
+        - No real LLM calls or network access
+      context:
+        file: tests/contractors/test_contractors.py
+        language: Python
+        test_framework: pytest
+        file_to_edit: tests/contractors/test_contractors.py
+        merge_mode: true
+
+  # ──────────────────────────────────────────────────────────────────────
+  # AD-005: Integration tests (2-file + 3-file features)
+  # ──────────────────────────────────────────────────────────────────────
+  - task_id: AD-005
+    title: "Integration tests (2-file + 3-file features)"
+    task_type: task
+    story_points: 3
+    priority: low
+    depends_on:
+      - AD-004
+    labels:
+      - auto-decompose
+      - prime-contractor
+      - testing
+      - integration
+    config:
+      task_description: |
+        Add integration tests for auto-decompose with multi-file features to
+        `tests/contractors/test_contractors.py`.
+
+        ## Tests to add (in a new `TestAutoDecomposeIntegration` class)
+
+        ### test_two_file_decomposition_dry_run
+        - Create two real Python files in tmp_path (a.py with a function, b.py with a class)
+        - Create a workflow with dry_run=True and LoggingInstrumentor
+        - Add a feature targeting both files
+        - Run workflow
+        - Assert: both files appear in simulated generated paths
+        - Assert: feature marked COMPLETE in queue
+
+        ### test_three_file_decomposition_dry_run
+        - Create three real files: models.py, views.py, urls.py
+        - Add a feature targeting all three
+        - Run workflow in dry_run mode
+        - Assert: 3 sub-features processed, feature is COMPLETE
+
+        ### test_decomposition_reads_current_file_content
+        - Create a file with known content ("# original content")
+        - Spy on develop_feature to capture the sub_feature.description
+        - Verify the description contains "# original content"
+
+        ### test_decomposition_with_dependencies
+        - Add feat-1 (single file) and feat-2 (two files, depends on feat-1)
+        - Run workflow in dry_run mode
+        - Assert: feat-1 completes first, then feat-2 decomposes and completes
+
+        ### test_mixed_single_and_multi_file_features
+        - Add three features: single-file, two-file, single-file
+        - Run workflow in dry_run mode
+        - Assert: all three complete, second one decomposes
+
+        ## Acceptance criteria
+
+        - All 5 tests pass with `pytest tests/contractors/test_contractors.py -v`
+        - Tests exercise the full workflow.run() path (not just individual methods)
+        - Tests verify queue state after completion (feature statuses)
+        - No real LLM calls, all dry_run=True
+      context:
+        file: tests/contractors/test_contractors.py
+        language: Python
+        test_framework: pytest
+        file_to_edit: tests/contractors/test_contractors.py
+        merge_mode: true

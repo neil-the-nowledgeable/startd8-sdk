@@ -120,7 +120,7 @@ def atomic_write(
         if backup_path and backup_path.exists():
             try:
                 backup_path.unlink()
-            except:
+            except OSError:
                 pass  # Best effort cleanup
 
 
@@ -220,10 +220,10 @@ class FileLock:
                 if self.lock_fd:
                     try:
                         self.lock_fd.close()
-                    except:
+                    except OSError:
                         pass
                     self.lock_fd = None
-                
+
                 raise FileOperationError(
                     f"Failed to acquire lock: {e}",
                     file_path=str(self.lock_file),
@@ -258,7 +258,7 @@ class FileLock:
             if self.lock_fd:
                 try:
                     self.lock_fd.close()
-                except:
+                except OSError:
                     pass
                 self.lock_fd = None
             self._is_locked = False

@@ -48,10 +48,13 @@ class Models:
     # ==========================================================================
 
     # Flagship - Best quality, highest cost
-    CLAUDE_OPUS_LATEST = "anthropic:claude-opus-4-5-20251101"
+    CLAUDE_OPUS_LATEST = "anthropic:claude-opus-4-6"
+
+    # Previous flagship
+    CLAUDE_OPUS_45 = "anthropic:claude-opus-4-5-20251101"
 
     # Balanced - Good quality/cost tradeoff (recommended for most use cases)
-    CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-5-20250927"
+    CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-5-20250929"
 
     # Fast - Quick responses, lower cost
     CLAUDE_HAIKU_LATEST = "anthropic:claude-haiku-4-5-20251008"
@@ -81,11 +84,33 @@ class Models:
     # OpenAI Models
     # ==========================================================================
 
-    # Flagship
+    # Flagship (Reasoning)
+    O3_LATEST = "openai:o3"
+
+    # Balanced
+    GPT4_1_LATEST = "openai:gpt-4.1"
+
+    # Fast
     GPT4_LATEST = "openai:gpt-4o"
 
     # Mini - Fast, cheap
     GPT4_MINI = "openai:gpt-4o-mini"
+
+    # Legacy aliases
+    GPT5_2_CODEX_LATEST = O3_LATEST
+
+    # ==========================================================================
+    # Mistral AI Models
+    # ==========================================================================
+
+    # Flagship
+    MISTRAL_LARGE_LATEST = "mistral:mistral-large-latest"
+
+    # Balanced
+    MISTRAL_MEDIUM_LATEST = "mistral:mistral-medium-latest"
+
+    # Fast
+    MISTRAL_SMALL_LATEST = "mistral:mistral-small-latest"
 
     # ==========================================================================
     # Recommended Defaults by Use Case
@@ -111,21 +136,33 @@ class Models:
 # Model registry with full metadata
 _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     # Anthropic
+    "claude-opus-4-6": ModelInfo(
+        provider="anthropic",
+        model_id="claude-opus-4-6",
+        tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
     "claude-opus-4-5-20251101": ModelInfo(
         provider="anthropic",
         model_id="claude-opus-4-5-20251101",
         tier="flagship",
         capabilities={"text", "vision", "code", "reasoning"},
     ),
-    "claude-sonnet-4-5-20250927": ModelInfo(
+    "claude-sonnet-4-5-20250929": ModelInfo(
         provider="anthropic",
-        model_id="claude-sonnet-4-5-20250927",
+        model_id="claude-sonnet-4-5-20250929",
         tier="balanced",
         capabilities={"text", "vision", "code", "reasoning"},
     ),
     "claude-haiku-4-5-20251008": ModelInfo(
         provider="anthropic",
         model_id="claude-haiku-4-5-20251008",
+        tier="fast",
+        capabilities={"text", "code"},
+    ),
+    "claude-haiku-4-5-20251001": ModelInfo(
+        provider="anthropic",
+        model_id="claude-haiku-4-5-20251001",
         tier="fast",
         capabilities={"text", "code"},
     ),
@@ -157,16 +194,48 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
     ),
 
     # OpenAI
+    "o3": ModelInfo(
+        provider="openai",
+        model_id="o3",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "gpt-4.1": ModelInfo(
+        provider="openai",
+        model_id="gpt-4.1",
+        tier="balanced",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
     "gpt-4o": ModelInfo(
         provider="openai",
         model_id="gpt-4o",
-        tier="flagship",
+        tier="fast",
         capabilities={"text", "vision", "code", "reasoning"},
     ),
     "gpt-4o-mini": ModelInfo(
         provider="openai",
         model_id="gpt-4o-mini",
         tier="mini",
+        capabilities={"text", "code"},
+    ),
+
+    # Mistral AI
+    "mistral-large-latest": ModelInfo(
+        provider="mistral",
+        model_id="mistral-large-latest",
+        tier="flagship",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "mistral-medium-latest": ModelInfo(
+        provider="mistral",
+        model_id="mistral-medium-latest",
+        tier="balanced",
+        capabilities={"text", "code", "reasoning"},
+    ),
+    "mistral-small-latest": ModelInfo(
+        provider="mistral",
+        model_id="mistral-small-latest",
+        tier="fast",
         capabilities={"text", "code"},
     ),
 }
@@ -229,10 +298,16 @@ def get_latest_model(
             "mini": Models.GEMINI_FLASH_LITE,
         },
         "openai": {
-            "flagship": Models.GPT4_LATEST,
-            "balanced": Models.GPT4_LATEST,
-            "fast": Models.GPT4_MINI,
+            "flagship": Models.O3_LATEST,
+            "balanced": Models.GPT4_1_LATEST,
+            "fast": Models.GPT4_LATEST,
             "mini": Models.GPT4_MINI,
+        },
+        "mistral": {
+            "flagship": Models.MISTRAL_LARGE_LATEST,
+            "balanced": Models.MISTRAL_MEDIUM_LATEST,
+            "fast": Models.MISTRAL_SMALL_LATEST,
+            "mini": Models.MISTRAL_SMALL_LATEST,
         },
     }
 

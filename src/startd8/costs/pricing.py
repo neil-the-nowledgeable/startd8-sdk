@@ -58,6 +58,13 @@ class PricingService:
     
     # Default pricing (updated January 2026)
     DEFAULT_PRICING: Dict[str, ModelPricing] = {
+        # Anthropic Claude 4.6 family
+        "claude-opus-4-6": ModelPricing(
+            model="claude-opus-4-6",
+            provider="anthropic",
+            input_cost_per_million=5.0,
+            output_cost_per_million=25.0
+        ),
         # Anthropic Claude 4.5 family
         "claude-opus-4-5-20251101": ModelPricing(
             model="claude-opus-4-5-20251101",
@@ -65,14 +72,20 @@ class PricingService:
             input_cost_per_million=5.0,
             output_cost_per_million=25.0
         ),
-        "claude-sonnet-4-5-20250927": ModelPricing(
-            model="claude-sonnet-4-5-20250927",
+        "claude-sonnet-4-5-20250929": ModelPricing(
+            model="claude-sonnet-4-5-20250929",
             provider="anthropic",
             input_cost_per_million=3.0,
             output_cost_per_million=15.0
         ),
         "claude-haiku-4-5-20251008": ModelPricing(
             model="claude-haiku-4-5-20251008",
+            provider="anthropic",
+            input_cost_per_million=1.0,
+            output_cost_per_million=5.0
+        ),
+        "claude-haiku-4-5-20251001": ModelPricing(
+            model="claude-haiku-4-5-20251001",
             provider="anthropic",
             input_cost_per_million=1.0,
             output_cost_per_million=5.0

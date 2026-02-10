@@ -185,6 +185,30 @@ class TestMetadata:
         assert "max_iterations" in input_names
         assert "pass_threshold" in input_names
 
+    def test_truncation_inputs_defined(self):
+        """Test truncation protection inputs are defined with correct defaults."""
+        workflow = LeadContractorWorkflow()
+        inputs_by_name = {i.name: i for i in workflow.metadata.inputs}
+
+        # check_truncation should exist and default to True
+        assert "check_truncation" in inputs_by_name
+        assert inputs_by_name["check_truncation"].default is True
+
+        # Granular truncation flags
+        assert "fail_on_api_truncation" in inputs_by_name
+        assert inputs_by_name["fail_on_api_truncation"].default is True
+
+        assert "fail_on_heuristic_truncation" in inputs_by_name
+        assert inputs_by_name["fail_on_heuristic_truncation"].default is False
+
+        # Legacy flag should exist with None default (backward compat)
+        assert "fail_on_truncation" in inputs_by_name
+        assert inputs_by_name["fail_on_truncation"].default is None
+
+        # strict_truncation should exist and default to False
+        assert "strict_truncation" in inputs_by_name
+        assert inputs_by_name["strict_truncation"].default is False
+
 
 class TestScoreParsing:
     """Tests for review score parsing."""
@@ -440,7 +464,7 @@ class TestWorkflowExecution:
         # Create mock agents
         mock_lead = Mock()
         mock_lead.name = "claude"
-        mock_lead.model = "claude-sonnet-4-5-20250927"
+        mock_lead.model = "claude-sonnet-4-5-20250929"
         mock_lead.generate.return_value = (
             "### Score: 90\n### Verdict: PASS\n### Strengths\n- Good code",
             1000,
@@ -498,7 +522,7 @@ class TestWorkflowExecution:
 
         mock_lead = Mock()
         mock_lead.name = "claude"
-        mock_lead.model = "claude-sonnet-4-5-20250927"
+        mock_lead.model = "claude-sonnet-4-5-20250929"
 
         # First review fails, second passes
         mock_lead.generate.side_effect = [

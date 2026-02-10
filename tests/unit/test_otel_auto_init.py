@@ -1,0 +1,238 @@
+"""
+Tests for OTel auto-initialization, framework opt-in, and span nesting.
+
+Phase 1E tests covering:
+- STARTD8_OTEL=enabled triggers auto-configure
+- Unset env var = zero overhead
+- AgentFramework(enable_otel=True) triggers configure
+- arun() creates spans
+- Pipeline parent→step span nesting
+"""
+
+import os
+import asyncio
+from unittest.mock import patch, MagicMock, AsyncMock
+import pytest
+
+
+class TestAutoConfigureOtel:
+    """Tests for auto_configure_otel()."""
+
+    def test_disabled_by_default(self):
+        """Unset STARTD8_OTEL = no OTel calls, zero overhead."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("STARTD8_OTEL", None)
+            # Reset the module guard
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+
+            with patch.object(otel_mod, "configure_otel") as mock_configure:
+                result = otel_mod.auto_configure_otel()
+
+            mock_configure.assert_not_called()
+            assert result["tracer"] is None
+            assert result["meter"] is None
+
+    def test_disabled_explicit(self):
+        """STARTD8_OTEL=disabled = no OTel calls."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "disabled"}):
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+
+            with patch.object(otel_mod, "configure_otel") as mock_configure:
+                result = otel_mod.auto_configure_otel()
+
+            mock_configure.assert_not_called()
+            assert result["tracer"] is None
+
+    def test_enabled_calls_configure(self):
+        """STARTD8_OTEL=enabled triggers configure_otel()."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled"}):
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+
+            mock_result = {"tracer": "mock_tracer", "meter": "mock_meter", "resource_attributes": {}}
+            with patch.object(otel_mod, "configure_otel", return_value=mock_result) as mock_configure:
+                result = otel_mod.auto_configure_otel()
+
+            mock_configure.assert_called_once()
+            assert result["tracer"] == "mock_tracer"
+            assert otel_mod._configured is True
+
+    def test_double_init_prevented(self):
+        """Calling auto_configure_otel() twice only configures once."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled"}):
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+
+            mock_result = {"tracer": "t", "meter": "m", "resource_attributes": {}}
+            with patch.object(otel_mod, "configure_otel", return_value=mock_result) as mock_configure:
+                otel_mod.auto_configure_otel()
+                result2 = otel_mod.auto_configure_otel()
+
+            # Only called once
+            mock_configure.assert_called_once()
+            # Second call returns empty result
+            assert result2["tracer"] is None
+
+    def test_auto_mode_without_otel(self):
+        """STARTD8_OTEL=auto with OTel unavailable = silent no-op."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "auto"}):
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = False
+            try:
+                with patch.object(otel_mod, "configure_otel") as mock_configure:
+                    result = otel_mod.auto_configure_otel()
+                mock_configure.assert_not_called()
+                assert result["tracer"] is None
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+    def test_auto_mode_with_otel(self):
+        """STARTD8_OTEL=auto with OTel available = configures."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "auto"}):
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                mock_result = {"tracer": "t", "meter": "m", "resource_attributes": {}}
+                with patch.object(otel_mod, "configure_otel", return_value=mock_result) as mock_configure:
+                    result = otel_mod.auto_configure_otel()
+                mock_configure.assert_called_once()
+                assert result["tracer"] == "t"
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+    def test_custom_endpoint_from_env(self):
+        """OTEL_EXPORTER_OTLP_ENDPOINT overrides default endpoint."""
+        with patch.dict(os.environ, {
+            "STARTD8_OTEL": "enabled",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://custom:4317",
+        }):
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+
+            mock_result = {"tracer": "t", "meter": "m", "resource_attributes": {}}
+            with patch.object(otel_mod, "configure_otel", return_value=mock_result) as mock_configure:
+                otel_mod.auto_configure_otel()
+
+            call_args = mock_configure.call_args[0][0]
+            assert call_args.otlp_endpoint == "http://custom:4317"
+
+    def teardown_method(self):
+        """Reset the configured guard after each test."""
+        import startd8.otel as otel_mod
+        otel_mod._configured = False
+
+
+class TestFrameworkOtelOptIn:
+    """Tests for AgentFramework(enable_otel=True)."""
+
+    def test_enable_otel_triggers_auto_configure(self):
+        """AgentFramework(enable_otel=True) calls auto_configure_otel()."""
+        with patch("startd8.otel.auto_configure_otel") as mock_auto:
+            from startd8.framework import AgentFramework
+            fw = AgentFramework(enable_otel=True)
+            mock_auto.assert_called_once()
+
+    def test_disable_otel_default(self):
+        """AgentFramework() does not call auto_configure_otel()."""
+        with patch("startd8.otel.auto_configure_otel") as mock_auto:
+            from startd8.framework import AgentFramework
+            fw = AgentFramework(enable_otel=False)
+            mock_auto.assert_not_called()
+
+
+class TestWorkflowSpanNesting:
+    """Tests for workflow span nesting via start_as_current_span()."""
+
+    def test_run_creates_parent_span(self):
+        """WorkflowBase.run() uses start_as_current_span for proper nesting."""
+        from startd8.workflows.base import WorkflowBase, WorkflowResult, _tracer
+        from startd8.workflows.models import WorkflowMetadata
+
+        class TestWorkflow(WorkflowBase):
+            @property
+            def metadata(self):
+                return WorkflowMetadata(
+                    workflow_id="test-wf",
+                    name="Test",
+                    description="Test workflow",
+                    capabilities=[],
+                    inputs=[],
+                    requires_agents=False,
+                )
+
+            def _execute(self, config, agents, on_progress):
+                return WorkflowResult(
+                    workflow_id="test-wf",
+                    success=True,
+                    output="ok",
+                )
+
+        wf = TestWorkflow()
+
+        # Mock the tracer if available
+        if _tracer:
+            mock_span = MagicMock()
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=mock_span)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            with patch.object(_tracer, "start_as_current_span", return_value=mock_ctx):
+                result = wf.run({})
+                assert result.success
+        else:
+            # OTel not installed — just verify span helper returns nullcontext
+            result = wf.run({})
+            assert result.success
+
+    def test_arun_creates_parent_span(self):
+        """WorkflowBase.arun() creates an OTel span."""
+        from startd8.workflows.base import WorkflowBase, WorkflowResult
+        from startd8.workflows.models import WorkflowMetadata
+
+        class TestAsyncWorkflow(WorkflowBase):
+            @property
+            def metadata(self):
+                return WorkflowMetadata(
+                    workflow_id="test-async-wf",
+                    name="Test Async",
+                    description="Test async workflow",
+                    capabilities=[],
+                    inputs=[],
+                    requires_agents=False,
+                )
+
+            async def _aexecute(self, config, agents, on_progress):
+                return WorkflowResult(
+                    workflow_id="test-async-wf",
+                    success=True,
+                    output="async ok",
+                )
+
+        wf = TestAsyncWorkflow()
+        result = asyncio.run(wf.arun({}))
+        assert result.success
+        assert result.output == "async ok"
+
+
+class TestPipelineSpanNesting:
+    """Tests for pipeline parent→step span nesting."""
+
+    def test_arun_wraps_steps_in_parent_span(self):
+        """Pipeline.arun() wraps all steps in a parent span."""
+        from startd8.orchestration import Pipeline
+        from startd8.agents import MockAgent
+
+        agent = MockAgent(name="mock", model="mock-model")
+        pipe = Pipeline(name="test-pipe")
+        pipe.add_step("s1", agent)
+
+        # Run the pipeline
+        result = asyncio.run(pipe.arun("hello"))
+        assert result.final_output is not None
+        assert len(result.steps) == 1
+        assert result.steps[0]["step_name"] == "s1"

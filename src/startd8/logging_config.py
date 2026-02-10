@@ -6,6 +6,8 @@ Automatically sets up a default log file handler for error persistence.
 """
 
 import logging
+import logging.handlers
+import os
 import sys
 import json
 from pathlib import Path
@@ -13,6 +15,13 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from .context import correlation_id as correlation_id_ctx
 from .paths import default_config_dir
+
+# Environment variable for log level control
+_ENV_LOG_LEVEL = os.environ.get("STARTD8_LOG_LEVEL", "").upper() or None
+
+# Log rotation defaults: 5 MB per file, keep 3 backups (≈20 MB total)
+_DEFAULT_MAX_BYTES = 5 * 1024 * 1024  # 5 MB
+_DEFAULT_BACKUP_COUNT = 3
 
 # Backwards-compatible export: `startd8.logging_config.correlation_id`
 correlation_id = correlation_id_ctx
@@ -87,25 +96,28 @@ def setup_logging(
 ) -> logging.Logger:
     """
     Set up logging configuration
-    
+
     Args:
-        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        level: Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+            Can also be set via STARTD8_LOG_LEVEL env var (env var takes precedence).
         json_format: Use JSON formatting (for production)
         log_file: Optional file to write logs to
         correlation_id: Optional correlation ID for request tracking
-    
+
     Returns:
         Configured logger
     """
+    # Environment variable overrides the argument
+    effective_level = _ENV_LOG_LEVEL or level.upper()
     logger = logging.getLogger("startd8")
-    logger.setLevel(getattr(logging, level.upper()))
+    logger.setLevel(getattr(logging, effective_level))
     
     # Remove existing handlers
     logger.handlers.clear()
     
     # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(getattr(logging, level.upper()))
+    console_handler.setLevel(getattr(logging, effective_level))
     
     if json_format:
         formatter = JSONFormatter()
@@ -118,10 +130,15 @@ def setup_logging(
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
     
-    # File handler if specified
+    # File handler if specified (rotating to prevent unbounded growth)
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=_DEFAULT_MAX_BYTES,
+            backupCount=_DEFAULT_BACKUP_COUNT,
+            encoding="utf-8",
+        )
         file_handler.setLevel(logging.DEBUG)  # More verbose in files
         file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
@@ -155,9 +172,9 @@ def _ensure_default_log_file_handler():
     
     root_logger = logging.getLogger("startd8")
     
-    # Check if a file handler already exists
+    # Check if a file handler already exists (RotatingFileHandler is a FileHandler subclass)
     has_file_handler = any(
-        isinstance(handler, logging.FileHandler) 
+        isinstance(handler, logging.FileHandler)
         for handler in root_logger.handlers
     )
     
@@ -176,8 +193,14 @@ def _ensure_default_log_file_handler():
         # Create log directory if it doesn't exist
         log_dir.mkdir(parents=True, exist_ok=True)
         
-        # Set up file handler with JSON format (Loki-friendly)
-        file_handler = logging.FileHandler(log_file, encoding='utf-8')
+        # Set up rotating file handler with JSON format (Loki-friendly)
+        # 5 MB per file, 3 backups → ~20 MB max disk usage
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file,
+            maxBytes=_DEFAULT_MAX_BYTES,
+            backupCount=_DEFAULT_BACKUP_COUNT,
+            encoding="utf-8",
+        )
         file_handler.setLevel(logging.DEBUG)  # Capture all levels in file
         file_handler.setFormatter(JSONFormatter())
         
@@ -195,15 +218,18 @@ def _ensure_default_log_file_handler():
         )
         # Continue without file handler - console handler will still be set up below
     
-    # Also ensure console handler exists for stderr/stdout
+    # Also ensure console handler exists for stderr/stdout.
+    # FileHandler is a StreamHandler subclass, so exclude it explicitly.
     has_console_handler = any(
-        isinstance(handler, logging.StreamHandler) 
+        isinstance(handler, logging.StreamHandler)
+        and not isinstance(handler, logging.FileHandler)
         for handler in root_logger.handlers
     )
     
     if not has_console_handler:
+        console_level = getattr(logging, _ENV_LOG_LEVEL) if _ENV_LOG_LEVEL else logging.INFO
         console_handler = logging.StreamHandler(sys.stderr)
-        console_handler.setLevel(logging.INFO)  # Less verbose in console
+        console_handler.setLevel(console_level)
         console_formatter = logging.Formatter(
             '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             datefmt='%Y-%m-%d %H:%M:%S'
@@ -211,11 +237,47 @@ def _ensure_default_log_file_handler():
         console_handler.setFormatter(console_formatter)
         root_logger.addHandler(console_handler)
     
-    # Set root logger level
-    if root_logger.level == logging.NOTSET:
-        root_logger.setLevel(logging.INFO)
+    # Set root logger level (env var overrides default)
+    if root_logger.level == logging.NOTSET or _ENV_LOG_LEVEL:
+        root_level = getattr(logging, _ENV_LOG_LEVEL) if _ENV_LOG_LEVEL else logging.INFO
+        root_logger.setLevel(root_level)
     
+    # Add OTel log handler and trace context filter if OTel LoggerProvider is available
+    _attach_otel_handlers(root_logger)
+
     _default_logging_initialized = True
+
+
+def _attach_otel_handlers(logger: logging.Logger) -> None:
+    """Attach OTel log handler and trace context filter if OTel is configured."""
+    try:
+        from .logging_otel import OTelLogHandler, OTelTraceContextFilter
+
+        # Avoid duplicate handlers
+        if any(isinstance(h, OTelLogHandler) for h in logger.handlers):
+            return
+
+        # Check if OTel LoggerProvider is available
+        try:
+            from opentelemetry._logs import get_logger_provider
+            provider = get_logger_provider()
+            if provider is None:
+                return
+        except (ImportError, Exception):
+            return
+
+        # Add OTel log handler
+        otel_handler = OTelLogHandler()
+        otel_handler.setLevel(logging.DEBUG)
+        logger.addHandler(otel_handler)
+
+        # Add trace context filter to all existing handlers
+        trace_filter = OTelTraceContextFilter()
+        for handler in logger.handlers:
+            handler.addFilter(trace_filter)
+
+    except ImportError:
+        pass
 
 
 def get_logger(name: str = "startd8") -> logging.Logger:

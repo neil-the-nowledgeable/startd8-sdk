@@ -1,0 +1,251 @@
+"""
+Code extraction utilities for LLM responses.
+
+Extracts code from markdown-fenced LLM responses, stripping preamble text
+and explanatory notes. Used by LeadContractorWorkflow and available for
+downstream integration pipelines.
+"""
+
+import logging
+import os
+import re
+from typing import Dict, List, Optional
+
+logger = logging.getLogger("startd8.utils.code_extraction")
+
+
+def extract_code_from_response(response: str, language: Optional[str] = None) -> str:
+    """
+    Extract code from markdown code blocks in an LLM response.
+
+    Handles responses that include preamble text, code blocks, and
+    explanatory notes.  Returns only the code content.
+
+    Supports:
+    - ``​`python ... ``​`
+    - ``​`yaml ... ``​`
+    - ``​` ... ``​` (generic)
+    - Multiple code blocks (returns the largest one)
+
+    Falls back to raw response if no code block is found.
+
+    Args:
+        response: Raw LLM response text
+        language: Optional language hint (currently unused, reserved for
+            future filtering by language tag)
+
+    Returns:
+        Extracted code string, or the raw response as fallback
+    """
+    if not response:
+        return response
+
+    # Pattern to match code blocks with optional language specifier
+    # Captures content between ``` markers
+    pattern = r'```(?:\w+)?\s*\n(.*?)```'
+    matches = re.findall(pattern, response, re.DOTALL)
+
+    if matches:
+        # Return the first (and typically main) code block
+        extracted = matches[0].strip()
+
+        # If multiple code blocks, return the largest one
+        if len(matches) > 1:
+            largest = max(matches, key=len).strip()
+            if len(largest) > len(extracted):
+                extracted = largest
+
+        logger.debug(
+            "Extracted %d chars from code block (response was %d chars)",
+            len(extracted),
+            len(response),
+        )
+        return extracted
+
+    # No code blocks found - check if response looks like raw code.
+    # These indicators must cover all languages the SDK's drafters produce,
+    # not just Python (context-blind heuristic anti-pattern).
+    stripped = response.strip()
+    first_line = stripped.split('\n', 1)[0] if stripped else ''
+    code_indicators = [
+        # Universal
+        first_line.startswith('#!/'),
+        # Python
+        first_line.startswith('import '),
+        first_line.startswith('from '),
+        first_line.startswith('def '),
+        first_line.startswith('class '),
+        first_line.startswith('# ==='),  # Common header pattern
+        # TypeScript / JavaScript
+        first_line.startswith('export '),
+        first_line.startswith('const '),
+        first_line.startswith('let '),
+        first_line.startswith('function '),
+        first_line.startswith('async '),
+        first_line.startswith('interface '),
+        first_line.startswith('type '),
+        # Go
+        first_line.startswith('package '),
+        # Rust
+        first_line.startswith('use '),
+        first_line.startswith('fn '),
+        first_line.startswith('pub '),
+        first_line.startswith('mod '),
+        # C / C++
+        first_line.startswith('#include '),
+        # Common comment-header patterns (// file.ts, /* ... */)
+        first_line.startswith('// '),
+        first_line.startswith('/* '),
+    ]
+
+    if any(code_indicators):
+        logger.debug("Response appears to be raw code without markdown blocks")
+        return stripped
+
+    # Fallback: return as-is but log warning
+    logger.warning(
+        "No code blocks found in response (%d chars). "
+        "Using raw response - may include commentary.",
+        len(response),
+    )
+    return response
+
+
+def extract_multi_file_code(
+    response: str, target_files: List[str]
+) -> Dict[str, str]:
+    """
+    Split an LLM response containing multiple file implementations into per-file code.
+
+    Tries two strategies in order:
+    1. **File-path comment markers** — looks for lines like ``// path/to/file.ts``
+       or ``# path/to/file.py`` that precede code blocks.
+    2. **Multiple fenced code blocks** — matches separate ````` blocks where the
+       filename appears in the language tag or as a first-line comment.
+
+    Args:
+        response: Raw LLM response (may contain markdown fencing, commentary, etc.)
+        target_files: Expected output file paths (used for basename matching)
+
+    Returns:
+        Dict mapping target filename → extracted code.
+        Returns an empty dict if splitting fails (caller handles fallback).
+    """
+    if not response or not target_files:
+        return {}
+
+    basenames = {os.path.basename(f): f for f in target_files}
+
+    # Try both strategies and return the one with the most matches.
+    # This avoids Strategy 1 (markers) short-circuiting Strategy 2 (fenced
+    # blocks) when markers appear inside fenced blocks and produce garbled results.
+
+    best: Dict[str, str] = {}
+
+    # --- Strategy 1: file-path comment markers ---
+    # Matches lines like: // path/to/File.tsx  or  # path/to/file.py
+    # The code block follows until the next such marker or end of string.
+    marker_pattern = re.compile(
+        r'^(?://|#)\s*(\S+\.(?:ts|tsx|js|jsx|py|css|html|vue|svelte|go|rs|java|rb))\s*$',
+        re.MULTILINE,
+    )
+    markers = list(marker_pattern.finditer(response))
+    if markers:
+        result = _extract_by_markers(response, markers, basenames)
+        if len(result) > len(best):
+            best = result
+
+    # --- Strategy 2: multiple fenced code blocks with filename hints ---
+    # Pattern: ```lang or ```filename.ext  followed by code  followed by ```
+    block_pattern = re.compile(
+        r'```(\S*)\s*\n(.*?)```', re.DOTALL
+    )
+    blocks = list(block_pattern.finditer(response))
+    if len(blocks) >= 2:
+        result = _extract_by_fenced_blocks(response, blocks, basenames)
+        if len(result) > len(best):
+            best = result
+
+    return best
+
+
+def _extract_by_markers(
+    response: str,
+    markers: list,
+    basenames: Dict[str, str],
+) -> Dict[str, str]:
+    """Extract code sections delimited by file-path comment markers."""
+    result: Dict[str, str] = {}
+
+    for i, marker in enumerate(markers):
+        marker_basename = os.path.basename(marker.group(1))
+        # Find which target file this marker refers to
+        matched_target = _match_basename(marker_basename, basenames)
+        if not matched_target:
+            continue
+
+        # Extract content from after this marker to before the next marker (or end)
+        start = marker.end()
+        end = markers[i + 1].start() if i + 1 < len(markers) else len(response)
+        section = response[start:end].strip()
+
+        # Strip fenced code block wrappers if present within the section
+        code = extract_code_from_response(section)
+        if code.strip():
+            result[matched_target] = code.strip()
+
+    # Return whatever we matched — caller handles unmatched files via fallback
+    return result
+
+
+def _extract_by_fenced_blocks(
+    response: str,
+    blocks: list,
+    basenames: Dict[str, str],
+) -> Dict[str, str]:
+    """Extract code from multiple fenced blocks matched to target files."""
+    result: Dict[str, str] = {}
+
+    for block in blocks:
+        lang_or_filename = block.group(1)
+        code_content = block.group(2).strip()
+        if not code_content:
+            continue
+
+        matched_target = None
+
+        # Check if the language tag IS a filename (e.g. ```MigrationQueue.tsx)
+        if '.' in lang_or_filename:
+            block_basename = os.path.basename(lang_or_filename)
+            matched_target = _match_basename(block_basename, basenames)
+
+        # Check first line of code for a file-path comment
+        if not matched_target:
+            first_line = code_content.split('\n', 1)[0].strip()
+            # Matches: // MigrationQueue.tsx  or  # useBatchMigration.ts
+            fname_comment = re.match(r'^(?://|#)\s*(\S+\.\w+)', first_line)
+            if fname_comment:
+                block_basename = os.path.basename(fname_comment.group(1))
+                matched_target = _match_basename(block_basename, basenames)
+                # Strip the filename comment from the code
+                if matched_target:
+                    _, _, rest = code_content.partition('\n')
+                    code_content = rest.strip()
+
+        if matched_target and code_content:
+            result[matched_target] = code_content
+
+    return result
+
+
+def _match_basename(candidate: str, basenames: Dict[str, str]) -> Optional[str]:
+    """Match a candidate filename against target basenames (case-insensitive)."""
+    # Exact match first
+    if candidate in basenames:
+        return basenames[candidate]
+    # Case-insensitive fallback
+    candidate_lower = candidate.lower()
+    for basename, target in basenames.items():
+        if basename.lower() == candidate_lower:
+            return target
+    return None

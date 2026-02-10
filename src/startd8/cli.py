@@ -1051,15 +1051,34 @@ def _load_workflow_registry():
 
 
 @workflow_app.command("list")
-def workflow_list():
-    """List all available workflows"""
+def workflow_list(
+    capability: Optional[str] = typer.Option(None, help="Filter by capability (partial match)"),
+    tag: Optional[str] = typer.Option(None, help="Filter by tag"),
+    search: Optional[str] = typer.Option(None, help="Search name and description"),
+):
+    """List all available workflows, with optional filters."""
     WorkflowRegistry = _load_workflow_registry()
     WorkflowRegistry.discover()
 
-    workflows = WorkflowRegistry.list_workflow_metadata()
+    # Start with all workflows (FR-210, FR-211, FR-212)
+    all_workflows = WorkflowRegistry.list_workflow_metadata()
+    all_ids = {m.workflow_id for m in all_workflows}
+
+    # Apply filters as intersection
+    if capability:
+        cap_matches = WorkflowRegistry.find_workflows_by_capability(capability)
+        all_ids &= {w.metadata.workflow_id for w in cap_matches}
+    if tag:
+        tag_matches = WorkflowRegistry.find_workflows_by_tag(tag)
+        all_ids &= {w.metadata.workflow_id for w in tag_matches}
+    if search:
+        search_matches = WorkflowRegistry.search_workflows(search)
+        all_ids &= {w.metadata.workflow_id for w in search_matches}
+
+    workflows = [m for m in all_workflows if m.workflow_id in all_ids]
 
     if not workflows:
-        console.print("[yellow]No workflows available.[/yellow]")
+        console.print("[yellow]No workflows match the given filters.[/yellow]")
         return
 
     table = Table(title="Available Workflows")
@@ -1157,6 +1176,14 @@ def workflow_run(
         None, "--output", "-o",
         help="Output file path"
     ),
+    max_retries: Optional[int] = typer.Option(
+        None, "--max-retries",
+        help="Max retries on transient failures (enables retry policy)"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run",
+        help="Simulate without API calls; show execution plan and cost estimate"
+    ),
 ):
     """Run a workflow with the given configuration"""
     import json
@@ -1198,18 +1225,42 @@ def workflow_run(
     def on_progress(current: int, total: int, message: str):
         console.print(f"[dim][{current}/{total}] {message}[/dim]")
 
-    console.print(f"[bold]Running workflow: {workflow_id}[/bold]")
+    if dry_run:
+        console.print(f"[bold]Dry run: {workflow_id}[/bold]")
+    else:
+        console.print(f"[bold]Running workflow: {workflow_id}[/bold]")
 
     try:
         result = WorkflowRegistry.run_workflow(
             workflow_id,
             config=config,
-            on_progress=on_progress
+            on_progress=on_progress,
+            dry_run=dry_run,
         )
     except Exception as e:
         console.print(f"[red]Error running workflow: {e}[/red]")
         logger.error(f"Workflow failed", exc_info=True, extra={"workflow_id": workflow_id})
         raise typer.Exit(1)
+
+    # Display dry run result as Rich table (FR-510)
+    if dry_run and result.success and isinstance(result.output, dict):
+        plan = result.output
+        table = Table(title="Execution Plan")
+        table.add_column("#", style="dim")
+        table.add_column("Name")
+        table.add_column("Type")
+        table.add_column("Agent")
+        for step in plan.get("execution_plan", []):
+            table.add_row(
+                str(step.get("step", "")),
+                step.get("name", ""),
+                step.get("type", ""),
+                step.get("agent", ""),
+            )
+        console.print(table)
+        console.print(f"\n[bold]Estimated cost:[/bold] ${plan.get('estimated_cost', 0):.6f}")
+        console.print(f"[bold]Step order:[/bold] {' -> '.join(plan.get('step_order', []))}")
+        return
 
     # Display result
     if result.success:
@@ -1218,13 +1269,23 @@ def workflow_run(
         console.print(f"\n[red]✗ Workflow failed: {result.error}[/red]")
 
     # Show metrics
-    console.print(Panel(
-        f"[bold]Time:[/bold] {result.metrics.total_time_ms}ms\n"
-        f"[bold]Tokens:[/bold] {result.metrics.input_tokens + result.metrics.output_tokens}\n"
-        f"[bold]Cost:[/bold] ${result.metrics.total_cost:.4f}\n"
-        f"[bold]Steps:[/bold] {result.metrics.step_count}",
-        title="Metrics"
-    ))
+    if result.metrics is not None:
+        console.print(Panel(
+            f"[bold]Time:[/bold] {result.metrics.total_time_ms}ms\n"
+            f"[bold]Tokens:[/bold] {result.metrics.input_tokens + result.metrics.output_tokens}\n"
+            f"[bold]Cost:[/bold] ${result.metrics.total_cost:.4f}\n"
+            f"[bold]Steps:[/bold] {result.metrics.step_count}",
+            title="Metrics"
+        ))
+    else:
+        # Some failures return WorkflowResult.from_error(...) which does not populate metrics.
+        console.print(Panel(
+            f"[bold]Time:[/bold] n/a\n"
+            f"[bold]Tokens:[/bold] n/a\n"
+            f"[bold]Cost:[/bold] n/a\n"
+            f"[bold]Steps:[/bold] {len(result.steps) if result.steps is not None else 0}",
+            title="Metrics"
+        ))
 
     # Write output
     if output_file and result.output:
@@ -1241,6 +1302,45 @@ def workflow_run(
 
     if not result.success:
         raise typer.Exit(1)
+
+
+@workflow_app.command("visualize")
+def workflow_visualize(
+    workflow_id: str = typer.Argument(..., help="Workflow ID to visualize"),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o",
+        help="Output file path (default: print to stdout)"
+    ),
+):
+    """Generate a Mermaid flowchart diagram of a workflow's structure (FR-530)."""
+    from .workflows.visualizer import WorkflowVisualizer
+    from .orchestration import Pipeline, PipelineStep
+
+    WorkflowRegistry = _load_workflow_registry()
+    WorkflowRegistry.discover()
+
+    workflow = WorkflowRegistry.get_workflow(workflow_id)
+    if workflow is None:
+        available = WorkflowRegistry.list_workflows()
+        console.print(f"[red]Unknown workflow: {workflow_id}[/red]")
+        console.print(f"[dim]Available: {', '.join(available)}[/dim]")
+        raise typer.Exit(1)
+
+    # Build a Pipeline from workflow metadata for visualization
+    meta = workflow.metadata
+    pipeline = Pipeline(name=meta.name)
+    for inp in meta.inputs:
+        # Create placeholder steps from input definitions
+        mock_agent = type('_Agent', (), {'name': inp.name, 'model': 'n/a'})()
+        pipeline.add_step(inp.name, mock_agent)
+
+    diagram = WorkflowVisualizer.to_mermaid(pipeline)
+
+    if output:
+        output.write_text(diagram)
+        console.print(f"[green]Diagram written to: {output}[/green]")
+    else:
+        console.print(Panel(diagram, title=f"Mermaid: {workflow_id}"))
 
 
 @workflow_app.command("export")
@@ -1405,6 +1505,41 @@ def workflow_templates():
     console.print(table)
     console.print()
     console.print("[dim]Usage: startd8 workflow new <name> --template <template>[/dim]")
+
+
+@app.command("serve")
+def serve(
+    port: int = typer.Option(8080, "--port", "-p", help="Server port"),
+    host: str = typer.Option("0.0.0.0", "--host", help="Bind address"),
+    api_key: Optional[str] = typer.Option(
+        None, "--api-key", envvar="STARTD8_API_KEY",
+        help="API key for mutation endpoints (POST)"
+    ),
+):
+    """Start the HTTP workflow server (FR-522).
+
+    Serves a REST API for listing, triggering, and polling workflows.
+    Requires the server extras: pip install startd8[server]
+
+    Example:
+        startd8 serve --port 8080
+        startd8 serve --api-key secret
+    """
+    try:
+        import uvicorn
+        from .server import create_app as _create_server_app
+    except ImportError:
+        console.print("[red]Server extras required: pip install startd8[server][/red]")
+        raise typer.Exit(1)
+
+    server_app = _create_server_app(api_key=api_key)
+    console.print(f"[bold]Starting StartD8 server on {host}:{port}[/bold]")
+    console.print(f"  GET  http://localhost:{port}/workflows")
+    console.print(f"  POST http://localhost:{port}/workflows/{{id}}/run")
+    console.print(f"  GET  http://localhost:{port}/workflows/{{id}}/runs/{{run_id}}")
+    if api_key:
+        console.print(f"  [dim]API key auth enabled for POST endpoints[/dim]")
+    uvicorn.run(server_app, host=host, port=port)
 
 
 if __name__ == "__main__":

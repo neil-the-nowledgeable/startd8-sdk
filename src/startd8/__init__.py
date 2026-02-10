@@ -118,8 +118,14 @@ from .exceptions import (
     APIError,
     ConfigurationError,
     AgentError,
+    GeminiSafetyFilterError,
 )
 from .logging_config import get_logger, setup_logging, correlation_id
+
+# Eagerly initialize OTel log bridge so that modules using raw
+# logging.getLogger(__name__) still propagate to Loki.
+from .logging_config import _ensure_default_log_file_handler
+_ensure_default_log_file_handler()
 from .events import EventBus, Event, EventType, EventPriority
 from .costs import (
     CostTracker,
@@ -166,6 +172,7 @@ from .otel import (
     configure_tracing,
     configure_metrics,
     configure_otel,
+    shutdown_otel,
     add_project_context_to_span,
 )
 
@@ -322,6 +329,7 @@ __all__ = [
     "configure_tracing",
     "configure_metrics",
     "configure_otel",
+    "shutdown_otel",
     "add_project_context_to_span",
 ]
 

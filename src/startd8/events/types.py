@@ -41,6 +41,7 @@ class EventType(Enum):
     PIPELINE_STEP_START = auto()
     PIPELINE_STEP_COMPLETE = auto()
     PIPELINE_COMPLETE = auto()
+    PIPELINE_STEP_RETRY = auto()  # FR-410
     PIPELINE_ERROR = auto()
     
     # Job Queue events
@@ -62,6 +63,11 @@ class EventType(Enum):
     BENCHMARK_CREATED = auto()
     BENCHMARK_COMPLETED = auto()
     
+    # Truncation detection events
+    TRUNCATION_DETECTED = auto()
+    TRUNCATION_WARNING = auto()
+    TRUNCATION_PREFLIGHT_REJECT = auto()
+
     # System events
     SYSTEM_ERROR = auto()
     SYSTEM_WARNING = auto()

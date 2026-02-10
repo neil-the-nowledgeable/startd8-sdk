@@ -37,7 +37,7 @@ class TestAsyncPipeline:
         assert result is not None
         assert len(result.steps) == 2
         assert result.final_output is not None
-        assert result.total_time_ms > 0
+        assert result.total_time_ms >= 0  # may round to 0 on fast machines
         assert result.total_tokens > 0
     
     @pytest.mark.asyncio
@@ -132,7 +132,7 @@ class TestAsyncPipeline:
         
         assert result is not None
         assert len(result.steps) == 1
-        assert result.total_time_ms > 0
+        assert result.total_time_ms >= 0  # may round to 0 on fast machines
     
     @pytest.mark.asyncio
     async def test_multiple_parallel_pipelines(self):

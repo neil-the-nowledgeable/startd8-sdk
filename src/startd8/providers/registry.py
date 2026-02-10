@@ -242,6 +242,13 @@ class ProviderRegistry:
             logger.debug("Registered built-in Gemini provider")
         except ImportError as e:
             logger.debug(f"Gemini provider not available: {e}")
+
+        try:
+            from .mistral import MistralProvider
+            cls.register(MistralProvider())
+            logger.debug("Registered built-in Mistral provider")
+        except ImportError as e:
+            logger.debug(f"Mistral provider not available: {e}")
     
     @classmethod
     def get_provider(cls, name: str) -> Optional[AgentProvider]:

@@ -137,6 +137,7 @@ class DraftResult:
     cost: float = 0.0
     time_ms: int = 0
     was_truncated: bool = False  # Whether output was truncated
+    truncation_source: Optional[str] = None  # "api" or "heuristic"
 
 
 @dataclass

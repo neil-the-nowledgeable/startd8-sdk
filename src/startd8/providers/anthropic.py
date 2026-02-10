@@ -18,9 +18,11 @@ class AnthropicProvider:
     
     # Official Claude models (hardcoded baseline)
     HARDCODED_MODELS = [
-        # Claude 4.5 family (Latest - November 2025)
-        "claude-opus-4-5-20251101",   # Claude Opus 4.5 - most intelligent model
-        "claude-sonnet-4-5-20250927", # Claude Sonnet 4.5 - best for complex agents/coding
+        # Claude 4.6 family (Latest - February 2026)
+        "claude-opus-4-6",            # Claude Opus 4.6 - most intelligent model
+        # Claude 4.5 family (November 2025)
+        "claude-opus-4-5-20251101",   # Claude Opus 4.5
+        "claude-sonnet-4-5-20250929", # Claude Sonnet 4.5 - best for complex agents/coding
         "claude-haiku-4-5-20251008",  # Claude Haiku 4.5 - fastest with near-frontier performance
         # Claude 4.x family
         "claude-opus-4-1-20250805",   # Claude Opus 4.1 - agentic tasks upgrade
@@ -77,7 +79,7 @@ class AnthropicProvider:
             "cost_per_1m_input": 5.00,
             "cost_per_1m_output": 25.00,
         },
-        "claude-sonnet-4-5-20250927": {
+        "claude-sonnet-4-5-20250929": {
             "name": "Claude Sonnet 4.5",
             "context_window": 200000,  # 1M beta available
             "max_output_tokens": 64000,
@@ -226,7 +228,11 @@ class AnthropicProvider:
             api_key=config.get('api_key'),
             max_tokens=config.get('max_tokens', 16384),  # Claude 4.5 supports up to 64K output tokens
             cost_tracker=config.get('cost_tracker'),
-            budget_manager=config.get('budget_manager')
+            budget_manager=config.get('budget_manager'),
+            timeout_config=config.get('timeout_config'),
+            retry_config=config.get('retry_config'),
+            enable_retry=config.get('enable_retry', False),
+            use_connection_pool=config.get('use_connection_pool', False),
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:
@@ -251,9 +257,11 @@ class AnthropicProvider:
                 raise ConfigurationError(
                     f"max_tokens must be a positive integer, got: {max_tokens}"
                 )
-            if max_tokens > 8192:
+            # Claude models can support high completion token limits; let API enforce exact limits.
+            # Keep a high cap to prevent accidental runaway configs while avoiding needless truncation.
+            if max_tokens > 65536:
                 raise ConfigurationError(
-                    f"max_tokens ({max_tokens}) exceeds maximum allowed (8192)"
+                    f"max_tokens ({max_tokens}) exceeds maximum allowed (65536)"
                 )
         
         return True

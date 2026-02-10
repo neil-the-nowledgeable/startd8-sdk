@@ -14,6 +14,7 @@ Available workflows:
 - LeadContractorContextCoreWorkflow: Lead contractor with ContextCore task tracking
 - PolicyAnalysisWorkflow: Multi-agent critical policy analysis
 - PlainLanguageWorkflow: Simplifies complex content into plain language
+- PlanIngestionWorkflow: Parses, assesses, and transforms generic plans into SDK-native formats
 """
 
 # Imports are done lazily to avoid circular imports
@@ -25,10 +26,13 @@ __all__ = [
     "IterativeDevWorkflowWrapper",
     "DesignPolishWorkflow",
     "CriticalReviewWorkflow",
+    "DocReviewLogWorkflow",
+    "ArchitecturalReviewLogWorkflow",
     "LeadContractorWorkflow",
     "LeadContractorContextCoreWorkflow",
     "PolicyAnalysisWorkflow",
     "PlainLanguageWorkflow",
+    "PlanIngestionWorkflow",
 ]
 
 
@@ -49,6 +53,12 @@ def __getattr__(name: str):
     elif name == "CriticalReviewWorkflow":
         from .critical_review_workflow import CriticalReviewWorkflow
         return CriticalReviewWorkflow
+    elif name == "DocReviewLogWorkflow":
+        from .doc_review_log_workflow import DocReviewLogWorkflow
+        return DocReviewLogWorkflow
+    elif name == "ArchitecturalReviewLogWorkflow":
+        from .architectural_review_log_workflow import ArchitecturalReviewLogWorkflow
+        return ArchitecturalReviewLogWorkflow
     elif name == "LeadContractorWorkflow":
         from .lead_contractor_workflow import LeadContractorWorkflow
         return LeadContractorWorkflow
@@ -61,4 +71,7 @@ def __getattr__(name: str):
     elif name == "PlainLanguageWorkflow":
         from .plain_language_workflow import PlainLanguageWorkflow
         return PlainLanguageWorkflow
+    elif name == "PlanIngestionWorkflow":
+        from .plan_ingestion_workflow import PlanIngestionWorkflow
+        return PlanIngestionWorkflow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

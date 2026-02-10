@@ -62,6 +62,7 @@ class AgentFramework:
         resilience_config: Optional["ResilienceConfig"] = None,
         enable_session_tracking: bool = False,
         prometheus_port: Optional[int] = None,
+        enable_otel: bool = False,
     ):
         """
         Initialize the Agent Framework
@@ -72,7 +73,16 @@ class AgentFramework:
             resilience_config: Resilience/self-healing configuration (default: STANDARD level)
             enable_session_tracking: Whether to enable session tracking (default: False)
             prometheus_port: Port for Prometheus metrics (requires enable_session_tracking=True)
+            enable_otel: Whether to auto-configure OpenTelemetry (default: False)
         """
+        # OTel auto-configuration (before other init so spans capture everything)
+        if enable_otel:
+            try:
+                from .otel import auto_configure_otel
+                auto_configure_otel()
+            except ImportError:
+                logger.debug("OTel not available, skipping auto-configure")
+
         if storage_dir is None:
             storage_dir = Path.cwd() / ".startd8"
 

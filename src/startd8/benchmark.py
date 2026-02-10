@@ -108,7 +108,12 @@ class BenchmarkRunner:
                 *[run_single_agent(agent) for agent in agents],
                 return_exceptions=True
             )
-            responses = [r for r in results if r is not None and not isinstance(r, Exception)]
+            responses = []
+            for r in results:
+                if isinstance(r, BaseException) and not isinstance(r, Exception):
+                    raise r
+                if r is not None and not isinstance(r, Exception):
+                    responses.append(r)
         else:
             # Run agents sequentially
             for agent in agents:

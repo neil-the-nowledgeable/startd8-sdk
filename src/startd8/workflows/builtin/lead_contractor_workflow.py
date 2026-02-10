@@ -44,9 +44,16 @@ from ..models import (
 )
 from ...agents import BaseAgent
 from ...utils.agent_resolution import resolve_agent_spec
+from ...utils.code_extraction import extract_code_from_response
 from ...logging_config import get_logger
 from ...costs.pricing import PricingService
-from ...truncation_detection import TruncationResult, detect_truncation
+from ...truncation_detection import (
+    CONFIDENCE_HIGH,
+    CONFIDENCE_IS_TRUNCATED,
+    TruncationResult,
+    detect_truncation,
+    get_expected_sections_for_code,
+)
 
 from .lead_contractor_models import (
     LeadContractorConfig,
@@ -134,6 +141,11 @@ DRAFT_PROMPT_TEMPLATE = """You are implementing code based on a detailed specifi
 3. Handle all edge cases mentioned
 4. Write clean, well-documented code
 5. Include inline comments explaining key decisions
+
+## Coding Standards (ruff/linter compliance)
+- NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+- Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+- Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
 
 ## Output Format
 Provide your complete implementation followed by a brief explanation of your approach.
@@ -231,8 +243,33 @@ class LeadContractorWorkflow(WorkflowBase):
             "max_iterations": 3 - Max review cycles,
             "pass_threshold": 80 - Minimum score to pass (0-100),
             "output_format": "string - Expected output format (optional)",
-            "integration_instructions": "string - Final integration notes (optional)"
+            "integration_instructions": "string - Final integration notes (optional)",
+            "check_truncation": true - Enable truncation detection (default: true),
+            "fail_on_api_truncation": true - Fail on API truncation (default: true),
+            "fail_on_heuristic_truncation": false - Fail on heuristic truncation (default: false),
+            "fail_on_truncation": true - Legacy flag, controls both (backward compat),
+            "strict_truncation": false - Use strict detection threshold (default: false)
         }
+
+    Truncation Protection:
+        The workflow detects two types of truncation:
+
+        1. **API truncation**: Model hit max_tokens (finish_reason="max_tokens").
+           Default: fail (fail_on_api_truncation=True).
+        2. **Heuristic truncation**: Output appears structurally incomplete.
+           Default: warn (fail_on_heuristic_truncation=False).
+
+        Config keys:
+        - check_truncation (default: True): Enable/disable heuristic detection
+        - fail_on_api_truncation (default: True): Fail on API truncation
+        - fail_on_heuristic_truncation (default: False): Fail on heuristic truncation
+        - fail_on_truncation: Legacy flag — controls both (backward compat)
+        - strict_truncation (default: False): Lower confidence threshold for heuristics
+
+        Recommended settings by use case:
+        - Code generation: fail_on_api_truncation=True, fail_on_heuristic_truncation=True
+        - Config/data generation: fail_on_api_truncation=True, fail_on_heuristic_truncation=False
+        - Exploratory: fail_on_api_truncation=False, fail_on_heuristic_truncation=False
 
     Recommended Lead Agents:
         - anthropic:claude-sonnet-4-20250514 (default - best for coding/agents)
@@ -331,6 +368,41 @@ class LeadContractorWorkflow(WorkflowBase):
                     required=False,
                     description="Instructions for final integration step"
                 ),
+                WorkflowInput(
+                    name="check_truncation",
+                    type="boolean",
+                    required=False,
+                    default=True,
+                    description="Enable truncation detection on drafter output (default: True)"
+                ),
+                WorkflowInput(
+                    name="fail_on_api_truncation",
+                    type="boolean",
+                    required=False,
+                    default=True,
+                    description="Fail workflow if API truncation detected (finish_reason=max_tokens). Default: True."
+                ),
+                WorkflowInput(
+                    name="fail_on_heuristic_truncation",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Fail workflow if heuristic truncation detected (incomplete code structure). Default: False."
+                ),
+                WorkflowInput(
+                    name="fail_on_truncation",
+                    type="boolean",
+                    required=False,
+                    default=None,
+                    description="Legacy flag: controls both API and heuristic truncation failure. Granular flags take precedence."
+                ),
+                WorkflowInput(
+                    name="strict_truncation",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Use strict truncation detection with lower confidence threshold (default: False)"
+                ),
             ]
         )
 
@@ -377,15 +449,31 @@ class LeadContractorWorkflow(WorkflowBase):
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
         integration_instructions = config.get("integration_instructions", "")
-        fail_on_truncation = config.get("fail_on_truncation", True)  # Fail by default
-        
+        # Truncation protection defaults - safe by default
+        check_truncation = config.get("check_truncation", True)
+        strict_truncation = config.get("strict_truncation", False)
+
+        # Granular truncation failure control
+        # Legacy flag for backward compatibility
+        legacy_fail_on_truncation = config.get("fail_on_truncation")
+        if legacy_fail_on_truncation is not None:
+            # Legacy mode: single flag controls both, but granular flags take precedence
+            fail_on_api_truncation = config.get("fail_on_api_truncation", legacy_fail_on_truncation)
+            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", legacy_fail_on_truncation)
+        else:
+            # New mode: separate control (safe defaults)
+            fail_on_api_truncation = config.get("fail_on_api_truncation", True)
+            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", False)
+
         # Extract ContextCore project context
         project_context = self._extract_project_context(config)
 
-        # Resolve agents
+        # Resolve agents (forward max_tokens if configured)
+        agent_max_tokens = config.get("max_tokens")
+        resolve_kwargs = {"max_tokens": agent_max_tokens} if agent_max_tokens else {}
         try:
-            lead_agent = resolve_agent_spec(lead_spec)
-            drafter_agent = resolve_agent_spec(drafter_spec)
+            lead_agent = resolve_agent_spec(lead_spec, **resolve_kwargs)
+            drafter_agent = resolve_agent_spec(drafter_spec, **resolve_kwargs)
         except Exception as e:
             return WorkflowResult.from_error(
                 self.metadata.workflow_id,
@@ -455,30 +543,11 @@ class LeadContractorWorkflow(WorkflowBase):
                     spec=spec,
                     feedback=review_feedback,
                     iteration=iteration,
+                    check_truncation=check_truncation,
+                    strict_truncation=strict_truncation,
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
-
-                # Check for truncation - fail fast if enabled
-                if draft.was_truncated:
-                    if fail_on_truncation:
-                        error_msg = (
-                            f"Draft was truncated at iteration {iteration}. "
-                            f"Output tokens: {draft.output_tokens}. "
-                            "Consider: (1) increasing max_tokens, (2) decomposing the task, "
-                            "or (3) setting fail_on_truncation=False to continue anyway."
-                        )
-                        logger.error(error_msg)
-                        return WorkflowResult.from_error(
-                            self.metadata.workflow_id,
-                            error_msg,
-                            steps=step_results,
-                        )
-                    else:
-                        logger.warning(
-                            f"Draft was truncated at iteration {iteration}, continuing anyway. "
-                            f"Set fail_on_truncation=True to fail on truncation."
-                        )
 
                 step_results.append(StepResult(
                     step_name=f"draft_iteration_{iteration}",
@@ -494,6 +563,56 @@ class LeadContractorWorkflow(WorkflowBase):
                 result.drafter_input_tokens += draft.input_tokens
                 result.drafter_output_tokens += draft.output_tokens
                 result.drafter_cost += draft.cost
+
+                # Check for truncation
+                if check_truncation and draft.was_truncated:
+                    is_api = draft.truncation_source == "api"
+                    should_fail = (
+                        (is_api and fail_on_api_truncation)
+                        or (not is_api and fail_on_heuristic_truncation)
+                    )
+
+                    if should_fail and iteration < max_iterations:
+                        # Auto-retry: skip review, re-draft with continuation prompt
+                        logger.warning(
+                            f"Draft truncated at iteration {iteration} "
+                            f"(source: {draft.truncation_source}, "
+                            f"{draft.output_tokens} tokens). Retrying with continuation prompt."
+                        )
+                        review_feedback = (
+                            "Your previous response was TRUNCATED — it was cut off before "
+                            "the code was complete. You MUST output the COMPLETE file in a "
+                            "single response. Do not add commentary — output ONLY the full "
+                            "source code for the file."
+                        )
+                        continue
+                    elif should_fail:
+                        error_msg = (
+                            f"Draft was truncated at iteration {iteration} "
+                            f"(source: {draft.truncation_source}). "
+                            f"Output tokens: {draft.output_tokens}. "
+                        )
+                        if is_api:
+                            error_msg += (
+                                "Consider: (1) increasing max_tokens, (2) decomposing the task, "
+                                "or (3) setting fail_on_api_truncation=False to continue anyway."
+                            )
+                        else:
+                            error_msg += (
+                                "Heuristic detection flagged incomplete code structure. "
+                                "Consider setting fail_on_heuristic_truncation=False if this is a false positive."
+                            )
+                        logger.error(error_msg)
+                        return WorkflowResult.from_error(
+                            self.metadata.workflow_id,
+                            error_msg,
+                            steps=step_results,
+                        )
+                    else:
+                        logger.warning(
+                            f"Draft truncation detected at iteration {iteration} "
+                            f"(source: {draft.truncation_source}), continuing anyway."
+                        )
 
                 # Review phase
                 current_step += 1
@@ -600,6 +719,7 @@ class LeadContractorWorkflow(WorkflowBase):
             output_tokens=result.lead_output_tokens + result.drafter_output_tokens,
             total_cost=result.total_cost,
             step_count=len(step_results),
+            model=lead_spec,
         )
 
         completed_at = datetime.now(timezone.utc)
@@ -691,8 +811,19 @@ class LeadContractorWorkflow(WorkflowBase):
         spec: ImplementationSpec,
         feedback: str,
         iteration: int,
+        check_truncation: bool = True,
+        strict_truncation: bool = False,
     ) -> DraftResult:
-        """Phase 2/4: Drafter creates implementation from spec."""
+        """Phase 2/4: Drafter creates implementation from spec.
+
+        Args:
+            drafter_agent: The agent to use for drafting
+            spec: The implementation specification
+            feedback: Review feedback from previous iteration (if any)
+            iteration: Current iteration number
+            check_truncation: Whether to run heuristic truncation detection (default: True)
+            strict_truncation: Use lower confidence threshold for detection (default: False)
+        """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
         prompt = DRAFT_PROMPT_TEMPLATE.format(
@@ -706,20 +837,33 @@ class LeadContractorWorkflow(WorkflowBase):
         implementation_code = self._extract_code_from_response(response_text)
 
         # Check for truncation (API-level detection)
-        was_truncated = token_usage.was_truncated if token_usage else False
+        api_truncated = token_usage.was_truncated if token_usage else False
+        truncation_source = "api" if api_truncated else None
 
-        # Also run heuristic detection for incomplete code
-        if not was_truncated and implementation_code:
+        # Heuristic detection for incomplete code (supplements API-level check).
+        # Does NOT pass original_input because the prompt-to-code length ratio
+        # is always misleadingly low (a 20K-char spec producing 5K chars of
+        # code is normal, not truncated).  code_mode auto-detects from content.
+        heuristic_truncated = False
+        if check_truncation and not api_truncated and implementation_code:
+            # Use CONFIDENCE_IS_TRUNCATED for strict mode, CONFIDENCE_HIGH for normal mode
+            confidence_threshold = CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
+            # Infer language-appropriate structure markers (None skips the check)
+            expected = get_expected_sections_for_code(implementation_code)
             truncation_result = detect_truncation(
                 implementation_code,
-                original_input=prompt,
-                expected_sections=["def ", "class "],  # Expect code structures
+                expected_sections=expected,
+                strict_mode=strict_truncation,
             )
-            if truncation_result.is_truncated and truncation_result.confidence >= 0.7:
-                was_truncated = True
+            if truncation_result.is_truncated and truncation_result.confidence >= confidence_threshold:
+                heuristic_truncated = True
+                truncation_source = "heuristic"
                 logger.warning(
-                    f"Draft appears truncated (heuristic): {truncation_result.indicators[:3]}"
+                    f"Draft appears truncated (heuristic, confidence={truncation_result.confidence:.0%}): "
+                    f"{truncation_result.indicators[:3]}"
                 )
+
+        was_truncated = api_truncated or heuristic_truncated
 
         draft = DraftResult(
             draft_id=draft_id,
@@ -731,7 +875,8 @@ class LeadContractorWorkflow(WorkflowBase):
             input_tokens=token_usage.input if token_usage else 0,
             output_tokens=token_usage.output if token_usage else 0,
             time_ms=response_time_ms,
-            was_truncated=was_truncated,  # Track truncation status
+            was_truncated=was_truncated,
+            truncation_source=truncation_source,
         )
 
         draft.cost = self._pricing.calculate_total_cost(
@@ -843,6 +988,538 @@ class LeadContractorWorkflow(WorkflowBase):
 
         return integration
 
+    # =========================================================================
+    # Async Execution (FR-150)
+    # =========================================================================
+
+    async def _aexecute(
+        self,
+        config: Dict[str, Any],
+        agents: Optional[List[BaseAgent]],
+        on_progress: Optional[ProgressCallback],
+    ) -> WorkflowResult:
+        """Execute the Lead Contractor workflow asynchronously (FR-150)."""
+        started_at = datetime.now(timezone.utc)
+        workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
+
+        task_description = config["task_description"]
+        context = config.get("context", {})
+        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
+        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash")
+        max_iterations = config.get("max_iterations", 3)
+        pass_threshold = config.get("pass_threshold", 80)
+        output_format = config.get("output_format")
+        integration_instructions = config.get("integration_instructions", "")
+        # Truncation protection defaults - safe by default
+        check_truncation = config.get("check_truncation", True)
+        strict_truncation = config.get("strict_truncation", False)
+
+        # Granular truncation failure control
+        legacy_fail_on_truncation = config.get("fail_on_truncation")
+        if legacy_fail_on_truncation is not None:
+            fail_on_api_truncation = config.get("fail_on_api_truncation", legacy_fail_on_truncation)
+            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", legacy_fail_on_truncation)
+        else:
+            fail_on_api_truncation = config.get("fail_on_api_truncation", True)
+            fail_on_heuristic_truncation = config.get("fail_on_heuristic_truncation", False)
+
+        project_context = self._extract_project_context(config)
+
+        # Resolve agents (forward max_tokens if configured)
+        agent_max_tokens = config.get("max_tokens")
+        resolve_kwargs = {"max_tokens": agent_max_tokens} if agent_max_tokens else {}
+        try:
+            lead_agent = resolve_agent_spec(lead_spec, **resolve_kwargs)
+            drafter_agent = resolve_agent_spec(drafter_spec, **resolve_kwargs)
+        except Exception as e:
+            return WorkflowResult.from_error(
+                self.metadata.workflow_id,
+                f"Failed to resolve agents: {e}"
+            )
+
+        result = LeadContractorResult(
+            workflow_id=workflow_id,
+            success=False,
+            final_implementation=""
+        )
+
+        step_results: List[StepResult] = []
+        total_steps = 2 + max_iterations * 2 + 1
+        current_step = 0
+
+        self._emit_progress(on_progress, current_step, total_steps, "Starting Lead Contractor workflow")
+
+        try:
+            # Phase 1: Spec Creation (Lead)
+            current_step += 1
+            self._emit_progress(on_progress, current_step, total_steps, "Creating implementation spec")
+
+            spec = await self._acreate_spec(
+                lead_agent=lead_agent,
+                task_description=task_description,
+                context=context,
+                output_format=output_format,
+            )
+            result.spec = spec
+
+            step_results.append(StepResult(
+                step_name="spec_creation",
+                agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                output=spec.raw_spec[:500] + "..." if len(spec.raw_spec) > 500 else spec.raw_spec,
+                time_ms=spec.time_ms,
+                input_tokens=spec.input_tokens,
+                output_tokens=spec.output_tokens,
+                cost=spec.cost,
+                metadata={"phase": WorkflowPhase.SPEC_CREATION.value}
+            ))
+
+            result.lead_input_tokens += spec.input_tokens
+            result.lead_output_tokens += spec.output_tokens
+            result.lead_cost += spec.cost
+
+            # Phase 2-4: Draft/Review Loop
+            current_implementation = ""
+            review_feedback = ""
+            final_review: Optional[ReviewResult] = None
+
+            for iteration in range(1, max_iterations + 1):
+                current_step += 1
+                self._emit_progress(
+                    on_progress, current_step, total_steps,
+                    f"Drafting implementation (iteration {iteration}/{max_iterations})"
+                )
+
+                draft = await self._acreate_draft(
+                    drafter_agent=drafter_agent,
+                    spec=spec,
+                    feedback=review_feedback,
+                    iteration=iteration,
+                    check_truncation=check_truncation,
+                    strict_truncation=strict_truncation,
+                )
+                result.drafts.append(draft)
+                current_implementation = draft.implementation
+
+                step_results.append(StepResult(
+                    step_name=f"draft_iteration_{iteration}",
+                    agent_name=f"{drafter_agent.name}:{drafter_agent.model}",
+                    output=draft.implementation[:500] + "..." if len(draft.implementation) > 500 else draft.implementation,
+                    time_ms=draft.time_ms,
+                    input_tokens=draft.input_tokens,
+                    output_tokens=draft.output_tokens,
+                    cost=draft.cost,
+                    metadata={"phase": WorkflowPhase.DRAFTING.value, "iteration": iteration}
+                ))
+
+                result.drafter_input_tokens += draft.input_tokens
+                result.drafter_output_tokens += draft.output_tokens
+                result.drafter_cost += draft.cost
+
+                # Check for truncation
+                if check_truncation and draft.was_truncated:
+                    is_api = draft.truncation_source == "api"
+                    should_fail = (
+                        (is_api and fail_on_api_truncation)
+                        or (not is_api and fail_on_heuristic_truncation)
+                    )
+
+                    if should_fail and iteration < max_iterations:
+                        # Auto-retry: skip review, re-draft with continuation prompt
+                        logger.warning(
+                            f"Draft truncated at iteration {iteration} "
+                            f"(source: {draft.truncation_source}, "
+                            f"{draft.output_tokens} tokens). Retrying with continuation prompt."
+                        )
+                        review_feedback = (
+                            "Your previous response was TRUNCATED — it was cut off before "
+                            "the code was complete. You MUST output the COMPLETE file in a "
+                            "single response. Do not add commentary — output ONLY the full "
+                            "source code for the file."
+                        )
+                        continue
+                    elif should_fail:
+                        error_msg = (
+                            f"Draft was truncated at iteration {iteration} "
+                            f"(source: {draft.truncation_source}). "
+                            f"Output tokens: {draft.output_tokens}. "
+                        )
+                        if is_api:
+                            error_msg += (
+                                "Consider: (1) increasing max_tokens, (2) decomposing the task, "
+                                "or (3) setting fail_on_api_truncation=False to continue anyway."
+                            )
+                        else:
+                            error_msg += (
+                                "Heuristic detection flagged incomplete code structure. "
+                                "Consider setting fail_on_heuristic_truncation=False if this is a false positive."
+                            )
+                        logger.error(error_msg)
+                        return WorkflowResult.from_error(
+                            self.metadata.workflow_id,
+                            error_msg,
+                            steps=step_results,
+                        )
+                    else:
+                        logger.warning(
+                            f"Draft truncation detected at iteration {iteration} "
+                            f"(source: {draft.truncation_source}), continuing anyway."
+                        )
+
+                # Review phase
+                current_step += 1
+                self._emit_progress(
+                    on_progress, current_step, total_steps,
+                    f"Reviewing implementation (iteration {iteration}/{max_iterations})"
+                )
+
+                review = await self._areview_draft(
+                    lead_agent=lead_agent,
+                    task_description=task_description,
+                    spec=spec,
+                    implementation=current_implementation,
+                    pass_threshold=pass_threshold,
+                    iteration=iteration,
+                )
+                result.reviews.append(review)
+                final_review = review
+
+                step_results.append(StepResult(
+                    step_name=f"review_iteration_{iteration}",
+                    agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                    output=review.review_text[:500] + "..." if len(review.review_text) > 500 else review.review_text,
+                    time_ms=review.time_ms,
+                    input_tokens=review.input_tokens,
+                    output_tokens=review.output_tokens,
+                    cost=review.cost,
+                    metadata={
+                        "phase": WorkflowPhase.REVIEW.value,
+                        "iteration": iteration,
+                        "score": review.score,
+                        "passed": review.passed
+                    }
+                ))
+
+                result.lead_input_tokens += review.input_tokens
+                result.lead_output_tokens += review.output_tokens
+                result.lead_cost += review.cost
+
+                if review.passed:
+                    logger.info(f"Review passed on iteration {iteration} with score {review.score}")
+                    break
+
+                review_feedback = self._format_review_feedback(review)
+
+                if iteration == max_iterations:
+                    logger.warning(f"Max iterations ({max_iterations}) reached without passing review")
+
+            result.total_iterations = len(result.drafts)
+
+            # Phase 5: Integration (Lead)
+            current_step += 1
+            self._emit_progress(on_progress, current_step, total_steps, "Integrating final implementation")
+
+            integration = await self._aintegrate_final(
+                lead_agent=lead_agent,
+                task_description=task_description,
+                implementation=current_implementation,
+                reviews=result.reviews,
+                integration_instructions=integration_instructions,
+            )
+            result.integration = integration
+
+            step_results.append(StepResult(
+                step_name="integration",
+                agent_name=f"{lead_agent.name}:{lead_agent.model}",
+                output=integration.final_implementation[:500] + "..." if len(integration.final_implementation) > 500 else integration.final_implementation,
+                time_ms=integration.time_ms,
+                input_tokens=integration.input_tokens,
+                output_tokens=integration.output_tokens,
+                cost=integration.cost,
+                metadata={"phase": WorkflowPhase.INTEGRATION.value}
+            ))
+
+            result.lead_input_tokens += integration.input_tokens
+            result.lead_output_tokens += integration.output_tokens
+            result.lead_cost += integration.cost
+
+            result.success = True
+            result.final_implementation = integration.final_implementation
+            result.final_phase = WorkflowPhase.COMPLETED
+            result.completed_at = datetime.now(timezone.utc)
+            result.total_cost = result.lead_cost + result.drafter_cost
+            result.total_time_ms = sum(s.time_ms for s in step_results)
+
+        except Exception as e:
+            logger.error(f"Lead Contractor workflow failed: {e}", exc_info=True)
+            result.success = False
+            result.error = str(e)
+            result.final_phase = WorkflowPhase.FAILED
+            result.completed_at = datetime.now(timezone.utc)
+            result.total_cost = result.lead_cost + result.drafter_cost
+            result.total_time_ms = sum(s.time_ms for s in step_results)
+
+        metrics = WorkflowMetrics(
+            total_time_ms=result.total_time_ms,
+            input_tokens=result.lead_input_tokens + result.drafter_input_tokens,
+            output_tokens=result.lead_output_tokens + result.drafter_output_tokens,
+            total_cost=result.total_cost,
+            step_count=len(step_results),
+            model=lead_spec,
+        )
+
+        completed_at = datetime.now(timezone.utc)
+
+        return WorkflowResult(
+            workflow_id=self.metadata.workflow_id,
+            success=result.success,
+            output={
+                "final_implementation": result.final_implementation,
+                "summary": result.to_summary(),
+            },
+            metrics=metrics,
+            steps=step_results,
+            error=result.error,
+            started_at=started_at,
+            completed_at=completed_at,
+            metadata={
+                "lead_contractor_result": result.to_summary(),
+                "lead_agent": lead_spec,
+                "drafter_agent": drafter_spec,
+                "total_iterations": result.total_iterations,
+                "lead_cost": result.lead_cost,
+                "drafter_cost": result.drafter_cost,
+                "cost_efficiency_ratio": result.get_cost_efficiency_ratio(),
+            },
+            project_context=project_context if not project_context.is_empty() else None,
+        )
+
+    async def _acreate_spec(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        context: Dict[str, Any],
+        output_format: Optional[str],
+    ) -> ImplementationSpec:
+        """Phase 1 (async): Lead creates implementation specification."""
+        spec_id = f"spec-{uuid.uuid4().hex[:8]}"
+
+        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
+        if output_format:
+            context_str += f"\n\nExpected Output Format:\n{output_format}"
+
+        prompt = SPEC_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            context=context_str
+        )
+
+        response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
+
+        requirements = self._parse_list_section(response_text, "Requirements")
+        acceptance_criteria = self._parse_list_section(response_text, "Acceptance Criteria")
+        edge_cases = self._parse_list_section(response_text, "Edge Cases")
+        constraints = self._parse_list_section(response_text, "Constraints")
+        technical_approach = self._parse_section_content(response_text, "Technical Approach")
+        code_structure = self._parse_section_content(response_text, "Code Structure")
+
+        spec = ImplementationSpec(
+            spec_id=spec_id,
+            task_summary=task_description,
+            requirements=requirements,
+            technical_approach=technical_approach,
+            acceptance_criteria=acceptance_criteria,
+            code_structure=code_structure if code_structure else None,
+            edge_cases=edge_cases,
+            constraints=constraints,
+            raw_spec=response_text,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        spec.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            spec.input_tokens,
+            spec.output_tokens
+        )
+
+        return spec
+
+    async def _acreate_draft(
+        self,
+        drafter_agent: BaseAgent,
+        spec: ImplementationSpec,
+        feedback: str,
+        iteration: int,
+        check_truncation: bool = True,
+        strict_truncation: bool = False,
+    ) -> DraftResult:
+        """Phase 2/4 (async): Drafter creates implementation from spec.
+
+        Args:
+            drafter_agent: The agent to use for drafting
+            spec: The implementation specification
+            feedback: Review feedback from previous iteration (if any)
+            iteration: Current iteration number
+            check_truncation: Whether to run heuristic truncation detection (default: True)
+            strict_truncation: Use lower confidence threshold for detection (default: False)
+        """
+        draft_id = f"draft-{uuid.uuid4().hex[:8]}"
+
+        prompt = DRAFT_PROMPT_TEMPLATE.format(
+            spec=spec.raw_spec,
+            feedback=feedback if feedback else "This is the initial implementation attempt."
+        )
+
+        response_text, response_time_ms, token_usage = await drafter_agent.agenerate(prompt)
+
+        implementation_code = self._extract_code_from_response(response_text)
+
+        # Check for truncation (API-level detection)
+        api_truncated = token_usage.was_truncated if token_usage else False
+        truncation_source = "api" if api_truncated else None
+
+        # Heuristic detection — see sync _create_draft for rationale.
+        # code_mode auto-detects from content.
+        heuristic_truncated = False
+        if check_truncation and not api_truncated and implementation_code:
+            # Use CONFIDENCE_IS_TRUNCATED for strict mode, CONFIDENCE_HIGH for normal mode
+            confidence_threshold = CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
+            # Infer language-appropriate structure markers (None skips the check)
+            expected = get_expected_sections_for_code(implementation_code)
+            truncation_result = detect_truncation(
+                implementation_code,
+                expected_sections=expected,
+                strict_mode=strict_truncation,
+            )
+            if truncation_result.is_truncated and truncation_result.confidence >= confidence_threshold:
+                heuristic_truncated = True
+                truncation_source = "heuristic"
+                logger.warning(
+                    f"Draft appears truncated (heuristic, confidence={truncation_result.confidence:.0%}): "
+                    f"{truncation_result.indicators[:3]}"
+                )
+
+        was_truncated = api_truncated or heuristic_truncated
+
+        draft = DraftResult(
+            draft_id=draft_id,
+            iteration=iteration,
+            implementation=implementation_code,
+            spec_id=spec.spec_id,
+            agent_name=drafter_agent.name,
+            model=drafter_agent.model,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+            was_truncated=was_truncated,
+            truncation_source=truncation_source,
+        )
+
+        draft.cost = self._pricing.calculate_total_cost(
+            drafter_agent.model,
+            draft.input_tokens,
+            draft.output_tokens
+        )
+
+        return draft
+
+    async def _areview_draft(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        spec: ImplementationSpec,
+        implementation: str,
+        pass_threshold: int,
+        iteration: int,
+    ) -> ReviewResult:
+        """Phase 3 (async): Lead reviews the draft implementation."""
+        review_id = f"review-{uuid.uuid4().hex[:8]}"
+
+        prompt = REVIEW_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            spec=spec.raw_spec,
+            implementation=implementation,
+            pass_threshold=pass_threshold
+        )
+
+        response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
+
+        review_text = response_text
+        score = self._parse_score(review_text)
+        has_pass_verdict = bool(re.search(r'\bPASS\b', review_text, re.IGNORECASE))
+        passed = score >= pass_threshold and has_pass_verdict
+
+        issues = self._parse_list_section(review_text, "Issues")
+        blocking = self._parse_list_section(review_text, "Blocking Issues")
+        suggestions = self._parse_list_section(review_text, "Suggestions")
+        strengths = self._parse_list_section(review_text, "Strengths")
+
+        review = ReviewResult(
+            review_id=review_id,
+            iteration=iteration,
+            passed=passed,
+            score=score,
+            review_text=review_text,
+            issues=issues,
+            blocking_issues=blocking,
+            suggestions=suggestions,
+            strengths=strengths,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        review.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            review.input_tokens,
+            review.output_tokens
+        )
+
+        return review
+
+    async def _aintegrate_final(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        implementation: str,
+        reviews: List[ReviewResult],
+        integration_instructions: str,
+    ) -> IntegrationResult:
+        """Phase 5 (async): Lead integrates and finalizes the implementation."""
+        integration_id = f"int-{uuid.uuid4().hex[:8]}"
+
+        review_history = "\n\n".join([
+            f"### Iteration {r.iteration}\n- Score: {r.score}\n- Passed: {r.passed}\n{r.review_text[:500]}"
+            for r in reviews
+        ])
+
+        prompt = INTEGRATION_PROMPT_TEMPLATE.format(
+            task_description=task_description,
+            implementation=implementation,
+            review_history=review_history,
+            integration_instructions=integration_instructions or "Finalize for production use."
+        )
+
+        response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
+
+        final_code = self._extract_code_from_response(response_text)
+
+        integration = IntegrationResult(
+            integration_id=integration_id,
+            final_implementation=final_code,
+            input_tokens=token_usage.input if token_usage else 0,
+            output_tokens=token_usage.output if token_usage else 0,
+            time_ms=response_time_ms,
+        )
+
+        integration.cost = self._pricing.calculate_total_cost(
+            lead_agent.model,
+            integration.input_tokens,
+            integration.output_tokens
+        )
+
+        return integration
+
     def _format_review_feedback(self, review: ReviewResult) -> str:
         """Format review into feedback for next draft iteration."""
         issues_str = '\n'.join(f'- {issue}' for issue in review.issues) if review.issues else '- None listed'
@@ -900,60 +1577,10 @@ class LeadContractorWorkflow(WorkflowBase):
         """
         Extract code from markdown code blocks in LLM response.
 
-        Handles responses that include preamble text, code blocks, and
-        explanatory notes. Returns only the code content.
-
-        Supports:
-        - ```python ... ```
-        - ```yaml ... ```
-        - ``` ... ``` (generic)
-        - Multiple code blocks (returns first one)
-
-        Falls back to raw response if no code block found.
+        Delegates to the public utility ``extract_code_from_response``
+        in ``startd8.utils.code_extraction``.
         """
-        if not response:
-            return response
-
-        # Pattern to match code blocks with optional language specifier
-        # Captures content between ``` markers
-        pattern = r'```(?:\w+)?\s*\n(.*?)```'
-        matches = re.findall(pattern, response, re.DOTALL)
-
-        if matches:
-            # Return the first (and typically main) code block
-            extracted = matches[0].strip()
-
-            # If multiple code blocks, check if we should concatenate
-            # (e.g., for multi-file outputs). For now, return largest block.
-            if len(matches) > 1:
-                largest = max(matches, key=len).strip()
-                if len(largest) > len(extracted):
-                    extracted = largest
-
-            logger.debug(f"Extracted {len(extracted)} chars from code block (response was {len(response)} chars)")
-            return extracted
-
-        # No code blocks found - check if response looks like raw code
-        # (starts with shebang, import, def, class, etc.)
-        code_indicators = [
-            response.strip().startswith('#!/'),
-            response.strip().startswith('import '),
-            response.strip().startswith('from '),
-            response.strip().startswith('def '),
-            response.strip().startswith('class '),
-            response.strip().startswith('# ==='),  # Common header pattern
-        ]
-
-        if any(code_indicators):
-            logger.debug("Response appears to be raw code without markdown blocks")
-            return response.strip()
-
-        # Fallback: return as-is but log warning
-        logger.warning(
-            f"No code blocks found in response ({len(response)} chars). "
-            "Using raw response - may include commentary."
-        )
-        return response
+        return extract_code_from_response(response)
 
     # =========================================================================
     # Test Plan Generation Methods

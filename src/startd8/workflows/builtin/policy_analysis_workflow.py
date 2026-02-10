@@ -868,6 +868,8 @@ class PolicyAnalysisWorkflow(WorkflowBase):
         # Filter successful analyses
         successful = []
         for result in results:
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
             if isinstance(result, AgentAnalysis):
                 successful.append(result)
             elif isinstance(result, Exception):

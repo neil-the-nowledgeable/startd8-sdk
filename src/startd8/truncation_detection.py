@@ -14,6 +14,17 @@ import re
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 
+from .logging_config import get_logger
+
+logger = get_logger(__name__)
+
+# Truncation confidence thresholds — single source of truth.
+# Callers should import these rather than hard-coding values.
+CONFIDENCE_IS_TRUNCATED = 0.5        # Default gate for TruncationResult.is_truncated
+CONFIDENCE_IS_TRUNCATED_STRICT = 0.3 # Gate when strict_mode=True
+CONFIDENCE_HIGH = 0.7                # High-confidence truncation (triggers rejection/error)
+CONFIDENCE_HIGH_PROSE = 0.9          # Higher bar for prose heuristics (more false-positive prone)
+
 
 @dataclass
 class TruncationResult:
@@ -188,16 +199,129 @@ def estimate_output_size(
     )
 
 
+# Language-specific code structure markers for truncation detection.
+# Each language maps to keywords expected in non-trivial source files.
+_LANGUAGE_SECTIONS = {
+    "python": ["def ", "class "],
+    "typescript": ["function ", "const ", "export "],
+    "javascript": ["function ", "const ", "export "],
+    "go": ["func ", "type "],
+    "rust": ["fn ", "struct "],
+    "java": ["class ", "public "],
+    "ruby": ["def ", "class "],
+    "swift": ["func ", "struct "],
+    "kotlin": ["fun ", "class "],
+}
+
+
+def infer_code_language(code: str) -> Optional[str]:
+    """Infer programming language from code content using keyword heuristics.
+
+    Returns a language key (e.g. ``"python"``, ``"typescript"``) or ``None``
+    if the language cannot be determined.
+    """
+    if not code or not code.strip():
+        return None
+
+    # Strong single-keyword signals (order matters: check specific before generic)
+    strong_signals = [
+        ("typescript", ["interface ", ": string", ": number", ": boolean",
+                        "=> {", "React.", "<React", "useState(", "useEffect("]),
+        ("python", ["def ", "self.", "__init__", "elif ", "except ",
+                    "yield ", "async def "]),
+        ("go", ["func ", "package "]),
+        ("rust", ["fn ", "let mut ", "impl ", "let ", "println!", "use std::"]),
+        ("java", ["public class ", "private void ", "System.out"]),
+        ("ruby", ["def ", "end\n", "require "]),
+        ("kotlin", ["fun ", "val ", "data class "]),
+        ("swift", ["func ", "var ", "guard let "]),
+    ]
+
+    for lang, keywords in strong_signals:
+        if sum(1 for kw in keywords if kw in code) >= 2:
+            return lang
+
+    # Fallback: TypeScript vs JavaScript (both share const/export/function)
+    if any(kw in code for kw in ["import ", "export ", "const "]):
+        # Type annotations suggest TypeScript
+        if any(kw in code for kw in [": string", ": number", "interface ",
+                                      "<", "as ", "readonly "]):
+            return "typescript"
+        return "javascript"
+
+    return None
+
+
+def get_expected_sections_for_code(code: str) -> Optional[List[str]]:
+    """Return expected code structure markers based on inferred language.
+
+    Returns ``None`` when the language cannot be determined, signalling
+    that the ``expected_sections`` check should be skipped entirely.
+    """
+    language = infer_code_language(code)
+    if language is None:
+        return None
+    return _LANGUAGE_SECTIONS.get(language)
+
+
+def _looks_like_code(text: str) -> bool:
+    """Conservative heuristic: does this text look like source code?
+
+    Used as a fallback when ``infer_code_language()`` returns ``None`` — the
+    language isn't recognized but the content is clearly not prose/markdown.
+
+    Checks for structural patterns common across ALL programming languages:
+    balanced-looking brace usage, semicolons at line ends, ``import``/
+    ``#include`` statements, shebang lines, etc.  Requires 2+ signals to
+    trigger, reducing false positives on prose that happens to contain a
+    single code-like token.
+    """
+    if not text or len(text) < 20:
+        return False
+
+    signals = 0
+    lines = text.split('\n')
+
+    # Lines ending with { or ; (common in C-family, Java, Go, Rust, etc.)
+    brace_or_semi = sum(1 for ln in lines if ln.rstrip().endswith(('{', ';')))
+    if brace_or_semi >= 3:
+        signals += 1
+
+    # Import / include / require at start of lines
+    import_lines = sum(
+        1 for ln in lines
+        if re.match(r'^\s*(import |from |#include |require |use |using )', ln)
+    )
+    if import_lines >= 1:
+        signals += 1
+
+    # Shebang
+    if text.startswith('#!'):
+        signals += 1
+
+    # Function/method definitions (language-agnostic patterns)
+    if re.search(r'\b(function |def |fn |func |sub |proc )\b', text):
+        signals += 1
+
+    # Indentation-heavy (4+ lines indented with spaces or tabs)
+    indented = sum(1 for ln in lines if re.match(r'^[\t ]{2,}\S', ln))
+    if indented >= 4:
+        signals += 1
+
+    return signals >= 2
+
+
 def detect_truncation(
     output: str,
     original_input: Optional[str] = None,
     expected_sections: Optional[List[str]] = None,
     min_output_ratio: float = 0.3,
-    strict_mode: bool = False
+    strict_mode: bool = False,
+    code_mode: Optional[bool] = None,
 ) -> TruncationResult:
     """
     Detect if LLM output appears to be truncated.
-    
+
     Uses multiple heuristics to determine if output was cut off:
     1. Unclosed code blocks (```)
     2. Unclosed JSON/YAML structures
@@ -205,21 +329,29 @@ def detect_truncation(
     4. Missing expected sections (if provided)
     5. Dramatic length reduction compared to input
     6. Incomplete markdown structures
-    
+
     Args:
         output: The LLM output to check
         original_input: Original input document (for length comparison)
         expected_sections: List of section headers expected in output
         min_output_ratio: Minimum acceptable output/input length ratio (default 0.3 = 30%)
         strict_mode: If True, be more aggressive about detecting truncation
-        
+        code_mode: Controls whether text-oriented heuristics are skipped.
+            - ``True``: Skip prose heuristics (mid-sentence, unclosed strings,
+              markdown). Use structural checks only (code blocks, brace balance).
+            - ``False``: Use all heuristics (for LLM prose/markdown output).
+            - ``None`` (default): **Auto-detect** via ``infer_code_language()``.
+              If the content looks like source code, code_mode is enabled
+              automatically.  This prevents false positives when callers forget
+              to specify the mode — the function adapts to its input.
+
     Returns:
         TruncationResult with detection results
     """
     indicators = []
     details = {}
     confidence = 0.0
-    
+
     if not output or not output.strip():
         return TruncationResult(
             is_truncated=True,
@@ -227,95 +359,158 @@ def detect_truncation(
             indicators=["Empty output"],
             details={"output_length": 0}
         )
-    
+
     output_stripped = output.strip()
     output_length = len(output_stripped)
     details["output_length"] = output_length
-    
+
+    # Auto-detect code_mode when not explicitly set.
+    # Conservative: when uncertain, assume code.  False positives on code
+    # (blocking valid files) are expensive; false negatives on prose (missing
+    # a truncation warning) are cheap since the API-level check still catches
+    # real truncation.
+    if code_mode is None:
+        code_mode = (
+            infer_code_language(output_stripped) is not None
+            or _looks_like_code(output_stripped)
+        )
+    details["code_mode"] = code_mode
+
     # 1. Check for unclosed code blocks
+    # Useful for both prose and code (catches LLM wrapper artifacts)
     code_block_count = output_stripped.count("```")
     if code_block_count % 2 != 0:
         indicators.append("Unclosed code block (odd number of ```)")
         confidence += 0.4
         details["code_blocks"] = {"count": code_block_count, "closed": False}
-    
+
     # 2. Check for unclosed JSON/YAML structures
-    json_truncation = _check_json_truncation(output_stripped)
-    if json_truncation:
-        indicators.append(f"Unclosed JSON/YAML: {json_truncation}")
-        confidence += 0.35
-        details["json_truncation"] = json_truncation
-    
-    # 3. Check for mid-sentence ending
-    mid_sentence = _check_mid_sentence_ending(output_stripped)
-    if mid_sentence:
-        indicators.append(f"Mid-sentence ending: {mid_sentence}")
-        confidence += 0.3
-        details["mid_sentence"] = mid_sentence
-    
-    # 4. Check for incomplete markdown structures
-    markdown_issues = _check_markdown_truncation(output_stripped)
-    if markdown_issues:
-        indicators.extend(markdown_issues)
-        confidence += 0.2 * len(markdown_issues)
-        details["markdown_issues"] = markdown_issues
-    
+    if code_mode:
+        # In code mode, only flag significant brace imbalance.
+        # Naive {/} counting is unreliable for source code (braces in strings,
+        # template literals, comments, regex). Only flag when the imbalance is
+        # large enough to indicate real truncation, not just string artifacts.
+        _code_brace_check = _check_code_brace_balance(output_stripped)
+        if _code_brace_check:
+            indicators.append(f"Significant brace imbalance: {_code_brace_check}")
+            confidence += 0.35
+            details["brace_imbalance"] = _code_brace_check
+    else:
+        json_truncation = _check_json_truncation(output_stripped)
+        if json_truncation:
+            indicators.append(f"Unclosed JSON/YAML: {json_truncation}")
+            confidence += 0.35
+            details["json_truncation"] = json_truncation
+
+    # 3-4: Text-oriented checks — skip in code mode
+    if not code_mode:
+        # 3. Check for mid-sentence ending
+        mid_sentence = _check_mid_sentence_ending(output_stripped)
+        if mid_sentence:
+            indicators.append(f"Mid-sentence ending: {mid_sentence}")
+            confidence += 0.3
+            details["mid_sentence"] = mid_sentence
+
+        # 4. Check for incomplete markdown structures
+        markdown_issues = _check_markdown_truncation(output_stripped)
+        if markdown_issues:
+            indicators.extend(markdown_issues)
+            confidence += 0.2 * len(markdown_issues)
+            details["markdown_issues"] = markdown_issues
+
     # 5. Check length ratio if original input provided
     if original_input:
         input_length = len(original_input.strip())
         details["input_length"] = input_length
-        
+
         if input_length > 0:
             ratio = output_length / input_length
             details["length_ratio"] = ratio
-            
+
             # For document polishing, output should be similar length or longer
             if ratio < min_output_ratio:
                 indicators.append(f"Output too short: {ratio:.1%} of input (expected >{min_output_ratio:.0%})")
                 confidence += 0.4
-    
+
     # 6. Check for missing expected sections
     if expected_sections:
         missing_sections = []
         for section in expected_sections:
-            # Check for section header in various formats
-            section_patterns = [
-                f"## {section}",
-                f"### {section}",
-                f"# {section}",
-                f"**{section}**",
-                section.lower()
-            ]
-            found = any(p.lower() in output_stripped.lower() for p in section_patterns)
+            if code_mode:
+                # In code mode, just check for the keyword in the source
+                # (no markdown header variants — source code doesn't have them)
+                found = section.lower() in output_stripped.lower()
+            else:
+                # Check for section header in various formats
+                section_patterns = [
+                    f"## {section}",
+                    f"### {section}",
+                    f"# {section}",
+                    f"**{section}**",
+                    section.lower()
+                ]
+                found = any(p.lower() in output_stripped.lower() for p in section_patterns)
             if not found:
                 missing_sections.append(section)
-        
+
         if missing_sections:
             details["missing_sections"] = missing_sections
             if len(missing_sections) >= len(expected_sections) * 0.5:
                 indicators.append(f"Missing {len(missing_sections)}/{len(expected_sections)} expected sections")
                 confidence += 0.3
-    
-    # 7. Check for common truncation patterns at end
-    truncation_patterns = _check_truncation_patterns(output_stripped)
-    if truncation_patterns:
-        indicators.extend(truncation_patterns)
-        confidence += 0.25 * len(truncation_patterns)
-        details["truncation_patterns"] = truncation_patterns
-    
+
+    # 7. Check for common truncation patterns at end — skip in code mode
+    # These patterns (unclosed quotes, backticks) are designed for markdown/prose
+    # and false-positive on virtually every source code file.
+    if not code_mode:
+        truncation_patterns = _check_truncation_patterns(output_stripped)
+        if truncation_patterns:
+            indicators.extend(truncation_patterns)
+            confidence += 0.25 * len(truncation_patterns)
+            details["truncation_patterns"] = truncation_patterns
+
     # Cap confidence at 1.0
     confidence = min(confidence, 1.0)
-    
+
     # Determine if truncated based on confidence threshold
-    threshold = 0.3 if strict_mode else 0.5
+    threshold = CONFIDENCE_IS_TRUNCATED_STRICT if strict_mode else CONFIDENCE_IS_TRUNCATED
     is_truncated = confidence >= threshold
-    
+
     return TruncationResult(
         is_truncated=is_truncated,
         confidence=confidence,
         indicators=indicators,
         details=details
     )
+
+
+def _check_code_brace_balance(text: str) -> Optional[str]:
+    """Check for significant brace/bracket imbalance in source code.
+
+    Unlike ``_check_json_truncation``, this uses a threshold to tolerate
+    small imbalances caused by braces inside string literals, template
+    literals, comments, or regex patterns.  Only flags imbalances large
+    enough to strongly suggest real truncation (3+ unmatched).
+    """
+    open_braces = text.count('{')
+    close_braces = text.count('}')
+    open_brackets = text.count('[')
+    close_brackets = text.count(']')
+    open_parens = text.count('(')
+    close_parens = text.count(')')
+
+    issues = []
+    # Threshold of 3 filters out single-brace string literals while still
+    # catching genuinely truncated files (which tend to have many unclosed
+    # scopes).
+    if open_braces - close_braces >= 3:
+        issues.append(f"unclosed braces ({open_braces} open, {close_braces} close)")
+    if open_brackets - close_brackets >= 3:
+        issues.append(f"unclosed brackets ({open_brackets} open, {close_brackets} close)")
+    if open_parens - close_parens >= 3:
+        issues.append(f"unclosed parentheses ({open_parens} open, {close_parens} close)")
+
+    return ", ".join(issues) if issues else None
 
 
 def _check_json_truncation(text: str) -> Optional[str]:
@@ -510,4 +705,94 @@ def get_truncation_warning_message(result: TruncationResult, step_name: str = No
     lines.append("Recommendation: Use chunked processing for large documents")
     
     return "\n".join(lines)
+
+
+def log_truncation_result(
+    result: TruncationResult,
+    source_file: Optional[str] = None,
+    feature_name: Optional[str] = None,
+    step_name: Optional[str] = None,
+    emit_event: bool = True,
+) -> None:
+    """
+    Log a truncation detection result and optionally emit an event.
+
+    Centralizes truncation reporting so callers don't need to handle
+    logging and event emission individually.
+
+    Args:
+        result: TruncationResult from detect_truncation
+        source_file: File that was checked (for log context)
+        feature_name: Feature being processed (for log context)
+        step_name: Pipeline step name (for log context)
+        emit_event: Whether to emit an EventBus event (default True)
+    """
+    if not result.is_truncated:
+        logger.debug(
+            "Truncation check passed",
+            extra={
+                "source_file": source_file,
+                "feature_name": feature_name,
+                "confidence": result.confidence,
+            },
+        )
+        return
+
+    extra = {
+        "source_file": source_file,
+        "feature_name": feature_name,
+        "step_name": step_name,
+        "confidence": result.confidence,
+        "indicators": result.indicators,
+        "output_length": result.details.get("output_length"),
+        "code_mode": result.details.get("code_mode"),
+    }
+
+    if result.confidence >= CONFIDENCE_HIGH:
+        logger.error(
+            "Truncation detected (high confidence): %s — indicators: %s",
+            source_file or "unknown",
+            "; ".join(result.indicators),
+            extra=extra,
+        )
+    else:
+        logger.warning(
+            "Possible truncation (low confidence): %s — indicators: %s",
+            source_file or "unknown",
+            "; ".join(result.indicators),
+            extra=extra,
+        )
+
+    if emit_event:
+        try:
+            from .events.types import Event, EventType, EventPriority
+            from .events.bus import EventBus
+
+            event_type = (
+                EventType.TRUNCATION_DETECTED
+                if result.confidence >= CONFIDENCE_HIGH
+                else EventType.TRUNCATION_WARNING
+            )
+            priority = (
+                EventPriority.HIGH
+                if result.confidence >= CONFIDENCE_HIGH
+                else EventPriority.NORMAL
+            )
+
+            EventBus.emit(Event(
+                type=event_type,
+                source="TruncationDetection",
+                data={
+                    "source_file": source_file,
+                    "feature_name": feature_name,
+                    "step_name": step_name,
+                    "confidence": result.confidence,
+                    "indicators": result.indicators,
+                    "details": result.details,
+                },
+                priority=priority,
+            ))
+        except Exception:
+            # Don't let event emission failures break the caller
+            logger.debug("Failed to emit truncation event", exc_info=True)
 

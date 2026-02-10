@@ -233,6 +233,37 @@ class WorkflowRegistry:
         except ImportError as e:
             logger.debug(f"IterativeDev workflow not available: {e}")
 
+        # Document review workflows (previously built but not registered by default)
+        try:
+            from .builtin.critical_review_workflow import CriticalReviewWorkflow
+            cls.register(CriticalReviewWorkflow())
+            logger.debug("Registered built-in CriticalReview workflow")
+        except ImportError as e:
+            logger.debug(f"CriticalReview workflow not available: {e}")
+
+        try:
+            from .builtin.doc_review_log_workflow import DocReviewLogWorkflow
+            cls.register(DocReviewLogWorkflow())
+            logger.debug("Registered built-in DocReviewLog workflow")
+        except ImportError as e:
+            logger.debug(f"DocReviewLog workflow not available: {e}")
+
+        try:
+            from .builtin.architectural_review_log_workflow import (
+                ArchitecturalReviewLogWorkflow,
+            )
+            cls.register(ArchitecturalReviewLogWorkflow())
+            logger.debug("Registered built-in ArchitecturalReviewLog workflow")
+        except ImportError as e:
+            logger.debug(f"ArchitecturalReviewLog workflow not available: {e}")
+
+        try:
+            from .builtin.plan_ingestion_workflow import PlanIngestionWorkflow
+            cls.register(PlanIngestionWorkflow())
+            logger.debug("Registered built-in PlanIngestion workflow")
+        except ImportError as e:
+            logger.debug(f"PlanIngestion workflow not available: {e}")
+
     @classmethod
     def get_workflow(cls, workflow_id: str) -> Optional[Workflow]:
         """
@@ -354,6 +385,7 @@ class WorkflowRegistry:
         config: Dict[str, Any],
         agents: Optional[List['BaseAgent']] = None,
         on_progress: Optional[ProgressCallback] = None,
+        dry_run: bool = False,
     ) -> WorkflowResult:
         """
         Convenience method to run a workflow by ID.
@@ -363,6 +395,7 @@ class WorkflowRegistry:
             config: Workflow configuration
             agents: Optional pre-resolved agents
             on_progress: Optional progress callback
+            dry_run: If True, simulate execution without API calls (FR-103)
 
         Returns:
             WorkflowResult
@@ -386,7 +419,7 @@ class WorkflowRegistry:
             )
 
         try:
-            return workflow.run(config, agents, on_progress)
+            return workflow.run(config, agents, on_progress, dry_run=dry_run)
         except Exception as e:
             logger.error(
                 f"Workflow {workflow_id} failed: {e}",
@@ -467,7 +500,7 @@ class WorkflowRegistry:
         with cls._lock:
             return [
                 w for w in cls._workflows.values()
-                if capability_lower in [c.lower() for c in w.metadata.capabilities]
+                if any(capability_lower == c.lower() for c in w.metadata.capabilities)
             ]
 
     @classmethod
@@ -488,6 +521,27 @@ class WorkflowRegistry:
             return [
                 w for w in cls._workflows.values()
                 if tag_lower in [t.lower() for t in w.metadata.tags]
+            ]
+
+    @classmethod
+    def search_workflows(cls, query: str) -> List[Workflow]:
+        """
+        Search workflows by name or description text (FR-201).
+
+        Args:
+            query: Substring to search for in workflow name or description
+
+        Returns:
+            List of workflows matching the query
+        """
+        cls.discover()
+        query_lower = query.lower()
+
+        with cls._lock:
+            return [
+                w for w in cls._workflows.values()
+                if query_lower in w.metadata.name.lower()
+                or query_lower in w.metadata.description.lower()
             ]
 
     @classmethod

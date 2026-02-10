@@ -55,6 +55,7 @@ class GeminiAgent(BaseAgent):
         enable_retry: bool = False,
         timeout_config: Optional[TimeoutConfig] = None,
         use_connection_pool: bool = False,
+        safety_settings: Optional[list] = None,
     ):
         """
         Initialize Gemini agent
@@ -74,6 +75,10 @@ class GeminiAgent(BaseAgent):
                 Note: Gemini client uses httpx internally; timeout is applied via httpx_client.
             use_connection_pool: If True, share HTTP clients with other agents using the same
                 config. Reduces connection overhead for multi-agent workloads. Default: False.
+            safety_settings: Optional list of safety setting dicts or SafetySetting objects
+                to pass to Gemini's GenerateContentConfig.  Each entry should have
+                ``category`` (e.g. "HARM_CATEGORY_DANGEROUS_CONTENT") and ``threshold``
+                (e.g. "BLOCK_NONE").  When None, Gemini applies its default filters.
 
         Raises:
             ImportError: If google-genai package is not installed
@@ -176,6 +181,8 @@ class GeminiAgent(BaseAgent):
         else:
             self.retry_config = None
 
+        self.safety_settings = safety_settings
+
     async def _make_api_call(self, prompt: str):
         """
         Make the raw API call to Gemini.
@@ -185,12 +192,15 @@ class GeminiAgent(BaseAgent):
         """
         # google.genai Client API - run in executor for async compatibility
         # Create generation config
-        generation_config = genai_types.GenerateContentConfig(
-            temperature=self.temperature,
-            max_output_tokens=self.max_tokens,
-        )
+        config_kwargs = {
+            "temperature": self.temperature,
+            "max_output_tokens": self.max_tokens,
+        }
+        if self.safety_settings:
+            config_kwargs["safety_settings"] = self.safety_settings
+        generation_config = genai_types.GenerateContentConfig(**config_kwargs)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             lambda: self.client.models.generate_content(
@@ -214,7 +224,8 @@ class GeminiAgent(BaseAgent):
             Tuple of (response_text, response_time_ms, token_usage)
 
         Raises:
-            RuntimeError: If Gemini API call fails
+            GeminiSafetyFilterError: If Gemini's content safety filter blocks the response
+            RuntimeError: If Gemini API call fails for other reasons
             APIError: For API errors
             RetryError: If all retry attempts are exhausted (when retry enabled)
         """
@@ -395,6 +406,59 @@ class GeminiAgent(BaseAgent):
         # Extract response text
         # New google.genai API structure
         if not hasattr(response, 'text') or not response.text:
+            # Distinguish SAFETY from other empty-response causes
+            if finish_reason and finish_reason.upper() == "SAFETY":
+                from ..exceptions import GeminiSafetyFilterError
+
+                # Extract safety ratings for diagnostics
+                safety_ratings = []
+                if hasattr(response, 'candidates') and response.candidates:
+                    raw = getattr(response.candidates[0], 'safety_ratings', None)
+                    if raw:
+                        safety_ratings = [
+                            {
+                                "category": getattr(r, 'category', None),
+                                "probability": getattr(r, 'probability', None),
+                                "blocked": getattr(r, 'blocked', None),
+                            }
+                            for r in raw
+                        ]
+
+                # Estimate prompt tokens for the diagnostic message
+                prompt_tokens_est = max(1, int(len(prompt.split()) / 1.3))
+
+                # Log the prompt that triggered the filter for investigation
+                logger.warning(
+                    "Gemini SAFETY filter triggered — logging prompt diagnostics",
+                    extra={
+                        "agent_name": self.name,
+                        "model": self.model,
+                        "prompt_tokens_est": prompt_tokens_est,
+                        "prompt_chars": len(prompt),
+                        "safety_ratings": safety_ratings,
+                        "operation": "agenerate",
+                    },
+                )
+                # Debug-level: first 2000 chars of the prompt for root-cause analysis
+                logger.debug(
+                    "SAFETY-blocked prompt sample (first 2000 chars): %s",
+                    prompt[:2000],
+                    extra={
+                        "agent_name": self.name,
+                        "model": self.model,
+                        "operation": "agenerate_safety_diagnostics",
+                    },
+                )
+
+                raise GeminiSafetyFilterError(
+                    f"Gemini safety filter blocked response for prompt "
+                    f"(~{prompt_tokens_est} tokens, {len(prompt)} chars). "
+                    f"Safety ratings: {safety_ratings}. "
+                    f"Try reducing context size or adjusting safety_settings.",
+                    prompt_tokens=prompt_tokens_est,
+                    safety_ratings=safety_ratings,
+                )
+
             raise RuntimeError(
                 f"Gemini returned empty response. "
                 f"Finish reason: {finish_reason or 'unknown'}"

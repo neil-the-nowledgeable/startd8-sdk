@@ -11,6 +11,7 @@ from .anthropic import AnthropicProvider
 from .openai import OpenAIProvider, OllamaProvider
 from .mock import MockProvider
 from .gemini import GeminiProvider
+from .mistral import MistralProvider
 
 __all__ = [
     'AgentProvider',
@@ -20,4 +21,5 @@ __all__ = [
     'OllamaProvider',
     'MockProvider',
     'GeminiProvider',
+    'MistralProvider',
 ]

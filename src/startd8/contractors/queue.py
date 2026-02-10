@@ -17,6 +17,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from startd8.utils.file_operations import atomic_write_json
+from ..logging_config import get_logger
+
+logger = get_logger(__name__)
+
 
 class FeatureStatus(Enum):
     """Status of a feature in the queue."""
@@ -120,7 +125,31 @@ class FeatureQueue:
         dependencies: Optional[List[str]] = None,
         target_files: Optional[List[str]] = None,
     ) -> FeatureSpec:
-        """Add a feature to the queue."""
+        """
+        Add a feature to the queue, preserving loaded state.
+
+        If the feature already exists with a non-pending status (e.g. loaded
+        from a persisted state file), its status, timestamps, generated files,
+        and error information are preserved.  Metadata (name, description,
+        dependencies, target_files) is updated in case the caller changed them.
+
+        This allows workflow scripts to declare their full feature queue on
+        every invocation without destroying resume state.
+        """
+        existing = self.features.get(feature_id)
+        if existing and existing.status != FeatureStatus.PENDING:
+            # Preserve progress state; update metadata that may have changed.
+            existing.name = name
+            existing.description = description
+            existing.dependencies = dependencies or []
+            existing.target_files = target_files or []
+            if feature_id not in self.order:
+                self.order.append(feature_id)
+            if self.auto_save:
+                self.save_state()
+            return existing
+
+        # New feature or existing pending feature — create fresh spec.
         spec = FeatureSpec(
             id=feature_id,
             name=name,
@@ -310,15 +339,23 @@ class FeatureQueue:
         return (completed / len(self.features)) * 100
 
     def save_state(self):
-        """Save queue state to file."""
+        """Save queue state to file (atomic write to prevent corruption)."""
         state = {
             "features": {fid: f.to_dict() for fid, f in self.features.items()},
             "order": self.order,
             "saved_at": datetime.now().isoformat(),
         }
 
-        with open(self.state_file, "w") as f:
-            json.dump(state, f, indent=2)
+        try:
+            atomic_write_json(Path(self.state_file), state, indent=2)
+        except Exception:
+            logger.warning(
+                "Atomic write failed for %s, falling back to direct write",
+                self.state_file,
+                exc_info=True,
+            )
+            with open(self.state_file, "w") as f:
+                json.dump(state, f, indent=2)
 
     def load_state(self) -> bool:
         """Load queue state from file."""

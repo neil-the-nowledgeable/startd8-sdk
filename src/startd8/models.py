@@ -53,9 +53,22 @@ class TokenUsage(BaseModel):
     
     @model_validator(mode='after')
     def validate_total(self) -> 'TokenUsage':
-        """Validate total matches input + output"""
-        if self.total != self.input + self.output:
-            raise ValueError(f"Total tokens ({self.total}) must equal input ({self.input}) + output ({self.output})")
+        """
+        Ensure `total` is consistent with `input + output`.
+
+        Some providers report additional token categories (e.g., cached, internal reasoning,
+        system overhead) in their "total" usage fields, which may not equal
+        `input + output` as tracked by this SDK.
+
+        To keep workflows resilient and cost estimation stable (cost is derived from
+        `input`/`output`), we normalize `total` to `input + output` when a mismatch
+        is detected instead of failing validation.
+        """
+        expected_total = self.input + self.output
+        if self.total != expected_total:
+            # Normalize in-place to avoid provider-specific "total" semantics
+            # and to avoid returning a new model instance (unsupported under __init__ validation).
+            object.__setattr__(self, "total", expected_total)
         return self
     
     @property

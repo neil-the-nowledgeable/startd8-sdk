@@ -46,6 +46,13 @@ validation = ["jsonschema>=4.0.0"]
 otel = [
     "opentelemetry-api>=1.20.0",
     "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.20.0",
+]
+openllmetry = [
+    "opentelemetry-api>=1.20.0",
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-instrumentation-anthropic>=0.50.0",
+    "opentelemetry-instrumentation-openai>=0.50.0",
 ]
 server = [
     "starlette>=0.27.0",
@@ -72,6 +79,7 @@ openai = "startd8.providers.openai:OpenAIProvider"
 ollama = "startd8.providers.openai:OllamaProvider"
 mock = "startd8.providers.mock:MockProvider"
 gemini = "startd8.providers.gemini:GeminiProvider"
+mistral = "startd8.providers.mistral:MistralProvider"
 
 [project.entry-points."startd8.workflows"]
 pipeline = "startd8.workflows.builtin.pipeline_workflow:PipelineWorkflow"
@@ -83,6 +91,7 @@ lead-contractor = "startd8.workflows.builtin.lead_contractor_workflow:LeadContra
 lead-contractor-contextcore = "startd8.workflows.builtin.lead_contractor_contextcore_workflow:LeadContractorContextCoreWorkflow"
 policy-analysis = "startd8.workflows.builtin.policy_analysis_workflow:PolicyAnalysisWorkflow"
 plain-language = "startd8.workflows.builtin.plain_language_workflow:PlainLanguageWorkflow"
+plan-ingestion = "startd8.workflows.builtin.plan_ingestion_workflow:PlanIngestionWorkflow"
 
 # Prime Contractor entry points for plugin discovery
 [project.entry-points."startd8.contractors.instrumentors"]

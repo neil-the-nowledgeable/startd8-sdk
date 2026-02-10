@@ -7,15 +7,67 @@ for multi-step agent workflows with full metrics tracking.
 
 import time
 import asyncio
+import random
 import uuid
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Union
 from datetime import datetime, timezone
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .models import TokenUsage, AgentResponse, ResponseMetadata
 from .agents import BaseAgent
 from .events import EventBus, EventType, Event
 from .exceptions import AgentError, APIError, ConfigurationError
+
+# Graceful OTel import — no-op when not installed (FR-403)
+try:
+    from opentelemetry import trace as _otel_trace
+    _tracer = _otel_trace.get_tracer("startd8.orchestration")
+except ImportError:
+    _otel_trace = None  # type: ignore[assignment]
+    _tracer = None
+
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "spans": [
+        {
+            "name_pattern": "pipeline.{name}",
+            "kind": "INTERNAL",
+            "attributes": [
+                "pipeline.name",
+                "pipeline.id",
+                "step.count",
+                "pipeline.total_tokens",
+                "pipeline.total_cost",
+                "pipeline.total_time_ms",
+            ],
+            "events": [],
+        },
+        {
+            "name_pattern": "pipeline.{name}.step.{step_name}",
+            "kind": "INTERNAL",
+            "attributes": [
+                "step.name",
+                "step.index",
+                "agent.name",
+                "agent.model",
+                "tokens",
+                "cost",
+                "response_time_ms",
+                "retry_count",
+            ],
+            "events": [],
+        },
+    ],
+}
+
+try:
+    from contextlib import nullcontext as _nullcontext
+except ImportError:
+    from contextlib import contextmanager as _cm
+
+    @_cm
+    def _nullcontext(enter_result=None):
+        yield enter_result
 
 
 @dataclass
@@ -25,10 +77,82 @@ class PipelineStep:
     agent: BaseAgent
     transform: Optional[Callable[[str], str]] = None
     metadata: Dict[str, Any] = None
-    
+
     def __post_init__(self):
         if self.metadata is None:
             self.metadata = {}
+
+
+@dataclass
+class ConditionalStep:
+    """A pipeline step that branches based on a predicate (FR-311)."""
+    name: str
+    predicate: Callable[[str], bool]   # Receives previous step output
+    if_step: PipelineStep              # Run if predicate returns True
+    else_step: Optional[PipelineStep] = None  # Run if predicate returns False
+    metadata: Dict[str, Any] = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
+
+
+@dataclass
+class ParallelStep:
+    """A pipeline step that runs multiple steps concurrently (FR-320)."""
+    name: str
+    steps: List[PipelineStep] = field(default_factory=list)
+    aggregator: Optional[Callable[[List[str]], str]] = None  # Default: join
+    failure_policy: str = "collect_all"  # "fail_fast" | "collect_all"
+    metadata: Dict[str, Any] = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
+        if self.aggregator is None:
+            self.aggregator = lambda outputs: "\n---\n".join(outputs)
+
+
+@dataclass
+class WorkflowStep:
+    """A pipeline step that delegates to a sub-workflow (FR-330)."""
+    name: str
+    workflow: Any  # WorkflowBase instance (forward ref to avoid circular import)
+    config_mapping: Callable[[str], Dict[str, Any]]  # Transform output to config
+    metadata: Dict[str, Any] = None
+
+    def __post_init__(self):
+        if self.metadata is None:
+            self.metadata = {}
+
+
+# Type alias for all step types (FR-310)
+StepType = Union[PipelineStep, ConditionalStep, ParallelStep, WorkflowStep]
+
+
+def is_retryable(exc: Exception, retryable_codes: List[int]) -> bool:
+    """Classify exception as retryable or fatal (FR-301).
+
+    Retryable: ConnectionError, TimeoutError, HTTP 429/5xx.
+    Fatal: ValidationError, ConfigurationError, HTTP 400/401/403.
+    """
+    if isinstance(exc, (ConnectionError, TimeoutError, asyncio.TimeoutError)):
+        return True
+    # Check httpx status errors
+    try:
+        import httpx
+        if isinstance(exc, httpx.HTTPStatusError):
+            return exc.response.status_code in retryable_codes
+    except ImportError:
+        pass
+    # Check for status_code attribute on other exception types
+    status_code = getattr(exc, 'status_code', None)
+    if status_code is not None and isinstance(status_code, int):
+        return status_code in retryable_codes
+    # ConfigurationError and validation errors are never retryable
+    if isinstance(exc, ConfigurationError):
+        return False
+    return False
 
 
 @dataclass
@@ -84,24 +208,24 @@ class Pipeline:
         """
         self.name = name
         self.framework = framework
-        self.steps: List[PipelineStep] = []
-        
+        self.steps: List[StepType] = []
+
     def add_step(
         self,
         name: str,
         agent: BaseAgent,
         transform: Optional[Callable[[str], str]] = None,
-        metadata: Optional[Dict[str, Any]] = None  # Can contain arbitrary fields, filtered when passed to agent
+        metadata: Optional[Dict[str, Any]] = None
     ) -> 'Pipeline':
         """
-        Add a step to the pipeline
-        
+        Add a sequential step to the pipeline.
+
         Args:
             name: Step name (e.g., "planner", "implementer")
             agent: Agent to use for this step
             transform: Optional function to transform input before sending to agent
             metadata: Optional step metadata
-            
+
         Returns:
             Self for chaining
         """
@@ -113,21 +237,105 @@ class Pipeline:
         )
         self.steps.append(step)
         return self
-    
-    async def arun(self, initial_input: str, store: bool = True) -> PipelineResult:
+
+    def add_conditional(
+        self,
+        name: str,
+        predicate: Callable[[str], bool],
+        if_agent: BaseAgent,
+        else_agent: Optional[BaseAgent] = None,
+        if_transform: Optional[Callable[[str], str]] = None,
+        else_transform: Optional[Callable[[str], str]] = None,
+    ) -> 'Pipeline':
+        """Add a conditional branching step (FR-312).
+
+        Args:
+            name: Step name
+            predicate: Function receiving previous output, returns True/False
+            if_agent: Agent for the True branch
+            else_agent: Optional agent for the False branch (skip if None)
+            if_transform: Optional transform for True branch input
+            else_transform: Optional transform for False branch input
+
+        Returns:
+            Self for chaining
         """
-        Run the pipeline asynchronously
-        
+        if_step = PipelineStep(name=f"{name}_if", agent=if_agent, transform=if_transform)
+        else_step = (
+            PipelineStep(name=f"{name}_else", agent=else_agent, transform=else_transform)
+            if else_agent else None
+        )
+        self.steps.append(ConditionalStep(
+            name=name, predicate=predicate, if_step=if_step, else_step=else_step
+        ))
+        return self
+
+    def add_parallel(
+        self,
+        name: str,
+        steps: List[PipelineStep],
+        aggregator: Optional[Callable[[List[str]], str]] = None,
+        failure_policy: str = "collect_all",
+    ) -> 'Pipeline':
+        """Add a parallel execution step (FR-321).
+
+        Args:
+            name: Step name
+            steps: List of PipelineSteps to run concurrently
+            aggregator: Function to combine outputs (default: join with separator)
+            failure_policy: "fail_fast" or "collect_all"
+
+        Returns:
+            Self for chaining
+        """
+        self.steps.append(ParallelStep(
+            name=name, steps=steps, aggregator=aggregator,
+            failure_policy=failure_policy,
+        ))
+        return self
+
+    def add_workflow(
+        self,
+        name: str,
+        workflow: Any,
+        config_mapping: Callable[[str], Dict[str, Any]],
+    ) -> 'Pipeline':
+        """Add a sub-workflow step (FR-331).
+
+        Args:
+            name: Step name
+            workflow: WorkflowBase instance to delegate to
+            config_mapping: Transform previous output to sub-workflow config dict
+
+        Returns:
+            Self for chaining
+        """
+        self.steps.append(WorkflowStep(
+            name=name, workflow=workflow, config_mapping=config_mapping
+        ))
+        return self
+    
+    async def arun(
+        self,
+        initial_input: str,
+        store: bool = True,
+        retry_policy: Optional[Any] = None,
+    ) -> PipelineResult:
+        """
+        Run the pipeline asynchronously with isinstance dispatch (FR-310)
+        and optional retry support (FR-300).
+
         Args:
             initial_input: Initial input to first agent
             store: Whether to store results in framework (if available)
-            
+            retry_policy: Optional RetryPolicy for transient error recovery
+
         Returns:
             PipelineResult with all step details
         """
         pipeline_id = f"pipeline-{uuid.uuid4().hex[:12]}"
         start_time = time.time()
-        
+
         # Emit pipeline start event
         EventBus.emit(Event(
             type=EventType.PIPELINE_START,
@@ -135,16 +343,17 @@ class Pipeline:
             data={
                 "pipeline_id": pipeline_id,
                 "pipeline_name": self.name,
-                "steps": [s.name for s in self.steps]
+                "steps": [getattr(s, 'name', str(s)) for s in self.steps]
             },
             correlation_id=pipeline_id
         ))
-        
+
         current_input = initial_input
         step_results = []
         total_tokens = 0
         total_cost = 0.0
-        
+        total_retries = 0
+
         # Create a prompt if framework available
         if self.framework and store:
             prompt = self.framework.create_prompt(
@@ -154,218 +363,476 @@ class Pipeline:
                 metadata={
                     "pipeline_id": pipeline_id,
                     "pipeline_name": self.name,
-                    "steps": [s.name for s in self.steps]
+                    "steps": [getattr(s, 'name', str(s)) for s in self.steps]
                 }
             )
             prompt_id = prompt.id
         else:
             prompt_id = None
 
-        # Always run through BaseAgent.(a)create_response() so budget/cost enforcement
-        # and response_id linkage are consistent, even when we aren't storing prompts.
         tracking_prompt_id = prompt_id or f"prompt-{uuid.uuid4().hex[:12]}"
-        
-        try:
-            # Execute each step
-            for i, step in enumerate(self.steps):
-                # Emit step start event
+        completed_steps: List[int] = []  # FR-302: checkpoint tracking
+
+        # OTel parent span wrapping entire pipeline (child step spans nest under this)
+        _span_ctx = (
+            _tracer.start_as_current_span(
+                f"pipeline.{self.name}",
+                attributes={
+                    "pipeline.name": self.name,
+                    "pipeline.id": pipeline_id,
+                    "step.count": len(self.steps),
+                },
+            )
+            if _tracer
+            else _nullcontext()
+        )
+
+        with _span_ctx as pipeline_span:
+            try:
+                # Execute each step — dispatch by type (FR-310)
+                for i, step in enumerate(self.steps):
+                    if isinstance(step, PipelineStep):
+                        output, step_data, tokens, cost, retries = await self._execute_sequential_step(
+                            step, i, current_input, pipeline_id, tracking_prompt_id,
+                            prompt_id, store, retry_policy,
+                        )
+                    elif isinstance(step, ConditionalStep):
+                        output, step_data, tokens, cost, retries = await self._execute_conditional_step(
+                            step, i, current_input, pipeline_id, tracking_prompt_id,
+                            prompt_id, store, retry_policy,
+                        )
+                    elif isinstance(step, ParallelStep):
+                        output, step_data, tokens, cost, retries = await self._execute_parallel_step(
+                            step, i, current_input, pipeline_id, tracking_prompt_id,
+                            prompt_id, store, retry_policy,
+                        )
+                    elif isinstance(step, WorkflowStep):
+                        output, step_data, tokens, cost, retries = await self._execute_workflow_step(
+                            step, i, current_input, pipeline_id,
+                        )
+                    else:
+                        raise TypeError(f"Unknown step type: {type(step)}")
+
+                    current_input = output
+                    step_results.extend(step_data if isinstance(step_data, list) else [step_data])
+                    total_tokens += tokens
+                    total_cost += cost
+                    total_retries += retries
+                    completed_steps.append(i)
+
+                end_time = time.time()
+                total_time_ms = int((end_time - start_time) * 1000)
+
+                if pipeline_span:
+                    pipeline_span.set_attribute("pipeline.total_tokens", total_tokens)
+                    pipeline_span.set_attribute("pipeline.total_cost", total_cost)
+                    pipeline_span.set_attribute("pipeline.total_time_ms", total_time_ms)
+
+                result = PipelineResult(
+                    steps=step_results,
+                    final_output=current_input,
+                    total_time_ms=total_time_ms,
+                    total_tokens=total_tokens,
+                    total_cost=total_cost,
+                    pipeline_id=pipeline_id,
+                    timestamp=datetime.now(timezone.utc)
+                )
+
                 EventBus.emit(Event(
-                    type=EventType.PIPELINE_STEP_START,
+                    type=EventType.PIPELINE_COMPLETE,
                     source="Pipeline",
                     data={
                         "pipeline_id": pipeline_id,
-                        "step_number": i + 1,
-                        "step_name": step.name,
-                        "agent": step.agent.name
+                        "total_time_ms": total_time_ms,
+                        "total_tokens": total_tokens,
+                        "total_cost": total_cost,
+                        "total_retries": total_retries,
                     },
                     correlation_id=pipeline_id
                 ))
-                
-                # Transform input if needed
-                step_input = step.transform(current_input) if step.transform else current_input
-                
-                # Run agent asynchronously (with cost/budget enforcement if configured)
-                # Build step metadata compatible with ResponseMetadata TypedDict
-                valid_metadata_fields = set(ResponseMetadata.__annotations__.keys())
-                step_metadata: ResponseMetadata = {
-                    "pipeline_id": pipeline_id,
-                    "step_number": i + 1,
-                    "agent_name": step.agent.name,
-                    "model": step.agent.model,
-                    **{k: v for k, v in step.metadata.items() if k in valid_metadata_fields}
-                }
-                agent_response = await step.agent.acreate_response(
-                    prompt_id=tracking_prompt_id,
-                    prompt=step_input,
-                    metadata=step_metadata,
-                    tags=[self.name, "pipeline", step.name],
-                    pipeline_id=pipeline_id
+
+                return result
+
+            except (AgentError, APIError, ConfigurationError) as e:
+                if pipeline_span and _otel_trace:
+                    pipeline_span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                    pipeline_span.record_exception(e)
+                from .logging_config import get_logger
+                logger = get_logger(__name__)
+                logger.error(
+                    f"Pipeline '{self.name}' failed: {e}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": pipeline_id,
+                        "pipeline_name": self.name,
+                        "error_type": type(e).__name__,
+                        "pipeline_error": str(e)
+                    }
                 )
+                raise
+            except Exception as e:
+                if pipeline_span and _otel_trace:
+                    pipeline_span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                    pipeline_span.record_exception(e)
+                from .logging_config import get_logger
+                logger = get_logger(__name__)
+                logger.error(
+                    f"Unexpected error in pipeline '{self.name}': {e}",
+                    exc_info=True,
+                    extra={
+                        "pipeline_id": pipeline_id,
+                        "pipeline_name": self.name,
+                        "error_type": type(e).__name__,
+                        "steps": [getattr(s, 'name', str(s)) for s in self.steps]
+                    }
+                )
+                EventBus.emit(Event(
+                    type=EventType.PIPELINE_ERROR,
+                    source="Pipeline",
+                    data={
+                        "pipeline_id": pipeline_id,
+                        "error": str(e),
+                        "error_type": type(e).__name__
+                    },
+                    correlation_id=pipeline_id
+                ))
+                raise AgentError(
+                    f"Unexpected error in pipeline '{self.name}': {e}",
+                    agent_name=getattr(e, 'agent_name', None),
+                    original_error=e
+                ) from e
+
+    # =========================================================================
+    # Private step execution methods (FR-310 extract-method refactoring)
+    # =========================================================================
+
+    async def _execute_sequential_step(
+        self, step: PipelineStep, step_index: int, current_input: str,
+        pipeline_id: str, tracking_prompt_id: str,
+        prompt_id: Optional[str], store: bool,
+        retry_policy: Optional[Any],
+    ) -> tuple:
+        """Execute a single sequential PipelineStep with optional retry (FR-300).
+
+        Returns:
+            (output_text, step_result_dict, tokens, cost, retry_count)
+        """
+        EventBus.emit(Event(
+            type=EventType.PIPELINE_STEP_START,
+            source="Pipeline",
+            data={
+                "pipeline_id": pipeline_id,
+                "step_number": step_index + 1,
+                "step_name": step.name,
+                "agent": step.agent.name
+            },
+            correlation_id=pipeline_id
+        ))
+
+        step_input = step.transform(current_input) if step.transform else current_input
+
+        valid_metadata_fields = set(ResponseMetadata.__annotations__.keys())
+        step_metadata: ResponseMetadata = {
+            "pipeline_id": pipeline_id,
+            "step_number": step_index + 1,
+            "agent_name": step.agent.name,
+            "model": step.agent.model,
+            **{k: v for k, v in step.metadata.items() if k in valid_metadata_fields}
+        }
+
+        # OTel child span using start_as_current_span for proper nesting (FR-401)
+        _step_span_ctx = (
+            _tracer.start_as_current_span(
+                f"pipeline.{self.name}.step.{step.name}",
+                attributes={
+                    "step.name": step.name,
+                    "step.index": step_index,
+                    "agent.name": step.agent.name,
+                    "agent.model": step.agent.model,
+                },
+            )
+            if _tracer
+            else _nullcontext()
+        )
+
+        with _step_span_ctx as step_span:
+            try:
+                # Retry loop (FR-300)
+                max_attempts = 1 + (retry_policy.max_retries if retry_policy else 0)
+                retry_count = 0
+                last_error = None
+
+                for attempt in range(max_attempts):
+                    try:
+                        agent_response = await step.agent.acreate_response(
+                            prompt_id=tracking_prompt_id,
+                            prompt=step_input,
+                            metadata=step_metadata,
+                            tags=[self.name, "pipeline", step.name],
+                            pipeline_id=pipeline_id
+                        )
+                        break
+                    except Exception as e:
+                        if not retry_policy or not is_retryable(
+                            e, retry_policy.retryable_status_codes
+                        ):
+                            raise
+                        last_error = e
+                        retry_count = attempt + 1
+                        delay = min(
+                            retry_policy.backoff_base * (2 ** attempt),
+                            retry_policy.backoff_max
+                        )
+                        if retry_policy.jitter:
+                            delay += random.uniform(0, delay * 0.1)
+
+                        # Emit retry event (FR-410)
+                        EventBus.emit(Event(
+                            type=EventType.PIPELINE_STEP_RETRY,
+                            source="Pipeline",
+                            data={
+                                "step_name": step.name,
+                                "attempt_number": retry_count,
+                                "error": str(e),
+                                "delay_seconds": delay,
+                            },
+                            correlation_id=pipeline_id
+                        ))
+                        await asyncio.sleep(delay)
+                else:
+                    raise last_error  # type: ignore[misc]
+
                 response_text = agent_response.response
                 response_time_ms = agent_response.response_time_ms
                 token_usage = agent_response.token_usage
-                
-                # Track metrics
-                total_tokens += token_usage.total if token_usage else 0
-                total_cost += token_usage.cost_estimate if token_usage else 0
-                
-                # Store step result
+
+                tokens = token_usage.total if token_usage else 0
+                cost = token_usage.cost_estimate if token_usage else 0
+
+                # Set span metrics (FR-401)
+                if step_span:
+                    step_span.set_attribute("tokens", tokens)
+                    step_span.set_attribute("cost", cost)
+                    step_span.set_attribute("response_time_ms", response_time_ms)
+                    step_span.set_attribute("retry_count", retry_count)
+
                 step_result = {
-                    "step_number": i + 1,
+                    "step_number": step_index + 1,
                     "step_name": step.name,
                     "agent": step.agent.name,
                     "model": step.agent.model,
                     "input": step_input[:200] + "..." if len(step_input) > 200 else step_input,
                     "output": response_text,
                     "response_time_ms": response_time_ms,
-                    "tokens": token_usage.total if token_usage else 0,
-                    "cost": token_usage.cost_estimate if token_usage else 0,
-                    "metadata": step.metadata
+                    "tokens": tokens,
+                    "cost": cost,
+                    "metadata": {**step.metadata, "retry_count": retry_count},
                 }
-                step_results.append(step_result)
-                
-                # Emit step complete event
-                EventBus.emit(Event(
-                    type=EventType.PIPELINE_STEP_COMPLETE,
-                    source="Pipeline",
-                    data={
-                        "pipeline_id": pipeline_id,
-                        "step_number": i + 1,
-                        "step_name": step.name,
-                        "response_time_ms": response_time_ms,
-                        "tokens": token_usage.total if token_usage else 0
-                    },
-                    correlation_id=pipeline_id
-                ))
-                
-                # Store in framework if available
-                if self.framework and store and prompt_id:
-                    self.framework.record_response(
-                        prompt_id=prompt_id,
-                        agent_name=f"{self.name}:{step.name}",
-                        model=step.agent.model,
-                        response=response_text,
-                        response_time_ms=response_time_ms,
-                        token_usage=token_usage,
-                        metadata={
-                            "pipeline_id": pipeline_id,
-                            "step_number": i + 1,
-                            "step_name": step.name,
-                            **step.metadata
-                        },
-                        response_id=agent_response.id,
-                        timestamp=agent_response.timestamp,
-                    )
-                
-                # Output becomes input for next step
-                current_input = response_text
-            
-            end_time = time.time()
-            total_time_ms = int((end_time - start_time) * 1000)
-            
-            result = PipelineResult(
-                steps=step_results,
-                final_output=current_input,
-                total_time_ms=total_time_ms,
-                total_tokens=total_tokens,
-                total_cost=total_cost,
-                pipeline_id=pipeline_id,
-                timestamp=datetime.now(timezone.utc)
-            )
-            
-            # Emit pipeline complete event
-            EventBus.emit(Event(
-                type=EventType.PIPELINE_COMPLETE,
-                source="Pipeline",
-                data={
+            except Exception as e:
+                if step_span and _otel_trace:
+                    step_span.set_status(_otel_trace.StatusCode.ERROR, str(e))
+                    step_span.record_exception(e)
+                raise
+
+        EventBus.emit(Event(
+            type=EventType.PIPELINE_STEP_COMPLETE,
+            source="Pipeline",
+            data={
+                "pipeline_id": pipeline_id,
+                "step_number": step_index + 1,
+                "step_name": step.name,
+                "response_time_ms": response_time_ms,
+                "tokens": tokens,
+            },
+            correlation_id=pipeline_id
+        ))
+
+        if self.framework and store and prompt_id:
+            self.framework.record_response(
+                prompt_id=prompt_id,
+                agent_name=f"{self.name}:{step.name}",
+                model=step.agent.model,
+                response=response_text,
+                response_time_ms=response_time_ms,
+                token_usage=token_usage,
+                metadata={
                     "pipeline_id": pipeline_id,
-                    "total_time_ms": total_time_ms,
-                    "total_tokens": total_tokens,
-                    "total_cost": total_cost
+                    "step_number": step_index + 1,
+                    "step_name": step.name,
+                    **step.metadata
                 },
-                correlation_id=pipeline_id
-            ))
-            
-            return result
-            
-        except (AgentError, APIError, ConfigurationError) as e:
-            # Known pipeline errors - log with context and re-raise
-            from .logging_config import get_logger
-            logger = get_logger(__name__)
-            
-            logger.error(
-                f"Pipeline '{self.name}' failed: {e}",
-                exc_info=True,
-                extra={
-                    "pipeline_id": pipeline_id,
-                    "pipeline_name": self.name,
-                    "error_type": type(e).__name__,
-                    "pipeline_error": str(e)
-                }
+                response_id=agent_response.id,
+                timestamp=agent_response.timestamp,
             )
-            # Re-raise known exceptions to allow caller to handle
-            raise
-        except Exception as e:
-            # Unexpected errors during pipeline execution
-            from .logging_config import get_logger
-            logger = get_logger(__name__)
-            
-            logger.error(
-                f"Unexpected error in pipeline '{self.name}': {e}",
-                exc_info=True,
-                extra={
-                    "pipeline_id": pipeline_id,
-                    "pipeline_name": self.name,
-                    "error_type": type(e).__name__,
-                    "steps": [s.name for s in self.steps]
-                }
+
+        return response_text, step_result, tokens, cost, retry_count
+
+    async def _execute_conditional_step(
+        self, step: ConditionalStep, step_index: int, current_input: str,
+        pipeline_id: str, tracking_prompt_id: str,
+        prompt_id: Optional[str], store: bool,
+        retry_policy: Optional[Any],
+    ) -> tuple:
+        """Execute a ConditionalStep by evaluating predicate and running matching branch."""
+        branch_taken = step.predicate(current_input)
+        target = step.if_step if branch_taken else step.else_step
+
+        if target is None:
+            # No else_step and predicate was False — pass through
+            return current_input, {
+                "step_number": step_index + 1,
+                "step_name": step.name,
+                "branch": "skipped",
+                "metadata": {**step.metadata, "branch_taken": branch_taken},
+            }, 0, 0.0, 0
+
+        output, step_data, tokens, cost, retries = await self._execute_sequential_step(
+            target, step_index, current_input, pipeline_id,
+            tracking_prompt_id, prompt_id, store, retry_policy,
+        )
+        # Enrich metadata with branch info
+        if isinstance(step_data, dict):
+            step_data["metadata"] = {
+                **step_data.get("metadata", {}),
+                "branch_taken": branch_taken,
+                "conditional_name": step.name,
+            }
+        return output, step_data, tokens, cost, retries
+
+    async def _execute_parallel_step(
+        self, step: ParallelStep, step_index: int, current_input: str,
+        pipeline_id: str, tracking_prompt_id: str,
+        prompt_id: Optional[str], store: bool,
+        retry_policy: Optional[Any],
+    ) -> tuple:
+        """Execute a ParallelStep by running sub-steps concurrently (FR-322)."""
+        async def run_sub(sub_step: PipelineStep) -> tuple:
+            return await self._execute_sequential_step(
+                sub_step, step_index, current_input, pipeline_id,
+                tracking_prompt_id, prompt_id, store, retry_policy,
             )
-            
-            # Emit pipeline error event
-            EventBus.emit(Event(
-                type=EventType.PIPELINE_ERROR,
-                source="Pipeline",
-                data={
-                    "pipeline_id": pipeline_id,
-                    "error": str(e),
-                    "error_type": type(e).__name__
-                },
-                correlation_id=pipeline_id
-            ))
-            
-            # Wrap unexpected errors in AgentError for consistency
-            raise AgentError(
-                f"Unexpected error in pipeline '{self.name}': {e}",
-                agent_name=getattr(e, 'agent_name', None),
-                original_error=e
-            ) from e
+
+        total_tokens = 0
+        total_cost = 0.0
+        total_retries = 0
+        all_step_data = []
+
+        if step.failure_policy == "fail_fast":
+            results = await asyncio.gather(
+                *[run_sub(s) for s in step.steps]
+            )
+        else:  # collect_all
+            results = await asyncio.gather(
+                *[run_sub(s) for s in step.steps],
+                return_exceptions=True
+            )
+
+        outputs = []
+        for r in results:
+            if isinstance(r, BaseException) and not isinstance(r, Exception):
+                raise r
+            if isinstance(r, Exception):
+                outputs.append(f"[ERROR: {r}]")
+            else:
+                output_text, step_data, tokens, cost, retries = r
+                outputs.append(output_text)
+                all_step_data.append(step_data)
+                total_tokens += tokens
+                total_cost += cost
+                total_retries += retries
+
+        aggregated = step.aggregator(outputs)
+
+        # Wrap parallel results in a summary entry
+        summary = {
+            "step_number": step_index + 1,
+            "step_name": step.name,
+            "type": "parallel",
+            "sub_steps": len(step.steps),
+            "output": aggregated[:200] + "..." if len(aggregated) > 200 else aggregated,
+            "metadata": {**step.metadata, "failure_policy": step.failure_policy},
+        }
+
+        return aggregated, [summary] + all_step_data, total_tokens, total_cost, total_retries
+
+    async def _execute_workflow_step(
+        self, step: WorkflowStep, step_index: int, current_input: str,
+        pipeline_id: str,
+    ) -> tuple:
+        """Execute a WorkflowStep by delegating to a sub-workflow (FR-332)."""
+        config = step.config_mapping(current_input)
+
+        # Validate sub-workflow
+        validation = step.workflow.validate_config(config)
+        if not validation.valid:
+            raise ConfigurationError(
+                f"Sub-workflow '{step.name}' validation failed: {validation.errors}"
+            )
+
+        # Execute sub-workflow (prefer async)
+        if hasattr(step.workflow, 'arun'):
+            result = await step.workflow.arun(config, agents=config.get('agents'))
+        else:
+            result = step.workflow.run(config, agents=config.get('agents'))
+
+        # Aggregate metrics (FR-332)
+        tokens = 0
+        cost = 0.0
+        if result.metrics:
+            tokens = result.metrics.input_tokens + result.metrics.output_tokens
+            cost = result.metrics.total_cost
+
+        # Flatten sub-workflow steps with namespace prefix
+        sub_step_data = []
+        for sub_step in result.steps:
+            sub_step_data.append({
+                "step_number": step_index + 1,
+                "step_name": f"{step.name}:{sub_step.step_name}",
+                "agent": sub_step.agent_name or "",
+                "output": sub_step.output[:200] + "..." if len(sub_step.output) > 200 else sub_step.output,
+                "tokens": sub_step.input_tokens + sub_step.output_tokens,
+                "cost": sub_step.cost,
+                "metadata": {**step.metadata, "sub_workflow": True},
+            })
+
+        output = str(result.output) if result.output else ""
+        return output, sub_step_data or [{
+            "step_number": step_index + 1,
+            "step_name": step.name,
+            "type": "workflow",
+            "output": output[:200] + "..." if len(output) > 200 else output,
+            "metadata": step.metadata,
+        }], tokens, cost, 0
     
-    def run(self, initial_input: str, store: bool = True) -> PipelineResult:
+    def run(
+        self,
+        initial_input: str,
+        store: bool = True,
+        retry_policy: Optional[Any] = None,
+    ) -> PipelineResult:
         """
         Run the pipeline (synchronous wrapper)
-        
+
         Args:
             initial_input: Initial input to first agent
             store: Whether to store results in framework (if available)
-            
+            retry_policy: Optional RetryPolicy for transient error recovery
+
         Returns:
             PipelineResult with all step details
         """
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop, safe to use asyncio.run
-            return asyncio.run(self.arun(initial_input, store))
+            return asyncio.run(self.arun(initial_input, store, retry_policy))
 
-        # Running inside an existing event loop (e.g. Jupyter/FastAPI).
-        # Bridge by running the coroutine in a new thread + event loop.
         import concurrent.futures
         import contextvars
 
         ctx = contextvars.copy_context()
 
         def _runner() -> PipelineResult:
-            return asyncio.run(self.arun(initial_input, store))
+            return asyncio.run(self.arun(initial_input, store, retry_policy))
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
             future = pool.submit(ctx.run, _runner)
@@ -395,6 +862,8 @@ class Pipeline:
         # Filter out exceptions and log them
         successful_results = []
         for i, result in enumerate(results):
+            if isinstance(result, BaseException) and not isinstance(result, Exception):
+                raise result
             if isinstance(result, Exception):
                 EventBus.emit(Event(
                     type=EventType.AGENT_CALL_ERROR,
