@@ -61,6 +61,28 @@ enhanced_documents/
 test_pipeline_failure.py
 verify_pipeline_error_logging.py
 
+# Prime contractor state/output files
+.prime_contractor_state.json
+.prime_contractor_tests_state.json
+.prime_contractor_auto_decompose_state.json
+
+# Generated output directories
+generated/
+out/
+
+# Backup files from AST merge
+*.backup
+*.pre_integration
+
+# Run reports and scratch docs
+KNOWN_ISSUES.md
+OTEL_INTEGRATION_GUIDE.md
+PHASE5_RUN_REPORT.md
+PLAN-auto-decompose.md
+docs/GEMINI_SAFETY_FILTER_SEQUENTIAL_WORKFLOW_FIX.md
+docs/artisan-review-config.json
+docs/.startd8/
+
 # ---------------------------------------------------------------------------
 # startd8 project data (Decision 28B)
 # - Keep prompts versioned in git
@@ -74,6 +96,11 @@ verify_pipeline_error_logging.py
 # ---------------------------------------------------------------------------
 # WIP/Experimental Scripts (gitignored until ready to commit)
 # ---------------------------------------------------------------------------
+scripts/run_auto_decompose_pipeline.py
+scripts/run_auto_decompose_tests.py
+scripts/run_iterative_plan_ingestion.py
+scripts/run_triage_test.py
+scripts/test_artisan_context_seed.py
 scripts/apply_contextcore_integration.py
 scripts/apply_semantic_convention_fixes.py
 scripts/example_tasks.yaml
