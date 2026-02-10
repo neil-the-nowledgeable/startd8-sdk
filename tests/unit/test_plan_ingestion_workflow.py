@@ -140,6 +140,7 @@ def _make_mock_agent(name="test-agent"):
     agent = MagicMock()
     agent.name = name
     agent.model = "mock-model"
+    agent.max_tokens = 4096
     return agent
 
 

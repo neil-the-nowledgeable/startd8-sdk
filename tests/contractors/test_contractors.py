@@ -491,6 +491,14 @@ class TestAutoDecompose:
         # Verify that execution stopped after b.py failure (only 2 calls to the mock)
         assert mock_execute.call_count == 2, 'Should stop execution after first failure (a.py succeeds, b.py fails, c.py skipped)'
 
+try:
+    from auto_decompose.workflow import run as workflow_run
+    from auto_decompose.models import DecompositionPlan, FileOperation
+    _AUTO_DECOMPOSE_AVAILABLE = True
+except ImportError:
+    _AUTO_DECOMPOSE_AVAILABLE = False
+
+@pytest.mark.skipif(not _AUTO_DECOMPOSE_AVAILABLE, reason="auto_decompose library not installed")
 class TestAutoDecomposeIntegration:
     """
     Integration tests for the auto-decompose workflow.
@@ -688,31 +696,3 @@ def callback_tracker():
         tracker.calls.append((args, kwargs))
     tracker.callback = track_callback
     return tracker
-'\nTests for the Prime Contractor framework.\n\nThese tests verify the contractors module works correctly both\nstandalone and with ContextCore integration.\n'
-"\nTestAutoDecompose: Test suite for automatic feature decomposition logic.\n\nThis module tests the AutoDecomposer's ability to intelligently split multi-file\nfeatures into single-file sub-features, with proper ID assignment, callback\nhandling, and failure propagation. All tests use dry_run=True to avoid actual\nexecution and LoggingInstrumentor for event verification.\n"
-try:
-    from auto_decompose.workflow import run as workflow_run
-    from auto_decompose.models import DecompositionPlan, FileOperation
-    MOCK_MODE = False
-except ImportError:
-    import warnings
-    warnings.warn('auto_decompose library not found. Tests will fail. Install the library with: pip install auto-decompose')
-
-    class FileOperation:
-
-        def __init__(self, target_file, type, content=None):
-            self.target_file = target_file
-            self.type = type
-            self.content = content
-
-    class DecompositionPlan:
-
-        def __init__(self, success, dry_run, operations, errors=None):
-            self.success = success
-            self.dry_run = dry_run
-            self.operations = operations
-            self.errors = errors if errors is not None else []
-
-    def workflow_run(source_path, dry_run=False, **kwargs):
-        raise RuntimeError('auto_decompose library not installed. These tests require the actual library to run.')
-    MOCK_MODE = True
