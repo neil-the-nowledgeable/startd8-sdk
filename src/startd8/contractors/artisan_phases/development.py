@@ -738,6 +738,312 @@ class LLMChunkExecutor(ChunkExecutor):
             return False, f"LLM execution error: {str(e)}"
 
 
+class LeadContractorChunkExecutor(ChunkExecutor):
+    """Chunk executor that wraps :class:`LeadContractorCodeGenerator`.
+
+    Bridges the synchronous ``generator.generate()`` call into the async
+    ``ChunkExecutor`` interface using ``run_in_executor``.  Stores the
+    full :class:`GenerationResult` in ``chunk.metadata["_generation_result"]``
+    so that downstream phases (TEST, REVIEW, FINALIZE) can access it after
+    :class:`DevelopmentPhase` completes.
+
+    Supports error-informed retry: when the orchestrator retries a failed
+    chunk, prior error information is injected into the generation context
+    so the LeadContractor can self-correct.
+
+    Example::
+
+        executor = LeadContractorChunkExecutor(
+            lead_agent="anthropic:claude-sonnet-4-5-20250927",
+            drafter_agent="gemini:gemini-2.5-flash-lite",
+            output_dir=Path("my-project"),
+        )
+        phase = DevelopmentPhase(executor=executor)
+        result = await phase.run(plan)
+    """
+
+    #: Maximum bytes to read from an existing file before truncating.
+    _MAX_EXISTING_FILE_BYTES: int = 60_000
+
+    def __init__(
+        self,
+        lead_agent: str = "anthropic:claude-sonnet-4-5-20250927",
+        drafter_agent: str = "gemini:gemini-2.5-flash-lite",
+        output_dir: Optional[Path] = None,
+        max_iterations: int = 3,
+        pass_threshold: int = 80,
+        max_tokens: Optional[int] = None,
+        fail_on_truncation: bool = True,
+        check_truncation: bool = True,
+        strict_truncation: bool = False,
+    ):
+        """
+        Initialize the LeadContractor chunk executor.
+
+        Args:
+            lead_agent: Agent spec for architect/reviewer.
+            drafter_agent: Agent spec for drafter.
+            output_dir: Project root / output directory for generated files.
+            max_iterations: Maximum draft → review iterations per task.
+            pass_threshold: Minimum review score (0-100) to pass.
+            max_tokens: Override max_tokens for agent creation.
+            fail_on_truncation: Fail on detected truncation.
+            check_truncation: Enable truncation detection.
+            strict_truncation: Use strict detection threshold.
+        """
+        self._lead_agent = lead_agent
+        self._drafter_agent = drafter_agent
+        self._output_dir = output_dir or Path("generated")
+        self._max_iterations = max_iterations
+        self._pass_threshold = pass_threshold
+        self._max_tokens = max_tokens
+        self._fail_on_truncation = fail_on_truncation
+        self._check_truncation = check_truncation
+        self._strict_truncation = strict_truncation
+        self._generator: Optional[Any] = None
+        self.logger = logging.getLogger("startd8.development.lead_executor")
+
+    # ------------------------------------------------------------------
+    # Generator resolution (lazy, cached)
+    # ------------------------------------------------------------------
+
+    def _resolve_generator(self) -> Any:
+        """Resolve or create the LeadContractorCodeGenerator (cached)."""
+        if self._generator is not None:
+            return self._generator
+
+        from startd8.contractors.generators.lead_contractor import (
+            LeadContractorCodeGenerator,
+        )
+
+        self.logger.info(
+            "Creating LeadContractorCodeGenerator (lead=%s, drafter=%s)",
+            self._lead_agent,
+            self._drafter_agent,
+        )
+        self._generator = LeadContractorCodeGenerator(
+            lead_agent=self._lead_agent,
+            drafter_agent=self._drafter_agent,
+            max_iterations=self._max_iterations,
+            pass_threshold=self._pass_threshold,
+            output_dir=self._output_dir,
+            max_tokens=self._max_tokens,
+            fail_on_truncation=self._fail_on_truncation,
+            check_truncation=self._check_truncation,
+            strict_truncation=self._strict_truncation,
+        )
+        return self._generator
+
+    # ------------------------------------------------------------------
+    # Context building
+    # ------------------------------------------------------------------
+
+    def _build_generation_context(
+        self,
+        chunk: DevelopmentChunk,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Assemble the context dict for ``generator.generate()``.
+
+        Includes existing file contents, dependency outputs, prompt
+        constraints, and retry feedback.
+
+        Args:
+            chunk: The chunk to build context for.
+            context: Execution context from the orchestrator.
+
+        Returns:
+            Context dict suitable for ``CodeGenerator.generate()``.
+        """
+        meta = chunk.metadata
+        gen_ctx: Dict[str, Any] = {
+            "task_id": chunk.chunk_id,
+            "feature_id": meta.get("feature_id", ""),
+            "domain": meta.get("domain", "unknown"),
+            "target_files": chunk.file_targets,
+            "estimated_loc": meta.get("estimated_loc", 0),
+            "prompt_constraints": meta.get("prompt_constraints", []),
+            "environment_checks": meta.get("environment_checks", []),
+            "project_root": str(self._output_dir),
+        }
+
+        # Read existing file contents for modify-in-place tasks
+        for target in chunk.file_targets:
+            target_path = self._output_dir / target
+            if target_path.exists():
+                try:
+                    content = target_path.read_text(encoding="utf-8")
+                    if len(content) > self._MAX_EXISTING_FILE_BYTES:
+                        content = (
+                            content[: self._MAX_EXISTING_FILE_BYTES]
+                            + f"\n\n# ... truncated ({len(content)} bytes total)"
+                        )
+                    gen_ctx.setdefault("existing_files", {})[target] = content
+                except (UnicodeDecodeError, OSError) as exc:
+                    self.logger.warning(
+                        "Could not read existing file %s: %s", target_path, exc,
+                    )
+
+        # Inject retry feedback from orchestrator context
+        last_error = context.get("last_error")
+        test_output = context.get("test_output")
+        if last_error:
+            gen_ctx["retry_feedback"] = {
+                "last_error": last_error,
+                "test_output": test_output,
+            }
+
+        # Inject domain constraints from DomainChecklist (if present)
+        domain_constraints = context.get("domain_constraints")
+        if domain_constraints:
+            gen_ctx["domain_constraints"] = domain_constraints
+
+        return gen_ctx
+
+    def _build_task_description(
+        self,
+        chunk: DevelopmentChunk,
+        context: Dict[str, Any],
+    ) -> str:
+        """Build the task description string for ``generator.generate()``.
+
+        Enriches the chunk description with prompt constraints and retry
+        feedback for error-informed retries.
+
+        Args:
+            chunk: The chunk being executed.
+            context: Execution context.
+
+        Returns:
+            Enriched task description string.
+        """
+        parts: List[str] = [chunk.description]
+
+        # Append prompt constraints from enrichment
+        constraints = chunk.metadata.get("prompt_constraints", [])
+        if constraints:
+            parts.append("\n## Constraints")
+            for c in constraints:
+                parts.append(f"- {c}")
+
+        # Append retry feedback
+        last_error = context.get("last_error")
+        test_output = context.get("test_output")
+        if last_error or test_output:
+            parts.append("\n## Retry Feedback")
+            parts.append(
+                "The previous attempt failed. Please fix the issues "
+                "and regenerate."
+            )
+            if last_error:
+                parts.append(f"\nPrevious error:\n{last_error}")
+            if test_output:
+                parts.append(f"\nTest output:\n{test_output}")
+
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # Core execute
+    # ------------------------------------------------------------------
+
+    async def execute(
+        self, chunk: DevelopmentChunk, context: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """Execute the chunk via LeadContractorCodeGenerator.
+
+        Wraps the synchronous ``generator.generate()`` in a thread pool
+        executor so it doesn't block the async event loop.
+
+        Workflow:
+        1. Build enriched task description and generation context.
+        2. Resolve/create the generator (lazy, cached).
+        3. Run ``generator.generate()`` via ``run_in_executor``.
+        4. Store ``GenerationResult`` in ``chunk.metadata["_generation_result"]``.
+        5. Accumulate cost/token metrics in context.
+        6. Return ``(success, code_or_error)``.
+
+        Args:
+            chunk: The chunk to execute.
+            context: Execution context (mutated to add cost metrics).
+
+        Returns:
+            ``(success, output_or_error)`` tuple.
+        """
+        # Dry-run short-circuit
+        if context.get("dry_run", False):
+            self.logger.debug("[DRY-RUN] LeadContractor chunk %s", chunk.chunk_id)
+            return True, "Dry-run: LeadContractor execution skipped"
+
+        try:
+            generator = self._resolve_generator()
+            task_desc = self._build_task_description(chunk, context)
+            gen_ctx = self._build_generation_context(chunk, context)
+
+            self.logger.info(
+                "Generating code for chunk %s via LeadContractor (%d file targets)",
+                chunk.chunk_id,
+                len(chunk.file_targets),
+            )
+
+            # Run synchronous generator.generate() in thread pool
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                generator.generate,
+                task_desc,
+                gen_ctx,
+                chunk.file_targets,
+            )
+
+            # Store full GenerationResult in chunk metadata for downstream phases
+            chunk.metadata["_generation_result"] = result
+
+            # Accumulate cost metrics in context for DevelopmentPhase
+            context["_llm_cost_usd"] = (
+                context.get("_llm_cost_usd", 0.0) + result.cost_usd
+            )
+            context["_llm_input_tokens"] = (
+                context.get("_llm_input_tokens", 0) + result.input_tokens
+            )
+            context["_llm_output_tokens"] = (
+                context.get("_llm_output_tokens", 0) + result.output_tokens
+            )
+
+            # Store per-chunk cost in metadata for detailed reporting
+            chunk.metadata["llm_cost_usd"] = result.cost_usd
+            chunk.metadata["llm_input_tokens"] = result.input_tokens
+            chunk.metadata["llm_output_tokens"] = result.output_tokens
+            chunk.metadata["llm_model"] = result.model
+            chunk.metadata["iterations"] = result.iterations
+
+            if result.success:
+                self.logger.info(
+                    "Chunk %s: generation succeeded (%d files, $%.4f, %d iterations)",
+                    chunk.chunk_id,
+                    len(result.generated_files),
+                    result.cost_usd,
+                    result.iterations,
+                )
+                # Return a summary as the "code" output
+                file_list = ", ".join(str(f) for f in result.generated_files)
+                return True, f"Generated files: {file_list}"
+            else:
+                self.logger.warning(
+                    "Chunk %s: generation failed: %s",
+                    chunk.chunk_id,
+                    result.error,
+                )
+                return False, result.error or "Generation failed"
+
+        except Exception as e:
+            self.logger.exception(
+                "LeadContractor execution failed for chunk %s: %s",
+                chunk.chunk_id,
+                e,
+            )
+            return False, f"LeadContractor execution error: {str(e)}"
+
+
 class DefaultTestRunner(TestRunner):
     """Default test runner that executes shell commands via subprocess.
 

@@ -45,13 +45,14 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
 import subprocess
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -457,19 +458,22 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
 
 
 class ImplementPhaseHandler(AbstractPhaseHandler):
-    """IMPLEMENT phase: Generate code per task in dependency order.
+    """IMPLEMENT phase: Generate code per task via DevelopmentPhase engine.
 
     In dry-run mode: reports what would be implemented per task (unchanged).
-    In real mode: invokes :class:`LeadContractorCodeGenerator` for each task,
-    writing generated files to ``project_root / target_file``.
+    In real mode: delegates to :class:`DevelopmentPhase` with a
+    :class:`LeadContractorChunkExecutor`, gaining parallelism, state
+    persistence, crash recovery, and retry with error-informed feedback.
 
-    Wires to :class:`LeadContractorCodeGenerator` for actual code generation:
-        * ``_resolve_generator`` lazily creates the generator (or uses an injected one).
-        * ``_build_task_context`` assembles the prompt context dict for a task,
-          including existing file contents and dependency outputs.
-        * ``_generate_for_task`` calls ``generator.generate()`` and returns the report.
-        * ``execute`` orchestrates the full loop with env-check, dep-check, and
-          cost aggregation.
+    Bridges the sync ``handler.execute()`` call from
+    :class:`ArtisanContractorWorkflow` to the async ``DevelopmentPhase.run()``
+    via ``asyncio.run()``.
+
+    Data flow:
+        1. ``SeedTask`` list → ``DevelopmentChunk`` list (``_tasks_to_chunks``)
+        2. Build ``DevelopmentPlan`` → ``DevelopmentPhase.run()``
+        3. ``DevelopmentResult`` → output dict + ``context["generation_results"]``
+           (``_map_development_result``)
     """
 
     def __init__(
@@ -478,184 +482,11 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         code_generator: Optional[CodeGenerator] = None,
     ) -> None:
         self.config = handler_config or HandlerConfig()
-        self._generator = code_generator  # None → auto-created via _resolve_generator()
+        self._code_generator = code_generator
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    def _resolve_generator(self, project_root: Path) -> CodeGenerator:
-        """Resolve the code generator, creating one if not injected.
-
-        Returns the injected generator if set, otherwise creates a
-        :class:`LeadContractorCodeGenerator` from ``self.config``.
-
-        A new generator is created per call when ``project_root`` differs
-        from the cached instance's ``output_dir``, since
-        ``LeadContractorCodeGenerator`` binds ``output_dir`` at init time.
-
-        Args:
-            project_root: The project root, used as the generator's output
-                directory so files land in the correct location.
-
-        Returns:
-            A ``CodeGenerator`` instance ready to use.
-        """
-        if self._generator is not None:
-            # Invalidate cache if project_root changed since last creation
-            cached_output_dir = getattr(self._generator, "output_dir", None)
-            if cached_output_dir is not None and Path(cached_output_dir) != project_root:
-                logger.info(
-                    "IMPLEMENT: project_root changed (%s → %s), recreating generator",
-                    cached_output_dir, project_root,
-                )
-                self._generator = None
-            else:
-                return self._generator
-
-        from startd8.contractors.generators.lead_contractor import LeadContractorCodeGenerator
-
-        self._generator = LeadContractorCodeGenerator(
-            lead_agent=self.config.lead_agent,
-            drafter_agent=self.config.drafter_agent,
-            max_iterations=self.config.max_iterations,
-            pass_threshold=self.config.pass_threshold,
-            output_dir=project_root,
-            max_tokens=self.config.max_tokens,
-            fail_on_truncation=self.config.fail_on_truncation,
-            check_truncation=self.config.check_truncation,
-            strict_truncation=self.config.strict_truncation,
-        )
-        return self._generator
-
-    #: Maximum bytes to read from an existing file before truncating.
-    #: Keeps the LLM context window manageable for large files.
-    _MAX_EXISTING_FILE_BYTES: int = 60_000
-
-    def _build_task_context(
-        self,
-        task: SeedTask,
-        project_root: Path,
-        prior_results: Dict[str, GenerationResult],
-    ) -> Dict[str, Any]:
-        """Build the context dict for a single task's code generation.
-
-        Includes:
-        - Task description and constraints
-        - Target file paths and existing content (if any)
-        - Outputs of dependency tasks (for cross-task awareness)
-        - Enrichment metadata (domain, environment checks)
-
-        Args:
-            task: The seed task to build context for.
-            project_root: Root of the target project.
-            prior_results: Map of task_id → GenerationResult for completed deps.
-
-        Returns:
-            Context dict suitable for ``CodeGenerator.generate()``.
-        """
-        ctx: Dict[str, Any] = {
-            "task_id": task.task_id,
-            "feature_id": task.feature_id,
-            "domain": task.domain,
-            "target_files": task.target_files,
-            "estimated_loc": task.estimated_loc,
-            "prompt_constraints": task.prompt_constraints,
-            "environment_checks": task.environment_checks,
-            "project_root": str(project_root),
-        }
-
-        # Read existing file contents for modify-in-place tasks
-        for target in task.target_files:
-            target_path = project_root / target
-            if target_path.exists():
-                try:
-                    content = target_path.read_text(encoding="utf-8")
-                    if len(content) > self._MAX_EXISTING_FILE_BYTES:
-                        content = (
-                            content[: self._MAX_EXISTING_FILE_BYTES]
-                            + f"\n\n# ... truncated ({len(content)} bytes total)"
-                        )
-                    ctx.setdefault("existing_files", {})[target] = content
-                except (UnicodeDecodeError, OSError) as exc:
-                    logger.warning(
-                        "IMPLEMENT: could not read existing file %s: %s",
-                        target_path, exc,
-                    )
-
-        # Inject real dependency outputs for cross-task context
-        dep_outputs: Dict[str, Any] = {}
-        for dep_id in task.depends_on:
-            dep_result = prior_results.get(dep_id)
-            if dep_result and dep_result.success:
-                dep_files: Dict[str, str] = {}
-                for gen_file in dep_result.generated_files:
-                    try:
-                        if gen_file.exists():
-                            content = gen_file.read_text(encoding="utf-8")
-                            if len(content) > self._MAX_EXISTING_FILE_BYTES:
-                                content = (
-                                    content[: self._MAX_EXISTING_FILE_BYTES]
-                                    + f"\n\n# ... truncated ({len(content)} bytes total)"
-                                )
-                            dep_files[str(gen_file)] = content
-                    except (UnicodeDecodeError, OSError) as exc:
-                        logger.warning(
-                            "IMPLEMENT: could not read dep output %s: %s",
-                            gen_file, exc,
-                        )
-                dep_outputs[dep_id] = dep_files
-        if dep_outputs:
-            ctx["dependency_outputs"] = dep_outputs
-
-        return ctx
-
-    def _generate_for_task(
-        self,
-        task: SeedTask,
-        context: Dict[str, Any],
-        project_root: Path,
-        generator: CodeGenerator,
-    ) -> Tuple[Dict[str, Any], GenerationResult]:
-        """Run code generation for a single task and return report + result.
-
-        Args:
-            task: The seed task.
-            context: Task context from ``_build_task_context``.
-            project_root: Root directory for output.
-            generator: The code generator to invoke.
-
-        Returns:
-            Tuple of (task_report dict, GenerationResult).
-        """
-        task_report: Dict[str, Any] = {
-            "task_id": task.task_id,
-            "feature_id": task.feature_id,
-            "title": task.title,
-            "domain": task.domain,
-            "target_files": task.target_files,
-            "estimated_loc": task.estimated_loc,
-            "depends_on": task.depends_on,
-            "prompt_constraints_count": len(task.prompt_constraints),
-            "validators": task.post_generation_validators,
-        }
-
-        result = generator.generate(
-            task=task.description,
-            context=context,
-            target_files=task.target_files,
-        )
-        task_report["status"] = "generated" if result.success else "generation_failed"
-        task_report["cost"] = result.cost_usd
-        task_report["tokens"] = {
-            "input": result.input_tokens,
-            "output": result.output_tokens,
-        }
-        task_report["iterations"] = result.iterations
-        if result.error:
-            task_report["error"] = result.error
-
-        return task_report, result
 
     def _check_environment(self, task: SeedTask) -> List[Dict[str, Any]]:
         """Check environment readiness for a task.
@@ -666,6 +497,173 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             c for c in task.environment_checks
             if c.get("status") in ("fail", "warn")
         ]
+
+    @staticmethod
+    def _tasks_to_chunks(
+        tasks: List[SeedTask],
+        max_retries: int = 2,
+    ) -> Tuple[List[Any], List[Dict[str, Any]]]:
+        """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
+
+        Args:
+            tasks: Parsed seed tasks from the PLAN phase.
+            max_retries: Max retry count for each chunk.
+
+        Returns:
+            Tuple of (chunks, skipped_reports). ``skipped_reports`` contains
+            task report dicts for env-blocked tasks.
+        """
+        from startd8.contractors.artisan_phases.development import DevelopmentChunk
+
+        chunks: List[DevelopmentChunk] = []
+        skipped: List[Dict[str, Any]] = []
+        included_ids: set[str] = set()
+
+        for task in tasks:
+            # Pre-filter tasks with blocking environment failures
+            env_fails = [
+                c for c in task.environment_checks
+                if c.get("status") == "fail"
+            ]
+            if env_fails:
+                skipped.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "status": "env_blocked",
+                    "environment_issues": [
+                        c for c in task.environment_checks
+                        if c.get("status") in ("fail", "warn")
+                    ],
+                })
+                continue
+
+            included_ids.add(task.task_id)
+            chunks.append(DevelopmentChunk(
+                chunk_id=task.task_id,
+                description=task.description,
+                # Only include deps that are in the included set (not env-blocked)
+                dependencies=[d for d in task.depends_on if d in included_ids],
+                file_targets=task.target_files,
+                implementation_prompt=task.description,
+                test_commands=[],  # Post-gen validation via DomainChecklist
+                max_retries=max_retries,
+                metadata={
+                    "feature_id": task.feature_id,
+                    "domain": task.domain,
+                    "estimated_loc": task.estimated_loc,
+                    "prompt_constraints": task.prompt_constraints,
+                    "environment_checks": task.environment_checks,
+                    "post_generation_validators": task.post_generation_validators,
+                    "title": task.title,
+                },
+            ))
+
+        # Second pass: fix dependencies for chunks whose deps were added
+        # after them (topological order guarantees deps come first, but
+        # env-blocked deps need to be excluded from dependency lists)
+        for chunk in chunks:
+            chunk.dependencies = [d for d in chunk.dependencies if d in included_ids]
+
+        return chunks, skipped
+
+    def _map_development_result(
+        self,
+        dev_result: Any,  # DevelopmentResult
+        chunks: List[Any],  # List[DevelopmentChunk]
+        tasks: List[SeedTask],
+        skipped_reports: List[Dict[str, Any]],
+    ) -> Tuple[Dict[str, Any], Dict[str, GenerationResult], float]:
+        """Map DevelopmentResult back to the output format downstream expects.
+
+        Reconstructs ``generation_results`` (Dict[str, GenerationResult])
+        from chunk metadata where ``LeadContractorChunkExecutor`` stored them.
+
+        Args:
+            dev_result: The DevelopmentResult from DevelopmentPhase.run().
+            chunks: The DevelopmentChunk list (with metadata populated).
+            tasks: Original SeedTask list for domain grouping.
+            skipped_reports: Pre-filtered env-blocked task reports.
+
+        Returns:
+            Tuple of (output_dict, generation_results, total_cost).
+        """
+        from startd8.contractors.artisan_phases.development import ChunkStatus
+
+        chunk_map = {c.chunk_id: c for c in chunks}
+        generation_results: Dict[str, GenerationResult] = {}
+        task_reports: List[Dict[str, Any]] = list(skipped_reports)
+        total_cost = 0.0
+
+        for chunk_id, state in dev_result.chunk_states.items():
+            chunk = chunk_map.get(chunk_id)
+            if chunk is None:
+                continue
+
+            meta = chunk.metadata
+            gen_result = meta.get("_generation_result")
+
+            task_report: Dict[str, Any] = {
+                "task_id": chunk_id,
+                "feature_id": meta.get("feature_id", ""),
+                "title": meta.get("title", ""),
+                "domain": meta.get("domain", "unknown"),
+                "target_files": chunk.file_targets,
+                "estimated_loc": meta.get("estimated_loc", 0),
+                "depends_on": chunk.dependencies,
+                "prompt_constraints_count": len(meta.get("prompt_constraints", [])),
+                "validators": meta.get("post_generation_validators", []),
+            }
+
+            if state.status == ChunkStatus.PASSED and gen_result is not None:
+                task_report["status"] = "generated"
+                task_report["cost"] = gen_result.cost_usd
+                task_report["tokens"] = {
+                    "input": gen_result.input_tokens,
+                    "output": gen_result.output_tokens,
+                }
+                task_report["iterations"] = gen_result.iterations
+                generation_results[chunk_id] = gen_result
+                total_cost += gen_result.cost_usd
+            elif state.status == ChunkStatus.FAILED:
+                task_report["status"] = "generation_failed"
+                task_report["error"] = state.last_error or "Unknown failure"
+                if gen_result is not None:
+                    task_report["cost"] = gen_result.cost_usd
+                    task_report["tokens"] = {
+                        "input": gen_result.input_tokens,
+                        "output": gen_result.output_tokens,
+                    }
+                    task_report["iterations"] = gen_result.iterations
+                    generation_results[chunk_id] = gen_result
+                    total_cost += gen_result.cost_usd
+            elif state.status == ChunkStatus.SKIPPED:
+                task_report["status"] = "dep_blocked"
+                task_report["error"] = state.last_error or "Dependency not satisfied"
+            else:
+                task_report["status"] = "unknown"
+
+            task_reports.append(task_report)
+
+        # Domain breakdown
+        domain_tasks: Dict[str, List[str]] = defaultdict(list)
+        for task in tasks:
+            domain_tasks[task.domain].append(task.task_id)
+
+        output: Dict[str, Any] = {
+            "task_reports": task_reports,
+            "tasks_processed": len(task_reports),
+            "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
+            "total_estimated_loc": sum(t.estimated_loc for t in tasks),
+            "total_cost": total_cost,
+            "generation_results": {
+                tid: {"success": r.success, "error": r.error, "cost": r.cost_usd}
+                for tid, r in generation_results.items()
+            },
+            "development_result_summary": dev_result.summary,
+            "execution_order": dev_result.execution_order,
+        }
+
+        return output, generation_results, total_cost
 
     # ------------------------------------------------------------------
     # Public execute
@@ -683,15 +681,11 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
 
         logger.info("IMPLEMENT phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
-        task_reports: list[dict[str, Any]] = []
-        total_cost = 0.0
-        prior_results: Dict[str, GenerationResult] = {}
-
-        for task in tasks:
-            env_checks = self._check_environment(task)
-
-            if dry_run:
-                # --- Dry-run path (unchanged from original) ---
+        # --- Dry-run path (unchanged) ---
+        if dry_run:
+            task_reports: list[dict[str, Any]] = []
+            for task in tasks:
+                env_checks = self._check_environment(task)
                 task_report: Dict[str, Any] = {
                     "task_id": task.task_id,
                     "feature_id": task.feature_id,
@@ -707,78 +701,128 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 if env_checks:
                     task_report["environment_issues"] = env_checks
                 task_reports.append(task_report)
-                continue
 
-            # --- Real-mode path ---
+            domain_tasks: dict[str, list[str]] = defaultdict(list)
+            for task in tasks:
+                domain_tasks[task.domain].append(task.task_id)
 
-            # Skip tasks with blocking environment failures
-            if any(c.get("status") == "fail" for c in env_checks):
-                logger.warning(
-                    "IMPLEMENT: skipping task %s due to environment failures",
-                    task.task_id,
-                )
-                task_reports.append({
-                    "task_id": task.task_id,
-                    "title": task.title,
-                    "status": "env_blocked",
-                    "environment_issues": env_checks,
-                })
-                continue
+            output = {
+                "task_reports": task_reports,
+                "tasks_processed": len(task_reports),
+                "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
+                "total_estimated_loc": sum(t.estimated_loc for t in tasks),
+                "total_cost": 0.0,
+                "generation_results": {},
+            }
+            context["implementation"] = output
+            context["generation_results"] = {}
+            duration = time.monotonic() - start
+            logger.info(
+                "IMPLEMENT phase complete (dry-run): %d tasks (%.2fs)",
+                len(task_reports), duration,
+            )
+            return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
-            # Skip tasks whose dependencies failed
-            failed_deps = [
-                dep_id for dep_id in task.depends_on
-                if dep_id in prior_results and not prior_results[dep_id].success
-            ]
-            if failed_deps:
-                logger.warning(
-                    "IMPLEMENT: skipping task %s — deps failed: %s",
-                    task.task_id, failed_deps,
-                )
-                task_reports.append({
-                    "task_id": task.task_id,
-                    "title": task.title,
-                    "status": "dep_blocked",
-                    "failed_dependencies": failed_deps,
-                })
-                continue
+        # --- Real-mode path: delegate to DevelopmentPhase ---
+        from startd8.contractors.artisan_phases.development import (
+            DevelopmentPhase,
+            DevelopmentPlan,
+            DefaultTestRunner,
+            JsonFileStateStore,
+            LeadContractorChunkExecutor,
+        )
 
-            # Build context and generate
-            task_ctx = self._build_task_context(task, project_root, prior_results)
+        # Convert SeedTasks → DevelopmentChunks (with env pre-filter)
+        chunks, skipped_reports = self._tasks_to_chunks(tasks, max_retries=2)
 
-            generator = self._resolve_generator(project_root)
-            report, result = self._generate_for_task(
-                task, task_ctx, project_root, generator,
+        if not chunks:
+            logger.warning("IMPLEMENT: no eligible tasks after env pre-filter")
+            output = {
+                "task_reports": skipped_reports,
+                "tasks_processed": len(skipped_reports),
+                "domain_breakdown": {},
+                "total_estimated_loc": 0,
+                "total_cost": 0.0,
+                "generation_results": {},
+            }
+            context["implementation"] = output
+            context["generation_results"] = {}
+            duration = time.monotonic() - start
+            return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
+
+        # Build executor — use injected code_generator if provided
+        if self._code_generator is not None:
+            # Wrap the injected generator in a LeadContractorChunkExecutor-compatible
+            # way by setting it directly on the executor instance
+            executor = LeadContractorChunkExecutor(
+                lead_agent=self.config.lead_agent,
+                drafter_agent=self.config.drafter_agent,
+                output_dir=project_root,
+                max_iterations=self.config.max_iterations,
+                pass_threshold=self.config.pass_threshold,
+                max_tokens=self.config.max_tokens,
+                fail_on_truncation=self.config.fail_on_truncation,
+                check_truncation=self.config.check_truncation,
+                strict_truncation=self.config.strict_truncation,
+            )
+            executor._generator = self._code_generator
+        else:
+            executor = LeadContractorChunkExecutor(
+                lead_agent=self.config.lead_agent,
+                drafter_agent=self.config.drafter_agent,
+                output_dir=project_root,
+                max_iterations=self.config.max_iterations,
+                pass_threshold=self.config.pass_threshold,
+                max_tokens=self.config.max_tokens,
+                fail_on_truncation=self.config.fail_on_truncation,
+                check_truncation=self.config.check_truncation,
+                strict_truncation=self.config.strict_truncation,
             )
 
-            prior_results[task.task_id] = result
-            total_cost += result.cost_usd
-            task_reports.append(report)
-
-        # Group by domain for summary
-        domain_tasks: dict[str, list[str]] = defaultdict(list)
-        for task in tasks:
-            domain_tasks[task.domain].append(task.task_id)
-
-        output = {
-            "task_reports": task_reports,
-            "tasks_processed": len(task_reports),
-            "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
-            "total_estimated_loc": sum(t.estimated_loc for t in tasks),
-            "total_cost": total_cost,
-            "generation_results": {
-                tid: {"success": r.success, "error": r.error, "cost": r.cost_usd}
-                for tid, r in prior_results.items()
+        # Build plan
+        plan = DevelopmentPlan(
+            plan_id=f"artisan-implement-{int(time.time())}",
+            chunks=chunks,
+            config={
+                "dry_run": False,
+                "state_dir": str(project_root / ".startd8_state"),
             },
-        }
+        )
+
+        # Build phase with test runner (no shell test commands — tests are
+        # handled by DomainChecklist and the TEST phase handler)
+        state_store = JsonFileStateStore(
+            directory=str(project_root / ".startd8_state"),
+        )
+        dev_phase = DevelopmentPhase(
+            executor=executor,
+            test_runner=DefaultTestRunner(),
+            state_store=state_store,
+            max_parallel=4,
+        )
+
+        # Bridge sync → async
+        logger.info(
+            "IMPLEMENT: delegating %d chunks to DevelopmentPhase (plan=%s)",
+            len(chunks), plan.plan_id,
+        )
+        dev_result = asyncio.run(dev_phase.run(plan))
+
+        # Map results back to downstream contract
+        output, generation_results, total_cost = self._map_development_result(
+            dev_result, chunks, tasks, skipped_reports,
+        )
 
         context["implementation"] = output
-        context["generation_results"] = prior_results  # for TEST phase
+        context["generation_results"] = generation_results
         duration = time.monotonic() - start
 
         logger.info(
-            "IMPLEMENT phase complete: %d tasks processed, $%.4f cost (%.2fs)",
-            len(task_reports), total_cost, duration,
+            "IMPLEMENT phase complete: %d tasks, %d passed, $%.4f cost (%.2fs)",
+            len(tasks),
+            sum(1 for r in generation_results.values() if r.success),
+            total_cost,
+            duration,
         )
 
         return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
