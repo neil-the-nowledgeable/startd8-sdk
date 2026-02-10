@@ -172,6 +172,7 @@ from .otel import (
     configure_tracing,
     configure_metrics,
     configure_otel,
+    shutdown_otel,
     add_project_context_to_span,
 )
 
@@ -328,6 +329,7 @@ __all__ = [
     "configure_tracing",
     "configure_metrics",
     "configure_otel",
+    "shutdown_otel",
     "add_project_context_to_span",
 ]
 

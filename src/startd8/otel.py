@@ -19,10 +19,11 @@ Standard OTel Semantic Conventions:
     - deployment.environment
 """
 
+import atexit
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 # Conditional OTel imports
 try:
@@ -207,19 +208,20 @@ def configure_tracing(
     )
     
     provider = TracerProvider(resource=resource)
-    
+
     exporter = OTLPSpanExporter(
         endpoint=config.otlp_endpoint,
         headers=config.otlp_headers or None,
     )
-    
+
     processor = BatchSpanProcessor(
         exporter,
         max_export_batch_size=config.trace_batch_size,
     )
     provider.add_span_processor(processor)
-    
+
     trace.set_tracer_provider(provider)
+    _providers.append(provider)
     return trace.get_tracer(config.service_name)
 
 
@@ -257,7 +259,8 @@ def configure_metrics(
     
     provider = MeterProvider(resource=resource, metric_readers=[reader])
     metrics.set_meter_provider(provider)
-    
+    _providers.append(provider)
+
     return metrics.get_meter(config.service_name)
 
 
@@ -308,7 +311,37 @@ def configure_otel(
     except ImportError:
         pass
 
+    # Register atexit handler once so sys.exit() always flushes
+    global _atexit_registered
+    if not _atexit_registered and _providers:
+        atexit.register(shutdown_otel)
+        _atexit_registered = True
+
     return result
+
+
+def shutdown_otel(timeout_millis: int = 5000) -> None:
+    """
+    Flush and shutdown all OTel providers (traces, metrics, logs).
+
+    Called automatically via ``atexit`` when :func:`configure_otel` has
+    created providers, so ``sys.exit()`` no longer silently drops
+    buffered telemetry.  Can also be called explicitly before exit for
+    belt-and-suspenders certainty.
+
+    Args:
+        timeout_millis: Max time to wait for each provider to flush.
+    """
+    for provider in _providers:
+        try:
+            provider.force_flush(timeout_millis=timeout_millis)
+        except Exception:
+            pass
+        try:
+            provider.shutdown()
+        except Exception:
+            pass
+    _providers.clear()
 
 
 def configure_otel_with_openllmetry(
@@ -355,6 +388,10 @@ def configure_otel_with_openllmetry(
 # Module-level guard to prevent double-init
 _configured: bool = False
 
+# Track providers so we can flush/shutdown on exit
+_providers: List[Any] = []
+_atexit_registered: bool = False
+
 
 def configure_logging(config: OTelConfig) -> None:
     """
@@ -394,6 +431,7 @@ def configure_logging(config: OTelConfig) -> None:
         BatchLogRecordProcessor(log_exporter)
     )
     set_logger_provider(logger_provider)
+    _providers.append(logger_provider)
 
 
 def auto_configure_otel() -> Dict[str, Any]:
@@ -483,5 +521,6 @@ __all__ = [
     "configure_otel",
     "configure_otel_with_openllmetry",
     "auto_configure_otel",
+    "shutdown_otel",
     "add_project_context_to_span",
 ]
