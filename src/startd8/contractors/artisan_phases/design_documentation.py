@@ -804,6 +804,8 @@ class DesignDocumentationPhase:
         self.llm = llm
         self.max_iterations = max_iterations
         self.confidence_threshold = confidence_threshold
+        if not (0.0 <= confidence_threshold <= 1.0):
+            raise ValueError(f"confidence_threshold must be in [0.0, 1.0], got {confidence_threshold}")
         self.resolution_callback: ResolutionCallback = (
             resolution_callback or AutoResolutionCallback()
         )
@@ -1242,7 +1244,8 @@ class DesignDocumentationPhase:
 
                 # RE_REVIEW — continue to next iteration
 
-            except DesignDocumentationError:
+            except DesignDocumentationError as exc:
+                logger.error("Design documentation phase failed: %s", exc)
                 raise
             except Exception as exc:
                 logger.error(
@@ -1264,9 +1267,12 @@ class DesignDocumentationPhase:
             self.max_iterations,
         )
 
-        assert design is not None, "Design should have been generated"
-        assert reviewer_verdict is not None
-        assert arbiter_verdict is not None
+        if design is None:
+            raise DesignDocumentationError("No design was generated after max iterations")
+        if reviewer_verdict is None:
+            raise DesignDocumentationError("No reviewer verdict was produced after max iterations")
+        if arbiter_verdict is None:
+            raise DesignDocumentationError("No arbiter verdict was produced after max iterations")
 
         return DesignDocumentResult(
             design_document=design,

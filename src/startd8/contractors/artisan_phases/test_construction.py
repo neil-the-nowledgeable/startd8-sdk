@@ -18,6 +18,7 @@ Two generation strategies are supported:
 
 from __future__ import annotations
 
+import asyncio
 import enum
 import logging
 import os
@@ -1380,7 +1381,7 @@ class LLMTestGenerator:
                 modules.append(
                     TestModule(
                         filename=filename,
-                        imports=[],
+                        imports=["import pytest"],
                         test_cases=[
                             TestCase(
                                 test_name="__llm_generated__",
@@ -1414,7 +1415,7 @@ class LLMTestGenerator:
         modules.append(
             TestModule(
                 filename=filename,
-                imports=[],
+                imports=["import pytest"],
                 test_cases=[
                     TestCase(
                         test_name="__llm_generated__",
@@ -1910,7 +1911,7 @@ class TestConstructionPhase:
         """
         if self.agent_spec is None:
             # No LLM — fall back to template path
-            return self.execute()
+            return await asyncio.to_thread(self.execute)
 
         self.status = PhaseStatus.IN_PROGRESS
         result = PhaseResult(
@@ -1950,7 +1951,7 @@ class TestConstructionPhase:
                     f"{gen_exc}"
                 )
                 # Fall back to synchronous template path
-                return self.execute()
+                return await asyncio.to_thread(self.execute)
 
             result.test_modules = test_modules
 

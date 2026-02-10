@@ -14,14 +14,13 @@ WorkflowPhase mapping (from artisan_contractor.py docstring):
     FINALIZE  → Collect artifacts + write comprehensive execution report
 
 Implementation Passes:
-    Pass 1 (this commit): Scaffold all handler interfaces, __init__ params,
-        private helper stubs, and factory config propagation.  Dry-run mode
-        continues to work as before.  Real-mode stubs log clear messages and
-        set status to ``"awaiting_implementation"``.
+    Pass 1: Scaffold all handler interfaces, __init__ params,
+        private helper stubs, and factory config propagation.
     Pass 2: Wire ImplementPhaseHandler to LeadContractorCodeGenerator.
-    Pass 3: Wire TestPhaseHandler to subprocess validators + ReviewPhaseHandler
-        to LLM review agent.
-    Pass 4: Polish FinalizePhaseHandler artifact collection and diff generation.
+    Pass 3: Wire TestPhaseHandler to subprocess validators.
+    Pass 4: Polish FinalizePhaseHandler artifact collection (checksums,
+        line counts, domain tags), cost aggregation (test phase), manifest
+        per-task status rollup, and overall success/partial/failed status.
 
 Usage::
 
@@ -46,6 +45,7 @@ Usage::
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import subprocess
@@ -145,7 +145,7 @@ class SeedTask:
         context = config.get("context", {})
         enrichment = entry.get("_enrichment", {})
 
-        return cls(
+        task = cls(
             task_id=entry.get("task_id", ""),
             title=entry.get("title", ""),
             task_type=entry.get("task_type", "task"),
@@ -167,6 +167,11 @@ class SeedTask:
             available_siblings=enrichment.get("available_siblings", []),
             existing_content_hash=enrichment.get("existing_content_hash"),
         )
+        if not task.task_id:
+            raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
+        if not task.title:
+            raise ValueError(f"Seed entry missing required field 'title': {entry}")
+        return task
 
 
 def _load_enriched_seed(seed_path: str) -> dict[str, Any]:
@@ -786,13 +791,12 @@ class TestPhaseHandler(AbstractPhaseHandler):
     In real mode: executes validator commands (pytest, mypy, ruff, etc.)
     as subprocesses and collects pass/fail results.
 
-    Pass 1 scaffold:
-        * ``__init__`` accepts :class:`HandlerConfig`.
-        * ``_resolve_validator_command`` maps validator names to CLI commands.
-        * ``_run_validator`` executes a single validator subprocess.
-        * ``_run_validators_for_task`` runs all validators for one task.
-        * Real-mode ``execute`` calls helpers but falls through to
-          ``"awaiting_implementation"`` until Pass 3 wires subprocess execution.
+    Helpers:
+        * ``_resolve_validator_command`` — maps validator names to CLI commands.
+        * ``_run_validator`` — executes a single validator subprocess with
+          timeout handling.
+        * ``_run_validators_for_task`` — runs all validators for one task,
+          skipping tasks whose generation was not successful.
     """
 
     def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
@@ -830,8 +834,6 @@ class TestPhaseHandler(AbstractPhaseHandler):
 
         Returns:
             Formatted command string, or None if validator is unknown.
-
-        TODO: Pass 3 — support custom validator commands from seed config.
         """
         template = self.VALIDATOR_COMMANDS.get(validator_name)
         if template is None:
@@ -859,34 +861,54 @@ class TestPhaseHandler(AbstractPhaseHandler):
             timeout: Timeout in seconds.
 
         Returns:
-            Dict with keys: ``passed``, ``returncode``, ``stdout``, ``stderr``, ``timed_out``.
-
-        TODO: Pass 3 — implement subprocess execution.
+            Dict with keys: ``passed``, ``returncode``, ``stdout``,
+            ``stderr``, ``timed_out``.
         """
-        # Pass 3: replace with actual subprocess call
-        #   try:
-        #       proc = subprocess.run(
-        #           command, shell=True, cwd=str(project_root),
-        #           capture_output=True, text=True, timeout=timeout,
-        #       )
-        #       return {
-        #           "passed": proc.returncode == 0,
-        #           "returncode": proc.returncode,
-        #           "stdout": proc.stdout[-2000:],  # truncate for report
-        #           "stderr": proc.stderr[-2000:],
-        #           "timed_out": False,
-        #       }
-        #   except subprocess.TimeoutExpired:
-        #       return {"passed": False, "returncode": -1, "stdout": "", "stderr": "timeout", "timed_out": True}
-
-        return {
-            "passed": False,
-            "returncode": -1,
-            "stdout": "",
-            "stderr": "Validator execution not yet wired (Pass 3)",
-            "timed_out": False,
-            "awaiting_implementation": True,
-        }
+        logger.debug("TEST: running validator: %s (cwd=%s)", command, project_root)
+        try:
+            proc = subprocess.run(
+                command,
+                shell=True,
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+            passed = proc.returncode == 0
+            result = {
+                "passed": passed,
+                "returncode": proc.returncode,
+                "stdout": proc.stdout[-2000:] if proc.stdout else "",
+                "stderr": proc.stderr[-2000:] if proc.stderr else "",
+                "timed_out": False,
+            }
+            if not passed:
+                logger.info(
+                    "TEST: validator failed (rc=%d): %s",
+                    proc.returncode,
+                    command,
+                )
+            return result
+        except subprocess.TimeoutExpired:
+            logger.warning(
+                "TEST: validator timed out after %ds: %s", timeout, command
+            )
+            return {
+                "passed": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": f"Timed out after {timeout}s",
+                "timed_out": True,
+            }
+        except OSError as exc:
+            logger.error("TEST: validator command failed to start: %s", exc)
+            return {
+                "passed": False,
+                "returncode": -1,
+                "stdout": "",
+                "stderr": f"Command failed to start: {exc}",
+                "timed_out": False,
+            }
 
     def _run_validators_for_task(
         self,
@@ -896,16 +918,31 @@ class TestPhaseHandler(AbstractPhaseHandler):
     ) -> Dict[str, Any]:
         """Run all validators for a single task.
 
+        Validators are only executed when *generation_result* indicates
+        success.  If the generation failed or was not attempted the task
+        is reported as skipped with ``all_passed = False``.
+
         Args:
             task: The seed task.
             project_root: Project root directory.
-            generation_result: The generation result from IMPLEMENT phase (if any).
+            generation_result: The generation result from IMPLEMENT phase
+                (if any).
 
         Returns:
             Dict with per-validator results and overall pass/fail.
-
-        TODO: Pass 3 — only run validators if generation_result.success is True.
         """
+        # Skip if generation was not successful
+        if generation_result is None or not generation_result.success:
+            return {
+                "task_id": task.task_id,
+                "title": task.title,
+                "domain": task.domain,
+                "validators_run": 0,
+                "all_passed": False,
+                "results": [],
+                "skipped_reason": "generation_not_successful",
+            }
+
         validator_results: List[Dict[str, Any]] = []
         all_passed = True
 
@@ -980,7 +1017,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 test_plan.append(test_entry)
                 continue
 
-            # --- Real-mode path (scaffolded — wired in Pass 3) ---
+            # --- Real-mode path ---
             gen_result = generation_results.get(task.task_id)
 
             # Skip tasks that were not generated
@@ -1341,14 +1378,16 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
     """FINALIZE phase: Collect artifacts and write comprehensive execution report.
 
     Produces a workflow execution report aggregating all phase results,
-    lists generated files, and optionally writes a manifest of changes.
+    lists generated files with checksums and line counts, computes a
+    per-task status rollup joining generation/test/review outcomes, and
+    writes both a human-readable report and a machine-readable manifest.
 
-    Pass 1 scaffold:
-        * ``__init__`` accepts output_dir + :class:`HandlerConfig`.
-        * ``_collect_generated_artifacts`` inventories files from IMPLEMENT phase.
-        * ``_build_cost_summary`` aggregates costs across all phases.
-        * ``_write_manifest`` writes a machine-readable manifest of changes.
-        * Enhanced ``execute`` includes richer summaries from scaffolded phases.
+    Key outputs written to ``output_dir``:
+
+    * ``workflow-execution-report.json`` — full summary with cost
+      breakdown, artifact inventory, and per-phase stats.
+    * ``generation-manifest.json`` — machine-readable manifest with
+      per-task status, artifact checksums, and cost attribution.
     """
 
     def __init__(
@@ -1360,7 +1399,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         self.config = handler_config or HandlerConfig()
 
     # ------------------------------------------------------------------
-    # Private helpers (scaffolded — bodies filled in Pass 4)
+    # Private helpers
     # ------------------------------------------------------------------
 
     def _collect_generated_artifacts(
@@ -1370,30 +1409,47 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         """Inventory all files generated during the IMPLEMENT phase.
 
         Reads ``context["generation_results"]`` and lists output files
-        with sizes and paths.
+        with sizes, hashes, line counts, and domain tags.
 
         Args:
             context: Shared workflow context.
 
         Returns:
-            List of artifact dicts (path, size_bytes, task_id).
-
-        TODO: Pass 4 — read actual file stats from GenerationResult.generated_files.
+            List of artifact dicts with keys: ``task_id``, ``path``,
+            ``exists``, ``size_bytes``, ``line_count``, ``sha256``,
+            ``domain``.
         """
         artifacts: List[Dict[str, Any]] = []
-        generation_results: Dict[str, GenerationResult] = context.get("generation_results", {})
+        generation_results: Dict[str, GenerationResult] = context.get(
+            "generation_results", {}
+        )
+
+        # Build task_id → SeedTask lookup for domain metadata
+        tasks: list[SeedTask] = context.get("tasks", [])
+        id_to_task: Dict[str, SeedTask] = {t.task_id: t for t in tasks}
 
         for task_id, result in generation_results.items():
             if result.success:
+                task = id_to_task.get(task_id)
                 for fpath in result.generated_files:
-                    artifact = {
+                    artifact: Dict[str, Any] = {
                         "task_id": task_id,
                         "path": str(fpath),
-                        "exists": fpath.exists() if hasattr(fpath, "exists") else False,
+                        "exists": (
+                            fpath.exists() if hasattr(fpath, "exists") else False
+                        ),
+                        "domain": task.domain if task else "unknown",
                     }
-                    # Pass 4: add size_bytes, line_count, hash
                     if hasattr(fpath, "exists") and fpath.exists():
-                        artifact["size_bytes"] = fpath.stat().st_size
+                        raw_bytes = fpath.read_bytes()
+                        artifact["size_bytes"] = len(raw_bytes)
+                        artifact["sha256"] = hashlib.sha256(raw_bytes).hexdigest()
+                        try:
+                            text = raw_bytes.decode("utf-8", errors="strict")
+                            artifact["line_count"] = len(text.splitlines())
+                        except (UnicodeDecodeError, ValueError):
+                            # Binary file — line count not applicable
+                            artifact["line_count"] = None
                     artifacts.append(artifact)
 
         return artifacts
@@ -1406,16 +1462,25 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
         Returns:
             Dict with per-phase and total cost breakdowns.
+
+        Note:
+            PLAN and SCAFFOLD phases are zero-cost (no LLM calls) and
+            excluded for clarity.  TEST phase cost is included even
+            though current validators are subprocess-based (zero cost);
+            this future-proofs for LLM-based test generation.
         """
         implementation = context.get("implementation", {})
+        test_results = context.get("test_results", {})
         review_results = context.get("review_results", {})
 
         impl_cost = implementation.get("total_cost", 0.0)
+        test_cost = test_results.get("total_cost", 0.0)
         review_cost = review_results.get("total_cost", 0.0)
-        total = impl_cost + review_cost
+        total = impl_cost + test_cost + review_cost
 
         return {
             "implementation_cost": impl_cost,
+            "test_cost": test_cost,
             "review_cost": review_cost,
             "total_cost": total,
             "currency": "USD",
@@ -1425,38 +1490,74 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         self,
         artifacts: List[Dict[str, Any]],
         summary: Dict[str, Any],
+        context: dict[str, Any],
         output_dir: Path,
     ) -> Optional[Path]:
         """Write a machine-readable manifest of all changes.
 
+        Includes per-task status rollup joining generation results with
+        test and review outcomes, artifact checksums (from enriched
+        ``_collect_generated_artifacts``), and cost breakdown.
+
         Args:
-            artifacts: List of generated artifact dicts.
+            artifacts: List of generated artifact dicts (with ``sha256``).
             summary: The full workflow summary.
+            context: Shared workflow context (for test/review joining).
             output_dir: Directory to write the manifest.
 
         Returns:
             Path to the manifest file, or None if no artifacts.
-
-        TODO: Pass 4 — include file diffs, checksums, etc.
         """
         if not artifacts:
             return None
 
+        # Per-task status rollup: join generation, test, and review data
+        generation_results: Dict[str, GenerationResult] = context.get(
+            "generation_results", {}
+        )
+        test_results_map: Dict[str, Any] = context.get("test_results", {}).get(
+            "per_task", {}
+        )
+        review_results_map: Dict[str, Any] = context.get("review_results", {}).get(
+            "per_task", {}
+        )
+
+        task_status: Dict[str, Dict[str, Any]] = {}
+        for task_id, gen_result in generation_results.items():
+            test_info = test_results_map.get(task_id, {})
+            review_info = review_results_map.get(task_id, {})
+            task_status[task_id] = {
+                "generated": gen_result.success,
+                "files_count": len(gen_result.generated_files),
+                "generation_cost_usd": gen_result.cost_usd,
+                "tests_passed": test_info.get("passed", None),
+                "review_score": review_info.get("score", None),
+                "review_passed": review_info.get("passed", None),
+            }
+
         manifest = {
             "workflow_version": "0.4.0",
             "artifacts": artifacts,
+            "task_status": task_status,
             "summary": {
                 "plan_title": summary.get("plan_title", ""),
                 "task_count": summary.get("task_count", 0),
-                "total_cost": summary.get("cost_summary", {}).get("total_cost", 0.0),
+                "total_cost": summary.get("cost_summary", {}).get(
+                    "total_cost", 0.0
+                ),
+                "status": summary.get("status", "unknown"),
             },
         }
 
         manifest_path = output_dir / "generation-manifest.json"
-        manifest_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2, default=str)
-        logger.info("Wrote generation manifest to %s", manifest_path)
+        try:
+            manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(manifest_path, "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2, default=str)
+            logger.info("Wrote manifest: %s", manifest_path)
+        except OSError as exc:
+            logger.warning("Failed to write manifest to %s: %s", manifest_path, exc)
+            return None
         return manifest_path
 
     # ------------------------------------------------------------------
@@ -1485,9 +1586,31 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         artifacts = self._collect_generated_artifacts(context)
         cost_summary = self._build_cost_summary(context)
 
+        # Compute overall status rollup
+        generation_results: Dict[str, GenerationResult] = context.get(
+            "generation_results", {}
+        )
+        total_tasks = len(tasks)
+        generated_ok = sum(
+            1 for r in generation_results.values() if r.success
+        )
+        generated_fail = sum(
+            1 for r in generation_results.values() if not r.success
+        )
+
+        if generated_fail == 0 and generated_ok == total_tasks:
+            overall_status = "success"
+        elif generated_ok == 0:
+            overall_status = "failed"
+        else:
+            overall_status = "partial"
+
         summary: Dict[str, Any] = {
             "plan_title": plan_title,
-            "task_count": len(tasks),
+            "task_count": total_tasks,
+            "status": overall_status,
+            "tasks_succeeded": generated_ok,
+            "tasks_failed": generated_fail,
             "domain_summary": domain_summary,
             "preflight_summary": preflight_summary,
             "scaffold_summary": {
@@ -1498,7 +1621,17 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             "implementation_summary": {
                 "tasks_processed": implementation.get("tasks_processed", 0),
                 "total_estimated_loc": implementation.get("total_estimated_loc", 0),
-                "generation_results": implementation.get("generation_results", {}),
+                "generation_results": {
+                    tid: {
+                        "success": r.success,
+                        "error": r.error,
+                        "cost_usd": r.cost_usd,
+                        "files": [str(f) for f in r.generated_files],
+                        "model": r.model,
+                        "iterations": r.iterations,
+                    }
+                    for tid, r in generation_results.items()
+                },
             },
             "test_summary": {
                 "total_validators": test_results.get("total_validators", 0),
@@ -1529,7 +1662,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
             # Write manifest of generated files
             manifest_path = self._write_manifest(
-                artifacts, summary, Path(self.output_dir),
+                artifacts, summary, context, Path(self.output_dir),
             )
             if manifest_path:
                 summary["manifest_path"] = str(manifest_path)
@@ -1538,8 +1671,9 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         duration = time.monotonic() - start
 
         logger.info(
-            "FINALIZE phase complete: %d artifacts, $%.4f total cost (%.2fs)",
-            len(artifacts), cost_summary.get("total_cost", 0.0), duration,
+            "FINALIZE phase complete: %s — %d artifacts, $%.4f total cost (%.2fs)",
+            overall_status, len(artifacts),
+            cost_summary.get("total_cost", 0.0), duration,
         )
 
         return {"output": summary, "cost": 0.0, "metadata": {"duration": duration}}
