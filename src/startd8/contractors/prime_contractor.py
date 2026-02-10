@@ -47,7 +47,7 @@ class PrimeContractorWorkflow:
         result = workflow.run()  # Emits spans to Tempo
     """
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=2, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True):
         """
         Initialize the Prime Contractor workflow.
 
@@ -217,6 +217,11 @@ class PrimeContractorWorkflow:
         """
         Process a feature through the full lifecycle.
 
+        If a GENERATED feature has a prior error_message (from a failed
+        checkpoint), it is regenerated with the error injected as feedback
+        so the LLM can fix the issue rather than blindly retrying the same
+        broken code.
+
         Returns:
             True if the feature was fully processed, False otherwise
         """
@@ -227,6 +232,20 @@ class PrimeContractorWorkflow:
             if not self.develop_feature(feature):
                 return False
         if feature.status == FeatureStatus.GENERATED:
+            # Error-informed retry: if this feature failed a prior integration
+            # attempt (e.g., lint, import, or syntax error), regenerate with
+            # the error as feedback context instead of retrying the same code.
+            if feature.error_message and self.code_generator:
+                logger.info(
+                    "Feature '%s' has prior error — regenerating with feedback: %s",
+                    feature.name, feature.error_message,
+                    extra={'feature_name': feature.name, 'prior_error': feature.error_message},
+                )
+                prior_error = feature.error_message
+                feature.error_message = None
+                feature.status = FeatureStatus.PENDING
+                if not self.develop_feature(feature, prior_error=prior_error):
+                    return False
             return self.integrate_feature(feature)
         logger.warning("Feature '%s' in unexpected state: %s", feature.name, feature.status, extra={'feature_name': feature.name, 'status': str(feature.status)})
         return False
@@ -271,14 +290,21 @@ class PrimeContractorWorkflow:
         logger.info("All %d sub-features integrated for '%s'", n, feature.name, extra={'feature_name': feature.name, 'sub_feature_count': n})
         return True
 
-    def develop_feature(self, feature: FeatureSpec) -> bool:
+    def develop_feature(self, feature: FeatureSpec, prior_error: Optional[str] = None) -> bool:
         """
         Develop a feature using the configured CodeGenerator.
+
+        Args:
+            prior_error: If provided, error feedback from a previous failed
+                attempt (e.g., checkpoint lint/import errors). Injected into
+                the generation context so the LLM can avoid the same mistake.
 
         Returns:
             True if code generation succeeded, False otherwise
         """
-        logger.info('DEVELOPING FEATURE: %s', feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id})
+        is_retry = prior_error is not None
+        label = 'RE-DEVELOPING' if is_retry else 'DEVELOPING'
+        logger.info('%s FEATURE: %s', label, feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id, 'is_retry': is_retry})
         should_proceed, decomposition_info = self.pre_flight_validation(feature)
         if not should_proceed:
             reason = decomposition_info.get('reason', 'Size exceeds safe limits')
@@ -307,6 +333,13 @@ class PrimeContractorWorkflow:
                     'with multiple files. All classes, enums, and functions must '
                     'be defined in one file. Do NOT use relative imports '
                     '(from .module import ...) — everything lives in this file.'
+                )
+            if prior_error:
+                gen_context['prior_error_feedback'] = (
+                    'CRITICAL: A previous attempt to generate this code FAILED '
+                    'integration checks. You MUST fix the following issues in '
+                    f'your output:\n\n{prior_error}\n\n'
+                    'Do NOT repeat these mistakes. Address each error explicitly.'
                 )
             result: GenerationResult = self.code_generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
             if result.success:
@@ -415,7 +448,15 @@ class PrimeContractorWorkflow:
             all_passed = self.checkpoint.summarize_results(results)
             if not all_passed:
                 failed_checks = [r for r in results if r.status == CheckpointStatus.FAILED]
-                error_msg = '; '.join((r.message for r in failed_checks))
+                # Build error message with full detail so error-informed
+                # retry can feed actionable feedback to the LLM.
+                error_parts = []
+                for r in failed_checks:
+                    detail = r.message
+                    if r.errors:
+                        detail += ': ' + '; '.join(r.errors[:5])
+                    error_parts.append(detail)
+                error_msg = ' | '.join(error_parts)
                 self.queue.fail_feature(feature.id, error_msg)
                 self.instrumentor.emit_insight(insight_type='integration_failed', summary=f"Feature '{feature.name}' failed checkpoints", confidence=1.0, feature_id=feature.id, failed_checks=[r.name for r in failed_checks])
                 if self.on_checkpoint_failed:
@@ -520,17 +561,23 @@ class PrimeContractorWorkflow:
         return self.integrate_feature(feature)
 
     def reset_failed_features(self):
-        """Reset all failed/stuck features to appropriate status for retry."""
+        """Reset all failed/stuck features to appropriate status for retry.
+
+        Preserves error_message so that the next attempt can use it as
+        feedback context for regeneration (error-informed retry).
+        """
         reset_count = 0
         for feature in self.queue.features.values():
             if feature.status in (FeatureStatus.FAILED, FeatureStatus.BLOCKED, FeatureStatus.INTEGRATING, FeatureStatus.DEVELOPING):
                 if feature.generated_files:
                     feature.status = FeatureStatus.GENERATED
-                    logger.info('Reset %s -> GENERATED (has code)', feature.name)
+                    logger.info('Reset %s -> GENERATED (has code, prior error preserved)', feature.name)
                 else:
                     feature.status = FeatureStatus.PENDING
                     logger.info('Reset %s -> PENDING (needs development)', feature.name)
-                feature.error_message = None
+                # NOTE: error_message is intentionally preserved — it is used
+                # by process_feature() to inject checkpoint feedback into the
+                # next code generation attempt.
                 reset_count += 1
         self.queue.save_state()
         logger.info('Reset %d failed/blocked feature(s)', reset_count)
@@ -968,7 +1015,7 @@ class FeatureProcessor:
         return processed_feature
 '\nPrime Contractor Workflow - Continuous Integration Wrapper for Code Generation.\n\nThe Prime Contractor ensures that code is integrated immediately after each\nfeature is developed, preventing the "backlog integration nightmare" where\nmultiple features developed in isolation create merge conflicts and regressions.\n\nKey Principles:\n1. INTEGRATE IMMEDIATELY: Each feature is integrated right after generation\n2. CHECKPOINT VALIDATION: Code must pass all checks before next feature starts\n3. FAIL FAST: Stop the pipeline if integration fails, don\'t accumulate problems\n4. MAINLINE ALWAYS WORKS: The main codebase is always in a working state\n\nThis is the "general contractor" pattern - just as a general contractor\ncoordinates subcontractors and ensures each phase is complete before the\nnext begins, the Prime Contractor coordinates code generation tasks and\nensures each feature is integrated before moving on.\n\nThis module works standalone without ContextCore. When ContextCore is\navailable, it provides enhanced observability via OpenTelemetry spans.\n'
 logger = get_logger(__name__)
-MAX_INTEGRATION_ATTEMPTS = 3
+MAX_INTEGRATION_ATTEMPTS = 6
 '\nFeature Processor Module\n\nThis module provides robust processing capabilities for decomposed features,\nincluding validation, normalization, enrichment, and analysis.\n\nVersion: 1.0.0\nAuthor: Development Team\nLast Updated: 2024\n'
 if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

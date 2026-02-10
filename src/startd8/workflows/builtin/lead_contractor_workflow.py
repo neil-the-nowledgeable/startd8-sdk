@@ -142,6 +142,11 @@ DRAFT_PROMPT_TEMPLATE = """You are implementing code based on a detailed specifi
 4. Write clean, well-documented code
 5. Include inline comments explaining key decisions
 
+## Coding Standards (ruff/linter compliance)
+- NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+- Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+- Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
+
 ## Output Format
 Provide your complete implementation followed by a brief explanation of your approach.
 

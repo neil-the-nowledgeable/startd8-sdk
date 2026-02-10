@@ -1,8 +1,8 @@
 import logging
-from enum import Enum, auto
+from enum import Enum
 from dataclasses import dataclass, field, replace
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 class _FallbackEncoding:
@@ -164,7 +164,7 @@ class TruncationStrategy(CompressionStrategy):
         """
         try:
             self.encoding = _get_encoding(encoding_name)
-        except ValueError as e:
+        except ValueError:
             logger.error(f'Invalid encoding name: {encoding_name}. Falling back to cl100k_base.')
             self.encoding = _get_encoding('cl100k_base')
 
@@ -213,7 +213,7 @@ class SummarizationStrategy(CompressionStrategy):
         try:
             self.encoding = _get_encoding(encoding_name)
         except ValueError:
-            logger.error(f'Invalid encoding. Falling back to cl100k_base.')
+            logger.error('Invalid encoding. Falling back to cl100k_base.')
             self.encoding = _get_encoding('cl100k_base')
 
     def compress(self, content: str, target_tokens: int, current_tokens: int) -> str:
@@ -262,7 +262,7 @@ class TokenCounter:
         """
         try:
             self.encoding = _get_encoding(encoding_name)
-        except ValueError as e:
+        except ValueError:
             logger.error(f'Invalid encoding name: {encoding_name}. Falling back to cl100k_base.')
             self.encoding = _get_encoding('cl100k_base')
         self._cache: Dict[str, int] = {}

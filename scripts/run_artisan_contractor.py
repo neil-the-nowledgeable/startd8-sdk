@@ -254,6 +254,67 @@ def print_task_summary(tasks: list[dict]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Status query (reads state file only — no workflow init)
+# ---------------------------------------------------------------------------
+
+def show_status() -> None:
+    """Print live status from the state file without starting a workflow."""
+    import json
+    from datetime import datetime, timezone
+
+    state_file = PROJECT_ROOT / ".prime_contractor_state.json"
+    if not state_file.exists():
+        print("No state file found. Run the workflow first.")
+        sys.exit(0)
+
+    data = json.loads(state_file.read_text())
+    features = data.get("features", {})
+    order = data.get("order", sorted(features.keys()))
+    saved_at = data.get("saved_at", "unknown")
+
+    icon_map = {
+        "pending": "○", "developing": "◐", "generated": "◑",
+        "integrating": "◕", "checkpoint": "◔", "complete": "●",
+        "failed": "✗", "blocked": "⊘",
+    }
+
+    counts: dict[str, int] = {}
+    for f in features.values():
+        s = f.get("status", "pending")
+        counts[s] = counts.get(s, 0) + 1
+
+    total = len(features)
+    complete = counts.get("complete", 0)
+    failed = counts.get("failed", 0)
+    pct = (complete / total * 100) if total else 0
+
+    print(f"\n{'=' * 60}")
+    print(f"ARTISAN CONTRACTOR STATUS  (as of {saved_at})")
+    print(f"{'=' * 60}")
+    print(f"\nProgress: {pct:.0f}% ({complete}/{total} features)")
+    for status in ["pending", "developing", "generated", "integrating",
+                    "checkpoint", "complete", "failed", "blocked"]:
+        if counts.get(status, 0):
+            print(f"  {icon_map.get(status, '?')} {status}: {counts[status]}")
+
+    print(f"\n{'─' * 60}")
+    for fid in order:
+        f = features.get(fid, {})
+        status = f.get("status", "pending")
+        icon = icon_map.get(status, "?")
+        name = f.get("name", fid)
+        line = f"  {icon} {fid}: {name} ({status})"
+        if f.get("error_message"):
+            line += f"\n       Error: {f['error_message'][:80]}"
+        print(line)
+
+    if failed:
+        print(f"\n  {failed} failed — use --retry-failed to retry")
+    print()
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -262,6 +323,12 @@ def main():
         description="Execute Artisan Contractor plan via PrimeContractor",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
+    )
+
+    # Status query (no workflow init)
+    parser.add_argument(
+        "--status", action="store_true",
+        help="Show current feature status from state file and exit",
     )
 
     # Workflow control flags
@@ -309,6 +376,10 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Status-only mode — read state file and exit
+    if args.status:
+        show_status()
 
     # Load tasks
     tasks = load_tasks()

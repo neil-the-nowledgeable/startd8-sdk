@@ -21,8 +21,8 @@ Usage::
 
     runner = PhaseRunner(
         phases=[
-            PhaseConfig(DraftPhase(), RetryPolicy(max_attempts=3)),
-            PhaseConfig(ValidatePhase(), RetryPolicy(max_attempts=2)),
+            PhaseConfig(DraftPhase(), RetryPolicy(max_attempts=6)),
+            PhaseConfig(ValidatePhase(), RetryPolicy(max_attempts=6)),
             PhaseConfig(GatePhase()),
         ],
         budget=1.00,
@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, Sequence, Type, runtime_checkable
 
 from opentelemetry import trace
-from opentelemetry.trace import Span, StatusCode, Tracer
+from opentelemetry.trace import StatusCode, Tracer
 
 __all__ = [
     "PhaseType",
@@ -286,8 +286,8 @@ class PhaseRunner:
 
         runner = PhaseRunner(
             phases=[
-                PhaseConfig(DraftPhase(), RetryPolicy(max_attempts=3)),
-                PhaseConfig(ValidatePhase()),
+                PhaseConfig(DraftPhase(), RetryPolicy(max_attempts=6)),
+                PhaseConfig(ValidatePhase(), RetryPolicy(max_attempts=6)),
                 PhaseConfig(GatePhase()),
             ],
             budget=0.50,

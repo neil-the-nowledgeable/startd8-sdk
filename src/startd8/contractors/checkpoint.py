@@ -301,7 +301,7 @@ class IntegrationCheckpoint:
             # Try ruff if available
             try:
                 result = subprocess.run(
-                    ["python3", "-m", "ruff", "check", str(file_path), "--select=E,F"],
+                    ["python3", "-m", "ruff", "check", str(file_path), "--select=E7,E9,F"],
                     capture_output=True,
                     text=True,
                     cwd=self.project_root,
@@ -313,9 +313,11 @@ class IntegrationCheckpoint:
 
             if result.returncode != 0:
                 # Parse ruff output for errors vs warnings
+                # Include all error codes (E=pycodestyle, F=pyflakes) for
+                # actionable feedback in error-informed retries.
                 for line in result.stdout.strip().split("\n"):
                     if line.strip():
-                        if ": F" in line or ": E9" in line:  # Fatal errors
+                        if ": F" in line or ": E" in line:
                             errors.append(line)
                         else:
                             warnings.append(line)
