@@ -133,6 +133,15 @@ class TestSnapshotRestore:
 class TestPreValidate:
     """Verify IntegrationCheckpoint.pre_validate catches errors before merge."""
 
+    def test_check_lint_catches_e741(self, tmp_path):
+        """Regression: check_lint with concise output detects E741."""
+        checkpoint = IntegrationCheckpoint(project_root=tmp_path)
+        bad_file = tmp_path / "ambiguous.py"
+        bad_file.write_text("l = 1\n")
+        result = checkpoint.check_lint([bad_file])
+        assert result.status == CheckpointStatus.FAILED
+        assert any("E741" in e for e in result.errors)
+
     def test_valid_generated_file_passes(self, tmp_path):
         """Clean generated file → PASSED."""
         checkpoint = IntegrationCheckpoint(project_root=tmp_path)
@@ -157,36 +166,29 @@ class TestPreValidate:
         assert len(result.errors) > 0
 
     def test_lint_error_fails(self, tmp_path):
-        """Generated file with F821 (undefined name) → FAILED.
-
-        Note: check_lint uses ruff's default rich output format. The line
-        parser matches ``': F'`` or ``': E'`` which only works with ruff's
-        concise format.  F-errors at the *start* of a rich-format line are
-        not matched, so we use a syntax error here which is always caught
-        by the separate check_syntax pass inside pre_validate.
-        """
+        """Generated file with E741 (ambiguous variable name) → FAILED."""
         checkpoint = IntegrationCheckpoint(project_root=tmp_path)
         gen_file = tmp_path / "generated" / "lint_bad.py"
         gen_file.parent.mkdir(parents=True, exist_ok=True)
-        # Syntax error — always caught by check_syntax
-        gen_file.write_text("def foo(:\n    pass\n")
+        # E741: ambiguous variable name 'l'
+        gen_file.write_text("l = 1\nO = 2\n")
         result = checkpoint.pre_validate([gen_file])
         assert result.status == CheckpointStatus.FAILED
-        assert len(result.errors) > 0
+        assert any("E741" in e for e in result.errors)
 
     def test_multiple_files_aggregates_errors(self, tmp_path):
-        """Syntax errors from multiple files are combined."""
+        """Errors from multiple files (syntax + lint) are combined."""
         checkpoint = IntegrationCheckpoint(project_root=tmp_path)
         gen_dir = tmp_path / "generated"
         gen_dir.mkdir(parents=True, exist_ok=True)
 
-        bad1 = gen_dir / "first.py"
-        bad1.write_text("def x(\n")
+        bad_syntax = gen_dir / "syntax_bad.py"
+        bad_syntax.write_text("def x(\n")
 
-        bad2 = gen_dir / "second.py"
-        bad2.write_text("class Y[\n")
+        bad_lint = gen_dir / "lint_bad.py"
+        bad_lint.write_text("l = 1\n")  # E741
 
-        result = checkpoint.pre_validate([bad1, bad2])
+        result = checkpoint.pre_validate([bad_syntax, bad_lint])
         assert result.status == CheckpointStatus.FAILED
         # Should have errors from both files
         assert len(result.errors) >= 2

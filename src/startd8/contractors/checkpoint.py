@@ -301,7 +301,7 @@ class IntegrationCheckpoint:
             # Try ruff if available
             try:
                 result = subprocess.run(
-                    ["python3", "-m", "ruff", "check", str(file_path), "--select=E7,E9,F"],
+                    ["python3", "-m", "ruff", "check", str(file_path), "--select=E7,E9,F", "--output-format=concise"],
                     capture_output=True,
                     text=True,
                     cwd=self.project_root,
