@@ -340,7 +340,7 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         # checkpoint resume needs it, _ensure_context_loaded re-reads the file.
         context["enriched_seed_path"] = self.enriched_seed_path
         context["tasks"] = sorted_tasks
-        context["task_index"] = {t.task_id: t for t in tasks}
+        context["task_index"] = {t.task_id: t for t in sorted_tasks}
         context["plan_title"] = plan_meta.get("title", "Untitled Plan")
         context["plan_goals"] = plan_meta.get("goals", [])
         context["domain_summary"] = dict(domain_counts)
@@ -497,7 +497,16 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             A ``CodeGenerator`` instance ready to use.
         """
         if self._generator is not None:
-            return self._generator
+            # Invalidate cache if project_root changed since last creation
+            cached_output_dir = getattr(self._generator, "output_dir", None)
+            if cached_output_dir is not None and Path(cached_output_dir) != project_root:
+                logger.info(
+                    "IMPLEMENT: project_root changed (%s → %s), recreating generator",
+                    cached_output_dir, project_root,
+                )
+                self._generator = None
+            else:
+                return self._generator
 
         from startd8.contractors.generators.lead_contractor import LeadContractorCodeGenerator
 

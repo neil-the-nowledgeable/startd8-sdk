@@ -508,32 +508,32 @@ def parse_review_verdict(raw_text: str, role: ReviewRole) -> ReviewVerdict:
             pass
 
     summary = ""
-    summary_match = re.search(r'"summary"\s*:\s*"([^"]*)"', cleaned)
+    summary_match = re.search(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"', cleaned)
     if summary_match:
-        summary = summary_match.group(1)
+        summary = summary_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
 
     # Extract list items via regex
-    concerns_match = re.findall(
+    concerns_match = re.search(
         r'"concerns"\s*:\s*\[(.*?)\]', cleaned, re.DOTALL
     )
     concern_list: list[str] = (
         [
-            c.strip().strip('"')
-            for c in concerns_match[0].split(",")
-            if c.strip().strip('"')
+            c.replace('\\"', '"').replace('\\\\', '\\')
+            for c in re.findall(r'"((?:[^"\\]|\\.)*)"', concerns_match.group(1))
+            if c.strip()
         ]
         if concerns_match
         else []
     )
 
-    suggestions_match = re.findall(
+    suggestions_match = re.search(
         r'"suggestions"\s*:\s*\[(.*?)\]', cleaned, re.DOTALL
     )
     suggestion_list: list[str] = (
         [
-            s.strip().strip('"')
-            for s in suggestions_match[0].split(",")
-            if s.strip().strip('"')
+            s.replace('\\"', '"').replace('\\\\', '\\')
+            for s in re.findall(r'"((?:[^"\\]|\\.)*)"', suggestions_match.group(1))
+            if s.strip()
         ]
         if suggestions_match
         else []

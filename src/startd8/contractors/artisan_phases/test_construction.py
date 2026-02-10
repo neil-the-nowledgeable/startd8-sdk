@@ -28,6 +28,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+from startd8.utils.token_usage import token_usage_cost
+
 if TYPE_CHECKING:
     from startd8.contractors.artisan_phases.design_documentation import (
         DesignDocument as DesignPhaseDocument,
@@ -1478,7 +1480,7 @@ class LLMTestGenerator:
         )
 
         # Accumulate cost metrics
-        self.total_cost_usd += token_usage.cost_estimate
+        self.total_cost_usd += token_usage_cost(token_usage)
         self.total_input_tokens += token_usage.input
         self.total_output_tokens += token_usage.output
 
@@ -1489,7 +1491,7 @@ class LLMTestGenerator:
             time_ms,
             token_usage.input,
             token_usage.output,
-            token_usage.cost_estimate,
+            token_usage_cost(token_usage),
         )
 
         code = self._extract_code(response_text)
@@ -1531,7 +1533,7 @@ class LLMTestGenerator:
             full_prompt
         )
 
-        self.total_cost_usd += token_usage.cost_estimate
+        self.total_cost_usd += token_usage_cost(token_usage)
         self.total_input_tokens += token_usage.input
         self.total_output_tokens += token_usage.output
 
@@ -1539,7 +1541,7 @@ class LLMTestGenerator:
             "LLM retry for '%s': %dms, $%.4f",
             design.feature_name,
             time_ms,
-            token_usage.cost_estimate,
+            token_usage_cost(token_usage),
         )
 
         code = self._extract_code(response_text)
@@ -1718,17 +1720,6 @@ class TestConstructionPhase:
     # ------------------------------------------------------------------
     # LLM helpers
     # ------------------------------------------------------------------
-
-    def _render_llm_modules(
-        self, test_modules: List[TestModule]
-    ) -> List[TestModule]:
-        """Ensure LLM-generated modules use a direct-render path.
-
-        For LLM modules the ``test_body`` of the single synthetic
-        ``TestCase`` IS the complete source.  We tag them so
-        ``render_test_module`` can detect and short-circuit.
-        """
-        return test_modules
 
     def _render_llm_module_source(self, module: TestModule) -> str:
         """Render an LLM-generated module to source code.
