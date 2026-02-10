@@ -230,7 +230,6 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     plan_meta = seed_data.get("plan", {})
     preflight = seed_data.get("_preflight", {})
 
-    context["seed_data"] = seed_data
     context["tasks"] = tasks
     context["task_index"] = {t.task_id: t for t in tasks}
     context["plan_title"] = plan_meta.get("title", "Untitled Plan")
@@ -286,9 +285,11 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         check_summary = preflight.get("check_summary", {})
         fail_count = check_summary.get("fail", 0)
 
-        # Populate context for downstream phases
+        # Populate context for downstream phases.
+        # Note: we intentionally do NOT store the raw seed_data blob in
+        # context — it can be large and is not needed after parsing.  If a
+        # checkpoint resume needs it, _ensure_context_loaded re-reads the file.
         context["enriched_seed_path"] = self.enriched_seed_path
-        context["seed_data"] = seed_data
         context["tasks"] = sorted_tasks
         context["task_index"] = {t.task_id: t for t in tasks}
         context["plan_title"] = plan_meta.get("title", "Untitled Plan")

@@ -955,7 +955,7 @@ class ArtisanContractorWorkflow:
                         if config.dry_run
                         else PhaseStatus.COMPLETED
                     )
-                    cost = float(result_dict.get("cost", 0.0))
+                    cost = float(result_dict.get("cost") or 0.0)
                     output = result_dict.get("output")
                     metadata = result_dict.get("metadata", {})
 

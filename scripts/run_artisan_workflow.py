@@ -34,8 +34,10 @@ import logging
 import sys
 from pathlib import Path
 
-# Ensure the SDK is importable
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
+# Ensure the SDK is importable (dev mode — installed editable is preferred)
+_src = str(Path(__file__).resolve().parent.parent / "src")
+if _src not in sys.path:
+    sys.path.insert(0, _src)
 
 from startd8.contractors.artisan_contractor import (
     ArtisanContractorWorkflow,
@@ -253,7 +255,7 @@ def main() -> int:
         logger.info("Dry run — skipping result file write")
 
     # Return code based on status
-    if result.status in (WorkflowStatus.COMPLETED, ):
+    if result.status == WorkflowStatus.COMPLETED:
         return 0
     return 1
 
