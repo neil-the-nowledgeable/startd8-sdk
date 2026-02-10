@@ -286,8 +286,15 @@ class IntegrationCheckpoint:
             details={"files_checked": checked},
         )
 
-    def check_lint(self, files: List[Path]) -> CheckpointResult:
-        """Run basic lint checks on the files."""
+    def check_lint(self, files: List[Path], ignore_codes: Optional[List[str]] = None) -> CheckpointResult:
+        """Run basic lint checks on the files.
+
+        Args:
+            files: List of file paths to lint.
+            ignore_codes: Optional list of ruff rule codes to ignore
+                (e.g. ``["F401"]`` to skip unused-import checks on
+                partial files destined for AST merge).
+        """
         errors = []
         warnings = []
         checked = 0
@@ -299,9 +306,12 @@ class IntegrationCheckpoint:
             checked += 1
 
             # Try ruff if available
+            cmd = ["python3", "-m", "ruff", "check", str(file_path), "--select=E7,E9,F", "--output-format=concise"]
+            if ignore_codes:
+                cmd.extend(["--ignore", ",".join(ignore_codes)])
             try:
                 result = subprocess.run(
-                    ["python3", "-m", "ruff", "check", str(file_path), "--select=E7,E9,F", "--output-format=concise"],
+                    cmd,
                     capture_output=True,
                     text=True,
                     cwd=self.project_root,
@@ -367,7 +377,10 @@ class IntegrationCheckpoint:
         if syntax_result.status == CheckpointStatus.FAILED:
             all_errors.extend(syntax_result.errors)
 
-        lint_result = self.check_lint(generated_files)
+        # Ignore F401 (unused imports) in pre-merge validation because
+        # generated files are partial — the AST merge will combine them
+        # with the full target file where those imports are used.
+        lint_result = self.check_lint(generated_files, ignore_codes=["F401"])
         if lint_result.status == CheckpointStatus.FAILED:
             all_errors.extend(lint_result.errors)
 

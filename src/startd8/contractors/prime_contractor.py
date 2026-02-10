@@ -82,10 +82,8 @@ class PrimeContractorWorkflow:
         registry.discover()
         self.code_generator = code_generator
         self.instrumentor = instrumentor or registry.get_default_instrumentor()()
-        # Ensure OTel is configured so logs/traces/metrics reach the collector.
-        # Defaults to enabled; callers can set STARTD8_OTEL=disabled to opt out.
         import os as _os
-        _os.environ.setdefault("STARTD8_OTEL", "enabled")
+        _os.environ.setdefault('STARTD8_OTEL', 'enabled')
         from ..otel import auto_configure_otel
         auto_configure_otel()
         self.size_estimator = size_estimator or registry.get_default_size_estimator()()
@@ -198,7 +196,7 @@ class PrimeContractorWorkflow:
         """
         key = str(target_path)
         if key in self._pre_integration_snapshots:
-            return  # already snapshotted
+            return
         if target_path.exists():
             snapshot_path = target_path.with_suffix(target_path.suffix + '.pre_integration')
             shutil.copy2(target_path, snapshot_path)
@@ -219,7 +217,6 @@ class PrimeContractorWorkflow:
             logger.warning('No pre-integration snapshot for %s', self._rel_display(target_path))
             return False
         if snapshot is None:
-            # File didn't exist before — remove whatever was written
             if target_path.exists():
                 target_path.unlink()
                 logger.info('Deleted (no original): %s', self._rel_display(target_path))
@@ -228,7 +225,7 @@ class PrimeContractorWorkflow:
         logger.info('Restored from snapshot: %s', self._rel_display(target_path))
         return True
 
-    def _cleanup_snapshots(self, target_paths: Optional[List[Path]] = None) -> int:
+    def _cleanup_snapshots(self, target_paths: Optional[List[Path]]=None) -> int:
         """Remove ``.pre_integration`` snapshot files.
 
         Args:
@@ -291,15 +288,8 @@ class PrimeContractorWorkflow:
             if not self.develop_feature(feature):
                 return False
         if feature.status == FeatureStatus.GENERATED:
-            # Error-informed retry: if this feature failed a prior integration
-            # attempt (e.g., lint, import, or syntax error), regenerate with
-            # the error as feedback context instead of retrying the same code.
             if feature.error_message and self.code_generator:
-                logger.info(
-                    "Feature '%s' has prior error — regenerating with feedback: %s",
-                    feature.name, feature.error_message,
-                    extra={'feature_name': feature.name, 'prior_error': feature.error_message},
-                )
+                logger.info("Feature '%s' has prior error — regenerating with feedback: %s", feature.name, feature.error_message, extra={'feature_name': feature.name, 'prior_error': feature.error_message})
                 prior_error = feature.error_message
                 feature.error_message = None
                 feature.status = FeatureStatus.PENDING
@@ -349,7 +339,7 @@ class PrimeContractorWorkflow:
         logger.info("All %d sub-features integrated for '%s'", n, feature.name, extra={'feature_name': feature.name, 'sub_feature_count': n})
         return True
 
-    def develop_feature(self, feature: FeatureSpec, prior_error: Optional[str] = None) -> bool:
+    def develop_feature(self, feature: FeatureSpec, prior_error: Optional[str]=None) -> bool:
         """
         Develop a feature using the configured CodeGenerator.
 
@@ -387,19 +377,9 @@ class PrimeContractorWorkflow:
             gen_context: dict = {'feature_name': feature.name}
             if feature.target_files:
                 gen_context['target_file'] = feature.target_files[0]
-                gen_context['output_constraint'] = (
-                    'IMPORTANT: Output a single Python module, NOT a package '
-                    'with multiple files. All classes, enums, and functions must '
-                    'be defined in one file. Do NOT use relative imports '
-                    '(from .module import ...) — everything lives in this file.'
-                )
+                gen_context['output_constraint'] = 'IMPORTANT: Output a single Python module, NOT a package with multiple files. All classes, enums, and functions must be defined in one file. Do NOT use relative imports (from .module import ...) — everything lives in this file.'
             if prior_error:
-                gen_context['prior_error_feedback'] = (
-                    'CRITICAL: A previous attempt to generate this code FAILED '
-                    'integration checks. You MUST fix the following issues in '
-                    f'your output:\n\n{prior_error}\n\n'
-                    'Do NOT repeat these mistakes. Address each error explicitly.'
-                )
+                gen_context['prior_error_feedback'] = f'CRITICAL: A previous attempt to generate this code FAILED integration checks. You MUST fix the following issues in your output:\n\n{prior_error}\n\nDo NOT repeat these mistakes. Address each error explicitly.'
             result: GenerationResult = self.code_generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]
@@ -431,13 +411,11 @@ class PrimeContractorWorkflow:
         """
         logger.info('INTEGRATING FEATURE: %s', feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id})
         self.queue.start_integration(feature.id)
-        # --- Clean-slate retry: restore targets from pre-integration snapshots ---
         if feature.integration_attempts > 1:
             for tf in feature.target_files:
                 tp = sanitize_path(tf, base_dir=self.project_root)
                 if self._restore_target(tp):
                     logger.info('Retry %d: restored %s from snapshot', feature.integration_attempts, self._rel_display(tp))
-        # --- Pre-merge validation: reject broken generated code early ---
         if not self.dry_run:
             gen_paths = [Path(f) for f in feature.generated_files if Path(f).exists() and Path(f).suffix == '.py']
             if gen_paths:
@@ -495,7 +473,6 @@ class PrimeContractorWorkflow:
                 if not self.protect_dirty_target(target_path):
                     logger.warning('Skipping %s to protect uncommitted changes', target_path.name)
                     continue
-            # Snapshot target before first merge so retries can restore it
             if feature.integration_attempts == 1:
                 self._snapshot_target(target_path)
             if self.merge_strategy.can_merge(source_path, target_path):
@@ -529,8 +506,6 @@ class PrimeContractorWorkflow:
             all_passed = self.checkpoint.summarize_results(results)
             if not all_passed:
                 failed_checks = [r for r in results if r.status == CheckpointStatus.FAILED]
-                # Build error message with full detail so error-informed
-                # retry can feed actionable feedback to the LLM.
                 error_parts = []
                 for r in failed_checks:
                     detail = r.message
@@ -657,9 +632,6 @@ class PrimeContractorWorkflow:
                 else:
                     feature.status = FeatureStatus.PENDING
                     logger.info('Reset %s -> PENDING (needs development)', feature.name)
-                # NOTE: error_message is intentionally preserved — it is used
-                # by process_feature() to inject checkpoint feedback into the
-                # next code generation attempt.
                 reset_count += 1
         self.queue.save_state()
         logger.info('Reset %d failed/blocked feature(s)', reset_count)
@@ -1100,7 +1072,5 @@ class FeatureProcessor:
         processed_feature.setdefault('dependencies', [])
         processed_feature.setdefault('complexity_score', 0)
         return processed_feature
-
-
 logger = get_logger(__name__)
 MAX_INTEGRATION_ATTEMPTS = 6

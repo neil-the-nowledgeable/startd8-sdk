@@ -51,7 +51,12 @@ from typing import Any, Dict, List, Tuple
 
 
 class Phase(Enum):
-    """The 8 phases of the Artisan pipeline."""
+    """Generic lifecycle phases for prompt template lookup.
+
+    NOTE: These are a *prompt taxonomy*, not the 9-phase artisan pipeline.
+    The actual artisan phases live in ``artisan_phases/`` and are
+    orchestrated by ``WorkflowPhase`` in ``artisan_contractor.py``.
+    """
 
     DISCOVER = "discover"
     DEFINE = "define"
