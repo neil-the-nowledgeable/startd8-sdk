@@ -41,6 +41,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from startd8.contractors.protocols import (
+    DRAFT_MODEL_CLAUDE_HAIKU,
+    REVIEW_MODEL_CLAUDE_OPUS,
+    VALIDATE_MODEL_CLAUDE_SONNET,
+)
+
 __all__ = [
     "WorkflowPhase",
     "PhaseStatus",
@@ -206,6 +212,9 @@ class WorkflowConfig:
                         Ignored when a custom ``checkpoint_store`` is passed to
                         the orchestrator.
         tracer_name: OpenTelemetry tracer instrumentation name.
+        drafter_model: Model ID for the low-cost drafter role.
+        validator_model: Model ID for the validation/gating role.
+        reviewer_model: Model ID for the independent review role.
         metadata: Arbitrary metadata attached to results and checkpoints.
     """
 
@@ -217,6 +226,9 @@ class WorkflowConfig:
     max_retries_per_phase: int = 0
     checkpoint_dir: Optional[str] = None
     tracer_name: str = "startd8.artisan_contractor"
+    drafter_model: str = DRAFT_MODEL_CLAUDE_HAIKU.model_id
+    validator_model: str = VALIDATE_MODEL_CLAUDE_SONNET.model_id
+    reviewer_model: str = REVIEW_MODEL_CLAUDE_OPUS.model_id
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -603,6 +615,11 @@ class ArtisanContractorWorkflow:
         if context is None:
             context = {}
 
+        # Inject model assignments so phase handlers can look them up
+        context.setdefault("drafter_model", self.config.drafter_model)
+        context.setdefault("validator_model", self.config.validator_model)
+        context.setdefault("reviewer_model", self.config.reviewer_model)
+
         config = self.config
         cost_tracker = _CostTracker(budget=config.cost_budget)
         phase_results: list[PhaseResult] = []
@@ -651,6 +668,9 @@ class ArtisanContractorWorkflow:
                 "workflow.total_timeout": config.total_timeout_seconds or -1,
                 "workflow.cost_budget": config.cost_budget or -1,
                 "workflow.resume_from": resumed_from_value or "",
+                "workflow.drafter_model": config.drafter_model,
+                "workflow.validator_model": config.validator_model,
+                "workflow.reviewer_model": config.reviewer_model,
             },
         )
 

@@ -43,8 +43,20 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, Sequence, Type, runtime_checkable
 
-from opentelemetry import trace
-from opentelemetry.trace import StatusCode, Tracer
+try:
+    from opentelemetry import trace
+    from opentelemetry.trace import StatusCode, Tracer
+
+    HAS_OTEL = True
+except ImportError:  # pragma: no cover
+    HAS_OTEL = False
+    trace = None  # type: ignore[assignment]
+    Tracer = None  # type: ignore[assignment,misc]
+
+    class StatusCode:  # type: ignore[no-redef]
+        """Minimal stand-in when OTel is not installed."""
+        OK = "OK"
+        ERROR = "ERROR"
 
 __all__ = [
     "PhaseType",
@@ -63,6 +75,32 @@ __all__ = [
 ]
 
 logger = logging.getLogger("startd8.phase_runner")
+
+
+class _NoOpSpan:
+    """Minimal no-op span for when OTel is not installed."""
+
+    def __enter__(self) -> _NoOpSpan:
+        return self
+
+    def __exit__(self, *args: Any) -> None:
+        pass
+
+    def set_attribute(self, key: str, value: Any) -> None:
+        pass
+
+    def set_status(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def record_exception(self, exception: Exception) -> None:
+        pass
+
+
+class _NoOpTracer:
+    """Minimal no-op tracer for when OTel is not installed."""
+
+    def start_as_current_span(self, name: str, **kwargs: Any) -> _NoOpSpan:
+        return _NoOpSpan()
 
 
 # ============================================================================
@@ -304,7 +342,7 @@ class PhaseRunner:
         self,
         phases: Sequence[PhaseConfig],
         budget: float = float("inf"),
-        tracer: Optional[Tracer] = None,
+        tracer: Optional[Any] = None,
         logger_instance: Optional[logging.Logger] = None,
     ) -> None:
         """Initialize the PhaseRunner.
@@ -327,7 +365,12 @@ class PhaseRunner:
 
         self._phases = list(phases)
         self._budget = budget
-        self._tracer = tracer or trace.get_tracer("startd8.phase_runner")
+        if tracer is not None:
+            self._tracer = tracer
+        elif HAS_OTEL:
+            self._tracer = trace.get_tracer("startd8.phase_runner")
+        else:
+            self._tracer = _NoOpTracer()
         self._logger = logger_instance or logger
         self._total_cost: float = 0.0
 
