@@ -238,7 +238,8 @@ class SummarizationStrategy(CompressionStrategy):
         """
         Summarize content to target ratio.
 
-        TODO: Replace with actual LLM-based summarization in production.
+        Uses truncation as a fallback; an LLM-backed implementation can
+        be swapped in via :class:`CompressionStrategy`.
         """
         summarized_target = int(current_tokens * self.target_ratio)
         effective_target = min(target_tokens, summarized_target)
@@ -841,7 +842,7 @@ class ContextAssembler:
                     f" Target: {available_tokens}"
                 )
                 return None
-        except Exception as e:
+        except (ValueError, RuntimeError) as e:
             logger.error(f"Error compressing component '{component.name}': {e}")
             return None
 
@@ -949,42 +950,21 @@ def create_context_assembler(budget: int, **kwargs) -> ContextAssembler:
     return ContextAssembler(total_budget=budget, **kwargs)
 
 
-(\
-"\nCentralized Context Assembly System"
-" with Token Budget Management\n\n"
-"This module provides a comprehensive"
-" context assembly system with token"
-" budget tracking,\n"
-"overflow protection, prioritization,"
-" and compression capabilities."
-" It's designed for\n"
-"managing LLM context windows"
-" efficiently.\n\n"
-"Features:\n"
-"- Token budget tracking using tiktoken\n"
-"- Component prioritization"
-" (CRITICAL, HIGH, NORMAL, LOW)\n"
-"- Multiple compression strategies"
-" (truncation, summarization placeholder)\n"
-"- Overflow protection"
-" and safety margins\n"
-"- Detailed metrics and warnings\n"
-"- Fluent builder interface\n"
-"- File content integration\n\n"
-"Author: Lead Contractor\n"
-"Version: 1.0.0\n"
-)
+# ---------------------------------------------------------------------------
+# Module-level setup (must follow class/function definitions that reference
+# logger/_HAS_TIKTOKEN/_get_encoding at *call*-time, not *definition*-time).
+# ---------------------------------------------------------------------------
+
 try:
     import tiktoken
 
     _HAS_TIKTOKEN = True
 except ImportError:
-    tiktoken = None
+    tiktoken = None  # type: ignore[assignment]
     _HAS_TIKTOKEN = False
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+
 logger = logging.getLogger(__name__)
+
 __all__ = [
     "ContextPriority",
     "CompressionType",
@@ -1000,6 +980,3 @@ __all__ = [
     "ContextAssembler",
     "create_context_assembler",
 ]
-__version__ = "1.0.0"
-__author__ = "Lead Contractor"
-__license__ = "MIT"

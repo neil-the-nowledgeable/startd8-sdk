@@ -1,16 +1,24 @@
+import re
 import shutil
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
 from ..logging_config import get_logger
 from ..security import sanitize_path
 from .checkpoint import CheckpointStatus, IntegrationCheckpoint
-from .protocols import CheckpointFailedCallback, CodeGenerator, FeatureCompleteCallback, GenerationResult, Instrumentor, MergeStrategy, SizeEstimator
+from .protocols import (
+    CheckpointFailedCallback,
+    CodeGenerator,
+    FeatureCompleteCallback,
+    GenerationResult,
+    Instrumentor,
+    MergeStrategy,
+    SizeEstimator,
+)
 from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
-import re
-from datetime import timezone
 
 class PrimeContractorWorkflow:
     """
