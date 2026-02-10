@@ -1036,6 +1036,11 @@ class PreFlightChecker:
 
         # Known model family prefixes (new models added frequently)
         known_prefixes = (
+            # Current generation (4.5/4.6) — name-first convention
+            "claude-opus-4",
+            "claude-sonnet-4",
+            "claude-haiku-4",
+            # Legacy generation (3.x) — version-first convention
             "claude-3-opus",
             "claude-3-sonnet",
             "claude-3-haiku",

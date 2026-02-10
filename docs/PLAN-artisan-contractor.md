@@ -21,13 +21,17 @@ The **ArtisanContractor** is an advanced multi-phase workflow that goes beyond t
 
 ### Cost Model
 
+> **2026-02-10 Update:** Switched to Anthropic-only models. Gemini proved unreliable
+> as a drafter in practice. Updated all model IDs to current generation (4.5/4.6).
+> See `docs/ARTISAN_MODEL_CORRECTION.md` for full problem description.
+
 | Role | Default Model | Tier | Cost/1M (in/out) |
 |------|--------------|------|-------------------|
-| **Drafter** (low-cost) | `gemini:gemini-2.5-flash-lite` | Mini | $0.075 / $0.30 |
-| **Validator** (high-cost) | `anthropic:claude-sonnet-4-5-20250927` | Balanced | $3.00 / $15.00 |
-| **Reviewer** (2nd high-cost) | `anthropic:claude-opus-4-5-20251101` | Flagship | $5.00 / $25.00 |
+| **Drafter** (low-cost) | `anthropic:claude-haiku-4-5-20251008` | Fast | $1.00 / $5.00 |
+| **Validator** (high-cost) | `anthropic:claude-sonnet-4-5-20250929` | Balanced | $3.00 / $15.00 |
+| **Reviewer** (2nd high-cost) | `anthropic:claude-opus-4-6` | Flagship | $15.00 / $75.00 |
 
-All model roles are configurable via agent spec strings. The Reviewer is a distinct model from the Validator to get independent perspective.
+All model roles are configurable via agent spec strings. The Reviewer is a distinct model from the Validator to get independent perspective. Core principle: **cheap drafts, expensive validation** — the drafter generates many attempts cheaply while the validator and reviewer ensure quality.
 
 ### Architectural Decisions (from review triage)
 

@@ -325,7 +325,7 @@ class ModelCatalogEntry:
     """An entry in the model catalog describing an available AI model.
 
     Attributes:
-        model_id: Unique model identifier (e.g. 'claude-3-5-sonnet-20241022').
+        model_id: Unique model identifier (e.g. 'claude-sonnet-4-5-20250929').
         model_name: Human-readable model name.
         role: The role this model serves (draft, validate, etc.).
         provider: The model provider name (e.g. 'anthropic', 'openai').
@@ -422,6 +422,14 @@ def get_validate_models() -> List[ModelCatalogEntry]:
     """
     return get_models_by_role(ModelRole.VALIDATE)
 
+def get_review_models() -> List[ModelCatalogEntry]:
+    """Return all review model catalog entries.
+
+    Returns:
+        List of ModelCatalogEntry objects with role=REVIEW.
+    """
+    return get_models_by_role(ModelRole.REVIEW)
+
 def get_model_by_id(model_id: str) -> Optional[ModelCatalogEntry]:
     """Look up a model catalog entry by its model_id.
 
@@ -438,57 +446,45 @@ ProgressCallback = Callable[[int, int, str], None]
 FeatureCompleteCallback = Callable[[Any], None]
 CheckpointFailedCallback = Callable[[Any, List[Any]], None]
 
-DRAFT_MODEL_CLAUDE_SONNET = ModelCatalogEntry(
-    model_id='claude-3-5-sonnet-20241022',
-    model_name='Claude 3.5 Sonnet',
+DRAFT_MODEL_CLAUDE_HAIKU = ModelCatalogEntry(
+    model_id='claude-haiku-4-5-20251008',
+    model_name='Claude Haiku 4.5',
     role=ModelRole.DRAFT,
     provider='anthropic',
-    description='High-capability model for drafting code, text, and structured outputs.',
+    description='Fast, low-cost model for drafting. Cheap retries, expensive validation.',
     max_tokens=8192,
     supports_streaming=True,
     config={'temperature': 0.7},
-    version='3.5',
+    version='4.5',
 )
-DRAFT_MODEL_GPT4O = ModelCatalogEntry(
-    model_id='gpt-4o',
-    model_name='GPT-4o',
-    role=ModelRole.DRAFT,
-    provider='openai',
-    description="OpenAI's flagship model for drafting tasks.",
-    max_tokens=4096,
-    supports_streaming=True,
-    config={'temperature': 0.7},
-    version='4o',
-)
-VALIDATE_MODEL_CLAUDE_HAIKU = ModelCatalogEntry(
-    model_id='claude-3-5-haiku-20241022',
-    model_name='Claude 3.5 Haiku',
+VALIDATE_MODEL_CLAUDE_SONNET = ModelCatalogEntry(
+    model_id='claude-sonnet-4-5-20250929',
+    model_name='Claude Sonnet 4.5',
     role=ModelRole.VALIDATE,
     provider='anthropic',
-    description='Fast, cost-effective model for validation and checking tasks.',
-    max_tokens=4096,
+    description='Balanced model for validation and quality gating.',
+    max_tokens=8192,
     supports_streaming=True,
     config={'temperature': 0.0},
-    version='3.5',
+    version='4.5',
 )
-VALIDATE_MODEL_GPT4O_MINI = ModelCatalogEntry(
-    model_id='gpt-4o-mini',
-    model_name='GPT-4o Mini',
-    role=ModelRole.VALIDATE,
-    provider='openai',
-    description='Lightweight OpenAI model for validation passes.',
-    max_tokens=4096,
+REVIEW_MODEL_CLAUDE_OPUS = ModelCatalogEntry(
+    model_id='claude-opus-4-6',
+    model_name='Claude Opus 4.6',
+    role=ModelRole.REVIEW,
+    provider='anthropic',
+    description='Flagship model for independent design review and arbitration.',
+    max_tokens=8192,
     supports_streaming=True,
     config={'temperature': 0.0},
-    version='4o-mini',
+    version='4.6',
 )
 MODEL_CATALOG: Dict[str, ModelCatalogEntry] = {
     entry.model_id: entry
     for entry in [
-        DRAFT_MODEL_CLAUDE_SONNET,
-        DRAFT_MODEL_GPT4O,
-        VALIDATE_MODEL_CLAUDE_HAIKU,
-        VALIDATE_MODEL_GPT4O_MINI,
+        DRAFT_MODEL_CLAUDE_HAIKU,
+        VALIDATE_MODEL_CLAUDE_SONNET,
+        REVIEW_MODEL_CLAUDE_OPUS,
     ]
 }
 
@@ -496,9 +492,9 @@ __all__ = [
     'ModelRole', 'LessonCategory', 'LessonSeverity', 'SortOrder',
     'LessonQuery', 'Lesson', 'LessonResult', 'ModelCatalogEntry',
     'LessonsProvider',
-    'DRAFT_MODEL_CLAUDE_SONNET', 'DRAFT_MODEL_GPT4O',
-    'VALIDATE_MODEL_CLAUDE_HAIKU', 'VALIDATE_MODEL_GPT4O_MINI',
+    'DRAFT_MODEL_CLAUDE_HAIKU', 'VALIDATE_MODEL_CLAUDE_SONNET',
+    'REVIEW_MODEL_CLAUDE_OPUS',
     'MODEL_CATALOG',
     'get_models_by_role', 'get_draft_models', 'get_validate_models',
-    'get_model_by_id',
+    'get_review_models', 'get_model_by_id',
 ]
