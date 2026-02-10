@@ -264,6 +264,13 @@ class WorkflowRegistry:
         except ImportError as e:
             logger.debug(f"PlanIngestion workflow not available: {e}")
 
+        try:
+            from .builtin.domain_preflight_workflow import DomainPreflightWorkflow
+            cls.register(DomainPreflightWorkflow())
+            logger.debug("Registered built-in DomainPreflight workflow")
+        except ImportError as e:
+            logger.debug(f"DomainPreflight workflow not available: {e}")
+
     @classmethod
     def get_workflow(cls, workflow_id: str) -> Optional[Workflow]:
         """

@@ -15,6 +15,7 @@ Available workflows:
 - PolicyAnalysisWorkflow: Multi-agent critical policy analysis
 - PlainLanguageWorkflow: Simplifies complex content into plain language
 - PlanIngestionWorkflow: Parses, assesses, and transforms generic plans into SDK-native formats
+- DomainPreflightWorkflow: Domain-aware pre-flight analysis for artisan context seeds
 """
 
 # Imports are done lazily to avoid circular imports
@@ -33,6 +34,7 @@ __all__ = [
     "PolicyAnalysisWorkflow",
     "PlainLanguageWorkflow",
     "PlanIngestionWorkflow",
+    "DomainPreflightWorkflow",
 ]
 
 
@@ -74,4 +76,7 @@ def __getattr__(name: str):
     elif name == "PlanIngestionWorkflow":
         from .plan_ingestion_workflow import PlanIngestionWorkflow
         return PlanIngestionWorkflow
+    elif name == "DomainPreflightWorkflow":
+        from .domain_preflight_workflow import DomainPreflightWorkflow
+        return DomainPreflightWorkflow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
