@@ -34,12 +34,11 @@ Usage::
 
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import time
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
@@ -151,25 +150,99 @@ def _parse_tasks(seed_data: dict[str, Any]) -> list[SeedTask]:
 
 
 def _topological_sort(tasks: list[SeedTask]) -> list[SeedTask]:
-    """Sort tasks by dependency order (tasks with no deps first)."""
-    id_to_task = {t.task_id: t for t in tasks}
-    visited: set[str] = set()
-    result: list[str] = []
+    """Sort tasks by dependency order (tasks with no deps first).
 
-    def visit(task_id: str) -> None:
-        if task_id in visited:
-            return
-        visited.add(task_id)
+    Uses DFS with gray/black coloring to detect cycles.  If a cycle is
+    found, logs a warning with the involved task IDs and falls back to
+    the original input order (safe — the orchestrator can still run, it
+    just won't guarantee prerequisite ordering).
+    """
+    id_to_task = {t.task_id: t for t in tasks}
+    # WHITE = not visited, GRAY = in current DFS path, BLACK = finished
+    WHITE, GRAY, BLACK = 0, 1, 2
+    color: dict[str, int] = {t.task_id: WHITE for t in tasks}
+    result: list[str] = []
+    cycle_members: list[str] = []
+
+    def visit(task_id: str) -> bool:
+        """Return True if a cycle was detected."""
+        state = color.get(task_id, BLACK)  # unknown IDs treated as done
+        if state == BLACK:
+            return False
+        if state == GRAY:
+            cycle_members.append(task_id)
+            return True
+
+        color[task_id] = GRAY
         task = id_to_task.get(task_id)
         if task:
             for dep_id in task.depends_on:
-                visit(dep_id)
-            result.append(task_id)
+                if visit(dep_id):
+                    cycle_members.append(task_id)
+                    return True
+        color[task_id] = BLACK
+        result.append(task_id)
+        return False
 
+    has_cycle = False
     for t in tasks:
-        visit(t.task_id)
+        if color[t.task_id] == WHITE:
+            if visit(t.task_id):
+                has_cycle = True
+                break
+
+    if has_cycle:
+        logger.warning(
+            "Dependency cycle detected among tasks: %s — "
+            "falling back to original seed order",
+            " → ".join(reversed(cycle_members)),
+        )
+        return list(tasks)
 
     return [id_to_task[tid] for tid in result if tid in id_to_task]
+
+
+def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
+    """Return the task list from context, reloading from seed if needed.
+
+    After a checkpoint resume the context dict is empty because the
+    orchestrator does not persist it.  Every handler that needs tasks
+    calls this helper, which transparently reloads the seed when the
+    PLAN phase's data is absent.
+    """
+    tasks: list[SeedTask] | None = context.get("tasks")
+    if tasks is not None:
+        return tasks
+
+    seed_path = context.get("enriched_seed_path")
+    if not seed_path:
+        logger.warning(
+            "Context missing 'tasks' and 'enriched_seed_path' — "
+            "cannot reload seed (possible checkpoint resume without PLAN phase)"
+        )
+        return []
+
+    logger.info("Reloading enriched seed for resumed workflow from %s", seed_path)
+    seed_data = _load_enriched_seed(seed_path)
+    tasks = _topological_sort(_parse_tasks(seed_data))
+
+    # Re-populate the keys that PlanPhaseHandler normally sets
+    plan_meta = seed_data.get("plan", {})
+    preflight = seed_data.get("_preflight", {})
+
+    context["seed_data"] = seed_data
+    context["tasks"] = tasks
+    context["task_index"] = {t.task_id: t for t in tasks}
+    context["plan_title"] = plan_meta.get("title", "Untitled Plan")
+    context["plan_goals"] = plan_meta.get("goals", [])
+    context["preflight_summary"] = preflight.get("check_summary", {})
+    domain_counts: dict[str, int] = defaultdict(int)
+    for t in tasks:
+        domain_counts[t.domain] += 1
+    context["domain_summary"] = dict(domain_counts)
+    context["total_estimated_loc"] = sum(t.estimated_loc for t in tasks)
+
+    return tasks
 
 
 # ============================================================================
@@ -263,7 +336,7 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
-        tasks: list[SeedTask] = context.get("tasks", [])
+        tasks: list[SeedTask] = _ensure_context_loaded(context)
         project_root = Path(context.get("project_root", "."))
 
         logger.info("SCAFFOLD phase: checking %d tasks against %s", len(tasks), project_root)
@@ -273,11 +346,24 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
         dirs_created: set[str] = set()
         files_existing: list[str] = []
 
+        skipped_targets: list[str] = []
+
         for task in tasks:
             for target in task.target_files:
                 target_path = project_root / target
                 parent = target_path.parent
-                parent_rel = str(parent.relative_to(project_root))
+
+                # Guard: skip targets whose resolved parent falls outside
+                # project_root (e.g. absolute paths in target_files).
+                try:
+                    parent_rel = str(parent.relative_to(project_root))
+                except ValueError:
+                    logger.warning(
+                        "SCAFFOLD: target %r resolves outside project root, skipping",
+                        target,
+                    )
+                    skipped_targets.append(target)
+                    continue
 
                 dirs_needed.add(parent_rel)
 
@@ -299,6 +385,7 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
             "directories_created": sorted(dirs_created),
             "directories_missing": sorted(dirs_missing) if dry_run else [],
             "existing_target_files": files_existing,
+            "skipped_targets": skipped_targets,
             "project_root": str(project_root),
         }
 
@@ -328,7 +415,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
-        tasks: list[SeedTask] = context.get("tasks", [])
+        tasks: list[SeedTask] = _ensure_context_loaded(context)
         project_root = Path(context.get("project_root", "."))
 
         logger.info("IMPLEMENT phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
@@ -351,17 +438,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             }
 
             if not dry_run:
-                # Real implementation would:
-                # 1. Build prompt from task description + constraints
-                # 2. Call LLM via drafter model
-                # 3. Validate output against post_generation_validators
-                # 4. Write files to target_files
-                # For now, mark as pending (future work with PhaseRunner)
                 task_report["status"] = "not_implemented"
-                task_report["note"] = (
-                    "Real LLM code generation requires PhaseRunner integration "
-                    "with draft→validate→gate pattern. Use --dry-run to test orchestration."
-                )
 
             # Check environment readiness
             env_issues = [
@@ -411,7 +488,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
-        tasks: list[SeedTask] = context.get("tasks", [])
+        tasks: list[SeedTask] = _ensure_context_loaded(context)
 
         logger.info("TEST phase: building test plan for %d tasks (dry_run=%s)", len(tasks), dry_run)
 
@@ -465,7 +542,7 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
-        tasks: list[SeedTask] = context.get("tasks", [])
+        tasks: list[SeedTask] = _ensure_context_loaded(context)
         preflight_summary = context.get("preflight_summary", {})
 
         logger.info("REVIEW phase: building review checklist (dry_run=%s)", dry_run)
@@ -540,7 +617,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         logger.info("FINALIZE phase: generating summary (dry_run=%s)", dry_run)
 
         plan_title = context.get("plan_title", "Untitled")
-        tasks: list[SeedTask] = context.get("tasks", [])
+        tasks: list[SeedTask] = _ensure_context_loaded(context)
         domain_summary = context.get("domain_summary", {})
         preflight_summary = context.get("preflight_summary", {})
         scaffold = context.get("scaffold", {})

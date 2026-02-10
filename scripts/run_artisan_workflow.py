@@ -204,9 +204,15 @@ def main() -> int:
     for wp_phase, handler in handlers.items():
         workflow.register_handler(wp_phase, handler)
 
-    # Execute
+    # Execute — pass enriched_seed_path in context so handlers can
+    # reload task data after a checkpoint resume (context is not persisted).
+    initial_context = {
+        "enriched_seed_path": str(seed_path.resolve()),
+    }
+
     try:
         result = workflow.execute(
+            context=initial_context,
             resume_from_checkpoint=args.resume,
         )
     except Exception as exc:
