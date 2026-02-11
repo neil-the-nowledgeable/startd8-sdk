@@ -47,6 +47,7 @@ from startd8.contractors.artisan_contractor import (
     WorkflowStatus,
 )
 from startd8.contractors.context_seed_handlers import ContextSeedHandlers
+from startd8.contractors.handoff import write_design_handoff
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -97,6 +98,12 @@ def print_phase_results(result: WorkflowResult) -> None:
                 print(f"      Dirs needed:  {len(pr.output.get('directories_needed', []))}")
                 print(f"      Dirs created: {len(pr.output.get('directories_created', []))}")
                 print(f"      Files exist:  {len(pr.output.get('existing_target_files', []))}")
+
+            elif pr.phase == WorkflowPhase.DESIGN:
+                print(f"      Tasks designed: {pr.output.get('tasks_designed', '?')}")
+                print(f"      Agreed: {pr.output.get('tasks_agreed', '?')}")
+                if pr.output.get("output_dir"):
+                    print(f"      Output: {pr.output['output_dir']}")
 
             elif pr.phase == WorkflowPhase.IMPLEMENT:
                 print(f"      Tasks processed: {pr.output.get('tasks_processed', '?')}")
@@ -158,6 +165,11 @@ def main() -> int:
         help="Resume from last checkpoint",
     )
     parser.add_argument(
+        "--stop-after", default=None,
+        choices=[p.value for p in WorkflowPhase],
+        help="Stop after this phase completes (e.g. --stop-after design)",
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable debug logging",
     )
@@ -204,8 +216,17 @@ def main() -> int:
     if config.cost_budget is not None:
         logger.info("Cost budget: $%.2f", config.cost_budget)
 
+    # Determine phase sublist when --stop-after is set
+    phases = None
+    if args.stop_after:
+        stop_phase = WorkflowPhase.from_value(args.stop_after)
+        all_phases = WorkflowPhase.ordered()
+        stop_idx = all_phases.index(stop_phase)
+        phases = all_phases[:stop_idx + 1]
+        logger.info("Stop-after: running phases %s", [p.value for p in phases])
+
     # Create workflow and register handlers
-    workflow = ArtisanContractorWorkflow(config=config)
+    workflow = ArtisanContractorWorkflow(config=config, phases=phases)
 
     handler_kwargs: dict = {
         "enriched_seed_path": str(seed_path.resolve()),
@@ -234,6 +255,24 @@ def main() -> int:
     except Exception as exc:
         logger.error("Workflow failed: %s", exc, exc_info=True)
         return 1
+
+    # Write design handoff when stopping after a phase that includes DESIGN
+    if (
+        result.status == WorkflowStatus.COMPLETED
+        and not args.dry_run
+        and phases is not None
+        and WorkflowPhase.DESIGN in phases
+    ):
+        handoff_path = write_design_handoff(
+            output_dir=output_dir,
+            enriched_seed_path=str(seed_path.resolve()),
+            project_root=str(Path(args.project_root).resolve()),
+            workflow_id=config.workflow_id,
+            completed_phases=[p.value for p in phases],
+            design_results=initial_context.get("design_results", {}),
+            scaffold=initial_context.get("scaffold", {}),
+        )
+        logger.info("Wrote design handoff: %s", handoff_path)
 
     # Print results
     print_phase_results(result)

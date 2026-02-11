@@ -8,6 +8,7 @@ implementations for each WorkflowPhase.
 WorkflowPhase mapping (from artisan_contractor.py docstring):
     PLAN      → Load seed + validate + build task plan
     SCAFFOLD  → Verify target directories + resolve dependencies
+    DESIGN    → Generate design docs per task via DesignDocumentationPhase
     IMPLEMENT → Generate code per task via LeadContractorCodeGenerator
     TEST      → Run post-generation validators against generated code
     REVIEW    → LLM-based quality review of generated implementations
@@ -17,6 +18,7 @@ Context dict contract (keys populated by each phase):
     After PLAN:      tasks, task_index, plan_title, preflight_summary, domain_summary,
                      enriched_seed_path
     After SCAFFOLD:  scaffold (summary dict)
+    After DESIGN:    design_results (Dict[task_id, dict] with design_document, agreed, iterations, cost)
     After IMPLEMENT: implementation (output dict), generation_results (Dict[task_id, GenerationResult])
     After TEST:      test_results (Dict with test_plan, per_task, total_cost)
     After REVIEW:    review_results (Dict with review_items, per_task, total_cost)
@@ -53,7 +55,8 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from dataclasses import dataclass
+import dataclasses
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Optional
 
@@ -81,6 +84,7 @@ __all__ = [
     "ContextSeedHandlers",
     "PlanPhaseHandler",
     "ScaffoldPhaseHandler",
+    "DesignPhaseHandler",
     "ImplementPhaseHandler",
     "TestPhaseHandler",
     "ReviewPhaseHandler",
@@ -126,6 +130,46 @@ class HandlerConfig:
     review_temperature: float = 0.0
     review_max_code_chars: int = 8000
     development_timeout_seconds: Optional[float] = None
+
+    @classmethod
+    def from_config(
+        cls,
+        cli_overrides: Optional[dict[str, Any]] = None,
+    ) -> "HandlerConfig":
+        """Build a HandlerConfig using the 3-tier priority chain.
+
+        Priority: *cli_overrides* > env vars / config file (via
+        ``ConfigManager.get_artisan_setting``) > dataclass defaults.
+
+        Args:
+            cli_overrides: Dict of field-name → value from CLI args.
+                Only non-``None`` entries are considered overrides.
+
+        Returns:
+            A fully resolved ``HandlerConfig``.
+        """
+        from startd8.config import get_config_manager
+
+        cfg_mgr = get_config_manager()
+        overrides = cli_overrides or {}
+        kwargs: dict[str, Any] = {}
+
+        for f in fields(cls):
+            # CLI override wins
+            cli_val = overrides.get(f.name)
+            if cli_val is not None:
+                kwargs[f.name] = cli_val
+                continue
+
+            # Config manager checks env var → config file
+            cfg_val = cfg_mgr.get_artisan_setting(f.name)
+            if cfg_val is not None:
+                kwargs[f.name] = cfg_val
+                continue
+
+            # Otherwise let the dataclass default apply (omit from kwargs)
+
+        return cls(**kwargs)
 
 
 # ============================================================================
@@ -480,6 +524,245 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
         )
 
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
+
+
+class DesignPhaseHandler(AbstractPhaseHandler):
+    """DESIGN phase: Generate design docs per task via DesignDocumentationPhase.
+
+    In dry-run mode: reports what would be designed per task (no LLM calls).
+    In real mode: delegates to :class:`DesignDocumentationPhase` for each task,
+    running the async dual-review design pipeline via a thread-owned event loop
+    (same pattern as :class:`ImplementPhaseHandler`).
+
+    Data flow:
+        1. ``SeedTask`` → ``FeatureContext`` (per task)
+        2. ``DesignDocumentationPhase.run(context)`` → ``DesignDocumentResult``
+        3. Results serialized → ``context["design_results"]``
+
+    Output files:
+        When ``output_dir`` is set, writes ``{task_id}-design.md`` files
+        containing the raw design document text.
+    """
+
+    def __init__(
+        self,
+        handler_config: Optional[HandlerConfig] = None,
+        output_dir: Optional[str] = None,
+    ) -> None:
+        self.config = handler_config or HandlerConfig()
+        self.output_dir = output_dir
+        self._llm_backend: Any = None
+        self._design_phase: Any = None
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _get_llm_backend(self) -> Any:
+        """Lazily create the AgentLLMBackend."""
+        if self._llm_backend is not None:
+            return self._llm_backend
+
+        from startd8.contractors.artisan_phases.design_documentation import (
+            AgentLLMBackend,
+        )
+
+        self._llm_backend = AgentLLMBackend(agent_spec=self.config.lead_agent)
+        return self._llm_backend
+
+    def _get_design_phase(self) -> Any:
+        """Lazily create the DesignDocumentationPhase."""
+        if self._design_phase is not None:
+            return self._design_phase
+
+        from startd8.contractors.artisan_phases.design_documentation import (
+            DesignDocumentationPhase,
+        )
+
+        self._design_phase = DesignDocumentationPhase(
+            llm=self._get_llm_backend(),
+            max_iterations=self.config.max_iterations,
+        )
+        return self._design_phase
+
+    @staticmethod
+    def _task_to_feature_context(task: SeedTask) -> Any:
+        """Convert a SeedTask to a FeatureContext for the design phase."""
+        from startd8.contractors.artisan_phases.design_documentation import (
+            FeatureContext,
+        )
+
+        additional_context: dict[str, Any] = {}
+        if task.domain != "unknown":
+            additional_context["domain"] = task.domain
+        if task.domain_reasoning:
+            additional_context["domain_reasoning"] = task.domain_reasoning
+        if task.available_siblings:
+            additional_context["siblings"] = ", ".join(task.available_siblings)
+        if task.feature_id:
+            additional_context["feature_id"] = task.feature_id
+
+        return FeatureContext(
+            feature_name=task.title,
+            description=task.description,
+            target_file=task.target_files[0] if task.target_files else "",
+            constraints=list(task.prompt_constraints),
+            additional_context=additional_context,
+        )
+
+    @staticmethod
+    def _run_design_async(design_phase: Any, feature_context: Any) -> Any:
+        """Run DesignDocumentationPhase.run() in a dedicated thread-owned event loop.
+
+        Uses the same pattern as ImplementPhaseHandler._run_development_phase()
+        to avoid nested event-loop errors.
+        """
+        result_box: dict[str, Any] = {}
+        error_box: dict[str, BaseException] = {}
+
+        def _runner() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                result_box["result"] = loop.run_until_complete(
+                    design_phase.run(feature_context)
+                )
+            except BaseException as exc:
+                error_box["error"] = exc
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join()
+
+        if "error" in error_box:
+            raise error_box["error"]
+        return result_box["result"]
+
+    @staticmethod
+    def _serialize_result(result: Any) -> dict[str, Any]:
+        """Serialize a DesignDocumentResult to a checkpoint-safe dict."""
+        return {
+            "design_document": result.design_document.raw_text,
+            "feature_name": result.design_document.feature_name,
+            "agreed": result.agreed,
+            "iterations": result.iterations,
+            "completed_at": result.completed_at.isoformat(),
+        }
+
+    # ------------------------------------------------------------------
+    # Public execute
+    # ------------------------------------------------------------------
+
+    def execute(
+        self,
+        phase: WorkflowPhase,
+        context: dict[str, Any],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        start = time.monotonic()
+        tasks: list[SeedTask] = _ensure_context_loaded(context)
+
+        logger.info("DESIGN phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
+
+        design_results: dict[str, dict[str, Any]] = {}
+        total_cost = 0.0
+        tasks_designed = 0
+        tasks_agreed = 0
+        tasks_failed = 0
+
+        for task in tasks:
+            # Skip tasks with env failures
+            env_fails = [
+                c for c in task.environment_checks
+                if c.get("status") == "fail"
+            ]
+            if env_fails:
+                design_results[task.task_id] = {
+                    "status": "env_blocked",
+                    "environment_issues": env_fails,
+                }
+                continue
+
+            if dry_run:
+                design_results[task.task_id] = {
+                    "status": "dry_run_skipped",
+                    "title": task.title,
+                    "target_file": task.target_files[0] if task.target_files else "",
+                    "constraints_count": len(task.prompt_constraints),
+                    "domain": task.domain,
+                }
+                continue
+
+            # Real-mode: run design documentation phase per task
+            feature_context = self._task_to_feature_context(task)
+
+            # Snapshot cost before this task
+            backend = self._get_llm_backend()
+            cost_before = backend.total_cost_usd
+
+            try:
+                design_phase = self._get_design_phase()
+                result = self._run_design_async(design_phase, feature_context)
+                task_cost = backend.total_cost_usd - cost_before
+                total_cost += task_cost
+
+                serialized = self._serialize_result(result)
+                serialized["status"] = "designed"
+                serialized["cost"] = task_cost
+                design_results[task.task_id] = serialized
+
+                tasks_designed += 1
+                if result.agreed:
+                    tasks_agreed += 1
+
+                # Write design doc to output_dir if configured
+                if self.output_dir:
+                    out_path = Path(self.output_dir) / f"{task.task_id}-design.md"
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(
+                        result.design_document.raw_text, encoding="utf-8"
+                    )
+                    design_results[task.task_id]["output_file"] = str(out_path)
+                    logger.info("Wrote design doc: %s", out_path)
+
+            except Exception as exc:
+                task_cost = backend.total_cost_usd - cost_before
+                total_cost += task_cost
+                tasks_failed += 1
+                logger.warning(
+                    "DESIGN: failed for task %s: %s", task.task_id, exc
+                )
+                design_results[task.task_id] = {
+                    "status": "design_failed",
+                    "error": str(exc),
+                    "cost": task_cost,
+                }
+
+        context["design_results"] = design_results
+
+        output: dict[str, Any] = {
+            "tasks_designed": tasks_designed,
+            "tasks_agreed": tasks_agreed,
+            "tasks_failed": tasks_failed,
+            "tasks_skipped": len(tasks) - tasks_designed - tasks_failed - sum(
+                1 for r in design_results.values()
+                if r.get("status") == "env_blocked"
+            ),
+            "total_cost": total_cost,
+        }
+        if self.output_dir:
+            output["output_dir"] = self.output_dir
+
+        duration = time.monotonic() - start
+        logger.info(
+            "DESIGN phase complete: %d designed (%d agreed), %d failed, $%.4f cost (%.2fs)",
+            tasks_designed, tasks_agreed, tasks_failed, total_cost, duration,
+        )
+
+        return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
 
 
 class ImplementPhaseHandler(AbstractPhaseHandler):
@@ -2039,22 +2322,25 @@ class ContextSeedHandlers:
         enriched_seed_path: str,
         output_dir: Optional[str] = None,
         *,
-        # Agent configuration (keyword-only)
-        lead_agent: str = REVIEW_MODEL_CLAUDE_OPUS.agent_spec,
-        drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
-        max_iterations: int = 3,
-        pass_threshold: int = 80,
+        # Agent configuration (keyword-only) — all Optional so callers
+        # only pass what they explicitly want to override.  Missing keys
+        # are resolved via the config-file / env-var / dataclass-default
+        # priority chain in HandlerConfig.from_config().
+        lead_agent: Optional[str] = None,
+        drafter_agent: Optional[str] = None,
+        max_iterations: Optional[int] = None,
+        pass_threshold: Optional[int] = None,
         max_tokens: Optional[int] = None,
-        fail_on_truncation: bool = True,
-        check_truncation: bool = True,
-        strict_truncation: bool = False,
-        test_timeout_seconds: int = 120,
-        review_temperature: float = 0.0,
-        review_max_code_chars: int = 8000,
+        fail_on_truncation: Optional[bool] = None,
+        check_truncation: Optional[bool] = None,
+        strict_truncation: Optional[bool] = None,
+        test_timeout_seconds: Optional[int] = None,
+        review_temperature: Optional[float] = None,
+        review_max_code_chars: Optional[int] = None,
         development_timeout_seconds: Optional[float] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
-        """Create handlers for all six workflow phases.
+        """Create handlers for all seven workflow phases.
 
         Args:
             enriched_seed_path: Path to the enriched context seed JSON.
@@ -2076,24 +2362,34 @@ class ContextSeedHandlers:
         Returns:
             Dict mapping WorkflowPhase → handler instance.
         """
-        config = HandlerConfig(
-            lead_agent=lead_agent,
-            drafter_agent=drafter_agent,
-            max_iterations=max_iterations,
-            pass_threshold=pass_threshold,
-            max_tokens=max_tokens,
-            fail_on_truncation=fail_on_truncation,
-            check_truncation=check_truncation,
-            strict_truncation=strict_truncation,
-            test_timeout_seconds=test_timeout_seconds,
-            review_temperature=review_temperature,
-            review_max_code_chars=review_max_code_chars,
-            development_timeout_seconds=development_timeout_seconds,
-        )
+        # Build cli_overrides from non-None kwargs
+        cli_overrides: dict[str, Any] = {}
+        for name, val in [
+            ("lead_agent", lead_agent),
+            ("drafter_agent", drafter_agent),
+            ("max_iterations", max_iterations),
+            ("pass_threshold", pass_threshold),
+            ("max_tokens", max_tokens),
+            ("fail_on_truncation", fail_on_truncation),
+            ("check_truncation", check_truncation),
+            ("strict_truncation", strict_truncation),
+            ("test_timeout_seconds", test_timeout_seconds),
+            ("review_temperature", review_temperature),
+            ("review_max_code_chars", review_max_code_chars),
+            ("development_timeout_seconds", development_timeout_seconds),
+        ]:
+            if val is not None:
+                cli_overrides[name] = val
+
+        config = HandlerConfig.from_config(cli_overrides or None)
 
         return {
             WorkflowPhase.PLAN: PlanPhaseHandler(enriched_seed_path),
             WorkflowPhase.SCAFFOLD: ScaffoldPhaseHandler(),
+            WorkflowPhase.DESIGN: DesignPhaseHandler(
+                handler_config=config,
+                output_dir=output_dir,
+            ),
             WorkflowPhase.IMPLEMENT: ImplementPhaseHandler(
                 handler_config=config,
                 code_generator=code_generator,

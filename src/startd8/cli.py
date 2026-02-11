@@ -1542,6 +1542,99 @@ def serve(
     uvicorn.run(server_app, host=host, port=port)
 
 
+# =============================================================================
+# Config Commands
+# =============================================================================
+
+config_app = typer.Typer(
+    name="config",
+    help="Persistent configuration management"
+)
+app.add_typer(config_app, name="config")
+
+
+def _kebab_to_snake(key: str) -> str:
+    """Convert kebab-case CLI key to snake_case config key."""
+    return key.replace("-", "_")
+
+
+@config_app.command("artisan-show")
+def config_artisan_show():
+    """Show resolved artisan workflow configuration.
+
+    Displays each setting's current value and where it came from
+    (env, config, or default).
+    """
+    import os as _os
+    from .config import get_config_manager, _coerce_artisan_value
+
+    cfg_mgr = get_config_manager()
+    artisan_cfg = cfg_mgr.get_artisan_config()
+
+    # Import HandlerConfig to access dataclass defaults
+    from .contractors.context_seed_handlers import HandlerConfig
+    import dataclasses as _dc
+
+    defaults = {f.name: f.default for f in _dc.fields(HandlerConfig)}
+
+    table = Table(title="Artisan Workflow Configuration")
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_column("Source", style="magenta")
+
+    for key in sorted(artisan_cfg.keys()):
+        env_var = f"STARTD8_ARTISAN_{key.upper()}"
+        env_val = _os.getenv(env_var)
+        cfg_val = artisan_cfg.get(key)
+
+        if env_val is not None:
+            display_val = str(_coerce_artisan_value(key, env_val))
+            source = f"env ({env_var})"
+        elif cfg_val is not None:
+            display_val = str(cfg_val)
+            source = "config"
+        else:
+            default_val = defaults.get(key)
+            display_val = str(default_val) if default_val is not None else "None"
+            source = "default"
+
+        # Display kebab-case for consistency with CLI args
+        display_key = key.replace("_", "-")
+        table.add_row(display_key, display_val, source)
+
+    console.print(table)
+    console.print(f"\n[dim]Config file: {cfg_mgr.get_config_file_path()}[/dim]")
+
+
+@config_app.command("artisan-set")
+def config_artisan_set(
+    key: str = typer.Argument(..., help="Setting name (kebab-case, e.g. drafter-agent)"),
+    value: str = typer.Argument(..., help="Value to set"),
+):
+    """Set a persistent artisan workflow setting."""
+    from .config import get_config_manager, _coerce_artisan_value
+
+    snake_key = _kebab_to_snake(key)
+    typed_value = _coerce_artisan_value(snake_key, value)
+
+    cfg_mgr = get_config_manager()
+    cfg_mgr.set_artisan_setting(snake_key, typed_value)
+    console.print(f"[green]Set artisan.{snake_key} = {typed_value!r}[/green]")
+
+
+@config_app.command("artisan-clear")
+def config_artisan_clear(
+    key: str = typer.Argument(..., help="Setting name (kebab-case, e.g. drafter-agent)"),
+):
+    """Clear a persistent artisan setting (revert to default)."""
+    from .config import get_config_manager
+
+    snake_key = _kebab_to_snake(key)
+    cfg_mgr = get_config_manager()
+    cfg_mgr.clear_artisan_setting(snake_key)
+    console.print(f"[green]Cleared artisan.{snake_key} (will use default)[/green]")
+
+
 if __name__ == "__main__":
     app()
 
