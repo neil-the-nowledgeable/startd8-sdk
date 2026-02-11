@@ -1,0 +1,35 @@
+# StartD8 SDK ServiceMonitor
+# Prometheus scrape configuration for startd8-agent-runtime
+# Source: startd8-sdk/.contextcore.yaml v2.0 (spec.observability.metricsInterval: 30s)
+
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: startd8-agent-runtime
+  namespace: agents
+  labels:
+    app: startd8-agent-runtime
+    contextcore.io/project: startd8-sdk
+    contextcore.io/criticality: high
+    contextcore.io/pack: beaver
+spec:
+  selector:
+    matchLabels:
+      app: startd8-agent-runtime
+  namespaceSelector:
+    matchNames:
+      - agents
+  endpoints:
+    - port: metrics
+      interval: 30s
+      path: /metrics
+      honorLabels: true
+      metricRelabelings:
+        # Drop high-cardinality session_id label from gauge metrics
+        - sourceLabels: [__name__]
+          regex: "startd8_context_usage_ratio"
+          action: keep
+        - sourceLabels: [session_id]
+          regex: ".+"
+          action: labeldrop
+          targetLabel: session_id

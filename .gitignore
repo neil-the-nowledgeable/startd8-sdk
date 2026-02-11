@@ -96,6 +96,7 @@ docs/.startd8/
 # ---------------------------------------------------------------------------
 # WIP/Experimental Scripts (gitignored until ready to commit)
 # ---------------------------------------------------------------------------
+scripts/run_autism_prime_ingestion.py
 scripts/run_auto_decompose_pipeline.py
 scripts/run_auto_decompose_tests.py
 scripts/run_iterative_plan_ingestion.py

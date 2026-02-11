@@ -1,0 +1,73 @@
+# StartD8 SDK Mimir Alert Rules
+# Convention: StartD8[Resource][Issue] (follows ContextCore[Resource][Issue])
+# Source: startd8-sdk/.contextcore.yaml v2.0
+# SLO: availability 99.9%, latency P99 < 500ms
+
+groups:
+  - name: startd8_slo_alerts
+    rules:
+      # Availability SLO violation — success rate below 99.9%
+      - alert: StartD8AgentRuntimeAvailabilityLow
+        expr: |
+          service:startd8_availability:rate5m < 0.999
+        for: 5m
+        labels:
+          severity: P2
+          service: startd8-agent-runtime
+          namespace: agents
+        annotations:
+          summary: "StartD8 agent runtime availability below 99.9% SLO"
+          description: >
+            Success rate is {{ $value | humanizePercentage }} over the last 5 minutes,
+            below the 99.9% availability target.
+          runbook_url: "runbooks/startd8-agent-runtime-runbook.md#availabilitylow-alert"
+
+      # Latency SLO violation — P99 above 500ms
+      - alert: StartD8AgentRuntimeLatencyHigh
+        expr: |
+          service:startd8_latency_p99:rate5m > 500
+        for: 5m
+        labels:
+          severity: P2
+          service: startd8-agent-runtime
+          namespace: agents
+        annotations:
+          summary: "StartD8 agent runtime P99 latency exceeds 500ms SLO"
+          description: >
+            P99 response time is {{ $value | humanizeDuration }}ms over the last 5 minutes,
+            exceeding the 500ms latency target.
+          runbook_url: "runbooks/startd8-agent-runtime-runbook.md#latencyhigh-alert"
+
+  - name: startd8_operational_alerts
+    rules:
+      # Truncation rate too high — context windows being exceeded
+      - alert: StartD8TruncationHigh
+        expr: |
+          service:startd8_truncations:rate5m > 0.05
+        for: 10m
+        labels:
+          severity: P3
+          service: startd8-agent-runtime
+          namespace: agents
+        annotations:
+          summary: "StartD8 context truncation rate exceeds 5%"
+          description: >
+            {{ $value | humanizePercentage }} of requests are experiencing context
+            truncation. This may cause degraded agent output quality.
+          runbook_url: "runbooks/startd8-agent-runtime-runbook.md#truncation-response"
+
+      # Cost budget burn — spending more than $10/hour
+      - alert: StartD8CostBudgetBurn
+        expr: |
+          service:startd8_cost:rate1h > 10
+        for: 15m
+        labels:
+          severity: P3
+          service: startd8-agent-runtime
+          namespace: agents
+        annotations:
+          summary: "StartD8 cost burn rate exceeds $10/hour"
+          description: >
+            Current cost burn rate is ${{ $value | printf "%.2f" }}/hour, sustained
+            for 15 minutes. Review model usage patterns and consider provider fallback.
+          runbook_url: "runbooks/startd8-agent-runtime-runbook.md#cost-anomaly-response"

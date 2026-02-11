@@ -1,0 +1,165 @@
+apiVersion: contextcore.io/v1
+kind: ArtifactManifest
+metadata:
+  generatedAt: '2026-02-11T10:32:16.575470'
+  updatedAt: '2026-02-11T16:00:00.000000'
+  generatedFrom: /Users/neilyashinsky/Documents/dev/startd8-sdk/.contextcore.yaml
+  contextcoreVersion: 2.0.0
+  projectId: startd8-sdk
+artifacts:
+- id: startd8_agent_runtime-dashboard
+  type: dashboard
+  name: startd8-agent-runtime Service Dashboard
+  target: startd8-agent-runtime
+  priority: required
+  status: existing
+  path: dashboards/startd8-sdk-overview.json
+  note: "Pre-existing 12-panel dashboard with Tempo/Mimir/Loki datasources"
+  derivedFrom:
+  - property: title
+    sourceField: spec.targets[].name
+    transformation: '''{name} Service Dashboard'''
+  - property: panels.availability
+    sourceField: spec.requirements.availability
+    transformation: 'SLO threshold: 99.9%'
+    rationale: Dashboard shows availability against SLO target
+  parameters:
+    criticality: high
+    dashboardPlacement: standard
+  validationErrors: []
+- id: startd8_agent_runtime-prometheus-rules
+  type: prometheus_rule
+  name: startd8-agent-runtime Alerting & Recording Rules
+  target: startd8-agent-runtime
+  priority: required
+  status: existing
+  path: rules/mimir/startd8-alerts.yaml
+  additionalPaths:
+    - rules/mimir/startd8-recording-rules.yaml
+  note: "4 alert rules (SLO + operational) and 13 recording rules using actual startd8_* metrics"
+  derivedFrom:
+  - property: severity
+    sourceField: spec.business.criticality
+    transformation: "high \u2192 P2"
+    rationale: Alert severity is derived from business criticality
+  - property: threshold
+    sourceField: spec.requirements.availability
+    transformation: 'Target: 99.9%'
+  parameters:
+    alertSeverity: P2
+    availabilityThreshold: '99.9'
+    latencyThreshold: 500ms
+  validationErrors: []
+- id: startd8_agent_runtime-slo
+  type: slo_definition
+  name: startd8-agent-runtime SLO Definition
+  target: startd8-agent-runtime
+  priority: recommended
+  status: existing
+  path: slo/startd8-slo-definition.yaml
+  note: "Availability (99.9%) and latency (P99 < 500ms) SLOs with error budget burn rate alerts"
+  derivedFrom:
+  - property: objective
+    sourceField: spec.requirements.availability
+    transformation: 'Availability SLO: 99.9%'
+  - property: errorBudget
+    sourceField: spec.requirements.errorBudget
+    transformation: 'Error budget: 0.1% monthly (43.2 min)'
+  parameters:
+    availability: '99.9'
+    latencyP99: 500ms
+    errorBudget: '0.1'
+  validationErrors: []
+- id: startd8_agent_runtime-service-monitor
+  type: service_monitor
+  name: startd8-agent-runtime Service Monitor
+  target: startd8-agent-runtime
+  priority: required
+  status: existing
+  path: k8s/startd8-service-monitor.yaml
+  note: "ServiceMonitor CR with 30s scrape interval, ContextCore labels"
+  derivedFrom:
+  - property: scrapeInterval
+    sourceField: spec.observability.metricsInterval
+    transformation: 'Interval: 30s'
+  parameters:
+    metricsInterval: 30s
+    namespace: agents
+  validationErrors: []
+- id: startd8_agent_runtime-loki-rules
+  type: loki_rule
+  name: startd8-agent-runtime Log Recording Rules
+  target: startd8-agent-runtime
+  priority: recommended
+  status: existing
+  path: rules/loki/startd8-loki-rules.yaml
+  note: "5 recording rules: error rates, provider errors, log-derived cost, truncation events, session lifecycle"
+  derivedFrom: []
+  parameters:
+    logSelectors:
+    - '{app="startd8-agent-runtime"}'
+  validationErrors: []
+- id: startd8_agent_runtime-notification
+  type: notification_policy
+  name: startd8-agent-runtime Notification Policy
+  target: startd8-agent-runtime
+  priority: required
+  status: existing
+  path: k8s/startd8-notification-policy.yaml
+  note: "AlertmanagerConfig CR with P2/P3 severity routing. TODO: configure receiver"
+  derivedFrom:
+  - property: channels
+    sourceField: spec.observability.alertChannels
+    transformation: 'Channels: [] (TODO: configure)'
+  parameters:
+    alertChannels: []
+    owner: platform-engineering
+  validationErrors:
+  - "No alertChannels configured in .contextcore.yaml — receiver is a placeholder"
+- id: startd8_agent_runtime-runbook
+  type: runbook
+  name: startd8-agent-runtime Incident Runbook
+  target: startd8-agent-runtime
+  priority: optional
+  status: existing
+  path: runbooks/startd8-agent-runtime-runbook.md
+  note: "Generated via Wayfinder + startd8-specific enhancements: provider failover, cost anomaly, truncation"
+  derivedFrom:
+  - property: risks
+    sourceField: spec.risks[]
+    transformation: 'Risk count: 4'
+    rationale: Runbook should address documented risks
+  parameters:
+    risks:
+    - type: availability
+      description: LLM provider API failure cascades to all dependent agents
+    - type: financial
+      description: Cost tracking drift between SDK estimates and provider invoices
+    - type: availability
+      description: OTLP exporter failure silently drops agent telemetry spans
+    - type: data-integrity
+      description: Token count normalization varies across providers (tiktoken vs
+        provider-native)
+    escalationContacts: platform-engineering
+  validationErrors: []
+coverage:
+  totalRequired: 4
+  totalExisting: 4
+  totalOutdated: 0
+  overallCoverage: 100.0
+  byTarget:
+  - target: startd8-agent-runtime
+    namespace: agents
+    requiredCount: 4
+    existingCount: 4
+    coveragePercent: 100.0
+    gaps: []
+  byType:
+    dashboard: 1
+    prometheus_rule: 1
+    slo_definition: 1
+    service_monitor: 1
+    loki_rule: 1
+    notification_policy: 1
+    runbook: 1
+crdReference: startd8-sdk-projectcontext.yaml

@@ -1,0 +1,81 @@
+# StartD8 SDK SLO Definition
+# Formal Service Level Objectives for startd8-agent-runtime
+# Source: startd8-sdk/.contextcore.yaml v2.0
+
+apiVersion: contextcore.io/v1
+kind: SLODefinition
+metadata:
+  name: startd8-agent-runtime-slo
+  namespace: agents
+  labels:
+    contextcore.io/project: startd8-sdk
+    contextcore.io/criticality: high
+    contextcore.io/pack: beaver
+
+spec:
+  service: startd8-agent-runtime
+  owner: platform-engineering
+
+  objectives:
+    # --- Availability SLO ---
+    - name: availability
+      description: "Proportion of successful LLM requests across all providers"
+      target: 99.9
+      unit: "%"
+      window: 30d
+      sli:
+        type: ratio
+        good:
+          promql: "sum(rate(startd8_requests_total{status=\"success\"}[5m]))"
+        total:
+          promql: "sum(rate(startd8_requests_total[5m]))"
+        precomputed: "service:startd8_availability:rate5m"
+      alertRules:
+        - name: StartD8AgentRuntimeAvailabilityLow
+          threshold: 0.999
+          for: 5m
+          severity: P2
+
+    # --- Latency SLO ---
+    - name: latency-p99
+      description: "99th percentile response time across all LLM requests"
+      target: 500
+      unit: ms
+      window: 30d
+      sli:
+        type: threshold
+        indicator:
+          promql: >
+            histogram_quantile(0.99,
+              sum(rate(startd8_response_time_ms_bucket[5m])) by (le)
+            )
+        precomputed: "service:startd8_latency_p99:rate5m"
+      alertRules:
+        - name: StartD8AgentRuntimeLatencyHigh
+          threshold: 500
+          for: 5m
+          severity: P2
+
+  errorBudget:
+    # 99.9% availability over 30 days = 43.2 minutes of downtime allowed
+    policy: "0.1% monthly error budget"
+    calculatedMinutes: 43.2
+    burnRateAlerts:
+      - name: fast-burn
+        description: "Burning through error budget at >14.4x rate (exhausts in 2h)"
+        factor: 14.4
+        shortWindow: 5m
+        longWindow: 1h
+      - name: slow-burn
+        description: "Burning through error budget at >6x rate (exhausts in 5d)"
+        factor: 6.0
+        shortWindow: 30m
+        longWindow: 6h
+
+  dashboards:
+    - name: startd8-sdk-overview
+      path: dashboards/startd8-sdk-overview.json
+    - name: startd8-cost-tracking
+      path: dashboards/startd8-cost-tracking.json
+    - name: startd8-metrics
+      path: dashboards/startd8-metrics.json

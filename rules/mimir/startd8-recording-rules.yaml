@@ -1,0 +1,95 @@
+# StartD8 SDK Mimir Recording Rules
+# Convention: <aggregation_level>:<base_metric>:<aggregation_function>
+# Source: startd8-sdk/.contextcore.yaml v2.0
+# Metrics: src/startd8/session_tracking.py, src/startd8/costs/otel_metrics.py
+
+groups:
+  - name: startd8_availability
+    interval: 1m
+    rules:
+      # Success rate across all requests (availability SLI)
+      - record: "service:startd8_availability:rate5m"
+        expr: |
+          sum(rate(startd8_requests_total{status="success"}[5m]))
+          /
+          sum(rate(startd8_requests_total[5m]))
+
+      # Success rate by model
+      - record: "model:startd8_availability:rate5m"
+        expr: |
+          sum by (model) (rate(startd8_requests_total{status="success"}[5m]))
+          /
+          sum by (model) (rate(startd8_requests_total[5m]))
+
+  - name: startd8_latency
+    interval: 1m
+    rules:
+      # P99 latency across all requests
+      - record: "service:startd8_latency_p99:rate5m"
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(startd8_response_time_ms_bucket[5m])) by (le)
+          )
+
+      # P50 latency across all requests
+      - record: "service:startd8_latency_p50:rate5m"
+        expr: |
+          histogram_quantile(0.50,
+            sum(rate(startd8_response_time_ms_bucket[5m])) by (le)
+          )
+
+      # P99 latency by model
+      - record: "model:startd8_latency_p99:rate5m"
+        expr: |
+          histogram_quantile(0.99,
+            sum by (le, model) (rate(startd8_response_time_ms_bucket[5m]))
+          )
+
+  - name: startd8_throughput
+    interval: 1m
+    rules:
+      # Request throughput (rps)
+      - record: "service:startd8_requests:rate5m"
+        expr: |
+          sum(rate(startd8_requests_total[5m]))
+
+      # Request throughput by model
+      - record: "model:startd8_requests:rate5m"
+        expr: |
+          sum by (model) (rate(startd8_requests_total[5m]))
+
+  - name: startd8_cost
+    interval: 1m
+    rules:
+      # Cost burn rate by model (USD/hour)
+      - record: "model:startd8_cost:rate1h"
+        expr: |
+          sum by (model) (rate(startd8_cost_total[1h])) * 3600
+
+      # Total cost burn rate (USD/hour)
+      - record: "service:startd8_cost:rate1h"
+        expr: |
+          sum(rate(startd8_cost_total[1h])) * 3600
+
+  - name: startd8_tokens
+    interval: 1m
+    rules:
+      # Token throughput by direction (input/output)
+      - record: "direction:startd8_tokens:rate5m"
+        expr: |
+          sum by (direction) (rate(startd8_tokens_total[5m]))
+
+      # Token throughput by model
+      - record: "model:startd8_tokens:rate5m"
+        expr: |
+          sum by (model, direction) (rate(startd8_tokens_total[5m]))
+
+  - name: startd8_truncation
+    interval: 1m
+    rules:
+      # Truncation rate as a ratio of total requests
+      - record: "service:startd8_truncations:rate5m"
+        expr: |
+          sum(rate(startd8_truncations_total[5m]))
+          /
+          sum(rate(startd8_requests_total[5m]))

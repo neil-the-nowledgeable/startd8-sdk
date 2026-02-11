@@ -1,0 +1,54 @@
+# StartD8 SDK Alertmanager Notification Policy
+# Routes StartD8* alerts to the appropriate receiver
+# Source: startd8-sdk/.contextcore.yaml v2.0
+#
+# TODO: Configure receiver — no alertChannels defined in .contextcore.yaml yet.
+#       Update spec.observability.alertChannels and regenerate, or edit below.
+
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: startd8-notification-policy
+  namespace: agents
+  labels:
+    app: startd8-agent-runtime
+    contextcore.io/project: startd8-sdk
+spec:
+  route:
+    receiver: startd8-default
+    groupBy:
+      - alertname
+      - service
+    groupWait: 30s
+    groupInterval: 5m
+    repeatInterval: 4h
+    matchers:
+      - name: service
+        value: startd8-agent-runtime
+        matchType: "="
+    routes:
+      # P2 alerts (SLO violations) — shorter repeat interval
+      - receiver: startd8-default
+        matchers:
+          - name: severity
+            value: P2
+            matchType: "="
+        repeatInterval: 1h
+      # P3 alerts (operational) — standard repeat interval
+      - receiver: startd8-default
+        matchers:
+          - name: severity
+            value: P3
+            matchType: "="
+        repeatInterval: 4h
+
+  receivers:
+    - name: startd8-default
+      # TODO: Add webhook, Slack, PagerDuty, or email config
+      # Example Slack config:
+      # slackConfigs:
+      #   - channel: "#startd8-dev"
+      #     sendResolved: true
+      #     title: '{{ .GroupLabels.alertname }}'
+      #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
+      webhookConfigs: []

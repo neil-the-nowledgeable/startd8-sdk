@@ -1,0 +1,253 @@
+# =============================================================================
+# StartD8 SDK (Beaver / Amik) — Context Manifest v2.0
+# =============================================================================
+# Multi-LLM agent SDK with cost tracking and observability.
+# Part of the ContextCore expansion pack ecosystem.
+#
+# Migrate from v1.1: contextcore manifest migrate --path .contextcore.yaml
+# Validate:          contextcore manifest validate --path .contextcore.yaml
+# Export artifacts:   contextcore manifest export -p .contextcore.yaml -o output/
+
+apiVersion: contextcore.io/v1alpha2
+kind: ContextManifest
+
+metadata:
+  name: startd8-sdk
+  owners:
+    - team: platform-engineering
+      slack: "#startd8-dev"
+  changelog:
+    - date: "2026-02-11"
+      version: "2.0"
+      actor: agent:claude
+      summary: "Initial v2.0 manifest for startd8-sdk (Beaver/Amik)"
+  lastUpdated: "2026-02-11T00:00:00Z"
+  links:
+    repository: https://github.com/example/startd8-sdk
+    docs: https://github.com/example/startd8-sdk/tree/main/docs
+
+# =============================================================================
+# Operational Context (synced to Kubernetes CRD)
+# =============================================================================
+spec:
+  project:
+    id: startd8-sdk
+    name: StartD8 SDK
+    description: >
+      Multi-LLM provider abstraction SDK with unified interface, cost tracking,
+      token accounting, and OpenTelemetry observability. Known as Beaver (Amik)
+      in the ContextCore expansion pack ecosystem.
+  business:
+    criticality: high
+    owner: platform-engineering
+    value: enabler
+    costCenter: platform-engineering
+  requirements:
+    availability: "99.9"
+    latencyP99: "500ms"
+    throughput: "100rps"
+  targets:
+    - kind: Service
+      name: startd8-agent-runtime
+      namespace: agents
+  risks:
+    - type: availability
+      description: "LLM provider API failure cascades to all dependent agents"
+      priority: P1
+      mitigation: "Provider fallback chain with configurable retry and circuit breaker"
+    - type: financial
+      description: "Cost tracking drift between SDK estimates and provider invoices"
+      priority: P2
+      mitigation: "Reconciliation job compares tracked costs with billing API data"
+    - type: availability
+      description: "OTLP exporter failure silently drops agent telemetry spans"
+      priority: P2
+      mitigation: "Graceful degradation — TrackedAgentMixin logs warning and continues without telemetry"
+    - type: data-integrity
+      description: "Token count normalization varies across providers (tiktoken vs provider-native)"
+      priority: P3
+      mitigation: "Standardize on tiktoken for estimation, record provider-reported tokens as ground truth"
+  observability:
+    traceSampling: 1.0
+    metricsInterval: "30s"
+    logLevel: info
+    dashboardPlacement: standard
+
+# =============================================================================
+# Strategic Context (Objectives & Tactics)
+# =============================================================================
+strategy:
+  objectives:
+    - id: OBJ-PROVIDER-RELIABILITY
+      description: "Ensure 99.9% success rate across all LLM providers"
+      keyResults:
+        - metricKey: availability
+          unit: "%"
+          target: 99.9
+          targetOperator: gte
+          baseline: 99.5
+          window: "30d"
+
+    - id: OBJ-COST-ACCURACY
+      description: "Maintain less than 1% cost tracking variance vs provider invoices"
+      keyResults:
+        - metricKey: cost_variance
+          unit: "%"
+          target: 1.0
+          targetOperator: lte
+          baseline: 5.0
+          window: "30d"
+
+    - id: OBJ-OTEL-COVERAGE
+      description: "100% of agent interactions emit telemetry spans"
+      keyResults:
+        - metricKey: availability
+          unit: "%"
+          target: 100.0
+          targetOperator: gte
+          baseline: 85.0
+          window: "7d"
+
+  tactics:
+    - id: TAC-OPENLLMETRY
+      description: "Integrate OpenLLMetry for automatic LLM call instrumentation"
+      status: done
+      owner: platform-engineering
+      linkedObjectives:
+        - OBJ-OTEL-COVERAGE
+      completedDate: "2026-02-04"
+      progress: 100
+
+    - id: TAC-DUAL-EMIT
+      description: "Dual-emit gen_ai.* and agent.* attributes for OTel GenAI alignment"
+      status: done
+      owner: platform-engineering
+      linkedObjectives:
+        - OBJ-OTEL-COVERAGE
+      completedDate: "2026-02-04"
+      progress: 100
+
+    - id: TAC-ARTISAN-STABILIZE
+      description: "Stabilize Artisan contractor 12-phase workflow for reliable code generation"
+      status: in_progress
+      owner: platform-engineering
+      linkedObjectives:
+        - OBJ-PROVIDER-RELIABILITY
+      progress: 40
+
+    - id: TAC-PROVIDER-FALLBACK
+      description: "Implement provider fallback chain with automatic failover"
+      status: planned
+      linkedObjectives:
+        - OBJ-PROVIDER-RELIABILITY
+
+    - id: TAC-COST-RECONCILIATION
+      description: "Build cost reconciliation pipeline comparing SDK estimates with billing data"
+      status: planned
+      linkedObjectives:
+        - OBJ-COST-ACCURACY
+
+# =============================================================================
+# Governance Context (Agent Directives)
+# =============================================================================
+guidance:
+  focus:
+    areas:
+      - stability
+      - cost tracking accuracy
+      - OTel alignment
+    reason: "SDK is the LLM abstraction for the entire ContextCore ecosystem; reliability is paramount"
+
+  constraints:
+    - id: C-NO-BREAKING-API
+      rule: "No breaking API changes without a version bump and migration guide"
+      severity: blocking
+      rationale: "Downstream packages (Coyote, Fox) depend on stable SDK interfaces"
+      appliesTo:
+        - src/startd8/agents/
+        - src/startd8/providers/
+
+    - id: C-LAZY-PROVIDERS
+      rule: "LLM provider dependencies must be lazy-loaded at first use, not at import time"
+      severity: blocking
+      rationale: "Users should not need all provider SDKs installed; only the ones they use"
+      appliesTo:
+        - src/startd8/providers/
+
+    - id: C-TRACKED-MIXIN
+      rule: "All new agent classes must inherit TrackedAgentMixin for telemetry"
+      severity: warning
+      rationale: "Ensures OTel coverage objective is maintained as new agents are added"
+      appliesTo:
+        - src/startd8/agents/
+
+  preferences:
+    - id: PREF-PYDANTIC-V2
+      description: "Use Pydantic v2 BaseModel for all data models"
+      example: "class AgentConfig(BaseModel): model_config = {'populate_by_name': True}"
+
+    - id: PREF-ASYNC-FIRST
+      description: "Prefer async interfaces; provide sync wrappers where needed"
+      example: "async def generate(self, prompt): ... / def generate_sync(self, prompt): ..."
+
+    - id: PREF-OTEL-CONVENTIONS
+      description: "Follow OTel GenAI semantic conventions for all span attributes"
+      example: "gen_ai.system, gen_ai.request.model, gen_ai.usage.input_tokens"
+
+  questions:
+    - id: Q-PROVIDER-PIN
+      question: "Should provider SDK versions be pinned to exact versions or use compatible ranges?"
+      status: open
+      priority: medium
+
+    - id: Q-GEMINI-OPTIONAL
+      question: "Should google-genai become an optional extra install like 'pip install startd8[gemini]'?"
+      status: open
+      priority: high
+
+# =============================================================================
+# Ephemeral Context (Derived Insights)
+# =============================================================================
+insights:
+  - id: INS-OPENLLMETRY-OVERLAP
+    type: pattern
+    summary: "OpenLLMetry child spans overlap with TrackedAgentMixin spans, requiring emit mode coordination"
+    confidence: 0.95
+    source: "agent:claude"
+    severity: medium
+    observedAt: "2026-02-04T00:00:00Z"
+    impact: "Duplicate attributes emitted when both TrackedAgentMixin and OpenLLMetry are active"
+    recommendedActions:
+      - "TrackedAgentMixin switches to SpanKind.INTERNAL and skips gen_ai.*/token attrs when OpenLLMetry is active"
+      - "Controlled by STARTD8_OPENLLMETRY env var (auto|enabled|disabled)"
+
+  - id: INS-GEMINI-INSTALL
+    type: risk
+    summary: "Gemini provider requires separate google-genai install not in core dependencies"
+    confidence: 1.0
+    source: "agent:claude"
+    severity: low
+    observedAt: "2026-02-04T00:00:00Z"
+    impact: "Users get ImportError at runtime if they try to use Gemini without installing google-genai"
+    recommendedActions:
+      - "Add optional extras group: pip install startd8[gemini]"
+      - "Improve error message when google-genai is not installed"
+
+  - id: INS-ARTISAN-TELEMETRY
+    type: opportunity
+    summary: "Artisan contractor 12-phase workflow can emit per-phase telemetry spans"
+    confidence: 0.80
+    source: "agent:claude"
+    severity: info
+    observedAt: "2026-02-11T00:00:00Z"
+    impact: "Would enable granular code generation health monitoring via dashboards"
+    recommendedActions:
+      - "Add span events for each Artisan phase (plan, generate, validate, integrate)"
+      - "Emit code generation size estimates as span attributes for truncation prevention"
+
+state:
+  lastSyncTime: "2026-02-11T00:00:00Z"
+  syncStatus: initial
+  objectiveCount: 3
+  activeTacticCount: 3
+  openQuestionCount: 2

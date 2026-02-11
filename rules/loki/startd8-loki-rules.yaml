@@ -1,0 +1,65 @@
+# StartD8 SDK Loki Recording Rules
+# Convention: <aggregation_level>:<base_metric>:<aggregation_function>
+# Source: startd8-sdk/.contextcore.yaml v2.0
+# Log selector: {app="startd8-agent-runtime"}
+
+groups:
+  - name: startd8_log_errors
+    interval: 1m
+    rules:
+      # Error log rate from structured logs
+      - record: "service:startd8_error_logs:rate5m"
+        expr: |
+          sum(rate(
+            {app="startd8-agent-runtime"} | json | level = "error" [5m]
+          ))
+        labels:
+          source: loki
+
+      # Error count by provider (for failover decisions)
+      - record: "provider:startd8_provider_errors:rate5m"
+        expr: |
+          sum by (provider) (rate(
+            {app="startd8-agent-runtime"} | json
+            | level = "error"
+            | provider != "" [5m]
+          ))
+        labels:
+          source: loki
+
+  - name: startd8_log_cost
+    interval: 1m
+    rules:
+      # Log-derived cost tracking (for reconciliation against Prometheus metrics)
+      - record: "model:startd8_log_cost:sum1h"
+        expr: |
+          sum by (model) (sum_over_time(
+            {app="startd8-agent-runtime"} | json
+            | event = "request.completed"
+            | unwrap cost_usd [1h]
+          ))
+        labels:
+          source: loki
+
+  - name: startd8_log_truncation
+    interval: 1m
+    rules:
+      # Truncation events from logs
+      - record: "service:startd8_log_truncations:count5m"
+        expr: |
+          count_over_time(
+            {app="startd8-agent-runtime"} | json
+            | event = "context.truncated" [5m]
+          )
+        labels:
+          source: loki
+
+      # Session lifecycle events
+      - record: "service:startd8_sessions:count5m"
+        expr: |
+          count_over_time(
+            {app="startd8-agent-runtime"} | json
+            | event =~ "session.started|session.ended" [5m]
+          )
+        labels:
+          source: loki

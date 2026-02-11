@@ -1,0 +1,52 @@
+apiVersion: contextcore.io/v1
+kind: ProjectContext
+metadata:
+  name: startd8-sdk
+  namespace: default
+spec:
+  project:
+    id: startd8-sdk
+    tasks: []
+  business:
+    criticality: high
+    value: enabler
+    owner: platform-engineering
+    costCenter: platform-engineering
+    stakeholders: []
+  requirements:
+    availability: '99.9'
+    latencyP99: 500ms
+    throughput: 100rps
+  risks:
+  - type: availability
+    description: LLM provider API failure cascades to all dependent agents
+    priority: P1
+    mitigation: Provider fallback chain with configurable retry and circuit breaker
+    controls: []
+  - type: financial
+    description: Cost tracking drift between SDK estimates and provider invoices
+    priority: P2
+    mitigation: Reconciliation job compares tracked costs with billing API data
+    controls: []
+  - type: availability
+    description: OTLP exporter failure silently drops agent telemetry spans
+    priority: P2
+    mitigation: "Graceful degradation \u2014 TrackedAgentMixin logs warning and continues\
+      \ without telemetry"
+    controls: []
+  - type: data-integrity
+    description: Token count normalization varies across providers (tiktoken vs provider-native)
+    priority: P3
+    mitigation: Standardize on tiktoken for estimation, record provider-reported tokens
+      as ground truth
+    controls: []
+  targets:
+  - kind: Service
+    name: startd8-agent-runtime
+    namespace: agents
+  observability:
+    traceSampling: 1.0
+    metricsInterval: 30s
+    logLevel: info
+    dashboardPlacement: standard
+    alertChannels: []
