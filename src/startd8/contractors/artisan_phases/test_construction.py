@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-from startd8.utils.token_usage import token_usage_cost
+from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
 
 if TYPE_CHECKING:
     from startd8.contractors.artisan_phases.design_documentation import (
@@ -1482,16 +1482,16 @@ class LLMTestGenerator:
 
         # Accumulate cost metrics
         self.total_cost_usd += token_usage_cost(token_usage)
-        self.total_input_tokens += token_usage.input
-        self.total_output_tokens += token_usage.output
+        self.total_input_tokens += token_usage_input(token_usage)
+        self.total_output_tokens += token_usage_output(token_usage)
 
         self.logger.info(
             "LLM test generation for '%s': %dms, %d in / %d out tokens, "
             "$%.4f",
             design.feature_name,
             time_ms,
-            token_usage.input,
-            token_usage.output,
+            token_usage_input(token_usage),
+            token_usage_output(token_usage),
             token_usage_cost(token_usage),
         )
 
@@ -1535,8 +1535,8 @@ class LLMTestGenerator:
         )
 
         self.total_cost_usd += token_usage_cost(token_usage)
-        self.total_input_tokens += token_usage.input
-        self.total_output_tokens += token_usage.output
+        self.total_input_tokens += token_usage_input(token_usage)
+        self.total_output_tokens += token_usage_output(token_usage)
 
         self.logger.info(
             "LLM retry for '%s': %dms, $%.4f",

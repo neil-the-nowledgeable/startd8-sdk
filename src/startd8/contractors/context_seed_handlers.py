@@ -999,7 +999,8 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 command,
                 cwd=str(project_root),
                 capture_output=True,
-                text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
             )
             passed = proc.returncode == 0
@@ -1028,7 +1029,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 "stderr": f"Timed out after {timeout}s",
                 "timed_out": True,
             }
-        except OSError as exc:
+        except (OSError, UnicodeDecodeError) as exc:
             logger.error("TEST: validator command failed to start: %s", exc)
             return {
                 "passed": False,
@@ -1331,14 +1332,24 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         test_str = json.dumps(test_results, indent=2, default=str) if test_results else "No tests run"
 
+        max_code = self.config.review_max_code_chars
+        code_for_prompt = generated_code[:max_code]
+        if len(generated_code) > max_code:
+            code_for_prompt += f"\n\n# ... [truncated — {len(generated_code) - max_code} chars omitted] ..."
+
+        max_test = 2000
+        test_for_prompt = test_str[:max_test]
+        if len(test_str) > max_test:
+            test_for_prompt += f"\n... [truncated — {len(test_str) - max_test} chars omitted] ..."
+
         return self.REVIEW_PROMPT_TEMPLATE.format(
             task_id=task.task_id,
             title=task.title,
             domain=task.domain,
             description=task.description,
             constraints=constraints_str,
-            generated_code=generated_code[:self.config.review_max_code_chars],
-            test_results=test_str[:2000],
+            generated_code=code_for_prompt,
+            test_results=test_for_prompt,
             pass_threshold=self.config.pass_threshold,
         )
 

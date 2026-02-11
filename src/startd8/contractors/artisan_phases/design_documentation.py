@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
+from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
+
 __all__ = [
     # Enums
     "DesignSection",
@@ -602,6 +604,9 @@ class AgentLLMBackend:
         self._agent = agent
         self._agent_spec = agent_spec
         self._agent_kwargs = agent_kwargs
+        self.total_input_tokens: int = 0
+        self.total_output_tokens: int = 0
+        self.total_cost_usd: float = 0.0
 
     def _resolve_agent(self) -> Any:
         """Lazily resolve the agent from its spec string."""
@@ -640,9 +645,12 @@ class AgentLLMBackend:
             full_prompt = prompt
 
         # BaseAgent.agenerate returns Tuple[str, int, TokenUsage]
-        response_text, _response_time_ms, _token_usage = await agent.agenerate(
+        response_text, response_time_ms, token_usage = await agent.agenerate(
             full_prompt
         )
+        self.total_input_tokens += token_usage_input(token_usage)
+        self.total_output_tokens += token_usage_output(token_usage)
+        self.total_cost_usd += token_usage_cost(token_usage)
         return response_text
 
 
