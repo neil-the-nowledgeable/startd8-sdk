@@ -48,13 +48,13 @@ def main() -> None:
 
     report = enrich_prime_yaml(args.input, args.project_root, args.output)
 
-    print(f"\nEnrichment Report:")
+    print("\nEnrichment Report:")
     print(f"  Total tasks: {report.total_tasks}")
     print(f"  Enriched:    {report.enriched}")
     print(f"  Skipped:     {report.skipped}")
     print(f"  Failed:      {report.failed}")
     if report.errors:
-        print(f"\nErrors:")
+        print("\nErrors:")
         for err in report.errors:
             print(f"  - {err}")
     print(f"\nOutput: {args.output}")

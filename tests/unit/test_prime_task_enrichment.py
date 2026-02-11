@@ -1,14 +1,10 @@
 """Tests for prime_task_enrichment utilities."""
 
 import json
-import textwrap
-from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-import pytest
 
 from startd8.utils.prime_task_enrichment import (
-    EnrichmentReport,
     extract_target_files,
     enrich_prime_yaml,
 )
@@ -229,7 +225,6 @@ class TestConstraintFormatting:
 
     def test_constraints_removed_from_context_dict(self):
         """_create_spec should pop domain_constraints from context before JSON-serializing."""
-        import json
 
         context = {
             "feature_name": "test",

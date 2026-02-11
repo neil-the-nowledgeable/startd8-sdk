@@ -6,8 +6,7 @@ Claude acts as lead contractor and cheaper models draft code.
 """
 
 import pytest
-from unittest.mock import Mock, MagicMock, patch
-from datetime import datetime, timezone
+from unittest.mock import Mock, patch
 
 from startd8.workflows.builtin.lead_contractor_workflow import (
     LeadContractorWorkflow,
@@ -19,15 +18,11 @@ from startd8.workflows.builtin.lead_contractor_workflow import (
 from startd8.workflows.builtin.lead_contractor_models import (
     LeadContractorConfig,
     ImplementationSpec,
-    DraftResult,
     ReviewResult,
-    IntegrationResult,
     LeadContractorResult,
     WorkflowPhase,
-    TestPlanJSON,
     TestCase,
 )
-from startd8.workflows.models import ValidationResult
 from startd8.model_catalog import Models
 
 

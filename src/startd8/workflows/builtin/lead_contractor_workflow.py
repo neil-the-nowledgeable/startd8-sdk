@@ -40,7 +40,6 @@ from ..models import (
     StepResult,
     AgentCount,
     ValidationResult,
-    ProjectContext,
 )
 from ...agents import BaseAgent
 from ...utils.agent_resolution import resolve_agent_spec
@@ -50,22 +49,18 @@ from ...costs.pricing import PricingService
 from ...truncation_detection import (
     CONFIDENCE_HIGH,
     CONFIDENCE_IS_TRUNCATED,
-    TruncationResult,
     detect_truncation,
     get_expected_sections_for_code,
 )
 
 from .lead_contractor_models import (
-    LeadContractorConfig,
     ImplementationSpec,
     DraftResult,
     ReviewResult,
     IntegrationResult,
     LeadContractorResult,
-    PhaseMetrics,
     WorkflowPhase,
     TestPlanJSON,
-    TestPlanMarkdown,
     TestCase,
 )
 
@@ -531,7 +526,6 @@ class LeadContractorWorkflow(WorkflowBase):
             # =================================================================
             current_implementation = ""
             review_feedback = ""
-            final_review: Optional[ReviewResult] = None
 
             for iteration in range(1, max_iterations + 1):
                 # Draft phase
@@ -633,7 +627,6 @@ class LeadContractorWorkflow(WorkflowBase):
                     iteration=iteration,
                 )
                 result.reviews.append(review)
-                final_review = review
 
                 step_results.append(StepResult(
                     step_name=f"review_iteration_{iteration}",
@@ -1093,7 +1086,6 @@ class LeadContractorWorkflow(WorkflowBase):
             # Phase 2-4: Draft/Review Loop
             current_implementation = ""
             review_feedback = ""
-            final_review: Optional[ReviewResult] = None
 
             for iteration in range(1, max_iterations + 1):
                 current_step += 1
@@ -1194,7 +1186,6 @@ class LeadContractorWorkflow(WorkflowBase):
                     iteration=iteration,
                 )
                 result.reviews.append(review)
-                final_review = review
 
                 step_results.append(StepResult(
                     step_name=f"review_iteration_{iteration}",

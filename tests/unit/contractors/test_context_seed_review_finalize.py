@@ -12,6 +12,7 @@ from startd8.contractors.context_seed_handlers import (
     HandlerConfig,
     ReviewPhaseHandler,
     SeedTask,
+    TestPhaseHandler as ContextSeedTestPhaseHandler,
 )
 from startd8.contractors.protocols import GenerationResult
 from startd8.contractors.artisan_contractor import WorkflowPhase
@@ -124,3 +125,26 @@ def test_finalize_manifest_rolls_up_test_and_review_status(tmp_path: Path):
     assert task_status["tests_passed"] is True
     assert task_status["review_score"] == 92
     assert task_status["review_passed"] is True
+
+
+def test_test_phase_uses_arg_list_without_shell(tmp_path: Path):
+    code_path = tmp_path / "src" / "feature.py"
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.write_text("def f() -> int:\n    return 1\n", encoding="utf-8")
+
+    task = _seed_task("T1")
+    task.post_generation_validators = ["ruff"]
+    context = {
+        "tasks": [task],
+        "project_root": str(tmp_path),
+        "generation_results": {"T1": _generation_result(code_path)},
+    }
+
+    with patch("startd8.contractors.context_seed_handlers.subprocess.run") as mock_run:
+        mock_run.return_value = SimpleNamespace(returncode=0, stdout="", stderr="")
+        handler = ContextSeedTestPhaseHandler(handler_config=HandlerConfig(test_timeout_seconds=5))
+        handler.execute(WorkflowPhase.TEST, context, dry_run=False)
+
+    args, kwargs = mock_run.call_args
+    assert isinstance(args[0], list)
+    assert kwargs.get("shell") is None

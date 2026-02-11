@@ -263,7 +263,6 @@ def print_task_summary(tasks: list[dict]) -> None:
 def show_status() -> None:
     """Print live status from the state file without starting a workflow."""
     import json
-    from datetime import datetime, timezone
 
     state_file = PROJECT_ROOT / ".prime_contractor_state.json"
     if not state_file.exists():

@@ -451,8 +451,8 @@ class TestExecuteRealMode:
         assert result["output"]["tasks_processed"] == 2
         assert context["generation_results"] == {}
 
-    @patch("startd8.contractors.context_seed_handlers.asyncio.run")
-    def test_delegates_to_development_phase(self, mock_asyncio_run):
+    @patch.object(ImplementPhaseHandler, "_run_development_phase")
+    def test_delegates_to_development_phase(self, mock_run_development_phase):
         """Real mode creates DevelopmentPhase and runs it."""
         # Set up mock DevelopmentResult
         gen_result = _make_gen_result(success=True, cost=0.10)
@@ -465,7 +465,7 @@ class TestExecuteRealMode:
             total_duration_seconds=2.0,
             summary="1 passed",
         )
-        mock_asyncio_run.return_value = dev_result
+        mock_run_development_phase.return_value = dev_result
 
         handler = ImplementPhaseHandler()
 
@@ -501,8 +501,8 @@ class TestExecuteRealMode:
         ):
             result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
 
-        # Verify asyncio.run was called (DevelopmentPhase was used)
-        mock_asyncio_run.assert_called_once()
+        # Verify DevelopmentPhase bridge was called
+        mock_run_development_phase.assert_called_once()
 
         # Verify downstream contract
         assert "generation_results" in context
