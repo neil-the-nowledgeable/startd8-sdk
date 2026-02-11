@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
+from startd8.contractors.protocols import VALIDATE_MODEL_CLAUDE_SONNET
 from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
 
 __all__ = [
@@ -575,7 +576,7 @@ class AgentLLMBackend:
 
     Usage::
 
-        backend = AgentLLMBackend("anthropic:claude-sonnet-4-5-20250927")
+        backend = AgentLLMBackend(VALIDATE_MODEL_CLAUDE_SONNET.agent_spec)
         text = await backend.generate(
             "Write a design doc",
             system_prompt="You are an architect",
@@ -583,7 +584,7 @@ class AgentLLMBackend:
 
     Args:
         agent_spec: Agent specification string (e.g.
-            ``"anthropic:claude-sonnet-4-5-20250927"``).  Ignored when
+            ``VALIDATE_MODEL_CLAUDE_SONNET.agent_spec``).  Ignored when
             *agent* is provided.
         agent: Pre-built ``BaseAgent`` instance.  Takes precedence over
             *agent_spec* when both are supplied.
@@ -797,7 +798,7 @@ class DesignDocumentationPhase:
 
     Usage::
 
-        llm = AgentLLMBackend("anthropic:claude-sonnet-4-5-20250927")
+        llm = AgentLLMBackend(VALIDATE_MODEL_CLAUDE_SONNET.agent_spec)
         phase = DesignDocumentationPhase(llm=llm, max_iterations=3)
         context = FeatureContext(
             feature_name="User Auth",
