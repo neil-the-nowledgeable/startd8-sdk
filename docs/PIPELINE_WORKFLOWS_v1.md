@@ -1,8 +1,8 @@
 # Startd8 Pipeline Workflows Guide
 
 **Version:** 0.4.0
-**Document Version:** v1.1
-**Last Updated:** 2026-01-29
+**Document Version:** v1.2
+**Last Updated:** 2026-02-11
 
 > **See also:** [Capability Manifest](capability-index/startd8.workflow.capabilities.yaml) for the full capability inventory and roadmap.
 
@@ -21,6 +21,7 @@ Startd8 provides a powerful pipeline orchestration system for chaining multiple 
 | Critical Review | `critical-review` | Multi-agent review | Multi-agent |
 | Lead Contractor | `lead-contractor` | Spec-driven iteration | Config-based |
 | Lead Contractor + ContextCore | `lead-contractor-contextcore` | Spec-driven + tracking | Config-based |
+| **Artisan Contractor** | `artisan-contractor` | **7-phase design+implement** | **3-tier (Haiku/Sonnet/Opus)** |
 | Policy Analysis | `policy-analysis` | Parallel critical analysis | 2-5 agents |
 | Plain Language | `plain-language` | Content simplification | 1-5 agents |
 
@@ -504,6 +505,45 @@ pipeline.add_step(
 
 result = pipeline.run("REST API documentation for user service")
 ```
+
+## Artisan Contractor Workflow
+
+The Artisan Contractor is a 7-phase orchestrated workflow for batch code generation with explicit design review. Unlike the simpler Pipeline workflows above, it operates on an **enriched context seed** (from PlanIngestion + DomainPreflight) and separates design from implementation.
+
+### Phases
+
+```
+PLAN ──▶ SCAFFOLD ──▶ DESIGN ──▶ IMPLEMENT ──▶ TEST ──▶ REVIEW ──▶ FINALIZE
+```
+
+### Two-Half Execution
+
+The workflow supports split execution, allowing design and implementation to run as separate processes with a **design handoff file** bridging the two halves:
+
+```bash
+# First half: design only (writes design-handoff.json)
+python3 scripts/run_artisan_design_only.py \
+    --seed out/artisan-context-seed-enriched.json \
+    --output-dir out/designs
+
+# Second half: implementation only (reads handoff)
+python3 scripts/run_artisan_implement_only.py \
+    --handoff out/designs/design-handoff.json
+```
+
+### Cost Model
+
+Uses a 3-tier model hierarchy — Haiku (drafter), Sonnet (validator), Opus (reviewer) — following the principle of cheap drafts and expensive validation.
+
+### Key Features
+
+- Phase-level checkpoints with JSON persistence
+- Cost budget enforcement across all phases
+- OpenTelemetry instrumentation (graceful degradation)
+- Dry-run mode for safe preview
+- Resume from checkpoint after failure
+
+> **Full documentation:** See [ARTISAN_WORKFLOW_GUIDE.md](ARTISAN_WORKFLOW_GUIDE.md) for the complete reference.
 
 ## Optional Dependencies
 

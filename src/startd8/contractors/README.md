@@ -149,20 +149,78 @@ result = workflow.run()  # Preview without executing
 
 ```
 src/startd8/contractors/
-├── __init__.py           # Main exports
-├── protocols.py          # Protocol definitions (interfaces)
-├── queue.py              # FeatureQueue - ordered feature queue with dependencies
-├── checkpoint.py         # IntegrationCheckpoint - validates code after integration
-├── prime_contractor.py   # PrimeContractorWorkflow - main orchestration
-├── registry.py           # Plugin discovery via entry points
+├── __init__.py               # Main exports
+├── protocols.py              # Protocol definitions (interfaces)
+├── queue.py                  # FeatureQueue - ordered feature queue with dependencies
+├── checkpoint.py             # IntegrationCheckpoint - validates code after integration
+├── prime_contractor.py       # PrimeContractorWorkflow - per-feature orchestration
+├── artisan_contractor.py     # ArtisanContractorWorkflow - 7-phase orchestrator
+├── context_seed_handlers.py  # Phase handlers for artisan workflow
+├── handoff.py                # Design handoff persistence (two-half split)
+├── registry.py               # Plugin discovery via entry points
 ├── adapters/
 │   ├── __init__.py
-│   ├── standalone.py     # LoggingInstrumentor, HeuristicSizeEstimator, SimpleMergeStrategy
-│   └── contextcore.py    # ContextCoreInstrumentor, ASTMergeStrategy (optional)
-└── generators/
-    ├── __init__.py
-    └── lead_contractor.py # LeadContractorCodeGenerator
+│   ├── standalone.py         # LoggingInstrumentor, HeuristicSizeEstimator, SimpleMergeStrategy
+│   └── contextcore.py        # ContextCoreInstrumentor, ASTMergeStrategy (optional)
+├── generators/
+│   ├── __init__.py
+│   └── lead_contractor.py    # LeadContractorCodeGenerator
+└── artisan_phases/           # Phase implementations (design, testing, development, etc.)
 ```
+
+## Artisan Contractor
+
+The `ArtisanContractorWorkflow` is a 7-phase orchestrator that separates design from implementation. It consumes an enriched context seed and provides explicit phase gates, checkpoint persistence, cost budget enforcement, and a two-half split execution model.
+
+### Phases
+
+```
+PLAN ──▶ SCAFFOLD ──▶ DESIGN ──▶ IMPLEMENT ──▶ TEST ──▶ REVIEW ──▶ FINALIZE
+```
+
+### Quick Start
+
+```python
+from startd8.contractors.artisan_contractor import (
+    ArtisanContractorWorkflow, WorkflowConfig, WorkflowPhase,
+)
+from startd8.contractors.context_seed_handlers import ContextSeedHandlers
+
+config = WorkflowConfig(dry_run=True, cost_budget=5.0)
+workflow = ArtisanContractorWorkflow(config=config)
+
+handlers = ContextSeedHandlers.create_all(
+    enriched_seed_path="out/seed.json",
+    output_dir="out/results",
+)
+for phase, handler in handlers.items():
+    workflow.register_handler(phase, handler)
+
+result = workflow.execute(context={"enriched_seed_path": "out/seed.json"})
+```
+
+### Two-Half Split with Design Handoff
+
+The workflow supports split execution where design and implementation run as separate processes, bridged by a `design-handoff.json` file:
+
+```python
+from startd8.contractors.handoff import write_design_handoff, load_design_handoff
+
+# First half writes handoff after DESIGN
+write_design_handoff(
+    output_dir="out/designs",
+    enriched_seed_path="/abs/path/to/seed.json",
+    project_root="/abs/path/to/project",
+    workflow_id="...",
+    design_results=context.get("design_results", {}),
+    scaffold=context.get("scaffold", {}),
+)
+
+# Second half loads handoff for IMPLEMENT → FINALIZE
+handoff = load_design_handoff("out/designs")
+```
+
+See [Artisan Workflow Guide](../../docs/ARTISAN_WORKFLOW_GUIDE.md) for full documentation.
 
 ## Key Concepts
 

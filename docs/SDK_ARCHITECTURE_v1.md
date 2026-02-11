@@ -1,8 +1,8 @@
 # Startd8 SDK Architecture
 
-**Version:** 0.2.0  
-**Document Version:** v1  
-**Last Updated:** 2025-01-13
+**Version:** 0.4.0
+**Document Version:** v1.1
+**Last Updated:** 2026-02-11
 
 ## Overview
 
@@ -30,16 +30,15 @@ The Startd8 SDK is a comprehensive Python framework for managing multi-LLM agent
 │                                    │                                         │
 │         ┌──────────────────────────┼──────────────────────────┐             │
 │         │                          │                          │             │
-│  ┌──────▼──────┐          ┌───────▼───────┐         ┌────────▼────────┐   │
-│  │   Agents    │          │ Orchestration │         │     Storage     │   │
-│  │             │          │               │         │                 │   │
-│  │ • Claude    │          │ • Pipeline    │         │ • File-based    │   │
-│  │ • GPT-4     │          │ • Workflows   │         │ • JSON format   │   │
-│  │ • OpenAI-   │          │ • Multi-step  │         │ • Pagination    │   │
-│  │   Compatible│          │   chains      │         │                 │   │
-│  │ • Mock      │          │               │         │                 │   │
-│  │ • Composer  │          │               │         │                 │   │
-│  └─────────────┘          └───────────────┘         └─────────────────┘   │
+│  ┌──────▼──────┐  ┌───────▼───────┐  ┌──────▼──────┐  ┌──────▼──────┐   │
+│  │   Agents    │  │ Orchestration │  │ Contractors │  │   Storage   │   │
+│  │             │  │               │  │             │  │             │   │
+│  │ • Claude    │  │ • Pipeline    │  │ • Prime     │  │ • File-     │   │
+│  │ • GPT-4     │  │ • Workflows   │  │   Contractor│  │   based     │   │
+│  │ • Gemini    │  │ • Multi-step  │  │ • Artisan   │  │ • JSON      │   │
+│  │ • Ollama    │  │   chains      │  │   Contractor│  │   format    │   │
+│  │ • Mock      │  │               │  │ • Handoff   │  │ • Paginated │   │
+│  └─────────────┘  └───────────────┘  └─────────────┘  └─────────────┘   │
 │                                                                              │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                            Support Modules                                   │
@@ -158,6 +157,29 @@ File-based job queue for batch processing:
 - Priority-based job ordering
 - Agent registry
 - Progress tracking
+
+### 9. Contractors (`contractors/`)
+
+Multi-phase workflow orchestration for code generation:
+
+- **PrimeContractor**: Per-feature `generate -> integrate -> validate` loop with protocol-based design (CodeGenerator, Instrumentor, SizeEstimator, MergeStrategy)
+- **ArtisanContractor**: 7-phase workflow (PLAN -> SCAFFOLD -> DESIGN -> IMPLEMENT -> TEST -> REVIEW -> FINALIZE) with phase handlers, checkpoints, cost budget enforcement, and OTel tracing
+- **Design Handoff**: Serializable context state (`design-handoff.json`) enabling two-half split execution where design and implementation run as separate processes
+- **Context Seed Handlers**: Bridges enriched context seeds to the orchestrator via `ContextSeedHandlers.create_all()`
+
+```
+contractors/
+├── artisan_contractor.py     # ArtisanContractorWorkflow orchestrator
+├── context_seed_handlers.py  # Phase handler implementations
+├── handoff.py                # Design handoff persistence
+├── prime_contractor.py       # PrimeContractorWorkflow
+├── protocols.py              # Protocol interfaces
+├── generators/               # Code generators (LeadContractor)
+├── adapters/                 # Instrumentation adapters
+└── artisan_phases/           # Phase implementations (design, testing, etc.)
+```
+
+See [Artisan Workflow Guide](ARTISAN_WORKFLOW_GUIDE.md) and [Contractors README](../src/startd8/contractors/README.md) for details.
 
 ## Data Models
 

@@ -1,20 +1,21 @@
 # Startd8 API Reference
 
-**Version:** 0.4.0  
-**Document Version:** v1  
-**Last Updated:** 2025-01-13
+**Version:** 0.4.0
+**Document Version:** v1.1
+**Last Updated:** 2026-02-11
 
 ## Table of Contents
 
 1. [Core Classes](#core-classes)
 2. [Agent Classes](#agent-classes)
 3. [Orchestration](#orchestration)
-4. [Data Models](#data-models)
-5. [Storage](#storage)
-6. [Job Queue](#job-queue)
-7. [Document Enhancement](#document-enhancement)
-8. [Exceptions](#exceptions)
-9. [Utilities](#utilities)
+4. [Contractors](#contractors)
+5. [Data Models](#data-models)
+6. [Storage](#storage)
+7. [Job Queue](#job-queue)
+8. [Document Enhancement](#document-enhancement)
+9. [Exceptions](#exceptions)
+10. [Utilities](#utilities)
 
 ---
 
@@ -313,6 +314,193 @@ class PipelineResult:
     total_cost: float
     pipeline_id: str
     timestamp: datetime
+```
+
+---
+
+## Contractors
+
+Multi-phase workflow orchestration for code generation.
+
+### ArtisanContractorWorkflow
+
+```python
+from startd8.contractors.artisan_contractor import (
+    ArtisanContractorWorkflow,
+    WorkflowConfig,
+    WorkflowPhase,
+    WorkflowResult,
+    WorkflowStatus,
+    PhaseStatus,
+    PhaseResult,
+    AbstractPhaseHandler,
+)
+```
+
+#### WorkflowConfig
+
+```python
+config = WorkflowConfig(
+    workflow_id: str = auto,              # Auto-generated UUID
+    dry_run: bool = False,
+    total_timeout_seconds: float = None,
+    phase_timeout_seconds: float = None,
+    cost_budget: float = None,            # Max USD across all phases
+    max_retries_per_phase: int = 0,
+    checkpoint_dir: str = None,
+    project_root: str = None,
+    metadata: dict = {},
+)
+```
+
+#### ArtisanContractorWorkflow Methods
+
+```python
+workflow = ArtisanContractorWorkflow(
+    config: WorkflowConfig = None,
+    handlers: dict[WorkflowPhase, AbstractPhaseHandler] = None,
+    checkpoint_store: CheckpointStore = None,
+    phases: list[WorkflowPhase] = None,   # Default: all 7 phases
+)
+
+# Register a phase handler
+workflow.register_handler(
+    phase: WorkflowPhase,
+    handler: AbstractPhaseHandler,
+) -> None
+
+# Execute the workflow
+result: WorkflowResult = workflow.execute(
+    context: dict = None,                 # Shared mutable context
+    resume_from: str = None,              # Phase name to resume from
+    resume_from_checkpoint: bool = False,  # Load last checkpoint
+)
+```
+
+#### WorkflowPhase
+
+```python
+WorkflowPhase.PLAN       # "plan"
+WorkflowPhase.SCAFFOLD   # "scaffold"
+WorkflowPhase.DESIGN     # "design"
+WorkflowPhase.IMPLEMENT  # "implement"
+WorkflowPhase.TEST       # "test"
+WorkflowPhase.REVIEW     # "review"
+WorkflowPhase.FINALIZE   # "finalize"
+
+WorkflowPhase.ordered() -> list[WorkflowPhase]     # All 7 in order
+WorkflowPhase.from_value(value: str) -> WorkflowPhase
+```
+
+#### WorkflowResult
+
+```python
+@dataclass
+class WorkflowResult:
+    workflow_id: str
+    status: WorkflowStatus           # COMPLETED, FAILED, TIMED_OUT, etc.
+    phase_results: list[PhaseResult]
+    total_cost: float
+    total_duration_seconds: float
+    start_time: str                   # ISO-8601
+    end_time: str
+    resumed_from: str | None
+    dry_run: bool
+    metadata: dict
+```
+
+#### PhaseResult
+
+```python
+@dataclass
+class PhaseResult:
+    phase: WorkflowPhase
+    status: PhaseStatus               # COMPLETED, FAILED, SKIPPED, DRY_RUN, etc.
+    start_time: str
+    end_time: str
+    duration_seconds: float
+    cost: float
+    output: Any                       # Phase-specific payload
+    error_message: str | None
+    retry_count: int
+    metadata: dict
+```
+
+### ContextSeedHandlers
+
+```python
+from startd8.contractors.context_seed_handlers import ContextSeedHandlers, HandlerConfig
+
+handlers: dict[WorkflowPhase, AbstractPhaseHandler] = ContextSeedHandlers.create_all(
+    enriched_seed_path: str,
+    output_dir: str = None,
+    *,
+    lead_agent: str = None,
+    drafter_agent: str = None,
+    max_iterations: int = None,
+    pass_threshold: int = None,
+    max_tokens: int = None,
+    fail_on_truncation: bool = None,
+    check_truncation: bool = None,
+    strict_truncation: bool = None,
+    test_timeout_seconds: int = None,
+    review_temperature: float = None,
+    review_max_code_chars: int = None,
+    development_timeout_seconds: float = None,
+)
+```
+
+### Design Handoff
+
+```python
+from startd8.contractors.handoff import (
+    write_design_handoff,
+    load_design_handoff,
+    HandoffData,
+    DESIGN_HANDOFF_FILENAME,   # "design-handoff.json"
+    SCHEMA_VERSION,            # 1
+)
+
+# Write handoff after design phase
+path: Path = write_design_handoff(
+    output_dir: str,
+    enriched_seed_path: str,
+    project_root: str,
+    workflow_id: str,
+    completed_phases: list[str] = None,
+    design_results: dict = None,
+    scaffold: dict = None,
+)
+
+# Load handoff (accepts file path or directory)
+handoff: HandoffData = load_design_handoff(path: str | Path)
+```
+
+#### HandoffData
+
+```python
+@dataclass
+class HandoffData:
+    enriched_seed_path: str
+    project_root: str
+    output_dir: str
+    workflow_id: str
+    completed_phases: list[str]
+    design_results: dict
+    scaffold: dict
+    created_at: str              # ISO-8601
+    schema_version: int          # Currently 1
+```
+
+### Contractor Exceptions
+
+```python
+from startd8.contractors.artisan_contractor import (
+    WorkflowError,              # Base (carries optional checkpoint)
+    WorkflowTimeoutError,       # Total or phase timeout exceeded
+    CostBudgetExceededError,    # Cumulative cost > budget
+    PhaseExecutionError,        # Phase failed after retries
+)
 ```
 
 ---
