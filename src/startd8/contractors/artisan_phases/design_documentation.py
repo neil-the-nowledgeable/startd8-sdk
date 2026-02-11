@@ -489,8 +489,8 @@ def parse_review_verdict(raw_text: str, role: ReviewRole) -> ReviewVerdict:
             role=role,
             approved=bool(data.get("approved", False)),
             confidence=float(data.get("confidence", 0.0)),
-            concerns=list(data.get("concerns", [])),
-            suggestions=list(data.get("suggestions", [])),
+            concerns=[str(c) for c in data.get("concerns", [])],
+            suggestions=[str(s) for s in data.get("suggestions", [])],
             summary=str(data.get("summary", "")),
             reviewed_at=datetime.now(timezone.utc),
         )
@@ -526,28 +526,26 @@ def parse_review_verdict(raw_text: str, role: ReviewRole) -> ReviewVerdict:
     concerns_match = re.search(
         r'"concerns"\s*:\s*\[(.*?)\]', cleaned, re.DOTALL
     )
-    concern_list: list[str] = (
-        [
+    if concerns_match:
+        concern_list: list[str] = [
             c.replace('\\\\', '\\').replace('\\"', '"')
             for c in re.findall(r'"((?:[^"\\]|\\.)*)"', concerns_match.group(1))
             if c.strip()
         ]
-        if concerns_match
-        else []
-    )
+    else:
+        concern_list: list[str] = []
 
     suggestions_match = re.search(
         r'"suggestions"\s*:\s*\[(.*?)\]', cleaned, re.DOTALL
     )
-    suggestion_list: list[str] = (
-        [
+    if suggestions_match:
+        suggestion_list: list[str] = [
             s.replace('\\\\', '\\').replace('\\"', '"')
             for s in re.findall(r'"((?:[^"\\]|\\.)*)"', suggestions_match.group(1))
             if s.strip()
         ]
-        if suggestions_match
-        else []
-    )
+    else:
+        suggestion_list: list[str] = []
 
     return ReviewVerdict(
         role=role,

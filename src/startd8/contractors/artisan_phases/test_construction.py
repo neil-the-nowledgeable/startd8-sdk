@@ -1900,7 +1900,7 @@ class TestConstructionPhase:
         When ``agent_spec`` was provided at construction time the phase
         uses :class:`LLMTestGenerator` for intelligent test authoring.
         If no ``agent_spec`` is set this falls back to the synchronous
-        template-based ``execute()`` wrapped in the event loop.
+        template-based ``execute()`` method directly.
 
         Steps:
             1. Parse design document

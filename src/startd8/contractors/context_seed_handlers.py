@@ -290,6 +290,13 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
         )
         return []
 
+    seed_path_obj = Path(seed_path)
+    if not seed_path_obj.exists():
+        logger.error(
+            "Enriched seed not found at '%s' — cannot reload tasks", seed_path
+        )
+        return []
+
     logger.info("Reloading enriched seed for resumed workflow from %s", seed_path)
     seed_data = _load_enriched_seed(seed_path)
     tasks = _topological_sort(_parse_tasks(seed_data))
@@ -1644,6 +1651,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             len(review_items), total_passed, total_failed, total_cost, duration,
         )
 
+        # "cost" is the authoritative phase cost; output["total_cost"] is for reporting
         return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
 
 
@@ -1746,9 +1754,15 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         test_results = context.get("test_results", {})
         review_results = context.get("review_results", {})
 
-        impl_cost = implementation.get("total_cost", 0.0)
-        test_cost = test_results.get("total_cost", 0.0)
-        review_cost = review_results.get("total_cost", 0.0)
+        def _safe_cost(d: dict, key: str = "total_cost") -> float:
+            try:
+                return float(d.get(key, 0.0))
+            except (TypeError, ValueError):
+                return 0.0
+
+        impl_cost = _safe_cost(implementation)
+        test_cost = _safe_cost(test_results)
+        review_cost = _safe_cost(review_results)
         total = impl_cost + test_cost + review_cost
 
         return {
