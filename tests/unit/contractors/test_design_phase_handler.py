@@ -212,6 +212,11 @@ class TestTaskToFeatureContext:
         assert "siblings" in fc.additional_context
         assert "sibling1" in fc.additional_context["siblings"]
 
+    def test_multiple_target_files_uses_first(self):
+        task = _seed_task("T1", target_files=["scripts/fetch.py", "data/output.csv"])
+        fc = DesignPhaseHandler._task_to_feature_context(task)
+        assert fc.target_file == "scripts/fetch.py"
+
 
 # ============================================================================
 # DesignPhaseHandler real-mode tests (with mocked async)
