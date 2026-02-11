@@ -1144,6 +1144,8 @@ class LLMTestGenerator:
     ) -> None:
         self._agent_spec = agent_spec
         self._max_tokens = max_tokens
+        if max_retries < 0:
+            raise ValueError(f"max_retries must be >= 0, got {max_retries}")
         self._max_retries = max_retries
 
         # Lazily resolved agent (cached after first call)
@@ -1386,7 +1388,7 @@ class LLMTestGenerator:
                 modules.append(
                     TestModule(
                         filename=filename,
-                        imports=["import pytest"],
+                        imports=["import pytest"],  # metadata only; LLM modules render from test_body
                         test_cases=[
                             TestCase(
                                 test_name="__llm_generated__",
@@ -1420,7 +1422,7 @@ class LLMTestGenerator:
         modules.append(
             TestModule(
                 filename=filename,
-                imports=["import pytest"],
+                imports=["import pytest"],  # metadata only; LLM modules render from test_body
                 test_cases=[
                     TestCase(
                         test_name="__llm_generated__",
@@ -1553,8 +1555,7 @@ class LLMTestGenerator:
         code = self._extract_code(response_text)
         if not code or not code.strip():
             raise RuntimeError(
-                "LLM returned empty test code on retry for "
-                f"'{design.feature_name}'"
+                f"LLM returned empty test code for '{design.feature_name}' (retry)"
             )
 
         return self._parse_into_test_modules(code, design)

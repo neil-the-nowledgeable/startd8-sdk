@@ -30,20 +30,22 @@ def _make_token_usage(
     output_tokens: int = 200,
     cost: float = 0.005,
 ):
-    """Create a mock token-usage object.
+    """Create a lightweight TokenUsage stand-in.
 
-    Uses ``spec=[]`` so ``hasattr`` checks work correctly with the
+    Uses SimpleNamespace so hasattr checks work correctly with the
     ``token_usage_cost``/``token_usage_input``/``token_usage_output``
-    utilities, then sets the exact attributes the utilities look for.
+    utilities — attributes exist only if explicitly set, matching
+    real TokenUsage behaviour.
     """
-    tu = MagicMock(spec=[])
-    tu.input = input_tokens
-    tu.output = output_tokens
-    tu.input_tokens = input_tokens
-    tu.output_tokens = output_tokens
-    tu.cost = cost
-    tu.cost_estimate = cost
-    return tu
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        input=input_tokens,
+        output=output_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost=cost,
+        cost_estimate=cost,
+    )
 
 
 def _make_design(

@@ -277,6 +277,11 @@ class TestCostAccumulation:
         chunk2 = _make_chunk(chunk_id="task-2")
 
         await executor.execute(chunk1, context)
+        # Verify intermediate state — catch overwrite-instead-of-add bugs
+        assert context["_llm_cost_usd"] == pytest.approx(0.03)
+        assert context["_llm_input_tokens"] == 500
+        assert context["_llm_output_tokens"] == 200
+
         await executor.execute(chunk2, context)
 
         assert context["_llm_cost_usd"] == pytest.approx(0.06)

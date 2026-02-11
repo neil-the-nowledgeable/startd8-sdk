@@ -69,19 +69,21 @@ def _make_seed_task(
 
 
 def _make_token_usage(input_tokens: int = 500, output_tokens: int = 200, cost: float = 0.005):
-    """Create a mock TokenUsage.
+    """Create a lightweight TokenUsage stand-in.
 
-    Uses spec=[] so hasattr checks work correctly with token_usage_cost/input/output
-    utilities, then sets the exact attributes the utilities look for.
+    Uses SimpleNamespace so hasattr checks work correctly with
+    token_usage_cost/input/output utilities — attributes exist only
+    if explicitly set, matching real TokenUsage behaviour.
     """
-    tu = MagicMock(spec=[])
-    tu.input = input_tokens
-    tu.output = output_tokens
-    tu.input_tokens = input_tokens
-    tu.output_tokens = output_tokens
-    tu.cost = cost
-    tu.cost_estimate = cost
-    return tu
+    from types import SimpleNamespace
+    return SimpleNamespace(
+        input=input_tokens,
+        output=output_tokens,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost=cost,
+        cost_estimate=cost,
+    )
 
 
 def _make_review_response(score: int = 85, verdict: str = "PASS") -> str:

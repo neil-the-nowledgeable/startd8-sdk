@@ -822,6 +822,12 @@ class DesignDocumentationPhase:
         self.confidence_threshold = confidence_threshold
         if not (0.0 <= confidence_threshold <= 1.0):
             raise ValueError(f"confidence_threshold must be in [0.0, 1.0], got {confidence_threshold}")
+        # NOTE: This threshold detects disagreements (higher = fewer flagged).
+        # AutoResolutionCallback.confidence_gap_threshold (default 0.2) is
+        # a *separate* threshold used to decide which reviewer to trust when
+        # a disagreement is escalated.  The gap intentionally:
+        #   detection (0.3) > resolution (0.2)
+        # so disagreements are escalated conservatively but resolved decisively.
         self.resolution_callback: ResolutionCallback = (
             resolution_callback or AutoResolutionCallback()
         )
@@ -1238,6 +1244,7 @@ class DesignDocumentationPhase:
 
                 # Non-RE_REVIEW resolutions: revise once then return
                 if resolution_decision.action != ResolutionAction.RE_REVIEW:
+                    actual_iterations = iteration
                     if iteration < self.max_iterations:
                         design = await self._revise_design(
                             design,
@@ -1246,6 +1253,7 @@ class DesignDocumentationPhase:
                             resolution_decision.guidance,
                             iteration + 1,
                         )
+                        actual_iterations = iteration + 1
 
                     return DesignDocumentResult(
                         design_document=design,
@@ -1254,7 +1262,7 @@ class DesignDocumentationPhase:
                         escalation_report=escalation_report,
                         resolution_decision=resolution_decision,
                         agreed=False,
-                        iterations=iteration,
+                        iterations=actual_iterations,
                         completed_at=datetime.now(timezone.utc),
                     )
 
@@ -1273,7 +1281,7 @@ class DesignDocumentationPhase:
                 )
                 raise DesignDocumentationError(
                     f"Design documentation failed at iteration "
-                    f"{iteration}: {exc}"
+                    f"{iteration} ({type(exc).__name__}): {exc}"
                 ) from exc
 
         # Max iterations reached without full convergence

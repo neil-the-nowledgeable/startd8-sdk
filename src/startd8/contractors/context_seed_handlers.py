@@ -13,6 +13,15 @@ WorkflowPhase mapping (from artisan_contractor.py docstring):
     REVIEW    → LLM-based quality review of generated implementations
     FINALIZE  → Collect artifacts + write comprehensive execution report
 
+Context dict contract (keys populated by each phase):
+    After PLAN:      tasks, task_index, plan_title, preflight_summary, domain_summary,
+                     enriched_seed_path
+    After SCAFFOLD:  scaffold (summary dict)
+    After IMPLEMENT: implementation (output dict), generation_results (Dict[task_id, GenerationResult])
+    After TEST:      test_results (Dict with test_plan, per_task, total_cost)
+    After REVIEW:    review_results (Dict with review_items, per_task, total_cost)
+    After FINALIZE:  workflow_summary (final manifest dict)
+
 Usage::
 
     from startd8.contractors.context_seed_handlers import ContextSeedHandlers
@@ -861,6 +870,13 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             dev_phase, plan, timeout=self.config.development_timeout_seconds,
         )
 
+        if dev_result is None or not hasattr(dev_result, "chunk_states"):
+            raise RuntimeError(
+                "DevelopmentPhase returned an invalid result "
+                f"(type={type(dev_result).__name__}). "
+                "Expected DevelopmentResult with chunk_states attribute."
+            )
+
         # Map results back to downstream contract
         output, generation_results, total_cost = self._map_development_result(
             dev_result, chunks, tasks, skipped_reports,
@@ -1396,19 +1412,29 @@ PASS if score >= {pass_threshold} and no blocking issues.
         if score_match:
             score = min(100, max(0, int(score_match.group(1))))
         else:
-            logger.warning(
-                "REVIEW: could not extract score from response (defaulting to 0); "
-                "first 200 chars: %s", response[:200],
-            )
+            # Fallback: try without markdown headers
+            score_fallback = re.search(r"(?:^|\n)\s*Score\s*[:=]\s*(\d+)", response, re.IGNORECASE)
+            if score_fallback:
+                score = min(100, max(0, int(score_fallback.group(1))))
+            else:
+                logger.warning(
+                    "REVIEW: could not extract score from response (defaulting to 0); "
+                    "first 200 chars: %s", response[:200],
+                )
 
         # Extract verdict
         verdict_match = re.search(r"###\s*Verdict:\s*(PASS|FAIL)", response, re.IGNORECASE)
         if verdict_match:
             verdict = verdict_match.group(1).upper()
         else:
-            logger.warning(
-                "REVIEW: could not extract verdict from response (defaulting to FAIL)"
-            )
+            # Fallback: try without markdown headers
+            verdict_fallback = re.search(r"(?:^|\n)\s*Verdict\s*[:=]\s*(PASS|FAIL)", response, re.IGNORECASE)
+            if verdict_fallback:
+                verdict = verdict_fallback.group(1).upper()
+            else:
+                logger.warning(
+                    "REVIEW: could not extract verdict from response (defaulting to FAIL)"
+                )
 
         def extract_section(section: str) -> list[str]:
             pattern = rf"###\s*{section}\s*\n(.*?)(?=\n###\s|\Z)"
