@@ -59,14 +59,21 @@ def sanitize_path(file_path: Union[str, Path], base_dir: Optional[Path] = None) 
     
     # Now resolve and check base directory
     try:
-        path = Path(file_path).expanduser().resolve()
+        raw_path = Path(file_path).expanduser()
+        # Resolve relative paths against base_dir when provided,
+        # so that target_files like "scripts/foo.py" resolve against
+        # the project root rather than the current working directory.
+        if base_dir and not raw_path.is_absolute():
+            path = (Path(base_dir).resolve() / raw_path).resolve()
+        else:
+            path = raw_path.resolve()
     except (OSError, ValueError) as e:
         raise ValidationError(
             f"Invalid path: {e}",
             field="file_path",
             value=path_str
         )
-    
+
     # If base_dir is specified, ensure path is within it
     if base_dir:
         base_dir = Path(base_dir).resolve()

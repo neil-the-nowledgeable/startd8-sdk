@@ -161,6 +161,14 @@ def main() -> int:
         "--verbose", "-v", action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--lead-agent", default=None,
+        help="Lead agent spec (default: anthropic:claude-sonnet-4-5-20250929)",
+    )
+    parser.add_argument(
+        "--drafter-agent", default=None,
+        help="Drafter agent spec (default: from ContextSeedHandlers defaults)",
+    )
 
     args = parser.parse_args()
     setup_logging(verbose=args.verbose)
@@ -199,10 +207,16 @@ def main() -> int:
     # Create workflow and register handlers
     workflow = ArtisanContractorWorkflow(config=config)
 
-    handlers = ContextSeedHandlers.create_all(
-        enriched_seed_path=str(seed_path.resolve()),
-        output_dir=output_dir,
-    )
+    handler_kwargs: dict = {
+        "enriched_seed_path": str(seed_path.resolve()),
+        "output_dir": output_dir,
+    }
+    if args.lead_agent:
+        handler_kwargs["lead_agent"] = args.lead_agent
+    if args.drafter_agent:
+        handler_kwargs["drafter_agent"] = args.drafter_agent
+
+    handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():
         workflow.register_handler(wp_phase, handler)
 
