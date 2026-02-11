@@ -80,12 +80,16 @@ class SingleModuleConstraintsRule(PreflightRule):
     rule_id = "single_module_constraints"
 
     def evaluate(self, ctx: RuleContext) -> Optional[RuleContribution]:
-        importable = sorted(ctx.available_deps.all_importable)[:50]
+        all_importable = ctx.available_deps.all_importable
+        # For the LLM prompt hint, show only public module names (skip _-prefixed
+        # internal modules) to keep the constraint readable while covering the
+        # names the generated code is likely to use.
+        public = sorted(n for n in all_importable if not n.startswith("_"))
         return RuleContribution(
             constraints=[
                 "Output a single Python module -- not a package",
                 "Do not use relative imports (from .module import ...)",
-                f"Only import from: {', '.join(importable)}",
+                f"Only import from: {', '.join(public)}",
                 "Define utility functions before classes that reference them",
             ],
             validators=[

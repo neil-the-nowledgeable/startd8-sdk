@@ -207,7 +207,7 @@ class PrimeContractorWorkflow:
         key = str(target_path)
         if key in self._pre_integration_snapshots:
             return
-        if target_path.exists():
+        if target_path.is_file():
             snapshot_path = target_path.with_suffix(target_path.suffix + '.pre_integration')
             shutil.copy2(target_path, snapshot_path)
             self._pre_integration_snapshots[key] = snapshot_path
@@ -227,7 +227,7 @@ class PrimeContractorWorkflow:
             logger.warning('No pre-integration snapshot for %s', self._rel_display(target_path))
             return False
         if snapshot is None:
-            if target_path.exists():
+            if target_path.is_file():
                 target_path.unlink()
                 logger.info('Deleted (no original): %s', self._rel_display(target_path))
             return True
@@ -330,7 +330,7 @@ class PrimeContractorWorkflow:
             sub_name = f'{feature.name} ({Path(target_file).name})'
             current_content = ''
             target_path = self.project_root / target_file
-            if target_path.exists():
+            if target_path.is_file():
                 current_content = target_path.read_text(encoding='utf-8')
             sub_description = f'{feature.description}\n\n---\nIMPORTANT: This is part {i + 1} of {n}. You MUST ONLY output code for the file: {target_file}\nDo NOT output code for any other file.\n\nCURRENT CONTENTS of {target_file}:\n```\n{current_content}\n```'
             sub_feature = FeatureSpec(id=sub_id, name=sub_name, description=sub_description, target_files=[target_file], dependencies=feature.dependencies)
@@ -753,7 +753,7 @@ class PrimeContractorWorkflow:
                     target_path = Path(target_file)
                     if not target_path.is_absolute():
                         target_path = self.project_root / target_path
-                    if target_path.exists():
+                    if target_path.is_file():
                         target_path.unlink()
                         logger.info('Removed target: %s', target_path.relative_to(self.project_root))
                         removed += 1
