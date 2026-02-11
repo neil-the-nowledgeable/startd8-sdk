@@ -518,7 +518,7 @@ def parse_review_verdict(raw_text: str, role: ReviewRole) -> ReviewVerdict:
     summary = ""
     summary_match = re.search(r'"summary"\s*:\s*"((?:[^"\\]|\\.)*)"', cleaned)
     if summary_match:
-        summary = summary_match.group(1).replace('\\"', '"').replace('\\\\', '\\')
+        summary = summary_match.group(1).replace('\\\\', '\\').replace('\\"', '"')
 
     # Extract list items via regex
     concerns_match = re.search(
@@ -526,7 +526,7 @@ def parse_review_verdict(raw_text: str, role: ReviewRole) -> ReviewVerdict:
     )
     concern_list: list[str] = (
         [
-            c.replace('\\"', '"').replace('\\\\', '\\')
+            c.replace('\\\\', '\\').replace('\\"', '"')
             for c in re.findall(r'"((?:[^"\\]|\\.)*)"', concerns_match.group(1))
             if c.strip()
         ]
@@ -539,7 +539,7 @@ def parse_review_verdict(raw_text: str, role: ReviewRole) -> ReviewVerdict:
     )
     suggestion_list: list[str] = (
         [
-            s.replace('\\"', '"').replace('\\\\', '\\')
+            s.replace('\\\\', '\\').replace('\\"', '"')
             for s in re.findall(r'"((?:[^"\\]|\\.)*)"', suggestions_match.group(1))
             if s.strip()
         ]
