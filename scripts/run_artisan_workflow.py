@@ -154,7 +154,15 @@ def main() -> int:
     )
     parser.add_argument(
         "--timeout", type=float, default=None,
-        help="Total workflow timeout in seconds",
+        help="TOTAL workflow timeout in seconds (wall-clock cap across all phases)",
+    )
+    parser.add_argument(
+        "--phase-timeout", type=float, default=None,
+        help="Per-phase timeout in seconds (each phase gets this much time)",
+    )
+    parser.add_argument(
+        "--implement-timeout", type=float, default=None,
+        help="IMPLEMENT phase internal DevelopmentPhase thread timeout in seconds",
     )
     parser.add_argument(
         "--checkpoint-dir", default=None,
@@ -201,6 +209,7 @@ def main() -> int:
         dry_run=args.dry_run,
         cost_budget=args.cost_budget,
         total_timeout_seconds=args.timeout,
+        phase_timeout_seconds=args.phase_timeout,
         checkpoint_dir=args.checkpoint_dir,
         project_root=str(Path(args.project_root).resolve()),
         metadata={
@@ -236,6 +245,8 @@ def main() -> int:
         handler_kwargs["lead_agent"] = args.lead_agent
     if args.drafter_agent:
         handler_kwargs["drafter_agent"] = args.drafter_agent
+    if args.implement_timeout is not None:
+        handler_kwargs["development_timeout_seconds"] = args.implement_timeout
 
     handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():

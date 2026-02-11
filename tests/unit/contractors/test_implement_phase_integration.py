@@ -436,13 +436,13 @@ class TestExecuteDryRun:
 class TestExecuteRealMode:
     """Tests for execute() in real mode with mocked DevelopmentPhase."""
 
-    def test_all_env_blocked_short_circuit(self):
+    def test_all_env_blocked_short_circuit(self, tmp_path):
         """When all tasks are env-blocked, returns immediately without DevelopmentPhase."""
         handler = ImplementPhaseHandler()
         tasks = [_make_env_fail_task("T1"), _make_env_fail_task("T2")]
         context: dict[str, Any] = {
             "tasks": tasks,
-            "project_root": "/tmp/test",
+            "project_root": str(tmp_path),
         }
 
         result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
@@ -452,7 +452,7 @@ class TestExecuteRealMode:
         assert context["generation_results"] == {}
 
     @patch.object(ImplementPhaseHandler, "_run_development_phase")
-    def test_delegates_to_development_phase(self, mock_run_development_phase):
+    def test_delegates_to_development_phase(self, mock_run_development_phase, tmp_path):
         """Real mode creates DevelopmentPhase and runs it."""
         # Set up mock DevelopmentResult
         gen_result = _make_gen_result(success=True, cost=0.10)
@@ -472,7 +472,7 @@ class TestExecuteRealMode:
         tasks = [_make_seed_task(task_id="T1")]
         context: dict[str, Any] = {
             "tasks": tasks,
-            "project_root": "/tmp/test",
+            "project_root": str(tmp_path),
         }
 
         # Patch _tasks_to_chunks to return a chunk with _generation_result
@@ -510,13 +510,13 @@ class TestExecuteRealMode:
         assert context["generation_results"]["T1"].success is True
         assert result["cost"] == pytest.approx(0.10)
 
-    def test_context_generation_results_has_generation_result_objects(self):
+    def test_context_generation_results_has_generation_result_objects(self, tmp_path):
         """context['generation_results'] must contain GenerationResult objects."""
         handler = ImplementPhaseHandler()
         tasks = [_make_env_fail_task("T1")]
         context: dict[str, Any] = {
             "tasks": tasks,
-            "project_root": "/tmp/test",
+            "project_root": str(tmp_path),
         }
 
         handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)

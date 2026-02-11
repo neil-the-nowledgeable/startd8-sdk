@@ -55,7 +55,6 @@ import sys
 import threading
 import time
 from collections import defaultdict
-import dataclasses
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Optional
@@ -1099,83 +1098,180 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             LeadContractorChunkExecutor,
         )
 
-        # Convert SeedTasks → DevelopmentChunks (with env pre-filter)
-        chunks, skipped_reports = self._tasks_to_chunks(tasks, max_retries=2)
+        # --- Resume check: load prior generation results if available ---
+        results_path = project_root / ".startd8_state" / "generation_results.json"
+        resumed = False
+        if results_path.exists() and not dry_run:
+            try:
+                with open(results_path) as f:
+                    saved = json.load(f)
+                generation_results: dict[str, GenerationResult] = {}
+                for tid, data in saved.items():
+                    generation_results[tid] = GenerationResult(
+                        success=data["success"],
+                        generated_files=[Path(p) for p in data["generated_files"]],
+                        error=data.get("error"),
+                        input_tokens=data.get("input_tokens", 0),
+                        output_tokens=data.get("output_tokens", 0),
+                        cost_usd=data.get("cost_usd", 0.0),
+                        iterations=data.get("iterations", 0),
+                        model=data.get("model", "unknown"),
+                    )
+                logger.info(
+                    "IMPLEMENT --resume: loaded %d generation results from %s",
+                    len(generation_results), results_path,
+                )
 
-        if not chunks:
-            logger.warning("IMPLEMENT: no eligible tasks after env pre-filter")
-            output = {
-                "task_reports": skipped_reports,
-                "tasks_processed": len(skipped_reports),
-                "domain_breakdown": {},
-                "total_estimated_loc": 0,
-                "total_cost": 0.0,
-                "generation_results": {},
-            }
-            context["implementation"] = output
-            context["generation_results"] = {}
-            duration = time.monotonic() - start
-            return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
+                # Reconstruct output dict from resumed results
+                total_cost = sum(r.cost_usd for r in generation_results.values())
+                domain_tasks: dict[str, list[str]] = defaultdict(list)
+                for task in tasks:
+                    domain_tasks[task.domain].append(task.task_id)
 
-        # Build executor (inject pre-configured generator if provided)
-        executor = LeadContractorChunkExecutor(
-            lead_agent=self.config.lead_agent,
-            drafter_agent=self.config.drafter_agent,
-            output_dir=project_root,
-            max_iterations=self.config.max_iterations,
-            pass_threshold=self.config.pass_threshold,
-            max_tokens=self.config.max_tokens,
-            fail_on_truncation=self.config.fail_on_truncation,
-            check_truncation=self.config.check_truncation,
-            strict_truncation=self.config.strict_truncation,
-        )
-        if self._code_generator is not None:
-            # _generator is the lazy-init slot on LeadContractorChunkExecutor;
-            # setting it skips _resolve_generator() and uses our instance.
-            executor._generator = self._code_generator
+                task_reports: list[dict[str, Any]] = []
+                for task in tasks:
+                    gr = generation_results.get(task.task_id)
+                    report: dict[str, Any] = {
+                        "task_id": task.task_id,
+                        "feature_id": task.feature_id,
+                        "title": task.title,
+                        "domain": task.domain,
+                        "target_files": task.target_files,
+                        "estimated_loc": task.estimated_loc,
+                        "depends_on": task.depends_on,
+                        "prompt_constraints_count": len(task.prompt_constraints),
+                        "validators": task.post_generation_validators,
+                    }
+                    if gr is not None:
+                        report["status"] = "generated" if gr.success else "generation_failed"
+                        report["cost"] = gr.cost_usd
+                        report["tokens"] = {
+                            "input": gr.input_tokens,
+                            "output": gr.output_tokens,
+                        }
+                        report["iterations"] = gr.iterations
+                        if gr.error:
+                            report["error"] = gr.error
+                    else:
+                        report["status"] = "not_in_saved_results"
+                    task_reports.append(report)
 
-        # Build plan
-        plan = DevelopmentPlan(
-            plan_id=f"artisan-implement-{int(time.time())}",
-            chunks=chunks,
-            config={
-                "dry_run": False,
-                "state_dir": str(project_root / ".startd8_state"),
-            },
-        )
+                output: dict[str, Any] = {
+                    "task_reports": task_reports,
+                    "tasks_processed": len(task_reports),
+                    "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
+                    "total_estimated_loc": sum(t.estimated_loc for t in tasks),
+                    "total_cost": total_cost,
+                    "generation_results": {
+                        tid: {"success": r.success, "error": r.error, "cost": r.cost_usd}
+                        for tid, r in generation_results.items()
+                    },
+                }
+                resumed = True
+            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                logger.warning(
+                    "IMPLEMENT --resume: could not load saved generation results: %s — re-running",
+                    exc,
+                )
 
-        # Build phase with test runner (no shell test commands — tests are
-        # handled by DomainChecklist and the TEST phase handler)
-        state_store = JsonFileStateStore(
-            directory=str(project_root / ".startd8_state"),
-        )
-        dev_phase = DevelopmentPhase(
-            executor=executor,
-            test_runner=DefaultTestRunner(),
-            state_store=state_store,
-            max_parallel=4,
-        )
+        if not resumed:
+            # Convert SeedTasks → DevelopmentChunks (with env pre-filter)
+            chunks, skipped_reports = self._tasks_to_chunks(tasks, max_retries=2)
 
-        # Bridge sync → async
-        logger.info(
-            "IMPLEMENT: delegating %d chunks to DevelopmentPhase (plan=%s)",
-            len(chunks), plan.plan_id,
-        )
-        dev_result = self._run_development_phase(
-            dev_phase, plan, timeout=self.config.development_timeout_seconds,
-        )
+            if not chunks:
+                logger.warning("IMPLEMENT: no eligible tasks after env pre-filter")
+                output = {
+                    "task_reports": skipped_reports,
+                    "tasks_processed": len(skipped_reports),
+                    "domain_breakdown": {},
+                    "total_estimated_loc": 0,
+                    "total_cost": 0.0,
+                    "generation_results": {},
+                }
+                context["implementation"] = output
+                context["generation_results"] = {}
+                duration = time.monotonic() - start
+                return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
-        if dev_result is None or not hasattr(dev_result, "chunk_states"):
-            raise RuntimeError(
-                "DevelopmentPhase returned an invalid result "
-                f"(type={type(dev_result).__name__}). "
-                "Expected DevelopmentResult with chunk_states attribute."
+            # Build executor (inject pre-configured generator if provided)
+            executor = LeadContractorChunkExecutor(
+                lead_agent=self.config.lead_agent,
+                drafter_agent=self.config.drafter_agent,
+                output_dir=project_root,
+                max_iterations=self.config.max_iterations,
+                pass_threshold=self.config.pass_threshold,
+                max_tokens=self.config.max_tokens,
+                fail_on_truncation=self.config.fail_on_truncation,
+                check_truncation=self.config.check_truncation,
+                strict_truncation=self.config.strict_truncation,
+            )
+            if self._code_generator is not None:
+                # _generator is the lazy-init slot on LeadContractorChunkExecutor;
+                # setting it skips _resolve_generator() and uses our instance.
+                executor._generator = self._code_generator
+
+            # Build plan
+            plan = DevelopmentPlan(
+                plan_id=f"artisan-implement-{int(time.time())}",
+                chunks=chunks,
+                config={
+                    "dry_run": False,
+                    "state_dir": str(project_root / ".startd8_state"),
+                },
             )
 
-        # Map results back to downstream contract
-        output, generation_results, total_cost = self._map_development_result(
-            dev_result, chunks, tasks, skipped_reports,
-        )
+            # Build phase with test runner (no shell test commands — tests are
+            # handled by DomainChecklist and the TEST phase handler)
+            state_store = JsonFileStateStore(
+                directory=str(project_root / ".startd8_state"),
+            )
+            dev_phase = DevelopmentPhase(
+                executor=executor,
+                test_runner=DefaultTestRunner(),
+                state_store=state_store,
+                max_parallel=4,
+            )
+
+            # Bridge sync → async
+            logger.info(
+                "IMPLEMENT: delegating %d chunks to DevelopmentPhase (plan=%s)",
+                len(chunks), plan.plan_id,
+            )
+            dev_result = self._run_development_phase(
+                dev_phase, plan, timeout=self.config.development_timeout_seconds,
+            )
+
+            if dev_result is None or not hasattr(dev_result, "chunk_states"):
+                raise RuntimeError(
+                    "DevelopmentPhase returned an invalid result "
+                    f"(type={type(dev_result).__name__}). "
+                    "Expected DevelopmentResult with chunk_states attribute."
+                )
+
+            # Map results back to downstream contract
+            output, generation_results, total_cost = self._map_development_result(
+                dev_result, chunks, tasks, skipped_reports,
+            )
+
+            # Persist generation_results to disk for crash recovery
+            serializable = {}
+            for tid, gr in generation_results.items():
+                serializable[tid] = {
+                    "success": gr.success,
+                    "generated_files": [str(p) for p in gr.generated_files],
+                    "error": gr.error,
+                    "input_tokens": gr.input_tokens,
+                    "output_tokens": gr.output_tokens,
+                    "cost_usd": gr.cost_usd,
+                    "iterations": gr.iterations,
+                    "model": gr.model,
+                }
+            results_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(results_path, serializable, indent=2)
+            logger.info(
+                "IMPLEMENT: saved %d generation results to %s",
+                len(generation_results), results_path,
+            )
 
         context["implementation"] = output
         context["generation_results"] = generation_results
