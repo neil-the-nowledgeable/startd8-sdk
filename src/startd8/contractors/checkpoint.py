@@ -384,14 +384,18 @@ class IntegrationCheckpoint:
         for gf in generated_files:
             if gf.suffix == ".py":
                 try:
+                    before = gf.read_text()
                     subprocess.run(
                         ["python3", "-m", "ruff", "check", "--fix",
                          "--unsafe-fixes", "--select=E7,E9,F", str(gf)],
                         capture_output=True, text=True,
                         cwd=self.project_root, timeout=30,
                     )
+                    after = gf.read_text()
+                    if before != after:
+                        logger.debug("Auto-fixed lint issues in %s", gf.name)
                 except (subprocess.TimeoutExpired, FileNotFoundError):
-                    pass  # ruff unavailable or timed out — lint check below will catch
+                    logger.debug("ruff auto-fix skipped for %s (unavailable or timed out)", gf.name)
 
         # Ignore F401 (unused imports) in pre-merge validation because
         # generated files are partial — the AST merge will combine them
