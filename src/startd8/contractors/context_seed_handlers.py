@@ -40,18 +40,22 @@ import asyncio
 import hashlib
 import json
 import logging
+import shlex
 import subprocess
+import sys
+import threading
 import time
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Optional
 
 from startd8.contractors.artisan_contractor import (
     AbstractPhaseHandler,
     WorkflowPhase,
 )
 from startd8.contractors.protocols import CodeGenerator, GenerationResult
+from startd8.utils.file_operations import atomic_write_json
 from startd8.utils.token_usage import (
     token_usage_cost,
     token_usage_input,
@@ -92,6 +96,8 @@ class HandlerConfig:
         strict_truncation: Use strict detection threshold.
         test_timeout_seconds: Timeout for each validator subprocess.
         review_temperature: Temperature for LLM review calls.
+        review_max_code_chars: Max characters of generated code to include in review prompt.
+        development_timeout_seconds: Timeout for the DevelopmentPhase thread (None = no limit).
     """
 
     lead_agent: str = "anthropic:claude-sonnet-4-5-20250927"
@@ -104,6 +110,8 @@ class HandlerConfig:
     strict_truncation: bool = False
     test_timeout_seconds: int = 120
     review_temperature: float = 0.0
+    review_max_code_chars: int = 8000
+    development_timeout_seconds: Optional[float] = None
 
 
 # ============================================================================
@@ -246,7 +254,7 @@ def _topological_sort(tasks: list[SeedTask]) -> list[SeedTask]:
         logger.warning(
             "Dependency cycle detected among tasks: %s — "
             "falling back to original seed order",
-            " → ".join(cycle_members),
+            " → ".join(reversed(cycle_members)),
         )
         return list(tasks)
 
@@ -484,7 +492,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _check_environment(self, task: SeedTask) -> List[Dict[str, Any]]:
+    def _check_environment(self, task: SeedTask) -> list[dict[str, Any]]:
         """Check environment readiness for a task.
 
         Returns list of environment issues (fail/warn checks).
@@ -496,9 +504,9 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
 
     @staticmethod
     def _tasks_to_chunks(
-        tasks: List[SeedTask],
+        tasks: list[SeedTask],
         max_retries: int = 2,
-    ) -> Tuple[List[Any], List[Dict[str, Any]]]:
+    ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
         Args:
@@ -511,8 +519,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         """
         from startd8.contractors.artisan_phases.development import DevelopmentChunk
 
-        chunks: List[DevelopmentChunk] = []
-        skipped: List[Dict[str, Any]] = []
+        chunks: list[DevelopmentChunk] = []
+        skipped: list[dict[str, Any]] = []
 
         env_blocked_ids: set[str] = set()
         for task in tasks:
@@ -571,13 +579,13 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
     def _map_development_result(
         self,
         dev_result: Any,  # DevelopmentResult
-        chunks: List[Any],  # List[DevelopmentChunk]
-        tasks: List[SeedTask],
-        skipped_reports: List[Dict[str, Any]],
-    ) -> Tuple[Dict[str, Any], Dict[str, GenerationResult], float]:
+        chunks: list[Any],  # list[DevelopmentChunk]
+        tasks: list[SeedTask],
+        skipped_reports: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], dict[str, GenerationResult], float]:
         """Map DevelopmentResult back to the output format downstream expects.
 
-        Reconstructs ``generation_results`` (Dict[str, GenerationResult])
+        Reconstructs ``generation_results`` (dict[str, GenerationResult])
         from chunk metadata where ``LeadContractorChunkExecutor`` stored them.
 
         Args:
@@ -592,8 +600,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         from startd8.contractors.artisan_phases.development import ChunkStatus
 
         chunk_map = {c.chunk_id: c for c in chunks}
-        generation_results: Dict[str, GenerationResult] = {}
-        task_reports: List[Dict[str, Any]] = list(skipped_reports)
+        generation_results: dict[str, GenerationResult] = {}
+        task_reports: list[dict[str, Any]] = list(skipped_reports)
         total_cost = 0.0
 
         for chunk_id, state in dev_result.chunk_states.items():
@@ -604,7 +612,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             meta = chunk.metadata
             gen_result = meta.get("_generation_result")
 
-            task_report: Dict[str, Any] = {
+            task_report: dict[str, Any] = {
                 "task_id": chunk_id,
                 "feature_id": meta.get("feature_id", ""),
                 "title": meta.get("title", ""),
@@ -647,11 +655,11 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             task_reports.append(task_report)
 
         # Domain breakdown
-        domain_tasks: Dict[str, List[str]] = defaultdict(list)
+        domain_tasks: dict[str, list[str]] = defaultdict(list)
         for task in tasks:
             domain_tasks[task.domain].append(task.task_id)
 
-        output: Dict[str, Any] = {
+        output: dict[str, Any] = {
             "task_reports": task_reports,
             "tasks_processed": len(task_reports),
             "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
@@ -666,6 +674,59 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         }
 
         return output, generation_results, total_cost
+
+    @staticmethod
+    def _run_development_phase(
+        dev_phase: Any,
+        plan: Any,
+        timeout: Optional[float] = None,
+    ) -> Any:
+        """Run DevelopmentPhase in a dedicated thread-owned event loop.
+
+        Using a dedicated thread avoids nested event-loop errors when the
+        caller is already inside an async runtime (e.g. notebooks, test
+        harnesses, or async servers).
+
+        Args:
+            dev_phase: The DevelopmentPhase instance.
+            plan: The DevelopmentPlan to execute.
+            timeout: Maximum seconds to wait for the thread. ``None``
+                means wait indefinitely (the orchestrator's own timeout
+                still applies at the outer level).
+        """
+        result_box: dict[str, Any] = {}
+        error_box: dict[str, BaseException] = {}
+
+        def _runner() -> None:
+            loop = asyncio.new_event_loop()
+            try:
+                asyncio.set_event_loop(loop)
+                result_box["result"] = loop.run_until_complete(
+                    dev_phase.run(plan)
+                )
+            except BaseException as exc:  # pragma: no cover - propagated
+                error_box["error"] = exc
+            finally:
+                loop.close()
+                asyncio.set_event_loop(None)
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            logger.error(
+                "DevelopmentPhase did not complete within %.0fs — "
+                "abandoning background thread (daemon=True)",
+                timeout,
+            )
+            raise TimeoutError(
+                f"DevelopmentPhase.run() did not complete within {timeout}s"
+            )
+
+        if "error" in error_box:
+            raise error_box["error"]
+        return result_box["result"]
 
     # ------------------------------------------------------------------
     # Public execute
@@ -688,7 +749,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             task_reports: list[dict[str, Any]] = []
             for task in tasks:
                 env_checks = self._check_environment(task)
-                task_report: Dict[str, Any] = {
+                task_report: dict[str, Any] = {
                     "task_id": task.task_id,
                     "feature_id": task.feature_id,
                     "title": task.title,
@@ -752,34 +813,22 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             duration = time.monotonic() - start
             return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
-        # Build executor — use injected code_generator if provided
+        # Build executor (inject pre-configured generator if provided)
+        executor = LeadContractorChunkExecutor(
+            lead_agent=self.config.lead_agent,
+            drafter_agent=self.config.drafter_agent,
+            output_dir=project_root,
+            max_iterations=self.config.max_iterations,
+            pass_threshold=self.config.pass_threshold,
+            max_tokens=self.config.max_tokens,
+            fail_on_truncation=self.config.fail_on_truncation,
+            check_truncation=self.config.check_truncation,
+            strict_truncation=self.config.strict_truncation,
+        )
         if self._code_generator is not None:
-            # Wrap the injected generator in a LeadContractorChunkExecutor-compatible
-            # way by setting it directly on the executor instance
-            executor = LeadContractorChunkExecutor(
-                lead_agent=self.config.lead_agent,
-                drafter_agent=self.config.drafter_agent,
-                output_dir=project_root,
-                max_iterations=self.config.max_iterations,
-                pass_threshold=self.config.pass_threshold,
-                max_tokens=self.config.max_tokens,
-                fail_on_truncation=self.config.fail_on_truncation,
-                check_truncation=self.config.check_truncation,
-                strict_truncation=self.config.strict_truncation,
-            )
+            # _generator is the lazy-init slot on LeadContractorChunkExecutor;
+            # setting it skips _resolve_generator() and uses our instance.
             executor._generator = self._code_generator
-        else:
-            executor = LeadContractorChunkExecutor(
-                lead_agent=self.config.lead_agent,
-                drafter_agent=self.config.drafter_agent,
-                output_dir=project_root,
-                max_iterations=self.config.max_iterations,
-                pass_threshold=self.config.pass_threshold,
-                max_tokens=self.config.max_tokens,
-                fail_on_truncation=self.config.fail_on_truncation,
-                check_truncation=self.config.check_truncation,
-                strict_truncation=self.config.strict_truncation,
-            )
 
         # Build plan
         plan = DevelopmentPlan(
@@ -808,7 +857,9 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             "IMPLEMENT: delegating %d chunks to DevelopmentPhase (plan=%s)",
             len(chunks), plan.plan_id,
         )
-        dev_result = asyncio.run(dev_phase.run(plan))
+        dev_result = self._run_development_phase(
+            dev_phase, plan, timeout=self.config.development_timeout_seconds,
+        )
 
         # Map results back to downstream contract
         output, generation_results, total_cost = self._map_development_result(
@@ -852,26 +903,13 @@ class TestPhaseHandler(AbstractPhaseHandler):
     # Validator command mapping
     # ------------------------------------------------------------------
 
-    #: Known validator names → CLI command templates.
-    #: ``{project_root}`` and ``{target_files}`` are substituted at runtime.
-    VALIDATOR_COMMANDS: Dict[str, str] = {
-        "pytest": "python -m pytest {target_files} --tb=short -q",
-        "mypy": "python -m mypy {target_files} --ignore-missing-imports",
-        "ruff": "python -m ruff check {target_files}",
-        "ruff_format": "python -m ruff format --check {target_files}",
-        "black": "python -m black --check {target_files}",
-        "pylint": "python -m pylint {target_files}",
-        "import_check": "python -c \"import {module}\"",
-        "syntax_check": "python -m py_compile {target_files}",
-    }
-
     def _resolve_validator_command(
         self,
         validator_name: str,
-        target_files: List[str],
+        target_files: list[str],
         project_root: Path,
-    ) -> Optional[str]:
-        """Resolve a validator name to a runnable CLI command.
+    ) -> Optional[list[str]]:
+        """Resolve a validator name to runnable subprocess args.
 
         Args:
             validator_name: Name from ``task.post_generation_validators``.
@@ -879,30 +917,75 @@ class TestPhaseHandler(AbstractPhaseHandler):
             project_root: The project root directory.
 
         Returns:
-            Formatted command string, or None if validator is unknown.
+            List of command arguments, or None if validator is unknown.
         """
-        template = self.VALIDATOR_COMMANDS.get(validator_name)
-        if template is None:
-            logger.warning("TEST: unknown validator %r — skipping", validator_name)
+        py = sys.executable  # use the running interpreter, not "python"
+        file_args = [str(project_root / f) for f in target_files]
+
+        if validator_name == "pytest":
+            return [py, "-m", "pytest", *file_args, "--tb=short", "-q"]
+        if validator_name == "mypy":
+            return [py, "-m", "mypy", *file_args, "--ignore-missing-imports"]
+        if validator_name == "ruff":
+            return [py, "-m", "ruff", "check", *file_args]
+        if validator_name == "ruff_format":
+            return [py, "-m", "ruff", "format", "--check", *file_args]
+        if validator_name == "black":
+            return [py, "-m", "black", "--check", *file_args]
+        if validator_name == "pylint":
+            return [py, "-m", "pylint", *file_args]
+        if validator_name == "syntax_check":
+            return [py, "-m", "py_compile", *file_args]
+        if validator_name == "import_check":
+            module_name = self._file_to_module(target_files[0], project_root) if target_files else ""
+            if module_name:
+                return [py, "-c", f"import {module_name}"]
             return None
 
-        files_str = " ".join(str(project_root / f) for f in target_files)
-        return template.format(
-            target_files=files_str,
-            project_root=str(project_root),
-            module=target_files[0].replace("/", ".").replace(".py", "") if target_files else "",
-        )
+        logger.warning("TEST: unknown validator %r — skipping", validator_name)
+        return None
+
+    @staticmethod
+    def _file_to_module(rel_path: str, project_root: Path) -> str:
+        """Convert a relative file path to a Python module name.
+
+        Strips common source prefixes (``src/``) and the ``.py`` extension,
+        then validates that the resulting dotted path looks importable.
+
+        Returns:
+            Dotted module name (e.g. ``"startd8.contractors.foo"``), or
+            empty string if the path cannot be converted.
+        """
+        # Normalize and strip .py
+        p = rel_path.replace("\\", "/")
+        if not p.endswith(".py"):
+            return ""
+        p = p[:-3]  # strip .py
+
+        # Strip common source-tree prefixes
+        for prefix in ("src/", "lib/"):
+            if p.startswith(prefix):
+                p = p[len(prefix):]
+                break
+
+        # Convert path separators to dots
+        module = p.replace("/", ".")
+
+        # Basic sanity: no leading/trailing dots, no double dots
+        if module.startswith(".") or module.endswith(".") or ".." in module:
+            return ""
+        return module
 
     def _run_validator(
         self,
-        command: str,
+        command: list[str],
         project_root: Path,
         timeout: int,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Execute a single validator command as a subprocess.
 
         Args:
-            command: The CLI command to run.
+            command: The CLI command args to run.
             project_root: Working directory for the subprocess.
             timeout: Timeout in seconds.
 
@@ -914,7 +997,6 @@ class TestPhaseHandler(AbstractPhaseHandler):
         try:
             proc = subprocess.run(
                 command,
-                shell=True,
                 cwd=str(project_root),
                 capture_output=True,
                 text=True,
@@ -961,7 +1043,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         task: SeedTask,
         project_root: Path,
         generation_result: Optional[GenerationResult],
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Run all validators for a single task.
 
         Validators are only executed when *generation_result* indicates
@@ -989,7 +1071,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 "skipped_reason": "generation_not_successful",
             }
 
-        validator_results: List[Dict[str, Any]] = []
+        validator_results: list[dict[str, Any]] = []
         all_passed = True
 
         for validator_name in task.post_generation_validators:
@@ -1008,7 +1090,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 command, project_root, self.config.test_timeout_seconds,
             )
             result["validator"] = validator_name
-            result["command"] = command
+            result["command"] = " ".join(shlex.quote(part) for part in command)
             validator_results.append(result)
 
             if not result.get("passed", False):
@@ -1036,7 +1118,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         start = time.monotonic()
         tasks: list[SeedTask] = _ensure_context_loaded(context)
         project_root = Path(context.get("project_root", "."))
-        generation_results: Dict[str, GenerationResult] = context.get("generation_results", {})
+        generation_results: dict[str, GenerationResult] = context.get("generation_results", {})
 
         logger.info("TEST phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
@@ -1092,7 +1174,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
             else:
                 total_failed += 1
 
-        per_task: Dict[str, Any] = {}
+        per_task: dict[str, Any] = {}
         for entry in test_plan:
             task_id = entry.get("task_id")
             if not task_id:
@@ -1214,7 +1296,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         from startd8.utils.agent_resolution import resolve_agent_spec
 
-        resolve_kwargs: Dict[str, Any] = {
+        resolve_kwargs: dict[str, Any] = {
             "name": "context-seed-reviewer",
             "temperature": self.config.review_temperature,
         }
@@ -1231,7 +1313,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         self,
         task: SeedTask,
         generated_code: str,
-        test_results: Dict[str, Any],
+        test_results: dict[str, Any],
     ) -> str:
         """Build the review prompt for a single task.
 
@@ -1255,12 +1337,12 @@ PASS if score >= {pass_threshold} and no blocking issues.
             domain=task.domain,
             description=task.description,
             constraints=constraints_str,
-            generated_code=generated_code[:8000],  # truncate for prompt
+            generated_code=generated_code[:self.config.review_max_code_chars],
             test_results=test_str[:2000],
             pass_threshold=self.config.pass_threshold,
         )
 
-    def _parse_review_response(self, response: str) -> Dict[str, Any]:
+    def _parse_review_response(self, response: str) -> dict[str, Any]:
         """Parse score, verdict, and issues from the LLM review response.
 
         Args:
@@ -1279,18 +1361,27 @@ PASS if score >= {pass_threshold} and no blocking issues.
         score_match = re.search(r"###\s*Score:\s*(\d+)", response)
         if score_match:
             score = min(100, max(0, int(score_match.group(1))))
+        else:
+            logger.warning(
+                "REVIEW: could not extract score from response (defaulting to 0); "
+                "first 200 chars: %s", response[:200],
+            )
 
         # Extract verdict
         verdict_match = re.search(r"###\s*Verdict:\s*(PASS|FAIL)", response, re.IGNORECASE)
         if verdict_match:
             verdict = verdict_match.group(1).upper()
+        else:
+            logger.warning(
+                "REVIEW: could not extract verdict from response (defaulting to FAIL)"
+            )
 
-        def extract_section(section: str) -> List[str]:
+        def extract_section(section: str) -> list[str]:
             pattern = rf"###\s*{section}\s*\n(.*?)(?=\n###\s|\Z)"
             match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
             if not match:
                 return []
-            items: List[str] = []
+            items: list[str] = []
             for line in match.group(1).splitlines():
                 cleaned = line.strip()
                 if cleaned.startswith("- "):
@@ -1311,8 +1402,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
         self,
         task: SeedTask,
         generated_code: str,
-        test_results: Dict[str, Any],
-    ) -> Dict[str, Any]:
+        test_results: dict[str, Any],
+    ) -> dict[str, Any]:
         """Conduct LLM review for a single task.
 
         Args:
@@ -1362,8 +1453,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
         start = time.monotonic()
         tasks: list[SeedTask] = _ensure_context_loaded(context)
         preflight_summary = context.get("preflight_summary", {})
-        generation_results: Dict[str, GenerationResult] = context.get("generation_results", {})
-        test_results_ctx: Dict[str, Any] = context.get("test_results", {})
+        generation_results: dict[str, GenerationResult] = context.get("generation_results", {})
+        test_results_ctx: dict[str, Any] = context.get("test_results", {})
         test_plan = test_results_ctx.get("test_plan", [])
         test_by_task = {t["task_id"]: t for t in test_plan if isinstance(t, dict)}
 
@@ -1448,7 +1539,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             review["constraint_count"] = len(task.prompt_constraints)
             review["env_failures"] = len(env_fails)
             review["env_warnings"] = len(env_warns)
-            review["review_status"] = "reviewed"
+            review["review_status"] = review.get("status", "reviewed")
 
             total_cost += review.get("cost", 0.0)
             if review.get("passed", False):
@@ -1458,7 +1549,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
             review_items.append(review)
 
-        per_task: Dict[str, Any] = {}
+        per_task: dict[str, Any] = {}
         for item in review_items:
             task_id = item.get("task_id")
             if not task_id:
@@ -1527,7 +1618,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
     def _collect_generated_artifacts(
         self,
         context: dict[str, Any],
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Inventory all files generated during the IMPLEMENT phase.
 
         Reads ``context["generation_results"]`` and lists output files
@@ -1541,20 +1632,20 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             ``exists``, ``size_bytes``, ``line_count``, ``sha256``,
             ``domain``.
         """
-        artifacts: List[Dict[str, Any]] = []
-        generation_results: Dict[str, GenerationResult] = context.get(
+        artifacts: list[dict[str, Any]] = []
+        generation_results: dict[str, GenerationResult] = context.get(
             "generation_results", {}
         )
 
         # Build task_id → SeedTask lookup for domain metadata
         tasks: list[SeedTask] = context.get("tasks", [])
-        id_to_task: Dict[str, SeedTask] = {t.task_id: t for t in tasks}
+        id_to_task: dict[str, SeedTask] = {t.task_id: t for t in tasks}
 
         for task_id, result in generation_results.items():
             if result.success:
                 task = id_to_task.get(task_id)
                 for fpath in result.generated_files:
-                    artifact: Dict[str, Any] = {
+                    artifact: dict[str, Any] = {
                         "task_id": task_id,
                         "path": str(fpath),
                         "exists": (
@@ -1576,7 +1667,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
         return artifacts
 
-    def _build_cost_summary(self, context: dict[str, Any]) -> Dict[str, Any]:
+    def _build_cost_summary(self, context: dict[str, Any]) -> dict[str, Any]:
         """Aggregate costs across all phases.
 
         Args:
@@ -1610,8 +1701,8 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
     def _write_manifest(
         self,
-        artifacts: List[Dict[str, Any]],
-        summary: Dict[str, Any],
+        artifacts: list[dict[str, Any]],
+        summary: dict[str, Any],
         context: dict[str, Any],
         output_dir: Path,
     ) -> Optional[Path]:
@@ -1634,13 +1725,13 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             return None
 
         # Per-task status rollup: join generation, test, and review data
-        generation_results: Dict[str, GenerationResult] = context.get(
+        generation_results: dict[str, GenerationResult] = context.get(
             "generation_results", {}
         )
-        test_results_ctx: Dict[str, Any] = context.get("test_results", {})
-        review_results_ctx: Dict[str, Any] = context.get("review_results", {})
+        test_results_ctx: dict[str, Any] = context.get("test_results", {})
+        review_results_ctx: dict[str, Any] = context.get("review_results", {})
 
-        test_results_map: Dict[str, Any] = dict(
+        test_results_map: dict[str, Any] = dict(
             test_results_ctx.get("per_task", {}) or {}
         )
         if not test_results_map:
@@ -1658,7 +1749,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                 )
                 test_results_map[task_id] = {"status": status, "passed": passed}
 
-        review_results_map: Dict[str, Any] = dict(
+        review_results_map: dict[str, Any] = dict(
             review_results_ctx.get("per_task", {}) or {}
         )
         if not review_results_map:
@@ -1675,7 +1766,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                     "verdict": entry.get("verdict"),
                 }
 
-        task_status: Dict[str, Dict[str, Any]] = {}
+        task_status: dict[str, dict[str, Any]] = {}
         for task_id, gen_result in generation_results.items():
             test_info = test_results_map.get(task_id, {})
             review_info = review_results_map.get(task_id, {})
@@ -1705,8 +1796,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         manifest_path = output_dir / "generation-manifest.json"
         try:
             manifest_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2, default=str)
+            atomic_write_json(manifest_path, manifest, indent=2, default=str)
             logger.info("Wrote manifest: %s", manifest_path)
         except OSError as exc:
             logger.warning("Failed to write manifest to %s: %s", manifest_path, exc)
@@ -1740,7 +1830,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         cost_summary = self._build_cost_summary(context)
 
         # Compute overall status rollup
-        generation_results: Dict[str, GenerationResult] = context.get(
+        generation_results: dict[str, GenerationResult] = context.get(
             "generation_results", {}
         )
         total_tasks = len(tasks)
@@ -1758,7 +1848,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         else:
             overall_status = "partial"
 
-        summary: Dict[str, Any] = {
+        summary: dict[str, Any] = {
             "plan_title": plan_title,
             "task_count": total_tasks,
             "status": overall_status,
@@ -1808,8 +1898,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         if self.output_dir and not dry_run:
             output_path = Path(self.output_dir) / "workflow-execution-report.json"
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(summary, f, indent=2, default=str)
+            atomic_write_json(output_path, summary, indent=2, default=str)
             logger.info("Wrote execution report to %s", output_path)
             summary["report_path"] = str(output_path)
 
@@ -1870,6 +1959,8 @@ class ContextSeedHandlers:
         strict_truncation: bool = False,
         test_timeout_seconds: int = 120,
         review_temperature: float = 0.0,
+        review_max_code_chars: int = 8000,
+        development_timeout_seconds: Optional[float] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all six workflow phases.
@@ -1887,6 +1978,8 @@ class ContextSeedHandlers:
             strict_truncation: Use strict detection threshold.
             test_timeout_seconds: Timeout for each validator subprocess.
             review_temperature: Temperature for LLM review calls.
+            review_max_code_chars: Max chars of code in review prompt.
+            development_timeout_seconds: Timeout for development thread.
             code_generator: Optional pre-configured CodeGenerator instance.
 
         Returns:
@@ -1903,6 +1996,8 @@ class ContextSeedHandlers:
             strict_truncation=strict_truncation,
             test_timeout_seconds=test_timeout_seconds,
             review_temperature=review_temperature,
+            review_max_code_chars=review_max_code_chars,
+            development_timeout_seconds=development_timeout_seconds,
         )
 
         return {
