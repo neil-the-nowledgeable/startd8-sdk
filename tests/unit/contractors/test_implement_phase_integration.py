@@ -12,10 +12,9 @@ Tests cover:
 
 from __future__ import annotations
 
-from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, List
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any, Dict
+from unittest.mock import patch
 
 import pytest
 
@@ -26,7 +25,6 @@ from startd8.contractors.artisan_phases.development import (
     DevelopmentResult,
 )
 from startd8.contractors.context_seed_handlers import (
-    HandlerConfig,
     ImplementPhaseHandler,
     SeedTask,
     WorkflowPhase,
@@ -161,18 +159,20 @@ class TestTasksToChunks:
         assert chunks[1].chunk_id == "T2"
         assert chunks[1].dependencies == ["T1"]
 
-    def test_dependencies_on_env_blocked_excluded(self):
-        """Dependencies on env-blocked tasks are excluded from chunk deps."""
+    def test_dependencies_on_env_blocked_task_are_blocked(self):
+        """Tasks depending on env-blocked tasks are skipped, not executed."""
         tasks = [
             _make_env_fail_task(task_id="T1"),
             _make_seed_task(task_id="T2", depends_on=["T1"]),
         ]
         chunks, skipped = ImplementPhaseHandler._tasks_to_chunks(tasks)
 
-        assert len(chunks) == 1
-        assert chunks[0].chunk_id == "T2"
-        # T1 was env-blocked, so T2's dependency on it is removed
-        assert chunks[0].dependencies == []
+        assert len(chunks) == 0
+        assert len(skipped) == 2
+        skip_by_id = {s["task_id"]: s for s in skipped}
+        assert skip_by_id["T1"]["status"] == "env_blocked"
+        assert skip_by_id["T2"]["status"] == "dep_blocked_env"
+        assert skip_by_id["T2"]["blocked_dependencies"] == ["T1"]
 
     def test_custom_max_retries(self):
         """Custom max_retries is propagated to chunks."""

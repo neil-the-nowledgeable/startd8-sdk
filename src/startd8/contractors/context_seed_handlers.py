@@ -13,15 +13,6 @@ WorkflowPhase mapping (from artisan_contractor.py docstring):
     REVIEW    → LLM-based quality review of generated implementations
     FINALIZE  → Collect artifacts + write comprehensive execution report
 
-Implementation Passes:
-    Pass 1: Scaffold all handler interfaces, __init__ params,
-        private helper stubs, and factory config propagation.
-    Pass 2: Wire ImplementPhaseHandler to LeadContractorCodeGenerator.
-    Pass 3: Wire TestPhaseHandler to subprocess validators.
-    Pass 4: Polish FinalizePhaseHandler artifact collection (checksums,
-        line counts, domain tags), cost aggregation (test phase), manifest
-        per-task status rollup, and overall success/partial/failed status.
-
 Usage::
 
     from startd8.contractors.context_seed_handlers import ContextSeedHandlers
@@ -61,6 +52,11 @@ from startd8.contractors.artisan_contractor import (
     WorkflowPhase,
 )
 from startd8.contractors.protocols import CodeGenerator, GenerationResult
+from startd8.utils.token_usage import (
+    token_usage_cost,
+    token_usage_input,
+    token_usage_output,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -517,15 +513,15 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
 
         chunks: List[DevelopmentChunk] = []
         skipped: List[Dict[str, Any]] = []
-        included_ids: set[str] = set()
 
+        env_blocked_ids: set[str] = set()
         for task in tasks:
-            # Pre-filter tasks with blocking environment failures
             env_fails = [
                 c for c in task.environment_checks
                 if c.get("status") == "fail"
             ]
             if env_fails:
+                env_blocked_ids.add(task.task_id)
                 skipped.append({
                     "task_id": task.task_id,
                     "title": task.title,
@@ -535,14 +531,26 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                         if c.get("status") in ("fail", "warn")
                     ],
                 })
+
+        for task in tasks:
+            if task.task_id in env_blocked_ids:
                 continue
 
-            included_ids.add(task.task_id)
+            blocked_deps = [d for d in task.depends_on if d in env_blocked_ids]
+            if blocked_deps:
+                skipped.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "status": "dep_blocked_env",
+                    "blocked_dependencies": blocked_deps,
+                    "depends_on": task.depends_on,
+                })
+                continue
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
-                # Only include deps that are in the included set (not env-blocked)
-                dependencies=[d for d in task.depends_on if d in included_ids],
+                dependencies=list(task.depends_on),
                 file_targets=task.target_files,
                 implementation_prompt=task.description,
                 test_commands=[],  # Post-gen validation via DomainChecklist
@@ -557,12 +565,6 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     "title": task.title,
                 },
             ))
-
-        # Second pass: fix dependencies for chunks whose deps were added
-        # after them (topological order guarantees deps come first, but
-        # env-blocked deps need to be excluded from dependency lists)
-        for chunk in chunks:
-            chunk.dependencies = [d for d in chunk.dependencies if d in included_ids]
 
         return chunks, skipped
 
@@ -1090,6 +1092,36 @@ class TestPhaseHandler(AbstractPhaseHandler):
             else:
                 total_failed += 1
 
+        per_task: Dict[str, Any] = {}
+        for entry in test_plan:
+            task_id = entry.get("task_id")
+            if not task_id:
+                continue
+            if entry.get("status") == "passed":
+                per_task[task_id] = {
+                    "status": "passed",
+                    "passed": True,
+                    "validators_run": entry.get("validators_run", 0),
+                }
+            elif entry.get("status") == "failed":
+                per_task[task_id] = {
+                    "status": "failed",
+                    "passed": False,
+                    "validators_run": entry.get("validators_run", 0),
+                }
+            elif entry.get("status") == "skipped_no_generation":
+                per_task[task_id] = {
+                    "status": "skipped_no_generation",
+                    "passed": None,
+                    "validators_run": 0,
+                }
+            else:
+                per_task[task_id] = {
+                    "status": entry.get("status", "unknown"),
+                    "passed": None,
+                    "validators_run": entry.get("validators_run", 0),
+                }
+
         output = {
             "test_plan": test_plan,
             "total_validators": sum(len(t.post_generation_validators) for t in tasks),
@@ -1097,6 +1129,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
             "tasks_with_tests": len([t for t in test_plan if t.get("validator_count", 0) > 0 or t.get("validators_run", 0) > 0]),
             "total_passed": total_passed,
             "total_failed": total_failed,
+            "per_task": per_task,
         }
 
         context["test_results"] = output
@@ -1114,22 +1147,13 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
     """REVIEW phase: LLM-based quality review of generated implementations.
 
     In dry-run mode: reports review checklist (unchanged).
-    In real mode: sends generated code to a review agent (Claude) for
+    In real mode: sends generated code to a review agent for
     quality scoring, then aggregates pass/fail verdicts.
-
-    Pass 1 scaffold:
-        * ``__init__`` accepts :class:`HandlerConfig`.
-        * ``_resolve_review_agent`` lazily creates the review LLM agent.
-        * ``_build_review_prompt`` assembles the review prompt for a task.
-        * ``_parse_review_response`` extracts score/verdict from LLM output.
-        * ``_review_task`` orchestrates a single task review.
-        * Real-mode ``execute`` calls helpers but falls through to
-          ``"awaiting_implementation"`` until Pass 3 wires the LLM call.
     """
 
     def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
         self.config = handler_config or HandlerConfig()
-        self._review_agent: Any = None  # Pass 3: BaseAgent instance
+        self._review_agent: Any = None
 
     # ------------------------------------------------------------------
     # Review prompt template
@@ -1184,22 +1208,24 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         Returns:
             A BaseAgent instance.
-
-        TODO: Pass 3 — instantiate via ``resolve_agent_spec``.
         """
         if self._review_agent is not None:
             return self._review_agent
 
-        # Pass 3: replace with actual agent resolution
-        #   from startd8.utils.agent_resolution import resolve_agent_spec
-        #   self._review_agent = resolve_agent_spec(
-        #       self.config.lead_agent,
-        #       temperature=self.config.review_temperature,
-        #   )
-        #   return self._review_agent
-        raise NotImplementedError(
-            "Review agent not yet wired (Pass 3)"
+        from startd8.utils.agent_resolution import resolve_agent_spec
+
+        resolve_kwargs: Dict[str, Any] = {
+            "name": "context-seed-reviewer",
+            "temperature": self.config.review_temperature,
+        }
+        if self.config.max_tokens is not None:
+            resolve_kwargs["max_tokens"] = self.config.max_tokens
+
+        self._review_agent = resolve_agent_spec(
+            self.config.lead_agent,
+            **resolve_kwargs,
         )
+        return self._review_agent
 
     def _build_review_prompt(
         self,
@@ -1243,7 +1269,6 @@ PASS if score >= {pass_threshold} and no blocking issues.
         Returns:
             Dict with ``score``, ``verdict``, ``strengths``, ``issues``, ``suggestions``.
 
-        TODO: Pass 3 — robust parsing with regex fallbacks.
         """
         import re
 
@@ -1260,11 +1285,26 @@ PASS if score >= {pass_threshold} and no blocking issues.
         if verdict_match:
             verdict = verdict_match.group(1).upper()
 
+        def extract_section(section: str) -> List[str]:
+            pattern = rf"###\s*{section}\s*\n(.*?)(?=\n###\s|\Z)"
+            match = re.search(pattern, response, re.DOTALL | re.IGNORECASE)
+            if not match:
+                return []
+            items: List[str] = []
+            for line in match.group(1).splitlines():
+                cleaned = line.strip()
+                if cleaned.startswith("- "):
+                    items.append(cleaned[2:].strip())
+            return items
+
         return {
             "score": score,
             "verdict": verdict,
             "passed": verdict == "PASS" and score >= self.config.pass_threshold,
             "raw_response": response[:4000],  # truncate for storage
+            "strengths": extract_section("Strengths"),
+            "issues": extract_section("Issues"),
+            "suggestions": extract_section("Suggestions"),
         }
 
     def _review_task(
@@ -1282,26 +1322,32 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         Returns:
             Review result dict with score, verdict, cost.
-
-        TODO: Pass 3 — call review agent and parse response.
         """
-        # Pass 3: replace with actual LLM call
-        #   agent = self._resolve_review_agent()
-        #   prompt = self._build_review_prompt(task, generated_code, test_results)
-        #   response_text, token_count, token_usage = agent.generate(prompt)
-        #   review = self._parse_review_response(response_text)
-        #   review["cost"] = <calculate from token_usage>
-        #   review["tokens"] = {"input": token_usage.input_tokens, "output": token_usage.output_tokens}
-        #   return review
-
-        return {
-            "task_id": task.task_id,
-            "score": 0,
-            "verdict": "NOT_REVIEWED",
-            "passed": False,
-            "cost": 0.0,
-            "status": "awaiting_implementation",
-        }
+        try:
+            agent = self._resolve_review_agent()
+            prompt = self._build_review_prompt(task, generated_code, test_results)
+            response_text, _time_ms, token_usage = agent.generate(prompt)
+            review = self._parse_review_response(response_text)
+            review["task_id"] = task.task_id
+            review["cost"] = token_usage_cost(token_usage)
+            review["tokens"] = {
+                "input": token_usage_input(token_usage),
+                "output": token_usage_output(token_usage),
+            }
+            review["status"] = "reviewed"
+            return review
+        except Exception as exc:
+            logger.warning("REVIEW: agent error for %s: %s", task.task_id, exc)
+            return {
+                "task_id": task.task_id,
+                "score": 0,
+                "verdict": "ERROR",
+                "passed": False,
+                "cost": 0.0,
+                "tokens": {"input": 0, "output": 0},
+                "error": str(exc),
+                "status": "review_error",
+            }
 
     # ------------------------------------------------------------------
     # Public execute
@@ -1357,7 +1403,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 })
                 continue
 
-            # --- Real-mode path (scaffolded — wired in Pass 3) ---
+            # --- Real-mode path ---
             gen_result = generation_results.get(task.task_id)
 
             # Skip tasks that were not generated successfully
@@ -1374,8 +1420,26 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 continue
 
             # Read generated code for review
-            # Pass 3: read actual file contents from gen_result.generated_files
-            generated_code = "# TODO: Pass 3 — read generated files"
+            code_parts = []
+            for fpath in gen_result.generated_files:
+                try:
+                    if fpath.exists():
+                        content = fpath.read_text(encoding="utf-8")
+                        code_parts.append(f"# File: {fpath.name}\n{content}")
+                except (OSError, UnicodeDecodeError) as exc:
+                    logger.warning("REVIEW: could not read %s: %s", fpath, exc)
+            generated_code = "\n\n".join(code_parts)
+            if not generated_code.strip():
+                review_items.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "domain": task.domain,
+                    "constraint_count": len(task.prompt_constraints),
+                    "env_failures": len(env_fails),
+                    "env_warnings": len(env_warns),
+                    "review_status": "skipped_no_code",
+                })
+                continue
             task_test = test_by_task.get(task.task_id, {})
 
             review = self._review_task(task, generated_code, task_test)
@@ -1384,7 +1448,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             review["constraint_count"] = len(task.prompt_constraints)
             review["env_failures"] = len(env_fails)
             review["env_warnings"] = len(env_warns)
-            review["review_status"] = review.get("status", "awaiting_implementation")
+            review["review_status"] = "reviewed"
 
             total_cost += review.get("cost", 0.0)
             if review.get("passed", False):
@@ -1393,6 +1457,19 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 total_failed += 1
 
             review_items.append(review)
+
+        per_task: Dict[str, Any] = {}
+        for item in review_items:
+            task_id = item.get("task_id")
+            if not task_id:
+                continue
+            status = item.get("review_status", "unknown")
+            per_task[task_id] = {
+                "status": status,
+                "passed": item.get("passed") if status == "reviewed" else None,
+                "score": item.get("score"),
+                "verdict": item.get("verdict"),
+            }
 
         output = {
             "review_items": review_items,
@@ -1405,6 +1482,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             "total_cost": total_cost,
             "total_passed": total_passed,
             "total_failed": total_failed,
+            "per_task": per_task,
         }
 
         context["review_results"] = output
@@ -1559,12 +1637,43 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         generation_results: Dict[str, GenerationResult] = context.get(
             "generation_results", {}
         )
-        test_results_map: Dict[str, Any] = context.get("test_results", {}).get(
-            "per_task", {}
+        test_results_ctx: Dict[str, Any] = context.get("test_results", {})
+        review_results_ctx: Dict[str, Any] = context.get("review_results", {})
+
+        test_results_map: Dict[str, Any] = dict(
+            test_results_ctx.get("per_task", {}) or {}
         )
-        review_results_map: Dict[str, Any] = context.get("review_results", {}).get(
-            "per_task", {}
+        if not test_results_map:
+            for entry in test_results_ctx.get("test_plan", []):
+                if not isinstance(entry, dict):
+                    continue
+                task_id = entry.get("task_id")
+                if not task_id:
+                    continue
+                status = entry.get("status", "unknown")
+                passed = (
+                    True if status == "passed"
+                    else False if status == "failed"
+                    else None
+                )
+                test_results_map[task_id] = {"status": status, "passed": passed}
+
+        review_results_map: Dict[str, Any] = dict(
+            review_results_ctx.get("per_task", {}) or {}
         )
+        if not review_results_map:
+            for entry in review_results_ctx.get("review_items", []):
+                if not isinstance(entry, dict):
+                    continue
+                task_id = entry.get("task_id")
+                if not task_id:
+                    continue
+                review_results_map[task_id] = {
+                    "status": entry.get("review_status", "unknown"),
+                    "passed": entry.get("passed"),
+                    "score": entry.get("score"),
+                    "verdict": entry.get("verdict"),
+                }
 
         task_status: Dict[str, Dict[str, Any]] = {}
         for task_id, gen_result in generation_results.items():
