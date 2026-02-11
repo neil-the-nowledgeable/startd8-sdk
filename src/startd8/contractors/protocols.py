@@ -345,6 +345,11 @@ class ModelCatalogEntry:
     config: Optional[Dict[str, Any]] = None
     version: str = '1.0'
 
+    @property
+    def agent_spec(self) -> str:
+        """Return the ``"provider:model_id"`` string used by ``resolve_agent_spec()``."""
+        return f"{self.provider}:{self.model_id}"
+
     def __post_init__(self) -> None:
         """Validate model catalog entry parameters."""
         if not isinstance(self.model_id, str) or not self.model_id.strip():

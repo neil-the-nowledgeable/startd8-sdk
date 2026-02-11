@@ -64,6 +64,11 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from startd8.contractors.protocols import (
+    DRAFT_MODEL_CLAUDE_HAIKU,
+    VALIDATE_MODEL_CLAUDE_SONNET,
+)
+
 
 # ============================================================================
 # ENUMS
@@ -448,7 +453,7 @@ class LLMChunkExecutor(ChunkExecutor):
     Example::
 
         executor = LLMChunkExecutor(
-            drafter_agent="anthropic:claude-haiku-4-5-20251001",
+            drafter_agent=DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
             output_dir=Path("generated/my-project"),
         )
         phase = DevelopmentPhase(executor=executor)
@@ -458,7 +463,7 @@ class LLMChunkExecutor(ChunkExecutor):
 
     def __init__(
         self,
-        drafter_agent: str = "anthropic:claude-haiku-4-5-20251001",
+        drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         lead_agent: Optional[str] = None,
         output_dir: Optional[Path] = None,
         max_tokens: int = 64000,
@@ -467,8 +472,8 @@ class LLMChunkExecutor(ChunkExecutor):
         Initialize the LLM chunk executor.
 
         Args:
-            drafter_agent: Agent spec string for the implementation drafter
-                (e.g. ``"anthropic:claude-haiku-4-5-20251001"``).
+            drafter_agent: Agent spec string for the implementation drafter.
+                Defaults to ``DRAFT_MODEL_CLAUDE_HAIKU`` from the model catalog.
             lead_agent: Optional agent spec for review gating.  When set,
                 generated code is sent to the lead agent for a quality
                 review before being accepted.  If ``None``, no review
@@ -754,8 +759,8 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     Example::
 
         executor = LeadContractorChunkExecutor(
-            lead_agent="anthropic:claude-sonnet-4-5-20250927",
-            drafter_agent="gemini:gemini-2.5-flash-lite",
+            lead_agent=VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
+            drafter_agent=DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
             output_dir=Path("my-project"),
         )
         phase = DevelopmentPhase(executor=executor)
@@ -767,8 +772,8 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
     def __init__(
         self,
-        lead_agent: str = "anthropic:claude-sonnet-4-5-20250927",
-        drafter_agent: str = "gemini:gemini-2.5-flash-lite",
+        lead_agent: str = VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
+        drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         output_dir: Optional[Path] = None,
         max_iterations: int = 3,
         pass_threshold: int = 80,

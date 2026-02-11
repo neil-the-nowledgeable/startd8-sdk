@@ -34,8 +34,6 @@ Usage::
 
     handlers = ContextSeedHandlers.create_all(
         enriched_seed_path="out/artisan-context-seed-enriched.json",
-        lead_agent="anthropic:claude-sonnet-4-5-20250927",
-        drafter_agent="gemini:gemini-2.5-flash-lite",
     )
     for phase, handler in handlers.items():
         workflow.register_handler(phase, handler)
@@ -63,7 +61,12 @@ from startd8.contractors.artisan_contractor import (
     AbstractPhaseHandler,
     WorkflowPhase,
 )
-from startd8.contractors.protocols import CodeGenerator, GenerationResult
+from startd8.contractors.protocols import (
+    CodeGenerator,
+    DRAFT_MODEL_CLAUDE_HAIKU,
+    GenerationResult,
+    VALIDATE_MODEL_CLAUDE_SONNET,
+)
 from startd8.utils.file_operations import atomic_write_json
 from startd8.utils.token_usage import (
     token_usage_cost,
@@ -95,8 +98,10 @@ class HandlerConfig:
     """Shared configuration propagated to all phase handlers.
 
     Attributes:
-        lead_agent: Agent spec for architect/reviewer (e.g. ``"anthropic:claude-sonnet-4-5-20250927"``).
-        drafter_agent: Agent spec for drafter (e.g. ``"gemini:gemini-2.5-flash-lite"``).
+        lead_agent: Agent spec for architect/reviewer.
+            Defaults to ``VALIDATE_MODEL_CLAUDE_SONNET`` from the model catalog.
+        drafter_agent: Agent spec for drafter.
+            Defaults to ``DRAFT_MODEL_CLAUDE_HAIKU`` from the model catalog.
         max_iterations: Maximum draft → review iterations per task.
         pass_threshold: Minimum review score (0-100) to pass.
         max_tokens: Override max_tokens for agent creation (None = provider default).
@@ -109,8 +114,8 @@ class HandlerConfig:
         development_timeout_seconds: Timeout for the DevelopmentPhase thread (None = no limit).
     """
 
-    lead_agent: str = "anthropic:claude-sonnet-4-5-20250927"
-    drafter_agent: str = "gemini:gemini-2.5-flash-lite"
+    lead_agent: str = VALIDATE_MODEL_CLAUDE_SONNET.agent_spec
+    drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec
     max_iterations: int = 3
     pass_threshold: int = 80
     max_tokens: Optional[int] = None
@@ -2025,8 +2030,6 @@ class ContextSeedHandlers:
 
         handlers = ContextSeedHandlers.create_all(
             enriched_seed_path="out/artisan-context-seed-enriched.json",
-            lead_agent="anthropic:claude-sonnet-4-5-20250927",
-            drafter_agent="gemini:gemini-2.5-flash-lite",
             output_dir="out/artifacts",
         )
     """
@@ -2037,8 +2040,8 @@ class ContextSeedHandlers:
         output_dir: Optional[str] = None,
         *,
         # Agent configuration (keyword-only)
-        lead_agent: str = "anthropic:claude-sonnet-4-5-20250927",
-        drafter_agent: str = "gemini:gemini-2.5-flash-lite",
+        lead_agent: str = VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
+        drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         max_iterations: int = 3,
         pass_threshold: int = 80,
         max_tokens: Optional[int] = None,
