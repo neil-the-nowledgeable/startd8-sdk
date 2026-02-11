@@ -18,20 +18,39 @@ import pytest
 class TestAutoConfigureOtel:
     """Tests for auto_configure_otel()."""
 
-    def test_disabled_by_default(self):
-        """Unset STARTD8_OTEL = no OTel calls, zero overhead."""
+    def test_auto_by_default_with_otel(self):
+        """Unset STARTD8_OTEL defaults to 'auto'; configures when OTel available."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("STARTD8_OTEL", None)
-            # Reset the module guard
             import startd8.otel as otel_mod
             otel_mod._configured = False
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                mock_result = {"tracer": "t", "meter": "m", "resource_attributes": {}}
+                with patch.object(otel_mod, "configure_otel", return_value=mock_result) as mock_configure:
+                    result = otel_mod.auto_configure_otel()
+                mock_configure.assert_called_once()
+                assert result["tracer"] == "t"
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
 
-            with patch.object(otel_mod, "configure_otel") as mock_configure:
-                result = otel_mod.auto_configure_otel()
-
-            mock_configure.assert_not_called()
-            assert result["tracer"] is None
-            assert result["meter"] is None
+    def test_auto_by_default_without_otel(self):
+        """Unset STARTD8_OTEL defaults to 'auto'; silent no-op without OTel packages."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("STARTD8_OTEL", None)
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = False
+            try:
+                with patch.object(otel_mod, "configure_otel") as mock_configure:
+                    result = otel_mod.auto_configure_otel()
+                mock_configure.assert_not_called()
+                assert result["tracer"] is None
+                assert result["meter"] is None
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
 
     def test_disabled_explicit(self):
         """STARTD8_OTEL=disabled = no OTel calls."""
