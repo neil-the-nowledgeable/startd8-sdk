@@ -452,7 +452,7 @@ FeatureCompleteCallback = Callable[[Any], None]
 CheckpointFailedCallback = Callable[[Any, List[Any]], None]
 
 DRAFT_MODEL_CLAUDE_HAIKU = ModelCatalogEntry(
-    model_id='claude-haiku-4-5-20251008',
+    model_id='claude-haiku-4-5-20251001',
     model_name='Claude Haiku 4.5',
     role=ModelRole.DRAFT,
     provider='anthropic',

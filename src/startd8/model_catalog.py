@@ -57,7 +57,7 @@ class Models:
     CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-5-20250929"
 
     # Fast - Quick responses, lower cost
-    CLAUDE_HAIKU_LATEST = "anthropic:claude-haiku-4-5-20251008"
+    CLAUDE_HAIKU_LATEST = "anthropic:claude-haiku-4-5-20251001"
 
     # Legacy (for backwards compatibility)
     CLAUDE_SONNET_4 = "anthropic:claude-sonnet-4-20250514"
@@ -154,9 +154,9 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         tier="balanced",
         capabilities={"text", "vision", "code", "reasoning"},
     ),
-    "claude-haiku-4-5-20251008": ModelInfo(
+    "claude-haiku-4-5-20251001": ModelInfo(
         provider="anthropic",
-        model_id="claude-haiku-4-5-20251008",
+        model_id="claude-haiku-4-5-20251001",
         tier="fast",
         capabilities={"text", "code"},
     ),

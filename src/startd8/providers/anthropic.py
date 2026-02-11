@@ -23,7 +23,7 @@ class AnthropicProvider:
         # Claude 4.5 family (November 2025)
         "claude-opus-4-5-20251101",   # Claude Opus 4.5
         "claude-sonnet-4-5-20250929", # Claude Sonnet 4.5 - best for complex agents/coding
-        "claude-haiku-4-5-20251008",  # Claude Haiku 4.5 - fastest with near-frontier performance
+        "claude-haiku-4-5-20251001",  # Claude Haiku 4.5 - fastest with near-frontier performance
         # Claude 4.x family
         "claude-opus-4-1-20250805",   # Claude Opus 4.1 - agentic tasks upgrade
         "claude-sonnet-4-20250514",   # Claude Sonnet 4
@@ -86,7 +86,7 @@ class AnthropicProvider:
             "cost_per_1m_input": 3.00,
             "cost_per_1m_output": 15.00,
         },
-        "claude-haiku-4-5-20251008": {
+        "claude-haiku-4-5-20251001": {
             "name": "Claude Haiku 4.5",
             "context_window": 200000,
             "max_output_tokens": 64000,

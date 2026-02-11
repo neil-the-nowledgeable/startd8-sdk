@@ -65,7 +65,7 @@ from startd8.contractors.protocols import (
     CodeGenerator,
     DRAFT_MODEL_CLAUDE_HAIKU,
     GenerationResult,
-    VALIDATE_MODEL_CLAUDE_SONNET,
+    REVIEW_MODEL_CLAUDE_OPUS,
 )
 from startd8.utils.file_operations import atomic_write_json
 from startd8.utils.token_usage import (
@@ -99,7 +99,7 @@ class HandlerConfig:
 
     Attributes:
         lead_agent: Agent spec for architect/reviewer.
-            Defaults to ``VALIDATE_MODEL_CLAUDE_SONNET`` from the model catalog.
+            Defaults to ``REVIEW_MODEL_CLAUDE_OPUS`` from the model catalog.
         drafter_agent: Agent spec for drafter.
             Defaults to ``DRAFT_MODEL_CLAUDE_HAIKU`` from the model catalog.
         max_iterations: Maximum draft → review iterations per task.
@@ -114,7 +114,7 @@ class HandlerConfig:
         development_timeout_seconds: Timeout for the DevelopmentPhase thread (None = no limit).
     """
 
-    lead_agent: str = VALIDATE_MODEL_CLAUDE_SONNET.agent_spec
+    lead_agent: str = REVIEW_MODEL_CLAUDE_OPUS.agent_spec
     drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec
     max_iterations: int = 3
     pass_threshold: int = 80
@@ -2040,7 +2040,7 @@ class ContextSeedHandlers:
         output_dir: Optional[str] = None,
         *,
         # Agent configuration (keyword-only)
-        lead_agent: str = VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
+        lead_agent: str = REVIEW_MODEL_CLAUDE_OPUS.agent_spec,
         drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         max_iterations: int = 3,
         pass_threshold: int = 80,
