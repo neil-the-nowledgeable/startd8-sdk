@@ -42,6 +42,7 @@ from ..models import (
     ValidationResult,
 )
 from ...agents import BaseAgent
+from ...model_catalog import Models
 from ...utils.agent_resolution import resolve_agent_spec
 from ...utils.code_extraction import extract_code_from_response
 from ...logging_config import get_logger
@@ -236,8 +237,8 @@ class LeadContractorWorkflow(WorkflowBase):
         {
             "task_description": "string - What to implement",
             "context": {...} - Optional additional context,
-            "lead_agent": "anthropic:claude-sonnet-4-20250514" - Lead contractor (Sonnet 4),
-            "drafter_agent": "gemini:gemini-2.5-flash-lite" - Drafter agent (best value),
+            "lead_agent": Models.LEAD_CONTRACTOR_LEAD - Lead contractor,
+            "drafter_agent": Models.LEAD_CONTRACTOR_DRAFTER - Drafter agent (best value),
             "max_iterations": 3 - Max review cycles,
             "pass_threshold": 80 - Minimum score to pass (0-100),
             "output_format": "string - Expected output format (optional)",
@@ -270,12 +271,12 @@ class LeadContractorWorkflow(WorkflowBase):
         - Exploratory: fail_on_api_truncation=False, fail_on_heuristic_truncation=False
 
     Recommended Lead Agents:
-        - anthropic:claude-sonnet-4-20250514 (default - best for coding/agents)
+        - anthropic:claude-sonnet-4-5-20250929 (default - best for coding/agents)
         - anthropic:claude-opus-4-5-20251101 (most intelligent)
         - anthropic:claude-haiku-4-5-20251008 (fastest, near-frontier)
 
     Recommended Drafter Agents:
-        - gemini:gemini-2.5-flash-lite (default - $0.075/$0.30, best value)
+        - anthropic:claude-haiku-4-5-20251008 (default - fast, low-cost)
         - openai:gpt-4.1-nano ($0.10/$0.40 - ultra-fast)
         - gemini:gemini-3-flash-preview ($0.10/$0.40 - latest)
         - openai:gpt-4o-mini ($0.15/$0.60 - reliable)
@@ -330,15 +331,15 @@ class LeadContractorWorkflow(WorkflowBase):
                     name="lead_agent",
                     type="agent_spec",
                     required=False,
-                    default="anthropic:claude-sonnet-4-20250514",
-                    description="Lead contractor agent (Claude 4 recommended: sonnet-4, opus-4-5, haiku-4-5)"
+                    default=Models.LEAD_CONTRACTOR_LEAD,
+                    description="Lead contractor agent (Claude recommended: sonnet-4.5, opus-4.5, haiku-4.5)"
                 ),
                 WorkflowInput(
                     name="drafter_agent",
                     type="agent_spec",
                     required=False,
-                    default="gemini:gemini-2.5-flash-lite",
-                    description="Drafter agent (cost-efficient: gemini-2.5-flash-lite, gpt-4.1-nano, gpt-4o-mini)"
+                    default=Models.LEAD_CONTRACTOR_DRAFTER,
+                    description="Drafter agent (cost-efficient: haiku-4.5, gpt-4.1-nano, gpt-4o-mini)"
                 ),
                 WorkflowInput(
                     name="max_iterations",
@@ -441,8 +442,8 @@ class LeadContractorWorkflow(WorkflowBase):
         # Parse configuration
         task_description = config["task_description"]
         context = config.get("context", {})
-        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
-        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash")
+        lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
+        drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
@@ -1010,8 +1011,8 @@ class LeadContractorWorkflow(WorkflowBase):
 
         task_description = config["task_description"]
         context = config.get("context", {})
-        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
-        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash")
+        lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
+        drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")

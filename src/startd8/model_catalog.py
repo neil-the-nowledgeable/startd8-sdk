@@ -118,7 +118,7 @@ class Models:
 
     # Lead Contractor pattern: balanced lead + cheap drafter
     LEAD_CONTRACTOR_LEAD = CLAUDE_SONNET_LATEST
-    LEAD_CONTRACTOR_DRAFTER = GEMINI_FLASH_LITE
+    LEAD_CONTRACTOR_DRAFTER = CLAUDE_HAIKU_LATEST
 
     # Code review: needs good reasoning
     CODE_REVIEW = CLAUDE_SONNET_LATEST
