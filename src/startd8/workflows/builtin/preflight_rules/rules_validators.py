@@ -8,6 +8,7 @@ so that ``domain_checklist.py`` can discover them via the registry.
 from __future__ import annotations
 
 import ast
+import sys
 from typing import Optional
 
 from ..domain_preflight_models import TaskDomain
@@ -56,6 +57,11 @@ def _validate_deps_available(code: str, enrichment) -> list:
 
     if importable is None:
         return issues
+
+    # Always include stdlib — the constraint string may only list public names
+    # for readability but all stdlib modules are always importable.
+    if hasattr(sys, "stdlib_module_names"):
+        importable |= sys.stdlib_module_names
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):

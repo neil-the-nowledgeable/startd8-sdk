@@ -63,6 +63,27 @@ from startd8.contractors.artisan_phases.domain_checklist import (
     validate_generated_code,
 )
 
+# Re-export test construction phase
+from startd8.contractors.artisan_phases.test_construction import (
+    TestConstructionPhase,
+    LLMTestGenerator,
+)
+
+# Re-export design documentation phase
+from startd8.contractors.artisan_phases.design_documentation import (
+    DesignDocumentationPhase,
+    AgentLLMBackend,
+    AutoResolutionCallback,
+    LLMBackend,
+    ResolutionCallback,
+    FeatureContext,
+    DesignDocument,
+    DesignDocumentResult,
+    DesignDocumentationError,
+    parse_design_document,
+    parse_review_verdict,
+)
+
 __all__ = [
     # Runner
     "PhaseRunner",
@@ -96,4 +117,19 @@ __all__ = [
     "PostValidationIssue",
     "PostValidationResult",
     "validate_generated_code",
+    # Design Documentation
+    "DesignDocumentationPhase",
+    "AgentLLMBackend",
+    "AutoResolutionCallback",
+    "LLMBackend",
+    "ResolutionCallback",
+    "FeatureContext",
+    "DesignDocument",
+    "DesignDocumentResult",
+    "DesignDocumentationError",
+    "parse_design_document",
+    "parse_review_verdict",
+    # Test Construction
+    "TestConstructionPhase",
+    "LLMTestGenerator",
 ]

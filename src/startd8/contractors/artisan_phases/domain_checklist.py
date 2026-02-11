@@ -12,6 +12,7 @@ from __future__ import annotations
 import ast
 import json
 import logging
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -94,6 +95,11 @@ def _validate_deps_available(
 
     if importable is None:
         return issues
+
+    # Always include stdlib — the constraint string may only list public names
+    # for readability but all stdlib modules are always importable.
+    if hasattr(sys, "stdlib_module_names"):
+        importable |= sys.stdlib_module_names
 
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
