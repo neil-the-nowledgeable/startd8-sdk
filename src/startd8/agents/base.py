@@ -14,7 +14,7 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import Optional, Tuple
 
-from ..models import TokenUsage, AgentResponse, ResponseMetadata
+from ..models import TokenUsage, GenerateResult, AgentResponse, ResponseMetadata
 from ..exceptions import TruncationWarning
 from ..truncation_detection import (
     detect_truncation,
@@ -171,7 +171,7 @@ class BaseAgent(ABC):
             pass
 
     @abstractmethod
-    async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+    async def agenerate(self, prompt: str) -> GenerateResult:
         """
         Async generate a response to a prompt.
 
@@ -181,11 +181,13 @@ class BaseAgent(ABC):
             prompt: The prompt text
 
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage).
+            Backward-compatible with tuple unpacking:
+            ``text, time_ms, usage = await agent.agenerate(prompt)``
         """
         pass
 
-    def generate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+    def generate(self, prompt: str) -> GenerateResult:
         """
         Synchronous wrapper for backward compatibility.
 
@@ -195,7 +197,9 @@ class BaseAgent(ABC):
             prompt: The prompt text
 
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage).
+            Backward-compatible with tuple unpacking:
+            ``text, time_ms, usage = agent.generate(prompt)``
         """
         try:
             asyncio.get_running_loop()
@@ -210,7 +214,7 @@ class BaseAgent(ABC):
 
         ctx = contextvars.copy_context()
 
-        def _runner() -> Tuple[str, int, TokenUsage]:
+        def _runner() -> GenerateResult:
             return asyncio.run(self.agenerate(prompt))
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
@@ -227,7 +231,7 @@ class BaseAgent(ABC):
         tags: Optional[list] = None,
         pipeline_id: Optional[str] = None,
         job_id: Optional[str] = None,
-    ) -> Tuple[str, int, TokenUsage]:
+    ) -> GenerateResult:
         """
         Execute API call with cost tracking and budget enforcement.
 
@@ -247,7 +251,7 @@ class BaseAgent(ABC):
             job_id: Optional job ID for attribution
 
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage)
 
         Raises:
             BudgetExceededError: If budget check fails with block_on_exceed=True
@@ -285,7 +289,8 @@ class BaseAgent(ABC):
                 )
 
         # STEP 2: Execute API call
-        response_text, response_time_ms, token_usage = await self.agenerate(prompt)
+        result = await self.agenerate(prompt)
+        response_text, response_time_ms, token_usage = result
 
         # STEP 3: Post-call cost recording
         if self.cost_tracker and _COSTS_AVAILABLE:
@@ -315,7 +320,7 @@ class BaseAgent(ABC):
             )
             # COST_RECORDED event is emitted automatically by record_cost()
 
-        return response_text, response_time_ms, token_usage
+        return result
 
     def _check_for_truncation(
         self,
@@ -524,7 +529,7 @@ class BaseAgent(ABC):
 
                 ctx = contextvars.copy_context()
 
-                def _runner() -> Tuple[str, int, TokenUsage]:
+                def _runner() -> GenerateResult:
                     return asyncio.run(
                         self._run_with_cost_tracking(
                             prompt=prompt,

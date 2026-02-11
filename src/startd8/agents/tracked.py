@@ -39,7 +39,7 @@ from .base import BaseAgent
 from .claude import ClaudeAgent
 from .openai import GPT4Agent
 from .gemini import GeminiAgent
-from ..models import TokenUsage
+from ..models import TokenUsage, GenerateResult
 from ..genai_compat import DualEmitAttributes, EmitMode, get_emit_mode
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ class TrackedAgentMixin:
         task_id: Optional[str] = None,
         emit_insight: bool = False,
         **kwargs
-    ) -> Tuple[str, int, TokenUsage]:
+    ) -> GenerateResult:
         """
         Generate with OpenTelemetry span tracking.
 
@@ -169,7 +169,7 @@ class TrackedAgentMixin:
             **kwargs: Additional arguments passed to parent agenerate
 
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage)
         """
         tracer = _get_tracer()
 
@@ -283,7 +283,7 @@ class TrackedAgentMixin:
             except Exception as e:
                 logger.debug(f"Failed to emit insight: {e}")
 
-        return response_text, response_time_ms, token_usage
+        return GenerateResult(response_text, response_time_ms, token_usage)
 
     def _get_genai_system(self) -> str:
         """Return the gen_ai.system value for this agent."""
@@ -328,11 +328,11 @@ class TrackedAgentMixin:
                 self.model = parent.model
                 self.project_id = self._project_id
 
-            async def agenerate(self, prompt: str, **kwargs) -> Tuple[str, int, TokenUsage]:
+            async def agenerate(self, prompt: str, **kwargs) -> GenerateResult:
                 kwargs.setdefault('task_id', self._task_id)
                 return await original_agenerate(prompt, **kwargs)
 
-            def generate(self, prompt: str, **kwargs) -> Tuple[str, int, TokenUsage]:
+            def generate(self, prompt: str, **kwargs) -> GenerateResult:
                 kwargs.setdefault('task_id', self._task_id)
                 return self._parent.generate(prompt, **kwargs)
 

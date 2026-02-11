@@ -472,8 +472,8 @@ class PlainLanguageWorkflow(WorkflowBase):
 
             # Handle different response formats
             if isinstance(response, tuple):
-                response_text = response[0]
-                token_usage = response[2] if len(response) > 2 else None
+                response_text = response.text if hasattr(response, 'text') else response[0]
+                token_usage = response.token_usage if hasattr(response, 'token_usage') else (response[2] if len(response) > 2 else None)
             else:
                 response_text = str(response)
                 token_usage = None

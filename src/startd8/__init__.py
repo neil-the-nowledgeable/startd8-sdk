@@ -71,9 +71,10 @@ from typing import Optional
 
 from .framework import AgentFramework
 from .models import (
-    Prompt, 
-    AgentResponse, 
-    Benchmark, 
+    Prompt,
+    AgentResponse,
+    GenerateResult,
+    Benchmark,
     TokenUsage,
     DocumentEnhancementConfig,
     AgentConfig,
@@ -242,6 +243,7 @@ __all__ = [
     "AgentFramework",
     "Prompt",
     "AgentResponse",
+    "GenerateResult",
     "Benchmark",
     "TokenUsage",
     "ClaudeAgent",

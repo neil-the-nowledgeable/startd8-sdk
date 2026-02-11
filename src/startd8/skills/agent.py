@@ -15,7 +15,7 @@ from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass, field
 
 from ..agents import BaseAgent
-from ..models import TokenUsage
+from ..models import TokenUsage, GenerateResult
 from ..logging_config import get_logger
 
 # Conditional imports
@@ -362,22 +362,22 @@ class SkillAgent(BaseAgent):
             )
             self._circuit_state = CircuitState.OPEN
     
-    async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+    async def agenerate(self, prompt: str) -> GenerateResult:
         """
         Execute skill via MCP and return response with metrics.
-        
+
         This method handles:
         1. Circuit breaker check
         2. MCP skill execution
         3. Response parsing
         4. Metric collection
         5. Error handling with proper logging
-        
+
         Args:
             prompt: The prompt/task for the skill
-            
+
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage)
             
         Raises:
             RuntimeError: If skill execution fails or circuit is open
@@ -431,8 +431,8 @@ class SkillAgent(BaseAgent):
                 }
             )
             
-            return response_text, response_time_ms, token_usage
-            
+            return GenerateResult(response_text, response_time_ms, token_usage)
+
         except Exception as e:
             # Record failure
             self._record_failure(e)

@@ -9,7 +9,7 @@ import tempfile
 from unittest.mock import Mock, MagicMock, patch
 
 from startd8.agents import MockAgent, BaseAgent
-from startd8.models import TokenUsage
+from startd8.models import TokenUsage, GenerateResult
 from startd8.exceptions import APIError
 from startd8.costs.tracker import CostTracker
 from startd8.costs.store import CostStore
@@ -872,4 +872,110 @@ class TestBudgetCostTrackerCoupling:
         assert response is not None
 
 
+class TestGenerateResult:
+    """Test GenerateResult NamedTuple (Issue #3 fix)"""
+
+    def _make_result(self) -> GenerateResult:
+        """Helper to create a standard GenerateResult for testing."""
+        usage = TokenUsage(input=10, output=20, total=30, model_name="mock-model")
+        return GenerateResult(text="Hello world", time_ms=150, token_usage=usage)
+
+    def test_named_field_access(self):
+        """Test that named fields work: .text, .time_ms, .token_usage"""
+        result = self._make_result()
+        assert result.text == "Hello world"
+        assert result.time_ms == 150
+        assert isinstance(result.token_usage, TokenUsage)
+        assert result.token_usage.input == 10
+        assert result.token_usage.output == 20
+
+    def test_tuple_unpacking(self):
+        """Test backward-compatible tuple unpacking"""
+        result = self._make_result()
+        text, time_ms, usage = result
+        assert text == "Hello world"
+        assert time_ms == 150
+        assert isinstance(usage, TokenUsage)
+        assert usage.total == 30
+
+    def test_index_access(self):
+        """Test positional index access (backward compat)"""
+        result = self._make_result()
+        assert result[0] == "Hello world"
+        assert result[1] == 150
+        assert isinstance(result[2], TokenUsage)
+
+    def test_str_returns_text(self):
+        """Test that str(result) returns just the text"""
+        result = self._make_result()
+        assert str(result) == "Hello world"
+
+    def test_is_tuple(self):
+        """Test that GenerateResult is a true tuple subclass"""
+        result = self._make_result()
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+
+    def test_len(self):
+        """Test that len works correctly"""
+        result = self._make_result()
+        assert len(result) == 3
+
+    @pytest.mark.asyncio
+    async def test_mock_agent_returns_generate_result(self):
+        """Test that MockAgent.agenerate returns a GenerateResult"""
+        agent = MockAgent()
+        result = await agent.agenerate("Test prompt")
+        assert isinstance(result, GenerateResult)
+        assert isinstance(result, tuple)
+        assert isinstance(result.text, str)
+        assert isinstance(result.time_ms, int)
+        assert isinstance(result.token_usage, TokenUsage)
+
+    @pytest.mark.asyncio
+    async def test_mock_agent_unpack_still_works(self):
+        """Test that existing tuple unpacking pattern still works with MockAgent"""
+        agent = MockAgent()
+        text, time_ms, usage = await agent.agenerate("Test prompt")
+        assert isinstance(text, str)
+        assert time_ms > 0
+        assert isinstance(usage, TokenUsage)
+
+    def test_sync_generate_returns_generate_result(self):
+        """Test that sync generate() also returns GenerateResult"""
+        agent = MockAgent()
+        result = agent.generate("Test prompt")
+        assert isinstance(result, GenerateResult)
+        assert isinstance(result, tuple)
+        assert isinstance(result.text, str)
+
+    @pytest.mark.asyncio
+    async def test_parallel_results_are_generate_result(self):
+        """Test that parallel agent calls return GenerateResult instances"""
+        agents = [MockAgent(name=f"agent-{i}") for i in range(3)]
+        tasks = [agent.agenerate("Test prompt") for agent in agents]
+        results = await asyncio.gather(*tasks)
+        for result in results:
+            assert isinstance(result, GenerateResult)
+            text, time_ms, usage = result
+            assert isinstance(text, str)
+
+    def test_repr(self):
+        """Test that repr produces a useful string"""
+        result = self._make_result()
+        r = repr(result)
+        assert "GenerateResult" in r
+        assert "Hello world" in r
+        assert "150" in r
+
+    def test_immutable(self):
+        """Test that GenerateResult is immutable like a tuple"""
+        result = self._make_result()
+        with pytest.raises(AttributeError):
+            result.text = "modified"
+
+    def test_export_from_package(self):
+        """Test that GenerateResult is importable from startd8"""
+        from startd8 import GenerateResult as GR
+        assert GR is GenerateResult
 

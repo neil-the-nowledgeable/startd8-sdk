@@ -31,25 +31,29 @@ class MockProvider:
         return self.MODELS.copy()
     
     def create_agent(
-        self, 
-        model: str, 
+        self,
+        model: str,
         name: Optional[str] = None,
         **config
     ) -> MockAgent:
         """
         Create a mock agent instance.
-        
+
         Args:
             model: Mock model identifier
             name: Optional agent name
-            **config: Configuration options (ignored for mock)
+            **config: Configuration options
+                - timeout_config: Optional timeout configuration
+                - retry_config: Optional retry configuration
         """
         if name is None:
             name = f"mock-{model.replace('mock-', '')}"
-        
+
         return MockAgent(
             name=name,
-            model=model
+            model=model,
+            timeout_config=config.get('timeout_config'),
+            retry_config=config.get('retry_config'),
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:

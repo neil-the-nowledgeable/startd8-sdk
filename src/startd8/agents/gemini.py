@@ -8,7 +8,7 @@ import os
 import time
 from typing import Optional, Tuple
 
-from ..models import TokenUsage
+from ..models import TokenUsage, GenerateResult
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent
 from .pool import TimeoutConfig, get_client_pool
@@ -210,7 +210,7 @@ class GeminiAgent(BaseAgent):
             )
         )
 
-    async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+    async def agenerate(self, prompt: str) -> GenerateResult:
         """
         Generate response using Gemini async API.
 
@@ -221,7 +221,7 @@ class GeminiAgent(BaseAgent):
             prompt: The prompt text
 
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage)
 
         Raises:
             GeminiSafetyFilterError: If Gemini's content safety filter blocks the response
@@ -539,4 +539,4 @@ class GeminiAgent(BaseAgent):
                 }
             )
 
-        return response_text, response_time_ms, token_usage
+        return GenerateResult(response_text, response_time_ms, token_usage)

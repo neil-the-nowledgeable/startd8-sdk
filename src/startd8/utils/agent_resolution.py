@@ -8,8 +8,10 @@ into BaseAgent instances. Used by workflows, CLI, and other SDK components.
 from typing import List, Optional, Union
 
 from ..agents import BaseAgent
+from ..agents.pool import TimeoutConfig
 from ..providers import ProviderRegistry
 from ..exceptions import ConfigurationError
+from ..utils.retry import RetryConfig
 
 
 # Backwards-compatible CLI shorthands
@@ -34,6 +36,8 @@ def resolve_agent_spec(
     *,
     name: Optional[str] = None,
     validate: bool = True,
+    timeout_config: Optional[TimeoutConfig] = None,
+    retry_config: Optional[RetryConfig] = None,
     **agent_config,
 ) -> BaseAgent:
     """
@@ -49,6 +53,11 @@ def resolve_agent_spec(
         spec: Agent specification string
         name: Optional custom name for the agent
         validate: Whether to validate provider config (default True)
+        timeout_config: Optional timeout configuration for HTTP requests.
+            Forwarded to the agent constructor via provider.create_agent().
+        retry_config: Optional retry configuration for transient failures.
+            Forwarded to the agent constructor via provider.create_agent().
+        **agent_config: Additional config forwarded to provider.create_agent()
 
     Returns:
         BaseAgent instance
@@ -68,7 +77,21 @@ def resolve_agent_spec(
 
         # With custom name
         agent = resolve_agent_spec("mock", name="test-agent")
+
+        # With custom timeout and retry
+        agent = resolve_agent_spec(
+            "anthropic:claude-sonnet-4-20250514",
+            timeout_config=TimeoutConfig(read=600.0),
+            retry_config=RetryConfig(max_attempts=5),
+        )
     """
+    # Merge explicit timeout/retry params into agent_config so they are
+    # forwarded through the single **config dict that providers expect.
+    if timeout_config is not None:
+        agent_config["timeout_config"] = timeout_config
+    if retry_config is not None:
+        agent_config["retry_config"] = retry_config
+
     ProviderRegistry.discover()
 
     spec_raw = spec.strip()
@@ -138,6 +161,8 @@ def resolve_agent_specs(
     specs: List[str],
     *,
     validate: bool = True,
+    timeout_config: Optional[TimeoutConfig] = None,
+    retry_config: Optional[RetryConfig] = None,
     **agent_config,
 ) -> List[BaseAgent]:
     """
@@ -146,6 +171,8 @@ def resolve_agent_specs(
     Args:
         specs: List of agent specification strings
         validate: Whether to validate provider configs
+        timeout_config: Optional timeout configuration for HTTP requests
+        retry_config: Optional retry configuration for transient failures
         **agent_config: Additional config forwarded to provider.create_agent()
 
     Returns:
@@ -162,7 +189,13 @@ def resolve_agent_specs(
         ])
     """
     return [
-        resolve_agent_spec(spec, validate=validate, **agent_config)
+        resolve_agent_spec(
+            spec,
+            validate=validate,
+            timeout_config=timeout_config,
+            retry_config=retry_config,
+            **agent_config,
+        )
         for spec in specs
     ]
 
@@ -171,6 +204,8 @@ def resolve_agents(
     agents_or_specs: Union[List[str], List[BaseAgent], None],
     *,
     validate: bool = True,
+    timeout_config: Optional[TimeoutConfig] = None,
+    retry_config: Optional[RetryConfig] = None,
     **agent_config,
 ) -> List[BaseAgent]:
     """
@@ -182,6 +217,8 @@ def resolve_agents(
     Args:
         agents_or_specs: List of strings or BaseAgent instances, or None
         validate: Whether to validate provider configs for string specs
+        timeout_config: Optional timeout configuration for HTTP requests
+        retry_config: Optional retry configuration for transient failures
         **agent_config: Additional config forwarded to provider.create_agent()
 
     Returns:
@@ -200,7 +237,15 @@ def resolve_agents(
     result = []
     for item in agents_or_specs:
         if isinstance(item, str):
-            result.append(resolve_agent_spec(item, validate=validate, **agent_config))
+            result.append(
+                resolve_agent_spec(
+                    item,
+                    validate=validate,
+                    timeout_config=timeout_config,
+                    retry_config=retry_config,
+                    **agent_config,
+                )
+            )
         elif isinstance(item, BaseAgent):
             result.append(item)
         else:

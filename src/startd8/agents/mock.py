@@ -3,21 +3,43 @@ Mock agents for testing.
 """
 
 import asyncio
-from typing import Optional, Tuple
+from typing import Optional, Tuple, TYPE_CHECKING
 
-from ..models import TokenUsage
+from ..models import TokenUsage, GenerateResult
 from .base import BaseAgent
 from .openai import OpenAICompatibleAgent
+
+if TYPE_CHECKING:
+    from .pool import TimeoutConfig
+    from ..utils.retry import RetryConfig
 
 
 class MockAgent(BaseAgent):
     """Mock agent for testing with async support"""
 
-    def __init__(self, name: str = "mock", model: str = "mock-model"):
-        """Initialize mock agent"""
-        super().__init__(name, model)
+    def __init__(
+        self,
+        name: str = "mock",
+        model: str = "mock-model",
+        timeout_config: Optional["TimeoutConfig"] = None,
+        retry_config: Optional["RetryConfig"] = None,
+        **kwargs,
+    ):
+        """
+        Initialize mock agent.
 
-    async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+        Args:
+            name: Agent identifier
+            model: Model name
+            timeout_config: Optional timeout configuration (stored for inspection)
+            retry_config: Optional retry configuration (stored for inspection)
+            **kwargs: Additional keyword arguments (ignored)
+        """
+        super().__init__(name, model)
+        self.timeout_config = timeout_config
+        self.retry_config = retry_config
+
+    async def agenerate(self, prompt: str) -> GenerateResult:
         """Generate mock response (async)"""
         await asyncio.sleep(0.1)  # Simulate async latency
 
@@ -31,7 +53,7 @@ class MockAgent(BaseAgent):
             model_name=self.model,
         )
 
-        return response, response_time_ms, token_usage
+        return GenerateResult(response, response_time_ms, token_usage)
 
 
 class ComposerAgent(OpenAICompatibleAgent):

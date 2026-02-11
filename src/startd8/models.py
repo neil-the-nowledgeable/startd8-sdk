@@ -8,7 +8,7 @@ Data models for StartDate Agent Framework
 """
 
 from datetime import datetime, timezone
-from typing import Optional, Dict, Any, List, TYPE_CHECKING, TypedDict
+from typing import Optional, Dict, Any, List, TYPE_CHECKING, TypedDict, NamedTuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from enum import Enum
 from pathlib import Path
@@ -100,6 +100,43 @@ def _default_pricing_service():
     from .costs.pricing import PricingService
 
     return PricingService()
+
+
+class GenerateResult(NamedTuple):
+    """
+    Return type for ``BaseAgent.agenerate()`` and ``BaseAgent.generate()``.
+
+    A NamedTuple that replaces the previous bare ``Tuple[str, int, TokenUsage]``
+    return value.  Because it is a true tuple subclass, existing call sites that
+    unpack with ``text, time_ms, usage = await agent.agenerate(prompt)`` continue
+    to work unchanged.
+
+    Named field access (``result.text``, ``result.token_usage``) is preferred in
+    new code for clarity and to prevent the silent data-loss bug where callers
+    accidentally index by position.
+
+    ``str(result)`` returns the response text, so code that passes the result
+    directly to string operations gets sensible output.
+    """
+
+    text: str
+    """The LLM response text."""
+
+    time_ms: int
+    """Wall-clock response time in milliseconds."""
+
+    token_usage: 'TokenUsage'
+    """Token usage statistics for the call."""
+
+    def __str__(self) -> str:          # noqa: D105
+        return self.text
+
+    def __repr__(self) -> str:         # noqa: D105
+        return (
+            f"GenerateResult(text={self.text!r:.120}, "
+            f"time_ms={self.time_ms}, "
+            f"token_usage={self.token_usage!r})"
+        )
 
 
 # TypedDict definitions for better type safety

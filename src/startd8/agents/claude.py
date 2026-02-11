@@ -7,7 +7,7 @@ import logging
 import time
 from typing import Optional, Tuple
 
-from ..models import TokenUsage
+from ..models import TokenUsage, GenerateResult
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent
 from .pool import TimeoutConfig, get_client_pool
@@ -219,7 +219,7 @@ class ClaudeAgent(BaseAgent):
             ]
         )
 
-    async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+    async def agenerate(self, prompt: str) -> GenerateResult:
         """
         Generate response using Claude async API.
 
@@ -230,7 +230,7 @@ class ClaudeAgent(BaseAgent):
             prompt: The prompt text to send
 
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage)
 
         Raises:
             AgentError: For DNS/connection errors that can't be retried
@@ -356,4 +356,4 @@ class ClaudeAgent(BaseAgent):
                 }
             )
 
-        return response_text, response_time_ms, token_usage
+        return GenerateResult(response_text, response_time_ms, token_usage)

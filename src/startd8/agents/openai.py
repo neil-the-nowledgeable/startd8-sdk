@@ -12,7 +12,7 @@ import os
 import time
 from typing import Optional, Tuple
 
-from ..models import TokenUsage
+from ..models import TokenUsage, GenerateResult
 from ..utils.retry import RetryConfig, RetryError, with_retry
 from .base import BaseAgent, is_completion_model
 from .pool import TimeoutConfig, get_client_pool
@@ -125,7 +125,7 @@ class GPT4Agent(BaseAgent):
             ]
         )
 
-    async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+    async def agenerate(self, prompt: str) -> GenerateResult:
         """
         Generate response using GPT-4 async API.
 
@@ -136,7 +136,7 @@ class GPT4Agent(BaseAgent):
             prompt: The prompt text to send
 
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage)
 
         Raises:
             AgentError: For model errors or DNS/connection errors that can't be retried
@@ -309,7 +309,7 @@ class GPT4Agent(BaseAgent):
                 }
             )
 
-        return response_text, response_time_ms, token_usage
+        return GenerateResult(response_text, response_time_ms, token_usage)
 
 
 class OpenAICompatibleAgent(BaseAgent):
@@ -528,7 +528,7 @@ class OpenAICompatibleAgent(BaseAgent):
             ]
         )
 
-    async def agenerate(self, prompt: str) -> Tuple[str, int, TokenUsage]:
+    async def agenerate(self, prompt: str) -> GenerateResult:
         """
         Generate response using OpenAI-compatible API (async).
 
@@ -539,7 +539,7 @@ class OpenAICompatibleAgent(BaseAgent):
             prompt: The prompt text
 
         Returns:
-            Tuple of (response_text, response_time_ms, token_usage)
+            GenerateResult(text, time_ms, token_usage)
 
         Raises:
             APIError: For API errors
@@ -597,7 +597,7 @@ class OpenAICompatibleAgent(BaseAgent):
                     }
                 )
 
-            return response_text, response_time_ms, token_usage
+            return GenerateResult(response_text, response_time_ms, token_usage)
 
         except RetryError as e:
             # All retry attempts exhausted
