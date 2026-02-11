@@ -56,6 +56,7 @@ class GeminiAgent(BaseAgent):
         timeout_config: Optional[TimeoutConfig] = None,
         use_connection_pool: bool = False,
         safety_settings: Optional[list] = None,
+        system_prompt: Optional[str] = None,
     ):
         """
         Initialize Gemini agent
@@ -79,6 +80,9 @@ class GeminiAgent(BaseAgent):
                 to pass to Gemini's GenerateContentConfig.  Each entry should have
                 ``category`` (e.g. "HARM_CATEGORY_DANGEROUS_CONTENT") and ``threshold``
                 (e.g. "BLOCK_NONE").  When None, Gemini applies its default filters.
+            system_prompt: Optional system prompt. Sent as ``system_instruction`` in
+                Gemini's GenerateContentConfig. Can be overridden per-call via
+                ``agenerate(prompt, system_prompt=...)``.
 
         Raises:
             ImportError: If google-genai package is not installed
@@ -182,13 +186,19 @@ class GeminiAgent(BaseAgent):
             self.retry_config = None
 
         self.safety_settings = safety_settings
+        self.system_prompt = system_prompt
 
-    async def _make_api_call(self, prompt: str):
+    async def _make_api_call(self, prompt: str, system_prompt: Optional[str] = None):
         """
         Make the raw API call to Gemini.
 
         This is separated from agenerate to allow retry logic to wrap it.
         Raises the raw API exceptions for retry handling.
+
+        Args:
+            prompt: The user prompt text
+            system_prompt: Optional system prompt. If provided, sent as
+                ``system_instruction`` in the GenerateContentConfig.
         """
         # google.genai Client API - run in executor for async compatibility
         # Create generation config
@@ -198,6 +208,8 @@ class GeminiAgent(BaseAgent):
         }
         if self.safety_settings:
             config_kwargs["safety_settings"] = self.safety_settings
+        if system_prompt is not None:
+            config_kwargs["system_instruction"] = system_prompt
         generation_config = genai_types.GenerateContentConfig(**config_kwargs)
 
         loop = asyncio.get_running_loop()
@@ -210,7 +222,7 @@ class GeminiAgent(BaseAgent):
             )
         )
 
-    async def agenerate(self, prompt: str) -> GenerateResult:
+    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
         """
         Generate response using Gemini async API.
 
@@ -219,6 +231,9 @@ class GeminiAgent(BaseAgent):
 
         Args:
             prompt: The prompt text
+            system_prompt: Optional per-call system prompt override. When provided,
+                takes precedence over the instance-level ``self.system_prompt``.
+                If neither is set, no system instruction is sent.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -229,15 +244,18 @@ class GeminiAgent(BaseAgent):
             APIError: For API errors
             RetryError: If all retry attempts are exhausted (when retry enabled)
         """
+        # Resolve system prompt: call-level overrides instance-level
+        effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
+
         start_time = time.time()
 
         try:
             # Use retry wrapper if configured
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
-                response = await make_call(prompt)
+                response = await make_call(prompt, system_prompt=effective_system_prompt)
             else:
-                response = await self._make_api_call(prompt)
+                response = await self._make_api_call(prompt, system_prompt=effective_system_prompt)
 
         except RetryError as e:
             # All retry attempts exhausted

@@ -57,6 +57,7 @@ class GPT4Agent(BaseAgent):
         enable_retry: bool = False,
         timeout_config: Optional[TimeoutConfig] = None,
         use_connection_pool: bool = False,
+        system_prompt: Optional[str] = None,
     ):
         """
         Initialize GPT-4 agent
@@ -74,6 +75,9 @@ class GPT4Agent(BaseAgent):
             timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
             use_connection_pool: If True, share HTTP clients with other agents using the same
                 config. Reduces connection overhead for multi-agent workloads. Default: False.
+            system_prompt: Optional system prompt. Prepended as a ``{"role": "system", ...}``
+                message to the messages list. Can be overridden per-call via
+                ``agenerate(prompt, system_prompt=...)``.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
 
@@ -101,6 +105,7 @@ class GPT4Agent(BaseAgent):
             self.async_client = AsyncOpenAI(api_key=api_key, timeout=httpx_timeout)
 
         self.max_tokens = max_tokens
+        self.system_prompt = system_prompt
 
         # Configure retry behavior
         if retry_config is not None:
@@ -110,22 +115,30 @@ class GPT4Agent(BaseAgent):
         else:
             self.retry_config = None
 
-    async def _make_api_call(self, prompt: str):
+    async def _make_api_call(self, prompt: str, system_prompt: Optional[str] = None):
         """
         Make the raw API call to OpenAI.
 
         This is separated from agenerate to allow retry logic to wrap it.
         Raises the raw API exceptions for retry handling.
+
+        Args:
+            prompt: The user prompt text
+            system_prompt: Optional system prompt. If provided, prepended as a
+                ``{"role": "system", ...}`` message.
         """
+        messages = []
+        if system_prompt is not None:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
         return await self.async_client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            messages=messages,
         )
 
-    async def agenerate(self, prompt: str) -> GenerateResult:
+    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
         """
         Generate response using GPT-4 async API.
 
@@ -134,6 +147,9 @@ class GPT4Agent(BaseAgent):
 
         Args:
             prompt: The prompt text to send
+            system_prompt: Optional per-call system prompt override. When provided,
+                takes precedence over the instance-level ``self.system_prompt``.
+                If neither is set, no system message is sent.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -143,15 +159,18 @@ class GPT4Agent(BaseAgent):
             APIError: For API errors
             RetryError: If all retry attempts are exhausted (when retry enabled)
         """
+        # Resolve system prompt: call-level overrides instance-level
+        effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
+
         start_time = time.time()
 
         try:
             # Use retry wrapper if configured
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
-                response = await make_call(prompt)
+                response = await make_call(prompt, system_prompt=effective_system_prompt)
             else:
-                response = await self._make_api_call(prompt)
+                response = await self._make_api_call(prompt, system_prompt=effective_system_prompt)
 
         except RetryError as e:
             # All retry attempts exhausted
@@ -340,6 +359,7 @@ class OpenAICompatibleAgent(BaseAgent):
         enable_retry: bool = False,
         timeout_config: Optional[TimeoutConfig] = None,
         use_connection_pool: bool = False,
+        system_prompt: Optional[str] = None,
     ):
         """
         Initialize OpenAI-compatible agent
@@ -359,6 +379,9 @@ class OpenAICompatibleAgent(BaseAgent):
             timeout_config: Optional timeout configuration. If None, uses DEFAULT_TIMEOUT_CONFIG.
             use_connection_pool: If True, share HTTP clients with other agents using the same
                 config. Reduces connection overhead for multi-agent workloads. Default: False.
+            system_prompt: Optional system prompt. Prepended as a ``{"role": "system", ...}``
+                message to the messages list. Can be overridden per-call via
+                ``agenerate(prompt, system_prompt=...)``.
         """
         super().__init__(name, model, cost_tracker, budget_manager)
 
@@ -408,6 +431,7 @@ class OpenAICompatibleAgent(BaseAgent):
             )
 
         self.max_tokens = max_tokens
+        self.system_prompt = system_prompt
         self.base_url = base_url
         self.api_key_env = api_key_env
         self._cleanup_registered = False
@@ -513,22 +537,30 @@ class OpenAICompatibleAgent(BaseAgent):
                 )
                 pass
 
-    async def _make_api_call(self, prompt: str):
+    async def _make_api_call(self, prompt: str, system_prompt: Optional[str] = None):
         """
         Make the raw API call to the OpenAI-compatible endpoint.
 
         This is separated from agenerate to allow retry logic to wrap it.
         Raises the raw API exceptions for retry handling.
+
+        Args:
+            prompt: The user prompt text
+            system_prompt: Optional system prompt. If provided, prepended as a
+                ``{"role": "system", ...}`` message.
         """
+        messages = []
+        if system_prompt is not None:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
         return await self.async_client.chat.completions.create(
             model=self.model,
             max_tokens=self.max_tokens,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            messages=messages,
         )
 
-    async def agenerate(self, prompt: str) -> GenerateResult:
+    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
         """
         Generate response using OpenAI-compatible API (async).
 
@@ -537,6 +569,9 @@ class OpenAICompatibleAgent(BaseAgent):
 
         Args:
             prompt: The prompt text
+            system_prompt: Optional per-call system prompt override. When provided,
+                takes precedence over the instance-level ``self.system_prompt``.
+                If neither is set, no system message is sent.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -545,15 +580,18 @@ class OpenAICompatibleAgent(BaseAgent):
             APIError: For API errors
             RetryError: If all retry attempts are exhausted (when retry enabled)
         """
+        # Resolve system prompt: call-level overrides instance-level
+        effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
+
         start_time = time.time()
 
         try:
             # Use retry wrapper if configured
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
-                response = await make_call(prompt)
+                response = await make_call(prompt, system_prompt=effective_system_prompt)
             else:
-                response = await self._make_api_call(prompt)
+                response = await self._make_api_call(prompt, system_prompt=effective_system_prompt)
 
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)

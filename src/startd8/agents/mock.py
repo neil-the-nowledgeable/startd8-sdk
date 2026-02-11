@@ -23,6 +23,7 @@ class MockAgent(BaseAgent):
         model: str = "mock-model",
         timeout_config: Optional["TimeoutConfig"] = None,
         retry_config: Optional["RetryConfig"] = None,
+        system_prompt: Optional[str] = None,
         **kwargs,
     ):
         """
@@ -33,14 +34,27 @@ class MockAgent(BaseAgent):
             model: Model name
             timeout_config: Optional timeout configuration (stored for inspection)
             retry_config: Optional retry configuration (stored for inspection)
+            system_prompt: Optional system prompt (stored for inspection/testing)
             **kwargs: Additional keyword arguments (ignored)
         """
         super().__init__(name, model)
         self.timeout_config = timeout_config
         self.retry_config = retry_config
+        self.system_prompt = system_prompt
 
-    async def agenerate(self, prompt: str) -> GenerateResult:
-        """Generate mock response (async)"""
+    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
+        """Generate mock response (async)
+
+        Args:
+            prompt: The prompt text
+            system_prompt: Optional per-call system prompt override.
+                Stored as ``self._last_system_prompt`` for test inspection.
+        """
+        # Resolve system prompt: call-level overrides instance-level
+        effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt
+        # Store for test inspection
+        self._last_system_prompt = effective_system_prompt
+
         await asyncio.sleep(0.1)  # Simulate async latency
 
         response = f"Mock response to: {prompt[:50]}..."

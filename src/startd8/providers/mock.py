@@ -54,6 +54,7 @@ class MockProvider:
             model=model,
             timeout_config=config.get('timeout_config'),
             retry_config=config.get('retry_config'),
+            system_prompt=config.get('system_prompt'),
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:

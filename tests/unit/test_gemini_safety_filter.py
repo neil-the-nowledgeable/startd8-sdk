@@ -101,6 +101,7 @@ class TestGeminiAgentSafetyHandling:
         agent.temperature = 0.7
         agent.retry_config = None
         agent.safety_settings = None
+        agent.system_prompt = None
         agent.cost_tracker = None
         agent.budget_manager = None
 
@@ -133,6 +134,7 @@ class TestGeminiAgentSafetyHandling:
         agent.temperature = 0.7
         agent.retry_config = None
         agent.safety_settings = None
+        agent.system_prompt = None
         agent.cost_tracker = None
         agent.budget_manager = None
 
@@ -177,6 +179,7 @@ class TestGeminiAgentSafetyHandling:
         agent.temperature = 0.7
         agent.retry_config = None
         agent.safety_settings = None
+        agent.system_prompt = None
         agent.cost_tracker = None
         agent.budget_manager = None
 
@@ -235,6 +238,7 @@ class TestGeminiAgentSafetySettings:
         agent.temperature = 0.7
         agent.retry_config = None
         agent.safety_settings = settings
+        agent.system_prompt = None
         agent.cost_tracker = None
         agent.budget_manager = None
 
@@ -277,6 +281,7 @@ class TestGeminiAgentSafetySettings:
         agent.temperature = 0.7
         agent.retry_config = None
         agent.safety_settings = None
+        agent.system_prompt = None
         agent.cost_tracker = None
         agent.budget_manager = None
 
@@ -564,6 +569,7 @@ class TestSafetyDiagnosticLogging:
         agent.temperature = 0.7
         agent.retry_config = None
         agent.safety_settings = None
+        agent.system_prompt = None
         agent.cost_tracker = None
         agent.budget_manager = None
 
@@ -605,6 +611,7 @@ class TestSafetyDiagnosticLogging:
         agent.temperature = 0.7
         agent.retry_config = None
         agent.safety_settings = None
+        agent.system_prompt = None
         agent.cost_tracker = None
         agent.budget_manager = None
 

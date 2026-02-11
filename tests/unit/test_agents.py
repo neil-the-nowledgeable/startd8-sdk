@@ -979,3 +979,172 @@ class TestGenerateResult:
         from startd8 import GenerateResult as GR
         assert GR is GenerateResult
 
+
+class TestSystemPromptSupport:
+    """Test system_prompt support across agents (Issue #6)"""
+
+    def test_mock_agent_stores_system_prompt_in_constructor(self):
+        """Test that MockAgent stores system_prompt from constructor"""
+        agent = MockAgent(name="test", model="mock-model", system_prompt="You are a helpful assistant.")
+        assert agent.system_prompt == "You are a helpful assistant."
+
+    def test_mock_agent_system_prompt_defaults_to_none(self):
+        """Test that system_prompt defaults to None"""
+        agent = MockAgent()
+        assert agent.system_prompt is None
+
+    @pytest.mark.asyncio
+    async def test_mock_agent_per_call_system_prompt_override(self):
+        """Test that per-call system_prompt overrides instance-level"""
+        agent = MockAgent(system_prompt="Instance-level system prompt")
+        await agent.agenerate("Hello", system_prompt="Call-level override")
+        assert agent._last_system_prompt == "Call-level override"
+
+    @pytest.mark.asyncio
+    async def test_mock_agent_instance_system_prompt_used_when_no_override(self):
+        """Test that instance-level system_prompt is used when no per-call override"""
+        agent = MockAgent(system_prompt="Instance-level system prompt")
+        await agent.agenerate("Hello")
+        assert agent._last_system_prompt == "Instance-level system prompt"
+
+    @pytest.mark.asyncio
+    async def test_mock_agent_no_system_prompt_when_none(self):
+        """Test that no system_prompt is used when both are None"""
+        agent = MockAgent()
+        await agent.agenerate("Hello")
+        assert agent._last_system_prompt is None
+
+    @pytest.mark.asyncio
+    async def test_mock_agent_per_call_system_prompt_without_instance(self):
+        """Test per-call system_prompt works when instance has None"""
+        agent = MockAgent()
+        await agent.agenerate("Hello", system_prompt="Per-call only")
+        assert agent._last_system_prompt == "Per-call only"
+
+    def test_mock_provider_forwards_system_prompt(self):
+        """Test that MockProvider passes system_prompt through create_agent"""
+        from startd8.providers.mock import MockProvider
+        provider = MockProvider()
+        agent = provider.create_agent("mock-model", system_prompt="Test system prompt")
+        assert agent.system_prompt == "Test system prompt"
+
+    def test_mock_provider_system_prompt_defaults_to_none(self):
+        """Test that MockProvider creates agent with None system_prompt by default"""
+        from startd8.providers.mock import MockProvider
+        provider = MockProvider()
+        agent = provider.create_agent("mock-model")
+        assert agent.system_prompt is None
+
+    def test_claude_agent_accepts_system_prompt(self):
+        """Test that ClaudeAgent constructor accepts system_prompt parameter"""
+        from startd8.agents.claude import ClaudeAgent, _ANTHROPIC_AVAILABLE
+        if not _ANTHROPIC_AVAILABLE:
+            pytest.skip("anthropic package not installed")
+
+        # We can't fully initialize ClaudeAgent without a valid API key,
+        # but we can verify the parameter is accepted by checking the signature
+        import inspect
+        sig = inspect.signature(ClaudeAgent.__init__)
+        assert "system_prompt" in sig.parameters
+        param = sig.parameters["system_prompt"]
+        assert param.default is None
+
+    def test_gpt4_agent_accepts_system_prompt(self):
+        """Test that GPT4Agent constructor accepts system_prompt parameter"""
+        from startd8.agents.openai import GPT4Agent, _OPENAI_AVAILABLE
+        if not _OPENAI_AVAILABLE:
+            pytest.skip("openai package not installed")
+
+        import inspect
+        sig = inspect.signature(GPT4Agent.__init__)
+        assert "system_prompt" in sig.parameters
+        param = sig.parameters["system_prompt"]
+        assert param.default is None
+
+    def test_openai_compatible_agent_accepts_system_prompt(self):
+        """Test that OpenAICompatibleAgent constructor accepts system_prompt parameter"""
+        from startd8.agents.openai import OpenAICompatibleAgent, _OPENAI_AVAILABLE
+        if not _OPENAI_AVAILABLE:
+            pytest.skip("openai package not installed")
+
+        import inspect
+        sig = inspect.signature(OpenAICompatibleAgent.__init__)
+        assert "system_prompt" in sig.parameters
+        param = sig.parameters["system_prompt"]
+        assert param.default is None
+
+    def test_gemini_agent_accepts_system_prompt(self):
+        """Test that GeminiAgent constructor accepts system_prompt parameter"""
+        from startd8.agents.gemini import GeminiAgent, _GEMINI_AVAILABLE
+        if not _GEMINI_AVAILABLE:
+            pytest.skip("google-genai package not installed")
+
+        import inspect
+        sig = inspect.signature(GeminiAgent.__init__)
+        assert "system_prompt" in sig.parameters
+        param = sig.parameters["system_prompt"]
+        assert param.default is None
+
+    def test_anthropic_provider_forwards_system_prompt(self):
+        """Test that AnthropicProvider passes system_prompt through create_agent"""
+        from startd8.providers.anthropic import AnthropicProvider
+        from startd8.agents.claude import _ANTHROPIC_AVAILABLE
+        if not _ANTHROPIC_AVAILABLE:
+            pytest.skip("anthropic package not installed")
+
+        provider = AnthropicProvider()
+        # Use mock to avoid requiring a real API key
+        with patch('startd8.agents.claude.Anthropic'), \
+             patch('startd8.agents.claude.AsyncAnthropic'):
+            agent = provider.create_agent(
+                "claude-sonnet-4-20250514",
+                api_key="test-key",
+                system_prompt="You are a JSON generator"
+            )
+            assert agent.system_prompt == "You are a JSON generator"
+
+    def test_openai_provider_forwards_system_prompt(self):
+        """Test that OpenAIProvider passes system_prompt through create_agent"""
+        from startd8.providers.openai import OpenAIProvider
+        from startd8.agents.openai import _OPENAI_AVAILABLE
+        if not _OPENAI_AVAILABLE:
+            pytest.skip("openai package not installed")
+
+        provider = OpenAIProvider()
+        with patch('startd8.agents.openai.OpenAI'), \
+             patch('startd8.agents.openai.AsyncOpenAI'):
+            agent = provider.create_agent(
+                "gpt-4o",
+                api_key="test-key",
+                system_prompt="You are a code reviewer"
+            )
+            assert agent.system_prompt == "You are a code reviewer"
+
+    def test_resolve_agent_spec_forwards_system_prompt(self):
+        """Test that resolve_agent_spec passes system_prompt to provider"""
+        from startd8.utils.agent_resolution import resolve_agent_spec
+        agent = resolve_agent_spec(
+            "mock",
+            validate=False,
+            system_prompt="Test system prompt via resolve"
+        )
+        assert agent.system_prompt == "Test system prompt via resolve"
+
+    @pytest.mark.asyncio
+    async def test_generate_result_unaffected_by_system_prompt(self):
+        """Test that system_prompt doesn't break GenerateResult format"""
+        agent = MockAgent(system_prompt="You are a test assistant")
+        result = await agent.agenerate("Hello")
+        assert isinstance(result, GenerateResult)
+        text, time_ms, usage = result
+        assert isinstance(text, str)
+        assert time_ms > 0
+        assert isinstance(usage, TokenUsage)
+
+    def test_sync_generate_with_system_prompt(self):
+        """Test that sync generate works with system_prompt set"""
+        agent = MockAgent(system_prompt="Sync test")
+        result = agent.generate("Hello")
+        assert isinstance(result, GenerateResult)
+        assert isinstance(result.text, str)
+

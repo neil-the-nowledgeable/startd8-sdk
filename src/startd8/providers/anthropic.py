@@ -233,6 +233,7 @@ class AnthropicProvider:
             retry_config=config.get('retry_config'),
             enable_retry=config.get('enable_retry', False),
             use_connection_pool=config.get('use_connection_pool', False),
+            system_prompt=config.get('system_prompt'),
         )
     
     def validate_config(self, config: Dict[str, Any]) -> bool:
