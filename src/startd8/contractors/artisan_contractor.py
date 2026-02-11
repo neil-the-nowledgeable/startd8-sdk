@@ -87,13 +87,14 @@ logger = logging.getLogger(__name__)
 class WorkflowPhase(enum.Enum):
     """Ordered workflow phases (generic orchestration layer).
 
-    These six phases are an *abstract* orchestration grouping, not
+    These seven phases are an *abstract* orchestration grouping, not
     a 1-to-1 mapping to the 9-phase artisan pipeline defined in
     ``artisan_phases/``.  Concrete handler registrations should map
     them as follows:
 
         PLAN      → Phase 0 (Preflight) + Phase 1 (Plan Deconstruction)
-        SCAFFOLD  → Phase 2 (Lessons Discovery) + Phase 3 (Design Docs)
+        SCAFFOLD  → Phase 2 (Lessons Discovery)
+        DESIGN    → Phase 3 (Design Documentation)
         IMPLEMENT → Phase 4 (Test Construction) + Phase 5 (Development)
         TEST      → Phase 7 (Final Testing)
         REVIEW    → Phase 6 (Final Assembly & Validation)
@@ -102,6 +103,7 @@ class WorkflowPhase(enum.Enum):
 
     PLAN = "plan"
     SCAFFOLD = "scaffold"
+    DESIGN = "design"
     IMPLEMENT = "implement"
     TEST = "test"
     REVIEW = "review"
@@ -113,6 +115,7 @@ class WorkflowPhase(enum.Enum):
         return [
             cls.PLAN,
             cls.SCAFFOLD,
+            cls.DESIGN,
             cls.IMPLEMENT,
             cls.TEST,
             cls.REVIEW,

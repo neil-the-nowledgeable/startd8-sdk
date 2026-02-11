@@ -440,8 +440,8 @@ def auto_configure_otel() -> Dict[str, Any]:
 
     Modes:
         - ``enabled``: Always configure OTel with default endpoint.
-        - ``auto``: Configure only if OTel packages are installed (silent no-op otherwise).
-        - ``disabled`` or unset: Do nothing.
+        - ``auto`` (default): Configure only if OTel packages are installed (silent no-op otherwise).
+        - ``disabled``: Do nothing.
 
     The OTLP endpoint is read from ``OTEL_EXPORTER_OTLP_ENDPOINT`` or
     defaults to ``http://localhost:4317``.
@@ -453,11 +453,10 @@ def auto_configure_otel() -> Dict[str, Any]:
     if _configured:
         return {"tracer": None, "meter": None, "resource_attributes": {}}
 
-    mode = os.getenv("STARTD8_OTEL", "").lower().strip()
+    mode = os.getenv("STARTD8_OTEL", "auto").lower().strip()
 
-    if mode == "disabled" or not mode:
-        if mode != "auto":
-            return {"tracer": None, "meter": None, "resource_attributes": {}}
+    if mode == "disabled":
+        return {"tracer": None, "meter": None, "resource_attributes": {}}
 
     if mode == "auto" and not OTEL_AVAILABLE:
         return {"tracer": None, "meter": None, "resource_attributes": {}}

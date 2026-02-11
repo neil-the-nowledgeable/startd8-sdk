@@ -73,12 +73,26 @@ src/startd8/           # Main package
 │   ├── pricing.py     # PricingService
 │   ├── budget.py      # BudgetManager
 │   └── analytics.py   # CostAnalytics
+├── contractors/       # Multi-phase workflow orchestration
+│   ├── artisan_contractor.py     # ArtisanContractorWorkflow (7-phase orchestrator)
+│   ├── context_seed_handlers.py  # Phase handler implementations
+│   ├── handoff.py                # Design handoff (two-half split execution)
+│   ├── prime_contractor.py       # PrimeContractorWorkflow
+│   ├── protocols.py              # Protocol interfaces
+│   ├── generators/               # Code generators (LeadContractor)
+│   ├── adapters/                 # Instrumentation adapters
+│   └── artisan_phases/           # Phase implementations
 ├── storage/           # Storage backends
 ├── events/            # Event bus system
 ├── mcp/               # MCP (Model Context Protocol) integration
 ├── skills/            # Skill agents and factories
 ├── prompt_builder/    # Prompt templating system
 └── document_enhancement.py  # Document enhancement chains
+
+scripts/               # Runner scripts
+├── run_artisan_workflow.py       # Full 7-phase artisan workflow
+├── run_artisan_design_only.py    # Design half (PLAN→SCAFFOLD→DESIGN)
+└── run_artisan_implement_only.py # Implementation half (IMPLEMENT→TEST→REVIEW→FINALIZE)
 
 tests/                 # Test suite
 ├── unit/              # Unit tests
@@ -188,8 +202,10 @@ Pre-1.0 SemVer: breaking changes may occur in MINOR versions.
 Key docs in `docs/`:
 - `SDK_ARCHITECTURE_v1.md` - Architecture overview
 - `API_REFERENCE_v1.md` - API reference
+- `ARTISAN_WORKFLOW_GUIDE.md` - Artisan contractor workflow guide (phases, handoff, scripts)
 - `COST_TRACKING_USER_GUIDE.md` - Cost tracking guide
 - `PIPELINE_WORKFLOWS_v1.md` - Pipeline workflows
+- `PRIME_CONTRACTOR_WORKFLOW_GUIDE.md` - Prime contractor pattern guide
 - `TUI_USER_GUIDE_v1.md` - TUI usage guide
 
 ## Lessons Learned

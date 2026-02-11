@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from ...logging_config import get_logger
-from ..protocols import GenerationResult
+from ..protocols import (
+    DRAFT_MODEL_CLAUDE_HAIKU,
+    GenerationResult,
+    VALIDATE_MODEL_CLAUDE_SONNET,
+)
 
 logger = get_logger("startd8.contractors.generators")
 
@@ -23,8 +27,8 @@ class LeadContractorCodeGenerator:
 
     Example:
         generator = LeadContractorCodeGenerator(
-            lead_agent="anthropic:claude-sonnet-4-20250514",
-            drafter_agent="gemini:gemini-2.5-flash-lite",
+            lead_agent=VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
+            drafter_agent=DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         )
         result = generator.generate(
             task="Implement a rate limiter",
@@ -35,8 +39,8 @@ class LeadContractorCodeGenerator:
 
     def __init__(
         self,
-        lead_agent: str = "anthropic:claude-sonnet-4-20250514",
-        drafter_agent: str = "gemini:gemini-2.5-flash-lite",
+        lead_agent: str = VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
+        drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         max_iterations: int = 3,
         pass_threshold: int = 80,
         output_dir: Optional[Path] = None,

@@ -411,13 +411,29 @@ class TestPromptTemplates:
         assert "Domain Constraints" in prompt
 
     def test_draft_prompt_template_format(self):
-        """Test draft prompt template can be formatted."""
+        """Test draft prompt template can be formatted (single-file)."""
+        from startd8.workflows.builtin.lead_contractor_workflow import _build_output_format
         prompt = DRAFT_PROMPT_TEMPLATE.format(
             spec="Detailed spec...",
-            feedback="No feedback yet"
+            feedback="No feedback yet",
+            output_format=_build_output_format(None),
         )
         assert "Detailed spec..." in prompt
         assert "No feedback yet" in prompt
+        assert "[Your implementation code here]" in prompt
+
+    def test_draft_prompt_template_multi_file(self):
+        """Test draft prompt template with multi-file output format."""
+        from startd8.workflows.builtin.lead_contractor_workflow import _build_output_format
+        target_files = ["src/main.py", "data/output.csv"]
+        prompt = DRAFT_PROMPT_TEMPLATE.format(
+            spec="Multi-file spec",
+            feedback="No feedback",
+            output_format=_build_output_format(target_files),
+        )
+        assert "SEPARATE fenced code block" in prompt
+        assert "`src/main.py`" in prompt
+        assert "`data/output.csv`" in prompt
 
     def test_review_prompt_template_format(self):
         """Test review prompt template can be formatted."""

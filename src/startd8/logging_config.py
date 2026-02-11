@@ -241,11 +241,21 @@ def _ensure_default_log_file_handler():
     if root_logger.level == logging.NOTSET or _ENV_LOG_LEVEL:
         root_level = getattr(logging, _ENV_LOG_LEVEL) if _ENV_LOG_LEVEL else logging.INFO
         root_logger.setLevel(root_level)
-    
+
+    # Mark as initialized (file + console handlers are ready).
+    # Set BEFORE OTel calls to prevent re-entrancy if OTel init logs.
+    _default_logging_initialized = True
+
+    # Auto-configure OTel if available (must run before attaching handlers
+    # so the LoggerProvider exists when _attach_otel_handlers checks for it)
+    try:
+        from .otel import auto_configure_otel
+        auto_configure_otel()
+    except ImportError:
+        pass
+
     # Add OTel log handler and trace context filter if OTel LoggerProvider is available
     _attach_otel_handlers(root_logger)
-
-    _default_logging_initialized = True
 
 
 def _attach_otel_handlers(logger: logging.Logger) -> None:

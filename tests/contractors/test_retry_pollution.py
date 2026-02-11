@@ -7,6 +7,7 @@ Verification suite for the retry-pollution fix:
 4. ruff lint passes on both modified source files
 """
 
+import logging
 import shutil
 import subprocess
 import textwrap
@@ -358,3 +359,98 @@ class TestSourceLint:
                     assert method not in line, (
                         f"Lint error in new code ({method}): {line}"
                     )
+
+
+# ---------------------------------------------------------------------------
+# 5. Auto-fix lint audit logging tests
+# ---------------------------------------------------------------------------
+
+class TestPreValidateAutoFix:
+    """Verify auto-fix behavior in pre_validate: fixes applied, logged, graceful fallback."""
+
+    def test_auto_fix_removes_unused_variable(self, tmp_path):
+        """F841 (unused variable) is auto-fixed before lint runs, so pre_validate passes."""
+        checkpoint = IntegrationCheckpoint(project_root=tmp_path)
+        gen_file = tmp_path / "generated" / "fixable.py"
+        gen_file.parent.mkdir(parents=True, exist_ok=True)
+        # F841: local variable 'unused' assigned but never used
+        gen_file.write_text(textwrap.dedent("""\
+            def compute(x):
+                unused = 42
+                return x + 1
+        """))
+        result = checkpoint.pre_validate([gen_file])
+        assert result.status == CheckpointStatus.PASSED
+        # The file should have been modified (unused variable removed)
+        content = gen_file.read_text()
+        assert "unused" not in content
+
+    def test_auto_fix_logs_when_file_changed(self, tmp_path, caplog):
+        """Logger emits debug message when ruff modifies a file."""
+        checkpoint = IntegrationCheckpoint(project_root=tmp_path)
+        gen_file = tmp_path / "generated" / "fixable.py"
+        gen_file.parent.mkdir(parents=True, exist_ok=True)
+        gen_file.write_text(textwrap.dedent("""\
+            def compute(x):
+                unused = 42
+                return x + 1
+        """))
+        with caplog.at_level(logging.DEBUG, logger="startd8.contractors.checkpoint"):
+            checkpoint.pre_validate([gen_file])
+        assert any("Auto-fixed lint issues" in msg for msg in caplog.messages)
+
+    def test_auto_fix_no_log_when_clean(self, tmp_path, caplog):
+        """No auto-fix log when file is already clean."""
+        checkpoint = IntegrationCheckpoint(project_root=tmp_path)
+        gen_file = tmp_path / "generated" / "clean.py"
+        gen_file.parent.mkdir(parents=True, exist_ok=True)
+        gen_file.write_text(textwrap.dedent("""\
+            def add(a, b):
+                return a + b
+        """))
+        with caplog.at_level(logging.DEBUG, logger="startd8.contractors.checkpoint"):
+            checkpoint.pre_validate([gen_file])
+        assert not any("Auto-fixed lint issues" in msg for msg in caplog.messages)
+
+    def test_auto_fix_ruff_unavailable(self, tmp_path, caplog):
+        """When ruff is not installed, pre_validate still runs (graceful degradation)."""
+        checkpoint = IntegrationCheckpoint(project_root=tmp_path)
+        gen_file = tmp_path / "generated" / "some.py"
+        gen_file.parent.mkdir(parents=True, exist_ok=True)
+        gen_file.write_text(textwrap.dedent("""\
+            def add(a, b):
+                return a + b
+        """))
+        original_run = subprocess.run
+
+        def selective_mock(*args, **kwargs):
+            cmd = args[0] if args else kwargs.get("args", [])
+            if isinstance(cmd, list) and "--fix" in cmd:
+                raise FileNotFoundError("ruff not found")
+            return original_run(*args, **kwargs)
+
+        with patch("subprocess.run", side_effect=selective_mock):
+            with caplog.at_level(logging.DEBUG, logger="startd8.contractors.checkpoint"):
+                checkpoint.pre_validate([gen_file])
+        assert any("skipped" in msg for msg in caplog.messages)
+
+    def test_unfixable_errors_still_caught(self, tmp_path):
+        """Auto-fix can't fix E741 (ambiguous name) — lint check still catches it."""
+        checkpoint = IntegrationCheckpoint(project_root=tmp_path)
+        gen_file = tmp_path / "generated" / "ambig.py"
+        gen_file.parent.mkdir(parents=True, exist_ok=True)
+        # E741: ambiguous variable name 'l'
+        gen_file.write_text("l = 1\n")
+        result = checkpoint.pre_validate([gen_file])
+        assert result.status == CheckpointStatus.FAILED
+        assert any("E741" in e for e in result.errors)
+
+    def test_non_python_files_skipped(self, tmp_path):
+        """Auto-fix only runs on .py files; .json etc. are skipped."""
+        checkpoint = IntegrationCheckpoint(project_root=tmp_path)
+        gen_file = tmp_path / "generated" / "data.json"
+        gen_file.parent.mkdir(parents=True, exist_ok=True)
+        gen_file.write_text('{"key": "value"}')
+        # Should not crash — non-.py files simply skipped for auto-fix
+        result = checkpoint.pre_validate([gen_file])
+        assert result.status == CheckpointStatus.PASSED

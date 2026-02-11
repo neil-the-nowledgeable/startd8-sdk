@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+from startd8.contractors.protocols import DRAFT_MODEL_CLAUDE_HAIKU
 from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
 
 if TYPE_CHECKING:
@@ -1124,14 +1125,14 @@ class LLMTestGenerator:
 
     Args:
         agent_spec: Agent specification string (e.g.
-            ``"anthropic:claude-haiku-4-5-20251001"``).
+            ``DRAFT_MODEL_CLAUDE_HAIKU.agent_spec``).
         max_tokens: ``max_tokens`` override for the agent.
         max_retries: Maximum error-informed retry attempts when pytest
             collection fails (default ``2``).
 
     Example::
 
-        gen = LLMTestGenerator("anthropic:claude-haiku-4-5-20251001")
+        gen = LLMTestGenerator(DRAFT_MODEL_CLAUDE_HAIKU.agent_spec)
         modules = await gen.generate_tests(design_doc)
         print(modules[0].filename)
     """
@@ -1586,7 +1587,7 @@ class TestConstructionPhase:
         # LLM-driven
         phase = TestConstructionPhase(
             design_doc=my_design_dict,
-            agent_spec="anthropic:claude-haiku-4-5-20251001",
+            agent_spec=DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
             implementation_code=src_code,
         )
         result = await phase.execute_async()

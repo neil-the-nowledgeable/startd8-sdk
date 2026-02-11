@@ -81,6 +81,20 @@ class ConfigManager:
                 "show_mock_in_workflows": False,  # Show mock agents in workflow agent selection
                 "agents_per_page": 10
             },
+            "artisan": {
+                "lead_agent": None,
+                "drafter_agent": None,
+                "max_iterations": None,
+                "pass_threshold": None,
+                "max_tokens": None,
+                "fail_on_truncation": None,
+                "check_truncation": None,
+                "strict_truncation": None,
+                "test_timeout_seconds": None,
+                "review_temperature": None,
+                "review_max_code_chars": None,
+                "development_timeout_seconds": None,
+            },
             "resilience": {
                 "level": "standard",  # off, minimal, standard, aggressive, custom
                 "retry": {
@@ -327,6 +341,57 @@ class ConfigManager:
         self._config["resilience"] = config.to_dict()
         self._save_config()
 
+    # Artisan Workflow Configuration
+
+    def get_artisan_config(self) -> Dict[str, Any]:
+        """Get full artisan workflow configuration."""
+        return dict(self._config.get("artisan", self._default_config()["artisan"]))
+
+    def get_artisan_setting(self, key: str, default: Any = None) -> Any:
+        """Get a single artisan setting with env var override.
+
+        Priority: env var ``STARTD8_ARTISAN_{KEY}`` > config file > *default*.
+
+        Args:
+            key: Setting name (snake_case, e.g. ``"lead_agent"``).
+            default: Fallback if not set anywhere.
+
+        Returns:
+            The resolved value (coerced from string when sourced from env).
+        """
+        env_var = f"STARTD8_ARTISAN_{key.upper()}"
+        env_val = os.getenv(env_var)
+        if env_val is not None:
+            return _coerce_artisan_value(key, env_val)
+
+        cfg_val = self._config.get("artisan", {}).get(key)
+        if cfg_val is not None:
+            return cfg_val
+
+        return default
+
+    def set_artisan_setting(self, key: str, value: Any) -> None:
+        """Persist an artisan setting to the config file.
+
+        Args:
+            key: Setting name (snake_case).
+            value: The value to store.
+        """
+        if "artisan" not in self._config:
+            self._config["artisan"] = dict(self._default_config()["artisan"])
+        self._config["artisan"][key] = value
+        self._save_config()
+
+    def clear_artisan_setting(self, key: str) -> None:
+        """Reset an artisan setting back to None (use dataclass default).
+
+        Args:
+            key: Setting name (snake_case).
+        """
+        if "artisan" in self._config and key in self._config["artisan"]:
+            self._config["artisan"][key] = None
+            self._save_config()
+
     # Utility
 
     def export_config(self) -> Dict[str, Any]:
@@ -353,6 +418,34 @@ class ConfigManager:
     def get_config_file_path(self) -> Path:
         """Get path to config file"""
         return self.config_file
+
+
+_ARTISAN_BOOL_KEYS = {
+    "fail_on_truncation", "check_truncation", "strict_truncation",
+}
+_ARTISAN_INT_KEYS = {
+    "max_iterations", "pass_threshold", "max_tokens",
+    "test_timeout_seconds", "review_max_code_chars",
+}
+_ARTISAN_FLOAT_KEYS = {
+    "review_temperature", "development_timeout_seconds",
+}
+
+
+def _coerce_artisan_value(key: str, raw: str) -> Any:
+    """Coerce a raw env-var string to the correct Python type for *key*.
+
+    Bool keys accept ``true/false/1/0`` (case-insensitive).
+    Int/float keys are converted numerically.
+    Everything else is returned as-is (str).
+    """
+    if key in _ARTISAN_BOOL_KEYS:
+        return raw.lower() in ("true", "1", "yes")
+    if key in _ARTISAN_INT_KEYS:
+        return int(raw)
+    if key in _ARTISAN_FLOAT_KEYS:
+        return float(raw)
+    return raw
 
 
 # Singleton instance

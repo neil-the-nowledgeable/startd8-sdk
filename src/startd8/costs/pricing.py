@@ -78,8 +78,8 @@ class PricingService:
             input_cost_per_million=3.0,
             output_cost_per_million=15.0
         ),
-        "claude-haiku-4-5-20251008": ModelPricing(
-            model="claude-haiku-4-5-20251008",
+        "claude-haiku-4-5-20251001": ModelPricing(
+            model="claude-haiku-4-5-20251001",
             provider="anthropic",
             input_cost_per_million=1.0,
             output_cost_per_million=5.0

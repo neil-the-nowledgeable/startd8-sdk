@@ -1,7 +1,7 @@
 # Artisan Contractor Workflow — Implementation Plan
 
-**Status:** DRAFT — Triage rounds 1+2+3+4+5+6+7+8+9 applied (R1–R18)
-**Date:** 2026-02-09
+**Status:** DRAFT — Triage rounds 1+2+3+4+5+6+7+8+9 applied (R1–R18); Section 15 added (2026-02-11)
+**Date:** 2026-02-11
 **Base:** Extends PrimeContractor pattern (`src/startd8/contractors/`) + inherits `WorkflowBase`
 
 ---
@@ -2063,6 +2063,57 @@ def test_artisan_preflight_fails(tmp_path):
 53. `ast.unparse()` canonicalization prevents false reconciliation deviations (R17-S8)
 54. Plan item ID uniqueness validated before Phase 5 dependency resolution (R17-S10)
 55. Lessons file input hardened with size limits and safe YAML loading (R18-S5)
+
+---
+
+## 15. Design Handoff — Two-Half Split Execution
+
+> **Added:** 2026-02-11 — Implemented in `src/startd8/contractors/handoff.py`
+
+### Problem
+
+The orchestrator's shared `context` dict lives only in memory. When the first-half process (PLAN -> SCAFFOLD -> DESIGN) exits, `design_results`, `scaffold`, and other context keys are lost. The checkpoint mechanism stores phase execution metadata (cost, status, timing) but not context state. This prevents running the second half (IMPLEMENT -> TEST -> REVIEW -> FINALIZE) as a separate process.
+
+### Solution
+
+A **design handoff file** (`design-handoff.json`) serializes the context state needed by the second half. The first half writes it on success; the second half loads it to reconstruct context.
+
+### Handoff Schema (v1)
+
+```json
+{
+  "schema_version": 1,
+  "enriched_seed_path": "/abs/path/to/seed.json",
+  "project_root": "/abs/path/to/project",
+  "output_dir": "out/designs",
+  "workflow_id": "uuid-...",
+  "completed_phases": ["plan", "scaffold", "design"],
+  "design_results": { "TASK-001": {...}, ... },
+  "scaffold": { "directories_created": [...], ... },
+  "created_at": "2026-02-11T14:30:00+00:00"
+}
+```
+
+### Key Design Decisions
+
+| Decision | Resolution | Rationale |
+|----------|-----------|-----------|
+| Handoff vs. extend checkpoints | Separate file | Checkpoints are orchestrator-internal (cost, status); handoff is inter-process context transfer |
+| Schema versioning | `schema_version` field, reject future versions | Forward compatibility without silent data loss |
+| Required vs. optional fields | 4 required (`enriched_seed_path`, `project_root`, `output_dir`, `workflow_id`), rest optional with defaults | Minimal contract; `design_results={}` is valid (handlers reload from seed) |
+| File format | JSON via `atomic_write_json` | Consistent with other SDK artifacts; atomic write prevents corruption |
+
+### Runner Scripts
+
+| Script | Phases | Handoff Behavior |
+|--------|--------|-----------------|
+| `run_artisan_design_only.py` | PLAN, SCAFFOLD, DESIGN | **Writes** handoff on success |
+| `run_artisan_workflow.py` with `--stop-after design` | PLAN through DESIGN | **Writes** handoff on success |
+| `run_artisan_implement_only.py` | IMPLEMENT, TEST, REVIEW, FINALIZE | **Reads** handoff (or falls back to seed-only) |
+
+### Fallback Path
+
+When the second half runs without a handoff (e.g., `--seed` only), downstream handlers call `_ensure_context_loaded(context)` which reloads tasks from the enriched seed file. Implementation proceeds without `design_results` — the IMPLEMENT handler generates code directly from task descriptions.
 
 ---
 

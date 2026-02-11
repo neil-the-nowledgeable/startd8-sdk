@@ -42,6 +42,7 @@ from ..models import (
     ValidationResult,
 )
 from ...agents import BaseAgent
+from ...model_catalog import Models
 from ...utils.agent_resolution import resolve_agent_spec
 from ...utils.code_extraction import extract_code_from_response
 from ...logging_config import get_logger
@@ -146,15 +147,50 @@ DRAFT_PROMPT_TEMPLATE = """You are implementing code based on a detailed specifi
 - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
 
 ## Output Format
-Provide your complete implementation followed by a brief explanation of your approach.
-
-```
-[Your implementation code here]
-```
+{output_format}
 
 ## Explanation
 [Brief notes on your implementation approach]
 """
+
+
+SINGLE_FILE_OUTPUT_FORMAT = """Provide your complete implementation followed by a brief explanation of your approach.
+
+```
+[Your implementation code here]
+```"""
+
+MULTI_FILE_OUTPUT_FORMAT = """This task requires MULTIPLE files. You MUST produce a SEPARATE fenced code block
+for each file listed below. Each block MUST have the file path as the first line comment.
+
+{file_list}
+
+Example format (follow this exactly):
+```
+# path/to/first_file.py
+<complete implementation of first file>
+```
+
+```
+# path/to/second_file.ext
+<complete contents of second file>
+```
+
+CRITICAL: Every target file listed above MUST have its own distinct code block.
+Do NOT combine multiple files into a single block."""
+
+
+def _build_output_format(target_files: Optional[List[str]] = None) -> str:
+    """Build the output format section for the draft prompt.
+
+    Single-file tasks get a simple single-block format.
+    Multi-file tasks get explicit per-file fencing instructions.
+    """
+    if not target_files or len(target_files) <= 1:
+        return SINGLE_FILE_OUTPUT_FORMAT
+    file_list = "\n".join(f"- `{f}`" for f in target_files)
+    return MULTI_FILE_OUTPUT_FORMAT.format(file_list=file_list)
+
 
 REVIEW_PROMPT_TEMPLATE = """You are reviewing an implementation as the Lead Contractor.
 
@@ -236,8 +272,8 @@ class LeadContractorWorkflow(WorkflowBase):
         {
             "task_description": "string - What to implement",
             "context": {...} - Optional additional context,
-            "lead_agent": "anthropic:claude-sonnet-4-20250514" - Lead contractor (Sonnet 4),
-            "drafter_agent": "gemini:gemini-2.5-flash-lite" - Drafter agent (best value),
+            "lead_agent": Models.LEAD_CONTRACTOR_LEAD - Lead contractor,
+            "drafter_agent": Models.LEAD_CONTRACTOR_DRAFTER - Drafter agent (best value),
             "max_iterations": 3 - Max review cycles,
             "pass_threshold": 80 - Minimum score to pass (0-100),
             "output_format": "string - Expected output format (optional)",
@@ -270,12 +306,12 @@ class LeadContractorWorkflow(WorkflowBase):
         - Exploratory: fail_on_api_truncation=False, fail_on_heuristic_truncation=False
 
     Recommended Lead Agents:
-        - anthropic:claude-sonnet-4-20250514 (default - best for coding/agents)
+        - anthropic:claude-sonnet-4-5-20250929 (default - best for coding/agents)
         - anthropic:claude-opus-4-5-20251101 (most intelligent)
-        - anthropic:claude-haiku-4-5-20251008 (fastest, near-frontier)
+        - anthropic:claude-haiku-4-5-20251001 (fastest, near-frontier)
 
     Recommended Drafter Agents:
-        - gemini:gemini-2.5-flash-lite (default - $0.075/$0.30, best value)
+        - anthropic:claude-haiku-4-5-20251001 (default - fast, low-cost)
         - openai:gpt-4.1-nano ($0.10/$0.40 - ultra-fast)
         - gemini:gemini-3-flash-preview ($0.10/$0.40 - latest)
         - openai:gpt-4o-mini ($0.15/$0.60 - reliable)
@@ -330,15 +366,15 @@ class LeadContractorWorkflow(WorkflowBase):
                     name="lead_agent",
                     type="agent_spec",
                     required=False,
-                    default="anthropic:claude-sonnet-4-20250514",
-                    description="Lead contractor agent (Claude 4 recommended: sonnet-4, opus-4-5, haiku-4-5)"
+                    default=Models.LEAD_CONTRACTOR_LEAD,
+                    description="Lead contractor agent (Claude recommended: sonnet-4.5, opus-4.5, haiku-4.5)"
                 ),
                 WorkflowInput(
                     name="drafter_agent",
                     type="agent_spec",
                     required=False,
-                    default="gemini:gemini-2.5-flash-lite",
-                    description="Drafter agent (cost-efficient: gemini-2.5-flash-lite, gpt-4.1-nano, gpt-4o-mini)"
+                    default=Models.LEAD_CONTRACTOR_DRAFTER,
+                    description="Drafter agent (cost-efficient: haiku-4.5, gpt-4.1-nano, gpt-4o-mini)"
                 ),
                 WorkflowInput(
                     name="max_iterations",
@@ -441,8 +477,8 @@ class LeadContractorWorkflow(WorkflowBase):
         # Parse configuration
         task_description = config["task_description"]
         context = config.get("context", {})
-        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
-        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash")
+        lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
+        drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
@@ -542,6 +578,7 @@ class LeadContractorWorkflow(WorkflowBase):
                     iteration=iteration,
                     check_truncation=check_truncation,
                     strict_truncation=strict_truncation,
+                    target_files=context.get("target_files"),
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
@@ -819,6 +856,7 @@ class LeadContractorWorkflow(WorkflowBase):
         iteration: int,
         check_truncation: bool = True,
         strict_truncation: bool = False,
+        target_files: Optional[List[str]] = None,
     ) -> DraftResult:
         """Phase 2/4: Drafter creates implementation from spec.
 
@@ -829,12 +867,15 @@ class LeadContractorWorkflow(WorkflowBase):
             iteration: Current iteration number
             check_truncation: Whether to run heuristic truncation detection (default: True)
             strict_truncation: Use lower confidence threshold for detection (default: False)
+            target_files: Target file paths (triggers multi-file output format when len > 1)
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
+        output_format = _build_output_format(target_files)
         prompt = DRAFT_PROMPT_TEMPLATE.format(
             spec=spec.raw_spec,
-            feedback=feedback if feedback else "This is the initial implementation attempt."
+            feedback=feedback if feedback else "This is the initial implementation attempt.",
+            output_format=output_format,
         )
 
         response_text, response_time_ms, token_usage = drafter_agent.generate(prompt)
@@ -1010,8 +1051,8 @@ class LeadContractorWorkflow(WorkflowBase):
 
         task_description = config["task_description"]
         context = config.get("context", {})
-        lead_spec = config.get("lead_agent", "anthropic:claude-sonnet-4-20250514")
-        drafter_spec = config.get("drafter_agent", "gemini:gemini-2.5-flash")
+        lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
+        drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
         pass_threshold = config.get("pass_threshold", 80)
         output_format = config.get("output_format")
@@ -1101,6 +1142,7 @@ class LeadContractorWorkflow(WorkflowBase):
                     iteration=iteration,
                     check_truncation=check_truncation,
                     strict_truncation=strict_truncation,
+                    target_files=context.get("target_files"),
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
@@ -1366,6 +1408,7 @@ class LeadContractorWorkflow(WorkflowBase):
         iteration: int,
         check_truncation: bool = True,
         strict_truncation: bool = False,
+        target_files: Optional[List[str]] = None,
     ) -> DraftResult:
         """Phase 2/4 (async): Drafter creates implementation from spec.
 
@@ -1376,12 +1419,15 @@ class LeadContractorWorkflow(WorkflowBase):
             iteration: Current iteration number
             check_truncation: Whether to run heuristic truncation detection (default: True)
             strict_truncation: Use lower confidence threshold for detection (default: False)
+            target_files: Target file paths (triggers multi-file output format when len > 1)
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
+        output_format = _build_output_format(target_files)
         prompt = DRAFT_PROMPT_TEMPLATE.format(
             spec=spec.raw_spec,
-            feedback=feedback if feedback else "This is the initial implementation attempt."
+            feedback=feedback if feedback else "This is the initial implementation attempt.",
+            output_format=output_format,
         )
 
         response_text, response_time_ms, token_usage = await drafter_agent.agenerate(prompt)

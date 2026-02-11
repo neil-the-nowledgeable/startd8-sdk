@@ -146,7 +146,10 @@ def extract_multi_file_code(
     # Matches lines like: // path/to/File.tsx  or  # path/to/file.py
     # The code block follows until the next such marker or end of string.
     marker_pattern = re.compile(
-        r'^(?://|#)\s*(\S+\.(?:ts|tsx|js|jsx|py|css|html|vue|svelte|go|rs|java|rb))\s*$',
+        r'^(?://|#)\s*(\S+\.(?:'
+        r'ts|tsx|js|jsx|py|css|html|vue|svelte|go|rs|java|rb'  # code
+        r'|csv|md|json|yaml|yml|toml|txt|sql|xml|cfg|ini|env|sh|bat'  # data/config/docs
+        r'))\s*$',
         re.MULTILINE,
     )
     markers = list(marker_pattern.finditer(response))
