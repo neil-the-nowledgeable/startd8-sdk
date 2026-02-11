@@ -377,6 +377,22 @@ class IntegrationCheckpoint:
         if syntax_result.status == CheckpointStatus.FAILED:
             all_errors.extend(syntax_result.errors)
 
+        # Auto-fix trivially-fixable lint issues (F541, F841, etc.)
+        # before running the lint check.  These are common LLM code-gen
+        # artifacts that ruff can resolve without changing semantics.
+        # --unsafe-fixes is needed for F841 (unused variable removal).
+        for gf in generated_files:
+            if gf.suffix == ".py":
+                try:
+                    subprocess.run(
+                        ["python3", "-m", "ruff", "check", "--fix",
+                         "--unsafe-fixes", "--select=E7,E9,F", str(gf)],
+                        capture_output=True, text=True,
+                        cwd=self.project_root, timeout=30,
+                    )
+                except (subprocess.TimeoutExpired, FileNotFoundError):
+                    pass  # ruff unavailable or timed out — lint check below will catch
+
         # Ignore F401 (unused imports) in pre-merge validation because
         # generated files are partial — the AST merge will combine them
         # with the full target file where those imports are used.
