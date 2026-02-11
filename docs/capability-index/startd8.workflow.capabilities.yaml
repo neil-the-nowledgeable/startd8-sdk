@@ -11,10 +11,11 @@
 
 manifest_id: startd8.workflow.capabilities
 name: StartD8 Workflow System Capabilities
-version: "2.4.0"
+version: "2.5.0"
 description: |
   Capabilities for StartD8 SDK workflow system.
   Protocol-based multi-agent orchestration with cost tracking and observability.
+  v2.5.0: Added domain preflight integration into PrimeContractor for domain-aware constraints and post-validation.
   v2.4.0: Added artisan contractor orchestrator and design handoff for two-half split execution.
   v2.3.0: Added architectural_review_log builtin workflow with automated triage + two-tier prompt steering.
   v2.2.0: Added plan_ingestion builtin workflow capability.
@@ -579,6 +580,44 @@ capabilities:
       - type: doc
         ref: docs/ARTISAN_WORKFLOW_GUIDE.md
         description: "Design Handoff section with schema, programmatic usage, and rationale"
+
+  - capability_id: startd8.workflow.contractor.domain_preflight_integration
+    category: action
+    maturity: beta
+    summary: "Domain-aware constraint injection and post-validation in PrimeContractor via DomainChecklist"
+    audiences: [workflow_user, ai_agent, workflow_developer]
+    user_benefit: "Generated code automatically follows domain rules (no relative imports, dep allowlists) without manual prompt editing"
+    delivers_benefit: workflow.execution.validated_run
+    description:
+      developer: |
+        PrimeContractor.develop_feature() lazy-inits DomainChecklist(project_root) and calls
+        get_enrichment(feature.id, target_files) to replace the hardcoded output_constraint with
+        domain-specific prompt_constraints. integrate_feature() runs validate_generated_code()
+        post-validation (relative imports, dep allowlists, definition ordering). LeadContractorWorkflow
+        SPEC_PROMPT_TEMPLATE includes a ## Domain Constraints section; _create_spec/_acreate_spec
+        pop domain_constraints from context, format as bullet list, and inject into the template.
+        extract_target_files() parses file paths from task descriptions via 5-tier priority regex.
+        enrich_prime_tasks.py CLI batch-enriches YAML files with DomainChecklist.
+      user: |
+        Automatic: PrimeContractor applies domain constraints when target_files are set.
+        Manual enrichment: python3 scripts/enrich_prime_tasks.py --input tasks.yaml --project-root /path --output enriched.yaml
+      agent: |
+        Auto-wired via PrimeContractor._get_domain_enrichment(). gen_context["domain_constraints"] = enrichment.prompt_constraints.
+        Post-validation: validate_generated_code(code, enrichment) -> PostValidationResult.
+        Utility: extract_target_files(description) -> List[str]. enrich_prime_yaml(input, root, output) -> EnrichmentReport.
+    evidence:
+      - type: code
+        ref: src/startd8/contractors/prime_contractor.py
+        description: "_get_domain_enrichment() lazy init, domain constraint injection in develop_feature(), post-validation in integrate_feature()"
+      - type: code
+        ref: src/startd8/utils/prime_task_enrichment.py
+        description: "extract_target_files() with 5-tier regex, enrich_prime_yaml() batch enrichment"
+      - type: code
+        ref: src/startd8/workflows/builtin/lead_contractor_workflow.py
+        description: "SPEC_PROMPT_TEMPLATE Domain Constraints section, _create_spec/_acreate_spec formatting"
+      - type: test
+        ref: tests/unit/test_prime_task_enrichment.py
+        description: "17 tests: target extraction (12), YAML enrichment (2), constraint formatting (3)"
 
   # ============================================================================
   # PHASE 1 CAPABILITIES (Foundation - Beta)
@@ -1311,6 +1350,11 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "2.5.0"
+    date: "2026-02-11"
+    changes:
+      - "Added startd8.workflow.contractor.domain_preflight_integration: domain-aware constraints + post-validation in PrimeContractor (beta)"
+      - "Total capabilities: 43 (was 42)"
   - version: "2.4.0"
     date: "2026-02-11"
     changes:

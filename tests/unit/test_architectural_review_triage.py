@@ -22,6 +22,7 @@ from startd8.workflows.builtin.architectural_review_log_workflow import (
     _strip_json_fences,
     _extract_untriaged_suggestions,
     _validate_triage_output,
+    _validate_snippet,
     _apply_triage_decisions,
     _compute_substantially_addressed,
     _insert_substantially_addressed_section,
@@ -31,6 +32,9 @@ from startd8.workflows.builtin.architectural_review_log_workflow import (
     _build_prompt,
     _build_untriaged_block,
     _extract_reviewer_sources,
+    _extract_feature_snippet,
+    _get_feature_doc_path,
+    _ensure_appendix_exists,
     _compute_substantially_addressed_from_doc,
     ArchitecturalReviewLogWorkflow,
 )
@@ -1036,3 +1040,540 @@ class TestBuildUntriagedBlock:
 
     def test_empty_suggestions(self):
         assert _build_untriaged_block([]) == "(none)"
+
+
+# ---------------------------------------------------------------------------
+# _build_prompt feature_requirements tests
+# ---------------------------------------------------------------------------
+
+class TestBuildPromptRequirements:
+    """Tests for feature_requirements support in reviewer prompts."""
+
+    def test_requirements_block_injected_when_provided(self):
+        prompt = _build_prompt(
+            document_without_appendix="# Test Plan",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (test-model)",
+            scope="Test",
+            requirements_content="## Feature: Auth\n\nMust support OAuth2.",
+        )
+        assert "Feature Requirements" in prompt
+        assert "Must support OAuth2" in prompt
+        assert "adequately addresses each requirement" in prompt
+
+    def test_requirements_block_absent_when_empty(self):
+        prompt = _build_prompt(
+            document_without_appendix="# Test Plan",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (test-model)",
+            scope="Test",
+            requirements_content="",
+        )
+        assert "Feature Requirements" not in prompt
+
+    def test_requirements_placed_before_context(self):
+        prompt = _build_prompt(
+            document_without_appendix="# Test Plan",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (test-model)",
+            scope="Test",
+            requirements_content="## Req\n\nSome requirement.",
+            context_content="## Lesson\n\nSome lesson.",
+        )
+        req_pos = prompt.index("Feature Requirements")
+        ctx_pos = prompt.index("Reference material")
+        assert req_pos < ctx_pos
+
+    def test_requirements_instruction_present_when_requirements_provided(self):
+        prompt = _build_prompt(
+            document_without_appendix="# Test Plan",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (test-model)",
+            scope="Test",
+            requirements_content="## Feature: Auth\n\nMust support OAuth2.",
+        )
+        assert "adequately covers the feature requirements" in prompt
+        assert "under-addressed" in prompt
+
+    def test_requirements_instruction_absent_when_no_requirements(self):
+        prompt = _build_prompt(
+            document_without_appendix="# Test Plan",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (test-model)",
+            scope="Test",
+            requirements_content="",
+        )
+        assert "adequately covers the feature requirements" not in prompt
+
+    def test_dual_doc_format_present_when_has_feature_requirements(self):
+        prompt = _build_prompt(
+            document_without_appendix="# Test Plan",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (test-model)",
+            scope="Test",
+            requirements_content="## Feature: Auth\n\nMust support OAuth2.",
+            has_feature_requirements=True,
+        )
+        assert "Requirements Coverage" in prompt
+        assert "Feature Requirements Suggestions" in prompt
+        assert "R1-F1" in prompt
+        # Directive requirement instruction
+        assert "You MUST include a Requirements Coverage section" in prompt
+
+    def test_dual_doc_format_absent_when_no_feature_requirements(self):
+        prompt = _build_prompt(
+            document_without_appendix="# Test Plan",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (test-model)",
+            scope="Test",
+            requirements_content="## Feature: Auth\n\nMust support OAuth2.",
+            has_feature_requirements=False,
+        )
+        assert "Dual-Document Output" not in prompt
+        assert "Feature Requirements Suggestions" not in prompt
+        # Should still have the passive instruction
+        assert "adequately covers the feature requirements" in prompt
+
+
+# ---------------------------------------------------------------------------
+# Dual-document mode tests
+# ---------------------------------------------------------------------------
+
+class TestDualDocumentMode:
+
+    def test_feature_doc_appendix_initialized(self, tmp_path):
+        """Feature doc gets appendix structure when missing."""
+        feature_doc = tmp_path / "feature-requirements.md"
+        feature_doc.write_text("# Feature Requirements\n\n## Auth\n\nMust support OAuth2.\n")
+
+        doc_path = tmp_path / "plan.md"
+        doc_path.write_text("# Implementation Plan\n\nSome content here.\n")
+
+        snippet = (
+            f"#### Review Round R1\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-11 00:00:00 UTC\n"
+            f"- **Scope**: Test review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-S1 | Architecture | high | Plan suggestion | Good rationale | Section 1 | Manual |\n"
+        )
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = json.dumps([
+            {"id": "R1-S1", "decision": "ACCEPT", "summary": "Plan suggestion", "rationale": "Ok", "area": "architecture"},
+        ])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        agent = MagicMock()
+        agent.name = "test-agent"
+        agent.model = "test-model"
+        agent.safety_settings = None
+        agent.__class__.__module__ = "startd8.agents.claude"
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "feature_requirements": [str(feature_doc)],
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        feature_text = feature_doc.read_text()
+        assert "## Appendix: Iterative Review Log" in feature_text
+        assert "### Appendix A: Applied Suggestions" in feature_text
+        assert "### Appendix C: Incoming Suggestions" in feature_text
+
+    def test_feature_suggestions_appended_to_feature_doc(self, tmp_path):
+        """F-prefix suggestions are extracted and appended to feature doc."""
+        feature_doc = tmp_path / "feature-requirements.md"
+        feature_doc.write_text("# Feature Requirements\n\n## Auth\n\nMust support OAuth2.\n")
+
+        doc_path = tmp_path / "plan.md"
+        doc_path.write_text("# Implementation Plan\n\nSome content here.\n")
+
+        snippet = (
+            f"#### Review Round R1\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-11 00:00:00 UTC\n"
+            f"- **Scope**: Test review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-S1 | Architecture | high | Plan suggestion | Good rationale | Section 1 | Manual |\n\n"
+            f"#### Feature Requirements Suggestions\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-F1 | Security | medium | Add OAuth2 scope definition | Spec is ambiguous | Section 2.1 | Spec review |\n"
+        )
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = json.dumps([
+            {"id": "R1-S1", "decision": "ACCEPT", "summary": "Plan suggestion", "rationale": "Ok", "area": "architecture"},
+            {"id": "R1-F1", "decision": "ACCEPT", "summary": "OAuth2 scope", "rationale": "Good", "area": "security"},
+        ])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        agent = MagicMock()
+        agent.name = "test-agent"
+        agent.model = "test-model"
+        agent.safety_settings = None
+        agent.__class__.__module__ = "startd8.agents.claude"
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "feature_requirements": [str(feature_doc)],
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        feature_text = feature_doc.read_text()
+        assert "Feature Requirements Suggestions" in feature_text
+        assert "R1-F1" in feature_text
+
+    def test_requirements_coverage_in_plan_doc(self, tmp_path):
+        """Full snippet (including coverage table) persists in plan doc."""
+        feature_doc = tmp_path / "feature-requirements.md"
+        feature_doc.write_text("# Feature Requirements\n\n## Auth\n\nMust support OAuth2.\n")
+
+        doc_path = tmp_path / "plan.md"
+        doc_path.write_text("# Implementation Plan\n\nSome content here.\n")
+
+        snippet = (
+            f"#### Review Round R1\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-11 00:00:00 UTC\n"
+            f"- **Scope**: Test review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-S1 | Architecture | high | Plan suggestion | Good rationale | Section 1 | Manual |\n\n"
+            f"#### Requirements Coverage\n"
+            f"| Feature Doc Section | Plan Step(s) | Coverage | Gaps |\n"
+            f"| ---- | ---- | ---- | ---- |\n"
+            f"| Auth | Step 3 | Full | None |\n"
+        )
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = json.dumps([
+            {"id": "R1-S1", "decision": "ACCEPT", "summary": "Plan suggestion", "rationale": "Ok", "area": "architecture"},
+        ])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        agent = MagicMock()
+        agent.name = "test-agent"
+        agent.model = "test-model"
+        agent.safety_settings = None
+        agent.__class__.__module__ = "startd8.agents.claude"
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "feature_requirements": [str(feature_doc)],
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        plan_text = doc_path.read_text()
+        assert "Requirements Coverage" in plan_text
+        assert "Auth" in plan_text
+
+    def test_triage_routes_plan_to_plan_doc(self, tmp_path):
+        """S-prefix ACCEPT/REJECT decisions go to plan doc Appendix A/B."""
+        feature_doc = tmp_path / "feature-requirements.md"
+        feature_doc.write_text("# Feature Requirements\n\n## Auth\n\nMust support OAuth2.\n")
+
+        doc_path = tmp_path / "plan.md"
+        doc_path.write_text("# Implementation Plan\n\nSome content here.\n")
+
+        snippet = (
+            f"#### Review Round R1\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-11 00:00:00 UTC\n"
+            f"- **Scope**: Test review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-S1 | Architecture | high | Plan improvement | Good rationale | Section 1 | Manual |\n\n"
+            f"#### Feature Requirements Suggestions\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-F1 | Security | medium | Add scope def | Ambiguous spec | Section 2.1 | Spec review |\n"
+        )
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = json.dumps([
+            {"id": "R1-S1", "decision": "ACCEPT", "summary": "Plan improvement", "rationale": "Good", "area": "architecture"},
+            {"id": "R1-F1", "decision": "REJECT", "summary": "Scope def", "rationale": "Already defined", "area": "security"},
+        ])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        agent = MagicMock()
+        agent.name = "test-agent"
+        agent.model = "test-model"
+        agent.safety_settings = None
+        agent.__class__.__module__ = "startd8.agents.claude"
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "feature_requirements": [str(feature_doc)],
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        plan_text = doc_path.read_text()
+        plan_appendix_a = plan_text.split("### Appendix A")[1].split("### Appendix B")[0]
+        assert "R1-S1" in plan_appendix_a
+        # F-prefix should NOT be in plan doc's appendix A or B
+        assert "R1-F1" not in plan_appendix_a
+
+    def test_triage_routes_feature_to_feature_doc(self, tmp_path):
+        """F-prefix ACCEPT/REJECT decisions go to feature doc Appendix A/B."""
+        feature_doc = tmp_path / "feature-requirements.md"
+        feature_doc.write_text("# Feature Requirements\n\n## Auth\n\nMust support OAuth2.\n")
+
+        doc_path = tmp_path / "plan.md"
+        doc_path.write_text("# Implementation Plan\n\nSome content here.\n")
+
+        snippet = (
+            f"#### Review Round R1\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-11 00:00:00 UTC\n"
+            f"- **Scope**: Test review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-S1 | Architecture | high | Plan improvement | Good rationale | Section 1 | Manual |\n\n"
+            f"#### Feature Requirements Suggestions\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-F1 | Security | medium | Add scope def | Ambiguous spec | Section 2.1 | Spec review |\n"
+        )
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = json.dumps([
+            {"id": "R1-S1", "decision": "ACCEPT", "summary": "Plan improvement", "rationale": "Good", "area": "architecture"},
+            {"id": "R1-F1", "decision": "ACCEPT", "summary": "Scope def", "rationale": "Good catch", "area": "security"},
+        ])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        agent = MagicMock()
+        agent.name = "test-agent"
+        agent.model = "test-model"
+        agent.safety_settings = None
+        agent.__class__.__module__ = "startd8.agents.claude"
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "feature_requirements": [str(feature_doc)],
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        feature_text = feature_doc.read_text()
+        feature_appendix_a = feature_text.split("### Appendix A")[1].split("### Appendix B")[0]
+        assert "R1-F1" in feature_appendix_a
+        assert result.output["triage"]["feature_accepted"] == 1
+
+    def test_no_feature_doc_unchanged_behavior(self, tmp_path):
+        """Without feature_requirements, everything works as before."""
+        doc_path = tmp_path / "plan.md"
+        doc_path.write_text("# Implementation Plan\n\nSome content here.\n")
+
+        snippet = (
+            f"#### Review Round R1\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-11 00:00:00 UTC\n"
+            f"- **Scope**: Test review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-S1 | Architecture | high | Plan suggestion | Good rationale | Section 1 | Manual |\n"
+        )
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = json.dumps([
+            {"id": "R1-S1", "decision": "ACCEPT", "summary": "Plan suggestion", "rationale": "Ok", "area": "architecture"},
+        ])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        agent = MagicMock()
+        agent.name = "test-agent"
+        agent.model = "test-model"
+        agent.safety_settings = None
+        agent.__class__.__module__ = "startd8.agents.claude"
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path)},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        assert result.output["feature_document_path"] is None
+        assert result.output["triage"]["feature_accepted"] == 0
+        assert result.output["triage"]["feature_rejected"] == 0
+
+    def test_validate_snippet_accepts_f_prefix_ids(self):
+        """Validator accepts R1-F1 IDs in feature suggestions table."""
+        snippet = (
+            f"#### Review Round R1\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-11 00:00:00 UTC\n"
+            f"- **Scope**: Test review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-S1 | Architecture | high | Plan suggestion | Good rationale | Section 1 | Manual |\n\n"
+            f"#### Feature Requirements Suggestions\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R1-F1 | Security | medium | Feature suggestion | Ambiguous spec | Section 2.1 | Review |\n"
+        )
+        ok, msg, ids = _validate_snippet(snippet, round_number=1, max_suggestions=5)
+        assert ok is True
+        assert "R1-S1" in ids
+        assert "R1-F1" in ids
+
+    def test_endorsement_matches_f_prefix(self):
+        """Endorsement regex matches F-prefix IDs."""
+        doc_with_f_endorsement = SAMPLE_DOC_WITH_SUGGESTIONS.replace(
+            "- R1-S3: Retry logic is a must-have",
+            "- R1-S3: Retry logic is a must-have\n- R1-F1: Good feature suggestion",
+        )
+        # Add a feature suggestion to a round
+        doc_with_f_endorsement = doc_with_f_endorsement.rstrip() + (
+            "\n\n#### Review Round R3\n\n"
+            "- **Reviewer**: test (test)\n"
+            "- **Date**: 2026-02-11 00:00:00 UTC\n"
+            "- **Scope**: Test\n\n"
+            "| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            "| R3-S1 | Architecture | high | Test | Test | S1 | V1 |\n\n"
+            "#### Feature Requirements Suggestions\n"
+            "| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            "| R1-F1 | Security | medium | Feature fix | Ambiguous | S2 | Review |\n"
+        )
+        _, endorsements = _extract_untriaged_suggestions(doc_with_f_endorsement, [], [])
+        assert endorsements.get("R1-F1", 0) >= 1
+
+
+# ---------------------------------------------------------------------------
+# _get_feature_doc_path tests
+# ---------------------------------------------------------------------------
+
+class TestGetFeatureDocPath:
+
+    def test_returns_md_file(self, tmp_path):
+        md = tmp_path / "feature.md"
+        md.write_text("# Features")
+        result = _get_feature_doc_path([str(md)])
+        assert result == md
+
+    def test_returns_first_md_in_dir(self, tmp_path):
+        d = tmp_path / "reqs"
+        d.mkdir()
+        (d / "aaa.md").write_text("# A")
+        (d / "bbb.md").write_text("# B")
+        result = _get_feature_doc_path([str(d)])
+        assert result == d / "aaa.md"
+
+    def test_returns_none_for_empty(self):
+        assert _get_feature_doc_path([]) is None
+
+    def test_skips_non_md_files(self, tmp_path):
+        txt = tmp_path / "file.txt"
+        txt.write_text("not markdown")
+        assert _get_feature_doc_path([str(txt)]) is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_feature_snippet tests
+# ---------------------------------------------------------------------------
+
+class TestExtractFeatureSnippet:
+
+    def test_extracts_feature_table(self):
+        full = (
+            "#### Review Round R1\n\n"
+            "| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            "| R1-S1 | Architecture | high | Plan fix | Rationale | Section 1 | Manual |\n\n"
+            "#### Feature Requirements Suggestions\n"
+            "| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            "| R1-F1 | Security | medium | Add scope | Ambiguous | Section 2 | Review |\n"
+        )
+        result = _extract_feature_snippet(full, 1, "test-agent (model)", "Test scope")
+        assert "#### Review Round R1" in result
+        assert "Feature Requirements Suggestions" in result
+        assert "R1-F1" in result
+        assert "test-agent (model)" in result
+
+    def test_returns_empty_when_no_feature_section(self):
+        full = (
+            "#### Review Round R1\n\n"
+            "| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            "| R1-S1 | Architecture | high | Plan fix | Rationale | Section 1 | Manual |\n"
+        )
+        result = _extract_feature_snippet(full, 1, "test", "scope")
+        assert result == ""
+
+
+# ---------------------------------------------------------------------------
+# _build_triage_prompt feature suggestion awareness tests
+# ---------------------------------------------------------------------------
+
+class TestBuildTriagePromptFeatureAwareness:
+
+    def test_suggestion_type_note_when_has_feature_suggestions(self):
+        prompt = _build_triage_prompt(
+            "doc content", [], [], "untriaged block", {},
+            has_feature_suggestions=True,
+        )
+        assert "R*-S* IDs are plan suggestions" in prompt
+        assert "R*-F* IDs are feature suggestions" in prompt
+
+    def test_no_suggestion_type_note_without_feature_suggestions(self):
+        prompt = _build_triage_prompt(
+            "doc content", [], [], "untriaged block", {},
+            has_feature_suggestions=False,
+        )
+        assert "R*-S* IDs are plan suggestions" not in prompt

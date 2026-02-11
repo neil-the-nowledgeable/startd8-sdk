@@ -153,6 +153,43 @@ def _ensure_appendix_exists(doc: str) -> str:
     return doc.rstrip() + "\n\n" + APPENDIX_TEMPLATE
 
 
+def _get_feature_doc_path(feature_requirements: list) -> Optional[Path]:
+    """Return the first .md file from feature_requirements paths, or None."""
+    for item in feature_requirements:
+        p = Path(str(item)).expanduser().resolve()
+        if p.is_file() and p.suffix == ".md":
+            return p
+        elif p.is_dir():
+            for md_file in sorted(p.glob("*.md")):
+                return md_file
+    return None
+
+
+def _extract_feature_snippet(
+    full_snippet: str,
+    round_number: int,
+    reviewer_label: str,
+    scope: str,
+) -> str:
+    """Extract feature suggestions from reviewer output, formatted as a feature doc Appendix C entry."""
+    match = re.search(
+        r"(####?\s*Feature Requirements Suggestions\s*\n.*?)(?=\n####?\s+(?!Feature)|$)",
+        full_snippet,
+        re.DOTALL,
+    )
+    if not match:
+        return ""
+    feature_table = match.group(1).strip()
+    # Wrap in round heading for the feature doc's Appendix C
+    return (
+        f"#### Review Round R{round_number}\n\n"
+        f"- **Reviewer**: {reviewer_label}\n"
+        f"- **Date**: {_now_utc()}\n"
+        f"- **Scope**: {scope}\n\n"
+        f"{feature_table}\n"
+    )
+
+
 def _strip_appendix_for_prompt(doc: str) -> str:
     idx = doc.find(APPENDIX_HEADING)
     if idx == -1:
@@ -234,15 +271,13 @@ def _extract_untriaged_suggestions(
             continue
         round_num = int(round_match.group(1))
 
-        # Extract table rows
+        # Extract table rows (may have multiple tables: plan + feature)
         lines = block.splitlines()
         in_table = False
-        header_seen = False
         for line in lines:
             stripped = line.strip()
-            if stripped.startswith("|") and "ID" in stripped and not header_seen:
+            if stripped.startswith("|") and "ID" in stripped:
                 in_table = True
-                header_seen = True
                 continue
             if in_table and stripped.startswith("|") and stripped.startswith("| -"):
                 # Separator row
@@ -274,7 +309,7 @@ def _extract_untriaged_suggestions(
         )
         if endorsement_match:
             endorsement_text = endorsement_match.group(0)
-            for eid in re.findall(r"(R\d+-S\d+)", endorsement_text):
+            for eid in re.findall(r"(R\d+-[SF]\d+)", endorsement_text):
                 endorsement_counts[eid] = endorsement_counts.get(eid, 0) + 1
 
     return suggestions, endorsement_counts
@@ -286,6 +321,7 @@ def _build_triage_prompt(
     rejected_ids: List[str],
     untriaged_block: str,
     endorsement_counts: Dict[str, int],
+    has_feature_suggestions: bool = False,
 ) -> str:
     """Build the triage prompt asking agent to classify each untriaged suggestion."""
     applied_list = ", ".join(applied_ids[:50]) if applied_ids else "(none)"
@@ -296,6 +332,15 @@ def _build_triage_prompt(
         parts = [f"  - {sid}: {count} endorsement(s)" for sid, count in sorted(endorsement_counts.items())]
         endorsement_info = "Endorsement counts (suggestions endorsed by multiple reviewers should be weighted higher):\n" + "\n".join(parts) + "\n\n"
 
+    suggestion_type_note = ""
+    if has_feature_suggestions:
+        suggestion_type_note = (
+            "\n**Note on suggestion types:**\n"
+            "- R*-S* IDs are plan suggestions (improvements to the implementation plan)\n"
+            "- R*-F* IDs are feature suggestions (improvements to the feature requirements document)\n"
+            "Evaluate both types using the same ACCEPT/REJECT criteria.\n\n"
+        )
+
     return f"""You are an expert enterprise architect performing triage on architectural review suggestions.
 
 Your task: Evaluate every untriaged suggestion below and decide whether to ACCEPT or REJECT it.
@@ -304,7 +349,7 @@ Context:
 - Previously applied suggestions: {applied_list}
 - Previously rejected suggestions: {rejected_list}
 
-{endorsement_info}Untriaged suggestions to evaluate:
+{endorsement_info}{suggestion_type_note}Untriaged suggestions to evaluate:
 {untriaged_block}
 
 Document being reviewed (for context):
@@ -727,8 +772,8 @@ def _extract_reviewer_sources(doc: str) -> Dict[str, str]:
         reviewer_match = re.search(r"\*\*Reviewer\*\*:\s*(.+)", block)
         reviewer_label = reviewer_match.group(1).strip() if reviewer_match else "Unknown"
 
-        # Extract suggestion IDs
-        for sid in re.findall(r"(R\d+-S\d+)", block):
+        # Extract suggestion IDs (S-prefix plan, F-prefix feature)
+        for sid in re.findall(r"(R\d+-[SF]\d+)", block):
             # Only set if we haven't seen it (first occurrence = definition)
             if sid not in sources:
                 sources[sid] = reviewer_label
@@ -789,13 +834,17 @@ def _build_prompt(
     scope: str,
     template_override: Optional[str] = None,
     context_content: str = "",
+    requirements_content: str = "",
     substantially_addressed_areas: Optional[Dict[str, List[str]]] = None,
     area_coverage: Optional[Dict[str, Dict[str, Any]]] = None,
+    has_feature_requirements: bool = False,
 ) -> str:
     """
     Build the reviewer prompt. Supports override template that must include:
     - {round_number}, {max_suggestions}, {applied_ids}, {rejected_ids}, {document}, {reviewer_label}, {scope}
     - Optional: {context} (reference material block, empty string when no context provided)
+    - Optional: {requirements} (feature requirements block, empty string when none provided)
+    - Optional: {has_feature_requirements} (bool, enables dual-document output sections)
     """
     applied_list = ", ".join(applied_ids[:50]) if applied_ids else "(none)"
     rejected_list = ", ".join(rejected_ids[:50]) if rejected_ids else "(none)"
@@ -810,6 +859,17 @@ def _build_prompt(
             "---\n\n"
         )
 
+    requirements_block = ""
+    if requirements_content.strip():
+        requirements_block = (
+            "Feature Requirements (the plan under review is designed to implement these — "
+            "evaluate whether the plan adequately addresses each requirement, flag gaps "
+            "in traceability, and identify requirements that lack clear implementation steps):\n"
+            "---\n"
+            f"{requirements_content}\n"
+            "---\n\n"
+        )
+
     if template_override:
         return template_override.format(
             round_number=round_number,
@@ -820,6 +880,8 @@ def _build_prompt(
             reviewer_label=reviewer_label,
             scope=scope,
             context=context_block,
+            requirements=requirements_block,
+            has_feature_requirements=has_feature_requirements,
         )
 
     cols = " | ".join(REQUIRED_COLUMNS)
@@ -921,16 +983,52 @@ If you want to revisit a rejected idea, explicitly reference its rejected ID and
             "and cite relevant lessons by name when applicable.\n"
         )
 
+    requirements_instruction = ""
+    if requirements_block:
+        if has_feature_requirements:
+            requirements_instruction = (
+                "- You MUST include a Requirements Coverage section mapping each feature "
+                "requirement to plan steps. Flag any requirements that are under-addressed, "
+                "missing implementation steps, or have unclear traceability.\n"
+            )
+        else:
+            requirements_instruction = (
+                "- Evaluate whether the plan adequately covers the feature requirements. "
+                "Flag any requirements that are under-addressed, missing implementation steps, "
+                "or have unclear traceability from requirement to implementation.\n"
+            )
+
+    dual_doc_format = ""
+    if has_feature_requirements:
+        dual_doc_format = (
+            f"\n**Dual-Document Output — REQUIRED when feature requirements are provided:**\n\n"
+            f"After your plan suggestion table, you MUST include TWO additional sections:\n\n"
+            f"1. **Requirements Coverage** (MANDATORY):\n"
+            f"   #### Requirements Coverage\n"
+            f"   | Feature Doc Section | Plan Step(s) | Coverage | Gaps |\n"
+            f"   | ---- | ---- | ---- | ---- |\n"
+            f"   For each major requirement/section in the feature requirements document, map it to "
+            f"the plan step(s) that implement it, assess coverage (Full / Partial / Missing), and "
+            f"describe any gaps. This is your primary analytical tool — be thorough and specific.\n\n"
+            f"2. **Feature Requirements Suggestions** (include if you find improvements needed):\n"
+            f"   #### Feature Requirements Suggestions\n"
+            f"   Same 7-column table schema as plan suggestions, but with IDs "
+            f"R{round_number}-F1..R{round_number}-F{max_suggestions}.\n"
+            f"   These target the feature requirements document itself — missing requirements, "
+            f"ambiguous specs, under-specified acceptance criteria, or gaps discovered during "
+            f"coverage analysis.\n\n"
+        )
+
     return f"""You are an expert enterprise architect performing Review Round R{round_number} of an iterative architectural review.
 
 This document undergoes multiple review passes. Each pass should be sharper than the last.
 
 {iteration_context}
 
-{context_block}Your task:
+{requirements_block}{context_block}Your task:
 - Propose up to {max_suggestions} high-leverage improvements not yet captured.
 {focus_line}
-{context_instruction}- Do NOT rewrite the document. Do NOT modify Appendix A or Appendix B.
+{requirements_instruction}{context_instruction}- Do NOT rewrite the document. Do NOT modify Appendix A or Appendix B.
 - You MUST output ONLY an appendable markdown snippet for Appendix C.
 
 Required output format (append-only snippet):
@@ -950,7 +1048,7 @@ Required output format (append-only snippet):
   **Endorsements** (prior untriaged suggestions this reviewer agrees with):
   - <ID>: <one-sentence reason you agree>
   This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage. Only endorse suggestions you genuinely believe should be implemented. Do NOT endorse your own suggestions.
-
+{dual_doc_format}
 Document (excluding the review appendix):
 ---
 {document_without_appendix}
@@ -1004,7 +1102,7 @@ def _validate_snippet(snippet: str, round_number: int, max_suggestions: int) -> 
         suggestion_id = cells[0]
         ids.append(suggestion_id)
 
-        # Validate ID pattern
+        # Validate ID pattern (S-prefix for plan suggestions)
         if not re.fullmatch(rf"R{round_number}-S\d+", suggestion_id):
             return False, f"Invalid suggestion ID '{suggestion_id}' for round R{round_number}", ids
 
@@ -1016,13 +1114,34 @@ def _validate_snippet(snippet: str, round_number: int, max_suggestions: int) -> 
         if severity not in ALLOWED_SEVERITIES:
             return False, f"Invalid Severity '{cells[2]}' (allowed: {sorted(ALLOWED_SEVERITIES)})", ids
 
-    unique_ids = sorted(set(ids), key=lambda x: int(re.search(r"-S(\d+)$", x).group(1)) if re.search(r"-S(\d+)$", x) else 9999)
+    unique_ids = sorted(set(ids), key=lambda x: int(m.group(1)) if (m := re.search(r"-S(\d+)$", x)) else 9999)
     if not unique_ids:
         return False, "No suggestion rows found in table", []
     if len(unique_ids) > max_suggestions:
         return False, f"Too many suggestions: {len(unique_ids)} > {max_suggestions}", unique_ids
 
-    return True, "ok", unique_ids
+    # Validate feature suggestions table (F-prefix IDs) if present
+    feature_ids: List[str] = []
+    feat_idx = None
+    for idx, ln in enumerate(lines):
+        if "Feature Requirements Suggestions" in ln:
+            feat_idx = idx
+            break
+    if feat_idx is not None:
+        for ln in lines[feat_idx + 1:]:
+            if not ln.strip().startswith("|"):
+                if feature_ids:  # past the table
+                    break
+                continue
+            cells = _split_cells(ln)
+            if len(cells) < 7 or cells[0] == "ID" or cells[0].startswith("-"):
+                continue
+            fid = cells[0]
+            if re.fullmatch(rf"R{round_number}-F\d+", fid):
+                feature_ids.append(fid)
+
+    all_ids = unique_ids + feature_ids
+    return True, "ok", all_ids
 
 
 @dataclass
@@ -1138,6 +1257,17 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         "List of file or directory paths to include as reference material in the reviewer prompt. "
                         "Directories are scanned recursively for .md files. "
                         "Use for lessons learned, design docs, or prior decisions."
+                    ),
+                ),
+                WorkflowInput(
+                    name="feature_requirements",
+                    type="array",
+                    required=False,
+                    description=(
+                        "List of file or directory paths containing feature requirements "
+                        "that the plan under review is designed to implement. "
+                        "Reviewers will evaluate plan-to-requirements traceability and coverage gaps. "
+                        "Directories are scanned recursively for .md files."
                     ),
                 ),
                 WorkflowInput(
@@ -1275,6 +1405,20 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
             if init_if_missing:
                 doc_text = _ensure_appendix_exists(doc_text)
 
+            # Resolve feature doc path for dual-document mode
+            feature_doc_path: Optional[Path] = None
+            feature_doc_text: Optional[str] = None
+            has_feature_doc = False
+            feature_requirements_list = config.get("feature_requirements") or []
+            if feature_requirements_list:
+                feature_doc_path = _get_feature_doc_path(feature_requirements_list)
+                if feature_doc_path and feature_doc_path.exists():
+                    feature_doc_text = feature_doc_path.read_text(encoding="utf-8")
+                    if init_if_missing:
+                        feature_doc_text = _ensure_appendix_exists(feature_doc_text)
+                        atomic_write(feature_doc_path, feature_doc_text, mode="w", backup=True)
+                    has_feature_doc = True
+
             applied_ids = _extract_table_ids(doc_text, "### Appendix A: Applied Suggestions")
             rejected_ids = _extract_table_ids(doc_text, "### Appendix B: Rejected Suggestions (with Rationale)")
             next_round = _max_review_round(doc_text) + 1
@@ -1284,11 +1428,12 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
             template_override = config.get("review_template")
 
+            max_context_chars = int(config.get("max_context_chars", 200_000))
+
             # Load context files (lessons learned, design docs, prior decisions)
             context_files = config.get("context_files") or []
             context_content = ""
             if context_files:
-                max_context_chars = int(config.get("max_context_chars", 200_000))
                 parts: List[str] = []
                 for cf in context_files:
                     p = Path(str(cf)).expanduser().resolve()
@@ -1309,6 +1454,31 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 context_content = "\n\n".join(parts)
                 if len(context_content) > max_context_chars:
                     context_content = context_content[:max_context_chars] + "\n\n[... truncated ...]"
+
+            # Load feature requirements (documents the plan is designed to implement)
+            feature_requirements = config.get("feature_requirements") or []
+            requirements_content = ""
+            if feature_requirements:
+                req_parts: List[str] = []
+                for cf in feature_requirements:
+                    p = Path(str(cf)).expanduser().resolve()
+                    if p.is_file():
+                        try:
+                            req_parts.append(f"### {p.name}\n\n{p.read_text(encoding='utf-8')}")
+                        except Exception:
+                            pass
+                    elif p.is_dir():
+                        for md_file in sorted(p.glob("**/*.md")):
+                            try:
+                                req_parts.append(
+                                    f"### {md_file.relative_to(p)}\n\n"
+                                    f"{md_file.read_text(encoding='utf-8')}"
+                                )
+                            except Exception:
+                                pass
+                requirements_content = "\n\n".join(req_parts)
+                if len(requirements_content) > max_context_chars:
+                    requirements_content = requirements_content[:max_context_chars] + "\n\n[... truncated ...]"
 
             # Compute substantially addressed areas and per-area coverage from existing Appendix A
             sa_threshold = int(config.get("substantially_addressed_threshold", 3))
@@ -1332,8 +1502,10 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     scope=scope,
                     template_override=template_override,
                     context_content=context_content,
+                    requirements_content=requirements_content,
                     substantially_addressed_areas=substantially_addressed,
                     area_coverage=coverage,
+                    has_feature_requirements=has_feature_doc,
                 )
 
                 # Execute generation with graceful error handling, Gemini SAFETY
@@ -1370,6 +1542,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         scope=scope,
                         template_override=template_override,
                         context_content="",  # drop context files
+                        requirements_content="",  # drop on safety retry
                     )
 
                     try:
@@ -1592,6 +1765,15 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 doc_text = doc_text.rstrip() + "\n\n" + response_text.strip() + "\n"
                 atomic_write(doc_path, doc_text, mode="w", backup=True)
 
+                # Dual-document: extract feature suggestions and append to feature doc
+                if has_feature_doc and feature_doc_text is not None:
+                    feature_snippet = _extract_feature_snippet(
+                        response_text, round_number, reviewer_label, scope,
+                    )
+                    if feature_snippet:
+                        feature_doc_text = feature_doc_text.rstrip() + "\n\n" + feature_snippet + "\n"
+                        atomic_write(feature_doc_path, feature_doc_text, mode="w", backup=True)
+
                 # Update memory from current doc for next round
                 applied_ids = _extract_table_ids(doc_text, "### Appendix A: Applied Suggestions")
                 rejected_ids = _extract_table_ids(doc_text, "### Appendix B: Rejected Suggestions (with Rationale)")
@@ -1654,6 +1836,9 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 "untriaged_remaining": [],
                 "substantially_addressed_areas": [],
                 "areas_needing_review": [],
+                "feature_accepted": 0,
+                "feature_rejected": 0,
+                "feature_document_path": str(feature_doc_path) if feature_doc_path else None,
             }
 
             if enable_triage and round_records and resolved_agents:
@@ -1671,12 +1856,14 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     untriaged_block = _build_untriaged_block(untriaged)
                     reviewer_sources = _extract_reviewer_sources(doc_text)
 
+                    has_feature_suggestions = any("-F" in s["id"] for s in untriaged)
                     triage_prompt = _build_triage_prompt(
                         document_without_appendix=_strip_appendix_for_prompt(doc_text),
                         applied_ids=applied_ids,
                         rejected_ids=rejected_ids,
                         untriaged_block=untriaged_block,
                         endorsement_counts=endorsements,
+                        has_feature_suggestions=has_feature_suggestions,
                     )
 
                     # Execute triage with same error handling pattern
@@ -1774,10 +1961,23 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 _logger.warning("Triage retry call failed: %s", retry_err)
 
                         if triage_decisions:
-                            doc_text = _apply_triage_decisions(doc_text, triage_decisions, reviewer_sources)
+                            # Split decisions by target document
+                            plan_decisions = [d for d in triage_decisions if "-S" in d["id"]]
+                            feature_decisions = [d for d in triage_decisions if "-F" in d["id"]]
+
+                            # Apply plan decisions to plan doc
+                            if plan_decisions:
+                                doc_text = _apply_triage_decisions(doc_text, plan_decisions, reviewer_sources)
+
+                            # Apply feature decisions to feature doc
+                            if feature_decisions and has_feature_doc and feature_doc_text is not None:
+                                feature_doc_text = _apply_triage_decisions(
+                                    feature_doc_text, feature_decisions, reviewer_sources,
+                                )
+                                atomic_write(feature_doc_path, feature_doc_text, mode="w", backup=True)
 
                             # Compute substantially addressed areas
-                            applied_with_area = [(d["id"], d["area"]) for d in triage_decisions if d["decision"] == "ACCEPT"]
+                            applied_with_area = [(d["id"], d["area"]) for d in plan_decisions if d["decision"] == "ACCEPT"]
                             # Also include previously applied suggestions
                             prev_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold)
                             # Merge with new accepts
@@ -1808,6 +2008,13 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             triage_info["accepted"] = accepted_count
                             triage_info["rejected"] = rejected_count
                             triage_info["untriaged_remaining"] = triage_missing
+
+                            # Update feature doc triage info
+                            if feature_decisions:
+                                feat_accepted = sum(1 for d in feature_decisions if d["decision"] == "ACCEPT")
+                                feat_rejected = sum(1 for d in feature_decisions if d["decision"] == "REJECT")
+                                triage_info["feature_accepted"] = feat_accepted
+                                triage_info["feature_rejected"] = feat_rejected
 
                         step_results.append(StepResult(
                             step_name="triage",
@@ -1868,6 +2075,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
             success=success,
             output={
                 "document_path": str(doc_path),
+                "feature_document_path": str(feature_doc_path) if feature_doc_path else None,
                 "rounds_appended": len(round_records),
                 "round_numbers": [r.round_number for r in round_records],
                 "state_path": str(state_path),
