@@ -976,6 +976,24 @@ class TestPhaseHandler(AbstractPhaseHandler):
             return ""
         return module
 
+    @staticmethod
+    def _truncate_output(text: str, limit: int = 4000) -> str:
+        """Truncate output keeping both head and tail for context.
+
+        When *text* exceeds *limit* characters the middle is replaced with
+        a marker showing how many characters were elided.  This preserves
+        the first lines (often file paths / summary) **and** the last lines
+        (often the actual error message) instead of discarding the head.
+        """
+        if len(text) <= limit:
+            return text
+        half = limit // 2
+        return (
+            text[:half]
+            + f"\n\n... [{len(text) - limit} chars truncated] ...\n\n"
+            + text[-half:]
+        )
+
     def _run_validator(
         self,
         command: list[str],
@@ -1007,8 +1025,8 @@ class TestPhaseHandler(AbstractPhaseHandler):
             result = {
                 "passed": passed,
                 "returncode": proc.returncode,
-                "stdout": proc.stdout[-2000:] if proc.stdout else "",
-                "stderr": proc.stderr[-2000:] if proc.stderr else "",
+                "stdout": self._truncate_output(proc.stdout) if proc.stdout else "",
+                "stderr": self._truncate_output(proc.stderr) if proc.stderr else "",
                 "timed_out": False,
             }
             if not passed:
@@ -1191,6 +1209,11 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "status": "failed",
                     "passed": False,
                     "validators_run": entry.get("validators_run", 0),
+                    "failures": [
+                        r.get("validator")
+                        for r in entry.get("results", [])
+                        if not r.get("passed", True)
+                    ],
                 }
             elif entry.get("status") == "skipped_no_generation":
                 per_task[task_id] = {
@@ -1330,7 +1353,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             f"- {c}" for c in task.prompt_constraints
         ) or "None specified"
 
-        test_str = json.dumps(test_results, indent=2, default=str) if test_results else "No tests run"
+        test_str = json.dumps(test_results, indent=2, default=str) if test_results else "No test results available for this task"
 
         max_code = self.config.review_max_code_chars
         code_for_prompt = generated_code[:max_code]
@@ -1746,6 +1769,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             test_results_ctx.get("per_task", {}) or {}
         )
         if not test_results_map:
+            logger.debug("FINALIZE: rebuilding test_results_map from test_plan entries")
             for entry in test_results_ctx.get("test_plan", []):
                 if not isinstance(entry, dict):
                     continue
@@ -1758,12 +1782,25 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                     else False if status == "failed"
                     else None
                 )
-                test_results_map[task_id] = {"status": status, "passed": passed}
+                validators_run = entry.get("validators_run", 0)
+                results = entry.get("results", [])
+                failures = [
+                    r.get("validator", "unknown")
+                    for r in results
+                    if isinstance(r, dict) and not r.get("passed", True)
+                ]
+                test_results_map[task_id] = {
+                    "status": status,
+                    "passed": passed,
+                    "validators_run": validators_run,
+                    "failures": failures,
+                }
 
         review_results_map: dict[str, Any] = dict(
             review_results_ctx.get("per_task", {}) or {}
         )
         if not review_results_map:
+            logger.debug("FINALIZE: rebuilding review_results_map from review_items entries")
             for entry in review_results_ctx.get("review_items", []):
                 if not isinstance(entry, dict):
                     continue

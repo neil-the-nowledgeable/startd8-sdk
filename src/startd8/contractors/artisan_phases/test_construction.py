@@ -1376,6 +1376,11 @@ class LLMTestGenerator:
                 )
                 if preamble:
                     mod_code = preamble + "\n\n" + mod_code
+                if not mod_code.strip():
+                    logger.warning(
+                        "Skipping empty module: %s", mod_path
+                    )
+                    continue
                 basename = mod_path.split(".")[-1]
                 filename = f"test_{basename}.py"
                 modules.append(
@@ -1950,8 +1955,16 @@ class TestConstructionPhase:
                     f"LLM generation failed (falling back to templates): "
                     f"{gen_exc}"
                 )
+                # Preserve partial costs from agent resolution / LLM call
+                partial_cost = llm_gen.total_cost_usd
+                partial_input = llm_gen.total_input_tokens
+                partial_output = llm_gen.total_output_tokens
                 # Fall back to synchronous template path
-                return await asyncio.to_thread(self.execute)
+                template_result = await asyncio.to_thread(self.execute)
+                template_result.total_cost_usd += partial_cost
+                template_result.total_input_tokens += partial_input
+                template_result.total_output_tokens += partial_output
+                return template_result
 
             result.test_modules = test_modules
 

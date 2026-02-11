@@ -9,12 +9,15 @@ Covers:
 - Reading generated files
 - Cost aggregation
 - _parse_review_response edge cases
+- File I/O error handling (missing, unreadable, binary)
 """
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -291,6 +294,104 @@ class TestExecute:
         assert result["output"]["total_cost"] == pytest.approx(0.03)
         assert result["output"]["total_passed"] == 1
         assert result["output"]["total_failed"] == 1
+
+    def test_execute_handles_missing_generated_file(self, tmp_path):
+        """generated_files contains a Path that doesn't exist on disk.
+
+        The handler should skip the missing file silently.  If ALL files
+        are missing, the task is marked ``skipped_no_code``.
+        """
+        nonexistent = tmp_path / "does_not_exist.py"
+        assert not nonexistent.exists()
+
+        gen_result = GenerationResult(
+            success=True,
+            generated_files=[nonexistent],
+        )
+
+        handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
+        handler._review_agent = _make_mock_agent(
+            _make_review_response(score=90, verdict="PASS"),
+        )
+
+        tasks = [_make_seed_task(task_id="T-MISS")]
+        ctx = _build_context(tasks, generation_results={"T-MISS": gen_result})
+
+        result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
+
+        items = result["output"]["review_items"]
+        assert len(items) == 1
+        # No readable code => skipped_no_code
+        assert items[0]["review_status"] == "skipped_no_code"
+        # Agent should NOT have been called
+        handler._review_agent.generate.assert_not_called()
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="chmod not reliable on Windows")
+    def test_execute_handles_unreadable_file(self, tmp_path):
+        """File exists but is not readable (permission denied).
+
+        The handler should log a warning and continue.  If this is the
+        only generated file the task is marked ``skipped_no_code``.
+        """
+        unreadable = _write_gen_file(tmp_path, "secret.py", "x = 42")
+        os.chmod(unreadable, 0o000)
+
+        gen_result = GenerationResult(
+            success=True,
+            generated_files=[unreadable],
+        )
+
+        handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
+        handler._review_agent = _make_mock_agent(
+            _make_review_response(score=90, verdict="PASS"),
+        )
+
+        tasks = [_make_seed_task(task_id="T-PERM")]
+        ctx = _build_context(tasks, generation_results={"T-PERM": gen_result})
+
+        try:
+            result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
+
+            items = result["output"]["review_items"]
+            assert len(items) == 1
+            # File unreadable => no code => skipped
+            assert items[0]["review_status"] == "skipped_no_code"
+            handler._review_agent.generate.assert_not_called()
+        finally:
+            # Restore permissions so pytest can clean up tmp_path
+            os.chmod(unreadable, 0o644)
+
+    def test_execute_handles_binary_file_encoding_error(self, tmp_path):
+        """File contains invalid UTF-8 bytes.
+
+        The handler catches ``UnicodeDecodeError`` and skips the file
+        gracefully.  If this is the only generated file the task is
+        marked ``skipped_no_code``.
+        """
+        binary_file = tmp_path / "binary.py"
+        # Write bytes that are not valid UTF-8
+        binary_file.write_bytes(b"\x80\x81\x82\xff\xfe\xfd")
+
+        gen_result = GenerationResult(
+            success=True,
+            generated_files=[binary_file],
+        )
+
+        handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
+        handler._review_agent = _make_mock_agent(
+            _make_review_response(score=90, verdict="PASS"),
+        )
+
+        tasks = [_make_seed_task(task_id="T-BIN")]
+        ctx = _build_context(tasks, generation_results={"T-BIN": gen_result})
+
+        result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
+
+        items = result["output"]["review_items"]
+        assert len(items) == 1
+        # Decode error => no code => skipped
+        assert items[0]["review_status"] == "skipped_no_code"
+        handler._review_agent.generate.assert_not_called()
 
 
 class TestParseReviewResponse:
