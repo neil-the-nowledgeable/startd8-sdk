@@ -109,6 +109,9 @@ class HandlerConfig:
         max_iterations: Maximum draft → review iterations per task.
         pass_threshold: Minimum review score (0-100) to pass.
         max_tokens: Override max_tokens for agent creation (None = provider default).
+        design_max_tokens: Override max_output_tokens for design phase LLM calls.
+            When set, overrides per-task design_calibration max_output_tokens.
+            Use to avoid truncation for complex design docs (e.g., 8192).
         fail_on_truncation: Fail workflow on detected truncation.
         check_truncation: Enable heuristic truncation detection.
         strict_truncation: Use strict detection threshold.
@@ -125,6 +128,7 @@ class HandlerConfig:
     max_iterations: int = 3
     pass_threshold: int = 80
     max_tokens: Optional[int] = None
+    design_max_tokens: Optional[int] = None
     fail_on_truncation: bool = True
     check_truncation: bool = True
     strict_truncation: bool = False
@@ -675,6 +679,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         architectural_context: dict[str, Any] | None = None,
         prior_design_summaries: list[str] | None = None,
         calibration: dict[str, Any] | None = None,
+        design_max_tokens_override: Optional[int] = None,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -684,6 +689,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             architectural_context: Shared context from manifest + cross-feature analysis.
             prior_design_summaries: Summaries of earlier design docs for cross-task context.
             calibration: Per-task calibration dict (depth_tier, sections, max_output_tokens).
+            design_max_tokens_override: Override max_output_tokens for all design tasks
+                (from HandlerConfig.design_max_tokens). Takes precedence over calibration.
         """
         from startd8.contractors.artisan_phases.design_documentation import (
             FeatureContext,
@@ -762,7 +769,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             additional_context["design_doc_sections"] = task.design_doc_sections
 
         sections = cal.get("sections")
-        max_output_tokens = cal.get("max_output_tokens")
+        max_output_tokens = (
+            design_max_tokens_override
+            if design_max_tokens_override is not None
+            else cal.get("max_output_tokens")
+        )
 
         return FeatureContext(
             feature_name=task.title,
@@ -895,6 +906,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 architectural_context=arch_context,
                 prior_design_summaries=prior_summaries,
                 calibration=task_calibration,
+                design_max_tokens_override=self.config.design_max_tokens,
             )
 
             # Snapshot cost before this task

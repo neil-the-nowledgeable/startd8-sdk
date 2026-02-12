@@ -459,17 +459,29 @@ _MERGED_FEEDBACK_LIMIT = 5
 
 
 def parse_design_document(
-    raw_text: str, feature_name: str, iteration: int
+    raw_text: str,
+    feature_name: str,
+    iteration: int,
+    *,
+    expected_sections: list[str] | None = None,
 ) -> DesignDocument:
     """Parse a raw design document string into a ``DesignDocument``.
 
     Extracts sections based on markdown ``## <Section Name>`` headers.
-    Missing sections are filled with a placeholder and a warning is logged.
+    Missing sections are filled with a placeholder. A warning is logged only
+    for sections in ``expected_sections`` (or all DesignSection values when
+    ``expected_sections`` is None).
+
+    When the context seed provides a calibrated section list (e.g., reduced
+    sections for a simpler task), pass it as ``expected_sections`` to avoid
+    noisy warnings for intentionally omitted sections.
 
     Args:
         raw_text: The raw design document text from the LLM.
         feature_name: Name of the feature.
         iteration: Current iteration number.
+        expected_sections: Section names to validate and warn about if missing.
+            None = validate all DesignSection values (legacy behavior).
 
     Returns:
         A ``DesignDocument`` instance with all sections populated.
@@ -477,9 +489,20 @@ def parse_design_document(
     sections: dict[DesignSection, str] = {}
     placeholder = "[Section not generated — requires manual input]"
 
-    for section in DesignSection:
-        # Match section header (case-insensitive), capture until next header or EOF
-        pattern = rf"##\s*{re.escape(section.value)}\s*\n(.*?)(?=##\s|\Z)"
+    # Determine which sections to validate (and warn on missing)
+    if expected_sections is not None:
+        section_names_to_check = expected_sections
+    else:
+        section_names_to_check = [s.value for s in DesignSection]
+
+    # Build name -> DesignSection mapping for lookup
+    name_to_section = {s.value: s for s in DesignSection}
+
+    for section_name in section_names_to_check:
+        section = name_to_section.get(section_name)
+        if section is None:
+            continue  # Unknown section name, skip
+        pattern = rf"##\s*{re.escape(section_name)}\s*\n(.*?)(?=##\s|\Z)"
         match = re.search(pattern, raw_text, re.IGNORECASE | re.DOTALL)
 
         if match and match.group(1).strip():
@@ -488,8 +511,17 @@ def parse_design_document(
             sections[section] = placeholder
             logger.warning(
                 "Design document missing section '%s' in iteration %d",
-                section.value,
+                section_name,
                 iteration,
+            )
+
+    # Fill any remaining DesignSection values not yet populated (no warning)
+    for section in DesignSection:
+        if section not in sections:
+            pattern = rf"##\s*{re.escape(section.value)}\s*\n(.*?)(?=##\s|\Z)"
+            match = re.search(pattern, raw_text, re.IGNORECASE | re.DOTALL)
+            sections[section] = (
+                match.group(1).strip() if match and match.group(1).strip() else placeholder
             )
 
     return DesignDocument(
@@ -942,7 +974,12 @@ class DesignDocumentationPhase:
             system_prompt=system_prompt,
             max_tokens=context.max_output_tokens,
         )
-        return parse_design_document(raw_text, context.feature_name, iteration)
+        return parse_design_document(
+            raw_text,
+            context.feature_name,
+            iteration,
+            expected_sections=context.sections,
+        )
 
     # ------------------------------------------------------------------
     # Review
@@ -1167,6 +1204,8 @@ class DesignDocumentationPhase:
         arbiter: ReviewVerdict,
         guidance: str,
         iteration: int,
+        *,
+        expected_sections: list[str] | None = None,
     ) -> DesignDocument:
         """Revise a design document incorporating review feedback.
 
@@ -1180,6 +1219,7 @@ class DesignDocumentationPhase:
             arbiter: The Arbiter's verdict.
             guidance: Additional guidance from the resolution decision.
             iteration: The new iteration number.
+            expected_sections: Section names to validate (same as parse_design_document).
 
         Returns:
             A revised ``DesignDocument``.
@@ -1224,7 +1264,12 @@ class DesignDocumentationPhase:
             prompt=prompt,
             system_prompt=REVISION_SYSTEM_PROMPT,
         )
-        return parse_design_document(raw_text, design.feature_name, iteration)
+        return parse_design_document(
+            raw_text,
+            design.feature_name,
+            iteration,
+            expected_sections=expected_sections,
+        )
 
     # ------------------------------------------------------------------
     # Main orchestration
@@ -1341,6 +1386,7 @@ class DesignDocumentationPhase:
                             arbiter_verdict,
                             resolution_decision.guidance,
                             iteration + 1,
+                            expected_sections=context.sections,
                         )
                         actual_iterations = iteration + 1
 

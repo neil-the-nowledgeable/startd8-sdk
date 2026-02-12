@@ -168,11 +168,11 @@ class TestEventTypes:
 
 
 class TestSpans:
-    """5 span patterns exist."""
+    """9 span patterns exist (5 base + 4 artisan)."""
 
     def test_all_spans_present(self):
         manifest = generate_manifest()
-        assert len(manifest.spans) == 5
+        assert len(manifest.spans) == 9
 
     def test_span_patterns(self):
         manifest = generate_manifest()
@@ -183,6 +183,10 @@ class TestSpans:
             "pipeline.{name}",
             "pipeline.{name}.step.{step_name}",
             "{caller_defined_name}",
+            "artisan.workflow.{workflow_id}",
+            "artisan.workflow.{workflow_id}.phase.{phase}",
+            "PhaseRunner.run",
+            "phase.{phase_type}.attempt.{attempt_number}",
         }
         assert patterns == expected
 

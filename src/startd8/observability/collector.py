@@ -28,6 +28,8 @@ _INSTRUMENTED_MODULES = [
     ("startd8.workflows.base", "src/startd8/workflows/base.py"),
     ("startd8.orchestration", "src/startd8/orchestration.py"),
     ("startd8.contractors.adapters.contextcore", "src/startd8/contractors/adapters/contextcore.py"),
+    ("startd8.contractors.artisan_contractor", "src/startd8/contractors/artisan_contractor.py"),
+    ("startd8.contractors.artisan_phases.runner", "src/startd8/contractors/artisan_phases/runner.py"),
 ]
 
 # Event type → category mapping (derived from EventType enum grouping).

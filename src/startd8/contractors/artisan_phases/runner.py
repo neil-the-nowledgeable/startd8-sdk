@@ -43,6 +43,24 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, Sequence, Type, runtime_checkable
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "spans": [
+        {
+            "name_pattern": "PhaseRunner.run",
+            "kind": "INTERNAL",
+            "attributes": ["phase.count", "phase.total_cost"],
+            "events": [],
+        },
+        {
+            "name_pattern": "phase.{phase_type}.attempt.{attempt_number}",
+            "kind": "INTERNAL",
+            "attributes": ["phase.type", "attempt.number", "attempt.status"],
+            "events": [],
+        },
+    ],
+}
+
 try:
     from opentelemetry import trace
     from opentelemetry.trace import StatusCode, Tracer

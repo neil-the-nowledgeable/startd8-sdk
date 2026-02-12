@@ -70,6 +70,24 @@ __all__ = [
     "ArtisanContractorWorkflow",
 ]
 
+# Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
+_OTEL_DESCRIPTORS = {
+    "spans": [
+        {
+            "name_pattern": "artisan.workflow.{workflow_id}",
+            "kind": "INTERNAL",
+            "attributes": ["workflow.id", "workflow.phase_count", "workflow.cost_budget", "workflow.dry_run"],
+            "events": [],
+        },
+        {
+            "name_pattern": "artisan.workflow.{workflow_id}.phase.{phase}",
+            "kind": "INTERNAL",
+            "attributes": ["phase.name", "phase.status", "phase.duration_ms", "phase.cost"],
+            "events": [],
+        },
+    ],
+}
+
 # OTel imports with graceful fallback
 try:
     from opentelemetry import trace

@@ -914,20 +914,20 @@ class PlanIngestionWorkflow(WorkflowBase):
         if hasattr(manifest, "strategy") and manifest.strategy:
             objectives = getattr(manifest.strategy, "objectives", [])
             if objectives:
-                ctx["objectives"] = [
-                    {
-                        # v2 ObjectiveV2 has .description, v1 has .name
-                        "name": getattr(obj, "description", None)
-                        or getattr(obj, "name", str(obj)),
-                        # Convert KeyResult models to dicts for JSON serialization
-                        "key_results": [
-                            kr.model_dump() if hasattr(kr, "model_dump") else kr.dict()
-                            if hasattr(kr, "dict") else kr
-                            for kr in getattr(obj, "key_results", [])
-                        ],
-                    }
-                    for obj in objectives
-                ]
+                ctx["objectives"] = []
+                for obj in objectives:
+                    # v2 ObjectiveV2 has .description, v1 has .name
+                    desc = getattr(obj, "description", None)
+                    name_val = getattr(obj, "name", None)
+                    label = desc if isinstance(desc, str) else (name_val if isinstance(name_val, str) else str(obj))
+                    # Convert KeyResult models to dicts for JSON serialization
+                    key_results = getattr(obj, "key_results", [])
+                    kr_list = [
+                        kr.model_dump() if hasattr(kr, "model_dump") else kr.dict()
+                        if hasattr(kr, "dict") else kr
+                        for kr in key_results
+                    ]
+                    ctx["objectives"].append({"name": label, "key_results": kr_list})
 
         # Guidance → constraints, preferences, focus
         guidance = getattr(manifest, "guidance", None)
@@ -946,12 +946,15 @@ class PlanIngestionWorkflow(WorkflowBase):
                 ]
             preferences = getattr(guidance, "preferences", [])
             if preferences:
-                ctx["preferences"] = [
+                prefs = []
+                for p in preferences:
                     # v2 Preference has .description, v1 has .preference
-                    getattr(p, "description", None)
-                    or getattr(p, "preference", str(p))
-                    for p in preferences
-                ]
+                    desc = getattr(p, "description", None)
+                    pref_val = getattr(p, "preference", None)
+                    prefs.append(
+                        desc if isinstance(desc, str) else (pref_val if isinstance(pref_val, str) else str(p))
+                    )
+                ctx["preferences"] = prefs
             focus = getattr(guidance, "focus", None)
             if focus:
                 areas = getattr(focus, "areas", [])
