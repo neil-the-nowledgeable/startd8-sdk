@@ -11,10 +11,11 @@
 
 manifest_id: startd8.workflow.capabilities
 name: StartD8 Workflow System Capabilities
-version: "2.5.0"
+version: "2.6.0"
 description: |
   Capabilities for StartD8 SDK workflow system.
   Protocol-based multi-agent orchestration with cost tracking and observability.
+  v2.6.0: Dual-document architectural review, ContextCore task tracking emitter, design quality context enrichment.
   v2.5.0: Added domain preflight integration into PrimeContractor for domain-aware constraints and post-validation.
   v2.4.0: Added artisan contractor orchestrator and design handoff for two-half split execution.
   v2.3.0: Added architectural_review_log builtin workflow with automated triage + two-tier prompt steering.
@@ -455,9 +456,9 @@ capabilities:
   - capability_id: startd8.workflow.builtin.plan_ingestion
     category: action
     maturity: beta
-    summary: "Parse generic plans → assess complexity → route to Prime/Artisan → refine via review"
+    summary: "Parse generic plans → assess complexity → route to Prime/Artisan → refine → emit with optional ContextCore task tracking"
     audiences: [workflow_user, ai_agent, workflow_developer]
-    user_benefit: "Automate plan-to-SDK-format conversion with LLM complexity scoring"
+    user_benefit: "Automate plan-to-SDK-format conversion with LLM complexity scoring and ContextCore-ready task artifacts"
     delivers_benefit: workflow.execution.validated_run
     description:
       developer: |
@@ -465,27 +466,42 @@ capabilities:
         LLM extracts features/deps, scores 7 complexity dimensions 0-100, routes to Prime (≤40)
         or Artisan (>40). Transforms to task YAML or plan markdown. Refines via N rounds of
         ArchitecturalReviewLogWorkflow. Emits review-config.json. Cost tracking with warn/max limits.
+        v2.6.0: Optional ContextCore task tracking artifact generation — emits epic/story/task
+        state files, NDJSON event logs (task.created zero-point), and tracking manifests via
+        emit_task_tracking_artifacts(). Opt-in via generate_task_tracking=True config.
+        Design quality enrichment: _derive_architectural_context() extracts manifest goals,
+        constraints, shared modules, dependency clusters; _derive_design_calibration() assigns
+        per-task depth tiers (brief ≤50 LOC, standard 51-150, comprehensive >150).
       user: |
         Convert any plan.md into SDK-native format:
         startd8 workflow run plan-ingestion --plan_path plan.md --output_dir ./out
+        With task tracking: --generate_task_tracking --project_id my-project
       agent: |
         workflow_id: "plan-ingestion". Config: {plan_path, output_dir, review_rounds, force_route,
-        complexity_threshold, assessor_agent, transformer_agent}. Returns PlanIngestionResult.
+        complexity_threshold, assessor_agent, transformer_agent, generate_task_tracking, project_id,
+        sprint_id, install_to_contextcore, emit_ndjson_events}. Returns PlanIngestionResult.
+        result.output["task_tracking"] contains emitted artifact paths when enabled.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/plan_ingestion_workflow.py
-        description: "PlanIngestionWorkflow class with 5-phase pipeline"
+        description: "PlanIngestionWorkflow with 5-phase pipeline + task tracking + design quality enrichment"
       - type: code
         ref: src/startd8/workflows/builtin/plan_ingestion_models.py
-        description: "Data models: ParsedPlan, ComplexityScore, IngestionState, PlanIngestionResult"
+        description: "Data models: ParsedPlan, ComplexityScore, IngestionState, PlanIngestionResult, TaskTrackingConfig"
+      - type: code
+        ref: src/startd8/workflows/builtin/task_tracking_emitter.py
+        description: "emit_task_tracking_artifacts(): epic/story/task state files, NDJSON events, tracking manifest"
       - type: test
         ref: tests/unit/test_plan_ingestion_workflow.py
-        description: "55 unit tests covering all phases, routing, cost limits, context_files"
+        description: "55+ unit tests covering all phases, routing, cost limits, context_files"
+      - type: test
+        ref: tests/unit/test_task_tracking_emitter.py
+        description: "Task tracking emitter tests: state files, NDJSON events, manifest generation"
 
   - capability_id: startd8.workflow.builtin.architectural_review_log
     category: action
     maturity: stable
-    summary: "Iterative multi-agent architectural review with append-only structured triage"
+    summary: "Iterative multi-agent architectural review with append-only structured triage and dual-document mode"
     audiences: [workflow_user, ai_agent, workflow_developer]
     user_benefit: "Automated multi-round design review with persistent acceptance/rejection tracking"
     delivers_benefit: workflow.execution.validated_run
@@ -495,20 +511,27 @@ capabilities:
         automated triage classifies as ACCEPT/REJECT into Appendix A/B, computes per-area
         coverage, and inserts "Areas Substantially Addressed" + "Areas Needing Further Review"
         sections. Two-tier prompt steering prioritizes uncovered areas with quantified gap data.
+        v2.6.0: Dual-document mode when feature_requirements points to a .md file — reviewers
+        produce Requirements Coverage mappings and split suggestions: S-prefix IDs for plan doc,
+        F-prefix IDs for feature doc. Triage routes to appropriate document appendices. Feature
+        doc auto-initialized with Appendix A/B/C structure if missing.
       user: |
         Run iterative architectural review with automated triage:
         startd8 workflow run architectural-review-log --document_path plan.md --reviewer_count 2
+        Dual-document mode (reviews plan against feature spec):
+        startd8 workflow run architectural-review-log --document_path plan.md --feature_requirements spec.md
       agent: |
         workflow_id: "architectural-review-log". Config: {document_path, reviewer_count,
         max_suggestions, scope, enable_triage, substantially_addressed_threshold, max_cost_usd,
-        warn_cost_usd, context_files, gemini_safety_settings}. Triage output in result.output["triage"].
+        warn_cost_usd, context_files, gemini_safety_settings, feature_requirements, quality_tier}.
+        Triage output in result.output["triage"]. Dual-doc: S-prefix → plan appendices, F-prefix → feature appendices.
     evidence:
       - type: code
         ref: src/startd8/workflows/builtin/architectural_review_log_workflow.py
-        description: "ArchitecturalReviewLogWorkflow with automated triage + two-tier prompt steering"
+        description: "ArchitecturalReviewLogWorkflow with automated triage, two-tier prompt steering, and dual-document mode"
       - type: test
         ref: tests/unit/test_architectural_review_triage.py
-        description: "64 unit tests covering triage helpers, area coverage, prompt priority, integration"
+        description: "87 unit tests covering triage helpers, area coverage, prompt priority, dual-document mode, integration"
       - type: test
         ref: tests/unit/test_gemini_safety_filter.py
         description: "29 tests for Gemini SAFETY retry, validation retry, code fence stripping"
@@ -516,9 +539,9 @@ capabilities:
   - capability_id: startd8.workflow.contractor.artisan_orchestrator
     category: action
     maturity: beta
-    summary: "7-phase artisan workflow orchestrator with cost budget, checkpoints, and OTel tracing"
+    summary: "7-phase artisan workflow orchestrator with cost budget, checkpoints, design quality context, and OTel tracing"
     audiences: [workflow_user, ai_agent, workflow_developer]
-    user_benefit: "Structured multi-phase code generation with explicit design review before implementation"
+    user_benefit: "Structured multi-phase code generation with design quality calibration and explicit review before implementation"
     delivers_benefit: workflow.execution.validated_run
     description:
       developer: |
@@ -526,6 +549,11 @@ capabilities:
         TEST → REVIEW → FINALIZE). Phase handlers registered via ContextSeedHandlers.create_all().
         3-tier cost model: Haiku drafter, Sonnet validator, Opus reviewer. Supports phase subsets,
         cost budget enforcement, per-phase and total timeouts, checkpoint persistence, OTel tracing.
+        v2.6.0: DesignPhaseHandler enriched with architectural context (manifest goals, constraints,
+        shared modules, dependency clusters, import conventions, domain concepts) and per-task
+        design calibration (depth tiers: brief ≤50 LOC / standard 51-150 / comprehensive >150
+        with section count and max_output_tokens scaling). Context flows via seed architectural_context
+        and design_calibration keys.
       user: |
         Run full artisan workflow:
         python3 scripts/run_artisan_workflow.py --seed seed.json --output-dir out/ --cost-budget 10
@@ -535,16 +563,23 @@ capabilities:
         ArtisanContractorWorkflow(config=WorkflowConfig(...), phases=[WorkflowPhase.PLAN, ...]).
         register_handler(phase, handler). execute(context={"enriched_seed_path": "..."}). Returns
         WorkflowResult with per-phase cost, status, duration. Phases configurable via HandlerConfig.
+        Context keys: architectural_context (manifest-derived), design_calibration (per-task depth tiers).
     evidence:
       - type: code
         ref: src/startd8/contractors/artisan_contractor.py
         description: "ArtisanContractorWorkflow orchestrator with checkpoints, cost budget, OTel"
       - type: code
         ref: src/startd8/contractors/context_seed_handlers.py
-        description: "7 phase handler implementations with ContextSeedHandlers.create_all() factory"
+        description: "7 phase handlers with design quality context: architectural_context + design_calibration"
       - type: test
         ref: tests/unit/contractors/test_design_phase_handler.py
         description: "22 tests covering phases, orchestrator integration, dry-run"
+      - type: test
+        ref: tests/unit/contractors/test_design_quality_context.py
+        description: "Design quality context tests: architectural context extraction, calibration tiers"
+      - type: test
+        ref: tests/unit/contractors/test_implement_auto_commit.py
+        description: "Implementation auto-commit tests"
       - type: doc
         ref: docs/ARTISAN_WORKFLOW_GUIDE.md
         description: "Comprehensive user guide: phases, scripts, configuration, API reference"
@@ -1329,13 +1364,13 @@ risk_flags:
 # ==============================================================================
 
 summary:
-  total_capabilities: 42
+  total_capabilities: 43
   by_maturity:
     stable: 25
-    beta: 6
+    beta: 7
     draft: 11
   by_phase:
-    delivered: 30  # stable + beta
+    delivered: 31  # stable + beta
     phase_1: 4     # auto_validate, search, assertions, async_audit
     phase_2: 5     # retry, mixed_steps, conditional, parallel, compose
     phase_3: 3     # dry_run, otel, visualize
@@ -1350,6 +1385,13 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "2.6.0"
+    date: "2026-02-12"
+    changes:
+      - "Updated startd8.workflow.builtin.architectural_review_log: dual-document mode with S-prefix/F-prefix split suggestion IDs and cross-document triage routing"
+      - "Updated startd8.workflow.builtin.plan_ingestion: ContextCore task tracking artifact generation (epic/story/task state files, NDJSON events, tracking manifest) via generate_task_tracking config"
+      - "Updated startd8.workflow.contractor.artisan_orchestrator: design quality context enrichment (architectural_context from manifest, per-task design_calibration with depth tiers)"
+      - "Evidence updates: +2 test files (test_design_quality_context.py, test_implement_auto_commit.py, test_task_tracking_emitter.py)"
   - version: "2.5.0"
     date: "2026-02-11"
     changes:

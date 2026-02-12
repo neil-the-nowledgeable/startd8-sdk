@@ -12,11 +12,12 @@
 # preserved during regeneration.
 
 manifest_id: startd8.observability
-version: "1.0.0"
+version: "1.1.0"
 description: |
   Observability surface manifest for the StartD8 SDK.
   Declares all metrics, spans, events, dashboard references, SLO templates,
   and alert templates emitted by the SDK's instrumented modules.
+  v1.1.0: Added 4 artisan contractor/phase runner span patterns.
 
 resource_attributes:
   - service.name
@@ -177,7 +178,7 @@ metrics:
       query: "rate(startd8_events_total[5m])"
 
 # ==============================================================================
-# SPANS (5 patterns)
+# SPANS (9 patterns)
 # ==============================================================================
 
 spans:
@@ -235,6 +236,39 @@ spans:
       - cost
       - response_time_ms
       - retry_count
+
+  - name_pattern: "artisan.workflow.{workflow_id}"
+    kind: INTERNAL
+    source_file: src/startd8/contractors/artisan_contractor.py
+    attributes:
+      - workflow.id
+      - workflow.phase_count
+      - workflow.cost_budget
+      - workflow.dry_run
+
+  - name_pattern: "artisan.workflow.{workflow_id}.phase.{phase}"
+    kind: INTERNAL
+    source_file: src/startd8/contractors/artisan_contractor.py
+    attributes:
+      - phase.name
+      - phase.status
+      - phase.duration_ms
+      - phase.cost
+
+  - name_pattern: "PhaseRunner.run"
+    kind: INTERNAL
+    source_file: src/startd8/contractors/artisan_phases/runner.py
+    attributes:
+      - phase.count
+      - phase.total_cost
+
+  - name_pattern: "phase.{phase_type}.attempt.{attempt_number}"
+    kind: INTERNAL
+    source_file: src/startd8/contractors/artisan_phases/runner.py
+    attributes:
+      - phase.type
+      - attempt.number
+      - attempt.status
 
   - name_pattern: "{caller_defined_name}"
     kind: INTERNAL

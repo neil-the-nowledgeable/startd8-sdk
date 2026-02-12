@@ -6,6 +6,8 @@ import pytest
 import tempfile
 from pathlib import Path
 
+pytest.importorskip("cryptography", reason="cryptography package required for encryption tests")
+
 from startd8.security import KeyEncryption, store_encrypted_keys, load_encrypted_keys
 from startd8.exceptions import ConfigurationError
 

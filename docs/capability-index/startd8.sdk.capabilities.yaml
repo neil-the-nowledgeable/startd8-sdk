@@ -1,0 +1,490 @@
+# StartD8 SDK Core Capabilities Manifest
+# Version: 1.0.0
+# Created: 2026-02-12
+#
+# PURPOSE: Capability index for SDK-level features outside the workflow system.
+# Covers agents, providers, utilities, resilience, observability, and developer tools.
+#
+# COMPLEMENT: startd8.workflow.capabilities.yaml (workflow-specific capabilities)
+#             startd8.observability.manifest.yaml (telemetry surface)
+
+manifest_id: startd8.sdk.capabilities
+name: StartD8 SDK Core Capabilities
+version: "1.0.0"
+description: |
+  Core capabilities of the StartD8 SDK covering multi-LLM agent management,
+  provider abstraction, code utilities, resilience, rate limiting, session
+  tracking, and developer tooling. These underpin the workflow system but are
+  independently valuable.
+
+owner: neilyashinsky
+repository: https://github.com/neilyashinsky/startd8-sdk
+
+labels:
+  domain: llm-orchestration
+  tier: sdk
+  audience: developer
+
+manifest_tokens: 400
+index_tokens: 4000
+
+# ==============================================================================
+# CAPABILITIES
+# ==============================================================================
+
+capabilities:
+
+  # ============================================================================
+  # AGENT LAYER — Agent creation, configuration, and invocation
+  # ============================================================================
+
+  - capability_id: startd8.agent.system_prompt
+    category: action
+    maturity: stable
+    summary: "Instance-level and per-call system prompt support across all 4 agent types and 5 providers"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        All agents (ClaudeAgent, GPT4Agent, GeminiAgent, MockAgent) accept system_prompt
+        in constructor (instance default) and per-call override in agenerate()/generate().
+        Per-call None preserves instance default; per-call string overrides it.
+        Provider mapping: Claude → separate `system` param, OpenAI → system message,
+        Gemini → system_instruction in GenerateContentConfig, Mock → stored for inspection.
+      agent: |
+        agent = resolve_agent_spec("anthropic:claude-sonnet-4-5-20250929", system_prompt="You are a reviewer.").
+        result = await agent.agenerate("Review this code", system_prompt="Be strict.").
+    triggers: ["system prompt", "system message", "instruction", "persona"]
+    evidence:
+      - type: code
+        ref: src/startd8/agents/claude.py
+        description: "ClaudeAgent system_prompt constructor + per-call override"
+      - type: code
+        ref: src/startd8/agents/openai.py
+        description: "GPT4Agent system_prompt as system message"
+      - type: code
+        ref: src/startd8/agents/gemini.py
+        description: "GeminiAgent system_prompt as system_instruction"
+      - type: code
+        ref: src/startd8/agents/mock.py
+        description: "MockAgent system_prompt storage for test inspection"
+      - type: test
+        ref: tests/unit/test_agents.py
+        description: "7 tests covering constructor default, per-call override, None preservation"
+    confidence: 0.95
+
+  - capability_id: startd8.agent.generate_result
+    category: action
+    maturity: stable
+    summary: "GenerateResult NamedTuple replacing bare tuples from agenerate() — backward-compatible"
+    audiences: [workflow_developer, sdk_architect]
+    description:
+      developer: |
+        GenerateResult(NamedTuple) with fields: text (str), time_ms (int), token_usage (TokenUsage).
+        IS a tuple subclass — existing `text, time_ms, usage = await agent.agenerate(prompt)` still
+        works. Named access preferred: result.text, result.token_usage. str(result) returns .text.
+        Returned by all 4 agent types. Defined in startd8.models.
+      agent: |
+        result = await agent.agenerate(prompt). result.text, result.time_ms, result.token_usage.
+        Backward-compatible: text, t, u = result still works.
+    triggers: ["generate result", "agenerate return", "named tuple"]
+    evidence:
+      - type: code
+        ref: src/startd8/models.py
+        description: "GenerateResult NamedTuple definition (lines 105-140)"
+      - type: code
+        ref: src/startd8/agents/base.py
+        description: "BaseAgent imports and returns GenerateResult"
+      - type: test
+        ref: tests/unit/test_agents.py
+        description: "13 tests for GenerateResult backward compatibility and named access"
+    confidence: 0.95
+
+  - capability_id: startd8.agent.resolution
+    category: action
+    maturity: stable
+    summary: "Resolve agent spec strings to BaseAgent instances with timeout/retry config forwarding"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        resolve_agent_spec(spec, timeout_config=, retry_config=, **config) parses provider:model
+        strings, legacy aliases, and bare model IDs. Discovers providers via ProviderRegistry,
+        validates config, creates agent. timeout_config (TimeoutConfig) and retry_config (RetryConfig)
+        are keyword-only params merged into **config for provider forwarding.
+        resolve_agents(specs) resolves a list. All 5 providers accept **config in create_agent().
+      agent: |
+        agent = resolve_agent_spec("anthropic:claude-sonnet-4-5-20250929",
+          timeout_config=TimeoutConfig(read=600.0), retry_config=RetryConfig(max_attempts=5)).
+    triggers: ["resolve agent", "agent spec", "create agent", "timeout config", "retry config"]
+    evidence:
+      - type: code
+        ref: src/startd8/utils/agent_resolution.py
+        description: "resolve_agent_spec() with timeout/retry forwarding"
+      - type: test
+        ref: tests/unit/test_agent_resolution.py
+        description: "16+ tests covering spec formats, timeout/retry forwarding, error cases"
+    confidence: 0.9
+
+  # ============================================================================
+  # PROVIDER LAYER — Multi-LLM provider abstraction
+  # ============================================================================
+
+  - capability_id: startd8.provider.registry
+    category: integration
+    maturity: stable
+    summary: "Dynamic provider discovery via entry points with 6 registered providers"
+    audiences: [workflow_developer, sdk_architect]
+    description:
+      developer: |
+        ProviderRegistry.discover() loads providers from pyproject.toml entry points.
+        6 providers: anthropic, openai, ollama, gemini, mistral, mock.
+        Each provider implements: validate_config(), create_agent(), list_models().
+        OpenAI-compatible providers (Mistral, Ollama) require zero agent-layer changes.
+      agent: |
+        ProviderRegistry.discover(). ProviderRegistry.get_provider("anthropic").
+        ProviderRegistry.list_providers() -> ["anthropic", "openai", "ollama", "gemini", "mistral", "mock"].
+    triggers: ["provider", "registry", "discover providers", "list models"]
+    evidence:
+      - type: code
+        ref: src/startd8/providers/registry.py
+        description: "ProviderRegistry with entry_point discovery"
+      - type: code
+        ref: src/startd8/providers/protocol.py
+        description: "Provider protocol interface"
+    confidence: 0.95
+
+  - capability_id: startd8.provider.model_catalog
+    category: query
+    maturity: stable
+    summary: "Centralized model constants and discovery with tier-based selection and agent_spec property"
+    audiences: [workflow_developer, ai_agent]
+    description:
+      developer: |
+        Models class with constants: CLAUDE_OPUS_LATEST, CLAUDE_SONNET_LATEST, CLAUDE_HAIKU_LATEST,
+        GEMINI_PRO_LATEST, GEMINI_FLASH_LATEST, GPT4O_LATEST, MISTRAL_LARGE_LATEST, etc.
+        ModelInfo(provider, model_id, tier, capabilities) with .full_id property.
+        ModelCatalogEntry.agent_spec replaces scattered hardcoded model strings.
+        get_latest_model(provider, tier) for dynamic selection.
+        list_models_by_tier(tier) returns all models at a given tier.
+      agent: |
+        from startd8.model_catalog import Models. Models.CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-5-20250929".
+        get_latest_model("gemini", tier="fast"). list_models_by_tier("flagship").
+    triggers: ["model catalog", "model constants", "latest model", "model tier"]
+    evidence:
+      - type: code
+        ref: src/startd8/model_catalog.py
+        description: "Models constants, ModelInfo, get_latest_model(), list_models_by_tier()"
+    confidence: 0.9
+
+  # ============================================================================
+  # UTILITY LAYER — Shared utilities
+  # ============================================================================
+
+  - capability_id: startd8.util.code_extraction
+    category: transform
+    maturity: stable
+    summary: "Extract code from markdown-fenced LLM responses with multi-language and multi-file support"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        extract_code_from_response(response, language=None) strips markdown fences, preamble,
+        and explanatory notes. Returns largest code block or raw response as fallback.
+        extract_multi_file_code(response) for multi-file extraction.
+        Language-aware: Python, TypeScript, Go, Rust, C/C++, YAML.
+        Public utility exported from startd8.utils.code_extraction.
+      agent: |
+        from startd8.utils.code_extraction import extract_code_from_response.
+        code = extract_code_from_response(llm_response, language="python").
+    triggers: ["extract code", "code block", "markdown fence", "code from response"]
+    evidence:
+      - type: code
+        ref: src/startd8/utils/code_extraction.py
+        description: "extract_code_from_response(), extract_multi_file_code()"
+    confidence: 0.85
+
+  - capability_id: startd8.util.truncation_detection
+    category: validate
+    maturity: stable
+    summary: "Code-aware truncation detection with centralized confidence thresholds and pre-flight estimation"
+    audiences: [workflow_developer, sdk_architect]
+    description:
+      developer: |
+        detect_truncation(text, code_mode=None, strict_mode=False) returns TruncationResult
+        with confidence score and indicators. code_mode=None auto-detects via infer_code_language()
+        + _looks_like_code(). Pre-flight: estimate_output_size() estimates before generation.
+        Centralized thresholds: CONFIDENCE_IS_TRUNCATED (0.5), CONFIDENCE_HIGH (0.7),
+        CONFIDENCE_HIGH_PROSE (0.9), CONFIDENCE_IS_TRUNCATED_STRICT (0.3).
+        Emits TRUNCATION_DETECTED, TRUNCATION_WARNING, TRUNCATION_PREFLIGHT_REJECT events.
+      agent: |
+        from startd8.truncation_detection import detect_truncation, estimate_output_size.
+        result = detect_truncation(text). result.is_truncated, result.confidence, result.indicators.
+    triggers: ["truncation", "truncated response", "max tokens", "finish reason"]
+    evidence:
+      - type: code
+        ref: src/startd8/truncation_detection.py
+        description: "detect_truncation(), estimate_output_size(), TruncationResult, PreFlightEstimate"
+      - type: doc
+        ref: docs/PATTERN-truncation-detection.md
+        description: "Code-aware truncation detection pattern documentation"
+    confidence: 0.9
+
+  # ============================================================================
+  # RESILIENCE LAYER — Fault tolerance and rate control
+  # ============================================================================
+
+  - capability_id: startd8.resilience.config
+    category: action
+    maturity: stable
+    summary: "Unified resilience configuration with preset levels: OFF, MINIMAL, STANDARD, AGGRESSIVE"
+    audiences: [workflow_developer, sdk_architect]
+    description:
+      developer: |
+        ResilienceConfig with nested settings: RetrySettings (max_attempts, backoff, jitter,
+        retryable_status_codes), CircuitBreakerSettings (failure_threshold, recovery_timeout),
+        AutoFixSettings (enabled, safe_only). Preset levels via ResilienceConfig.from_level().
+        ErrorStrategy enum: STOP, RETRY, SKIP, FALLBACK.
+      agent: |
+        from startd8.resilience import ResilienceConfig, ResilienceLevel.
+        config = ResilienceConfig.from_level(ResilienceLevel.STANDARD).
+    triggers: ["resilience", "circuit breaker", "error strategy", "self-healing"]
+    evidence:
+      - type: code
+        ref: src/startd8/resilience/__init__.py
+        description: "ResilienceConfig, ResilienceLevel, RetrySettings, CircuitBreakerSettings"
+    confidence: 0.85
+
+  - capability_id: startd8.ratelimit.limiter
+    category: action
+    maturity: stable
+    summary: "Async rate limiter with dual token buckets for request count and token count limits"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        RateLimiter with dual TokenBucket (requests/min + tokens/min). BackpressureStrategy:
+        QUEUE (wait), REJECT (raise), SHED (drop oldest). Context manager: async with limiter.acquire().
+        Decorator: @limiter.limit(estimated_tokens=500). Global registry: get_rate_limiter(name, provider).
+        Provider-aware defaults via get_provider_limits(). RateLimiterStats for monitoring.
+      agent: |
+        from startd8.ratelimit import RateLimiter, RateLimitConfig, get_rate_limiter.
+        limiter = get_rate_limiter("anthropic", provider="anthropic").
+        async with limiter.acquire(estimated_tokens=1000): ...
+    triggers: ["rate limit", "token bucket", "backpressure", "requests per minute"]
+    evidence:
+      - type: code
+        ref: src/startd8/ratelimit/__init__.py
+        description: "RateLimiter, RateLimitConfig, TokenBucket, BackpressureStrategy, get_rate_limiter"
+    confidence: 0.85
+
+  # ============================================================================
+  # OBSERVABILITY LAYER — Session tracking and telemetry
+  # ============================================================================
+
+  - capability_id: startd8.observability.session_tracking
+    category: observe
+    maturity: beta
+    summary: "Framework-level session tracking with 7 OTel metrics for active sessions, tokens, cost, and context usage"
+    audiences: [integration_developer, sdk_architect]
+    description:
+      developer: |
+        SessionTracker / get_session_tracker() singleton. start_session(agent_name, model) →
+        session_id. record_request(session_id, input_tokens, output_tokens, response_time_ms, cost).
+        end_session(session_id). OTel metrics: startd8_active_sessions (up_down_counter),
+        startd8_requests_total (counter), startd8_tokens_total (counter, direction label),
+        startd8_response_time_ms (histogram), startd8_context_usage_ratio (gauge),
+        startd8_truncations_total (counter), startd8_cost_total (counter USD).
+        Thread-safe. Graceful no-op when OTel not installed.
+      agent: |
+        tracker = get_session_tracker(). sid = tracker.start_session(agent_name="claude", model="...").
+        tracker.record_request(sid, input_tokens=100, output_tokens=50, response_time_ms=1200, cost=0.002).
+    triggers: ["session tracking", "active sessions", "context usage", "session metrics"]
+    evidence:
+      - type: code
+        ref: src/startd8/session_tracking.py
+        description: "SessionTracker, SessionMetrics, SessionState, ContextUsage, OTel metric export"
+    confidence: 0.8
+
+  - capability_id: startd8.observability.cost_tracking
+    category: observe
+    maturity: stable
+    summary: "Provider-agnostic cost tracking with budget management, analytics, and OTel metrics export"
+    audiences: [workflow_user, ai_agent, integration_developer]
+    description:
+      developer: |
+        CostTracker records per-call costs. PricingService provides per-model rates.
+        BudgetManager with warn/max limits and BUDGET_WARNING/BUDGET_EXCEEDED events.
+        CostAnalytics for aggregation and forecasting. OTel metrics via costs/otel_metrics.py:
+        startd8.cost.total, startd8.cost.input_tokens, startd8.cost.output_tokens,
+        startd8.cost.per_request (histogram). UsageLimitManager for quota enforcement.
+      agent: |
+        from startd8.costs import CostTracker, BudgetManager.
+        tracker = CostTracker(). tracker.record(model, input_tokens, output_tokens).
+    triggers: ["cost tracking", "budget", "token cost", "pricing", "usage limit"]
+    evidence:
+      - type: code
+        ref: src/startd8/costs/tracker.py
+        description: "CostTracker"
+      - type: code
+        ref: src/startd8/costs/otel_metrics.py
+        description: "OTel cost metrics export (4 metrics)"
+      - type: code
+        ref: src/startd8/costs/budget.py
+        description: "BudgetManager with warn/max limits"
+      - type: test
+        ref: tests/costs/
+        description: "Cost tracking test suite"
+    confidence: 0.9
+
+  - capability_id: startd8.observability.otel_logging
+    category: observe
+    maturity: stable
+    summary: "OTel log bridge ensuring SDK logs reach Loki via get_logger() instead of logging.getLogger()"
+    audiences: [sdk_architect, integration_developer]
+    description:
+      developer: |
+        get_logger(name) from startd8.logging_config attaches the OTel log handler eagerly.
+        All contractors/ modules and truncation_detection.py use get_logger() to ensure logs
+        reach Loki. _ensure_default_log_file_handler() in __init__.py provides eager init.
+        Anti-pattern: logging.getLogger() silently misses Loki because OTel handler is never attached.
+      agent: |
+        from startd8.logging_config import get_logger. logger = get_logger(__name__).
+    triggers: ["otel logging", "loki", "log bridge", "get_logger"]
+    evidence:
+      - type: code
+        ref: src/startd8/logging_config.py
+        description: "get_logger() with OTel handler attachment"
+      - type: code
+        ref: src/startd8/logging_otel.py
+        description: "OpenTelemetry log bridge implementation"
+    confidence: 0.9
+
+  # ============================================================================
+  # DEVELOPER TOOLS — Diagnostics and testing
+  # ============================================================================
+
+  - capability_id: startd8.diagnostics.runner
+    category: validate
+    maturity: beta
+    summary: "Self-diagnostic system with health checks, LLM-based failure analysis, and safe auto-fixes"
+    audiences: [workflow_developer, sdk_architect]
+    description:
+      developer: |
+        DiagnosticRunner orchestrates health checks across categories: framework, agent, cost,
+        storage. DiagnosticAnalyzer uses LLM agents to analyze failure patterns.
+        AutoFixer applies safe, reversible fixes. run_diagnostics() → DiagnosticReport.
+        analyze_report(report, agent) → analysis. apply_safe_fixes(report) → fix results.
+      agent: |
+        from startd8.diagnostics import run_diagnostics, analyze_report, apply_safe_fixes.
+        report = run_diagnostics(). analysis = analyze_report(report, agent=my_agent).
+    triggers: ["diagnostics", "health check", "self-diagnostic", "auto-fix"]
+    evidence:
+      - type: code
+        ref: src/startd8/diagnostics/__init__.py
+        description: "DiagnosticRunner, DiagnosticAnalyzer, AutoFixer (9 files)"
+    confidence: 0.7
+
+  - capability_id: startd8.testing.mock_provider
+    category: validate
+    maturity: stable
+    summary: "MockProvider and MockAgent for deterministic testing without API calls"
+    audiences: [workflow_developer]
+    description:
+      developer: |
+        MockProvider registered as "mock" entry point. MockAgent accepts response list,
+        supports system_prompt storage for test inspection, timeout_config/retry_config
+        forwarding verification. Error simulation via MockAgent(error=Exception("...")).
+        Used by all workflow and contractor test suites.
+      agent: |
+        agent = resolve_agent_spec("mock:mock-model"). Or MockAgent(responses=["Hello"]).
+    triggers: ["mock agent", "mock provider", "test agent", "deterministic test"]
+    evidence:
+      - type: code
+        ref: src/startd8/providers/mock.py
+        description: "MockProvider and MockAgent with system_prompt and config forwarding"
+      - type: code
+        ref: src/startd8/agents/mock.py
+        description: "MockAgent implementation"
+    confidence: 0.95
+
+  # ============================================================================
+  # INTEGRATION LAYER — ContextCore and MCP
+  # ============================================================================
+
+  - capability_id: startd8.integration.contextcore
+    category: integration
+    maturity: beta
+    summary: "ContextCore workflow adapter and task runner with OTel span tracking and dependency resolution"
+    audiences: [workflow_developer, integration_developer]
+    description:
+      developer: |
+        ContextCoreConfig for project/task/sprint IDs. ContextCoreWorkflowAdapter wraps any
+        workflow with OTel span tracking. ContextCoreTaskRunner for multi-task execution with
+        dependency resolution. Semantic conventions: CONTEXTCORE_PROJECT_ID, CONTEXTCORE_TASK_ID.
+        Task tracking emitter generates ContextCore-compatible state files from parsed plans.
+      agent: |
+        from startd8.integrations.contextcore import ContextCoreWorkflowAdapter.
+        adapter = ContextCoreWorkflowAdapter(workflow, config=ContextCoreConfig(...)).
+    triggers: ["contextcore", "task tracking", "project tracking", "otel spans"]
+    evidence:
+      - type: code
+        ref: src/startd8/integrations/contextcore.py
+        description: "ContextCoreWorkflowAdapter, ContextCoreTaskRunner, ContextCoreConfig"
+      - type: code
+        ref: src/startd8/workflows/builtin/task_tracking_emitter.py
+        description: "emit_task_tracking_artifacts() for ContextCore state files"
+    confidence: 0.8
+
+  - capability_id: startd8.integration.mcp
+    category: integration
+    maturity: stable
+    summary: "MCP gateway for AI agent access to workflows, providers, and SDK capabilities"
+    audiences: [ai_agent, integration_developer]
+    description:
+      developer: |
+        MCPGateway with handle_workflow_tool() dispatching list/describe/run actions.
+        Rate limited and audit logged. Returns structured WorkflowResult. Skill agents
+        (SkillAgent) execute Claude Skills via MCP. Factory functions for common skill types.
+      agent: |
+        MCP tool: startd8_workflow. Actions: list, describe, run.
+        Input: {action: "run", workflow_id: "pipeline", config: {...}}.
+    triggers: ["mcp", "mcp tool", "agent tool", "skill agent"]
+    evidence:
+      - type: code
+        ref: src/startd8/mcp/gateway.py
+        description: "MCPGateway with workflow tool dispatch"
+      - type: code
+        ref: src/startd8/skills/agent.py
+        description: "SkillAgent for Claude Skills via MCP"
+    confidence: 0.85
+
+# ==============================================================================
+# SUMMARY
+# ==============================================================================
+
+summary:
+  total_capabilities: 15
+  by_maturity:
+    stable: 11
+    beta: 4
+  by_category:
+    action: 5      # system_prompt, generate_result, resolution, resilience, ratelimit
+    observe: 3     # session_tracking, cost_tracking, otel_logging
+    validate: 3    # truncation_detection, diagnostics, mock_provider
+    integration: 3 # provider_registry, contextcore, mcp
+    query: 1       # model_catalog
+    transform: 1   # code_extraction
+
+# ==============================================================================
+# CHANGELOG
+# ==============================================================================
+
+changelog:
+  - version: "1.0.0"
+    date: "2026-02-12"
+    changes:
+      - "Initial SDK core capabilities manifest"
+      - "15 capabilities: 11 stable, 4 beta"
+      - "Covers: agents (system_prompt, GenerateResult, resolution), providers (registry, model_catalog)"
+      - "Covers: utilities (code_extraction, truncation_detection), resilience (config, rate_limiter)"
+      - "Covers: observability (session_tracking, cost_tracking, otel_logging)"
+      - "Covers: developer tools (diagnostics, mock_provider)"
+      - "Covers: integrations (contextcore, mcp)"
+      - "Complements startd8.workflow.capabilities.yaml (workflow-specific) and startd8.observability.manifest.yaml (telemetry surface)"
