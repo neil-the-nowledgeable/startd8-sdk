@@ -1,0 +1,285 @@
+direction: down
+
+title: {
+  label: Artisan Contractor Workflow
+  near: top-center
+  shape: text
+  style.font-size: 28
+  style.bold: true
+}
+
+# ---------------------------------------------------------------------------
+# Inputs
+# ---------------------------------------------------------------------------
+
+inputs: {
+  label: Inputs
+  style.fill: "#f0f4ff"
+  style.stroke: "#7c8db5"
+
+  seed: {
+    label: "artisan-context-seed.json\n(enriched)"
+    shape: page
+    style.fill: "#dce6f7"
+  }
+
+  manifest: {
+    label: "Artifact Manifest\n(optional)"
+    shape: page
+    style.fill: "#dce6f7"
+  }
+
+  config: {
+    label: "CLI flags\n--task-filter, --design-max-tokens\n--dress-rehearsal, --adopt-prior"
+    shape: page
+    style.fill: "#dce6f7"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Design Half
+# ---------------------------------------------------------------------------
+
+design_half: {
+  label: "Design Half"
+  style.fill: "#e8f5e9"
+  style.stroke: "#4caf50"
+  style.stroke-width: 2
+
+  plan: {
+    label: "1. PLAN\n─────────────\nDeconstruct seed → tasks\nPreflight checks\nDomain classification"
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#388e3c"
+    style.font-size: 13
+  }
+
+  scaffold: {
+    label: "2. SCAFFOLD\n─────────────\nCreate directories\nDetect existing files\nMap target structure"
+    shape: rectangle
+    style.fill: "#c8e6c9"
+    style.stroke: "#388e3c"
+    style.font-size: 13
+  }
+
+  design: {
+    label: "3. DESIGN\n─────────────\nGenerate design doc (LLM)\nDual-review: Reviewer + Arbiter\nResolve disagreements\nMax 3 iterations"
+    shape: rectangle
+    style.fill: "#a5d6a7"
+    style.stroke: "#2e7d32"
+    style.font-size: 13
+  }
+
+  adopt_check: {
+    label: "Prior result\navailable?"
+    shape: diamond
+    style.fill: "#fff9c4"
+    style.stroke: "#f9a825"
+  }
+
+  adopt: {
+    label: "Adopt prior\ndesign (skip LLM)"
+    shape: rectangle
+    style.fill: "#fff176"
+    style.stroke: "#f9a825"
+    style.font-size: 12
+  }
+
+  plan -> scaffold
+  scaffold -> adopt_check
+  adopt_check -> design: "No" {
+    style.stroke: "#d32f2f"
+  }
+  adopt_check -> adopt: "Yes (--adopt-prior)" {
+    style.stroke: "#2e7d32"
+  }
+  adopt -> handoff_write
+  design -> handoff_write
+
+  handoff_write: {
+    label: "Write design-handoff.json\n+ {task_id}-design.md"
+    shape: document
+    style.fill: "#e8eaf6"
+    style.stroke: "#5c6bc0"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Implementation Half
+# ---------------------------------------------------------------------------
+
+impl_half: {
+  label: "Implementation Half"
+  style.fill: "#fff3e0"
+  style.stroke: "#ff9800"
+  style.stroke-width: 2
+
+  implement: {
+    label: "4. IMPLEMENT\n─────────────\nLLMChunkExecutor\nCode generation per task\nDesign doc → code\nCost tracking"
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#ef6c00"
+    style.font-size: 13
+  }
+
+  test: {
+    label: "5. TEST\n─────────────\nLLMTestGenerator\nTest generation per task\nValidator subprocess\nRetry on failure"
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#ef6c00"
+    style.font-size: 13
+  }
+
+  review: {
+    label: "6. REVIEW\n─────────────\nLLM-powered quality review\nEnvironment issue detection\nCode quality scoring"
+    shape: rectangle
+    style.fill: "#ffe0b2"
+    style.stroke: "#ef6c00"
+    style.font-size: 13
+  }
+
+  finalize: {
+    label: "7. FINALIZE\n─────────────\nFinal assembly\nExecution report\nArtifact validation"
+    shape: rectangle
+    style.fill: "#ffcc80"
+    style.stroke: "#e65100"
+    style.font-size: 13
+  }
+
+  implement -> test
+  test -> review
+  review -> finalize
+}
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+
+outputs: {
+  label: Outputs
+  style.fill: "#fce4ec"
+  style.stroke: "#c62828"
+
+  report: {
+    label: "workflow-execution-report.json"
+    shape: page
+    style.fill: "#ffcdd2"
+  }
+
+  code: {
+    label: "Generated code\n(per task target files)"
+    shape: page
+    style.fill: "#ffcdd2"
+  }
+
+  tests: {
+    label: "Generated tests"
+    shape: page
+    style.fill: "#ffcdd2"
+  }
+
+  result: {
+    label: "workflow-result-{filter}.json"
+    shape: page
+    style.fill: "#ffcdd2"
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Dress Rehearsal Side Path
+# ---------------------------------------------------------------------------
+
+dress_rehearsal: {
+  label: "Dress Rehearsal Mode"
+  style.fill: "#f3e5f5"
+  style.stroke: "#9c27b0"
+  style.stroke-width: 2
+  style.stroke-dash: 5
+
+  staging: {
+    label: ".dress-rehearsal/\n─────────────\ndesign-handoff.json\n{task_id}-design.md\nworkflow-result.json"
+    shape: cylinder
+    style.fill: "#e1bee7"
+    style.stroke: "#7b1fa2"
+  }
+
+  note: {
+    label: |md
+      Stops after DESIGN
+      Real LLM calls
+      Staging output dir
+    |
+    shape: text
+    style.font-size: 12
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Checkpoint System
+# ---------------------------------------------------------------------------
+
+checkpoint: {
+  label: "Checkpoint / Resume"
+  style.fill: "#e0f2f1"
+  style.stroke: "#00897b"
+  style.stroke-dash: 3
+
+  store: {
+    label: ".startd8/checkpoints/\n─────────────\nPersisted after each phase\nContext snapshot\nCost accumulator\n--resume to continue"
+    shape: cylinder
+    style.fill: "#b2dfdb"
+    style.stroke: "#00695c"
+    style.font-size: 12
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Connections
+# ---------------------------------------------------------------------------
+
+inputs.seed -> design_half.plan: "load" {
+  style.stroke: "#546e7a"
+}
+inputs.manifest -> design_half.plan: "enrich" {
+  style.stroke: "#546e7a"
+  style.stroke-dash: 3
+}
+
+design_half.handoff_write -> impl_half.implement: "design_results\n+ scaffold" {
+  style.stroke: "#1565c0"
+  style.stroke-width: 2
+}
+
+design_half.handoff_write -> dress_rehearsal.staging: "--dress-rehearsal\n(stop here)" {
+  style.stroke: "#9c27b0"
+  style.stroke-dash: 5
+}
+
+dress_rehearsal.staging -> design_half.adopt_check: "--adopt-prior\n(next run)" {
+  style.stroke: "#f9a825"
+  style.stroke-width: 2
+  style.stroke-dash: 3
+}
+
+impl_half.finalize -> outputs.report
+impl_half.finalize -> outputs.code
+impl_half.finalize -> outputs.tests
+impl_half.finalize -> outputs.result
+
+# Checkpoint connections
+design_half.plan -> checkpoint.store: {
+  style.stroke: "#80cbc4"
+  style.stroke-dash: 3
+}
+design_half.design -> checkpoint.store: {
+  style.stroke: "#80cbc4"
+  style.stroke-dash: 3
+}
+impl_half.implement -> checkpoint.store: {
+  style.stroke: "#80cbc4"
+  style.stroke-dash: 3
+}
+impl_half.review -> checkpoint.store: {
+  style.stroke: "#80cbc4"
+  style.stroke-dash: 3
+}

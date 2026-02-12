@@ -848,6 +848,20 @@ class PlanIngestionWorkflow(WorkflowBase):
         for idx, feat in enumerate(features, start=1):
             fid_to_tid[feat.feature_id] = f"PI-{idx:03d}"
 
+        # ------------------------------------------------------------------
+        # Detect shared files: files that appear in multiple features'
+        # target_files. These need special handling during implementation
+        # to avoid the multi-file split failure (drafter omits shared files
+        # thinking they belong to other tasks).
+        # ------------------------------------------------------------------
+        file_to_features: Dict[str, List[str]] = {}
+        for feat in features:
+            for tf in feat.target_files:
+                file_to_features.setdefault(tf, []).append(feat.feature_id)
+        shared_files: Dict[str, List[str]] = {
+            f: fids for f, fids in file_to_features.items() if len(fids) > 1
+        }
+
         tasks: List[Dict[str, Any]] = []
         for idx, feat in enumerate(features, start=1):
             tid = fid_to_tid[feat.feature_id]
@@ -884,6 +898,32 @@ class PlanIngestionWorkflow(WorkflowBase):
                 ctx["design_doc_sections"] = list(feat.design_doc_sections)
             if feat.artifact_types_addressed:
                 ctx["artifact_types_addressed"] = list(feat.artifact_types_addressed)
+
+            # Auto-generate prompt hints for multi-file tasks with shared modules.
+            # These are merged into prompt_constraints during SeedTask.from_seed_entry().
+            prompt_hints: List[str] = []
+            if len(feat.target_files) > 1:
+                task_shared = [
+                    f for f in feat.target_files if f in shared_files
+                ]
+                if task_shared:
+                    others_map = {
+                        f: [fid_to_tid[fid] for fid in shared_files[f] if fid != feat.feature_id]
+                        for f in task_shared
+                    }
+                    hint_parts = [
+                        f"{f} (also used by {', '.join(tids)})"
+                        for f, tids in others_map.items() if tids
+                    ]
+                    if hint_parts:
+                        prompt_hints.append(
+                            f"Shared module warning: {'; '.join(hint_parts)}. "
+                            f"For this task, produce a minimal stub or interface "
+                            f"for shared files (imports, docstring, empty registrations). "
+                            f"Downstream tasks will implement the full logic."
+                        )
+            if prompt_hints:
+                ctx["prompt_hints"] = prompt_hints
 
             tasks.append({
                 "task_id": tid,

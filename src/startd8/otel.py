@@ -20,9 +20,12 @@ Standard OTel Semantic Conventions:
 """
 
 import atexit
+import logging
 import os
+import socket
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 
 # Conditional OTel imports
 try:
@@ -431,6 +434,36 @@ def configure_logging(config: OTelConfig) -> None:
     _providers.append(logger_provider)
 
 
+def _otlp_endpoint_reachable(endpoint: str, timeout: float = 1.0) -> bool:
+    """Check if the OTLP gRPC endpoint is reachable before configuring.
+
+    Args:
+        endpoint: OTLP endpoint URL (e.g. http://localhost:4317)
+        timeout: Socket connect timeout in seconds.
+
+    Returns:
+        True if endpoint is reachable, False otherwise.
+    """
+    try:
+        parsed = urlparse(endpoint)
+        host = parsed.hostname or "localhost"
+        if parsed.port:
+            port = parsed.port
+        elif parsed.scheme == "https":
+            port = 443
+        else:
+            port = 4317
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(timeout)
+        try:
+            sock.connect((host, port))
+            return True
+        finally:
+            sock.close()
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def auto_configure_otel() -> Dict[str, Any]:
     """
     Auto-configure OTel based on the STARTD8_OTEL environment variable.
@@ -463,6 +496,18 @@ def auto_configure_otel() -> Dict[str, Any]:
 
     endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
     config = OTelConfig(otlp_endpoint=endpoint)
+
+    # In auto mode: skip OTLP entirely when endpoint is unreachable to avoid
+    # retry noise and ERROR logs from the exporter when no collector is running.
+    if mode == "auto" and not _otlp_endpoint_reachable(endpoint):
+        _otel_logger = logging.getLogger("startd8.otel")
+        _otel_logger.info(
+            "OTLP endpoint unreachable (%s), skipping telemetry export. "
+            "Set STARTD8_OTEL=enabled to force, or STARTD8_OTEL=disabled to suppress.",
+            endpoint,
+        )
+        return {"tracer": None, "meter": None, "resource_attributes": {}}
+
     result = configure_otel(config)
     _configured = True
     return result

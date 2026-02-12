@@ -629,3 +629,98 @@ class TestExecuteRealMode:
         # Verify that if there were results, they'd be GenerationResult instances
         for v in gen_results.values():
             assert isinstance(v, GenerationResult)
+
+
+# ============================================================================
+# Pre-IMPLEMENT validation (defense-in-depth Layer 7)
+# ============================================================================
+
+
+class TestPreImplementValidation:
+    """Tests for _validate_multi_file_tasks risk detection."""
+
+    def test_single_file_tasks_no_warnings(self, caplog):
+        """Single-file tasks produce no risk warnings."""
+        tasks = [
+            _make_seed_task(task_id="T1", target_files=["src/a.py"]),
+            _make_seed_task(task_id="T2", target_files=["src/b.py"]),
+        ]
+        import logging
+        with caplog.at_level(logging.WARNING):
+            ImplementPhaseHandler._validate_multi_file_tasks(tasks)
+        assert not any("elevated" in r.message for r in caplog.records)
+
+    def test_multi_file_with_init_py_warns(self, caplog):
+        """Multi-file task with __init__.py gets risk warning."""
+        tasks = [
+            _make_seed_task(
+                task_id="T1",
+                target_files=[
+                    "src/pkg/__init__.py",
+                    "src/pkg/module.py",
+                ],
+            ),
+        ]
+        import logging
+        with caplog.at_level(logging.WARNING):
+            ImplementPhaseHandler._validate_multi_file_tasks(tasks)
+        warnings = [r for r in caplog.records if "elevated" in r.message]
+        assert len(warnings) == 1
+        assert "__init__.py" in warnings[0].message
+
+    def test_multi_file_with_shared_module_constraint_warns(self, caplog):
+        """Multi-file task with shared-module constraint gets risk warning."""
+        tasks = [
+            _make_seed_task(
+                task_id="T1",
+                target_files=["src/a.py", "src/b.py"],
+                prompt_constraints=[
+                    "Shared module warning: src/a.py (also used by T2)"
+                ],
+            ),
+        ]
+        import logging
+        with caplog.at_level(logging.WARNING):
+            ImplementPhaseHandler._validate_multi_file_tasks(tasks)
+        warnings = [r for r in caplog.records if "elevated" in r.message]
+        assert len(warnings) == 1
+        assert "shared-module constraint" in warnings[0].message
+
+    def test_overlapping_files_across_tasks_warns(self, caplog):
+        """Files targeted by multiple tasks get risk warning."""
+        shared = "src/shared/registry.py"
+        tasks = [
+            _make_seed_task(
+                task_id="T1",
+                target_files=[shared, "src/feat1/impl.py"],
+            ),
+            _make_seed_task(
+                task_id="T2",
+                target_files=[shared, "src/feat2/impl.py"],
+            ),
+        ]
+        import logging
+        with caplog.at_level(logging.WARNING):
+            ImplementPhaseHandler._validate_multi_file_tasks(tasks)
+        warnings = [r for r in caplog.records if "overlapping" in r.message]
+        assert len(warnings) >= 1
+
+    def test_multi_file_no_risk_factors_info_only(self, caplog):
+        """Multi-file task without risk factors just logs info."""
+        tasks = [
+            _make_seed_task(
+                task_id="T1",
+                target_files=["src/a.py", "src/b.py"],
+            ),
+        ]
+        import logging
+        with caplog.at_level(logging.INFO):
+            ImplementPhaseHandler._validate_multi_file_tasks(tasks)
+        # Should log info but no warnings
+        info_msgs = [
+            r for r in caplog.records
+            if r.levelno == logging.INFO and "T1 has 2 target files" in r.message
+        ]
+        assert len(info_msgs) == 1
+        warnings = [r for r in caplog.records if "elevated" in r.message]
+        assert len(warnings) == 0

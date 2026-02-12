@@ -87,6 +87,7 @@ class ConfigManager:
                 "max_iterations": None,
                 "pass_threshold": None,
                 "max_tokens": None,
+                "design_max_tokens": None,
                 "fail_on_truncation": None,
                 "check_truncation": None,
                 "strict_truncation": None,
@@ -427,7 +428,7 @@ _ARTISAN_BOOL_KEYS = {
     "scaffold_test_first",
 }
 _ARTISAN_INT_KEYS = {
-    "max_iterations", "pass_threshold", "max_tokens",
+    "max_iterations", "pass_threshold", "max_tokens", "design_max_tokens",
     "test_timeout_seconds", "review_max_code_chars",
 }
 _ARTISAN_FLOAT_KEYS = {

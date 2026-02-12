@@ -241,6 +241,57 @@ python3 scripts/run_artisan_workflow.py \
     --dry-run
 ```
 
+No LLM calls, no file writes. Orchestration only — validates phase sequencing and task flow.
+
+### Dress Rehearsal (Proactive Issue Detection)
+
+```bash
+python3 scripts/run_artisan_workflow.py \
+    --seed out/artisan-context-seed-enriched.json \
+    --output-dir out/designs \
+    --task-filter PI-001 \
+    --dress-rehearsal \
+    --design-max-tokens 8192
+```
+
+**Distinct from dry run:** Dress rehearsal runs **real LLM calls** through the DESIGN phase to surface issues (truncation, section mismatches) before committing to a full run. Writes to `{output_dir}/.dress-rehearsal/`. Defaults to `--stop-after design` when set.
+
+| Mode | LLM calls | File writes | Use case |
+|------|-----------|-------------|----------|
+| **Dry run** | No | No | Preview orchestration, zero cost |
+| **Dress rehearsal** | Yes (through DESIGN) | To staging dir | Proactively find truncation, calibration issues |
+| **Full run** | Yes | Yes | Production execution |
+
+### Adopting Dress-Rehearsal Artifacts
+
+Dress rehearsal design results are **not wasted**. A subsequent full run can adopt them:
+
+```bash
+# Auto-detect artifacts in <output-dir>/.dress-rehearsal/:
+python3 scripts/run_artisan_workflow.py \
+    --seed out/artisan-context-seed-enriched.json \
+    --output-dir out/designs \
+    --task-filter PI-001 \
+    --adopt-prior
+
+# Or point to a specific directory:
+python3 scripts/run_artisan_workflow.py \
+    --seed out/artisan-context-seed-enriched.json \
+    --output-dir out/designs \
+    --adopt-prior /path/to/.dress-rehearsal
+```
+
+**How it works:** The DESIGN phase handler checks each task's `design_results`. If a prior result has `status: "designed"` with a valid `design_document`, the task is **adopted** (status becomes `"adopted"`) and the LLM call is skipped entirely — saving time and cost. Tasks that failed or lack a design document are re-run normally.
+
+When prior artifacts exist but `--adopt-prior` was not specified, the runner logs a hint:
+
+```
+INFO Prior dress-rehearsal artifacts detected at out/designs/.dress-rehearsal.
+     Use --adopt-prior to reuse them and skip redundant LLM calls.
+```
+
+**Precursor to atomic operations:** This adopt-or-rerun pattern establishes task-level idempotency for the DESIGN phase — each task either reuses a valid prior result or generates a new one. Future phases (IMPLEMENT, TEST, REVIEW) can follow the same pattern for full pipeline idempotency.
+
 ---
 
 ## Runner Scripts
@@ -254,7 +305,10 @@ Full 7-phase workflow runner.
 | `--seed PATH` | **(Required)** Enriched context seed JSON |
 | `--project-root PATH` | Target project root (default: `.`) |
 | `--output-dir PATH` | Output directory (default: same as seed) |
-| `--dry-run` | Simulate without side effects |
+| `--dry-run` | Simulate without side effects (no LLM calls) |
+| `--dress-rehearsal` | Run real LLM calls through DESIGN; write to staging dir; default stop-after design |
+| `--adopt-prior [PATH]` | Adopt design artifacts from a prior dress-rehearsal/design-only run; auto-detects from `.dress-rehearsal/` if no path given |
+| `--design-max-tokens INT` | Override max_output_tokens for design phase (e.g. 8192 to avoid truncation) |
 | `--cost-budget FLOAT` | Maximum total cost in USD |
 | `--timeout FLOAT` | Total workflow timeout in seconds |
 | `--stop-after PHASE` | Stop after a phase (e.g., `--stop-after design`) |

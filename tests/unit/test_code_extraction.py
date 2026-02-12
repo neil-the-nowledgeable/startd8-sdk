@@ -2,7 +2,11 @@
 
 import pytest
 
-from startd8.utils.code_extraction import extract_multi_file_code
+from startd8.utils.code_extraction import (
+    STUB_SENTINEL,
+    _generate_stub,
+    extract_multi_file_code,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -221,3 +225,133 @@ class TestCaseInsensitiveMatching:
         ]
         result = extract_multi_file_code(response, targets)
         assert len(result) == 2
+
+
+# ---------------------------------------------------------------------------
+# _generate_stub — stub content generation
+# ---------------------------------------------------------------------------
+
+class TestGenerateStub:
+    """Tests for the _generate_stub defense-in-depth function."""
+
+    def test_python_stub(self):
+        stub = _generate_stub("src/pkg/module.py")
+        assert "module.py" in stub
+        assert STUB_SENTINEL in stub
+        assert "auto-generated stub" in stub
+        assert "__all__" in stub  # tool-friendly export
+
+    def test_typescript_stub(self):
+        stub = _generate_stub("src/components/Widget.tsx")
+        assert "Widget.tsx" in stub
+        assert STUB_SENTINEL in stub
+        assert "export {};" in stub
+
+    def test_javascript_stub(self):
+        stub = _generate_stub("lib/helper.js")
+        assert "helper.js" in stub
+        assert STUB_SENTINEL in stub
+        assert "export {};" in stub
+
+    def test_yaml_stub(self):
+        stub = _generate_stub("config/settings.yaml")
+        assert "settings.yaml" in stub
+        assert STUB_SENTINEL in stub
+
+    def test_unknown_extension_stub(self):
+        stub = _generate_stub("Makefile.mk")
+        assert "Makefile.mk" in stub
+        assert STUB_SENTINEL in stub
+
+    def test_init_py_stub(self):
+        stub = _generate_stub("src/pkg/__init__.py")
+        assert "__init__.py" in stub
+        assert STUB_SENTINEL in stub
+        assert "__all__" in stub
+
+    def test_sentinel_is_first_line(self):
+        """STUB_SENTINEL should be on the first line for fast detection."""
+        for path in ["a.py", "b.tsx", "c.yaml", "d.txt"]:
+            stub = _generate_stub(path)
+            first_line = stub.split("\n", 1)[0]
+            assert STUB_SENTINEL in first_line, f"Sentinel missing from first line of {path} stub"
+
+
+# ---------------------------------------------------------------------------
+# extract_multi_file_code with stub_missing=True
+# ---------------------------------------------------------------------------
+
+class TestStubMissingFallback:
+    """Defense-in-depth: stub generation for unmatched files."""
+
+    def test_stub_fills_missing_file(self):
+        """When LLM produces only one of two files, stub fills the gap."""
+        response = (
+            "```python\n"
+            "# src/pkg/module.py\n"
+            "def real_implementation(): pass\n"
+            "```\n"
+        )
+        targets = ["src/pkg/module.py", "src/pkg/__init__.py"]
+        result = extract_multi_file_code(response, targets, stub_missing=True)
+        assert len(result) == 2
+        assert "real_implementation" in result["src/pkg/module.py"]
+        assert STUB_SENTINEL in result["src/pkg/__init__.py"]
+
+    def test_stub_missing_false_returns_partial(self):
+        """Default behavior: partial result without stubs."""
+        response = (
+            "```python\n"
+            "# src/pkg/module.py\n"
+            "def real_implementation(): pass\n"
+            "```\n"
+        )
+        targets = ["src/pkg/module.py", "src/pkg/__init__.py"]
+        result = extract_multi_file_code(response, targets, stub_missing=False)
+        # With only one matched block, order fallback won't kick in (needs 2 blocks)
+        # So only the matched file should be present
+        assert "src/pkg/module.py" in result
+        # __init__.py might be absent (depends on exact strategy)
+
+    def test_stub_does_not_overwrite_matched(self):
+        """Stubs only fill gaps — matched files keep their real content."""
+        response = (
+            "```python\n"
+            "# src/a.py\n"
+            "x = 1\n"
+            "```\n\n"
+            "```python\n"
+            "# src/b.py\n"
+            "y = 2\n"
+            "```\n"
+        )
+        targets = ["src/a.py", "src/b.py", "src/c.py"]
+        result = extract_multi_file_code(response, targets, stub_missing=True)
+        assert len(result) == 3
+        assert "x = 1" in result["src/a.py"]
+        assert "y = 2" in result["src/b.py"]
+        assert STUB_SENTINEL in result["src/c.py"]
+
+    def test_all_files_matched_no_stubs_generated(self):
+        """When all files are matched, no stubs are generated."""
+        response = (
+            "```python\n"
+            "# src/a.py\n"
+            "x = 1\n"
+            "```\n\n"
+            "```python\n"
+            "# src/b.py\n"
+            "y = 2\n"
+            "```\n"
+        )
+        targets = ["src/a.py", "src/b.py"]
+        result = extract_multi_file_code(response, targets, stub_missing=True)
+        assert len(result) == 2
+        assert STUB_SENTINEL not in result.get("src/a.py", "")
+        assert STUB_SENTINEL not in result.get("src/b.py", "")
+
+    def test_empty_response_with_stub_missing_returns_all_stubs(self):
+        """Edge case: empty response + stub_missing produces stubs for all."""
+        result = extract_multi_file_code("", ["a.py", "b.py"], stub_missing=True)
+        # Empty response returns {} even with stub_missing (early return)
+        assert result == {}

@@ -1158,6 +1158,66 @@ class TestDeriveTasksFromFeatures:
         assert cfg["context"]["target_files"] == ["x.py"]
         assert cfg["context"]["estimated_loc"] == 150
 
+    def test_shared_module_detection_adds_prompt_hints(self):
+        """Tasks with multi-file targets that include shared files get prompt_hints."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Skeleton",
+                target_files=["src/pkg/__init__.py", "src/pkg/shared.py"],
+            ),
+            ParsedFeature(
+                feature_id="F-002", name="Generator A",
+                target_files=["src/pkg/shared.py"],
+                dependencies=["F-001"],
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+
+        # F-001 has multi-file targets with shared.py → should get prompt_hints
+        ctx1 = tasks[0]["config"]["context"]
+        assert "prompt_hints" in ctx1
+        assert len(ctx1["prompt_hints"]) == 1
+        assert "shared.py" in ctx1["prompt_hints"][0]
+        assert "PI-002" in ctx1["prompt_hints"][0]
+        assert "stub" in ctx1["prompt_hints"][0].lower()
+
+        # F-002 has only one target file → no prompt_hints (single-file tasks skip)
+        ctx2 = tasks[1]["config"]["context"]
+        assert "prompt_hints" not in ctx2
+
+    def test_no_shared_files_no_prompt_hints(self):
+        """Tasks with multi-file targets but no shared files get no prompt_hints."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Module",
+                target_files=["src/a.py", "src/b.py"],
+            ),
+            ParsedFeature(
+                feature_id="F-002", name="Other",
+                target_files=["src/c.py"],
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        # F-001 has multi-file but no file overlap → no prompt_hints
+        assert "prompt_hints" not in tasks[0]["config"]["context"]
+
+    def test_single_file_task_no_prompt_hints(self):
+        """Single-file tasks never get prompt_hints even if file is shared."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="A",
+                target_files=["src/shared.py"],
+            ),
+            ParsedFeature(
+                feature_id="F-002", name="B",
+                target_files=["src/shared.py"],
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        # Both are single-file → no prompt_hints (multi-file constraint doesn't apply)
+        assert "prompt_hints" not in tasks[0]["config"]["context"]
+        assert "prompt_hints" not in tasks[1]["config"]["context"]
+
 
 # ---------------------------------------------------------------------------
 # TestEmitPhaseArtisanRoute

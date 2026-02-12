@@ -220,6 +220,13 @@ class SeedTask:
         context = config.get("context", {})
         enrichment = entry.get("_enrichment", {})
 
+        # Merge prompt_hints (from plan ingestion shared-module detection)
+        # with enrichment prompt_constraints (from domain preflight rules).
+        constraints = list(enrichment.get("prompt_constraints", []))
+        for hint in context.get("prompt_hints", []):
+            if hint not in constraints:
+                constraints.append(hint)
+
         task = cls(
             task_id=entry.get("task_id", ""),
             title=entry.get("title", ""),
@@ -235,7 +242,7 @@ class SeedTask:
             domain=enrichment.get("domain", "unknown"),
             domain_reasoning=enrichment.get("domain_reasoning", ""),
             environment_checks=enrichment.get("environment_checks", []),
-            prompt_constraints=enrichment.get("prompt_constraints", []),
+            prompt_constraints=constraints,
             post_generation_validators=enrichment.get(
                 "post_generation_validators", []
             ),
@@ -868,6 +875,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         tasks_designed = 0
         tasks_agreed = 0
         tasks_failed = 0
+        tasks_adopted = 0
+
+        # Prior design_results injected via --adopt-prior (or checkpoint resume)
+        prior_design_results: dict[str, dict[str, Any]] = context.get("design_results", {})
 
         # Extract shared context for cross-task design quality
         plan_goals = context.get("plan_goals", [])
@@ -886,6 +897,44 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "status": "env_blocked",
                     "environment_issues": env_fails,
                 }
+                continue
+
+            # ----------------------------------------------------------
+            # Adopt prior design result (from dress-rehearsal / prior run)
+            # ----------------------------------------------------------
+            prior = prior_design_results.get(task.task_id, {})
+            if (
+                prior.get("status") == "designed"
+                and prior.get("design_document")
+            ):
+                design_results[task.task_id] = {
+                    **prior,
+                    "status": "adopted",
+                    "adopted_from": "prior_design_results",
+                }
+                tasks_adopted += 1
+                tasks_designed += 1
+                if prior.get("agreed"):
+                    tasks_agreed += 1
+
+                # Feed into cross-task progressive context
+                doc_text = prior["design_document"]
+                first_line = doc_text[:300].split("\n")[0]
+                prior_summaries.append(
+                    f"{task.task_id} ({task.title}): {first_line}"
+                )
+
+                # Copy design doc to current output_dir if configured
+                if self.output_dir:
+                    out_path = Path(self.output_dir) / f"{task.task_id}-design.md"
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(doc_text, encoding="utf-8")
+                    design_results[task.task_id]["output_file"] = str(out_path)
+
+                logger.info(
+                    "DESIGN: adopted prior result for %s (agreed=%s, cost=$%.4f)",
+                    task.task_id, prior.get("agreed"), prior.get("cost", 0.0),
+                )
                 continue
 
             if dry_run:
@@ -966,6 +1015,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "tasks_designed": tasks_designed,
             "tasks_agreed": tasks_agreed,
             "tasks_failed": tasks_failed,
+            "tasks_adopted": tasks_adopted,
             "tasks_skipped": len(tasks) - tasks_designed - tasks_failed - sum(
                 1 for r in design_results.values()
                 if r.get("status") == "env_blocked"
@@ -977,8 +1027,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         duration = time.monotonic() - start
         logger.info(
-            "DESIGN phase complete: %d designed (%d agreed), %d failed, $%.4f cost (%.2fs)",
-            tasks_designed, tasks_agreed, tasks_failed, total_cost, duration,
+            "DESIGN phase complete: %d designed (%d adopted, %d agreed), %d failed, $%.4f cost (%.2fs)",
+            tasks_designed, tasks_adopted, tasks_agreed, tasks_failed, total_cost, duration,
         )
 
         return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
@@ -1026,6 +1076,82 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             c for c in task.environment_checks
             if c.get("status") in ("fail", "warn")
         ]
+
+    @staticmethod
+    def _validate_multi_file_tasks(tasks: list[SeedTask]) -> None:
+        """Pre-IMPLEMENT validation: warn about risky multi-file tasks.
+
+        Logs structured warnings for tasks that are likely to encounter
+        multi-file split failures so operators can monitor and intervene
+        early. This is a defense-in-depth layer — it doesn't block
+        execution but makes risk visible.
+
+        Checks:
+        1. Multi-file tasks (>1 target) — higher split failure risk.
+        2. Multi-file tasks with ``__init__.py`` — often confuses LLMs.
+        3. Tasks whose prompt_constraints mention "shared module" — known
+           shared files that the LLM may skip.
+        4. Cross-task file overlap — files targeted by multiple tasks.
+        """
+        multi_file_tasks: list[SeedTask] = []
+        file_to_tasks: dict[str, list[str]] = {}
+
+        for task in tasks:
+            if len(task.target_files) > 1:
+                multi_file_tasks.append(task)
+            for tf in task.target_files:
+                file_to_tasks.setdefault(tf, []).append(task.task_id)
+
+        if not multi_file_tasks:
+            return
+
+        logger.info(
+            "IMPLEMENT pre-validation: %d of %d tasks are multi-file",
+            len(multi_file_tasks),
+            len(tasks),
+        )
+
+        for task in multi_file_tasks:
+            risk_flags: list[str] = []
+
+            # __init__.py is often omitted by LLMs
+            init_files = [f for f in task.target_files if f.endswith("__init__.py")]
+            if init_files:
+                risk_flags.append(f"includes __init__.py ({', '.join(init_files)})")
+
+            # Shared module hint present
+            shared_hints = [
+                c for c in task.prompt_constraints
+                if "shared module" in c.lower() or "shared file" in c.lower()
+            ]
+            if shared_hints:
+                risk_flags.append("contains shared-module constraint")
+
+            # Files targeted by other tasks too
+            overlapping = [
+                f for f in task.target_files
+                if len(file_to_tasks.get(f, [])) > 1
+            ]
+            if overlapping:
+                risk_flags.append(
+                    f"overlapping files: {', '.join(overlapping)}"
+                )
+
+            if risk_flags:
+                logger.warning(
+                    "IMPLEMENT pre-validation: task %s (%d files) has elevated "
+                    "multi-file split risk — %s. Stub generation will activate "
+                    "if LLM omits files.",
+                    task.task_id,
+                    len(task.target_files),
+                    "; ".join(risk_flags),
+                )
+            else:
+                logger.info(
+                    "IMPLEMENT pre-validation: task %s has %d target files",
+                    task.task_id,
+                    len(task.target_files),
+                )
 
     @staticmethod
     def _ensure_test_scaffolding_for_artifact_tasks(
@@ -1138,10 +1264,11 @@ class Test{class_name}:
                 })
                 continue
 
-            # Extract design document from DESIGN phase results (if available)
+            # Extract design document from DESIGN phase results (if available).
+            # "adopted" status indicates reuse from a prior run (dress-rehearsal).
             design_doc_text = None
             task_design = design_results.get(task.task_id, {})
-            if task_design.get("status") == "designed":
+            if task_design.get("status") in ("designed", "adopted"):
                 design_doc_text = task_design.get("design_document")
 
             # Per-task implement token cap from design_calibration
@@ -1151,10 +1278,17 @@ class Test{class_name}:
             # Multi-file format constraint: ensure LLM produces distinct blocks per file
             prompt_constraints = list(task.prompt_constraints)
             if len(task.target_files) > 1:
+                file_list = ", ".join(task.target_files)
                 prompt_constraints.append(
-                    "Output format: produce a SEPARATE fenced code block for EACH target "
-                    "file. First line of each block MUST be '# <full path>' (e.g. "
-                    "# src/package/__init__.py). Include __init__.py if it is a target."
+                    f"MULTI-FILE OUTPUT REQUIRED — you MUST produce a SEPARATE fenced "
+                    f"code block for EACH of these {len(task.target_files)} target files: "
+                    f"{file_list}. "
+                    f"First line of each block MUST be a comment with the full path "
+                    f"(e.g. # src/package/__init__.py). "
+                    f"If a file is a shared module implemented by downstream tasks, "
+                    f"produce a minimal stub (imports, docstring, empty registrations). "
+                    f"Every target file MUST have its own code block — omitting any "
+                    f"file will cause the build to fail."
                 )
 
             chunks.append(DevelopmentChunk(
@@ -1364,6 +1498,9 @@ class Test{class_name}:
         project_root = Path(context.get("project_root", "."))
 
         logger.info("IMPLEMENT phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
+
+        # --- Pre-IMPLEMENT validation: warn about risky multi-file tasks ---
+        self._validate_multi_file_tasks(tasks)
 
         # --- Dry-run path (unchanged) ---
         if dry_run:
@@ -2856,6 +2993,7 @@ class ContextSeedHandlers:
         max_iterations: Optional[int] = None,
         pass_threshold: Optional[int] = None,
         max_tokens: Optional[int] = None,
+        design_max_tokens: Optional[int] = None,
         fail_on_truncation: Optional[bool] = None,
         check_truncation: Optional[bool] = None,
         strict_truncation: Optional[bool] = None,
@@ -2899,6 +3037,7 @@ class ContextSeedHandlers:
             ("max_iterations", max_iterations),
             ("pass_threshold", pass_threshold),
             ("max_tokens", max_tokens),
+            ("design_max_tokens", design_max_tokens),
             ("fail_on_truncation", fail_on_truncation),
             ("check_truncation", check_truncation),
             ("strict_truncation", strict_truncation),

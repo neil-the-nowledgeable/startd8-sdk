@@ -207,48 +207,58 @@ class ProviderRegistry:
     
     @classmethod
     def _register_builtin_providers(cls) -> None:
-        """Register built-in providers that ship with the SDK"""
+        """Register built-in providers that ship with the SDK.
+
+        Skips registration when a provider with the same name is already
+        registered (e.g. from entry points), avoiding overwrite warnings.
+        """
+        def _register_if_missing(name: str, factory, display_name: str) -> None:
+            with cls._lock:
+                if name in cls._providers:
+                    logger.debug("Built-in %s already registered via entry point, skipping", name)
+                    return
+            try:
+                provider = factory()
+                cls.register(provider)
+                logger.debug("Registered built-in %s provider", display_name)
+            except ImportError as e:
+                logger.debug("%s provider not available: %s", display_name, e)
+
         try:
             from .anthropic import AnthropicProvider
-            cls.register(AnthropicProvider())
-            logger.debug("Registered built-in Anthropic provider")
-        except ImportError as e:
-            logger.debug(f"Anthropic provider not available: {e}")
-        
+            _register_if_missing("anthropic", AnthropicProvider, "Anthropic")
+        except ImportError:
+            pass
+
         try:
             from .openai import OpenAIProvider
-            cls.register(OpenAIProvider())
-            logger.debug("Registered built-in OpenAI provider")
-        except ImportError as e:
-            logger.debug(f"OpenAI provider not available: {e}")
+            _register_if_missing("openai", OpenAIProvider, "OpenAI")
+        except ImportError:
+            pass
 
         try:
             from .openai import OllamaProvider
-            cls.register(OllamaProvider())
-            logger.debug("Registered built-in Ollama provider")
-        except ImportError as e:
-            logger.debug(f"Ollama provider not available: {e}")
-        
+            _register_if_missing("ollama", OllamaProvider, "Ollama")
+        except ImportError:
+            pass
+
         try:
             from .mock import MockProvider
-            cls.register(MockProvider())
-            logger.debug("Registered built-in Mock provider")
-        except ImportError as e:
-            logger.debug(f"Mock provider not available: {e}")
+            _register_if_missing("mock", MockProvider, "Mock")
+        except ImportError:
+            pass
 
         try:
             from .gemini import GeminiProvider
-            cls.register(GeminiProvider())
-            logger.debug("Registered built-in Gemini provider")
-        except ImportError as e:
-            logger.debug(f"Gemini provider not available: {e}")
+            _register_if_missing("gemini", GeminiProvider, "Gemini")
+        except ImportError:
+            pass
 
         try:
             from .mistral import MistralProvider
-            cls.register(MistralProvider())
-            logger.debug("Registered built-in Mistral provider")
-        except ImportError as e:
-            logger.debug(f"Mistral provider not available: {e}")
+            _register_if_missing("mistral", MistralProvider, "Mistral")
+        except ImportError:
+            pass
     
     @classmethod
     def get_provider(cls, name: str) -> Optional[AgentProvider]:

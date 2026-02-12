@@ -11,6 +11,11 @@ import os
 import re
 from typing import Dict, List, Optional, Tuple
 
+#: Machine-readable sentinel embedded in every auto-generated stub.
+#: Used by observability and downstream phases to detect stubs without
+#: fragile substring heuristics.
+STUB_SENTINEL = "STARTD8_AUTO_STUB"
+
 logger = logging.getLogger("startd8.utils.code_extraction")
 
 
@@ -112,7 +117,10 @@ def extract_code_from_response(response: str, language: Optional[str] = None) ->
 
 
 def extract_multi_file_code(
-    response: str, target_files: List[str]
+    response: str,
+    target_files: List[str],
+    *,
+    stub_missing: bool = False,
 ) -> Dict[str, str]:
     """
     Split an LLM response containing multiple file implementations into per-file code.
@@ -124,14 +132,20 @@ def extract_multi_file_code(
        filename appears in the language tag or as a first-line comment.
     3. **Order-based fallback** — when exactly one file is unmatched and one
        block didn't match, assign by position (handles __init__.py etc.).
+    4. **Stub generation** (when ``stub_missing=True``) — for any target file
+       still unmatched, generate a minimal placeholder stub. This is the
+       last-resort recovery layer for shared modules that the LLM omitted.
 
     Args:
         response: Raw LLM response (may contain markdown fencing, commentary, etc.)
         target_files: Expected output file paths (used for basename matching)
+        stub_missing: If True, generate placeholder stubs for unmatched files
+            instead of leaving them out. Enables graceful degradation for
+            shared modules the LLM skipped.
 
     Returns:
         Dict mapping target filename → extracted code.
-        Returns an empty dict if splitting fails (caller handles fallback).
+        Returns an empty dict if splitting fails and ``stub_missing`` is False.
     """
     if not response or not target_files:
         return {}
@@ -171,7 +185,75 @@ def extract_multi_file_code(
         if len(result) > len(best):
             best = result
 
+    # --- Strategy 4: stub generation for unmatched files ---
+    if stub_missing:
+        unmatched = [f for f in target_files if f not in best]
+        for missing_file in unmatched:
+            stub = _generate_stub(missing_file)
+            best[missing_file] = stub
+            logger.warning(
+                "Multi-file split: generated stub for unmatched file %s "
+                "(LLM did not produce a code block for this target)",
+                missing_file,
+            )
+
     return best
+
+
+def _generate_stub(file_path: str) -> str:
+    """Generate a minimal placeholder stub for a file the LLM omitted.
+
+    Produces a syntactically valid file with a docstring explaining it's
+    a stub. Every stub embeds :data:`STUB_SENTINEL` so downstream code
+    can detect stubs without fragile substring heuristics.
+
+    The stub is intentionally minimal — downstream tasks will implement
+    the real logic.
+
+    Args:
+        file_path: Target file path (used to determine language/format).
+
+    Returns:
+        Stub file content string (always contains :data:`STUB_SENTINEL`).
+    """
+    basename = os.path.basename(file_path)
+    ext = os.path.splitext(basename)[1].lower()
+
+    if ext == ".py":
+        return (
+            f"# {STUB_SENTINEL}\n"
+            f'"""{basename} — auto-generated stub.\n'
+            f"\n"
+            f"This file was not produced by the LLM drafter and has been\n"
+            f"auto-stubbed to satisfy the multi-file build requirement.\n"
+            f"Downstream tasks will implement the real logic.\n"
+            f'"""\n'
+            f"\n"
+            f"__all__: list[str] = []\n"
+        )
+    elif ext in (".ts", ".tsx", ".js", ".jsx"):
+        return (
+            f"// {STUB_SENTINEL}\n"
+            f"// {basename} — auto-generated stub.\n"
+            f"//\n"
+            f"// This file was not produced by the LLM drafter and has been\n"
+            f"// auto-stubbed to satisfy the multi-file build requirement.\n"
+            f"// Downstream tasks will implement the real logic.\n"
+            f"export {{}};\n"
+        )
+    elif ext in (".yaml", ".yml"):
+        return (
+            f"# {STUB_SENTINEL}\n"
+            f"# {basename} — auto-generated stub.\n"
+            f"# This file was not produced by the LLM drafter.\n"
+            f"# Downstream tasks will populate it.\n"
+        )
+    else:
+        return (
+            f"# {STUB_SENTINEL}\n"
+            f"# {basename} — auto-generated stub.\n"
+            f"# This file was not produced by the LLM drafter.\n"
+        )
 
 
 def _extract_by_markers(

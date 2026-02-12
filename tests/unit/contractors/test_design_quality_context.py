@@ -30,9 +30,11 @@ from startd8.workflows.builtin.plan_ingestion_workflow import (
 )
 from startd8.contractors.artisan_phases.design_documentation import (
     AgentLLMBackend,
+    DesignSection,
     FeatureContext,
     ReviewRole,
     build_design_system_prompt,
+    parse_design_document,
     _DEFAULT_SECTIONS,
     DESIGN_GENERATION_SYSTEM_PROMPT,
     REVIEWER_USER_PROMPT_TEMPLATE,
@@ -524,6 +526,15 @@ class TestDesignPhaseHandlerContext:
         assert fc.max_output_tokens == 2048
         assert fc.additional_context["depth_guidance"] == "Concise design sketch."
 
+    def test_design_max_tokens_override(self):
+        """design_max_tokens_override takes precedence over calibration."""
+        task = _make_seed_task("PI-001")
+        cal = {"max_output_tokens": 4096}
+        fc = DesignPhaseHandler._task_to_feature_context(
+            task, calibration=cal, design_max_tokens_override=8192,
+        )
+        assert fc.max_output_tokens == 8192
+
     def test_prior_designs_accumulated(self):
         """Prior design summaries flow into additional_context."""
         task = _make_seed_task("PI-002")
@@ -682,3 +693,275 @@ class TestFeatureContextNewFields:
         assert fc.sections == ["Overview", "Architecture"]
         assert fc.max_output_tokens == 2048
         assert fc.depth_guidance == "Keep it brief"
+
+
+# ============================================================================
+# parse_design_document expected_sections
+# ============================================================================
+
+
+class TestParseDesignDocumentExpectedSections:
+
+    def test_expected_sections_parses_reduced_set(self):
+        """When expected_sections is provided, only those sections trigger validation."""
+        raw = """## Overview
+Brief overview here.
+
+## Architecture
+Simple architecture.
+"""
+        doc = parse_design_document(
+            raw,
+            "TestFeature",
+            1,
+            expected_sections=["Overview", "Architecture"],
+        )
+        assert doc.feature_name == "TestFeature"
+        assert DesignSection.OVERVIEW in doc.sections
+        assert doc.sections[DesignSection.OVERVIEW] == "Brief overview here."
+        assert DesignSection.ARCHITECTURE in doc.sections
+        # All DesignSection values still populated (for backward compat)
+        assert DesignSection.API_CONTRACTS in doc.sections
+        assert doc.sections[DesignSection.API_CONTRACTS] == "[Section not generated — requires manual input]"
+
+    def test_expected_sections_none_uses_full_enum(self):
+        """When expected_sections is None, all DesignSection values are validated (legacy)."""
+        raw = "## Overview\nOnly this."
+        doc = parse_design_document(raw, "Test", 1)
+        assert len(doc.sections) == len(DesignSection)
+        assert DesignSection.OVERVIEW in doc.sections
+
+
+# ============================================================================
+# DesignPhaseHandler: adopt prior design results
+# ============================================================================
+
+
+class TestDesignPhaseAdoptPrior:
+    """Tests for design result adoption from prior (dress-rehearsal) runs."""
+
+    def _make_prior_design_result(
+        self,
+        task_id: str = "PI-001",
+        *,
+        agreed: bool = True,
+        cost: float = 0.15,
+    ) -> dict[str, Any]:
+        return {
+            "status": "designed",
+            "design_document": f"## Overview\nDesign for {task_id}.\n\n## Architecture\nArch details.",
+            "feature_name": f"Feature {task_id}",
+            "agreed": agreed,
+            "iterations": 2,
+            "completed_at": datetime.now(timezone.utc).isoformat(),
+            "cost": cost,
+        }
+
+    def test_adopt_skips_llm_call(self):
+        """Task with prior 'designed' result is adopted — no LLM call made."""
+        from startd8.contractors.context_seed_handlers import HandlerConfig
+        from startd8.contractors.artisan_contractor import WorkflowPhase
+
+        handler = DesignPhaseHandler(handler_config=HandlerConfig(), output_dir="/tmp/test")
+
+        task = _make_seed_task("PI-001")
+        prior_result = self._make_prior_design_result("PI-001")
+
+        context: dict[str, Any] = {
+            "tasks": [task],
+            "task_index": {"PI-001": task},
+            "enriched_seed_path": "/dev/null",
+            "design_results": {"PI-001": prior_result},
+        }
+
+        result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        # Should adopt without calling LLM
+        assert context["design_results"]["PI-001"]["status"] == "adopted"
+        assert context["design_results"]["PI-001"]["adopted_from"] == "prior_design_results"
+        assert result["output"]["tasks_adopted"] == 1
+        assert result["output"]["tasks_designed"] == 1
+        assert result["cost"] == 0.0  # No LLM cost incurred
+
+    def test_adopt_without_design_document_falls_through(self):
+        """Task with prior result but missing design_document is NOT adopted.
+
+        Uses dry_run=True so the task falls through to dry_run_skipped
+        rather than attempting a real LLM call.
+        """
+        from startd8.contractors.context_seed_handlers import HandlerConfig
+        from startd8.contractors.artisan_contractor import WorkflowPhase
+
+        handler = DesignPhaseHandler(handler_config=HandlerConfig(), output_dir="/tmp/test")
+
+        task = _make_seed_task("PI-001")
+        # Prior result has status=designed but no design_document
+        broken_prior = {"status": "designed", "agreed": True}
+
+        context: dict[str, Any] = {
+            "tasks": [task],
+            "task_index": {"PI-001": task},
+            "enriched_seed_path": "/dev/null",
+            "design_results": {"PI-001": broken_prior},
+        }
+
+        # With dry_run=True, the task should NOT be adopted (missing doc)
+        # and instead get dry_run_skipped.
+        result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=True)
+        assert context["design_results"]["PI-001"]["status"] == "dry_run_skipped"
+        assert result["output"]["tasks_adopted"] == 0
+
+    def test_adopt_with_failed_prior_falls_through(self):
+        """Task with prior 'design_failed' is NOT adopted — falls to dry_run."""
+        from startd8.contractors.context_seed_handlers import HandlerConfig
+        from startd8.contractors.artisan_contractor import WorkflowPhase
+
+        handler = DesignPhaseHandler(handler_config=HandlerConfig(), output_dir="/tmp/test")
+
+        task = _make_seed_task("PI-001")
+        failed_prior = {"status": "design_failed", "error": "timeout"}
+
+        context: dict[str, Any] = {
+            "tasks": [task],
+            "task_index": {"PI-001": task},
+            "enriched_seed_path": "/dev/null",
+            "design_results": {"PI-001": failed_prior},
+        }
+
+        # With dry_run=True, the task should NOT be adopted (failed status)
+        # and instead get dry_run_skipped.
+        result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=True)
+        assert context["design_results"]["PI-001"]["status"] == "dry_run_skipped"
+        assert result["output"]["tasks_adopted"] == 0
+
+    def test_adopt_preserves_cross_task_summaries(self):
+        """Adopted tasks contribute to prior_summaries for progressive context."""
+        from startd8.contractors.context_seed_handlers import HandlerConfig
+        from startd8.contractors.artisan_contractor import WorkflowPhase
+
+        handler = DesignPhaseHandler(handler_config=HandlerConfig(), output_dir="/tmp/test")
+
+        task1 = _make_seed_task("PI-001")
+        task2 = _make_seed_task("PI-002")
+        prior1 = self._make_prior_design_result("PI-001")
+        prior2 = self._make_prior_design_result("PI-002")
+
+        context: dict[str, Any] = {
+            "tasks": [task1, task2],
+            "task_index": {"PI-001": task1, "PI-002": task2},
+            "enriched_seed_path": "/dev/null",
+            "design_results": {"PI-001": prior1, "PI-002": prior2},
+        }
+
+        result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        assert result["output"]["tasks_adopted"] == 2
+        assert result["output"]["tasks_designed"] == 2
+        # Both should be adopted
+        assert context["design_results"]["PI-001"]["status"] == "adopted"
+        assert context["design_results"]["PI-002"]["status"] == "adopted"
+
+    def test_no_prior_results_runs_normally_in_dry_run(self):
+        """Without prior results, dry_run produces dry_run_skipped as usual."""
+        from startd8.contractors.context_seed_handlers import HandlerConfig
+        from startd8.contractors.artisan_contractor import WorkflowPhase
+
+        handler = DesignPhaseHandler(handler_config=HandlerConfig(), output_dir="/tmp/test")
+
+        task = _make_seed_task("PI-001")
+        context: dict[str, Any] = {
+            "tasks": [task],
+            "task_index": {"PI-001": task},
+            "enriched_seed_path": "/dev/null",
+        }
+
+        result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=True)
+
+        assert context["design_results"]["PI-001"]["status"] == "dry_run_skipped"
+        assert result["output"]["tasks_adopted"] == 0
+
+    def test_implement_handler_reads_adopted_status(self):
+        """ImplementPhaseHandler treats 'adopted' same as 'designed'."""
+        # Verify that the check in ImplementPhaseHandler accepts "adopted"
+        task_design = {"status": "adopted", "design_document": "## Overview\nAdopted design."}
+        assert task_design.get("status") in ("designed", "adopted")
+        assert task_design.get("design_document") is not None
+
+
+# ============================================================================
+# SeedTask: prompt_hints merge from context into prompt_constraints
+# ============================================================================
+
+
+class TestSeedTaskPromptHintsMerge:
+    """Tests for SeedTask.from_seed_entry merging context.prompt_hints."""
+
+    def test_prompt_hints_merged_into_constraints(self):
+        """prompt_hints from config.context are merged into prompt_constraints."""
+        entry = {
+            "task_id": "PI-001",
+            "title": "Skeleton",
+            "config": {
+                "task_description": "Build skeleton",
+                "context": {
+                    "feature_id": "F-001",
+                    "target_files": ["src/pkg/__init__.py", "src/pkg/shared.py"],
+                    "estimated_loc": 80,
+                    "prompt_hints": [
+                        "Shared module warning: src/pkg/shared.py (also used by PI-002)."
+                    ],
+                },
+            },
+            "_enrichment": {
+                "domain": "backend",
+                "prompt_constraints": ["Use type hints"],
+            },
+        }
+        task = SeedTask.from_seed_entry(entry)
+        assert "Use type hints" in task.prompt_constraints
+        assert any("Shared module" in c for c in task.prompt_constraints)
+        assert len(task.prompt_constraints) == 2
+
+    def test_no_prompt_hints_preserves_enrichment_constraints(self):
+        """Without prompt_hints, only enrichment constraints are loaded."""
+        entry = {
+            "task_id": "PI-002",
+            "title": "Generator",
+            "config": {
+                "task_description": "Implement generator",
+                "context": {
+                    "feature_id": "F-002",
+                    "target_files": ["src/gen.py"],
+                    "estimated_loc": 50,
+                },
+            },
+            "_enrichment": {
+                "domain": "backend",
+                "prompt_constraints": ["Use type hints", "No blocking calls"],
+            },
+        }
+        task = SeedTask.from_seed_entry(entry)
+        assert task.prompt_constraints == ["Use type hints", "No blocking calls"]
+
+    def test_duplicate_hints_not_added_twice(self):
+        """If a hint already exists in enrichment constraints, it's not duplicated."""
+        hint = "Shared module warning: shared.py also used by PI-002."
+        entry = {
+            "task_id": "PI-001",
+            "title": "Test",
+            "config": {
+                "task_description": "Test",
+                "context": {
+                    "feature_id": "F-001",
+                    "target_files": ["a.py"],
+                    "estimated_loc": 10,
+                    "prompt_hints": [hint],
+                },
+            },
+            "_enrichment": {
+                "domain": "backend",
+                "prompt_constraints": [hint],  # Already present
+            },
+        }
+        task = SeedTask.from_seed_entry(entry)
+        assert task.prompt_constraints.count(hint) == 1

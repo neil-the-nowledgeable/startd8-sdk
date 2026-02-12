@@ -26,11 +26,11 @@ Output tokens: 4096. Consider increasing max_tokens (currently 4096).
 **Impact:** Design document is truncated; downstream DESIGN iterations may fail or produce incomplete artifacts.
 
 **Mitigations:**
-- **Option A (per-task):** Regenerate the context seed with `comprehensive` depth tier for PI-001 (8192 tokens) via PlanIngestionWorkflow's SizeEstimator.
-- **Option B (global):** Add `--design-max-tokens 8192` to `run_artisan_workflow.py` (would require SDK change; not currently supported).
+- **Option A (CLI override):** Use `--design-max-tokens 8192` to override per-task calibration.
+- **Option B (per-task):** Regenerate the context seed with `comprehensive` depth tier for PI-001 (8192 tokens) via PlanIngestionWorkflow's SizeEstimator.
 - **Option C (seed edit):** Manually edit `artisan-context-seed.json` → `design_calibration.PI-001.max_output_tokens` → `8192`.
 
-**Recommended:** Option C for a quick fix; Option A for a proper re-run of plan ingestion with higher calibration for infrastructure tasks.
+**Recommended:** Option A for a quick fix; Option B for a proper re-run of plan ingestion with higher calibration for infrastructure tasks.
 
 ---
 
@@ -46,7 +46,7 @@ WARNING [design_documentation] Design document missing section 'Security Conside
 
 **Impact:** No functional failure; design phase continues. Warnings are noisy and can mislead developers into thinking the doc is incomplete.
 
-**Mitigation:** SDK fix: `parse_design_document()` should accept and validate only against `context.sections` when provided, not the full enum. Until fixed, these warnings can be ignored for PI-001.
+**Mitigation:** Fixed in SDK: `parse_design_document()` now accepts `expected_sections` and validates only those when provided. Calibrated section lists from the seed are respected.
 
 ---
 
@@ -64,12 +64,11 @@ ERROR [opentelemetry.exporter.otlp.proto.grpc.exporter] Failed to export traces 
 
 **Impact:** Telemetry is dropped; no functional impact on the workflow. Retries add small latency and log noise.
 
-**Mitigations:**
-- **Disable OTel:** `STARTD8_OTEL=disabled` before running.
-- **Start collector:** `docker compose -f docker-compose.loki-stack.yml up -d` (if available in the SDK repo).
-- **Use HTTP endpoint:** `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318` if you have an HTTP OTLP receiver.
+**Mitigation:** Fixed in SDK: When `STARTD8_OTEL=auto` (default), the SDK now performs a connectivity check before configuring OTLP. If the endpoint is unreachable, it skips OTLP entirely and logs a single INFO message instead of retrying and failing.
 
-**Recommended:** `STARTD8_OTEL=disabled` for local runs when you don't need Grafana/Tempo.
+**Manual overrides:**
+- `STARTD8_OTEL=disabled` — skip OTel entirely.
+- `STARTD8_OTEL=enabled` — force OTLP configuration (no pre-flight check).
 
 ---
 
@@ -82,11 +81,9 @@ WARNING [startd8.providers.registry] Overwriting existing provider: openai
 ... (repeated for ollama, mock, gemini)
 ```
 
-**Root cause:** `ProviderRegistry.discover()` is called multiple times (e.g., from design phase, plan ingestion, or other entry points). Each call re-registers providers, overwriting existing ones.
+**Root cause:** Entry points and built-in providers both register the same providers; built-ins overwrote entry-point registrations.
 
-**Impact:** Cosmetic; no functional impact. Suggests redundant discovery in the codebase.
-
-**Mitigation:** SDK fix: Make `ProviderRegistry.discover()` idempotent (skip if already discovered) or centralize discovery to a single entry point. Until fixed, safe to ignore.
+**Mitigation:** Fixed in SDK: `_register_builtin_providers()` now skips registration when a provider is already present (e.g. from entry points), eliminating overwrite warnings. `discover()` is already idempotent (`_discovered` flag).
 
 ---
 
@@ -100,23 +97,34 @@ WARNING [startd8.providers.registry] Overwriting existing provider: openai
 
 ## Quick Command Reference
 
-**Run with OTel disabled (cleaner logs):**
+**Dress rehearsal (recommended for proactive issue detection):**
 ```bash
 STARTD8_OTEL=disabled python3 ~/Documents/dev/startd8-sdk/scripts/run_artisan_workflow.py \
   --seed /Users/neilyashinsky/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-context-seed.json \
   --output-dir /Users/neilyashinsky/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-design \
-  --task-filter PI-001
+  --task-filter PI-001 \
+  --dress-rehearsal \
+  --design-max-tokens 8192
 ```
 
-**Increase design tokens (edit seed first):**
+**Full run adopting dress-rehearsal artifacts (skips redundant design LLM calls):**
 ```bash
-# Edit artisan-context-seed.json: design_calibration.PI-001.max_output_tokens → 8192
-# Then run as above.
+STARTD8_OTEL=disabled python3 ~/Documents/dev/startd8-sdk/scripts/run_artisan_workflow.py \
+  --seed /Users/neilyashinsky/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-context-seed.json \
+  --output-dir /Users/neilyashinsky/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-design \
+  --task-filter PI-001 \
+  --adopt-prior \
+  --design-max-tokens 8192
+```
+
+**Run with OTel disabled (cleaner logs):**
+```bash
+STARTD8_OTEL=disabled python3 ... --task-filter PI-001 --design-max-tokens 8192
 ```
 
 **Design-only run (faster feedback):**
 ```bash
-... --task-filter PI-001 --stop-after design
+... --task-filter PI-001 --stop-after design --design-max-tokens 8192
 ```
 
 ---

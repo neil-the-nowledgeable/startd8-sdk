@@ -163,11 +163,20 @@ class LeadContractorCodeGenerator:
                         )
                         retry_context = dict(context)
                         retry_context["_multi_file_retry"] = True
+                        unmatched_list = "\n".join(f"  - {f}" for f in unmatched)
                         retry_context["_multi_file_retry_initial_feedback"] = (
-                            f"Your previous attempt was missing code blocks for: {unmatched}. "
-                            f"You MUST produce a SEPARATE fenced code block for EACH target file. "
-                            f"Format: put '# <full path>' as the first line of each block. "
-                            f"Missing files that MUST be included: {unmatched}"
+                            f"CRITICAL: Your previous attempt was missing code blocks for:\n"
+                            f"{unmatched_list}\n\n"
+                            f"You MUST produce a SEPARATE fenced code block for EVERY target file.\n"
+                            f"Format: the first line inside each code block MUST be a comment "
+                            f"with the full file path, e.g.:\n"
+                            f"```python\n# src/package/module.py\n...\n```\n\n"
+                            f"If a missing file is a shared module or interface stub, produce "
+                            f"a minimal placeholder with imports, docstring, and empty "
+                            f"registrations or pass-through functions. An empty or stub file "
+                            f"is acceptable — omitting it entirely is NOT.\n\n"
+                            f"ALL target files: {target_files}\n"
+                            f"MISSING files that MUST be included: {unmatched}"
                         )
                         return self.generate(
                             task=task,
@@ -175,27 +184,29 @@ class LeadContractorCodeGenerator:
                             target_files=target_files,
                         )
 
-                    # Drafter didn't produce distinct code for every target file.
-                    # Falling back to the full blob would write identical content
-                    # to multiple files (e.g. hook code into a component file).
-                    # Fail fast with a clear error instead of silent corruption.
-                    matched = list(per_file_code.keys())
-                    error_msg = (
-                        f"Multi-file split failed: drafter output matched "
-                        f"{matched or 'no files'} but not {unmatched}. "
-                        f"The drafter must produce distinct code blocks for "
-                        f"each target file. Consider retrying or splitting "
-                        f"this feature into single-file tasks."
+                    # Defense-in-depth: after retry exhausted, generate stubs
+                    # for unmatched files rather than failing the entire task.
+                    # Stubs are minimal placeholders that downstream tasks or
+                    # manual edits can flesh out.
+                    logger.warning(
+                        "Multi-file split still incomplete after retry for %s. "
+                        "Generating stubs for unmatched files: %s",
+                        context.get("task_id", "unknown"),
+                        unmatched,
                     )
-                    logger.error(error_msg)
-                    return GenerationResult(
-                        success=False,
-                        error=error_msg,
-                        input_tokens=result.metrics.input_tokens if result.metrics else 0,
-                        output_tokens=result.metrics.output_tokens if result.metrics else 0,
-                        cost_usd=result.metrics.total_cost if result.metrics else 0.0,
-                        model=self.lead_agent,
+                    per_file_code = extract_multi_file_code(
+                        final_implementation, target_files, stub_missing=True
                     )
+                    stubbed_files = [
+                        f for f in unmatched if f in per_file_code
+                    ]
+                    if stubbed_files:
+                        logger.warning(
+                            "Stub recovery: auto-generated stubs for %s. "
+                            "These are minimal placeholders — downstream "
+                            "tasks should implement the real logic.",
+                            stubbed_files,
+                        )
 
             for target_file in target_files:
                 output_path = self.output_dir / Path(target_file).name
@@ -213,6 +224,40 @@ class LeadContractorCodeGenerator:
                 output_path.write_text(final_implementation, encoding="utf-8")
                 generated_files.append(output_path)
 
+            # Build metadata with stub info for observability
+            gen_metadata: dict = {
+                "lead_cost": result.metadata.get("lead_cost", 0.0),
+                "drafter_cost": result.metadata.get("drafter_cost", 0.0),
+                "cost_efficiency_ratio": result.metadata.get(
+                    "cost_efficiency_ratio", 0.0
+                ),
+            }
+            # Record multi-file split outcome for observability (Layer 8)
+            if len(target_files) > 1:
+                from startd8.utils.code_extraction import STUB_SENTINEL
+
+                stubbed = [
+                    f for f in target_files
+                    if f in per_file_code and STUB_SENTINEL in per_file_code[f]
+                ]
+                gen_metadata["multi_file_split"] = {
+                    "target_count": len(target_files),
+                    "matched_count": len(target_files) - len(stubbed),
+                    "stubbed_count": len(stubbed),
+                    "stubbed_files": stubbed,
+                    "retry_used": "_multi_file_retry" in context,
+                }
+                if stubbed:
+                    logger.info(
+                        "Multi-file split outcome for %s: %d/%d matched by LLM, "
+                        "%d auto-stubbed %s",
+                        context.get("task_id", "unknown"),
+                        len(target_files) - len(stubbed),
+                        len(target_files),
+                        len(stubbed),
+                        stubbed,
+                    )
+
             return GenerationResult(
                 success=True,
                 generated_files=generated_files,
@@ -221,13 +266,7 @@ class LeadContractorCodeGenerator:
                 cost_usd=result.metrics.total_cost if result.metrics else 0.0,
                 iterations=result.metadata.get("total_iterations", 1),
                 model=self.lead_agent,
-                metadata={
-                    "lead_cost": result.metadata.get("lead_cost", 0.0),
-                    "drafter_cost": result.metadata.get("drafter_cost", 0.0),
-                    "cost_efficiency_ratio": result.metadata.get(
-                        "cost_efficiency_ratio", 0.0
-                    ),
-                },
+                metadata=gen_metadata,
             )
 
         except ImportError as e:

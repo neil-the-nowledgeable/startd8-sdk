@@ -48,7 +48,11 @@ from startd8.contractors.artisan_contractor import (  # noqa: E402
     WorkflowStatus,
 )
 from startd8.contractors.context_seed_handlers import ContextSeedHandlers  # noqa: E402
-from startd8.contractors.handoff import write_design_handoff  # noqa: E402
+from startd8.contractors.handoff import (  # noqa: E402
+    DESIGN_HANDOFF_FILENAME,
+    load_design_handoff,
+    write_design_handoff,
+)
 
 
 def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
@@ -236,6 +240,29 @@ def main() -> int:
         "--abort-on-preflight-fail", action="store_true",
         help="Abort PLAN phase if preflight checks report any failures",
     )
+    parser.add_argument(
+        "--design-max-tokens", type=int, default=None,
+        help="Override max_output_tokens for design phase LLM calls (e.g. 8192 to avoid truncation)",
+    )
+    parser.add_argument(
+        "--dress-rehearsal", action="store_true",
+        help=(
+            "Dress-rehearsal mode: run with real LLM calls through DESIGN to surface issues "
+            "(truncation, section mismatches) before committing. Writes to staging dir. "
+            "Distinct from --dry-run (which skips LLM calls entirely). "
+            "Defaults to --stop-after design when set."
+        ),
+    )
+    parser.add_argument(
+        "--adopt-prior", nargs="?", const="auto", default=None,
+        help=(
+            "Adopt design artifacts from a prior dress-rehearsal (or design-only) run. "
+            "Tasks whose design_results are already 'designed' skip LLM calls. "
+            "Pass a directory or handoff file path, or omit the value to auto-detect "
+            "from <output-dir>/.dress-rehearsal/. "
+            "Example: --adopt-prior  (auto)  or  --adopt-prior /path/to/handoff-dir"
+        ),
+    )
 
     args = parser.parse_args()
     setup_logging(verbose=args.verbose)
@@ -250,6 +277,60 @@ def main() -> int:
 
     # Determine output dir
     output_dir = args.output_dir or str(seed_path.parent)
+
+    # Dress-rehearsal mode: run with real LLM calls through DESIGN to surface issues
+    # before committing. Writes to staging dir; distinct from dry-run (no LLM).
+    if args.dress_rehearsal:
+        output_dir = str(Path(output_dir) / ".dress-rehearsal")
+        if not args.stop_after:
+            args.stop_after = "design"
+        # Dress-rehearsal requires real LLM calls; override dry-run if set
+        args.dry_run = False
+        logger.info("Dress-rehearsal mode: output_dir=%s, stop-after=%s", output_dir, args.stop_after)
+
+    # ------------------------------------------------------------------
+    # Adopt prior design artifacts (from dress-rehearsal or design-only)
+    # ------------------------------------------------------------------
+    adopted_design_results: dict[str, Any] | None = None
+
+    if args.adopt_prior is not None:
+        if args.dress_rehearsal:
+            parser.error("--adopt-prior and --dress-rehearsal are mutually exclusive")
+
+        # Resolve source: explicit path or auto-detect from <output_dir>/.dress-rehearsal/
+        if args.adopt_prior == "auto":
+            adopt_source = Path(output_dir) / ".dress-rehearsal"
+        else:
+            adopt_source = Path(args.adopt_prior)
+
+        try:
+            handoff = load_design_handoff(adopt_source)
+            adopted_design_results = handoff.design_results
+            adopted_count = sum(
+                1 for r in adopted_design_results.values()
+                if r.get("status") == "designed"
+            )
+            logger.info(
+                "Adopting %d prior design result(s) from %s (workflow %s)",
+                adopted_count, adopt_source, handoff.workflow_id,
+            )
+        except FileNotFoundError:
+            logger.warning(
+                "No design-handoff.json found at %s — running without prior artifacts",
+                adopt_source,
+            )
+        except ValueError as exc:
+            logger.warning("Could not load prior handoff: %s — ignoring", exc)
+
+    elif not args.dress_rehearsal and not args.dry_run:
+        # Auto-detection hint: check if dress-rehearsal artifacts exist
+        dr_handoff = Path(output_dir) / ".dress-rehearsal" / DESIGN_HANDOFF_FILENAME
+        if dr_handoff.exists():
+            logger.info(
+                "Prior dress-rehearsal artifacts detected at %s. "
+                "Use --adopt-prior to reuse them and skip redundant LLM calls.",
+                dr_handoff.parent,
+            )
 
     # Parse task filter (comma-separated task IDs)
     task_filter: list[str] | None = None
@@ -309,6 +390,8 @@ def main() -> int:
         handler_kwargs["lead_agent"] = args.lead_agent
     if args.drafter_agent:
         handler_kwargs["drafter_agent"] = args.drafter_agent
+    if args.design_max_tokens is not None:
+        handler_kwargs["design_max_tokens"] = args.design_max_tokens
     if args.implement_timeout is not None:
         handler_kwargs["development_timeout_seconds"] = args.implement_timeout
     if args.auto_commit:
@@ -329,6 +412,8 @@ def main() -> int:
         initial_context["task_filter"] = task_filter
     if args.abort_on_preflight_fail:
         initial_context["abort_on_preflight_fail"] = True
+    if adopted_design_results:
+        initial_context["design_results"] = adopted_design_results
 
     try:
         result = workflow.execute(
