@@ -96,6 +96,7 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "preflight_summary", "total_estimated_loc", "architectural_context",
     "design_calibration", "task_filter", "project_root",
     "design_results", "test_results", "review_results",
+    "abort_on_preflight_fail",
 })
 
 
@@ -273,7 +274,7 @@ class WorkflowConfig:
     phase_timeout_seconds: Optional[float] = None
     cost_budget: Optional[float] = None
     max_retries_per_phase: int = 0
-    checkpoint_dir: Optional[str] = None
+    checkpoint_dir: Optional[str] = ".startd8/checkpoints"
     tracer_name: str = "startd8.artisan_contractor"
     drafter_model: str = DRAFT_MODEL_CLAUDE_HAIKU.model_id
     validator_model: str = VALIDATE_MODEL_CLAUDE_SONNET.model_id
@@ -715,6 +716,9 @@ class ArtisanContractorWorkflow:
         else:
             self.checkpoint_store = InMemoryCheckpointStore()
 
+        # Error store — writes to .startd8/task_errors/ under project_root
+        self._error_store: Optional[Any] = None  # Lazy init on first error
+
         self._tracer: Optional[Any] = None
 
     # ------------------------------------------------------------------
@@ -730,6 +734,45 @@ class ArtisanContractorWorkflow:
             else:
                 self._tracer = _NoOpTracer()
         return self._tracer
+
+    @property
+    def error_store(self) -> Any:
+        """Lazy-initialised :class:`TaskErrorStore` for persisting errors."""
+        if self._error_store is None:
+            try:
+                from startd8.storage.error_store import TaskErrorStore
+
+                project_root = self.config.project_root or str(Path.cwd())
+                self._error_store = TaskErrorStore(project_root=project_root)
+            except Exception:
+                self._error_store = None
+        return self._error_store
+
+    def _record_error(
+        self,
+        source: str,
+        error_message: str,
+        *,
+        exception: Optional[Exception] = None,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Best-effort error recording — never raises."""
+        try:
+            store = self.error_store
+            if store is None:
+                return
+            ctx: dict[str, Any] = extra or {}
+            store.record_error(
+                workflow_id=self.config.workflow_id,
+                source=source,
+                error_message=error_message,
+                context=ctx,
+                exception=exception,
+            )
+        except Exception:
+            self._logger.debug(
+                "Failed to persist error record", exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Public API
@@ -898,9 +941,17 @@ class ArtisanContractorWorkflow:
                 WorkflowTimeoutError,
                 CostBudgetExceededError,
                 PhaseExecutionError,
-            ):
+            ) as known_err:
                 if HAS_OTEL and not isinstance(root_span, _NoOpSpan):
                     root_span.set_status(Status(StatusCode.ERROR))
+                self._record_error(
+                    source=getattr(known_err, "phase", WorkflowPhase.PLAN).value
+                    if isinstance(known_err, PhaseExecutionError)
+                    else "workflow",
+                    error_message=str(known_err),
+                    exception=known_err,
+                    extra={"cost": cost_tracker.cumulative_cost},
+                )
                 raise
 
             except Exception as err:
@@ -911,6 +962,12 @@ class ArtisanContractorWorkflow:
                 if HAS_OTEL and not isinstance(root_span, _NoOpSpan):
                     root_span.record_exception(err)
                     root_span.set_status(Status(StatusCode.ERROR))
+                self._record_error(
+                    source="workflow",
+                    error_message=str(err),
+                    exception=err,
+                    extra={"cost": cost_tracker.cumulative_cost},
+                )
                 raise
 
             finally:
@@ -1102,15 +1159,20 @@ class ArtisanContractorWorkflow:
                             {"timeout_seconds": effective_timeout or -1},
                         )
 
+                    timeout_msg = f"Phase timed out after {effective_timeout}s"
+                    self._record_error(
+                        source=phase.value,
+                        error_message=timeout_msg,
+                        extra={"attempt": attempt, "duration_seconds": duration},
+                    )
+
                     return PhaseResult(
                         phase=phase,
                         status=PhaseStatus.TIMED_OUT,
                         start_time=phase_start_iso,
                         end_time=datetime.now(timezone.utc).isoformat(),
                         duration_seconds=duration,
-                        error_message=(
-                            f"Phase timed out after {effective_timeout}s"
-                        ),
+                        error_message=timeout_msg,
                         retry_count=attempt,
                     )
 
@@ -1147,6 +1209,16 @@ class ArtisanContractorWorkflow:
                         phase.value,
                         attempt + 1,
                         err,
+                    )
+
+                    self._record_error(
+                        source=phase.value,
+                        error_message=str(err),
+                        exception=err,
+                        extra={
+                            "attempt": attempt + 1,
+                            "duration_seconds": duration,
+                        },
                     )
 
                     return PhaseResult(

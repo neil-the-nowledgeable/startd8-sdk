@@ -228,7 +228,7 @@ class DevelopmentPlan:
         max_parallel (int): Override for max concurrent chunks.
             Default: uses DevelopmentPhase.max_parallel.
         state_dir (str): Directory for state files.
-            Default: ".startd8_state".
+            Default: ".startd8/state".
     """
 
     plan_id: str
@@ -871,6 +871,10 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             "environment_checks": meta.get("environment_checks", []),
             "project_root": str(self._output_dir),
         }
+        # Per-task max_output_tokens from design_calibration (implement_max_output_tokens)
+        mt = meta.get("max_output_tokens")
+        if mt is not None:
+            gen_ctx["max_tokens"] = mt
 
         # Read existing file contents for modify-in-place tasks
         for target in chunk.file_targets:
@@ -1152,15 +1156,22 @@ class JsonFileStateStore(StateStore):
     configured directory.
     """
 
-    def __init__(self, directory: str = ".startd8_state"):
+    def __init__(self, directory: str = ".startd8/state"):
         """
         Initialize the JSON file state store.
 
         Args:
             directory: Directory to store state files. Created if needed.
+                Defaults to ``.startd8/state``.  The legacy
+                ``.startd8_state`` directory is checked on read when
+                the primary directory has no matching file.
         """
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
+        # Legacy fallback: check the old location when reading state
+        self._legacy_directory = Path(
+            str(directory).replace(".startd8/state", ".startd8_state")
+        ) if ".startd8/state" in str(directory) else None
         self.logger = logging.getLogger("startd8.development.state")
 
     def _get_state_path(self, plan_id: str) -> Path:
@@ -1170,8 +1181,21 @@ class JsonFileStateStore(StateStore):
         return self.directory / f"{safe_id}_state.json"
 
     async def load_state(self, plan_id: str) -> Dict[str, ChunkState]:
-        """Load state from a JSON file."""
+        """Load state from a JSON file.
+
+        Falls back to the legacy ``.startd8_state/`` directory if the
+        primary path does not exist.
+        """
         state_path = self._get_state_path(plan_id)
+
+        if not state_path.exists() and self._legacy_directory:
+            safe_id = "".join(c if c.isalnum() or c in "-_." else "_" for c in plan_id)
+            legacy_path = self._legacy_directory / f"{safe_id}_state.json"
+            if legacy_path.exists():
+                self.logger.info(
+                    "Migrating state from legacy %s → %s", legacy_path, state_path,
+                )
+                state_path = legacy_path
 
         if not state_path.exists():
             self.logger.debug(f"No persisted state found for plan {plan_id}")
@@ -1467,7 +1491,7 @@ class DevelopmentPhase:
             test_runner: Test runner implementation.
                 Default: DefaultTestRunner (shell commands).
             state_store: State storage backend.
-                Default: JsonFileStateStore (".startd8_state" directory).
+                Default: JsonFileStateStore (".startd8/state" directory).
             max_parallel: Maximum concurrent chunk executions per tier.
                 Must be >= 1.
             logger: Logger instance.

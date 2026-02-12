@@ -15,9 +15,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure the SDK is importable (dev mode — installed editable is preferred)
 _src = str(Path(__file__).resolve().parent.parent / "src")
@@ -32,6 +34,25 @@ from startd8.contractors.artisan_contractor import (
 )
 from startd8.contractors.context_seed_handlers import ContextSeedHandlers
 from startd8.contractors.handoff import write_design_handoff
+
+
+def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
+    """Extract artifact paths and context_files from seed for handoff."""
+    try:
+        data = json.loads(seed_path.read_text(encoding="utf-8"))
+        artifacts = data.get("artifacts") or {}
+        context_files = data.get("context_files") or []
+        return {
+            "artifact_manifest_path": artifacts.get("artifact_manifest_path"),
+            "project_context_path": artifacts.get("project_context_path"),
+            "context_files": context_files,
+        }
+    except (json.JSONDecodeError, OSError):
+        return {
+            "artifact_manifest_path": None,
+            "project_context_path": None,
+            "context_files": [],
+        }
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -71,6 +92,10 @@ def main() -> int:
         "--verbose", "-v", action="store_true",
         help="Enable debug logging",
     )
+    parser.add_argument(
+        "--abort-on-preflight-fail", action="store_true",
+        help="Abort PLAN phase if preflight checks report any failures",
+    )
 
     args = parser.parse_args()
     setup_logging(verbose=args.verbose)
@@ -107,7 +132,9 @@ def main() -> int:
     for wp_phase, handler in handlers.items():
         workflow.register_handler(wp_phase, handler)
 
-    initial_context = {"enriched_seed_path": str(seed_path.resolve())}
+    initial_context: dict = {"enriched_seed_path": str(seed_path.resolve())}
+    if args.abort_on_preflight_fail:
+        initial_context["abort_on_preflight_fail"] = True
 
     logger.info("Workflow ID: %s", config.workflow_id)
     logger.info("Design-only: phases=%s", [p.value for p in phases])
@@ -120,6 +147,7 @@ def main() -> int:
 
     # Write handoff for the second half (IMPLEMENT → FINALIZE)
     if result.status == WorkflowStatus.COMPLETED and not args.dry_run:
+        extras = _handoff_extras_from_seed(seed_path)
         handoff_path = write_design_handoff(
             output_dir=output_dir,
             enriched_seed_path=str(seed_path.resolve()),
@@ -128,6 +156,9 @@ def main() -> int:
             completed_phases=[p.value for p in phases],
             design_results=initial_context.get("design_results", {}),
             scaffold=initial_context.get("scaffold", {}),
+            artifact_manifest_path=extras.get("artifact_manifest_path"),
+            project_context_path=extras.get("project_context_path"),
+            context_files=extras.get("context_files", []),
         )
         logger.info("Wrote design handoff: %s", handoff_path)
 

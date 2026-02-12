@@ -67,6 +67,7 @@ def _make_seed_task(
         post_generation_validators=["ruff", "mypy"],
         available_siblings=[],
         existing_content_hash=None,
+        design_doc_sections=[],
     )
 
 
@@ -194,6 +195,20 @@ class TestTasksToChunks:
         assert meta["estimated_loc"] == 100
         assert meta["post_generation_validators"] == ["ruff", "mypy"]
         assert meta["environment_checks"] == [{"name": "check", "status": "pass"}]
+
+    def test_calibration_map_populates_max_output_tokens(self):
+        """design_calibration implement_max_output_tokens is passed to chunk metadata."""
+        tasks = [_make_seed_task(task_id="T1"), _make_seed_task(task_id="T2")]
+        calibration_map = {
+            "T1": {"implement_max_output_tokens": 8192},
+            "T2": {"implement_max_output_tokens": 32768},
+        }
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            tasks, design_results={}, calibration_map=calibration_map
+        )
+
+        assert chunks[0].metadata["max_output_tokens"] == 8192
+        assert chunks[1].metadata["max_output_tokens"] == 32768
 
 
 # ============================================================================

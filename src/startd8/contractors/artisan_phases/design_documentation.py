@@ -984,6 +984,11 @@ class DesignDocumentationPhase:
             depth = feature_context.additional_context.get("depth_guidance")
             if depth:
                 parts.append(f"**Design Scope:** {depth}")
+            doc_hints = feature_context.additional_context.get("design_doc_sections")
+            if doc_hints:
+                parts.append(
+                    f"**Content hints to emphasize:** {', '.join(doc_hints)}"
+                )
             if parts:
                 project_context = (
                     "**Context for Review:**\n"

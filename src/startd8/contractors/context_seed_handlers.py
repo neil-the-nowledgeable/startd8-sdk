@@ -201,6 +201,8 @@ class SeedTask:
     post_generation_validators: list[str]
     available_siblings: list[str]
     existing_content_hash: Optional[str]
+    # Task-specific design doc content hints (supplement calibration sections)
+    design_doc_sections: list[str]
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> SeedTask:
@@ -230,6 +232,7 @@ class SeedTask:
             ),
             available_siblings=enrichment.get("available_siblings", []),
             existing_content_hash=enrichment.get("existing_content_hash"),
+            design_doc_sections=context.get("design_doc_sections", []),
         )
         if not task.task_id:
             raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
@@ -503,6 +506,11 @@ class PlanPhaseHandler(AbstractPhaseHandler):
                 "PLAN phase: %d preflight failures detected — review before implementing",
                 fail_count,
             )
+            if context.get("abort_on_preflight_fail"):
+                raise ValueError(
+                    f"PLAN phase aborted: {fail_count} preflight failure(s) detected. "
+                    "Address preflight issues before proceeding, or run without --abort-on-preflight-fail."
+                )
 
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
@@ -735,6 +743,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         depth_guidance = cal.get("depth_guidance")
         if depth_guidance:
             additional_context["depth_guidance"] = depth_guidance
+
+        # Task-specific design doc content hints (supplement structural sections)
+        if task.design_doc_sections:
+            additional_context["design_doc_sections"] = task.design_doc_sections
 
         sections = cal.get("sections")
         max_output_tokens = cal.get("max_output_tokens")
@@ -995,6 +1007,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         tasks: list[SeedTask],
         max_retries: int = 2,
         design_results: dict[str, Any] | None = None,
+        calibration_map: dict[str, dict[str, Any]] | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -1004,6 +1017,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             design_results: Per-task design results from the DESIGN phase.
                 Maps task_id → dict with 'design_document' key containing the
                 raw design document text to inject into implementation prompts.
+            calibration_map: Per-task calibration (design_calibration) with
+                optional implement_max_output_tokens for per-task token caps.
 
         Returns:
             Tuple of (chunks, skipped_reports). ``skipped_reports`` contains
@@ -1054,6 +1069,10 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             if task_design.get("status") == "designed":
                 design_doc_text = task_design.get("design_document")
 
+            # Per-task implement token cap from design_calibration
+            task_cal = (calibration_map or {}).get(task.task_id, {})
+            max_output_tokens = task_cal.get("implement_max_output_tokens")
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
@@ -1071,6 +1090,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     "post_generation_validators": task.post_generation_validators,
                     "title": task.title,
                     "design_document": design_doc_text,
+                    "max_output_tokens": max_output_tokens,
                 },
             ))
 
@@ -1312,7 +1332,12 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         )
 
         # --- Resume check: load prior generation results if available ---
-        results_path = project_root / ".startd8_state" / "generation_results.json"
+        results_path = project_root / ".startd8" / "state" / "generation_results.json"
+        # Backward compat: check legacy location
+        if not results_path.exists():
+            _legacy = project_root / ".startd8_state" / "generation_results.json"
+            if _legacy.exists():
+                results_path = _legacy
         resumed = False
         if results_path.exists() and not dry_run:
             try:
@@ -1391,8 +1416,12 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             # Convert SeedTasks → DevelopmentChunks (with env pre-filter)
             # Inject design documents from the DESIGN phase into chunk metadata
             design_results = context.get("design_results", {})
+            calibration_map = context.get("design_calibration", {})
             chunks, skipped_reports = self._tasks_to_chunks(
-                tasks, max_retries=2, design_results=design_results
+                tasks,
+                max_retries=2,
+                design_results=design_results,
+                calibration_map=calibration_map,
             )
 
             if not chunks:
@@ -1437,7 +1466,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 chunks=chunks,
                 config={
                     "dry_run": False,
-                    "state_dir": str(project_root / ".startd8_state"),
+                    "state_dir": str(project_root / ".startd8" / "state"),
                     "cancel_event": cancel_event,
                 },
             )
@@ -1445,7 +1474,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             # Build phase with test runner (no shell test commands — tests are
             # handled by DomainChecklist and the TEST phase handler)
             state_store = JsonFileStateStore(
-                directory=str(project_root / ".startd8_state"),
+                directory=str(project_root / ".startd8" / "state"),
             )
             dev_phase = DevelopmentPhase(
                 executor=executor,
@@ -1478,6 +1507,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             )
 
             # Persist generation_results to disk for crash recovery
+            # Always write to the canonical .startd8/state/ location
+            save_path = project_root / ".startd8" / "state" / "generation_results.json"
             serializable = {}
             for tid, gr in generation_results.items():
                 serializable[tid] = {
@@ -1490,11 +1521,11 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     "iterations": gr.iterations,
                     "model": gr.model,
                 }
-            results_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(results_path, serializable, indent=2)
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(save_path, serializable, indent=2)
             logger.info(
                 "IMPLEMENT: saved %d generation results to %s",
-                len(generation_results), results_path,
+                len(generation_results), save_path,
             )
 
         # --- Auto-commit each feature's generated files ---

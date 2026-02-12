@@ -114,7 +114,11 @@ class LeadContractorCodeGenerator:
                 "check_truncation": self.check_truncation,
                 "strict_truncation": self.strict_truncation,
             }
-            if self.max_tokens is not None:
+            # Per-task override from context (design_calibration implement_max_output_tokens)
+            max_tokens = context.get("max_tokens")
+            if max_tokens is not None:
+                config["max_tokens"] = max_tokens
+            elif self.max_tokens is not None:
                 config["max_tokens"] = self.max_tokens
 
             # Run the workflow

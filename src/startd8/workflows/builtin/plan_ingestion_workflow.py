@@ -72,12 +72,15 @@ Return a JSON object (no markdown fences) with exactly these keys:
       "target_files": ["path/to/file.py"],
       "dependencies": ["F-002"],
       "estimated_loc": 100,
-      "labels": ["label"]
+      "labels": ["label"],
+      "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"]
     }}
   ],
   "mentioned_files": ["every file path mentioned in the plan"],
   "dependency_graph": {{"F-001": ["F-002"]}}
 }}
+
+design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
 
 Be thorough. Extract every feature, file reference, and dependency.
 """
@@ -252,6 +255,39 @@ def _parse_context_files(
     if isinstance(raw, str):
         return [f.strip() for f in raw.split(",") if f.strip()]
     return list(raw)
+
+
+def _context_files_with_checksums(
+    context_files: Optional[List[str]],
+    base_dir: Optional[Path] = None,
+) -> List[Dict[str, Any]]:
+    """Build context_files list with optional checksums for seed/handoff.
+
+    Args:
+        context_files: List of file paths.
+        base_dir: Base directory for resolving relative paths (default: cwd).
+
+    Returns:
+        List of {"path": str, "checksum": str | None} dicts.
+    """
+    if not context_files:
+        return []
+    import hashlib
+    result: List[Dict[str, Any]] = []
+    base = base_dir or Path.cwd()
+    for p in context_files:
+        entry: Dict[str, Any] = {"path": p}
+        try:
+            resolved = Path(p) if Path(p).is_absolute() else base / p
+            if resolved.exists() and resolved.is_file():
+                content = resolved.read_bytes()
+                entry["checksum"] = hashlib.sha256(content).hexdigest()
+            else:
+                entry["checksum"] = None
+        except (OSError, PermissionError):
+            entry["checksum"] = None
+        result.append(entry)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -451,6 +487,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 dependencies=f.get("dependencies", []),
                 estimated_loc=f.get("estimated_loc", 0),
                 labels=f.get("labels", []),
+                design_doc_sections=f.get("design_doc_sections", []),
             ))
 
         parsed = ParsedPlan(
@@ -780,6 +817,14 @@ class PlanIngestionWorkflow(WorkflowBase):
             else:
                 priority = "low"
 
+            ctx: Dict[str, Any] = {
+                "feature_id": feat.feature_id,
+                "target_files": list(feat.target_files),
+                "estimated_loc": feat.estimated_loc,
+            }
+            if feat.design_doc_sections:
+                ctx["design_doc_sections"] = list(feat.design_doc_sections)
+
             tasks.append({
                 "task_id": tid,
                 "title": feat.name,
@@ -790,11 +835,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "depends_on": deps,
                 "config": {
                     "task_description": feat.description,
-                    "context": {
-                        "feature_id": feat.feature_id,
-                        "target_files": list(feat.target_files),
-                        "estimated_loc": feat.estimated_loc,
-                    },
+                    "context": ctx,
                 },
             })
 
@@ -858,6 +899,49 @@ class PlanIngestionWorkflow(WorkflowBase):
                     ctx["focus_areas"] = list(areas)
 
         return ctx
+
+    @staticmethod
+    def _load_onboarding_metadata(
+        context_files: Optional[List[str]],
+        output_dir: Path,
+    ) -> Optional[Dict[str, Any]]:
+        """Load onboarding-metadata.json if present among context files.
+
+        When context_files includes a path ending with 'onboarding-metadata.json',
+        load and return its contents. Used for Items 5, 7 (merge into seed,
+        artifact_manifest_path, project_context_path).
+        """
+        if not context_files:
+            return None
+        for raw_path in context_files:
+            path = Path(raw_path.strip()).expanduser()
+            if path.name != "onboarding-metadata.json":
+                continue
+            if not path.is_absolute():
+                # Resolve relative to output_dir (common for plan ingestion)
+                path = (output_dir / path).resolve()
+            if not path.exists():
+                logger.debug(
+                    "onboarding-metadata.json referenced but not found: %s",
+                    path,
+                )
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    logger.debug(
+                        "Loaded onboarding metadata from %s (%d keys)",
+                        path,
+                        len(data),
+                    )
+                    return data
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning(
+                    "Failed to load onboarding-metadata.json %s: %s",
+                    path,
+                    exc,
+                )
+        return None
 
     @staticmethod
     def _derive_architectural_context(
@@ -982,10 +1066,19 @@ class PlanIngestionWorkflow(WorkflowBase):
             }.get(complexity, "standard")
             tier = DEPTH_TIERS[tier_name]
 
+            # Implement phase token caps: code gen needs more than design.
+            # brief=8192, standard=16384, comprehensive=32768
+            implement_tokens = {
+                "brief": 8192,
+                "standard": 16384,
+                "comprehensive": 32768,
+            }.get(tier_name, 16384)
+
             calibration[task["task_id"]] = {
                 "depth_tier": tier_name,
                 "sections": tier["sections"],
                 "max_output_tokens": tier["max_tokens"],
+                "implement_max_output_tokens": implement_tokens,
                 "depth_guidance": tier["guidance"],
                 "complexity": complexity,
             }
@@ -1057,21 +1150,43 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
             design_calibration = self._derive_design_calibration(tasks)
 
+            # Build artifacts dict
+            artifacts: Dict[str, Any] = {
+                "plan_document_path": str(doc_path),
+                "review_config_path": str(config_path),
+            }
+
+            # Merge onboarding metadata if present in context files (Items 5, 7)
+            onboarding = self._load_onboarding_metadata(context_files, output_dir)
+            onboarding_var: Optional[Dict[str, Any]] = None
+            if onboarding:
+                onboarding_var = onboarding
+                artifacts["onboarding"] = onboarding
+                amp = onboarding.get("artifact_manifest_path")
+                pcp = onboarding.get("project_context_path")
+                if amp:
+                    artifacts["artifact_manifest_path"] = str(amp)
+                if pcp:
+                    artifacts["project_context_path"] = str(pcp)
+
+            context_files_list = _context_files_with_checksums(
+                context_files, base_dir=output_dir
+            ) if context_files else None
+
             seed = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
                 plan=parsed_plan.to_seed_dict(),
                 complexity=complexity.to_seed_dict(),
                 tasks=tasks,
-                artifacts={
-                    "plan_document_path": str(doc_path),
-                    "review_config_path": str(config_path),
-                },
+                artifacts=artifacts,
                 ingestion_metrics={
                     **{f"{k}_cost": v for k, v in costs.items()},
                     "total_cost": total_cost,
                 },
                 architectural_context=architectural_context,
                 design_calibration=design_calibration,
+                onboarding=onboarding_var,
+                context_files=context_files_list,
             )
 
             context_seed_path = output_dir / "artisan-context-seed.json"

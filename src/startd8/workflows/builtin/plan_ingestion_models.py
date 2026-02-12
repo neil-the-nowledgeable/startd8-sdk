@@ -50,6 +50,8 @@ class ParsedFeature:
     dependencies: List[str] = field(default_factory=list)
     estimated_loc: int = 0
     labels: List[str] = field(default_factory=list)
+    # Task-specific content hints for design doc (e.g. "Parameter validation", "Error handling")
+    design_doc_sections: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -81,6 +83,7 @@ class ParsedPlan:
                     "dependencies": list(f.dependencies),
                     "estimated_loc": f.estimated_loc,
                     "labels": list(f.labels),
+                    "design_doc_sections": list(f.design_doc_sections),
                 }
                 for f in self.features
             ],
@@ -138,12 +141,16 @@ class ArtisanContextSeed:
     plan: Optional[Dict[str, Any]] = None
     complexity: Optional[Dict[str, Any]] = None
     tasks: List[Dict[str, Any]] = field(default_factory=list)
-    artifacts: Dict[str, str] = field(default_factory=dict)
+    artifacts: Dict[str, Any] = field(default_factory=dict)
     ingestion_metrics: Dict[str, Any] = field(default_factory=dict)
+    # Optional onboarding metadata (artifact_manifest_path, project_context_path, etc.)
+    onboarding: Optional[Dict[str, Any]] = None
     # Shared architectural context from manifest + cross-feature analysis
     architectural_context: Optional[Dict[str, Any]] = None
     # Per-task design calibration (sections, max_tokens) from SizeEstimator
     design_calibration: Optional[Dict[str, Dict[str, Any]]] = None
+    # Context files used for plan ingestion (path + optional checksum)
+    context_files: Optional[List[Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -160,6 +167,10 @@ class ArtisanContextSeed:
             d["architectural_context"] = self.architectural_context
         if self.design_calibration is not None:
             d["design_calibration"] = self.design_calibration
+        if self.onboarding is not None:
+            d["onboarding"] = self.onboarding
+        if self.context_files is not None:
+            d["context_files"] = self.context_files
         return d
 
 

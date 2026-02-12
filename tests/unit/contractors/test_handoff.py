@@ -70,6 +70,20 @@ class TestWriteDesignHandoff:
         assert data["design_results"] == {}
         assert data["scaffold"] == {}
         assert data["completed_phases"] == []
+        assert data["context_files"] == []
+
+    def test_context_files_round_trip(self, tmp_path, handoff_kwargs):
+        ctx_files = [
+            {"path": "src/foo.py", "checksum": "abc123"},
+            {"path": "docs/plan.md", "checksum": None},
+        ]
+        write_design_handoff(
+            output_dir=str(tmp_path),
+            context_files=ctx_files,
+            **handoff_kwargs,
+        )
+        handoff = load_design_handoff(tmp_path)
+        assert handoff.context_files == ctx_files
 
 
 # ── load_design_handoff ──────────────────────────────────────────────

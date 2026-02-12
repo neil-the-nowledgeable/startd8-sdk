@@ -11,10 +11,12 @@
 
 manifest_id: startd8.workflow.capabilities
 name: StartD8 Workflow System Capabilities
-version: "2.6.0"
+version: "2.8.0"
 description: |
   Capabilities for StartD8 SDK workflow system.
   Protocol-based multi-agent orchestration with cost tracking and observability.
+  v2.8.0: ImplementPhaseHandler wired to LeadContractorCodeGenerator — real code generation, file reads, dep context.
+  v2.7.0: FinalizePhaseHandler enriched with artifact checksums, cross-phase task-ID join, and overall status rollup.
   v2.6.0: Dual-document architectural review, ContextCore task tracking emitter, design quality context enrichment.
   v2.5.0: Added domain preflight integration into PrimeContractor for domain-aware constraints and post-validation.
   v2.4.0: Added artisan contractor orchestrator and design handoff for two-half split execution.
@@ -554,6 +556,15 @@ capabilities:
         design calibration (depth tiers: brief ≤50 LOC / standard 51-150 / comprehensive >150
         with section count and max_output_tokens scaling). Context flows via seed architectural_context
         and design_calibration keys.
+        v2.7.0: FinalizePhaseHandler enriched — artifacts include sha256, line_count, domain;
+        cost summary aggregates implementation + test + review phases; manifest includes per-task
+        status rollup (generation/test/review joined by task_id); report includes overall status
+        (success/partial/failed) with tasks_succeeded/tasks_failed counts.
+        v2.8.0: ImplementPhaseHandler fully wired to LeadContractorCodeGenerator.
+        _resolve_generator(project_root) creates generator with HandlerConfig params + output_dir.
+        _build_task_context() reads existing files (60KB cap) and dependency output files.
+        _generate_for_task() calls generator.generate() and reports cost/tokens/iterations.
+        execute() removes NotImplementedError safety net — all paths now live.
       user: |
         Run full artisan workflow:
         python3 scripts/run_artisan_workflow.py --seed seed.json --output-dir out/ --cost-budget 10
@@ -570,7 +581,7 @@ capabilities:
         description: "ArtisanContractorWorkflow orchestrator with checkpoints, cost budget, OTel"
       - type: code
         ref: src/startd8/contractors/context_seed_handlers.py
-        description: "7 phase handlers with design quality context: architectural_context + design_calibration"
+        description: "7 phase handlers: ImplementPhaseHandler wired to LeadContractorCodeGenerator; design quality context: architectural_context + design_calibration"
       - type: test
         ref: tests/unit/contractors/test_design_phase_handler.py
         description: "22 tests covering phases, orchestrator integration, dry-run"
@@ -1385,6 +1396,14 @@ summary:
 # ==============================================================================
 
 changelog:
+  - version: "2.8.0"
+    date: "2026-02-10"
+    changes:
+      - "Updated startd8.workflow.contractor.artisan_orchestrator: ImplementPhaseHandler wired to LeadContractorCodeGenerator — _resolve_generator(project_root) deferred creation, _build_task_context() real file reads (60KB cap) + dependency outputs, _generate_for_task() live generation call, NotImplementedError safety net removed"
+  - version: "2.7.0"
+    date: "2026-02-12"
+    changes:
+      - "Updated startd8.workflow.contractor.artisan_orchestrator: FinalizePhaseHandler enriched with artifact checksums (sha256, line_count, domain), cross-phase cost aggregation (impl+test+review), per-task status rollup joining generation/test/review by task_id, overall success/partial/failed status"
   - version: "2.6.0"
     date: "2026-02-12"
     changes:

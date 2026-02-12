@@ -69,6 +69,10 @@ class HandoffData:
     completed_phases: list[str] = field(default_factory=list)
     design_results: dict[str, Any] = field(default_factory=dict)
     scaffold: dict[str, Any] = field(default_factory=dict)
+    artifact_manifest_path: str | None = None
+    project_context_path: str | None = None
+    # Context files the design was based on (path + optional checksum)
+    context_files: list[dict[str, Any]] = field(default_factory=list)
     created_at: str = ""
     schema_version: int = SCHEMA_VERSION
 
@@ -81,6 +85,9 @@ def write_design_handoff(
     completed_phases: list[str] | None = None,
     design_results: dict[str, Any] | None = None,
     scaffold: dict[str, Any] | None = None,
+    artifact_manifest_path: str | None = None,
+    project_context_path: str | None = None,
+    context_files: list[dict[str, Any]] | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -104,6 +111,9 @@ def write_design_handoff(
         completed_phases=completed_phases or [],
         design_results=design_results or {},
         scaffold=scaffold or {},
+        artifact_manifest_path=artifact_manifest_path,
+        project_context_path=project_context_path,
+        context_files=context_files or [],
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,
     )
@@ -174,6 +184,9 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         completed_phases=raw.get("completed_phases", []),
         design_results=raw.get("design_results", {}),
         scaffold=raw.get("scaffold", {}),
+        artifact_manifest_path=raw.get("artifact_manifest_path"),
+        project_context_path=raw.get("project_context_path"),
+        context_files=raw.get("context_files", []),
         created_at=raw.get("created_at", ""),
         schema_version=version,
     )

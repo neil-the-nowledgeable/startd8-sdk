@@ -118,6 +118,7 @@ def _make_seed_task(
         post_generation_validators=["pytest"],
         available_siblings=[],
         existing_content_hash=None,
+        design_doc_sections=overrides.get("design_doc_sections", []),
     )
 
 
@@ -252,6 +253,7 @@ class TestDesignCalibration:
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "brief"
         assert cal["T1"]["max_output_tokens"] == 2048
+        assert cal["T1"]["implement_max_output_tokens"] == 8192
         assert len(cal["T1"]["sections"]) == 3
 
     def test_standard_for_medium_tasks(self):
@@ -259,6 +261,7 @@ class TestDesignCalibration:
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "standard"
         assert cal["T1"]["max_output_tokens"] == 4096
+        assert cal["T1"]["implement_max_output_tokens"] == 16384
         assert len(cal["T1"]["sections"]) == 5
 
     def test_comprehensive_for_large_tasks(self):
@@ -266,6 +269,7 @@ class TestDesignCalibration:
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "comprehensive"
         assert cal["T1"]["max_output_tokens"] == 8192
+        assert cal["T1"]["implement_max_output_tokens"] == 32768
         assert len(cal["T1"]["sections"]) == 7
 
     def test_calibration_fallback_heuristics(self):
@@ -533,6 +537,16 @@ class TestDesignPhaseHandlerContext:
         assert "PI-001" in prior
         assert "PI-003" in prior
         assert "Previously designed" in prior
+
+    def test_design_doc_sections_in_context(self):
+        """Task design_doc_sections flow to additional_context."""
+        task = _make_seed_task(
+            "PI-001",
+            design_doc_sections=["Parameter validation", "Error handling"],
+        )
+        fc = DesignPhaseHandler._task_to_feature_context(task)
+        hints = fc.additional_context.get("design_doc_sections", [])
+        assert hints == ["Parameter validation", "Error handling"]
 
     def test_architectural_context_shared_modules(self):
         """Shared modules from arch context appear when task targets overlap."""

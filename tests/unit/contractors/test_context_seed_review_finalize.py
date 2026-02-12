@@ -38,6 +38,7 @@ def _seed_task(task_id: str = "T1") -> SeedTask:
         post_generation_validators=["ruff"],
         available_siblings=[],
         existing_content_hash=None,
+        design_doc_sections=[],
     )
 
 

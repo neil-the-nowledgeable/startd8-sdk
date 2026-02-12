@@ -40,15 +40,34 @@ _src = str(Path(__file__).resolve().parent.parent / "src")
 if _src not in sys.path:
     sys.path.insert(0, _src)
 
-from startd8.contractors.artisan_contractor import (
+from startd8.contractors.artisan_contractor import (  # noqa: E402
     ArtisanContractorWorkflow,
     WorkflowConfig,
     WorkflowPhase,
     WorkflowResult,
     WorkflowStatus,
 )
-from startd8.contractors.context_seed_handlers import ContextSeedHandlers
-from startd8.contractors.handoff import write_design_handoff
+from startd8.contractors.context_seed_handlers import ContextSeedHandlers  # noqa: E402
+from startd8.contractors.handoff import write_design_handoff  # noqa: E402
+
+
+def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
+    """Extract artifact paths and context_files from seed for handoff."""
+    try:
+        data = json.loads(seed_path.read_text(encoding="utf-8"))
+        artifacts = data.get("artifacts") or {}
+        context_files = data.get("context_files") or []
+        return {
+            "artifact_manifest_path": artifacts.get("artifact_manifest_path"),
+            "project_context_path": artifacts.get("project_context_path"),
+            "context_files": context_files,
+        }
+    except (json.JSONDecodeError, OSError):
+        return {
+            "artifact_manifest_path": None,
+            "project_context_path": None,
+            "context_files": [],
+        }
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -168,8 +187,8 @@ def main() -> int:
         help="IMPLEMENT phase internal DevelopmentPhase thread timeout in seconds",
     )
     parser.add_argument(
-        "--checkpoint-dir", default=None,
-        help="Directory for checkpoint files (enables resume)",
+        "--checkpoint-dir", default=".startd8/checkpoints",
+        help="Directory for checkpoint files (default: .startd8/checkpoints)",
     )
     parser.add_argument(
         "--resume", action="store_true",
@@ -204,6 +223,10 @@ def main() -> int:
             "Only these tasks run through all 7 phases. "
             "Enables deterministic workflow IDs for reliable --resume per task."
         ),
+    )
+    parser.add_argument(
+        "--abort-on-preflight-fail", action="store_true",
+        help="Abort PLAN phase if preflight checks report any failures",
     )
 
     args = parser.parse_args()
@@ -294,6 +317,8 @@ def main() -> int:
     }
     if task_filter:
         initial_context["task_filter"] = task_filter
+    if args.abort_on_preflight_fail:
+        initial_context["abort_on_preflight_fail"] = True
 
     try:
         result = workflow.execute(
@@ -311,6 +336,7 @@ def main() -> int:
         and phases is not None
         and WorkflowPhase.DESIGN in phases
     ):
+        extras = _handoff_extras_from_seed(seed_path)
         handoff_path = write_design_handoff(
             output_dir=output_dir,
             enriched_seed_path=str(seed_path.resolve()),
@@ -319,6 +345,9 @@ def main() -> int:
             completed_phases=[p.value for p in phases],
             design_results=initial_context.get("design_results", {}),
             scaffold=initial_context.get("scaffold", {}),
+            artifact_manifest_path=extras.get("artifact_manifest_path"),
+            project_context_path=extras.get("project_context_path"),
+            context_files=extras.get("context_files", []),
         )
         logger.info("Wrote design handoff: %s", handoff_path)
 

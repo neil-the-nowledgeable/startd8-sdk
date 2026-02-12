@@ -65,6 +65,7 @@ def _make_seed_task(
         post_generation_validators=["ruff", "mypy"],
         available_siblings=[],
         existing_content_hash=None,
+        design_doc_sections=[],
     )
 
 
