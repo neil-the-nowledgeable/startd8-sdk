@@ -364,6 +364,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                     required=False,
                     description="Cost hard limit in USD — workflow fails if exceeded",
                 ),
+                WorkflowInput(
+                    name="project_root",
+                    type="string",
+                    required=False,
+                    description="Target project root directory (used for .contextcore.yaml auto-discovery)",
+                ),
+                WorkflowInput(
+                    name="contextcore_yaml",
+                    type="file",
+                    required=False,
+                    description="Explicit path to .contextcore.yaml (overrides auto-discovery)",
+                ),
             ],
         )
 
@@ -803,7 +815,9 @@ class PlanIngestionWorkflow(WorkflowBase):
             if objectives:
                 ctx["objectives"] = [
                     {
-                        "name": getattr(obj, "name", str(obj)),
+                        # v2 ObjectiveV2 has .description, v1 has .name
+                        "name": getattr(obj, "description", None)
+                        or getattr(obj, "name", str(obj)),
                         "key_results": getattr(obj, "key_results", []),
                     }
                     for obj in objectives
@@ -818,14 +832,19 @@ class PlanIngestionWorkflow(WorkflowBase):
                     {
                         "rule": getattr(c, "rule", str(c)),
                         "severity": getattr(c, "severity", "info"),
-                        "scope": getattr(c, "scope", "*"),
+                        # v2 Constraint has .applies_to, v1 has .scope
+                        "scope": getattr(c, "applies_to", None)
+                        or getattr(c, "scope", "*"),
                     }
                     for c in constraints
                 ]
             preferences = getattr(guidance, "preferences", [])
             if preferences:
                 ctx["preferences"] = [
-                    getattr(p, "preference", str(p)) for p in preferences
+                    # v2 Preference has .description, v1 has .preference
+                    getattr(p, "description", None)
+                    or getattr(p, "preference", str(p))
+                    for p in preferences
                 ]
             focus = getattr(guidance, "focus", None)
             if focus:
@@ -1161,10 +1180,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             manifest_context: Dict[str, Any] = {}
             contextcore_yaml = config.get("contextcore_yaml")
             if contextcore_yaml is None:
-                for candidate in [
-                    output_dir / ".contextcore.yaml",
-                    Path.cwd() / ".contextcore.yaml",
-                ]:
+                # Auto-discover: project_root (most specific), output_dir, cwd
+                candidates = [output_dir / ".contextcore.yaml", Path.cwd() / ".contextcore.yaml"]
+                project_root = config.get("project_root")
+                if project_root:
+                    candidates.insert(0, Path(project_root) / ".contextcore.yaml")
+                for candidate in candidates:
                     if candidate.exists():
                         contextcore_yaml = candidate
                         break

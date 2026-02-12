@@ -80,6 +80,10 @@ from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# Fraction of cost_budget at which a warning is logged.
+# For example, 0.5 means "warn when 50% of the budget has been consumed".
+_BUDGET_WARNING_THRESHOLD_FRACTION = 0.5
+
 # Context keys worth persisting in checkpoints for resume.
 # Excludes "tasks", "task_index", "generation_results" because they contain
 # non-serializable objects (SeedTask, Path, GenerationResult) that are reloaded
@@ -149,11 +153,19 @@ class WorkflowPhase(enum.Enum):
             ValueError: If no phase matches the given value.
         """
         normalized = value.strip().lower()
-        for member in cls:
-            if member.value == normalized:
-                return member
-        valid = ", ".join(m.value for m in cls)
-        raise ValueError(f"Unknown phase: {value!r}. Valid phases: {valid}")
+        try:
+            return cls._value_map[normalized]
+        except (AttributeError, KeyError):
+            pass
+        # Build lookup on first miss (or first call)
+        cls._value_map = {m.value: m for m in cls}
+        try:
+            return cls._value_map[normalized]
+        except KeyError:
+            valid = ", ".join(m.value for m in cls)
+            raise ValueError(
+                f"Unknown phase: {value!r}. Valid phases: {valid}"
+            ) from None
 
 
 class PhaseStatus(enum.Enum):
@@ -419,10 +431,29 @@ class JsonFileCheckpointStore(CheckpointStore):
         self.directory = Path(directory)
         self.directory.mkdir(parents=True, exist_ok=True)
 
+        # Verify checkpoint dir is writable — a read-only filesystem will
+        # let mkdir succeed (exist_ok=True) but silently fail on every save.
+        _probe = self.directory / ".write_probe"
+        try:
+            _probe.touch()
+            _probe.unlink()
+        except OSError as exc:
+            logger.warning(
+                "Checkpoint directory %s is not writable (%s) — "
+                "crash recovery will not be available",
+                self.directory,
+                exc,
+            )
+            self._writable = False
+        else:
+            self._writable = True
+
     def _path(self, workflow_id: str) -> Path:
         return self.directory / f"{workflow_id}.checkpoint.json"
 
     def save(self, checkpoint: WorkflowCheckpoint) -> None:
+        if not self._writable:
+            return  # silently skip — warning already logged at init
         path = self._path(checkpoint.workflow_id)
         data = json.dumps(asdict(checkpoint), indent=2, default=str)
         # Atomic-ish write: write to temp then rename
@@ -762,6 +793,22 @@ class ArtisanContractorWorkflow:
 
                     # Track cost
                     cost_tracker.add(phase_result.cost)
+
+                    # Warn when cost approaches the budget
+                    if (
+                        config.cost_budget is not None
+                        and cost_tracker.cumulative_cost
+                        >= config.cost_budget * _BUDGET_WARNING_THRESHOLD_FRACTION
+                    ):
+                        self._logger.warning(
+                            "Cost warning: %.4f of %.4f budget used "
+                            "(%.0f%% >= %.0f%% threshold) after phase %s",
+                            cost_tracker.cumulative_cost,
+                            config.cost_budget,
+                            (cost_tracker.cumulative_cost / config.cost_budget) * 100,
+                            _BUDGET_WARNING_THRESHOLD_FRACTION * 100,
+                            phase.value,
+                        )
 
                     # Persist checkpoint after every phase
                     self._persist_checkpoint(
@@ -1186,7 +1233,7 @@ class ArtisanContractorWorkflow:
         )
         try:
             self.checkpoint_store.save(checkpoint)
-        except Exception:
+        except (OSError, TypeError, ValueError):
             self._logger.warning(
                 "Failed to persist checkpoint for workflow %s",
                 self.config.workflow_id,

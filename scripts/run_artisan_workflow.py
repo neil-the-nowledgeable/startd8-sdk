@@ -62,6 +62,8 @@ def setup_logging(verbose: bool = False) -> None:
 
 
 def print_phase_results(result: WorkflowResult) -> None:
+    # User-facing output — intentionally uses print() rather than logger,
+    # since this is a CLI runner script producing human-readable summaries.
     """Print a human-readable summary of phase results."""
     print("\n" + "=" * 70)
     print(f"Workflow: {result.workflow_id}")
