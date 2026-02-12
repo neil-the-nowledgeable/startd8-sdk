@@ -780,7 +780,7 @@ class TestDesignPhaseAdoptPrior:
         assert context["design_results"]["PI-001"]["status"] == "adopted"
         assert context["design_results"]["PI-001"]["adopted_from"] == "prior_design_results"
         assert result["output"]["tasks_adopted"] == 1
-        assert result["output"]["tasks_designed"] == 1
+        assert result["output"]["tasks_designed"] == 0  # adopted != designed
         assert result["cost"] == 0.0  # No LLM cost incurred
 
     def test_adopt_without_design_document_falls_through(self):
@@ -856,7 +856,7 @@ class TestDesignPhaseAdoptPrior:
         result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
 
         assert result["output"]["tasks_adopted"] == 2
-        assert result["output"]["tasks_designed"] == 2
+        assert result["output"]["tasks_designed"] == 0  # adopted != designed
         # Both should be adopted
         assert context["design_results"]["PI-001"]["status"] == "adopted"
         assert context["design_results"]["PI-002"]["status"] == "adopted"

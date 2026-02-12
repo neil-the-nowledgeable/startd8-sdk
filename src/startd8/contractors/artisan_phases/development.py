@@ -635,34 +635,34 @@ class LLMChunkExecutor(ChunkExecutor):
         # Multi-file splitting
         per_file_code: Dict[str, str] = {}
         if len(chunk.file_targets) > 1:
-            from startd8.utils.code_extraction import extract_multi_file_code
+            from startd8.utils.code_extraction import (
+                _generate_stub,
+                extract_multi_file_code,
+            )
 
             per_file_code = extract_multi_file_code(code, chunk.file_targets)
             if len(per_file_code) < len(chunk.file_targets):
                 unmatched = [f for f in chunk.file_targets if f not in per_file_code]
                 self.logger.warning(
                     "Multi-file split incomplete for chunk %s: matched %s but not %s. "
-                    "Attempting stub generation for missing files.",
+                    "Generating stubs for missing files.",
                     chunk.chunk_id,
                     list(per_file_code.keys()),
                     unmatched,
                 )
-                # Defense-in-depth: re-run with stub_missing=True to generate
-                # minimal placeholders for files the LLM omitted.
-                per_file_code = extract_multi_file_code(
-                    code, chunk.file_targets, stub_missing=True
+                # Defense-in-depth: inject stubs directly into the existing
+                # extraction results rather than re-parsing the full response.
+                for missing_file in unmatched:
+                    per_file_code[missing_file] = _generate_stub(missing_file)
+                self.logger.warning(
+                    "Multi-file stub recovery: auto-generated stubs for %s "
+                    "(chunk %s). These are minimal placeholders — downstream "
+                    "tasks or manual edits may be needed.",
+                    unmatched,
+                    chunk.chunk_id,
                 )
-                stubbed = [f for f in unmatched if f in per_file_code]
-                if stubbed:
-                    self.logger.warning(
-                        "Multi-file stub recovery: auto-generated stubs for %s "
-                        "(chunk %s). These are minimal placeholders — downstream "
-                        "tasks or manual edits may be needed.",
-                        stubbed,
-                        chunk.chunk_id,
-                    )
-                    # Tag chunk metadata so downstream phases know stubs were used
-                    chunk.metadata.setdefault("_stubbed_files", []).extend(stubbed)
+                # Tag chunk metadata so downstream phases know stubs were used
+                chunk.metadata.setdefault("_stubbed_files", []).extend(unmatched)
 
         for target in chunk.file_targets:
             output_path = self._output_dir / target

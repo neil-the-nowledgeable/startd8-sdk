@@ -913,7 +913,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "adopted_from": "prior_design_results",
                 }
                 tasks_adopted += 1
-                tasks_designed += 1
                 if prior.get("agreed"):
                     tasks_agreed += 1
 
@@ -1011,15 +1010,16 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         context["design_results"] = design_results
 
+        env_blocked = sum(
+            1 for r in design_results.values()
+            if r.get("status") == "env_blocked"
+        )
         output: dict[str, Any] = {
             "tasks_designed": tasks_designed,
+            "tasks_adopted": tasks_adopted,
             "tasks_agreed": tasks_agreed,
             "tasks_failed": tasks_failed,
-            "tasks_adopted": tasks_adopted,
-            "tasks_skipped": len(tasks) - tasks_designed - tasks_failed - sum(
-                1 for r in design_results.values()
-                if r.get("status") == "env_blocked"
-            ),
+            "tasks_skipped": len(tasks) - tasks_designed - tasks_adopted - tasks_failed - env_blocked,
             "total_cost": total_cost,
         }
         if self.output_dir:
@@ -1027,7 +1027,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         duration = time.monotonic() - start
         logger.info(
-            "DESIGN phase complete: %d designed (%d adopted, %d agreed), %d failed, $%.4f cost (%.2fs)",
+            "DESIGN phase complete: %d designed, %d adopted, %d agreed, %d failed, $%.4f cost (%.2fs)",
             tasks_designed, tasks_adopted, tasks_agreed, tasks_failed, total_cost, duration,
         )
 
@@ -1093,17 +1093,16 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
            shared files that the LLM may skip.
         4. Cross-task file overlap — files targeted by multiple tasks.
         """
-        multi_file_tasks: list[SeedTask] = []
-        file_to_tasks: dict[str, list[str]] = {}
-
-        for task in tasks:
-            if len(task.target_files) > 1:
-                multi_file_tasks.append(task)
-            for tf in task.target_files:
-                file_to_tasks.setdefault(tf, []).append(task.task_id)
-
+        multi_file_tasks = [t for t in tasks if len(t.target_files) > 1]
         if not multi_file_tasks:
             return
+
+        # Only build the file→tasks index when there are multi-file tasks
+        # to check (avoids iterating all tasks when none are multi-file).
+        file_to_tasks: dict[str, list[str]] = {}
+        for task in tasks:
+            for tf in task.target_files:
+                file_to_tasks.setdefault(tf, []).append(task.task_id)
 
         logger.info(
             "IMPLEMENT pre-validation: %d of %d tasks are multi-file",

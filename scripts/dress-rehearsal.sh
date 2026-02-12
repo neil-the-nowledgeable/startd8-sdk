@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
-# Dress rehearsal for PI-001: runs real LLM calls through DESIGN to surface issues.
+# Dress rehearsal: runs real LLM calls through DESIGN to surface issues.
 # Artifacts written to <output-dir>/.dress-rehearsal/
+# Usage: dress-rehearsal.sh PI-001 [or PI-002, PI-003, ...]
 set -euo pipefail
+
+TASK_ID="${1:-}"
+if [ -z "$TASK_ID" ]; then
+  echo "Usage: $0 TASK_ID"
+  echo "Example: $0 PI-001"
+  echo "Example: $0 PI-002"
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -21,6 +30,6 @@ STARTD8_OTEL=disabled python3 "${SCRIPT_DIR}/run_artisan_workflow.py" \
   --seed "$SEED" \
   --output-dir "$OUTPUT_DIR" \
   --project-root "$PROJECT_ROOT" \
-  --task-filter PI-002 \
+  --task-filter "$TASK_ID" \
   --dress-rehearsal \
   --design-max-tokens 8192

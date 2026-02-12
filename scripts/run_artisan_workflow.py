@@ -244,7 +244,12 @@ def main() -> int:
         "--design-max-tokens", type=int, default=None,
         help="Override max_output_tokens for design phase LLM calls (e.g. 8192 to avoid truncation)",
     )
-    parser.add_argument(
+
+    # --dress-rehearsal and --adopt-prior are mutually exclusive:
+    # dress-rehearsal generates *new* design artifacts into a staging dir,
+    # adopt-prior *consumes* existing artifacts from a prior run.
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--dress-rehearsal", action="store_true",
         help=(
             "Dress-rehearsal mode: run with real LLM calls through DESIGN to surface issues "
@@ -253,7 +258,7 @@ def main() -> int:
             "Defaults to --stop-after design when set."
         ),
     )
-    parser.add_argument(
+    mode_group.add_argument(
         "--adopt-prior", nargs="?", const="auto", default=None,
         help=(
             "Adopt design artifacts from a prior dress-rehearsal (or design-only) run. "
@@ -294,9 +299,6 @@ def main() -> int:
     adopted_design_results: dict[str, Any] | None = None
 
     if args.adopt_prior is not None:
-        if args.dress_rehearsal:
-            parser.error("--adopt-prior and --dress-rehearsal are mutually exclusive")
-
         # Resolve source: explicit path or auto-detect from <output_dir>/.dress-rehearsal/
         if args.adopt_prior == "auto":
             adopt_source = Path(output_dir) / ".dress-rehearsal"
