@@ -99,32 +99,24 @@ WARNING [startd8.providers.registry] Overwriting existing provider: openai
 
 **Dress rehearsal (recommended for proactive issue detection):**
 ```bash
-STARTD8_OTEL=disabled python3 ~/Documents/dev/startd8-sdk/scripts/run_artisan_workflow.py \
-  --seed /Users/neilyashinsky/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-context-seed.json \
-  --output-dir /Users/neilyashinsky/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-design \
-  --task-filter PI-001 \
-  --dress-rehearsal \
-  --design-max-tokens 8192
+./scripts/dress-rehearsal.sh PI-001
+# Or with wayfinder paths explicit:
+ARTISAN_SEED=~/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-context-seed.json \
+  ./scripts/dress-rehearsal.sh PI-001
 ```
 
 **Full run adopting dress-rehearsal artifacts (skips redundant design LLM calls):**
 ```bash
-STARTD8_OTEL=disabled python3 ~/Documents/dev/startd8-sdk/scripts/run_artisan_workflow.py \
-  --seed /Users/neilyashinsky/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-context-seed.json \
-  --output-dir /Users/neilyashinsky/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-design \
-  --task-filter PI-001 \
-  --adopt-prior \
-  --design-max-tokens 8192
+./scripts/adopt-prior.sh PI-001
+# Or wayfinder convenience wrapper:
+./scripts/adopt-prior-PI-001.sh
 ```
 
-**Run with OTel disabled (cleaner logs):**
-```bash
-STARTD8_OTEL=disabled python3 ... --task-filter PI-001 --design-max-tokens 8192
-```
+**Run with OTel disabled (cleaner logs):** Scripts set `STARTD8_OTEL=disabled` automatically.
 
 **Design-only run (faster feedback):**
 ```bash
-... --task-filter PI-001 --stop-after design --design-max-tokens 8192
+# Add --stop-after design to run_artisan_workflow.py; see scripts for full usage
 ```
 
 ---

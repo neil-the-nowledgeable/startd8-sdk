@@ -292,6 +292,30 @@ INFO Prior dress-rehearsal artifacts detected at out/designs/.dress-rehearsal.
 
 **Precursor to atomic operations:** This adopt-or-rerun pattern establishes task-level idempotency for the DESIGN phase — each task either reuses a valid prior result or generates a new one. Future phases (IMPLEMENT, TEST, REVIEW) can follow the same pattern for full pipeline idempotency.
 
+### Convenience Shell Scripts (`dress-rehearsal.sh`, `adopt-prior.sh`)
+
+Parameterized scripts that support env vars and project-root inference:
+
+```bash
+# Generic usage (requires ARTISAN_SEED):
+export ARTISAN_SEED=/path/to/artisan-context-seed.json
+./scripts/dress-rehearsal.sh PI-001
+./scripts/adopt-prior.sh PI-002
+
+# Optional: override project root (for multi-repo setups)
+./scripts/adopt-prior.sh PI-001 /path/to/target/project
+```
+
+| Env var | Description |
+|---------|-------------|
+| `ARTISAN_SEED` | **(Required)** Path to enriched context seed JSON |
+| `ARTISAN_OUTPUT_DIR` | Output directory (default: `seed_dir/artisan-design`) |
+| `ARTISAN_PROJECT_ROOT` | Target project root; inferred from seed if unset (walk up for `pyproject.toml` or `.contextcore.yaml`). Defaults to `.` with a warning for multi-repo setups. |
+
+**Project-root inference:** When `ARTISAN_PROJECT_ROOT` is unset, the script walks up from the seed's directory until it finds `pyproject.toml` or `.contextcore.yaml`. For multi-repo setups (e.g. SDK generating into wayfinder), set `ARTISAN_PROJECT_ROOT` explicitly.
+
+**Wayfinder convenience wrappers:** `dress-rehearsal-PI-001.sh`, `adopt-prior-PI-002.sh`, etc. use wayfinder paths by default; override with env vars.
+
 ---
 
 ## Runner Scripts
@@ -309,6 +333,7 @@ Full 7-phase workflow runner.
 | `--dress-rehearsal` | Run real LLM calls through DESIGN; write to staging dir; default stop-after design |
 | `--adopt-prior [PATH]` | Adopt design artifacts from a prior dress-rehearsal/design-only run; auto-detects from `.dress-rehearsal/` if no path given |
 | `--design-max-tokens INT` | Override max_output_tokens for design phase (e.g. 8192 to avoid truncation) |
+| `--no-auto-commit` | Disable auto-commit (default: commit each feature's generated code to git after implementation) |
 | `--cost-budget FLOAT` | Maximum total cost in USD |
 | `--timeout FLOAT` | Total workflow timeout in seconds |
 | `--stop-after PHASE` | Stop after a phase (e.g., `--stop-after design`) |
@@ -524,6 +549,7 @@ Phase handlers emit their own telemetry for sub-operations (design rounds, code 
 4. **Override agents for cost control.** Use `--lead-agent` and `--drafter-agent` to select cheaper models during development.
 5. **Check environment first.** Tasks with failing environment checks are auto-skipped. Fix pre-flight issues before running.
 6. **Keep the seed current.** If you change target files or project structure, re-run the PlanIngestion and DomainPreflight workflows to regenerate the enriched seed.
+7. **Auto-commit is on by default.** Each feature's generated code is committed to git after implementation, giving atomic commits and crash recovery. Use `--no-auto-commit` to review and commit manually.
 
 ---
 

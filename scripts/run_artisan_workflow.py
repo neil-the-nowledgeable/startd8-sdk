@@ -220,8 +220,8 @@ def main() -> int:
         help="Drafter agent spec (default: from ContextSeedHandlers defaults)",
     )
     parser.add_argument(
-        "--auto-commit", action="store_true",
-        help="Commit each feature's generated code to git after implementation",
+        "--no-auto-commit", action="store_true",
+        help="Disable auto-commit (default: commit each feature's generated code to git after implementation)",
     )
     parser.add_argument(
         "--no-scaffold-test-first", action="store_true",
@@ -396,8 +396,8 @@ def main() -> int:
         handler_kwargs["design_max_tokens"] = args.design_max_tokens
     if args.implement_timeout is not None:
         handler_kwargs["development_timeout_seconds"] = args.implement_timeout
-    if args.auto_commit:
-        handler_kwargs["auto_commit"] = True
+    if args.no_auto_commit:
+        handler_kwargs["auto_commit"] = False
     if args.no_scaffold_test_first:
         handler_kwargs["scaffold_test_first"] = False
 

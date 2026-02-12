@@ -136,7 +136,7 @@ class HandlerConfig:
     review_temperature: float = 0.0
     review_max_code_chars: int = 8000
     development_timeout_seconds: Optional[float] = None
-    auto_commit: bool = False
+    auto_commit: bool = True
     scaffold_test_first: bool = True
 
     @classmethod

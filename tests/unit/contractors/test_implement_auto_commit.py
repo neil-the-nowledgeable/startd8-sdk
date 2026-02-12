@@ -182,13 +182,14 @@ class TestCommitFeatures:
 class TestHandlerConfigAutoCommit:
     """HandlerConfig.auto_commit default and override."""
 
-    def test_default_false(self):
+    def test_default_true(self):
+        """Default is opt-out: auto_commit=True for safety."""
         config = HandlerConfig()
-        assert config.auto_commit is False
+        assert config.auto_commit is True
 
     def test_cli_override(self):
-        config = HandlerConfig.from_config({"auto_commit": True})
-        assert config.auto_commit is True
+        config = HandlerConfig.from_config({"auto_commit": False})
+        assert config.auto_commit is False
 
 
 class TestCreateAllAutoCommit:
@@ -206,11 +207,25 @@ class TestCreateAllAutoCommit:
         impl_handler = handlers[WorkflowPhase.IMPLEMENT]
         assert impl_handler.config.auto_commit is True
 
-    def test_auto_commit_default_false(self):
+    def test_auto_commit_default_true(self):
+        """Default is opt-out: handlers get auto_commit=True unless overridden."""
         from startd8.contractors.context_seed_handlers import ContextSeedHandlers
 
         handlers = ContextSeedHandlers.create_all(
             enriched_seed_path="/fake/seed.json",
+        )
+        from startd8.contractors.artisan_contractor import WorkflowPhase
+
+        impl_handler = handlers[WorkflowPhase.IMPLEMENT]
+        assert impl_handler.config.auto_commit is True
+
+    def test_auto_commit_opt_out(self):
+        """--no-auto-commit passes auto_commit=False to disable commits."""
+        from startd8.contractors.context_seed_handlers import ContextSeedHandlers
+
+        handlers = ContextSeedHandlers.create_all(
+            enriched_seed_path="/fake/seed.json",
+            auto_commit=False,
         )
         from startd8.contractors.artisan_contractor import WorkflowPhase
 
