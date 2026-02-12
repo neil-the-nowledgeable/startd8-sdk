@@ -44,6 +44,7 @@ from .domain_preflight_models import (
 )
 
 from .preflight_rules import PreflightRuleRegistry, RuleContext
+from .schema_versions import ARTISAN_SCHEMA_VERSION, SUPPORTED_SEED_SCHEMA_VERSIONS
 from .preflight_rules._helpers import (
     STDLIB_FALLBACK as _STDLIB_FALLBACK_SET,
     STANDALONE_SCRIPT_DIRS as _STANDALONE_SCRIPT_DIRS_SET,
@@ -163,10 +164,12 @@ class DomainPreflightWorkflow(WorkflowBase):
         text = seed_path.read_text(encoding="utf-8")
         data = json.loads(text)
 
-        version = data.get("version", "")
-        if version != "1.0.0":
+        # Accept schema_version (Item 15) or version for backward compat
+        schema_ver = data.get("schema_version") or data.get("version", "")
+        if schema_ver not in SUPPORTED_SEED_SCHEMA_VERSIONS:
             raise ValueError(
-                f"Unsupported context seed version: {version!r} (expected '1.0.0')"
+                f"Unsupported context seed schema version: {schema_ver!r} "
+                f"(expected one of {sorted(SUPPORTED_SEED_SCHEMA_VERSIONS)})"
             )
 
         tasks = data.get("tasks")

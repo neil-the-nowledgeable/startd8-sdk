@@ -47,6 +47,61 @@ from ...logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# JSON Schema for ArtisanContextSeed (Item 6 — validation before write)
+_ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": ["version", "tasks", "artifacts", "ingestion_metrics"],
+    "properties": {
+        "version": {"type": "string"},
+        "schema_version": {"type": "string"},
+        "source_checksum": {"type": ["string", "null"]},
+        "generated_at": {"type": "string"},
+        "generator": {"type": "string"},
+        "plan": {"type": ["object", "null"]},
+        "complexity": {"type": ["object", "null"]},
+        "tasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["task_id", "title", "config"],
+                "properties": {
+                    "task_id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "config": {"type": "object"},
+                },
+            },
+        },
+        "artifacts": {"type": "object"},
+        "ingestion_metrics": {"type": "object"},
+        "onboarding": {"type": ["object", "null"]},
+        "architectural_context": {"type": ["object", "null"]},
+        "design_calibration": {"type": ["object", "null"]},
+        "context_files": {"type": ["array", "null"]},
+    },
+    "additionalProperties": True,
+}
+
+
+def _validate_context_seed(data: Dict[str, Any]) -> None:
+    """Validate context seed against JSON schema before write (Item 6).
+
+    Uses jsonschema if installed; no-op otherwise.
+    """
+    try:
+        import jsonschema
+
+        jsonschema.validate(data, _ARTISAN_SEED_SCHEMA)
+        logger.debug("Context seed validated against schema")
+    except ImportError:
+        pass  # Graceful fallback — jsonschema not installed
+    except Exception as e:
+        logger.warning(
+            "Context seed schema validation failed: %s — writing anyway",
+            str(e),
+        )
+        # Log but do not raise — validation is advisory; seed may have extra keys
+
 
 # ---------------------------------------------------------------------------
 # LLM prompt templates
@@ -73,7 +128,8 @@ Return a JSON object (no markdown fences) with exactly these keys:
       "dependencies": ["F-002"],
       "estimated_loc": 100,
       "labels": ["label"],
-      "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"]
+      "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
+      "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"]
     }}
   ],
   "mentioned_files": ["every file path mentioned in the plan"],
@@ -81,6 +137,7 @@ Return a JSON object (no markdown fences) with exactly these keys:
 }}
 
 design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
+artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
 
 Be thorough. Extract every feature, file reference, and dependency.
 """
@@ -488,6 +545,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 estimated_loc=f.get("estimated_loc", 0),
                 labels=f.get("labels", []),
                 design_doc_sections=f.get("design_doc_sections", []),
+                artifact_types_addressed=f.get("artifact_types_addressed", []),
             ))
 
         parsed = ParsedPlan(
@@ -824,6 +882,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             }
             if feat.design_doc_sections:
                 ctx["design_doc_sections"] = list(feat.design_doc_sections)
+            if feat.artifact_types_addressed:
+                ctx["artifact_types_addressed"] = list(feat.artifact_types_addressed)
 
             tasks.append({
                 "task_id": tid,
@@ -1159,6 +1219,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             # Merge onboarding metadata if present in context files (Items 5, 7)
             onboarding = self._load_onboarding_metadata(context_files, output_dir)
             onboarding_var: Optional[Dict[str, Any]] = None
+            source_checksum_val: Optional[str] = None
             if onboarding:
                 onboarding_var = onboarding
                 artifacts["onboarding"] = onboarding
@@ -1168,6 +1229,21 @@ class PlanIngestionWorkflow(WorkflowBase):
                     artifacts["artifact_manifest_path"] = str(amp)
                 if pcp:
                     artifacts["project_context_path"] = str(pcp)
+                # Item 9: example artifacts per type (e.g. ServiceMonitor YAML) for implement phase
+                ex = onboarding.get("example_artifacts")
+                if ex and isinstance(ex, dict):
+                    artifacts["example_artifacts"] = dict(ex)
+                # Item 11: coverage gaps — artifact types to generate first
+                cg = onboarding.get("coverage_gaps")
+                if cg and isinstance(cg, list):
+                    artifacts["coverage_gaps"] = list(cg)
+                # Item 16: provenance chain — propagate source_checksum to seed
+                sc = onboarding.get("source_checksum") or onboarding.get(
+                    "export_provenance_checksum"
+                )
+                if sc and isinstance(sc, str):
+                    artifacts["source_checksum"] = sc
+                    source_checksum_val = sc
 
             context_files_list = _context_files_with_checksums(
                 context_files, base_dir=output_dir
@@ -1175,6 +1251,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             seed = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
+                source_checksum=source_checksum_val,
                 plan=parsed_plan.to_seed_dict(),
                 complexity=complexity.to_seed_dict(),
                 tasks=tasks,
@@ -1189,8 +1266,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                 context_files=context_files_list,
             )
 
+            seed_dict = seed.to_dict()
+            _validate_context_seed(seed_dict)
             context_seed_path = output_dir / "artisan-context-seed.json"
-            atomic_write_json(context_seed_path, seed.to_dict(), indent=2)
+            atomic_write_json(context_seed_path, seed_dict, indent=2)
 
         # Task tracking artifact generation (opt-in)
         tracking_result = None

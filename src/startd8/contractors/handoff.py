@@ -26,6 +26,9 @@ Usage::
     handoff = load_design_handoff("out/designs")  # auto-appends filename
     # or
     handoff = load_design_handoff("out/designs/design-handoff.json")
+
+Schema (Item 13): The handoff file conforms to HandoffData; see HANDOFF_SCHEMA
+and write_design_handoff validates before write when jsonschema is installed.
 """
 
 from __future__ import annotations
@@ -37,13 +40,61 @@ from pathlib import Path
 from typing import Any
 
 from startd8.utils.file_operations import atomic_write_json
+from startd8.workflows.builtin.schema_versions import ARTISAN_SCHEMA_VERSION
 
 from ..logging_config import get_logger
 
 logger = get_logger(__name__)
 
 DESIGN_HANDOFF_FILENAME = "design-handoff.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 1  # Integer for backward compat; schema_version_str = ARTISAN_SCHEMA_VERSION
+
+# Map integer schema_version to string for legacy handoffs missing schema_version_str.
+_SCHEMA_VERSION_TO_STR: dict[int, str] = {1: ARTISAN_SCHEMA_VERSION}
+
+# JSON Schema for design-handoff.json (Item 13 — validation before write)
+HANDOFF_SCHEMA: dict[str, Any] = {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "type": "object",
+    "required": ["enriched_seed_path", "project_root", "output_dir", "workflow_id", "schema_version"],
+    "properties": {
+        "enriched_seed_path": {"type": "string"},
+        "project_root": {"type": "string"},
+        "output_dir": {"type": "string"},
+        "workflow_id": {"type": "string"},
+        "completed_phases": {"type": "array", "items": {"type": "string"}},
+        "design_results": {"type": "object"},
+        "scaffold": {"type": "object"},
+        "artifact_manifest_path": {"type": ["string", "null"]},
+        "project_context_path": {"type": ["string", "null"]},
+        "context_files": {"type": "array", "items": {"type": "object"}},
+        "example_artifacts": {"type": "object"},
+        "coverage_gaps": {"type": "array", "items": {"type": "string"}},
+        "created_at": {"type": "string"},
+        "schema_version": {"type": "integer"},
+        "schema_version_str": {"type": "string"},
+    },
+    "additionalProperties": True,
+}
+
+
+def _validate_handoff(data: dict[str, Any]) -> None:
+    """Validate handoff JSON against schema before write (Item 13).
+
+    Uses jsonschema if installed; no-op otherwise.
+    """
+    try:
+        import jsonschema
+
+        jsonschema.validate(data, HANDOFF_SCHEMA)
+        logger.debug("Design handoff validated against schema")
+    except ImportError:
+        pass  # Graceful fallback — jsonschema not installed
+    except Exception as e:
+        logger.warning(
+            "Design handoff schema validation failed: %s — writing anyway",
+            str(e),
+        )
 
 
 @dataclass
@@ -73,8 +124,13 @@ class HandoffData:
     project_context_path: str | None = None
     # Context files the design was based on (path + optional checksum)
     context_files: list[dict[str, Any]] = field(default_factory=list)
+    # Example artifacts per type (e.g. ServiceMonitor YAML) for implement phase (Item 9)
+    example_artifacts: dict[str, Any] = field(default_factory=dict)
+    # Coverage gaps — artifact types to generate first (Item 11)
+    coverage_gaps: list[str] = field(default_factory=list)
     created_at: str = ""
     schema_version: int = SCHEMA_VERSION
+    schema_version_str: str = ARTISAN_SCHEMA_VERSION
 
 
 def write_design_handoff(
@@ -88,6 +144,8 @@ def write_design_handoff(
     artifact_manifest_path: str | None = None,
     project_context_path: str | None = None,
     context_files: list[dict[str, Any]] | None = None,
+    example_artifacts: dict[str, Any] | None = None,
+    coverage_gaps: list[str] | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -114,14 +172,19 @@ def write_design_handoff(
         artifact_manifest_path=artifact_manifest_path,
         project_context_path=project_context_path,
         context_files=context_files or [],
+        example_artifacts=example_artifacts or {},
+        coverage_gaps=coverage_gaps or [],
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,
+        schema_version_str=ARTISAN_SCHEMA_VERSION,
     )
 
     out_path = Path(output_dir) / DESIGN_HANDOFF_FILENAME
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    atomic_write_json(out_path, asdict(handoff), indent=2, default=str)
+    data = asdict(handoff)
+    _validate_handoff(data)
+    atomic_write_json(out_path, data, indent=2, default=str)
 
     logger.info("Wrote design handoff: %s", out_path)
     return out_path
@@ -187,6 +250,10 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         artifact_manifest_path=raw.get("artifact_manifest_path"),
         project_context_path=raw.get("project_context_path"),
         context_files=raw.get("context_files", []),
+        example_artifacts=raw.get("example_artifacts", {}),
+        coverage_gaps=raw.get("coverage_gaps", []),
         created_at=raw.get("created_at", ""),
         schema_version=version,
+        schema_version_str=raw.get("schema_version_str")
+        or _SCHEMA_VERSION_TO_STR.get(version, ARTISAN_SCHEMA_VERSION),
     )
