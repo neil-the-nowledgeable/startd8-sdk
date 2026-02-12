@@ -607,7 +607,7 @@ class TestEmitPhase:
         doc_path.write_text("# Plan")
         complexity = ComplexityScore(composite=45, reasoning="Medium")
 
-        config_path, data, _ = self.wf._phase_emit(
+        config_path, data, _, _tracking = self.wf._phase_emit(
             doc_path,
             ContractorRoute.ARTISAN,
             complexity,
@@ -637,7 +637,7 @@ class TestEmitPhase:
         doc_path.write_text("project: {}")
         complexity = ComplexityScore(composite=20)
 
-        config_path, data, _ = self.wf._phase_emit(
+        config_path, data, _, _tracking = self.wf._phase_emit(
             doc_path,
             ContractorRoute.PRIME,
             complexity,
@@ -1185,7 +1185,7 @@ class TestEmitPhaseArtisanRoute:
             mentioned_files=["a.py"],
         )
 
-        config_path, _, seed_path = self.wf._phase_emit(
+        config_path, _, seed_path, _tracking = self.wf._phase_emit(
             doc_path, ContractorRoute.ARTISAN, complexity, tmp_path,
             review_rounds=2, review_quality_tier="flagship",
             scope=None, context_files=None,
@@ -1215,7 +1215,7 @@ class TestEmitPhaseArtisanRoute:
         complexity = ComplexityScore(composite=20, route=ContractorRoute.PRIME)
         parsed_plan = ParsedPlan(title="Simple", features=[])
 
-        config_path, _, seed_path = self.wf._phase_emit(
+        config_path, _, seed_path, _tracking = self.wf._phase_emit(
             doc_path, ContractorRoute.PRIME, complexity, tmp_path,
             review_rounds=1, review_quality_tier="flagship",
             scope=None, context_files=None,
@@ -1233,7 +1233,7 @@ class TestEmitPhaseArtisanRoute:
             composite=65, route=ContractorRoute.ARTISAN,
         )
 
-        config_path, _, seed_path = self.wf._phase_emit(
+        config_path, _, seed_path, _tracking = self.wf._phase_emit(
             doc_path, ContractorRoute.ARTISAN, complexity, tmp_path,
             review_rounds=1, review_quality_tier="flagship",
             scope=None, context_files=None,

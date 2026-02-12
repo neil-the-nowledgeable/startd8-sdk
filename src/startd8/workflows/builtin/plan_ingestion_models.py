@@ -19,6 +19,7 @@ __all__ = [
     "ArtisanContextSeed",
     "IngestionState",
     "PlanIngestionResult",
+    "TaskTrackingConfig",
 ]
 
 
@@ -196,3 +197,13 @@ class PlanIngestionResult:
     total_cost: float = 0.0
     error: Optional[str] = None
     refine_rounds_completed: int = 0
+
+
+@dataclass
+class TaskTrackingConfig:
+    """Configuration for ContextCore task tracking artifact generation."""
+    project_id: Optional[str] = None
+    project_name: Optional[str] = None
+    sprint_id: Optional[str] = None
+    install_to_contextcore: bool = False
+    emit_ndjson_events: bool = True

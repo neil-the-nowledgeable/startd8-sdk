@@ -768,7 +768,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         max_cost_usd: Optional[float],
         parsed_plan: Optional[ParsedPlan] = None,
         step_costs: Optional[Dict[str, float]] = None,
-    ) -> Tuple[Path, dict, Optional[Path]]:
+        tracking_config: Optional["TaskTrackingConfig"] = None,
+    ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]]]:
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
             "quality_tier": review_quality_tier,
@@ -825,7 +826,19 @@ class PlanIngestionWorkflow(WorkflowBase):
             context_seed_path = output_dir / "artisan-context-seed.json"
             atomic_write_json(context_seed_path, seed.to_dict(), indent=2)
 
-        return config_path, review_config, context_seed_path
+        # Task tracking artifact generation (opt-in)
+        tracking_result = None
+        if tracking_config is not None and parsed_plan is not None:
+            from .task_tracking_emitter import emit_task_tracking_artifacts
+
+            tracking_tasks = self._derive_tasks_from_features(
+                parsed_plan.features, parsed_plan.dependency_graph,
+            )
+            tracking_result = emit_task_tracking_artifacts(
+                parsed_plan, complexity, tracking_tasks, tracking_config, output_dir,
+            )
+
+        return config_path, review_config, context_seed_path, tracking_result
 
     # ------------------------------------------------------------------
     # Main execution
@@ -851,6 +864,19 @@ class PlanIngestionWorkflow(WorkflowBase):
         warn_cost_usd = config.get("warn_cost_usd")
         max_cost_usd = config.get("max_cost_usd")
         context_files = _parse_context_files(config.get("context_files"))
+
+        # Task tracking (opt-in)
+        generate_task_tracking = config.get("generate_task_tracking", False)
+        tracking_config = None
+        if generate_task_tracking:
+            from .plan_ingestion_models import TaskTrackingConfig
+            tracking_config = TaskTrackingConfig(
+                project_id=config.get("project_id"),
+                project_name=config.get("project_name"),
+                sprint_id=config.get("sprint_id"),
+                install_to_contextcore=config.get("install_to_contextcore", False),
+                emit_ndjson_events=config.get("emit_ndjson_events", True),
+            )
 
         total_steps = 5  # parse, assess, transform, refine, emit
         current_step = 0
@@ -998,12 +1024,13 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Emitting review config")
             state.current_phase = IngestionPhase.EMIT
 
-            config_path, review_config_data, context_seed_path = self._phase_emit(
+            config_path, review_config_data, context_seed_path, tracking_result = self._phase_emit(
                 doc_path, route, complexity, output_dir,
                 review_rounds, review_quality_tier, scope, context_files,
                 warn_cost_usd, max_cost_usd,
                 parsed_plan=parsed_plan,
                 step_costs=step_costs,
+                tracking_config=tracking_config,
             )
             state.review_config_path = str(config_path)
             if context_seed_path is not None:
@@ -1012,6 +1039,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             emit_output = f"Wrote {config_path}"
             if context_seed_path is not None:
                 emit_output += f", {context_seed_path}"
+            if tracking_result:
+                emit_output += f", {tracking_result.get('state_file_count', 0)} tracking files"
             emit_step = StepResult(
                 step_name="emit",
                 output=emit_output,
@@ -1036,6 +1065,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             }
             if context_seed_path is not None:
                 output["context_seed_path"] = str(context_seed_path)
+            if tracking_result:
+                output["task_tracking"] = tracking_result
 
             return WorkflowResult(
                 workflow_id=self.metadata.workflow_id,
