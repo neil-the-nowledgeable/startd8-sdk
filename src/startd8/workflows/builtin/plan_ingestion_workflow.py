@@ -9,7 +9,6 @@ Pipeline:  parse → assess → transform → refine → emit
 from __future__ import annotations
 
 import json
-import logging
 import re
 import time
 from collections import Counter
@@ -44,8 +43,9 @@ from .plan_ingestion_models import (
     ParsedFeature,
     ParsedPlan,
 )
+from ...logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -535,7 +535,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
             llm_route = data.get("route", "").lower()
             if llm_route and llm_route != route.value:
-                logger.info(
+                logger.debug(
                     "LLM suggested route '%s' but composite %d with threshold %d → '%s'",
                     llm_route, composite, threshold, route.value,
                 )
@@ -1199,7 +1199,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     from contextcore.models import load_manifest
                     manifest = load_manifest(str(contextcore_yaml))
                     manifest_context = self._extract_manifest_context(manifest)
-                    logger.info(
+                    logger.debug(
                         "Loaded manifest from %s: %d context keys",
                         contextcore_yaml, len(manifest_context),
                     )
@@ -1209,7 +1209,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     logger.warning("Failed to load manifest %s: %s", contextcore_yaml, exc)
 
             # --- PARSE ---
-            progress("Parsing plan")
+            progress("Parse")
             state.current_phase = IngestionPhase.PARSE
             assessor = self._resolve_assessor_agent(config)
 
@@ -1220,7 +1220,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             if parse_step.error:
                 return _fail(parse_step.error)
             state.parsed_plan = parsed_plan
-            logger.info(
+            logger.debug(
                 "Parsed plan: '%s' with %d features",
                 parsed_plan.title, len(parsed_plan.features),
             )
@@ -1230,7 +1230,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return cost_err
 
             # --- ASSESS ---
-            progress("Assessing complexity")
+            progress("Assess")
             state.current_phase = IngestionPhase.ASSESS
 
             complexity, assess_step = self._phase_assess(
@@ -1243,7 +1243,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return _fail(assess_step.error)
             state.complexity = complexity
             state.route = complexity.route
-            logger.info(
+            logger.debug(
                 "Complexity: %d → route=%s (threshold=%d)",
                 complexity.composite,
                 complexity.route.value if complexity.route else "?",
@@ -1259,7 +1259,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return _fail("Assessment did not produce a route")
 
             # --- TRANSFORM ---
-            progress("Transforming plan")
+            progress("Transform")
             state.current_phase = IngestionPhase.TRANSFORM
             transformer = self._resolve_transformer_agent(config)
 
@@ -1278,7 +1278,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return cost_err
 
             # --- REFINE ---
-            progress("Refining via architectural review")
+            progress("Refine")
             state.current_phase = IngestionPhase.REFINE
 
             rounds_completed, refine_steps, refine_cost = self._phase_refine(
@@ -1299,7 +1299,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return cost_err
 
             # --- EMIT ---
-            progress("Emitting review config")
+            progress("Emit")
             state.current_phase = IngestionPhase.EMIT
 
             config_path, review_config_data, context_seed_path, tracking_result = self._phase_emit(

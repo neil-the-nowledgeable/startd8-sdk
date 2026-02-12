@@ -1189,6 +1189,26 @@ def workflow_run(
     import json
     import sys
 
+    def _print_plan_ingestion_output(out: dict) -> None:
+        """Format plan-ingestion output as a structured table."""
+        table = Table(title="Plan Ingestion")
+        table.add_column("", style="cyan", width=22)
+        table.add_column("", style="green")
+        table.add_row("Route", str(out.get("route", "—")))
+        table.add_row("Complexity", str(out.get("complexity_score", "—")))
+        table.add_row("Refine rounds", str(out.get("refine_rounds_completed", "—")))
+        table.add_row("Plan document", str(out.get("plan_document_path", "—")))
+        table.add_row("Review config", str(out.get("review_config_path", "—")))
+        if out.get("context_seed_path"):
+            table.add_row("Context seed", str(out["context_seed_path"]))
+        if out.get("task_tracking"):
+            tr = out["task_tracking"]
+            summary = f"{tr.get('state_file_count', 0)} tracking files"
+            if tr.get("state_dir"):
+                summary += f" → {tr['state_dir']}"
+            table.add_row("Task tracking", summary)
+        console.print(table)
+
     WorkflowRegistry = _load_workflow_registry()
     WorkflowRegistry.discover()
 
@@ -1292,13 +1312,32 @@ def workflow_run(
         output_file.write_text(str(result.output))
         console.print(f"[green]Output written to: {output_file}[/green]")
     elif result.output:
-        console.print("\n[bold]Output:[/bold]")
-        output_str = str(result.output)
-        if len(output_str) > 500:
-            console.print(output_str[:500] + "...")
-            console.print(f"[dim]({len(output_str)} characters total)[/dim]")
+        # Format plan-ingestion output as structured table
+        if (
+            result.workflow_id == "plan-ingestion"
+            and isinstance(result.output, dict)
+        ):
+            _print_plan_ingestion_output(result.output)
+        elif isinstance(result.output, dict):
+            # Generic dict: key-value table
+            table = Table(title="Output")
+            table.add_column("Key", style="cyan")
+            table.add_column("Value", style="green")
+            for k, v in result.output.items():
+                val_str = str(v)
+                if isinstance(v, dict):
+                    j = json.dumps(v, indent=2)
+                    val_str = j[:200] + ("..." if len(j) > 200 else "")
+                table.add_row(k, val_str)
+            console.print(table)
         else:
-            console.print(output_str)
+            output_str = str(result.output)
+            console.print("\n[bold]Output:[/bold]")
+            if len(output_str) > 500:
+                console.print(output_str[:500] + "...")
+                console.print(f"[dim]({len(output_str)} characters total)[/dim]")
+            else:
+                console.print(output_str)
 
     if not result.success:
         raise typer.Exit(1)
