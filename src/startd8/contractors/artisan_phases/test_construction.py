@@ -1480,12 +1480,8 @@ class LLMTestGenerator:
             implementation_code is not None,
         )
 
-        # Prepend system prompt to user prompt (same pattern as
-        # AgentLLMBackend — BaseAgent.agenerate has no system_prompt param)
-        full_prompt = f"{_LLM_TEST_SYSTEM_PROMPT}\n\n---\n\n{prompt}"
-
         response_text, time_ms, token_usage = await agent.agenerate(
-            full_prompt
+            prompt, system_prompt=_LLM_TEST_SYSTEM_PROMPT,
         )
 
         # Accumulate cost metrics
@@ -1530,7 +1526,6 @@ class LLMTestGenerator:
         agent = self._resolve_agent()
 
         prompt = self._build_retry_prompt(previous_code, collection_errors)
-        full_prompt = f"{_LLM_TEST_SYSTEM_PROMPT}\n\n---\n\n{prompt}"
 
         self.logger.info(
             "Retrying test generation for '%s' with %d collection errors",
@@ -1539,7 +1534,7 @@ class LLMTestGenerator:
         )
 
         response_text, time_ms, token_usage = await agent.agenerate(
-            full_prompt
+            prompt, system_prompt=_LLM_TEST_SYSTEM_PROMPT,
         )
 
         self.total_cost_usd += token_usage_cost(token_usage)

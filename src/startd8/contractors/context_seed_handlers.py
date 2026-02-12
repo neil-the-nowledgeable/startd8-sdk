@@ -48,7 +48,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import logging
 import shlex
 import subprocess
 import sys
@@ -76,7 +75,9 @@ from startd8.utils.token_usage import (
     token_usage_output,
 )
 
-logger = logging.getLogger(__name__)
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 __all__ = [
     "HandlerConfig",
@@ -129,6 +130,7 @@ class HandlerConfig:
     review_temperature: float = 0.0
     review_max_code_chars: int = 8000
     development_timeout_seconds: Optional[float] = None
+    auto_commit: bool = False
 
     @classmethod
     def from_config(
@@ -332,22 +334,33 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
 
     seed_path = context.get("enriched_seed_path")
     if not seed_path:
-        logger.warning(
+        raise RuntimeError(
             "Context missing 'tasks' and 'enriched_seed_path' — "
-            "cannot reload seed (possible checkpoint resume without PLAN phase)"
+            "cannot reload seed. If resuming from checkpoint, ensure "
+            "'enriched_seed_path' is provided in the initial context."
         )
-        return []
 
     seed_path_obj = Path(seed_path)
     if not seed_path_obj.exists():
-        logger.error(
-            "Enriched seed not found at '%s' — cannot reload tasks", seed_path
+        raise FileNotFoundError(
+            f"Enriched seed not found at '{seed_path}' — cannot reload tasks. "
+            f"Ensure the seed file exists and the path is correct."
         )
-        return []
 
     logger.info("Reloading enriched seed for resumed workflow from %s", seed_path)
     seed_data = _load_enriched_seed(seed_path)
     tasks = _topological_sort(_parse_tasks(seed_data))
+
+    # Apply task filter so resumed workflows honour --task-filter.
+    task_filter = context.get("task_filter")
+    if task_filter:
+        filter_set = set(task_filter)
+        tasks = [t for t in tasks if t.task_id in filter_set]
+        logger.info(
+            "Applied task filter on reload — %d task(s): %s",
+            len(tasks),
+            [t.task_id for t in tasks],
+        )
 
     # Re-populate the keys that PlanPhaseHandler normally sets
     plan_meta = seed_data.get("plan", {})
@@ -395,13 +408,37 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         tasks = _parse_tasks(seed_data)
         sorted_tasks = _topological_sort(tasks)
 
+        # Apply task filter if provided (e.g. --task-filter PI-001,PI-002).
+        # This narrows the execution to a subset of tasks while preserving
+        # the full seed's architectural context and calibration data.
+        task_filter = context.get("task_filter")
+        if task_filter:
+            filter_set = set(task_filter)
+            all_ids = {t.task_id for t in sorted_tasks}
+            all_count = len(sorted_tasks)
+            sorted_tasks = [t for t in sorted_tasks if t.task_id in filter_set]
+            missing = filter_set - all_ids
+            if missing:
+                # Show available IDs so the user can spot typos (e.g. P1-001 vs PI-001)
+                sample = sorted(all_ids)[:10]
+                suffix = f" ... ({all_count} total)" if all_count > 10 else ""
+                raise ValueError(
+                    f"Task filter IDs not found in seed: {', '.join(sorted(missing))}. "
+                    f"Available IDs: {', '.join(sample)}{suffix}"
+                )
+            logger.info(
+                "PLAN phase: task filter applied — %d of %d tasks selected: %s",
+                len(sorted_tasks), all_count,
+                [t.task_id for t in sorted_tasks],
+            )
+
         # Extract plan metadata
         plan_meta = seed_data.get("plan", {})
         preflight = seed_data.get("_preflight", {})
 
-        # Domain summary
+        # Domain summary (computed over filtered tasks)
         domain_counts: dict[str, int] = defaultdict(int)
-        for t in tasks:
+        for t in sorted_tasks:
             domain_counts[t.domain] += 1
 
         # Check summary from preflight
@@ -419,11 +456,13 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         context["plan_goals"] = plan_meta.get("goals", [])
         context["domain_summary"] = dict(domain_counts)
         context["preflight_summary"] = check_summary
-        context["total_estimated_loc"] = sum(t.estimated_loc for t in tasks)
+        context["total_estimated_loc"] = sum(t.estimated_loc for t in sorted_tasks)
+        context["architectural_context"] = seed_data.get("architectural_context", {})
+        context["design_calibration"] = seed_data.get("design_calibration", {})
 
         output = {
             "plan_title": context["plan_title"],
-            "task_count": len(tasks),
+            "task_count": len(sorted_tasks),
             "execution_order": [t.task_id for t in sorted_tasks],
             "domain_summary": dict(domain_counts),
             "preflight_check_summary": check_summary,
@@ -431,11 +470,13 @@ class PlanPhaseHandler(AbstractPhaseHandler):
             "preflight_failures": fail_count,
             "goals": context["plan_goals"],
         }
+        if task_filter:
+            output["task_filter"] = task_filter
 
         duration = time.monotonic() - start
         logger.info(
             "PLAN phase complete: %d tasks, %d domains, %d preflight failures (%.2fs)",
-            len(tasks), len(domain_counts), fail_count, duration,
+            len(sorted_tasks), len(domain_counts), fail_count, duration,
         )
 
         if fail_count > 0 and not dry_run:
@@ -585,8 +626,23 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         return self._design_phase
 
     @staticmethod
-    def _task_to_feature_context(task: SeedTask) -> Any:
-        """Convert a SeedTask to a FeatureContext for the design phase."""
+    def _task_to_feature_context(
+        task: SeedTask,
+        *,
+        plan_goals: list[str] | None = None,
+        architectural_context: dict[str, Any] | None = None,
+        prior_design_summaries: list[str] | None = None,
+        calibration: dict[str, Any] | None = None,
+    ) -> Any:
+        """Convert a SeedTask to a FeatureContext for the design phase.
+
+        Args:
+            task: The seed task.
+            plan_goals: Project-level goals for benefit-driven framing.
+            architectural_context: Shared context from manifest + cross-feature analysis.
+            prior_design_summaries: Summaries of earlier design docs for cross-task context.
+            calibration: Per-task calibration dict (depth_tier, sections, max_output_tokens).
+        """
         from startd8.contractors.artisan_phases.design_documentation import (
             FeatureContext,
         )
@@ -601,20 +657,94 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if task.feature_id:
             additional_context["feature_id"] = task.feature_id
 
+        # Benefit-driven framing: inject project goals
+        if plan_goals:
+            additional_context["project_goals"] = (
+                "This feature supports these project goals:\n"
+                + "\n".join(f"- {g}" for g in plan_goals[:5])
+            )
+
+        # Architectural context from manifest + cross-feature analysis
+        arch = architectural_context or {}
+        objectives = arch.get("objectives", [])
+        if objectives:
+            additional_context["objectives"] = ", ".join(
+                o.get("name", str(o)) if isinstance(o, dict) else str(o)
+                for o in objectives[:5]
+            )
+        constraints = arch.get("constraints", [])
+        if constraints:
+            additional_context["constraints_from_manifest"] = [
+                f"[{c.get('severity', 'info')}] {c.get('rule', str(c))}"
+                if isinstance(c, dict) else str(c)
+                for c in constraints
+            ]
+
+        # Shared modules (only those overlapping with this task's targets)
+        shared = arch.get("shared_modules", [])
+        if shared and task.target_files:
+            task_targets = set(task.target_files)
+            overlapping = [
+                m["path"] for m in shared
+                if isinstance(m, dict) and m.get("path") in task_targets
+            ]
+            if overlapping:
+                additional_context["shared_modules"] = (
+                    f"These files are also targeted by other features — "
+                    f"coordinate interfaces: {', '.join(overlapping)}"
+                )
+
+        domain_concepts = arch.get("domain_concepts", [])
+        if domain_concepts:
+            additional_context["domain_concepts"] = ", ".join(domain_concepts[:10])
+
+        import_conventions = arch.get("import_conventions", [])
+        if import_conventions:
+            additional_context["import_conventions"] = ", ".join(import_conventions[:5])
+
+        # Cross-task context from prior designs
+        if prior_design_summaries:
+            additional_context["prior_designs"] = (
+                "Previously designed tasks:\n"
+                + "\n".join(f"- {s}" for s in prior_design_summaries[-5:])
+            )
+
+        # Calibration: depth guidance
+        cal = calibration or {}
+        depth_guidance = cal.get("depth_guidance")
+        if depth_guidance:
+            additional_context["depth_guidance"] = depth_guidance
+
+        sections = cal.get("sections")
+        max_output_tokens = cal.get("max_output_tokens")
+
         return FeatureContext(
             feature_name=task.title,
             description=task.description,
             target_file=task.target_files[0] if task.target_files else "",
             constraints=list(task.prompt_constraints),
             additional_context=additional_context,
+            sections=sections,
+            max_output_tokens=max_output_tokens,
+            depth_guidance=depth_guidance,
         )
 
     @staticmethod
-    def _run_design_async(design_phase: Any, feature_context: Any) -> Any:
+    def _run_design_async(
+        design_phase: Any,
+        feature_context: Any,
+        timeout: float | None = None,
+    ) -> Any:
         """Run DesignDocumentationPhase.run() in a dedicated thread-owned event loop.
 
         Uses the same pattern as ImplementPhaseHandler._run_development_phase()
         to avoid nested event-loop errors.
+
+        Args:
+            design_phase: The DesignDocumentationPhase instance.
+            feature_context: The FeatureContext for the design task.
+            timeout: Maximum seconds to wait for the thread. ``None``
+                means wait indefinitely.
         """
         result_box: dict[str, Any] = {}
         error_box: dict[str, BaseException] = {}
@@ -634,7 +764,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         thread = threading.Thread(target=_runner, daemon=True)
         thread.start()
-        thread.join()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            logger.error(
+                "DesignDocumentationPhase did not complete within %.0fs — "
+                "abandoning background thread (daemon=True)",
+                timeout,
+            )
+            raise TimeoutError(
+                f"DesignDocumentationPhase.run() did not complete within {timeout}s"
+            )
 
         if "error" in error_box:
             raise error_box["error"]
@@ -672,6 +812,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         tasks_agreed = 0
         tasks_failed = 0
 
+        # Extract shared context for cross-task design quality
+        plan_goals = context.get("plan_goals", [])
+        arch_context = context.get("architectural_context", {})
+        calibration_map = context.get("design_calibration", {})
+        prior_summaries: list[str] = []
+
         for task in tasks:
             # Skip tasks with env failures
             env_fails = [
@@ -696,7 +842,14 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 continue
 
             # Real-mode: run design documentation phase per task
-            feature_context = self._task_to_feature_context(task)
+            task_calibration = calibration_map.get(task.task_id, {})
+            feature_context = self._task_to_feature_context(
+                task,
+                plan_goals=plan_goals,
+                architectural_context=arch_context,
+                prior_design_summaries=prior_summaries,
+                calibration=task_calibration,
+            )
 
             # Snapshot cost before this task
             backend = self._get_llm_backend()
@@ -704,7 +857,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
             try:
                 design_phase = self._get_design_phase()
-                result = self._run_design_async(design_phase, feature_context)
+                result = self._run_design_async(
+                    design_phase, feature_context,
+                    timeout=self.config.development_timeout_seconds,
+                )
                 task_cost = backend.total_cost_usd - cost_before
                 total_cost += task_cost
 
@@ -716,6 +872,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 tasks_designed += 1
                 if result.agreed:
                     tasks_agreed += 1
+
+                # Accumulate cross-task summary for progressive context
+                doc_text = result.design_document.raw_text
+                first_line = doc_text[:300].split("\n")[0]
+                summary = f"{task.task_id} ({task.title}): {first_line}"
+                prior_summaries.append(summary)
 
                 # Write design doc to output_dir if configured
                 if self.output_dir:
@@ -983,6 +1145,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         dev_phase: Any,
         plan: Any,
         timeout: Optional[float] = None,
+        cancel_event: Optional[threading.Event] = None,
     ) -> Any:
         """Run DevelopmentPhase in a dedicated thread-owned event loop.
 
@@ -996,6 +1159,9 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             timeout: Maximum seconds to wait for the thread. ``None``
                 means wait indefinitely (the orchestrator's own timeout
                 still applies at the outer level).
+            cancel_event: Optional :class:`threading.Event` for cooperative
+                cancellation. When set after a timeout, signals the background
+                thread to stop initiating new LLM calls.
         """
         result_box: dict[str, Any] = {}
         error_box: dict[str, BaseException] = {}
@@ -1018,6 +1184,12 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         thread.join(timeout=timeout)
 
         if thread.is_alive():
+            if cancel_event:
+                cancel_event.set()
+                logger.warning(
+                    "Cancel event set — signalling background DevelopmentPhase "
+                    "thread to stop initiating new LLM calls",
+                )
             logger.error(
                 "DevelopmentPhase did not complete within %.0fs — "
                 "abandoning background thread (daemon=True)",
@@ -1210,6 +1382,10 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 # setting it skips _resolve_generator() and uses our instance.
                 executor._generator = self._code_generator
 
+            # Cooperative cancellation token — set on timeout to signal
+            # the background thread to stop initiating new LLM calls.
+            cancel_event = threading.Event()
+
             # Build plan
             plan = DevelopmentPlan(
                 plan_id=f"artisan-implement-{int(time.time())}",
@@ -1217,6 +1393,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 config={
                     "dry_run": False,
                     "state_dir": str(project_root / ".startd8_state"),
+                    "cancel_event": cancel_event,
                 },
             )
 
@@ -1238,7 +1415,9 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 len(chunks), plan.plan_id,
             )
             dev_result = self._run_development_phase(
-                dev_phase, plan, timeout=self.config.development_timeout_seconds,
+                dev_phase, plan,
+                timeout=self.config.development_timeout_seconds,
+                cancel_event=cancel_event,
             )
 
             if dev_result is None or not hasattr(dev_result, "chunk_states"):
@@ -1273,6 +1452,10 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 len(generation_results), results_path,
             )
 
+        # --- Auto-commit each feature's generated files ---
+        if self.config.auto_commit and generation_results:
+            self._commit_features(generation_results, tasks, project_root)
+
         context["implementation"] = output
         context["generation_results"] = generation_results
         duration = time.monotonic() - start
@@ -1286,6 +1469,53 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         )
 
         return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
+
+    def _commit_features(
+        self,
+        generation_results: dict[str, GenerationResult],
+        tasks: list[SeedTask],
+        project_root: Path,
+    ) -> None:
+        """Commit each successful feature's generated files to git individually.
+
+        Produces one commit per task, mirroring the PrimeContractor pattern.
+        Failures are logged as warnings but do not abort the workflow.
+        """
+        task_map = {t.task_id: t for t in tasks}
+        for task_id, gr in generation_results.items():
+            if not gr.success or not gr.generated_files:
+                continue
+            task = task_map.get(task_id)
+            title = task.title if task else task_id
+            for fpath in gr.generated_files:
+                subprocess.run(
+                    ["git", "add", str(fpath)],
+                    cwd=project_root,
+                    capture_output=True,
+                    timeout=30,
+                )
+            msg = (
+                f"feat({task_id}): {title}\n\n"
+                "Generated by Artisan IMPLEMENT phase"
+            )
+            # Commit only the specific generated files to avoid capturing
+            # unrelated staged changes from the user's working tree.
+            files_to_commit = [str(fpath) for fpath in gr.generated_files]
+            result = subprocess.run(
+                ["git", "commit", "-m", msg, "--"] + files_to_commit,
+                cwd=project_root,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0:
+                logger.info("Committed %s: %s", task_id, title)
+            else:
+                logger.warning(
+                    "Commit failed for %s: %s",
+                    task_id,
+                    result.stderr.strip(),
+                )
 
 
 class TestPhaseHandler(AbstractPhaseHandler):
@@ -1849,6 +2079,12 @@ PASS if score >= {pass_threshold} and no blocking issues.
             "suggestions": extract_section("Suggestions"),
         }
 
+    _REVIEW_PHASE_SYSTEM_PROMPT = (
+        "You are an expert code quality reviewer. Evaluate the implementation "
+        "against the design document, checking for correctness, completeness, "
+        "and adherence to stated constraints."
+    )
+
     def _review_task(
         self,
         task: SeedTask,
@@ -1868,7 +2104,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
         try:
             agent = self._resolve_review_agent()
             prompt = self._build_review_prompt(task, generated_code, test_results)
-            response_text, _time_ms, token_usage = agent.generate(prompt)
+            response_text, _time_ms, token_usage = agent.generate(
+                prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
+            )
             review = self._parse_review_response(response_text)
             review["task_id"] = task.task_id
             review["cost"] = token_usage_cost(token_usage)
@@ -2434,6 +2672,7 @@ class ContextSeedHandlers:
         review_temperature: Optional[float] = None,
         review_max_code_chars: Optional[int] = None,
         development_timeout_seconds: Optional[float] = None,
+        auto_commit: Optional[bool] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all seven workflow phases.
@@ -2453,6 +2692,7 @@ class ContextSeedHandlers:
             review_temperature: Temperature for LLM review calls.
             review_max_code_chars: Max chars of code in review prompt.
             development_timeout_seconds: Timeout for development thread.
+            auto_commit: Commit each feature's generated code to git.
             code_generator: Optional pre-configured CodeGenerator instance.
 
         Returns:
@@ -2473,6 +2713,7 @@ class ContextSeedHandlers:
             ("review_temperature", review_temperature),
             ("review_max_code_chars", review_max_code_chars),
             ("development_timeout_seconds", development_timeout_seconds),
+            ("auto_commit", auto_commit),
         ]:
             if val is not None:
                 cli_overrides[name] = val

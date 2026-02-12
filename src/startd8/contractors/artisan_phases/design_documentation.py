@@ -59,6 +59,7 @@ __all__ = [
     # Utility functions
     "parse_design_document",
     "parse_review_verdict",
+    "build_design_system_prompt",
 ]
 
 # Configure logging
@@ -130,6 +131,9 @@ class FeatureContext:
         target_file: Primary file path where the feature will be implemented.
         constraints: Technical or business constraints to observe.
         additional_context: Arbitrary key-value pairs for extra context.
+        sections: Calibrated section list (None = all 7 default sections).
+        max_output_tokens: Output token cap (None = provider default).
+        depth_guidance: Tier-specific guidance for system prompt.
     """
 
     feature_name: str
@@ -137,6 +141,9 @@ class FeatureContext:
     target_file: str
     constraints: list[str] = field(default_factory=list)
     additional_context: dict[str, Any] = field(default_factory=dict)
+    sections: list[str] | None = None
+    max_output_tokens: int | None = None
+    depth_guidance: str | None = None
 
 
 @dataclass
@@ -276,12 +283,18 @@ class LLMBackend(Protocol):
     signature can serve as the LLM backend — no inheritance required.
     """
 
-    async def generate(self, prompt: str, system_prompt: str | None = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
         """Generate text from the LLM.
 
         Args:
             prompt: The user prompt.
             system_prompt: Optional system prompt to set context.
+            max_tokens: Optional output token limit override.
 
         Returns:
             Generated text from the LLM.
@@ -312,31 +325,54 @@ class ResolutionCallback(Protocol):
 # PROMPT CONSTANTS
 # ============================================================================
 
-DESIGN_GENERATION_SYSTEM_PROMPT = (
-    "You are a senior software architect responsible for creating comprehensive "
-    "design documents.\n\n"
-    "Your output must contain exactly these sections with markdown headers "
-    "(## Section Name):\n"
-    "- ## Overview\n"
-    "- ## Architecture\n"
-    "- ## Data Model\n"
-    "- ## API Contracts\n"
-    "- ## Error Handling\n"
-    "- ## Security Considerations\n"
-    "- ## Testing Strategy\n\n"
-    "Be specific, actionable, and include code snippets where appropriate. "
-    "Each section should be thorough and address potential concerns."
-)
+_DEFAULT_SECTIONS = [
+    "Overview", "Architecture", "Data Model", "API Contracts",
+    "Error Handling", "Security Considerations", "Testing Strategy",
+]
+
+
+def build_design_system_prompt(
+    sections: list[str] | None = None,
+    depth_guidance: str | None = None,
+) -> str:
+    """Build a dynamic system prompt with calibrated section list."""
+    if sections is None:
+        sections = _DEFAULT_SECTIONS
+    section_list = "\n".join(f"- ## {s}" for s in sections)
+
+    depth_line = ""
+    if depth_guidance:
+        depth_line = f"\n\n**Scope guidance:** {depth_guidance}"
+
+    return (
+        "You are a senior software architect creating focused, "
+        "right-sized design documents.\n\n"
+        "Your output must contain exactly these sections with markdown headers "
+        "(## Section Name):\n"
+        f"{section_list}\n\n"
+        "Rules:\n"
+        "- Be specific and actionable. Include code snippets where appropriate.\n"
+        "- Scale depth to the feature's complexity.\n"
+        "- Put the most important information first within each section "
+        "(progressive disclosure).\n"
+        "- When Additional Context mentions project goals, constraints, or "
+        "shared modules, address them directly — don't invent requirements "
+        "outside the stated scope."
+        f"{depth_line}"
+    )
+
+
+# Backward-compatible constant for code that references it directly
+DESIGN_GENERATION_SYSTEM_PROMPT = build_design_system_prompt()
 
 DESIGN_GENERATION_USER_PROMPT_TEMPLATE = (
-    "Generate a comprehensive design document for the following feature:\n\n"
+    "Generate a design document for the following feature:\n\n"
     "**Feature Name:** {feature_name}\n\n"
     "**Description:** {description}\n\n"
     "**Target File:** {target_file}\n\n"
     "**Constraints:** {constraints}\n\n"
     "**Additional Context:** {additional_context}\n\n"
-    "{revision_guidance}\n\n"
-    "Ensure all 7 sections are present and well-developed."
+    "{revision_guidance}"
 )
 
 _REVIEW_JSON_SCHEMA = (
@@ -363,6 +399,7 @@ REVIEWER_SYSTEM_PROMPT = (
 )
 
 REVIEWER_USER_PROMPT_TEMPLATE = (
+    "{project_context}"
     "Review this design document:\n\n"
     "{design_document}\n\n"
     "Provide your verdict as JSON matching the specified schema."
@@ -382,6 +419,7 @@ ARBITER_SYSTEM_PROMPT = (
 )
 
 ARBITER_USER_PROMPT_TEMPLATE = (
+    "{project_context}"
     "Review this design document:\n\n"
     "{design_document}\n\n"
     "Provide your verdict as JSON matching the specified schema."
@@ -394,7 +432,7 @@ REVISION_SYSTEM_PROMPT = (
     "the document's core objectives.\n"
     "If feedback seems contradictory, use your best judgment to merge the most "
     "valuable insights.\n\n"
-    "Output the revised design document with all 7 sections."
+    "Output the revised design document preserving all existing sections."
 )
 
 REVISION_USER_PROMPT_TEMPLATE = (
@@ -620,37 +658,45 @@ class AgentLLMBackend:
         )
         return self._agent
 
-    async def generate(self, prompt: str, system_prompt: str | None = None) -> str:
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str | None = None,
+        max_tokens: int | None = None,
+    ) -> str:
         """Generate text from the LLM.
 
         Satisfies the ``LLMBackend`` protocol.
 
-        When *system_prompt* is provided it is prepended to *prompt* with a
-        separator because the underlying ``BaseAgent.agenerate`` interface
-        does not expose a native system-prompt parameter.
+        Uses the native ``system_prompt`` parameter supported by all agent
+        types (claude, openai, gemini, mock).
 
         Args:
             prompt: The user prompt.
             system_prompt: Optional system prompt to set context.
+            max_tokens: Optional output token limit override.
 
         Returns:
             Generated text from the LLM.
         """
         agent = self._resolve_agent()
 
-        if system_prompt:
-            full_prompt = f"{system_prompt}\n\n---\n\n{prompt}"
-        else:
-            full_prompt = prompt
-
-        # BaseAgent.agenerate returns Tuple[str, int, TokenUsage]
-        response_text, response_time_ms, token_usage = await agent.agenerate(
-            full_prompt
-        )
-        self.total_input_tokens += token_usage_input(token_usage)
-        self.total_output_tokens += token_usage_output(token_usage)
-        self.total_cost_usd += token_usage_cost(token_usage)
-        return response_text
+        # Temporarily override max_tokens if calibrated
+        original_max = getattr(agent, "max_tokens", None)
+        if max_tokens is not None and hasattr(agent, "max_tokens"):
+            agent.max_tokens = max_tokens
+        try:
+            # Use native system_prompt parameter (all agents support it)
+            response_text, response_time_ms, token_usage = await agent.agenerate(
+                prompt, system_prompt=system_prompt,
+            )
+            self.total_input_tokens += token_usage_input(token_usage)
+            self.total_output_tokens += token_usage_output(token_usage)
+            self.total_cost_usd += token_usage_cost(token_usage)
+            return response_text
+        finally:
+            if max_tokens is not None and original_max is not None:
+                agent.max_tokens = original_max
 
 
 # ============================================================================
@@ -852,6 +898,20 @@ class DesignDocumentationPhase:
         Returns:
             Parsed ``DesignDocument``.
         """
+        # Format additional_context preserving structure for nested values
+        if context.additional_context:
+            ctx_parts: list[str] = []
+            for k, v in context.additional_context.items():
+                if isinstance(v, str):
+                    ctx_parts.append(f"**{k}:** {v}")
+                else:
+                    ctx_parts.append(
+                        f"**{k}:**\n{json.dumps(v, indent=2, default=str)}"
+                    )
+            additional_context_str = "\n".join(ctx_parts)
+        else:
+            additional_context_str = "None"
+
         prompt = DESIGN_GENERATION_USER_PROMPT_TEMPLATE.format(
             feature_name=context.feature_name,
             description=context.description,
@@ -861,14 +921,7 @@ class DesignDocumentationPhase:
                 if context.constraints
                 else "None"
             ),
-            additional_context=(
-                ", ".join(
-                    f"{k}: {v}"
-                    for k, v in context.additional_context.items()
-                )
-                if context.additional_context
-                else "None"
-            ),
+            additional_context=additional_context_str,
             revision_guidance=revision_guidance,
         )
 
@@ -878,9 +931,16 @@ class DesignDocumentationPhase:
             iteration,
         )
 
+        # Dynamic system prompt based on calibrated sections
+        system_prompt = build_design_system_prompt(
+            context.sections,
+            depth_guidance=context.depth_guidance,
+        )
+
         raw_text = await self.llm.generate(
             prompt=prompt,
-            system_prompt=DESIGN_GENERATION_SYSTEM_PROMPT,
+            system_prompt=system_prompt,
+            max_tokens=context.max_output_tokens,
         )
         return parse_design_document(raw_text, context.feature_name, iteration)
 
@@ -892,12 +952,14 @@ class DesignDocumentationPhase:
         self,
         design: DesignDocument,
         role: ReviewRole,
+        feature_context: FeatureContext | None = None,
     ) -> ReviewVerdict:
         """Send a design document to one reviewer persona.
 
         Args:
             design: The design document to review.
             role: Which reviewer role to use.
+            feature_context: Optional context for evidence-anchored review.
 
         Returns:
             Parsed ``ReviewVerdict``.
@@ -909,7 +971,30 @@ class DesignDocumentationPhase:
             system_prompt = ARBITER_SYSTEM_PROMPT
             user_template = ARBITER_USER_PROMPT_TEMPLATE
 
-        prompt = user_template.format(design_document=design.raw_text)
+        # Format project context for evidence-anchored review
+        project_context = ""
+        if feature_context and feature_context.additional_context:
+            parts: list[str] = []
+            goals = feature_context.additional_context.get("project_goals")
+            if goals:
+                parts.append(f"**Project Goals:** {goals}")
+            constraints = feature_context.constraints
+            if constraints:
+                parts.append(f"**Constraints:** {'; '.join(constraints)}")
+            depth = feature_context.additional_context.get("depth_guidance")
+            if depth:
+                parts.append(f"**Design Scope:** {depth}")
+            if parts:
+                project_context = (
+                    "**Context for Review:**\n"
+                    + "\n".join(parts)
+                    + "\n\n"
+                )
+
+        prompt = user_template.format(
+            design_document=design.raw_text,
+            project_context=project_context,
+        )
 
         logger.info(
             "Requesting %s review for '%s' (iteration %d)",
@@ -1186,12 +1271,12 @@ class DesignDocumentationPhase:
                     context, iteration, revision_guidance
                 )
 
-                # --- Dual review ---
+                # --- Dual review (with project context for evidence-anchored review) ---
                 reviewer_verdict = await self._review_design(
-                    design, ReviewRole.REVIEWER
+                    design, ReviewRole.REVIEWER, feature_context=context
                 )
                 arbiter_verdict = await self._review_design(
-                    design, ReviewRole.ARBITER
+                    design, ReviewRole.ARBITER, feature_context=context
                 )
 
                 # --- Check agreement ---

@@ -94,6 +94,7 @@ class ConfigManager:
                 "review_temperature": None,
                 "review_max_code_chars": None,
                 "development_timeout_seconds": None,
+                "auto_commit": None,
             },
             "resilience": {
                 "level": "standard",  # off, minimal, standard, aggressive, custom

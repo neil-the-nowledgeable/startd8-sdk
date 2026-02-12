@@ -76,7 +76,20 @@ try:
 except ImportError:  # pragma: no cover
     HAS_OTEL = False
 
-logger = logging.getLogger(__name__)
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
+
+# Context keys worth persisting in checkpoints for resume.
+# Excludes "tasks", "task_index", "generation_results" because they contain
+# non-serializable objects (SeedTask, Path, GenerationResult) that are reloaded
+# from seed/disk via _ensure_context_loaded().
+_CHECKPOINT_CONTEXT_KEYS = frozenset({
+    "enriched_seed_path", "plan_title", "plan_goals", "domain_summary",
+    "preflight_summary", "total_estimated_loc", "architectural_context",
+    "design_calibration", "task_filter", "project_root",
+    "design_results", "test_results", "review_results",
+})
 
 
 # ============================================================================
@@ -289,6 +302,7 @@ class WorkflowCheckpoint:
     timestamp: str
     status: str
     metadata: dict[str, Any] = field(default_factory=dict)
+    context_snapshot: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -663,6 +677,10 @@ class ArtisanContractorWorkflow:
                 pr_dict_copy["status"] = PhaseStatus(pr_dict_copy["status"])
                 phase_results.append(PhaseResult(**pr_dict_copy))
             resumed_from_value = loaded_checkpoint.last_completed_phase
+            # Restore persisted context keys (CLI-supplied values take precedence)
+            if loaded_checkpoint.context_snapshot:
+                for key, value in loaded_checkpoint.context_snapshot.items():
+                    context.setdefault(key, value)
             self._logger.info(
                 "Resuming workflow %s from checkpoint (after phase %s)",
                 config.workflow_id,
@@ -719,6 +737,7 @@ class ArtisanContractorWorkflow:
                                 phase_results,
                                 cost_tracker.cumulative_cost,
                                 WorkflowStatus.TIMED_OUT,
+                                context=context,
                             )
                             final_status = WorkflowStatus.TIMED_OUT
                             raise WorkflowTimeoutError(
@@ -750,6 +769,7 @@ class ArtisanContractorWorkflow:
                         phase_results,
                         cost_tracker.cumulative_cost,
                         WorkflowStatus.IN_PROGRESS,
+                        context=context,
                     )
 
                     # Check budget
@@ -759,6 +779,7 @@ class ArtisanContractorWorkflow:
                             phase_results,
                             cost_tracker.cumulative_cost,
                             WorkflowStatus.BUDGET_EXCEEDED,
+                            context=context,
                         )
                         final_status = WorkflowStatus.BUDGET_EXCEEDED
                         assert config.cost_budget is not None  # for type checker
@@ -776,6 +797,7 @@ class ArtisanContractorWorkflow:
                             phase_results,
                             cost_tracker.cumulative_cost,
                             WorkflowStatus.FAILED,
+                            context=context,
                         )
                         final_status = WorkflowStatus.FAILED
                         raise PhaseExecutionError(
@@ -792,6 +814,7 @@ class ArtisanContractorWorkflow:
                             phase_results,
                             cost_tracker.cumulative_cost,
                             WorkflowStatus.TIMED_OUT,
+                            context=context,
                         )
                         final_status = WorkflowStatus.TIMED_OUT
                         raise WorkflowTimeoutError(
@@ -1119,8 +1142,22 @@ class ArtisanContractorWorkflow:
         phase_results: list[PhaseResult],
         cumulative_cost: float,
         status: WorkflowStatus,
+        context: Optional[dict[str, Any]] = None,
     ) -> WorkflowCheckpoint:
         """Build and save a checkpoint, returning it for attachment to errors."""
+        # Snapshot JSON-serializable context keys for resume
+        snapshot: dict[str, Any] = {}
+        if context is not None:
+            for key in _CHECKPOINT_CONTEXT_KEYS:
+                if key not in context:
+                    continue
+                value = context[key]
+                try:
+                    json.dumps(value)  # verify serializable
+                    snapshot[key] = value
+                except (TypeError, ValueError, OverflowError):
+                    pass  # skip non-serializable values
+
         checkpoint = WorkflowCheckpoint(
             workflow_id=self.config.workflow_id,
             last_completed_phase=(
@@ -1145,6 +1182,7 @@ class ArtisanContractorWorkflow:
             timestamp=datetime.now(timezone.utc).isoformat(),
             status=status.value,
             metadata=self.config.metadata,
+            context_snapshot=snapshot,
         )
         try:
             self.checkpoint_store.save(checkpoint)

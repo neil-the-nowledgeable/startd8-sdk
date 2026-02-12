@@ -33,6 +33,7 @@ import json
 import logging
 import sys
 from pathlib import Path
+from typing import Any
 
 # Ensure the SDK is importable (dev mode — installed editable is preferred)
 _src = str(Path(__file__).resolve().parent.parent / "src")
@@ -189,6 +190,19 @@ def main() -> int:
         "--drafter-agent", default=None,
         help="Drafter agent spec (default: from ContextSeedHandlers defaults)",
     )
+    parser.add_argument(
+        "--auto-commit", action="store_true",
+        help="Commit each feature's generated code to git after implementation",
+    )
+    parser.add_argument(
+        "--task-filter",
+        default=None,
+        help=(
+            "Comma-separated task IDs to process (e.g. PI-001 or PI-001,PI-002). "
+            "Only these tasks run through all 7 phases. "
+            "Enables deterministic workflow IDs for reliable --resume per task."
+        ),
+    )
 
     args = parser.parse_args()
     setup_logging(verbose=args.verbose)
@@ -204,6 +218,20 @@ def main() -> int:
     # Determine output dir
     output_dir = args.output_dir or str(seed_path.parent)
 
+    # Parse task filter (comma-separated task IDs)
+    task_filter: list[str] | None = None
+    if args.task_filter:
+        task_filter = [t.strip() for t in args.task_filter.split(",") if t.strip()]
+        if not task_filter:
+            parser.error("--task-filter requires at least one non-empty task ID")
+
+    # Deterministic workflow ID when filtering to specific tasks so that
+    # --resume reliably finds the checkpoint for the same task(s).
+    workflow_kwargs: dict[str, Any] = {}
+    if task_filter:
+        filter_key = "-".join(sorted(task_filter))
+        workflow_kwargs["workflow_id"] = f"artisan-{filter_key}"
+
     # Create workflow config
     config = WorkflowConfig(
         dry_run=args.dry_run,
@@ -216,12 +244,15 @@ def main() -> int:
             "seed_path": str(seed_path),
             "runner": "run_artisan_workflow.py",
         },
+        **workflow_kwargs,
     )
 
     logger.info("Workflow ID: %s", config.workflow_id)
     logger.info("Seed: %s", seed_path)
     logger.info("Project root: %s", config.project_root)
     logger.info("Dry run: %s", config.dry_run)
+    if task_filter:
+        logger.info("Task filter: %s (%d task(s))", task_filter, len(task_filter))
     if config.cost_budget is not None:
         logger.info("Cost budget: $%.2f", config.cost_budget)
 
@@ -247,6 +278,8 @@ def main() -> int:
         handler_kwargs["drafter_agent"] = args.drafter_agent
     if args.implement_timeout is not None:
         handler_kwargs["development_timeout_seconds"] = args.implement_timeout
+    if args.auto_commit:
+        handler_kwargs["auto_commit"] = True
 
     handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():
@@ -254,9 +287,11 @@ def main() -> int:
 
     # Execute — pass enriched_seed_path in context so handlers can
     # reload task data after a checkpoint resume (context is not persisted).
-    initial_context = {
+    initial_context: dict[str, Any] = {
         "enriched_seed_path": str(seed_path.resolve()),
     }
+    if task_filter:
+        initial_context["task_filter"] = task_filter
 
     try:
         result = workflow.execute(
@@ -289,7 +324,11 @@ def main() -> int:
     print_phase_results(result)
 
     # Write result JSON
-    result_path = Path(output_dir) / "workflow-result.json"
+    if task_filter:
+        filter_slug = "-".join(sorted(task_filter))
+        result_path = Path(output_dir) / f"workflow-result-{filter_slug}.json"
+    else:
+        result_path = Path(output_dir) / "workflow-result.json"
     result_data = {
         "workflow_id": result.workflow_id,
         "status": result.status.value,

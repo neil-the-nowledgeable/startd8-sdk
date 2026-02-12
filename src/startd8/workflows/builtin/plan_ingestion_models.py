@@ -140,9 +140,13 @@ class ArtisanContextSeed:
     tasks: List[Dict[str, Any]] = field(default_factory=list)
     artifacts: Dict[str, str] = field(default_factory=dict)
     ingestion_metrics: Dict[str, Any] = field(default_factory=dict)
+    # Shared architectural context from manifest + cross-feature analysis
+    architectural_context: Optional[Dict[str, Any]] = None
+    # Per-task design calibration (sections, max_tokens) from SizeEstimator
+    design_calibration: Optional[Dict[str, Dict[str, Any]]] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "version": self.version,
             "generated_at": self.generated_at,
             "generator": self.generator,
@@ -152,6 +156,11 @@ class ArtisanContextSeed:
             "artifacts": dict(self.artifacts),
             "ingestion_metrics": dict(self.ingestion_metrics),
         }
+        if self.architectural_context is not None:
+            d["architectural_context"] = self.architectural_context
+        if self.design_calibration is not None:
+            d["design_calibration"] = self.design_calibration
+        return d
 
 
 @dataclass

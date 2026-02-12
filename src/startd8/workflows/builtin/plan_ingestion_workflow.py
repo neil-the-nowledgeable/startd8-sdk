@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -193,6 +195,42 @@ Use ## for top-level sections, ### for subsections.
 
 _INPUT_TRUNCATION = 200   # Max chars of prompt stored in StepResult.input
 _OUTPUT_TRUNCATION = 500  # Max chars of response stored in StepResult.output
+
+# Depth tier calibration — channel adaptation pattern
+# (brief/standard/comprehensive map to feature complexity)
+DEPTH_TIERS: Dict[str, Dict[str, Any]] = {
+    "brief": {
+        "sections": ["Overview", "Architecture", "Testing Strategy"],
+        "max_tokens": 2048,
+        "guidance": (
+            "Concise design sketch. Focus on the interface contract and "
+            "key test cases. This is a small feature — avoid over-engineering."
+        ),
+    },
+    "standard": {
+        "sections": [
+            "Overview", "Architecture", "Data Model",
+            "Error Handling", "Testing Strategy",
+        ],
+        "max_tokens": 4096,
+        "guidance": (
+            "Standard design doc. Include data model and error handling "
+            "but keep depth proportional to the feature's scope."
+        ),
+    },
+    "comprehensive": {
+        "sections": [
+            "Overview", "Architecture", "Data Model",
+            "API Contracts", "Error Handling",
+            "Security Considerations", "Testing Strategy",
+        ],
+        "max_tokens": 8192,
+        "guidance": (
+            "Comprehensive design. All sections are warranted for this "
+            "complex feature — address security and API contracts thoroughly."
+        ),
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -751,6 +789,185 @@ class PlanIngestionWorkflow(WorkflowBase):
         return tasks
 
     # ------------------------------------------------------------------
+    # Manifest + context helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_manifest_context(manifest: Any) -> Dict[str, Any]:
+        """Extract architectural context from a ContextCore manifest."""
+        ctx: Dict[str, Any] = {}
+
+        # Objectives → project goals for prompt injection
+        if hasattr(manifest, "strategy") and manifest.strategy:
+            objectives = getattr(manifest.strategy, "objectives", [])
+            if objectives:
+                ctx["objectives"] = [
+                    {
+                        "name": getattr(obj, "name", str(obj)),
+                        "key_results": getattr(obj, "key_results", []),
+                    }
+                    for obj in objectives
+                ]
+
+        # Guidance → constraints, preferences, focus
+        guidance = getattr(manifest, "guidance", None)
+        if guidance:
+            constraints = getattr(guidance, "constraints", [])
+            if constraints:
+                ctx["constraints"] = [
+                    {
+                        "rule": getattr(c, "rule", str(c)),
+                        "severity": getattr(c, "severity", "info"),
+                        "scope": getattr(c, "scope", "*"),
+                    }
+                    for c in constraints
+                ]
+            preferences = getattr(guidance, "preferences", [])
+            if preferences:
+                ctx["preferences"] = [
+                    getattr(p, "preference", str(p)) for p in preferences
+                ]
+            focus = getattr(guidance, "focus", None)
+            if focus:
+                areas = getattr(focus, "areas", [])
+                if areas:
+                    ctx["focus_areas"] = list(areas)
+
+        return ctx
+
+    @staticmethod
+    def _derive_architectural_context(
+        parsed_plan: ParsedPlan,
+        manifest_context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Combine manifest data with deterministic cross-feature analysis."""
+        ctx: Dict[str, Any] = {
+            "project_goals": list(parsed_plan.goals),
+            "objectives": manifest_context.get("objectives", []),
+            "constraints": manifest_context.get("constraints", []),
+            "preferences": manifest_context.get("preferences", []),
+            "focus_areas": manifest_context.get("focus_areas", []),
+        }
+
+        # shared_modules: files targeted by 2+ features
+        file_counter: Counter[str] = Counter()
+        file_features: Dict[str, List[str]] = {}
+        for feat in parsed_plan.features:
+            for tf in feat.target_files:
+                file_counter[tf] += 1
+                file_features.setdefault(tf, []).append(feat.feature_id)
+        ctx["shared_modules"] = [
+            {"path": path, "features": file_features[path]}
+            for path, count in file_counter.items()
+            if count >= 2
+        ]
+
+        # import_conventions: most common parent directories
+        dir_counter: Counter[str] = Counter()
+        for feat in parsed_plan.features:
+            for tf in feat.target_files:
+                parent = str(Path(tf).parent)
+                if parent != ".":
+                    dir_counter[parent] += 1
+        ctx["import_conventions"] = [
+            d for d, _ in dir_counter.most_common(5)
+        ]
+
+        # domain_concepts: capitalized terms from goals
+        concepts: list[str] = []
+        for goal in parsed_plan.goals:
+            # Parenthetical lists
+            for m in re.findall(r"\(([^)]+)\)", goal):
+                concepts.extend(
+                    t.strip() for t in m.split(",") if t.strip()
+                )
+            # CamelCase / PascalCase terms
+            concepts.extend(re.findall(r"\b[A-Z][a-z]+(?:[A-Z][a-z]+)+\b", goal))
+        ctx["domain_concepts"] = list(dict.fromkeys(concepts))[:20]
+
+        # dependency_clusters: root features (depended upon, no deps of their own)
+        dep_graph = parsed_plan.dependency_graph
+        # Features that are depended upon by others
+        depended_upon: set[str] = set()
+        for deps in dep_graph.values():
+            depended_upon.update(deps)
+        # Features that have their own dependencies
+        has_deps: set[str] = set(dep_graph.keys())
+        # Roots = depended upon but have no deps of their own
+        root_ids = [
+            fid for fid in depended_upon
+            if fid not in has_deps or not dep_graph.get(fid)
+        ]
+
+        clusters: list[Dict[str, Any]] = []
+        for root_id in root_ids[:10]:
+            dependents: list[str] = []
+            for fid, deps in dep_graph.items():
+                if root_id in deps:
+                    dependents.append(fid)
+            if dependents:
+                clusters.append({"root": root_id, "dependents": dependents})
+        ctx["dependency_clusters"] = clusters
+
+        return ctx
+
+    @staticmethod
+    def _derive_design_calibration(
+        tasks: List[Dict[str, Any]],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Derive per-task design depth calibration.
+
+        Uses ContextCore SizeEstimator when available, falls back to
+        LOC-based heuristics.
+        """
+        estimator = None
+        try:
+            from contextcore.agent.size_estimation import SizeEstimator
+            estimator = SizeEstimator()
+        except ImportError:
+            pass
+
+        calibration: Dict[str, Dict[str, Any]] = {}
+        for task in tasks:
+            ctx = task.get("config", {}).get("context", {})
+            loc = ctx.get("estimated_loc", 100)
+            desc = task.get("config", {}).get("task_description", "")
+
+            if estimator:
+                try:
+                    estimate = estimator.estimate(
+                        task=desc,
+                        inputs={"context_files": ctx.get("target_files", [])},
+                    )
+                    complexity = estimate.complexity
+                except Exception:
+                    complexity = (
+                        "low" if loc <= 50
+                        else ("medium" if loc <= 150 else "high")
+                    )
+            else:
+                complexity = (
+                    "low" if loc <= 50
+                    else ("medium" if loc <= 150 else "high")
+                )
+
+            tier_name = {
+                "low": "brief",
+                "medium": "standard",
+                "high": "comprehensive",
+            }.get(complexity, "standard")
+            tier = DEPTH_TIERS[tier_name]
+
+            calibration[task["task_id"]] = {
+                "depth_tier": tier_name,
+                "sections": tier["sections"],
+                "max_output_tokens": tier["max_tokens"],
+                "depth_guidance": tier["guidance"],
+                "complexity": complexity,
+            }
+        return calibration
+
+    # ------------------------------------------------------------------
     # Phase: EMIT
     # ------------------------------------------------------------------
 
@@ -769,6 +986,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         parsed_plan: Optional[ParsedPlan] = None,
         step_costs: Optional[Dict[str, float]] = None,
         tracking_config: Optional["TaskTrackingConfig"] = None,
+        manifest_context: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]]]:
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
@@ -808,6 +1026,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                 parsed_plan.dependency_graph,
             )
 
+            # Derive architectural context + design calibration
+            m_ctx = manifest_context or {}
+            architectural_context = self._derive_architectural_context(
+                parsed_plan, m_ctx,
+            )
+            design_calibration = self._derive_design_calibration(tasks)
+
             seed = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
                 plan=parsed_plan.to_seed_dict(),
@@ -821,6 +1046,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                     **{f"{k}_cost": v for k, v in costs.items()},
                     "total_cost": total_cost,
                 },
+                architectural_context=architectural_context,
+                design_calibration=design_calibration,
             )
 
             context_seed_path = output_dir / "artisan-context-seed.json"
@@ -930,6 +1157,31 @@ class PlanIngestionWorkflow(WorkflowBase):
             plan_text = plan_path.read_text(encoding="utf-8")
             step_costs: Dict[str, float] = {}
 
+            # --- MANIFEST LOADING (optional) ---
+            manifest_context: Dict[str, Any] = {}
+            contextcore_yaml = config.get("contextcore_yaml")
+            if contextcore_yaml is None:
+                for candidate in [
+                    output_dir / ".contextcore.yaml",
+                    Path.cwd() / ".contextcore.yaml",
+                ]:
+                    if candidate.exists():
+                        contextcore_yaml = candidate
+                        break
+            if contextcore_yaml:
+                try:
+                    from contextcore.models import load_manifest
+                    manifest = load_manifest(str(contextcore_yaml))
+                    manifest_context = self._extract_manifest_context(manifest)
+                    logger.info(
+                        "Loaded manifest from %s: %d context keys",
+                        contextcore_yaml, len(manifest_context),
+                    )
+                except ImportError:
+                    logger.debug("contextcore not installed — skipping manifest loading")
+                except Exception as exc:
+                    logger.warning("Failed to load manifest %s: %s", contextcore_yaml, exc)
+
             # --- PARSE ---
             progress("Parsing plan")
             state.current_phase = IngestionPhase.PARSE
@@ -1031,6 +1283,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 parsed_plan=parsed_plan,
                 step_costs=step_costs,
                 tracking_config=tracking_config,
+                manifest_context=manifest_context,
             )
             state.review_config_path = str(config_path)
             if context_seed_path is not None:

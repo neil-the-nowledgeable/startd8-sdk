@@ -12,7 +12,7 @@ import logging
 import uuid
 import warnings
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from ..models import TokenUsage, GenerateResult, AgentResponse, ResponseMetadata
 from ..exceptions import TruncationWarning
@@ -187,14 +187,16 @@ class BaseAgent(ABC):
         """
         pass
 
-    def generate(self, prompt: str) -> GenerateResult:
+    def generate(self, prompt: str, **kwargs: Any) -> GenerateResult:
         """
         Synchronous wrapper for backward compatibility.
 
-        Runs the async method in an event loop.
+        Runs the async method in an event loop.  Any keyword arguments
+        (e.g. ``system_prompt``) are forwarded to ``agenerate``.
 
         Args:
             prompt: The prompt text
+            **kwargs: Additional arguments forwarded to ``agenerate``.
 
         Returns:
             GenerateResult(text, time_ms, token_usage).
@@ -205,7 +207,7 @@ class BaseAgent(ABC):
             asyncio.get_running_loop()
         except RuntimeError:
             # No running loop, safe to use asyncio.run
-            return asyncio.run(self.agenerate(prompt))
+            return asyncio.run(self.agenerate(prompt, **kwargs))
 
         # Running inside an existing event loop (e.g. Jupyter/FastAPI).
         # Bridge by running the coroutine in a new thread + event loop.
@@ -215,7 +217,7 @@ class BaseAgent(ABC):
         ctx = contextvars.copy_context()
 
         def _runner() -> GenerateResult:
-            return asyncio.run(self.agenerate(prompt))
+            return asyncio.run(self.agenerate(prompt, **kwargs))
 
         with concurrent.futures.ThreadPoolExecutor() as pool:
             future = pool.submit(ctx.run, _runner)
