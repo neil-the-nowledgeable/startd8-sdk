@@ -611,9 +611,9 @@ class LLMChunkExecutor(ChunkExecutor):
     ) -> List[Path]:
         """Write extracted code to the chunk's file targets.
 
-        For multi-file chunks, attempts to split the response into
-        per-file blocks using :func:`extract_multi_file_code`.  Falls
-        back to writing the full code to each target.
+        For multi-file chunks, splits the response into per-file blocks
+        using :func:`extract_multi_file_code`.  Fails with ValueError if
+        the split does not produce distinct content for every target file.
 
         Args:
             code: Extracted code from the LLM response.
@@ -638,6 +638,13 @@ class LLMChunkExecutor(ChunkExecutor):
             from startd8.utils.code_extraction import extract_multi_file_code
 
             per_file_code = extract_multi_file_code(code, chunk.file_targets)
+            if len(per_file_code) < len(chunk.file_targets):
+                unmatched = [f for f in chunk.file_targets if f not in per_file_code]
+                raise ValueError(
+                    f"Multi-file split failed: matched {list(per_file_code.keys())} "
+                    f"but not {unmatched}. LLM must produce distinct blocks for each "
+                    f"target file (use '# path/to/file.py' as first line of each block)."
+                )
 
         for target in chunk.file_targets:
             output_path = self._output_dir / target
@@ -911,6 +918,18 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         design_doc = meta.get("design_document")
         if design_doc:
             gen_ctx["design_document"] = design_doc
+
+        # Item 9: inject example artifacts for chunk's artifact_types_addressed
+        all_examples = context.get("example_artifacts", {})
+        artifact_types = meta.get("artifact_types_addressed", [])
+        if all_examples and artifact_types:
+            types_norm = {t.lower().replace("-", "_") for t in artifact_types}
+            examples_for_chunk = {
+                k: v for k, v in all_examples.items()
+                if k.lower().replace("-", "_") in types_norm
+            }
+            if examples_for_chunk:
+                gen_ctx["example_artifacts"] = examples_for_chunk
 
         return gen_ctx
 
@@ -1579,6 +1598,7 @@ class DevelopmentPhase:
         context: Dict[str, Any] = {
             "plan_id": plan.plan_id,
             "dry_run": plan.config.get("dry_run", False),
+            "example_artifacts": plan.config.get("example_artifacts", {}),
         }
 
         # --- Execute tiers ---

@@ -11,8 +11,7 @@ Phase 1E tests covering:
 
 import os
 import asyncio
-from unittest.mock import patch, MagicMock, AsyncMock
-import pytest
+from unittest.mock import patch, MagicMock
 
 
 class TestAutoConfigureOtel:
@@ -147,6 +146,29 @@ class TestAutoConfigureOtel:
         otel_mod._configured = False
 
 
+class TestShutdownOtelSemantics:
+    """Tests for shutdown_otel() behavior."""
+
+    def test_shutdown_flushes_without_provider_shutdown(self):
+        """shutdown_otel() flushes providers and avoids duplicate shutdown calls."""
+        import startd8.otel as otel_mod
+
+        provider1 = MagicMock()
+        provider2 = MagicMock()
+        otel_mod._providers = [provider1, provider2]
+
+        try:
+            otel_mod.shutdown_otel(timeout_millis=1234)
+        finally:
+            otel_mod._providers = []
+
+        provider1.force_flush.assert_called_once_with(timeout_millis=1234)
+        provider2.force_flush.assert_called_once_with(timeout_millis=1234)
+        provider1.shutdown.assert_not_called()
+        provider2.shutdown.assert_not_called()
+        assert otel_mod._providers == []
+
+
 class TestFrameworkOtelOptIn:
     """Tests for AgentFramework(enable_otel=True)."""
 
@@ -154,14 +176,14 @@ class TestFrameworkOtelOptIn:
         """AgentFramework(enable_otel=True) calls auto_configure_otel()."""
         with patch("startd8.otel.auto_configure_otel") as mock_auto:
             from startd8.framework import AgentFramework
-            fw = AgentFramework(enable_otel=True)
+            AgentFramework(enable_otel=True)
             mock_auto.assert_called_once()
 
     def test_disable_otel_default(self):
         """AgentFramework() does not call auto_configure_otel()."""
         with patch("startd8.otel.auto_configure_otel") as mock_auto:
             from startd8.framework import AgentFramework
-            fw = AgentFramework(enable_otel=False)
+            AgentFramework(enable_otel=False)
             mock_auto.assert_not_called()
 
 

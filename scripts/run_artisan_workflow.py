@@ -61,12 +61,16 @@ def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
             "artifact_manifest_path": artifacts.get("artifact_manifest_path"),
             "project_context_path": artifacts.get("project_context_path"),
             "context_files": context_files,
+            "example_artifacts": artifacts.get("example_artifacts", {}),
+            "coverage_gaps": artifacts.get("coverage_gaps", []),
         }
     except (json.JSONDecodeError, OSError):
         return {
             "artifact_manifest_path": None,
             "project_context_path": None,
             "context_files": [],
+            "example_artifacts": {},
+            "coverage_gaps": [],
         }
 
 
@@ -216,6 +220,10 @@ def main() -> int:
         help="Commit each feature's generated code to git after implementation",
     )
     parser.add_argument(
+        "--no-scaffold-test-first", action="store_true",
+        help="Disable test scaffolding for artifact generator tasks before implementation",
+    )
+    parser.add_argument(
         "--task-filter",
         default=None,
         help=(
@@ -305,6 +313,8 @@ def main() -> int:
         handler_kwargs["development_timeout_seconds"] = args.implement_timeout
     if args.auto_commit:
         handler_kwargs["auto_commit"] = True
+    if args.no_scaffold_test_first:
+        handler_kwargs["scaffold_test_first"] = False
 
     handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():
@@ -348,6 +358,8 @@ def main() -> int:
             artifact_manifest_path=extras.get("artifact_manifest_path"),
             project_context_path=extras.get("project_context_path"),
             context_files=extras.get("context_files", []),
+            example_artifacts=extras.get("example_artifacts", {}),
+            coverage_gaps=extras.get("coverage_gaps", []),
         )
         logger.info("Wrote design handoff: %s", handoff_path)
 

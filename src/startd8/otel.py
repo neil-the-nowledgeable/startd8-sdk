@@ -20,7 +20,6 @@ Standard OTel Semantic Conventions:
 """
 
 import atexit
-import logging
 import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -322,12 +321,14 @@ def configure_otel(
 
 def shutdown_otel(timeout_millis: int = 5000) -> None:
     """
-    Flush and shutdown all OTel providers (traces, metrics, logs).
+    Best-effort flush of tracked OTel providers (traces, metrics, logs).
 
     Called automatically via ``atexit`` when :func:`configure_otel` has
     created providers, so ``sys.exit()`` no longer silently drops
-    buffered telemetry.  Can also be called explicitly before exit for
-    belt-and-suspenders certainty.
+    buffered telemetry. This helper intentionally does not call each
+    provider's ``shutdown()`` to avoid duplicate-shutdown warnings during
+    process teardown in environments where OpenTelemetry already owns final
+    shutdown sequencing.
 
     Args:
         timeout_millis: Max time to wait for each provider to flush.
@@ -335,10 +336,6 @@ def shutdown_otel(timeout_millis: int = 5000) -> None:
     for provider in _providers:
         try:
             provider.force_flush(timeout_millis=timeout_millis)
-        except Exception:
-            pass
-        try:
-            provider.shutdown()
         except Exception:
             pass
     _providers.clear()
@@ -409,7 +406,7 @@ def configure_logging(config: OTelConfig) -> None:
 
     try:
         from opentelemetry._logs import set_logger_provider
-        from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+        from opentelemetry.sdk._logs import LoggerProvider
         from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
         from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
     except ImportError:

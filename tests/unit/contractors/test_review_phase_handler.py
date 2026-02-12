@@ -66,6 +66,7 @@ def _make_seed_task(
         available_siblings=[],
         existing_content_hash=None,
         design_doc_sections=[],
+        artifact_types_addressed=[],
     )
 
 

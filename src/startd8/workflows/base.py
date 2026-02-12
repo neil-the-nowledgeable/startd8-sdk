@@ -5,7 +5,9 @@ Workflows implement this protocol to be discoverable and executable
 through the WorkflowRegistry.
 """
 
-from typing import Any, Callable, Dict, List, Optional, Protocol, Union, runtime_checkable
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, List, Optional, Protocol, TYPE_CHECKING, runtime_checkable
 import asyncio
 
 from .models import (
@@ -15,6 +17,9 @@ from .models import (
     ProjectContext,
     DryRunResult,
 )
+
+if TYPE_CHECKING:
+    from ..agents import BaseAgent
 
 # Graceful OTel import — no-op when not installed (FR-403)
 try:
@@ -116,7 +121,7 @@ class Workflow(Protocol):
     def run(
         self,
         config: Dict[str, Any],
-        agents: Optional[List['BaseAgent']] = None,
+        agents: Optional[List[BaseAgent]] = None,
         on_progress: Optional[ProgressCallback] = None,
     ) -> WorkflowResult:
         """
@@ -159,7 +164,7 @@ class AsyncWorkflow(Workflow, Protocol):
     async def arun(
         self,
         config: Dict[str, Any],
-        agents: Optional[List['BaseAgent']] = None,
+        agents: Optional[List[BaseAgent]] = None,
         on_progress: Optional[ProgressCallback] = None,
     ) -> WorkflowResult:
         """
@@ -276,7 +281,7 @@ class WorkflowBase:
     def run(
         self,
         config: Dict[str, Any],
-        agents: Optional[List['BaseAgent']] = None,
+        agents: Optional[List[BaseAgent]] = None,
         on_progress: Optional[ProgressCallback] = None,
         dry_run: bool = False,
     ) -> WorkflowResult:
@@ -289,10 +294,12 @@ class WorkflowBase:
         # Validate first
         validation = self.validate_config(config)
         if not validation.valid:
-            return WorkflowResult.from_error(
+            result = WorkflowResult.from_error(
                 self.metadata.workflow_id,
                 f"Validation failed: {'; '.join(validation.errors)}"
             )
+            self._persist_error_result(result, config)
+            return result
 
         # Dry run interception (FR-340)
         if dry_run:
@@ -318,6 +325,8 @@ class WorkflowBase:
                     result = self._execute(config, agents, on_progress)
                     if span:
                         span.set_attribute("workflow.success", result.success)
+                    if not result.success:
+                        self._persist_error_result(result, config)
                     return result
 
                 # Fall back to async wrapped synchronously
@@ -342,6 +351,8 @@ class WorkflowBase:
                         )
                     if span:
                         span.set_attribute("workflow.success", result.success)
+                    if not result.success:
+                        self._persist_error_result(result, config)
                     return result
 
                 # Neither implemented
@@ -357,7 +368,7 @@ class WorkflowBase:
     async def arun(
         self,
         config: Dict[str, Any],
-        agents: Optional[List['BaseAgent']] = None,
+        agents: Optional[List[BaseAgent]] = None,
         on_progress: Optional[ProgressCallback] = None,
     ) -> WorkflowResult:
         """
@@ -369,10 +380,12 @@ class WorkflowBase:
         # Validate first
         validation = self.validate_config(config)
         if not validation.valid:
-            return WorkflowResult.from_error(
+            result = WorkflowResult.from_error(
                 self.metadata.workflow_id,
                 f"Validation failed: {'; '.join(validation.errors)}"
             )
+            self._persist_error_result(result, config)
+            return result
 
         # OTel parent span via start_as_current_span so child spans nest
         with self._create_workflow_span(config) as span:
@@ -406,6 +419,8 @@ class WorkflowBase:
 
                 if span:
                     span.set_attribute("workflow.success", result.success)
+                if not result.success:
+                    self._persist_error_result(result, config)
                 return result
             except Exception as e:
                 if span and _otel_trace:
@@ -416,7 +431,7 @@ class WorkflowBase:
     def _execute(
         self,
         config: Dict[str, Any],
-        agents: Optional[List['BaseAgent']],
+        agents: Optional[List[BaseAgent]],
         on_progress: Optional[ProgressCallback],
     ) -> WorkflowResult:
         """
@@ -431,7 +446,7 @@ class WorkflowBase:
     async def _aexecute(
         self,
         config: Dict[str, Any],
-        agents: Optional[List['BaseAgent']],
+        agents: Optional[List[BaseAgent]],
         on_progress: Optional[ProgressCallback],
     ) -> WorkflowResult:
         """
@@ -446,7 +461,7 @@ class WorkflowBase:
     def _build_dry_run_result(
         self,
         config: Dict[str, Any],
-        agents: Optional[List['BaseAgent']],
+        agents: Optional[List[BaseAgent]],
     ) -> WorkflowResult:
         """Build execution plan without making API calls (FR-340)."""
         meta = self.metadata
@@ -549,6 +564,31 @@ class WorkflowBase:
                 callback(current, total, message)
             except Exception:
                 pass  # Don't let callback errors break workflow
+
+    def _persist_error_result(
+        self,
+        result: WorkflowResult,
+        config: Dict[str, Any],
+    ) -> None:
+        """Best-effort persistence of a failed WorkflowResult to .startd8/task_errors/.
+
+        Never raises — errors in the error-recording path are silently logged.
+        """
+        if result.success:
+            return
+        try:
+            from ..storage.error_store import TaskErrorStore
+
+            project_root = config.get("project_root") or "."
+            store = TaskErrorStore(project_root=project_root)
+            store.record_workflow_result_error(
+                workflow_id=result.workflow_id,
+                error_message=result.error or "Unknown workflow error",
+                steps=[s.to_dict() for s in result.steps] if result.steps else None,
+                metrics=result.metrics.to_dict() if result.metrics else None,
+            )
+        except Exception:
+            pass  # Never let error persistence break the workflow
 
     def _extract_project_context(self, config: Dict[str, Any]) -> ProjectContext:
         """

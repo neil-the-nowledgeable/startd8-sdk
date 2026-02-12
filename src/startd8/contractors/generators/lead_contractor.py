@@ -154,12 +154,32 @@ class LeadContractorCodeGenerator:
                         len(per_file_code),
                     )
                 else:
+                    # Retry once with explicit feedback about missing files
+                    unmatched = [f for f in target_files if f not in per_file_code]
+                    if unmatched and "_multi_file_retry" not in context:
+                        logger.warning(
+                            "Multi-file split failed (missing %s). Retrying once with explicit feedback.",
+                            unmatched,
+                        )
+                        retry_context = dict(context)
+                        retry_context["_multi_file_retry"] = True
+                        retry_context["_multi_file_retry_initial_feedback"] = (
+                            f"Your previous attempt was missing code blocks for: {unmatched}. "
+                            f"You MUST produce a SEPARATE fenced code block for EACH target file. "
+                            f"Format: put '# <full path>' as the first line of each block. "
+                            f"Missing files that MUST be included: {unmatched}"
+                        )
+                        return self.generate(
+                            task=task,
+                            context=retry_context,
+                            target_files=target_files,
+                        )
+
                     # Drafter didn't produce distinct code for every target file.
                     # Falling back to the full blob would write identical content
                     # to multiple files (e.g. hook code into a component file).
                     # Fail fast with a clear error instead of silent corruption.
                     matched = list(per_file_code.keys())
-                    unmatched = [f for f in target_files if f not in per_file_code]
                     error_msg = (
                         f"Multi-file split failed: drafter output matched "
                         f"{matched or 'no files'} but not {unmatched}. "

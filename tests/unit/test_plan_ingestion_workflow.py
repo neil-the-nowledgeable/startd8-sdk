@@ -944,6 +944,8 @@ class TestArtisanContextSeed:
     def test_defaults(self):
         seed = ArtisanContextSeed()
         assert seed.version == "1.0.0"
+        assert seed.schema_version == "1.0"
+        assert seed.source_checksum is None
         assert seed.generator == "plan-ingestion"
         assert seed.tasks == []
         assert seed.artifacts == {}
@@ -959,6 +961,7 @@ class TestArtisanContextSeed:
         )
         d = seed.to_dict()
         assert d["version"] == "1.0.0"
+        assert d["schema_version"] == "1.0"
         assert d["generated_at"] == "2026-02-10T12:00:00Z"
         assert d["plan"]["title"] == "Test"
         assert d["complexity"]["composite"] == 65
@@ -1200,6 +1203,7 @@ class TestEmitPhaseArtisanRoute:
 
         data = json.loads(seed_path.read_text())
         assert data["version"] == "1.0.0"
+        assert data["schema_version"] == "1.0"
         assert data["generator"] == "plan-ingestion"
         assert data["plan"]["title"] == "Test Plan"
         assert data["complexity"]["composite"] == 65
@@ -1300,6 +1304,50 @@ class TestEmitPhaseArtisanRoute:
 
         assert seed_path is None
 
+    def test_artisan_seed_propagates_source_checksum_from_onboarding(self, tmp_path):
+        """Item 16: source_checksum from onboarding-metadata propagates to seed."""
+        doc_path = tmp_path / "PLAN-ingested.md"
+        doc_path.write_text("# Plan")
+        onboarding_path = tmp_path / "onboarding-metadata.json"
+        onboarding_path.write_text(
+            json.dumps({
+                "source_checksum": "sha256:abc123",
+                "artifact_manifest_path": str(tmp_path / "manifest.yaml"),
+            })
+        )
+
+        complexity = ComplexityScore(
+            composite=65, reasoning="Complex",
+            route=ContractorRoute.ARTISAN,
+        )
+        parsed_plan = ParsedPlan(
+            title="Test Plan",
+            goals=["G1"],
+            features=[
+                ParsedFeature(
+                    feature_id="F-001", name="Feat",
+                    description="Do it", target_files=["a.py"],
+                    estimated_loc=80, labels=["core"],
+                ),
+            ],
+            dependency_graph={},
+            mentioned_files=["a.py"],
+        )
+
+        _config_path, _, seed_path, _tracking = self.wf._phase_emit(
+            doc_path, ContractorRoute.ARTISAN, complexity, tmp_path,
+            review_rounds=1, review_quality_tier="flagship",
+            scope=None, context_files=[str(onboarding_path)],
+            warn_cost_usd=None, max_cost_usd=None,
+            parsed_plan=parsed_plan,
+            step_costs={"parse": 0.01, "assess": 0.02, "transform": 0.10},
+        )
+
+        assert seed_path is not None
+        data = json.loads(seed_path.read_text())
+        assert data["source_checksum"] == "sha256:abc123"
+        assert data["artifacts"]["source_checksum"] == "sha256:abc123"
+
 
 # ---------------------------------------------------------------------------
 # TestIngestionStateContextSeedPath
@@ -1365,6 +1413,7 @@ class TestEndToEndArtisanContextSeed:
 
         data = json.loads(seed_path.read_text())
         assert data["version"] == "1.0.0"
+        assert data["schema_version"] == "1.0"
         assert data["plan"]["title"] == "My Sample Plan"
         assert len(data["tasks"]) == 2
         assert data["tasks"][0]["task_id"] == "PI-001"

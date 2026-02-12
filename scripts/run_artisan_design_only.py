@@ -46,12 +46,16 @@ def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
             "artifact_manifest_path": artifacts.get("artifact_manifest_path"),
             "project_context_path": artifacts.get("project_context_path"),
             "context_files": context_files,
+            "example_artifacts": artifacts.get("example_artifacts", {}),
+            "coverage_gaps": artifacts.get("coverage_gaps", []),
         }
     except (json.JSONDecodeError, OSError):
         return {
             "artifact_manifest_path": None,
             "project_context_path": None,
             "context_files": [],
+            "example_artifacts": {},
+            "coverage_gaps": [],
         }
 
 
@@ -159,6 +163,8 @@ def main() -> int:
             artifact_manifest_path=extras.get("artifact_manifest_path"),
             project_context_path=extras.get("project_context_path"),
             context_files=extras.get("context_files", []),
+            example_artifacts=extras.get("example_artifacts", {}),
+            coverage_gaps=extras.get("coverage_gaps", []),
         )
         logger.info("Wrote design handoff: %s", handoff_path)
 

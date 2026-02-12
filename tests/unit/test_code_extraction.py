@@ -155,6 +155,52 @@ class TestFallbackBehavior:
         assert result == {}
 
 
+class TestInitPyAndOrderFallback:
+    """__init__.py and order-based fallback for partial matches."""
+
+    def test_init_py_via_first_line_comment(self):
+        """Path with __init__.py in first-line comment matches."""
+        response = (
+            "```python\n"
+            "# src/contextcore/generators/__init__.py\n"
+            "from .artifact_generators import render_service_monitor\n"
+            "```\n\n"
+            "```python\n"
+            "# src/contextcore/generators/artifact_generators.py\n"
+            "def render_service_monitor(): pass\n"
+            "```\n"
+        )
+        targets = [
+            "src/contextcore/generators/__init__.py",
+            "src/contextcore/generators/artifact_generators.py",
+        ]
+        result = extract_multi_file_code(response, targets)
+        assert len(result) == 2
+        assert "from .artifact_generators" in result["src/contextcore/generators/__init__.py"]
+        assert "render_service_monitor" in result["src/contextcore/generators/artifact_generators.py"]
+
+    def test_order_fallback_single_unmatched(self):
+        """When exactly one block and one target unmatched, assign by order."""
+        response = (
+            "```python\n"
+            "# src/pkg/module.py\n"
+            "def foo(): pass\n"
+            "```\n\n"
+            "```python\n"
+            "from .module import foo\n"
+            "__all__ = ['foo']\n"
+            "```\n"
+        )
+        targets = [
+            "src/pkg/__init__.py",
+            "src/pkg/module.py",
+        ]
+        result = extract_multi_file_code(response, targets)
+        assert len(result) == 2
+        assert "from .module import foo" in result["src/pkg/__init__.py"]
+        assert "def foo" in result["src/pkg/module.py"]
+
+
 class TestCaseInsensitiveMatching:
     """Basename matching is case-insensitive."""
 

@@ -9,11 +9,13 @@ import pytest
 
 from startd8.contractors.handoff import (
     DESIGN_HANDOFF_FILENAME,
+    HANDOFF_SCHEMA,
     SCHEMA_VERSION,
     HandoffData,
     load_design_handoff,
     write_design_handoff,
 )
+from startd8.workflows.builtin.schema_versions import ARTISAN_SCHEMA_VERSION
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────
@@ -51,6 +53,7 @@ class TestWriteDesignHandoff:
         assert data["design_results"] == handoff_kwargs["design_results"]
         assert data["scaffold"] == handoff_kwargs["scaffold"]
         assert data["schema_version"] == SCHEMA_VERSION
+        assert data["schema_version_str"] == ARTISAN_SCHEMA_VERSION
         assert data["created_at"]  # non-empty timestamp
 
     def test_creates_parent_dirs(self, tmp_path, handoff_kwargs):
@@ -71,6 +74,7 @@ class TestWriteDesignHandoff:
         assert data["scaffold"] == {}
         assert data["completed_phases"] == []
         assert data["context_files"] == []
+        assert data["coverage_gaps"] == []
 
     def test_context_files_round_trip(self, tmp_path, handoff_kwargs):
         ctx_files = [
@@ -84,6 +88,16 @@ class TestWriteDesignHandoff:
         )
         handoff = load_design_handoff(tmp_path)
         assert handoff.context_files == ctx_files
+
+    def test_coverage_gaps_round_trip(self, tmp_path, handoff_kwargs):
+        coverage_gaps = ["ServiceMonitor", "PrometheusRule"]
+        write_design_handoff(
+            output_dir=str(tmp_path),
+            coverage_gaps=coverage_gaps,
+            **handoff_kwargs,
+        )
+        handoff = load_design_handoff(tmp_path)
+        assert handoff.coverage_gaps == coverage_gaps
 
 
 # ── load_design_handoff ──────────────────────────────────────────────
@@ -113,6 +127,7 @@ class TestLoadDesignHandoff:
         assert handoff.design_results == handoff_kwargs["design_results"]
         assert handoff.scaffold == handoff_kwargs["scaffold"]
         assert handoff.schema_version == SCHEMA_VERSION
+        assert handoff.schema_version_str == ARTISAN_SCHEMA_VERSION
 
     def test_load_accepts_string_path(self, tmp_path, handoff_kwargs):
         write_design_handoff(output_dir=str(tmp_path), **handoff_kwargs)
@@ -160,3 +175,32 @@ class TestLoadErrors:
         }))
         with pytest.raises(ValueError, match="missing 'schema_version'"):
             load_design_handoff(bad_file)
+
+
+# ── Schema validation (Item 13) ──────────────────────────────────────────
+
+
+class TestHandoffSchema:
+    def test_schema_validates_handoff_dict(self):
+        """HANDOFF_SCHEMA validates a minimal valid handoff."""
+        try:
+            import jsonschema
+        except ImportError:
+            pytest.skip("jsonschema not installed")
+        valid = {
+            "enriched_seed_path": "/path/to/seed.json",
+            "project_root": "/project",
+            "output_dir": "/out",
+            "workflow_id": "wf-1",
+            "completed_phases": [],
+            "design_results": {},
+            "scaffold": {},
+            "artifact_manifest_path": None,
+            "project_context_path": None,
+            "context_files": [],
+            "example_artifacts": {},
+            "coverage_gaps": [],
+            "created_at": "2026-02-12T00:00:00Z",
+            "schema_version": 1,
+        }
+        jsonschema.validate(valid, HANDOFF_SCHEMA)

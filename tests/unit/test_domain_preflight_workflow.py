@@ -1178,6 +1178,22 @@ class TestEndToEndDomainPreflight:
         assert "_enrichment" in t5
         assert t5["_enrichment"]["domain"] == "unknown"
 
+    def test_schema_version_1_0_accepted(self, tmp_path):
+        """Item 15: schema_version '1.0' is accepted alongside version '1.0.0'."""
+        seed = {"schema_version": "1.0", "version": "1.0.0", "tasks": []}
+        seed_path = tmp_path / "seed.json"
+        seed_path.write_text(json.dumps(seed))
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "__init__.py").touch()
+        (tmp_path / "src" / "foo.py").write_text("# foo")
+
+        wf = DomainPreflightWorkflow()
+        result = wf.run({
+            "context_seed_path": str(seed_path),
+            "project_root": str(tmp_path),
+        })
+        assert result.success
+
     def test_invalid_version_fails(self, tmp_path):
         seed = {"version": "2.0.0", "tasks": []}
         seed_path = tmp_path / "seed.json"

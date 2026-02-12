@@ -163,21 +163,32 @@ SINGLE_FILE_OUTPUT_FORMAT = """Provide your complete implementation followed by 
 MULTI_FILE_OUTPUT_FORMAT = """This task requires MULTIPLE files. You MUST produce a SEPARATE fenced code block
 for each file listed below. Each block MUST have the file path as the first line comment.
 
+REQUIRED files (you MUST produce ALL of these — do not skip any):
 {file_list}
 
-Example format (follow this exactly):
+Use this exact format for EACH file:
 ```
-# path/to/first_file.py
-<complete implementation of first file>
+# <full path to file>
+<complete implementation>
+```
+
+Example:
+```
+# src/mypackage/__init__.py
+from .module import Foo
+__all__ = ["Foo"]
 ```
 
 ```
-# path/to/second_file.ext
-<complete contents of second file>
+# src/mypackage/module.py
+class Foo: ...
 ```
 
-CRITICAL: Every target file listed above MUST have its own distinct code block.
-Do NOT combine multiple files into a single block."""
+CRITICAL:
+- Include __init__.py if it is in the list — it is the package root and must not be omitted.
+- Every target file MUST have its own distinct block. No exceptions.
+- Do NOT combine multiple files into a single block.
+- Do NOT skip any file — missing blocks will cause the implementation to fail."""
 
 
 def _build_output_format(target_files: Optional[List[str]] = None) -> str:
@@ -561,7 +572,7 @@ class LeadContractorWorkflow(WorkflowBase):
             # Phase 2-4: Draft/Review Loop
             # =================================================================
             current_implementation = ""
-            review_feedback = ""
+            review_feedback = context.get("_multi_file_retry_initial_feedback", "")
 
             for iteration in range(1, max_iterations + 1):
                 # Draft phase

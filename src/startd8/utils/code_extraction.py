@@ -9,7 +9,7 @@ downstream integration pipelines.
 import logging
 import os
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 logger = logging.getLogger("startd8.utils.code_extraction")
 
@@ -117,11 +117,13 @@ def extract_multi_file_code(
     """
     Split an LLM response containing multiple file implementations into per-file code.
 
-    Tries two strategies in order:
+    Tries strategies in order:
     1. **File-path comment markers** — looks for lines like ``// path/to/file.ts``
        or ``# path/to/file.py`` that precede code blocks.
     2. **Multiple fenced code blocks** — matches separate ````` blocks where the
        filename appears in the language tag or as a first-line comment.
+    3. **Order-based fallback** — when exactly one file is unmatched and one
+       block didn't match, assign by position (handles __init__.py etc.).
 
     Args:
         response: Raw LLM response (may contain markdown fencing, commentary, etc.)
@@ -165,7 +167,7 @@ def extract_multi_file_code(
     )
     blocks = list(block_pattern.finditer(response))
     if len(blocks) >= 2:
-        result = _extract_by_fenced_blocks(response, blocks, basenames)
+        result = _extract_by_fenced_blocks(response, blocks, basenames, target_files)
         if len(result) > len(best):
             best = result
 
@@ -205,11 +207,13 @@ def _extract_by_fenced_blocks(
     response: str,
     blocks: list,
     basenames: Dict[str, str],
+    target_files: Optional[List[str]] = None,
 ) -> Dict[str, str]:
     """Extract code from multiple fenced blocks matched to target files."""
     result: Dict[str, str] = {}
+    unmatched_blocks: List[Tuple[str, int]] = []  # (code_content, block_index)
 
-    for block in blocks:
+    for i, block in enumerate(blocks):
         lang_or_filename = block.group(1)
         code_content = block.group(2).strip()
         if not code_content:
@@ -217,19 +221,31 @@ def _extract_by_fenced_blocks(
 
         matched_target = None
 
-        # Check if the language tag IS a filename (e.g. ```MigrationQueue.tsx)
+        # Check if the language tag IS a filename (e.g. ```MigrationQueue.tsx or ```path/to/__init__.py)
         if '.' in lang_or_filename:
             block_basename = os.path.basename(lang_or_filename)
             matched_target = _match_basename(block_basename, basenames)
+            # Also try path suffix match (e.g. lang="generators/__init__.py")
+            if not matched_target and target_files:
+                for tf in target_files:
+                    if tf == lang_or_filename or tf.endswith("/" + lang_or_filename):
+                        matched_target = tf
+                        break
 
         # Check first line of code for a file-path comment
         if not matched_target:
             first_line = code_content.split('\n', 1)[0].strip()
-            # Matches: // MigrationQueue.tsx  or  # useBatchMigration.ts
+            # Matches: // MigrationQueue.tsx  or  # path/to/__init__.py
             fname_comment = re.match(r'^(?://|#)\s*(\S+\.\w+)', first_line)
             if fname_comment:
-                block_basename = os.path.basename(fname_comment.group(1))
+                path_or_name = fname_comment.group(1)
+                block_basename = os.path.basename(path_or_name)
                 matched_target = _match_basename(block_basename, basenames)
+                if not matched_target and target_files:
+                    for tf in target_files:
+                        if tf == path_or_name or tf.endswith("/" + path_or_name):
+                            matched_target = tf
+                            break
                 # Strip the filename comment from the code
                 if matched_target:
                     _, _, rest = code_content.partition('\n')
@@ -237,6 +253,20 @@ def _extract_by_fenced_blocks(
 
         if matched_target and code_content:
             result[matched_target] = code_content
+        else:
+            unmatched_blocks.append((code_content, i))
+
+    # Strategy 3: order-based fallback when exactly one file and one block unmatched
+    targets = target_files or list(basenames.values())
+    unmatched_targets = [t for t in targets if t not in result]
+    if len(unmatched_targets) == 1 and len(unmatched_blocks) == 1:
+        content, _ = unmatched_blocks[0]
+        if content.strip():
+            result[unmatched_targets[0]] = content.strip()
+            logger.debug(
+                "Assigned unmatched block to %s via order fallback",
+                unmatched_targets[0],
+            )
 
     return result
 
