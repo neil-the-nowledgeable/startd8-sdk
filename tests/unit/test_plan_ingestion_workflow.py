@@ -1209,6 +1209,64 @@ class TestEmitPhaseArtisanRoute:
         assert data["ingestion_metrics"]["parse_cost"] == 0.01
         assert data["ingestion_metrics"]["total_cost"] == pytest.approx(0.13)
 
+    def test_artisan_seed_serializes_manifest_objectives_key_results(self, tmp_path):
+        class KeyResult:
+            def __init__(self, metric: str, target: str):
+                self.metric = metric
+                self.target = target
+
+        doc_path = tmp_path / "PLAN-ingested.md"
+        doc_path.write_text("# Plan")
+        complexity = ComplexityScore(
+            composite=65, reasoning="Complex",
+            route=ContractorRoute.ARTISAN,
+        )
+        parsed_plan = ParsedPlan(
+            title="Test Plan",
+            goals=["G1"],
+            features=[
+                ParsedFeature(
+                    feature_id="F-001",
+                    name="Feat",
+                    description="Do it",
+                    target_files=["a.py"],
+                    estimated_loc=80,
+                    labels=["core"],
+                ),
+            ],
+            dependency_graph={},
+            mentioned_files=["a.py"],
+        )
+        manifest_context = {
+            "objectives": [
+                {
+                    "name": "Ship feature serial",
+                    "key_results": [KeyResult("latency_p95", "<=250ms")],
+                }
+            ]
+        }
+
+        _config_path, _, seed_path, _tracking = self.wf._phase_emit(
+            doc_path,
+            ContractorRoute.ARTISAN,
+            complexity,
+            tmp_path,
+            review_rounds=2,
+            review_quality_tier="flagship",
+            scope=None,
+            context_files=None,
+            warn_cost_usd=None,
+            max_cost_usd=None,
+            parsed_plan=parsed_plan,
+            manifest_context=manifest_context,
+        )
+
+        assert seed_path is not None
+        data = json.loads(seed_path.read_text())
+        kr = data["architectural_context"]["objectives"][0]["key_results"][0]
+        assert kr["metric"] == "latency_p95"
+        assert kr["target"] == "<=250ms"
+
     def test_prime_does_not_emit_context_seed(self, tmp_path):
         doc_path = tmp_path / "plan-ingestion-tasks.yaml"
         doc_path.write_text("project: {}")

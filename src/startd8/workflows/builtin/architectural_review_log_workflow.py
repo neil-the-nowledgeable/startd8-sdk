@@ -144,7 +144,17 @@ def _strip_json_fences(text: str) -> str:
 
 
 def _split_cells(row: str) -> List[str]:
-    return [c.strip() for c in row.strip().strip("|").split("|")]
+    """Split a markdown table row into cells, handling escaped pipes.
+
+    Escaped pipes (\\|) within cell content are preserved and unescaped.
+    Unescaped pipes are treated as cell delimiters.
+    """
+    # Replace escaped pipes with a placeholder that won't appear in real content
+    placeholder = "\x00PIPE\x00"
+    escaped = row.strip().strip("|").replace("\\|", placeholder)
+    # Split on unescaped pipes
+    cells = [c.strip().replace(placeholder, "|") for c in escaped.split("|")]
+    return cells
 
 
 def _ensure_appendix_exists(doc: str) -> str:
@@ -1044,6 +1054,7 @@ Required output format (append-only snippet):
   Rows must use IDs R{round_number}-S1..R{round_number}-S{max_suggestions} (you may output fewer rows).
   Area must be one of: Architecture, Interfaces, Data, Risks, Validation, Ops, Security.
   Severity must be one of: critical, high, medium, low.
+  IMPORTANT: If any cell content contains a pipe character (|), escape it as \\| to avoid breaking the table structure.
 - After the table, if you agree with any untriaged suggestions from prior rounds (in Appendix C but NOT in Appendix A or B), add:
   **Endorsements** (prior untriaged suggestions this reviewer agrees with):
   - <ID>: <one-sentence reason you agree>
@@ -1690,6 +1701,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         f"- IDs: R{round_number}-S1, R{round_number}-S2, etc.\n"
                         f"- Area must be one of: {', '.join(sorted(ALLOWED_AREAS))}\n"
                         f"- Severity must be one of: {', '.join(sorted(ALLOWED_SEVERITIES))}\n"
+                        f"- If cell content contains a pipe character (|), escape it as \\| to avoid breaking the table\n"
                         f"- Do NOT wrap output in code blocks (no ```)\n\n"
                         f"Original prompt:\n{prompt}"
                     )

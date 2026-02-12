@@ -903,6 +903,11 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if domain_constraints:
             gen_ctx["domain_constraints"] = domain_constraints
 
+        # Inject design document from DESIGN phase (if present in chunk metadata)
+        design_doc = meta.get("design_document")
+        if design_doc:
+            gen_ctx["design_document"] = design_doc
+
         return gen_ctx
 
     def _build_task_description(
@@ -912,8 +917,8 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     ) -> str:
         """Build the task description string for ``generator.generate()``.
 
-        Enriches the chunk description with prompt constraints and retry
-        feedback for error-informed retries.
+        Enriches the chunk description with the design document (if available),
+        prompt constraints, and retry feedback for error-informed retries.
 
         Args:
             chunk: The chunk being executed.
@@ -922,7 +927,19 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         Returns:
             Enriched task description string.
         """
-        parts: List[str] = [chunk.description]
+        parts: List[str] = []
+
+        # Prepend design document from DESIGN phase (primary context for drafter)
+        design_doc = chunk.metadata.get("design_document")
+        if design_doc:
+            parts.append("## Design Document\n")
+            parts.append("The following design document was approved during the DESIGN phase.")
+            parts.append("Implement exactly what is specified below:\n")
+            parts.append(design_doc)
+            parts.append("\n---\n")
+            parts.append("## Task Summary\n")
+
+        parts.append(chunk.description)
 
         # Append prompt constraints from enrichment
         constraints = chunk.metadata.get("prompt_constraints", [])

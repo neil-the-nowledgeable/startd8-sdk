@@ -818,7 +818,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                         # v2 ObjectiveV2 has .description, v1 has .name
                         "name": getattr(obj, "description", None)
                         or getattr(obj, "name", str(obj)),
-                        "key_results": getattr(obj, "key_results", []),
+                        # Convert KeyResult models to dicts for JSON serialization
+                        "key_results": [
+                            kr.model_dump() if hasattr(kr, "model_dump") else kr.dict()
+                            if hasattr(kr, "dict") else kr
+                            for kr in getattr(obj, "key_results", [])
+                        ],
                     }
                     for obj in objectives
                 ]

@@ -328,9 +328,28 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     calls this helper, which transparently reloads the seed when the
     PLAN phase's data is absent.
     """
+    def _apply_runtime_task_selection(tasks_in: list[SeedTask]) -> list[SeedTask]:
+        """Apply runtime selection (feature-serial single-task execution).
+
+        PLAN-level ``task_filter`` is already applied when tasks are loaded.
+        Here we only apply per-feature narrowing used by feature-serial mode.
+        """
+        current_feature_id = context.get("current_feature_id")
+        if not current_feature_id:
+            return tasks_in
+
+        selected = [t for t in tasks_in if t.task_id == current_feature_id]
+        if not selected:
+            known = [t.task_id for t in tasks_in]
+            raise RuntimeError(
+                "Feature-serial execution requested unknown current_feature_id="
+                f"{current_feature_id!r}. Available task_ids: {known}"
+            )
+        return selected
+
     tasks: list[SeedTask] | None = context.get("tasks")
     if tasks is not None:
-        return tasks
+        return _apply_runtime_task_selection(tasks)
 
     seed_path = context.get("enriched_seed_path")
     if not seed_path:
@@ -377,7 +396,7 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     context["domain_summary"] = dict(domain_counts)
     context["total_estimated_loc"] = sum(t.estimated_loc for t in tasks)
 
-    return tasks
+    return _apply_runtime_task_selection(tasks)
 
 
 # ============================================================================
@@ -583,6 +602,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         When ``output_dir`` is set, writes ``{task_id}-design.md`` files
         containing the raw design document text.
     """
+
+    supports_feature_serial: bool = True
 
     def __init__(
         self,
@@ -945,6 +966,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
            (``_map_development_result``)
     """
 
+    supports_feature_serial: bool = True
+
     def __init__(
         self,
         handler_config: Optional[HandlerConfig] = None,
@@ -971,12 +994,16 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
     def _tasks_to_chunks(
         tasks: list[SeedTask],
         max_retries: int = 2,
+        design_results: dict[str, Any] | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
         Args:
             tasks: Parsed seed tasks from the PLAN phase.
             max_retries: Max retry count for each chunk.
+            design_results: Per-task design results from the DESIGN phase.
+                Maps task_id → dict with 'design_document' key containing the
+                raw design document text to inject into implementation prompts.
 
         Returns:
             Tuple of (chunks, skipped_reports). ``skipped_reports`` contains
@@ -986,6 +1013,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
 
         chunks: list[DevelopmentChunk] = []
         skipped: list[dict[str, Any]] = []
+        design_results = design_results or {}
 
         env_blocked_ids: set[str] = set()
         for task in tasks:
@@ -1020,6 +1048,12 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 })
                 continue
 
+            # Extract design document from DESIGN phase results (if available)
+            design_doc_text = None
+            task_design = design_results.get(task.task_id, {})
+            if task_design.get("status") == "designed":
+                design_doc_text = task_design.get("design_document")
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
@@ -1036,6 +1070,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     "environment_checks": task.environment_checks,
                     "post_generation_validators": task.post_generation_validators,
                     "title": task.title,
+                    "design_document": design_doc_text,
                 },
             ))
 
@@ -1354,7 +1389,11 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
 
         if not resumed:
             # Convert SeedTasks → DevelopmentChunks (with env pre-filter)
-            chunks, skipped_reports = self._tasks_to_chunks(tasks, max_retries=2)
+            # Inject design documents from the DESIGN phase into chunk metadata
+            design_results = context.get("design_results", {})
+            chunks, skipped_reports = self._tasks_to_chunks(
+                tasks, max_retries=2, design_results=design_results
+            )
 
             if not chunks:
                 logger.warning("IMPLEMENT: no eligible tasks after env pre-filter")
@@ -1557,6 +1596,8 @@ class TestPhaseHandler(AbstractPhaseHandler):
         * ``_run_validators_for_task`` — runs all validators for one task,
           skipping tasks whose generation was not successful.
     """
+
+    supports_feature_serial: bool = True
 
     def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
         self.config = handler_config or HandlerConfig()
@@ -1918,6 +1959,8 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
     In real mode: sends generated code to a review agent for
     quality scoring, then aggregates pass/fail verdicts.
     """
+
+    supports_feature_serial: bool = True
 
     def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
         self.config = handler_config or HandlerConfig()

@@ -75,9 +75,17 @@ def _now_utc_iso() -> str:
 
 
 def _split_cells(row: str) -> List[str]:
-    # Markdown tables: | a | b | c |
-    parts = [c.strip() for c in row.strip().strip("|").split("|")]
-    return parts
+    """Split a markdown table row into cells, handling escaped pipes.
+
+    Escaped pipes (\\|) within cell content are preserved and unescaped.
+    Unescaped pipes are treated as cell delimiters.
+    """
+    # Replace escaped pipes with a placeholder that won't appear in real content
+    placeholder = "\x00PIPE\x00"
+    escaped = row.strip().strip("|").replace("\\|", placeholder)
+    # Split on unescaped pipes
+    cells = [c.strip().replace(placeholder, "|") for c in escaped.split("|")]
+    return cells
 
 
 def _extract_table_ids(doc: str, section_heading: str) -> List[str]:

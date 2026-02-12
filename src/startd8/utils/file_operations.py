@@ -6,8 +6,10 @@ import os
 import tempfile
 import shutil
 import re
+from dataclasses import asdict, is_dataclass
+from enum import Enum
 from pathlib import Path
-from typing import Optional, Union
+from typing import Any, Optional, Union
 import platform
 
 from ..exceptions import FileOperationError
@@ -137,9 +139,38 @@ def atomic_write_json(file_path: Path, data: dict, **json_kwargs) -> None:
         FileOperationError: If write operation fails
     """
     import json
+
+    user_default = json_kwargs.pop("default", None)
+
+    def _default_serializer(value: Any) -> Any:
+        """Best-effort serializer for non-JSON-native objects."""
+        if user_default is not None:
+            try:
+                return user_default(value)
+            except TypeError:
+                # Fall through to SDK fallback behavior.
+                pass
+
+        if value is None or isinstance(value, (str, int, float, bool)):
+            return value
+        if isinstance(value, Enum):
+            return value.value
+        if isinstance(value, Path):
+            return str(value)
+        if is_dataclass(value):
+            return asdict(value)
+        if hasattr(value, "model_dump") and callable(value.model_dump):
+            return value.model_dump()
+        if hasattr(value, "to_dict") and callable(value.to_dict):
+            return value.to_dict()
+        if isinstance(value, set):
+            return list(value)
+        if hasattr(value, "__dict__"):
+            return vars(value)
+        return str(value)
     
     try:
-        json_str = json.dumps(data, **json_kwargs)
+        json_str = json.dumps(data, default=_default_serializer, **json_kwargs)
         atomic_write(file_path, json_str, mode='w')
     except Exception as e:
         raise FileOperationError(
