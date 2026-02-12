@@ -48,11 +48,17 @@ class AvailableDeps:
     optional: Dict[str, Set[str]] = field(default_factory=dict)
     stdlib: Set[str] = field(default_factory=set)
     project: Set[str] = field(default_factory=set)
+    installed: Set[str] = field(default_factory=set)
 
     @property
     def all_importable(self) -> Set[str]:
         """Union of all importable package names."""
-        result = set(self.runtime) | set(self.stdlib) | set(self.project)
+        result = (
+            set(self.runtime)
+            | set(self.stdlib)
+            | set(self.project)
+            | set(self.installed)
+        )
         for group in self.optional.values():
             result |= group
         return result
@@ -63,6 +69,7 @@ class AvailableDeps:
             "optional": {k: sorted(v) for k, v in self.optional.items()},
             "stdlib": sorted(self.stdlib),
             "project": sorted(self.project),
+            "installed": sorted(self.installed),
             "all_importable_count": len(self.all_importable),
         }
 

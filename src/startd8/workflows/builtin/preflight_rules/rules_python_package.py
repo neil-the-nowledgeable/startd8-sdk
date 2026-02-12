@@ -193,5 +193,6 @@ class PackageModuleConstraintsRule(PreflightRule):
                 "deps_available",
                 "no_circular_imports",
                 "no_markdown_fences",
+                "merge_damage",
             ],
         )

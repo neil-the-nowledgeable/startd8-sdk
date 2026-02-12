@@ -197,5 +197,6 @@ class TestConstraintsRule(PreflightRule):
                 "no_hardcoded_secrets",
                 "no_markdown_fences",
                 "no_substring_tag_matching",
+                "merge_damage",
             ],
         )

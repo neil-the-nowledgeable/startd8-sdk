@@ -232,6 +232,27 @@ class DomainPreflightWorkflow(WorkflowBase):
                 if child.is_dir() and (child / "__init__.py").exists():
                     deps.project.add(child.name)
 
+        # Installed packages: scan .venv site-packages
+        venv_dir = project_root / ".venv"
+        if venv_dir.is_dir():
+            for lib_dir in venv_dir.glob("lib/python*/site-packages"):
+                if lib_dir.is_dir():
+                    for item in lib_dir.iterdir():
+                        name = item.name
+                        # Skip internal/metadata directories
+                        if name.startswith(("_", ".")) or name.endswith(
+                            (".dist-info", ".egg-info", ".pth", ".py")
+                        ):
+                            continue
+                        if item.is_dir():
+                            # Package directory (has __init__.py or is
+                            # namespace package)
+                            deps.installed.add(name)
+                        elif item.suffix in (".so", ".pyd"):
+                            # Single-file extension modules
+                            deps.installed.add(item.stem)
+                    break  # Only scan the first matching site-packages
+
         return deps
 
     # ------------------------------------------------------------------

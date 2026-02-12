@@ -105,7 +105,7 @@ class PreflightRuleRegistry:
         )
         from .rules_validators import (
             NoRelativeImportsValidatorRule, DepsAvailableValidatorRule,
-            DefinitionOrderingValidatorRule,
+            DefinitionOrderingValidatorRule, MergeDamageDetectorRule,
         )
 
         builtin_classes = [
@@ -119,7 +119,7 @@ class PreflightRuleRegistry:
             PatchPathValidRule, ThreadAwareTeardownRule, TestConstraintsRule,
             ConfigFileValidRule, EntryPointReinstallRule, ConfigConstraintsRule,
             NoRelativeImportsValidatorRule, DepsAvailableValidatorRule,
-            DefinitionOrderingValidatorRule,
+            DefinitionOrderingValidatorRule, MergeDamageDetectorRule,
         ]
         for rule_cls in builtin_classes:
             cls.register(rule_cls())

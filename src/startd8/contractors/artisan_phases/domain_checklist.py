@@ -158,12 +158,73 @@ def _validate_definition_ordering(
     return issues
 
 
+def _validate_merge_damage(
+    code: str, enrichment: TaskEnrichment
+) -> List[PostValidationIssue]:
+    """Detect merge damage: duplicate definitions and ordering violations."""
+    issues: List[PostValidationIssue] = []
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return issues
+
+    # --- Check 1: Duplicate top-level definitions ---
+    seen_names: Dict[str, int] = {}  # name -> first line number
+    for node in ast.iter_child_nodes(tree):
+        name = None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = node.name
+        elif isinstance(node, ast.ClassDef):
+            name = node.name
+
+        if name is not None:
+            if name in seen_names:
+                issues.append(PostValidationIssue(
+                    validator="merge_damage",
+                    message=(
+                        f"Duplicate definition '{name}' "
+                        f"(first at line {seen_names[name]}, again at line {node.lineno})"
+                    ),
+                    line=node.lineno,
+                ))
+            else:
+                seen_names[name] = node.lineno
+
+    # --- Check 2: Definition ordering (default_factory references) ---
+    defined_names: set = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            defined_names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            for class_node in ast.walk(node):
+                if isinstance(class_node, ast.keyword) and class_node.arg == "default_factory":
+                    if isinstance(class_node.value, ast.Name):
+                        ref_name = class_node.value.id
+                        if ref_name not in defined_names:
+                            issues.append(PostValidationIssue(
+                                validator="merge_damage",
+                                message=(
+                                    f"'{ref_name}' used as default_factory but not defined "
+                                    f"before class '{node.name}' (possible merge ordering damage)"
+                                ),
+                                line=class_node.value.lineno,
+                            ))
+            defined_names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defined_names.add(target.id)
+
+    return issues
+
+
 _ValidatorFn = Callable[[str, TaskEnrichment], List[PostValidationIssue]]
 
 _POST_VALIDATORS: Dict[str, _ValidatorFn] = {
     "no_relative_imports": _validate_no_relative_imports,
     "deps_available": _validate_deps_available,
     "definition_ordering": _validate_definition_ordering,
+    "merge_damage": _validate_merge_damage,
 }
 
 

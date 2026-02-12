@@ -57,6 +57,7 @@ from startd8.workflows.builtin.preflight_rules.rules_config import (
 from startd8.workflows.builtin.preflight_rules.rules_validators import (
     DefinitionOrderingValidatorRule,
     DepsAvailableValidatorRule,
+    MergeDamageDetectorRule,
     NoRelativeImportsValidatorRule,
 )
 
@@ -546,3 +547,87 @@ class TestValidatorRules:
         rule = DefinitionOrderingValidatorRule()
         result = rule.evaluate(_ctx(tmp_path))
         assert "definition_ordering" in result.validator_fns
+
+
+class TestMergeDamageDetectorRule:
+    def test_rule_contributes_validator(self, tmp_path):
+        rule = MergeDamageDetectorRule()
+        result = rule.evaluate(_ctx(tmp_path))
+        assert "merge_damage" in result.validator_fns
+
+    def test_detects_duplicate_definitions(self, tmp_path):
+        # Code with same function defined twice
+        code = textwrap.dedent("""\
+            def helper():
+                return 1
+
+            class Foo:
+                pass
+
+            def helper():
+                return 2
+        """)
+        rule = MergeDamageDetectorRule()
+        result = rule.evaluate(_ctx(tmp_path))
+        fn = result.validator_fns["merge_damage"]
+        issues = fn(code, None)
+        assert any("duplicate" in i["message"].lower() for i in issues)
+
+    def test_detects_duplicate_class_definitions(self, tmp_path):
+        # Code with same class defined twice
+        code = textwrap.dedent("""\
+            class Config:
+                x = 1
+
+            class Config:
+                x = 2
+        """)
+        rule = MergeDamageDetectorRule()
+        result = rule.evaluate(_ctx(tmp_path))
+        fn = result.validator_fns["merge_damage"]
+        issues = fn(code, None)
+        assert any("duplicate" in i["message"].lower() for i in issues)
+        assert any("Config" in i["message"] for i in issues)
+
+    def test_detects_ordering_damage(self, tmp_path):
+        # Class uses default_factory=make_list, but make_list defined after
+        code = textwrap.dedent("""\
+            class Config:
+                items: list = Field(default_factory=make_list)
+
+            def make_list():
+                return []
+        """)
+        rule = MergeDamageDetectorRule()
+        result = rule.evaluate(_ctx(tmp_path))
+        fn = result.validator_fns["merge_damage"]
+        issues = fn(code, None)
+        assert any("make_list" in i["message"] for i in issues)
+
+    def test_passes_clean_code(self, tmp_path):
+        code = textwrap.dedent("""\
+            def make_list():
+                return []
+
+            class Config:
+                items: list = Field(default_factory=make_list)
+        """)
+        rule = MergeDamageDetectorRule()
+        result = rule.evaluate(_ctx(tmp_path))
+        fn = result.validator_fns["merge_damage"]
+        issues = fn(code, None)
+        assert issues == []
+
+    def test_applies_to_all_python_domains(self, tmp_path):
+        """MergeDamageDetectorRule should apply to all Python domains."""
+        rule = MergeDamageDetectorRule()
+        from startd8.workflows.builtin.preflight_rules._base import PYTHON_DOMAINS
+        assert rule.domains == PYTHON_DOMAINS
+
+    def test_handles_syntax_error_gracefully(self, tmp_path):
+        code = "def foo(:\n    pass\n"
+        rule = MergeDamageDetectorRule()
+        result = rule.evaluate(_ctx(tmp_path))
+        fn = result.validator_fns["merge_damage"]
+        issues = fn(code, None)
+        assert issues == []

@@ -102,7 +102,19 @@ class TestAvailableDeps:
         assert d["runtime"] == ["rich"]
         assert d["stdlib"] == ["os"]
         assert d["project"] == ["startd8"]
+        assert d["installed"] == []
         assert d["all_importable_count"] == 3
+
+    def test_to_dict_with_installed(self):
+        deps = AvailableDeps(
+            runtime={"rich"},
+            stdlib={"os"},
+            project={"startd8"},
+            installed={"boto3", "requests"},
+        )
+        d = deps.to_dict()
+        assert d["installed"] == ["boto3", "requests"]
+        assert d["all_importable_count"] == 5
 
 
 class TestPreflightState:
@@ -363,6 +375,106 @@ class TestScanAvailableDeps:
         deps = DomainPreflightWorkflow._scan_available_deps(tmp_path)
         assert len(deps.runtime) == 0
         assert len(deps.stdlib) > 50  # Still has stdlib
+
+
+class TestVenvScanning:
+    """Tests for .venv site-packages scanning in _scan_available_deps."""
+
+    def test_scan_venv_packages(self, tmp_path):
+        """Fake .venv with package dirs populates deps.installed."""
+        site_pkgs = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages"
+        site_pkgs.mkdir(parents=True)
+
+        # Create package directories
+        (site_pkgs / "requests").mkdir()
+        (site_pkgs / "requests" / "__init__.py").touch()
+        (site_pkgs / "flask").mkdir()
+        (site_pkgs / "flask" / "__init__.py").touch()
+        (site_pkgs / "click").mkdir()
+        (site_pkgs / "click" / "__init__.py").touch()
+
+        deps = DomainPreflightWorkflow._scan_available_deps(tmp_path)
+
+        assert "requests" in deps.installed
+        assert "flask" in deps.installed
+        assert "click" in deps.installed
+
+    def test_scan_skips_dist_info(self, tmp_path):
+        """Metadata directories (.dist-info, .egg-info) are excluded."""
+        site_pkgs = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages"
+        site_pkgs.mkdir(parents=True)
+
+        # Create metadata dirs that should be skipped
+        (site_pkgs / "requests-2.31.0.dist-info").mkdir()
+        (site_pkgs / "flask-3.0.0.dist-info").mkdir()
+        (site_pkgs / "setuptools-69.0.0.egg-info").mkdir()
+        # Create internal dirs that should be skipped
+        (site_pkgs / "_distutils_hack").mkdir()
+        (site_pkgs / "__pycache__").mkdir()
+        # Create .pth files that should be skipped
+        (site_pkgs / "easy_install.pth").touch()
+        (site_pkgs / "distutils-precedence.pth").touch()
+        # Create .py files that should be skipped
+        (site_pkgs / "_virtualenv.py").touch()
+
+        # Create one real package for contrast
+        (site_pkgs / "requests").mkdir()
+        (site_pkgs / "requests" / "__init__.py").touch()
+
+        deps = DomainPreflightWorkflow._scan_available_deps(tmp_path)
+
+        assert "requests" in deps.installed
+        assert not any("dist-info" in name for name in deps.installed)
+        assert not any("egg-info" in name for name in deps.installed)
+        assert "_distutils_hack" not in deps.installed
+        assert "__pycache__" not in deps.installed
+
+    def test_scan_no_venv(self, tmp_path):
+        """When no .venv exists, installed is empty."""
+        deps = DomainPreflightWorkflow._scan_available_deps(tmp_path)
+        assert deps.installed == set()
+
+    def test_installed_in_all_importable(self, tmp_path):
+        """Installed packages appear in all_importable."""
+        site_pkgs = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages"
+        site_pkgs.mkdir(parents=True)
+
+        (site_pkgs / "boto3").mkdir()
+        (site_pkgs / "boto3" / "__init__.py").touch()
+
+        deps = DomainPreflightWorkflow._scan_available_deps(tmp_path)
+
+        assert "boto3" in deps.installed
+        assert "boto3" in deps.all_importable
+
+    def test_scan_extension_modules(self, tmp_path):
+        """Single-file .so/.pyd extension modules are detected."""
+        site_pkgs = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages"
+        site_pkgs.mkdir(parents=True)
+
+        # Simulate compiled extension modules
+        (site_pkgs / "_yaml.cpython-311-darwin.so").touch()
+        (site_pkgs / "myext.pyd").touch()
+
+        deps = DomainPreflightWorkflow._scan_available_deps(tmp_path)
+
+        # .so files: stem is checked, but suffix must be exactly .so
+        # _yaml.cpython-311-darwin.so has stem starting with _, so it's skipped
+        assert "myext" in deps.installed
+
+    def test_scan_namespace_packages(self, tmp_path):
+        """Dirs without __init__.py (namespace packages) are included."""
+        site_pkgs = tmp_path / ".venv" / "lib" / "python3.11" / "site-packages"
+        site_pkgs.mkdir(parents=True)
+
+        # Namespace package (no __init__.py)
+        ns_pkg = site_pkgs / "google"
+        ns_pkg.mkdir()
+        (ns_pkg / "cloud").mkdir()
+
+        deps = DomainPreflightWorkflow._scan_available_deps(tmp_path)
+
+        assert "google" in deps.installed
 
 
 # ===================================================================

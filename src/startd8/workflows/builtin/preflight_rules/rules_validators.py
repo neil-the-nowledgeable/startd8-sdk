@@ -13,7 +13,7 @@ from typing import Optional
 
 from ..domain_preflight_models import TaskDomain
 
-from ._base import PreflightRule, RuleContext, RuleContribution
+from ._base import PYTHON_DOMAINS, PreflightRule, RuleContext, RuleContribution
 from ._registry import preflight_rule
 
 
@@ -159,4 +159,88 @@ class DefinitionOrderingValidatorRule(PreflightRule):
     def evaluate(self, ctx: RuleContext) -> Optional[RuleContribution]:
         return RuleContribution(
             validator_fns={"definition_ordering": _validate_definition_ordering},
+        )
+
+
+# ---------------------------------------------------------------------------
+# Merge damage detector
+# ---------------------------------------------------------------------------
+
+def _validate_merge_damage(code: str, enrichment) -> list:
+    """Detect damage introduced by merging generated code into existing files.
+
+    Checks for:
+    1. Duplicate top-level function/class definitions (same name defined twice)
+    2. Definition ordering violations (default_factory references before definition)
+    """
+    issues = []
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return issues
+
+    # --- Check 1: Duplicate top-level definitions ---
+    seen_names: dict = {}  # name -> first line number
+    for node in ast.iter_child_nodes(tree):
+        name = None
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = node.name
+        elif isinstance(node, ast.ClassDef):
+            name = node.name
+
+        if name is not None:
+            if name in seen_names:
+                issues.append({
+                    "validator": "merge_damage",
+                    "message": (
+                        f"Duplicate definition '{name}' "
+                        f"(first at line {seen_names[name]}, again at line {node.lineno})"
+                    ),
+                    "line": node.lineno,
+                })
+            else:
+                seen_names[name] = node.lineno
+
+    # --- Check 2: Definition ordering (default_factory references) ---
+    defined_names: set = set()
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            defined_names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            for class_node in ast.walk(node):
+                if isinstance(class_node, ast.keyword) and class_node.arg == "default_factory":
+                    if isinstance(class_node.value, ast.Name):
+                        ref_name = class_node.value.id
+                        if ref_name not in defined_names:
+                            issues.append({
+                                "validator": "merge_damage",
+                                "message": (
+                                    f"'{ref_name}' used as default_factory but not defined "
+                                    f"before class '{node.name}' (possible merge ordering damage)"
+                                ),
+                                "line": class_node.value.lineno,
+                            })
+            defined_names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    defined_names.add(target.id)
+
+    return issues
+
+
+@preflight_rule(domains=PYTHON_DOMAINS, priority=200)
+class MergeDamageDetectorRule(PreflightRule):
+    """Detect merge damage: duplicates and ordering violations after merge.
+
+    Runs at priority 200 (late) so it executes after merge strategies
+    have combined generated code with existing file content.
+    """
+
+    rule_id = "merge_damage_detector"
+    _validator_fns = {"merge_damage": _validate_merge_damage}
+
+    def evaluate(self, ctx: RuleContext) -> Optional[RuleContribution]:
+        return RuleContribution(
+            validator_fns={"merge_damage": _validate_merge_damage},
         )

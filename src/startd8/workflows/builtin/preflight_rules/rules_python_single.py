@@ -97,5 +97,6 @@ class SingleModuleConstraintsRule(PreflightRule):
                 "deps_available",
                 "definition_ordering",
                 "no_markdown_fences",
+                "merge_damage",
             ],
         )
