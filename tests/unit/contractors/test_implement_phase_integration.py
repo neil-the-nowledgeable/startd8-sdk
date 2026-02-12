@@ -46,6 +46,7 @@ def _make_seed_task(
     env_checks: list[dict[str, Any]] | None = None,
     prompt_constraints: list[str] | None = None,
     domain: str = "backend",
+    artifact_types_addressed: list[str] | None = None,
 ) -> SeedTask:
     """Create a SeedTask for testing."""
     return SeedTask(
@@ -68,6 +69,7 @@ def _make_seed_task(
         available_siblings=[],
         existing_content_hash=None,
         design_doc_sections=[],
+        artifact_types_addressed=artifact_types_addressed or [],
     )
 
 
@@ -209,6 +211,91 @@ class TestTasksToChunks:
 
         assert chunks[0].metadata["max_output_tokens"] == 8192
         assert chunks[1].metadata["max_output_tokens"] == 32768
+
+    def test_multi_file_task_gets_output_format_constraint(self):
+        """Tasks with multiple target files get multi-file output format constraint."""
+        tasks = [
+            _make_seed_task(
+                task_id="T1",
+                target_files=["src/pkg/__init__.py", "src/pkg/module.py"],
+                prompt_constraints=["Use type hints"],
+            ),
+        ]
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(tasks)
+
+        constraints = chunks[0].metadata["prompt_constraints"]
+        assert "Use type hints" in constraints
+        assert any(
+            "SEPARATE fenced code block" in c and "__init__.py" in c
+            for c in constraints
+        )
+
+
+# ============================================================================
+# Tests: _ensure_test_scaffolding_for_artifact_tasks (Item 12)
+# ============================================================================
+
+
+class TestEnsureTestScaffoldingForArtifactTasks:
+    """Tests for test-first scaffolding for artifact generator tasks."""
+
+    def test_creates_test_file_when_missing(self, tmp_path):
+        """Scaffolding creates tests/test_<stem>.py for artifact tasks."""
+        task = _make_seed_task(
+            task_id="T1",
+            target_files=["src/generators/servicemonitor.py"],
+            artifact_types_addressed=["ServiceMonitor"],
+        )
+        ImplementPhaseHandler._ensure_test_scaffolding_for_artifact_tasks(
+            [task], tmp_path
+        )
+        test_file = tmp_path / "tests" / "test_servicemonitor.py"
+        assert test_file.exists()
+        content = test_file.read_text()
+        assert "Tests for ServiceMonitor" in content
+        assert "class TestServicemonitor:" in content
+        assert "import pytest" in content
+
+    def test_skips_when_test_exists(self, tmp_path):
+        """Scaffolding does not overwrite existing test file."""
+        tests_dir = tmp_path / "tests"
+        tests_dir.mkdir()
+        existing = tests_dir / "test_servicemonitor.py"
+        existing.write_text("# existing content")
+
+        task = _make_seed_task(
+            task_id="T1",
+            target_files=["src/generators/servicemonitor.py"],
+            artifact_types_addressed=["ServiceMonitor"],
+        )
+        ImplementPhaseHandler._ensure_test_scaffolding_for_artifact_tasks(
+            [task], tmp_path
+        )
+        assert existing.read_text() == "# existing content"
+
+    def test_skips_tasks_without_artifact_types(self, tmp_path):
+        """Tasks without artifact_types_addressed are skipped."""
+        task = _make_seed_task(
+            task_id="T1",
+            target_files=["src/feature.py"],
+        )
+        ImplementPhaseHandler._ensure_test_scaffolding_for_artifact_tasks(
+            [task], tmp_path
+        )
+        # No tests_dir or test files created when no artifact tasks
+        assert not (tmp_path / "tests" / "test_feature.py").exists()
+
+    def test_skips_target_with_empty_stem(self, tmp_path):
+        """Targets with empty stem (e.g. "." or "") are skipped."""
+        task = _make_seed_task(
+            task_id="T1",
+            target_files=["."],
+            artifact_types_addressed=["config"],
+        )
+        ImplementPhaseHandler._ensure_test_scaffolding_for_artifact_tasks(
+            [task], tmp_path
+        )
+        assert not (tmp_path / "tests" / "test_.py").exists()
 
 
 # ============================================================================

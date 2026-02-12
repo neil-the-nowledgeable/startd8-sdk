@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
+from .schema_versions import ARTISAN_SCHEMA_VERSION
+
 
 __all__ = [
     "ContractorRoute",
@@ -52,6 +54,8 @@ class ParsedFeature:
     labels: List[str] = field(default_factory=list)
     # Task-specific content hints for design doc (e.g. "Parameter validation", "Error handling")
     design_doc_sections: List[str] = field(default_factory=list)
+    # Artifact types this task generates (e.g. "dashboard", "prometheus_rule", "servicemonitor")
+    artifact_types_addressed: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -84,6 +88,7 @@ class ParsedPlan:
                     "estimated_loc": f.estimated_loc,
                     "labels": list(f.labels),
                     "design_doc_sections": list(f.design_doc_sections),
+                    "artifact_types_addressed": list(f.artifact_types_addressed),
                 }
                 for f in self.features
             ],
@@ -135,8 +140,11 @@ class ComplexityScore:
 @dataclass
 class ArtisanContextSeed:
     """Structured context seed for the ArtisanContractor pipeline."""
-    version: str = "1.0.0"
+    version: str = "1.0.0"  # Legacy; prefer schema_version (Item 15)
+    schema_version: str = ARTISAN_SCHEMA_VERSION  # Canonical schema version
     generated_at: str = ""
+    # Item 16: provenance chain — checksum from export/onboarding for traceability
+    source_checksum: Optional[str] = None
     generator: str = "plan-ingestion"
     plan: Optional[Dict[str, Any]] = None
     complexity: Optional[Dict[str, Any]] = None
@@ -155,7 +163,9 @@ class ArtisanContextSeed:
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
             "version": self.version,
+            "schema_version": self.schema_version,
             "generated_at": self.generated_at,
+            "source_checksum": self.source_checksum,
             "generator": self.generator,
             "plan": self.plan,
             "complexity": self.complexity,

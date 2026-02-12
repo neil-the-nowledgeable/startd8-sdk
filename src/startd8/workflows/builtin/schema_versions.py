@@ -19,4 +19,5 @@ __all__ = ["ARTISAN_SCHEMA_VERSION", "SUPPORTED_SEED_SCHEMA_VERSIONS"]
 ARTISAN_SCHEMA_VERSION = "1.0"
 
 # Seed versions accepted by DomainPreflightWorkflow (avoids hardcoding in workflow).
+# Includes "1.0.0" for backward compat with seeds written before Item 15.
 SUPPORTED_SEED_SCHEMA_VERSIONS = frozenset({ARTISAN_SCHEMA_VERSION, "1.0.0"})

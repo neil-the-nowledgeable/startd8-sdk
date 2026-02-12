@@ -116,6 +116,8 @@ class HandlerConfig:
         review_temperature: Temperature for LLM review calls.
         review_max_code_chars: Max characters of generated code to include in review prompt.
         development_timeout_seconds: Timeout for the DevelopmentPhase thread (None = no limit).
+        scaffold_test_first: For artifact generator tasks, ensure test scaffolding exists
+            before implementation (Item 12). Default True.
     """
 
     lead_agent: str = REVIEW_MODEL_CLAUDE_OPUS.agent_spec
@@ -131,6 +133,7 @@ class HandlerConfig:
     review_max_code_chars: int = 8000
     development_timeout_seconds: Optional[float] = None
     auto_commit: bool = False
+    scaffold_test_first: bool = True
 
     @classmethod
     def from_config(
@@ -203,6 +206,8 @@ class SeedTask:
     existing_content_hash: Optional[str]
     # Task-specific design doc content hints (supplement calibration sections)
     design_doc_sections: list[str]
+    # Artifact types this task generates (e.g. dashboard, prometheus_rule, servicemonitor)
+    artifact_types_addressed: list[str]
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> SeedTask:
@@ -233,6 +238,7 @@ class SeedTask:
             available_siblings=enrichment.get("available_siblings", []),
             existing_content_hash=enrichment.get("existing_content_hash"),
             design_doc_sections=context.get("design_doc_sections", []),
+            artifact_types_addressed=context.get("artifact_types_addressed", []),
         )
         if not task.task_id:
             raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
@@ -398,6 +404,9 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
         domain_counts[t.domain] += 1
     context["domain_summary"] = dict(domain_counts)
     context["total_estimated_loc"] = sum(t.estimated_loc for t in tasks)
+    context["example_artifacts"] = (seed_data.get("artifacts") or {}).get(
+        "example_artifacts", {}
+    )
 
     return _apply_runtime_task_selection(tasks)
 
@@ -481,6 +490,10 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         context["total_estimated_loc"] = sum(t.estimated_loc for t in sorted_tasks)
         context["architectural_context"] = seed_data.get("architectural_context", {})
         context["design_calibration"] = seed_data.get("design_calibration", {})
+        # Item 9: example artifacts per type for implement phase
+        context["example_artifacts"] = (seed_data.get("artifacts") or {}).get(
+            "example_artifacts", {}
+        )
 
         output = {
             "plan_title": context["plan_title"],
@@ -1003,6 +1016,56 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         ]
 
     @staticmethod
+    def _ensure_test_scaffolding_for_artifact_tasks(
+        tasks: list[SeedTask],
+        project_root: Path,
+    ) -> None:
+        """Ensure test scaffolding exists for artifact generator tasks (Item 12).
+
+        For tasks with artifact_types_addressed, derive the expected test path
+        from the first target file and create minimal scaffolding if missing.
+        Uses convention: target path/to/foo.py or path/to/foo.yaml → tests/test_foo.py.
+        """
+        for task in tasks:
+            if not task.artifact_types_addressed or not task.target_files:
+                continue
+
+            tests_dir = project_root / "tests"
+            target = Path(task.target_files[0])
+            stem = target.stem.replace("-", "_")
+            if not stem:
+                continue
+            test_path = tests_dir / f"test_{stem}.py"
+
+            if test_path.exists():
+                continue
+
+            tests_dir.mkdir(parents=True, exist_ok=True)
+
+            # Minimal scaffolding: test class skeleton
+            artifact_label = "_".join(
+                t.replace("-", "_") for t in task.artifact_types_addressed[:2]
+            )
+            class_name = "".join(
+                p.capitalize() for p in stem.split("_") if p
+            ) or "Artifact"
+            content = f'''"""Tests for {artifact_label} — scaffold-first (Item 12)."""
+
+import pytest
+
+
+class Test{class_name}:
+    """Test scaffold for {artifact_label} — implement before generation."""
+    pass
+'''
+            test_path.write_text(content, encoding="utf-8")
+            logger.info(
+                "IMPLEMENT: scaffolded test file for artifact task %s: %s",
+                task.task_id,
+                test_path.relative_to(project_root),
+            )
+
+    @staticmethod
     def _tasks_to_chunks(
         tasks: list[SeedTask],
         max_retries: int = 2,
@@ -1073,6 +1136,15 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             task_cal = (calibration_map or {}).get(task.task_id, {})
             max_output_tokens = task_cal.get("implement_max_output_tokens")
 
+            # Multi-file format constraint: ensure LLM produces distinct blocks per file
+            prompt_constraints = list(task.prompt_constraints)
+            if len(task.target_files) > 1:
+                prompt_constraints.append(
+                    "Output format: produce a SEPARATE fenced code block for EACH target "
+                    "file. First line of each block MUST be '# <full path>' (e.g. "
+                    "# src/package/__init__.py). Include __init__.py if it is a target."
+                )
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
@@ -1085,12 +1157,13 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     "feature_id": task.feature_id,
                     "domain": task.domain,
                     "estimated_loc": task.estimated_loc,
-                    "prompt_constraints": task.prompt_constraints,
+                    "prompt_constraints": prompt_constraints,
                     "environment_checks": task.environment_checks,
                     "post_generation_validators": task.post_generation_validators,
                     "title": task.title,
                     "design_document": design_doc_text,
                     "max_output_tokens": max_output_tokens,
+                    "artifact_types_addressed": task.artifact_types_addressed,
                 },
             ))
 
@@ -1413,6 +1486,12 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 )
 
         if not resumed:
+            # Item 12: scaffold test files for artifact generator tasks first
+            if self.config.scaffold_test_first:
+                self._ensure_test_scaffolding_for_artifact_tasks(
+                    tasks, project_root
+                )
+
             # Convert SeedTasks → DevelopmentChunks (with env pre-filter)
             # Inject design documents from the DESIGN phase into chunk metadata
             design_results = context.get("design_results", {})
@@ -1468,6 +1547,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     "dry_run": False,
                     "state_dir": str(project_root / ".startd8" / "state"),
                     "cancel_event": cancel_event,
+                    "example_artifacts": context.get("example_artifacts", {}),
                 },
             )
 
@@ -2772,6 +2852,7 @@ class ContextSeedHandlers:
         review_max_code_chars: Optional[int] = None,
         development_timeout_seconds: Optional[float] = None,
         auto_commit: Optional[bool] = None,
+        scaffold_test_first: Optional[bool] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all seven workflow phases.
@@ -2792,6 +2873,7 @@ class ContextSeedHandlers:
             review_max_code_chars: Max chars of code in review prompt.
             development_timeout_seconds: Timeout for development thread.
             auto_commit: Commit each feature's generated code to git.
+            scaffold_test_first: Scaffold test files for artifact tasks before impl.
             code_generator: Optional pre-configured CodeGenerator instance.
 
         Returns:
@@ -2813,6 +2895,7 @@ class ContextSeedHandlers:
             ("review_max_code_chars", review_max_code_chars),
             ("development_timeout_seconds", development_timeout_seconds),
             ("auto_commit", auto_commit),
+            ("scaffold_test_first", scaffold_test_first),
         ]:
             if val is not None:
                 cli_overrides[name] = val
