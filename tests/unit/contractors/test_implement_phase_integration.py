@@ -23,6 +23,7 @@ from startd8.contractors.artisan_phases.development import (
     ChunkStatus,
     DevelopmentChunk,
     DevelopmentResult,
+    LLMChunkExecutor,
 )
 from startd8.contractors.context_seed_handlers import (
     ImplementPhaseHandler,
@@ -724,3 +725,96 @@ class TestPreImplementValidation:
         assert len(info_msgs) == 1
         warnings = [r for r in caplog.records if "elevated" in r.message]
         assert len(warnings) == 0
+
+
+# ============================================================================
+# _write_generated_files stub recovery path
+# ============================================================================
+
+class TestWriteGeneratedFilesStubRecovery:
+    """Verify that _write_generated_files generates stubs for unmatched files."""
+
+    def test_stub_injected_for_missing_file(self, tmp_path):
+        """When LLM only produces code for one of two target files,
+        the second file should get a stub and metadata should be tagged."""
+        from startd8.utils.code_extraction import STUB_SENTINEL
+
+        executor = LLMChunkExecutor(output_dir=tmp_path)
+        chunk = DevelopmentChunk(
+            chunk_id="C-001",
+            description="Multi-file chunk",
+            dependencies=[],
+            implementation_prompt="Generate foo and bar",
+            file_targets=["src/foo.py", "src/bar.py"],
+            test_commands=[],
+            metadata={},
+        )
+
+        # LLM only produced code for foo.py (no bar.py marker)
+        code = (
+            "# src/foo.py\n"
+            "def hello():\n"
+            "    return 'world'\n"
+        )
+
+        written = executor._write_generated_files(code, chunk)
+
+        assert len(written) == 2
+        foo_path = tmp_path / "src" / "foo.py"
+        bar_path = tmp_path / "src" / "bar.py"
+        assert foo_path.exists()
+        assert bar_path.exists()
+
+        # bar.py should be a stub
+        bar_content = bar_path.read_text()
+        assert STUB_SENTINEL in bar_content
+
+        # Metadata should record the stub
+        assert "src/bar.py" in chunk.metadata.get("_stubbed_files", [])
+
+    def test_all_files_matched_no_stubs(self, tmp_path):
+        """When all target files are matched, no stubs should be generated."""
+        executor = LLMChunkExecutor(output_dir=tmp_path)
+        chunk = DevelopmentChunk(
+            chunk_id="C-002",
+            description="Multi-file chunk",
+            dependencies=[],
+            implementation_prompt="Generate foo and bar",
+            file_targets=["src/foo.py", "src/bar.py"],
+            test_commands=[],
+            metadata={},
+        )
+
+        code = (
+            "# src/foo.py\n"
+            "def hello():\n"
+            "    return 'world'\n"
+            "\n"
+            "# src/bar.py\n"
+            "def goodbye():\n"
+            "    return 'mars'\n"
+        )
+
+        written = executor._write_generated_files(code, chunk)
+        assert len(written) == 2
+        assert "_stubbed_files" not in chunk.metadata
+
+    def test_single_file_no_stub_logic(self, tmp_path):
+        """Single-file chunks should bypass multi-file logic entirely."""
+        executor = LLMChunkExecutor(output_dir=tmp_path)
+        chunk = DevelopmentChunk(
+            chunk_id="C-003",
+            description="Single-file chunk",
+            dependencies=[],
+            implementation_prompt="Generate foo",
+            file_targets=["src/only.py"],
+            test_commands=[],
+            metadata={},
+        )
+
+        code = "def only():\n    pass\n"
+        written = executor._write_generated_files(code, chunk)
+
+        assert len(written) == 1
+        assert (tmp_path / "src" / "only.py").read_text() == code
+        assert "_stubbed_files" not in chunk.metadata

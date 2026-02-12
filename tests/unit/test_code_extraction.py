@@ -269,9 +269,45 @@ class TestGenerateStub:
         assert STUB_SENTINEL in stub
         assert "__all__" in stub
 
+    def test_go_stub(self):
+        stub = _generate_stub("pkg/handler/router.go")
+        assert "router.go" in stub
+        assert STUB_SENTINEL in stub
+        assert "package handler" in stub  # derived from parent dir
+
+    def test_go_stub_top_level(self):
+        """Go file with no parent dir defaults to package main."""
+        stub = _generate_stub("main.go")
+        assert "package main" in stub
+
+    def test_rust_stub(self):
+        stub = _generate_stub("src/lib.rs")
+        assert "lib.rs" in stub
+        assert STUB_SENTINEL in stub
+        assert stub.startswith("// ")
+
+    def test_java_stub(self):
+        stub = _generate_stub("com/example/UserService.java")
+        assert "UserService.java" in stub
+        assert STUB_SENTINEL in stub
+        assert "public class UserService {}" in stub
+
+    def test_c_header_stub(self):
+        stub = _generate_stub("include/utils.h")
+        assert "utils.h" in stub
+        assert STUB_SENTINEL in stub
+
+    def test_cpp_stub(self):
+        stub = _generate_stub("src/engine.cpp")
+        assert "engine.cpp" in stub
+        assert STUB_SENTINEL in stub
+
     def test_sentinel_is_first_line(self):
         """STUB_SENTINEL should be on the first line for fast detection."""
-        for path in ["a.py", "b.tsx", "c.yaml", "d.txt"]:
+        for path in [
+            "a.py", "b.tsx", "c.yaml", "d.txt",
+            "pkg/e.go", "f.rs", "G.java", "h.c", "i.hpp",
+        ]:
             stub = _generate_stub(path)
             first_line = stub.split("\n", 1)[0]
             assert STUB_SENTINEL in first_line, f"Sentinel missing from first line of {path} stub"

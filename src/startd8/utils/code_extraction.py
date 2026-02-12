@@ -241,6 +241,44 @@ def _generate_stub(file_path: str) -> str:
             f"// Downstream tasks will implement the real logic.\n"
             f"export {{}};\n"
         )
+    elif ext == ".go":
+        # Go requires a package declaration; derive from parent directory name.
+        parent_dir = os.path.basename(os.path.dirname(file_path)) or "main"
+        return (
+            f"// {STUB_SENTINEL}\n"
+            f"// {basename} — auto-generated stub.\n"
+            f"//\n"
+            f"// This file was not produced by the LLM drafter.\n"
+            f"// Downstream tasks will implement the real logic.\n"
+            f"package {parent_dir}\n"
+        )
+    elif ext == ".rs":
+        return (
+            f"// {STUB_SENTINEL}\n"
+            f"// {basename} — auto-generated stub.\n"
+            f"//\n"
+            f"// This file was not produced by the LLM drafter.\n"
+            f"// Downstream tasks will implement the real logic.\n"
+        )
+    elif ext == ".java":
+        # Java requires a class matching the filename (without extension).
+        class_name = os.path.splitext(basename)[0]
+        return (
+            f"// {STUB_SENTINEL}\n"
+            f"// {basename} — auto-generated stub.\n"
+            f"//\n"
+            f"// This file was not produced by the LLM drafter.\n"
+            f"// Downstream tasks will implement the real logic.\n"
+            f"public class {class_name} {{}}\n"
+        )
+    elif ext in (".c", ".h", ".cpp", ".hpp"):
+        return (
+            f"// {STUB_SENTINEL}\n"
+            f"// {basename} — auto-generated stub.\n"
+            f"//\n"
+            f"// This file was not produced by the LLM drafter.\n"
+            f"// Downstream tasks will implement the real logic.\n"
+        )
     elif ext in (".yaml", ".yml"):
         return (
             f"# {STUB_SENTINEL}\n"
