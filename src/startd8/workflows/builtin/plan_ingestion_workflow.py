@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 import time
+from hashlib import sha256
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -271,6 +272,7 @@ Use ## for top-level sections, ### for subsections.
 
 _INPUT_TRUNCATION = 200   # Max chars of prompt stored in StepResult.input
 _OUTPUT_TRUNCATION = 500  # Max chars of response stored in StepResult.output
+_REQ_ID_PATTERN = re.compile(r"\b(?:REQ|FR|NFR|R)[-_]?\d+\b", re.IGNORECASE)
 
 # Depth tier calibration — channel adaptation pattern
 # (brief/standard/comprehensive map to feature complexity)
@@ -328,6 +330,99 @@ def _parse_context_files(
     if isinstance(raw, str):
         return [f.strip() for f in raw.split(",") if f.strip()]
     return list(raw)
+
+
+def _parse_file_list(raw: Union[str, list, None]) -> List[str]:
+    """Parse an optional file list from string or list input."""
+    parsed = _parse_context_files(raw)
+    return parsed or []
+
+
+def _safe_json_load(path: Path) -> Optional[Dict[str, Any]]:
+    """Load JSON from path if possible; return None on failure."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _checksum_file(path: Path) -> Optional[str]:
+    """Return SHA-256 checksum for file content, or None if unreadable."""
+    try:
+        return sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _resolve_path(path_str: str, base_dir: Path) -> Path:
+    """Resolve absolute or relative path against base directory."""
+    p = Path(path_str).expanduser()
+    if p.is_absolute():
+        return p
+    return (base_dir / p).resolve()
+
+
+def _normalize_artifact_type(raw: str) -> str:
+    """Normalize artifact type labels to underscore format."""
+    return raw.strip().lower().replace("-", "_")
+
+
+def _artifact_type_from_id(artifact_id: str) -> Optional[str]:
+    """Derive artifact type from artifact ID suffix when possible."""
+    if "-" not in artifact_id:
+        return None
+    suffix = artifact_id.split("-", 1)[1]
+    return _normalize_artifact_type(suffix)
+
+
+def _extract_requirement_ids(requirements_text: str) -> List[str]:
+    """Extract likely requirement IDs from requirements corpus."""
+    found = [m.group(0).upper() for m in _REQ_ID_PATTERN.finditer(requirements_text)]
+    if found:
+        return sorted(set(found))
+
+    fallback: List[str] = []
+    for idx, line in enumerate(requirements_text.splitlines(), start=1):
+        lower = line.lower()
+        if ("must" in lower or "shall" in lower) and line.strip().startswith(("-", "*")):
+            fallback.append(f"REQ-LINE-{idx}")
+    return fallback
+
+
+def _load_requirements_documents(requirements_files: List[str], base_dir: Path) -> Dict[str, str]:
+    """Load requirement document content by resolved path."""
+    docs: Dict[str, str] = {}
+    for raw in requirements_files:
+        resolved = _resolve_path(raw, base_dir)
+        if not resolved.exists() or not resolved.is_file():
+            continue
+        try:
+            docs[str(resolved)] = resolved.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return docs
+
+
+def _normalize_requirements_hints(
+    onboarding: Optional[Dict[str, Any]],
+) -> Dict[str, Dict[str, Any]]:
+    """Build requirement-hint index keyed by requirement ID."""
+    if not isinstance(onboarding, dict):
+        return {}
+    raw_hints = onboarding.get("requirements_hints")
+    if not isinstance(raw_hints, list):
+        return {}
+    hints: Dict[str, Dict[str, Any]] = {}
+    for item in raw_hints:
+        if not isinstance(item, dict):
+            continue
+        rid = item.get("id")
+        if not isinstance(rid, str) or not rid.strip():
+            continue
+        rid_norm = rid.strip().upper()
+        hints[rid_norm] = item
+    return hints
 
 
 def _context_files_with_checksums(
@@ -456,6 +551,59 @@ class PlanIngestionWorkflow(WorkflowBase):
                     description="Comma-separated file paths for review context",
                 ),
                 WorkflowInput(
+                    name="contextcore_export_dir",
+                    type="string",
+                    required=False,
+                    description="Directory containing ContextCore export artifacts (onboarding-metadata.json, manifest, CRD)",
+                ),
+                WorkflowInput(
+                    name="requirements_path",
+                    type="file",
+                    required=False,
+                    description="Path to the primary requirements document used for traceability checks",
+                ),
+                WorkflowInput(
+                    name="requirements_files",
+                    type="text",
+                    required=False,
+                    description="Comma-separated requirements file paths for dual-document refine and coverage analysis",
+                ),
+                WorkflowInput(
+                    name="min_export_coverage",
+                    type="number",
+                    required=False,
+                    default=0,
+                    description="Minimum export coverage percent required in preflight (0-100)",
+                ),
+                WorkflowInput(
+                    name="low_quality_policy",
+                    type="string",
+                    required=False,
+                    default="bias_artisan",
+                    description="Action when translation quality is low: bias_artisan or fail",
+                ),
+                WorkflowInput(
+                    name="min_requirements_coverage",
+                    type="number",
+                    required=False,
+                    default=70,
+                    description="Minimum requirement mapping coverage percent before low-quality policy applies",
+                ),
+                WorkflowInput(
+                    name="min_artifact_mapping_coverage",
+                    type="number",
+                    required=False,
+                    default=70,
+                    description="Minimum artifact mapping completeness percent before low-quality policy applies",
+                ),
+                WorkflowInput(
+                    name="max_contract_conflicts",
+                    type="number",
+                    required=False,
+                    default=2,
+                    description="Maximum allowed unresolved mapping conflicts before low-quality policy applies",
+                ),
+                WorkflowInput(
                     name="scope",
                     type="string",
                     required=False,
@@ -499,6 +647,40 @@ class PlanIngestionWorkflow(WorkflowBase):
         force_route = config.get("force_route")
         if force_route and force_route not in ("prime", "artisan"):
             errors.append(f"force_route must be 'prime' or 'artisan', got '{force_route}'")
+
+        low_quality_policy = str(
+            config.get("low_quality_policy", "bias_artisan")
+        ).strip().lower()
+        if low_quality_policy not in {"bias_artisan", "fail"}:
+            errors.append(
+                "low_quality_policy must be 'bias_artisan' or 'fail'"
+            )
+
+        for key in (
+            "min_export_coverage",
+            "min_requirements_coverage",
+            "min_artifact_mapping_coverage",
+        ):
+            val = config.get(key)
+            if val is None:
+                continue
+            try:
+                fval = float(val)
+            except (TypeError, ValueError):
+                errors.append(f"{key} must be a number between 0 and 100")
+                continue
+            if fval < 0 or fval > 100:
+                errors.append(f"{key} must be between 0 and 100")
+
+        for path_key in ("requirements_path", "contextcore_export_dir"):
+            raw = config.get(path_key)
+            if not raw:
+                continue
+            p = Path(str(raw)).expanduser()
+            if path_key == "requirements_path" and (not p.exists() or not p.is_file()):
+                errors.append(f"{path_key} does not exist or is not a file: {p}")
+            if path_key == "contextcore_export_dir" and (not p.exists() or not p.is_dir()):
+                errors.append(f"{path_key} does not exist or is not a directory: {p}")
 
         return errors
 
@@ -796,6 +978,336 @@ class PlanIngestionWorkflow(WorkflowBase):
         return out_path, step
 
     # ------------------------------------------------------------------
+    # Preflight / quality helpers
+    # ------------------------------------------------------------------
+
+    def _preflight_export_contract(
+        self,
+        contextcore_export_dir: Optional[str],
+        context_files: Optional[List[str]],
+        output_dir: Path,
+        min_export_coverage: float,
+    ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], List[str], List[str]]:
+        """Validate ContextCore export artifacts before PARSE."""
+        warnings: List[str] = []
+        errors: List[str] = []
+        evidence: Dict[str, Any] = {"checksums": {}, "paths": {}, "coverage": {}}
+
+        onboarding_path: Optional[Path] = None
+        if contextcore_export_dir:
+            export_dir = _resolve_path(contextcore_export_dir, output_dir)
+            onboarding_path = export_dir / "onboarding-metadata.json"
+            if not onboarding_path.exists():
+                errors.append(
+                    f"Preflight: missing onboarding-metadata.json in contextcore_export_dir: {export_dir}"
+                )
+                return None, evidence, warnings, errors
+        elif context_files:
+            for raw in context_files:
+                p = _resolve_path(raw, output_dir)
+                if p.name == "onboarding-metadata.json":
+                    onboarding_path = p
+                    break
+
+        if onboarding_path is None:
+            warnings.append(
+                "Preflight: onboarding metadata not provided; skipping export contract checks"
+            )
+            return None, evidence, warnings, errors
+        if not onboarding_path.exists():
+            errors.append(f"Preflight: onboarding metadata not found: {onboarding_path}")
+            return None, evidence, warnings, errors
+
+        onboarding = _safe_json_load(onboarding_path)
+        if onboarding is None:
+            errors.append(f"Preflight: onboarding metadata is invalid JSON: {onboarding_path}")
+            return None, evidence, warnings, errors
+
+        evidence["paths"]["onboarding_metadata"] = str(onboarding_path)
+        base_dir = onboarding_path.parent
+
+        amp = onboarding.get("artifact_manifest_path")
+        pcp = onboarding.get("project_context_path")
+        if not isinstance(amp, str):
+            errors.append("Preflight: onboarding missing artifact_manifest_path")
+        if not isinstance(pcp, str):
+            errors.append("Preflight: onboarding missing project_context_path")
+        if errors:
+            return onboarding, evidence, warnings, errors
+
+        artifact_manifest_path = _resolve_path(amp, base_dir)
+        project_context_path = _resolve_path(pcp, base_dir)
+        evidence["paths"]["artifact_manifest"] = str(artifact_manifest_path)
+        evidence["paths"]["project_context"] = str(project_context_path)
+
+        if not artifact_manifest_path.exists():
+            errors.append(f"Preflight: expected artifact manifest missing: {artifact_manifest_path}")
+        if not project_context_path.exists():
+            errors.append(f"Preflight: expected project context missing: {project_context_path}")
+        if errors:
+            return onboarding, evidence, warnings, errors
+
+        # Check checksum integrity when checksums are present.
+        expected_manifest_checksum = onboarding.get("artifact_manifest_checksum")
+        expected_project_checksum = onboarding.get("project_context_checksum")
+        actual_manifest_checksum = _checksum_file(artifact_manifest_path)
+        actual_project_checksum = _checksum_file(project_context_path)
+        evidence["checksums"]["artifact_manifest_actual"] = actual_manifest_checksum
+        evidence["checksums"]["project_context_actual"] = actual_project_checksum
+
+        if isinstance(expected_manifest_checksum, str):
+            evidence["checksums"]["artifact_manifest_expected"] = expected_manifest_checksum
+            if actual_manifest_checksum != expected_manifest_checksum:
+                errors.append(
+                    "Preflight: artifact_manifest_checksum mismatch between onboarding and artifact manifest"
+                )
+        if isinstance(expected_project_checksum, str):
+            evidence["checksums"]["project_context_expected"] = expected_project_checksum
+            if actual_project_checksum != expected_project_checksum:
+                errors.append(
+                    "Preflight: project_context_checksum mismatch between onboarding and project context"
+                )
+
+        # Parameter source resolvability summary guardrail.
+        has_resolvability_summary = (
+            isinstance(onboarding.get("resolved_artifact_parameters"), dict)
+            or isinstance(onboarding.get("parameter_resolvability"), dict)
+        )
+        if not has_resolvability_summary:
+            errors.append(
+                "Preflight: onboarding lacks parameter resolvability summary "
+                "(expected resolved_artifact_parameters or parameter_resolvability)"
+            )
+
+        coverage = onboarding.get("coverage")
+        if not isinstance(coverage, dict):
+            errors.append("Preflight: onboarding missing coverage block")
+            return onboarding, evidence, warnings, errors
+        evidence["coverage"] = coverage
+
+        gaps = coverage.get("gaps")
+        if not isinstance(gaps, list):
+            errors.append("Preflight: coverage.gaps must be present as a list")
+
+        overall = coverage.get("overallCoverage", coverage.get("overall_coverage"))
+        try:
+            overall_pct = float(overall) if overall is not None else 0.0
+        except (TypeError, ValueError):
+            overall_pct = 0.0
+        evidence["coverage"]["overall_coverage_evaluated"] = overall_pct
+
+        if overall_pct < min_export_coverage:
+            errors.append(
+                f"Preflight: export coverage {overall_pct:.1f}% below minimum {min_export_coverage:.1f}%"
+            )
+
+        # source_checksum is expected for provenance chain, warn if absent.
+        if not isinstance(onboarding.get("source_checksum"), str):
+            warnings.append("Preflight: source_checksum missing in onboarding metadata")
+
+        return onboarding, evidence, warnings, errors
+
+    @staticmethod
+    def _evaluate_translation_quality(
+        parsed_plan: ParsedPlan,
+        requirements_docs: Dict[str, str],
+        onboarding: Optional[Dict[str, Any]],
+        requirements_hints: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Compute translation-quality metrics used for routing safeguards."""
+        plan_text = "\n".join(
+            [
+                parsed_plan.title,
+                parsed_plan.raw_text,
+                *(f"{f.feature_id} {f.name} {f.description}" for f in parsed_plan.features),
+            ]
+        ).lower()
+
+        requirement_hints = requirements_hints or {}
+        requirement_ids = sorted(requirement_hints.keys())
+        if not requirement_ids:
+            requirements_corpus = "\n\n".join(requirements_docs.values())
+            requirement_ids = _extract_requirement_ids(requirements_corpus)
+        req_to_feature: Dict[str, List[str]] = {}
+        for rid in requirement_ids:
+            rid_lower = rid.lower()
+            matched_features = [
+                f.feature_id for f in parsed_plan.features
+                if rid_lower in f"{f.feature_id} {f.name} {f.description}".lower()
+            ]
+            # fallback: requirement appears somewhere in plan text
+            if rid_lower in plan_text and not matched_features and parsed_plan.features:
+                matched_features = [parsed_plan.features[0].feature_id]
+            req_to_feature[rid] = matched_features
+
+        req_acceptance: Dict[str, List[str]] = {}
+        req_sources: Dict[str, List[str]] = {}
+        for rid in requirement_ids:
+            hint = requirement_hints.get(rid, {})
+            anchors = hint.get("acceptance_anchors", [])
+            if isinstance(anchors, list):
+                req_acceptance[rid] = [a for a in anchors if isinstance(a, str)]
+            else:
+                req_acceptance[rid] = []
+            src_refs = hint.get("source_references", [])
+            if isinstance(src_refs, list):
+                req_sources[rid] = [s for s in src_refs if isinstance(s, str)]
+            else:
+                req_sources[rid] = list(req_acceptance[rid])
+
+        mapped_requirements = sum(1 for fids in req_to_feature.values() if fids)
+        total_requirements = len(requirement_ids)
+        requirements_coverage = (
+            (mapped_requirements / total_requirements) * 100.0
+            if total_requirements
+            else 100.0
+        )
+
+        coverage = onboarding.get("coverage", {}) if isinstance(onboarding, dict) else {}
+        gaps = coverage.get("gaps", []) if isinstance(coverage, dict) else []
+        artifact_ids = [a for a in gaps if isinstance(a, str)]
+        artifact_to_feature: Dict[str, List[str]] = {}
+
+        for aid in artifact_ids:
+            expected_type = _artifact_type_from_id(aid)
+            matched: List[str] = []
+            for feat in parsed_plan.features:
+                feat_types = {_normalize_artifact_type(t) for t in feat.artifact_types_addressed}
+                if expected_type and expected_type in feat_types:
+                    matched.append(feat.feature_id)
+                elif aid.lower() in f"{feat.feature_id} {feat.name} {feat.description}".lower():
+                    matched.append(feat.feature_id)
+            artifact_to_feature[aid] = sorted(set(matched))
+
+        mapped_artifacts = sum(1 for fids in artifact_to_feature.values() if fids)
+        total_artifacts = len(artifact_ids)
+        artifact_completeness = (
+            (mapped_artifacts / total_artifacts) * 100.0
+            if total_artifacts
+            else 100.0
+        )
+
+        unmet_requirements = [rid for rid, fids in req_to_feature.items() if not fids]
+        unmet_artifacts = [aid for aid, fids in artifact_to_feature.items() if not fids]
+        conflict_count = len(unmet_requirements) + len(unmet_artifacts)
+
+        return {
+            "requirements_total": total_requirements,
+            "requirements_mapped": mapped_requirements,
+            "requirements_coverage_percent": round(requirements_coverage, 2),
+            "artifact_total": total_artifacts,
+            "artifact_mapped": mapped_artifacts,
+            "artifact_mapping_percent": round(artifact_completeness, 2),
+            "conflict_count": conflict_count,
+            "unmapped_requirements": unmet_requirements,
+            "unmapped_artifacts": unmet_artifacts,
+            "requirement_to_feature": req_to_feature,
+            "artifact_to_feature": artifact_to_feature,
+            "requirement_acceptance_anchors": req_acceptance,
+            "requirement_source_references": req_sources,
+        }
+
+    @staticmethod
+    def _build_traceability_artifact(
+        route: ContractorRoute,
+        parsed_plan: ParsedPlan,
+        tasks: List[Dict[str, Any]],
+        quality: Dict[str, Any],
+        checksum_evidence: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build deterministic traceability artifact payload."""
+        feature_to_task: Dict[str, List[str]] = {}
+        for t in tasks:
+            ctx = t.get("config", {}).get("context", {})
+            fid = ctx.get("feature_id")
+            if not isinstance(fid, str) or not fid:
+                continue
+            feature_to_task.setdefault(fid, []).append(t.get("task_id", ""))
+
+        req_mappings: List[Dict[str, Any]] = []
+        for rid, fids in quality.get("requirement_to_feature", {}).items():
+            task_ids: List[str] = []
+            for fid in fids:
+                task_ids.extend(feature_to_task.get(fid, []))
+            req_mappings.append(
+                {
+                    "requirement_id": rid,
+                    "feature_ids": fids,
+                    "task_ids": sorted(set(tid for tid in task_ids if tid)),
+                    "status": "mapped" if fids else "unresolved",
+                    "acceptance_obligations": quality.get(
+                        "requirement_acceptance_anchors", {}
+                    ).get(rid, []),
+                    "source_references": quality.get(
+                        "requirement_source_references", {}
+                    ).get(rid, []),
+                    "mapping_rationale": (
+                        ["matched by requirement hint id against parsed feature text"]
+                        if fids
+                        else ["no parsed feature contained requirement identifier"]
+                    ),
+                }
+            )
+
+        artifact_mappings: List[Dict[str, Any]] = []
+        for aid, fids in quality.get("artifact_to_feature", {}).items():
+            task_ids: List[str] = []
+            for fid in fids:
+                task_ids.extend(feature_to_task.get(fid, []))
+            artifact_mappings.append(
+                {
+                    "artifact_id": aid,
+                    "artifact_type": _artifact_type_from_id(aid),
+                    "feature_ids": fids,
+                    "task_ids": sorted(set(tid for tid in task_ids if tid)),
+                    "status": "mapped" if fids else "unresolved",
+                }
+            )
+
+        unresolved: List[Dict[str, Any]] = []
+        for rid in quality.get("unmapped_requirements", []):
+            unresolved.append(
+                {
+                    "type": "requirement",
+                    "id": rid,
+                    "severity": "high",
+                    "message": "No plan feature/task mapping found",
+                }
+            )
+        for aid in quality.get("unmapped_artifacts", []):
+            unresolved.append(
+                {
+                    "type": "artifact",
+                    "id": aid,
+                    "severity": "medium",
+                    "message": "No plan feature/task mapping found",
+                }
+            )
+
+        return {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "route": route.value,
+            "plan_title": parsed_plan.title,
+            "requirement_mappings": req_mappings,
+            "artifact_mappings": artifact_mappings,
+            "unresolved": unresolved,
+            "translation_quality": {
+                "requirements_coverage_percent": quality.get("requirements_coverage_percent", 100.0),
+                "artifact_mapping_percent": quality.get("artifact_mapping_percent", 100.0),
+                "conflict_count": quality.get("conflict_count", 0),
+            },
+            "checksum_evidence": checksum_evidence,
+        }
+
+    @staticmethod
+    def _write_traceability_artifact(output_dir: Path, payload: Dict[str, Any]) -> Path:
+        """Write ingestion-traceability.json and return the path."""
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "ingestion-traceability.json"
+        atomic_write_json(path, payload, indent=2)
+        return path
+
+    # ------------------------------------------------------------------
     # Phase: REFINE
     # ------------------------------------------------------------------
 
@@ -806,6 +1318,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         review_quality_tier: str,
         scope: Optional[str],
         context_files: Optional[List[str]],
+        feature_requirements: Optional[List[str]],
         warn_cost_usd: Optional[float],
         max_cost_usd: Optional[float],
     ) -> Tuple[int, List[StepResult], float]:
@@ -827,6 +1340,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             review_config["scope"] = scope
         if context_files:
             review_config["context_files"] = context_files
+        if feature_requirements:
+            review_config["feature_requirements"] = feature_requirements
         if warn_cost_usd is not None:
             review_config["warn_cost_usd"] = warn_cost_usd
         if max_cost_usd is not None:
@@ -881,6 +1396,9 @@ class PlanIngestionWorkflow(WorkflowBase):
         features: List[ParsedFeature],
         dependency_graph: Dict[str, List[str]],
         file_ownership: Optional[Dict[str, Any]] = None,
+        requirement_to_feature: Optional[Dict[str, List[str]]] = None,
+        artifact_to_feature: Optional[Dict[str, List[str]]] = None,
+        requirement_hints: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
         """Convert ParsedFeatures into task dicts matching prime-route schema.
 
@@ -910,6 +1428,32 @@ class PlanIngestionWorkflow(WorkflowBase):
         shared_files: Dict[str, List[str]] = {
             f: fids for f, fids in file_to_features.items() if len(fids) > 1
         }
+
+        feature_to_requirements: Dict[str, List[str]] = {}
+        for rid, fids in (requirement_to_feature or {}).items():
+            if not isinstance(rid, str):
+                continue
+            if not isinstance(fids, list):
+                continue
+            for fid in fids:
+                if not isinstance(fid, str):
+                    continue
+                feature_to_requirements.setdefault(fid, []).append(rid)
+        for fid in feature_to_requirements:
+            feature_to_requirements[fid] = sorted(set(feature_to_requirements[fid]))
+
+        feature_to_artifacts: Dict[str, List[str]] = {}
+        for aid, fids in (artifact_to_feature or {}).items():
+            if not isinstance(aid, str):
+                continue
+            if not isinstance(fids, list):
+                continue
+            for fid in fids:
+                if not isinstance(fid, str):
+                    continue
+                feature_to_artifacts.setdefault(fid, []).append(aid)
+        for fid in feature_to_artifacts:
+            feature_to_artifacts[fid] = sorted(set(feature_to_artifacts[fid]))
 
         tasks: List[Dict[str, Any]] = []
         for idx, feat in enumerate(features, start=1):
@@ -957,6 +1501,39 @@ class PlanIngestionWorkflow(WorkflowBase):
                 ctx["design_doc_sections"] = list(feat.design_doc_sections)
             if feat.artifact_types_addressed:
                 ctx["artifact_types_addressed"] = list(feat.artifact_types_addressed)
+
+            mapped_requirements = feature_to_requirements.get(feat.feature_id, [])
+            if mapped_requirements:
+                ctx["requirement_ids"] = mapped_requirements
+                acceptance_obligations: List[str] = []
+                source_references: List[str] = []
+                for rid in mapped_requirements:
+                    hint = (requirement_hints or {}).get(rid, {})
+                    anchors = hint.get("acceptance_anchors", [])
+                    if isinstance(anchors, list):
+                        acceptance_obligations.extend(
+                            a for a in anchors if isinstance(a, str)
+                        )
+                    refs = hint.get("source_references", [])
+                    if isinstance(refs, list):
+                        source_references.extend(
+                            r for r in refs if isinstance(r, str)
+                        )
+                if acceptance_obligations:
+                    ctx["acceptance_obligations"] = sorted(set(acceptance_obligations))
+                if source_references:
+                    ctx["source_references"] = sorted(set(source_references))
+
+                mapped_artifacts = feature_to_artifacts.get(feat.feature_id, [])
+                rationale: List[str] = [
+                    "feature selected via requirement identifier match"
+                ]
+                if mapped_artifacts:
+                    rationale.append(
+                        "feature also mapped to coverage gaps: "
+                        + ", ".join(mapped_artifacts)
+                    )
+                ctx["mapping_rationale"] = rationale
 
             # ── Multi-file risk metadata ──────────────────────────────
             # Embed risk signals directly in the seed so downstream
@@ -1439,6 +2016,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         step_costs: Optional[Dict[str, float]] = None,
         tracking_config: Optional["TaskTrackingConfig"] = None,
         manifest_context: Optional[Dict[str, Any]] = None,
+        translation_quality: Optional[Dict[str, Any]] = None,
+        requirement_hints: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]]]:
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
@@ -1486,6 +2065,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                 parsed_plan.features,
                 parsed_plan.dependency_graph,
                 file_ownership=_file_ownership,
+                requirement_to_feature=(translation_quality or {}).get(
+                    "requirement_to_feature", {}
+                ),
+                artifact_to_feature=(translation_quality or {}).get(
+                    "artifact_to_feature", {}
+                ),
+                requirement_hints=requirement_hints or {},
             )
 
             # Derive architectural context + design calibration
@@ -1563,7 +2149,15 @@ class PlanIngestionWorkflow(WorkflowBase):
             from .task_tracking_emitter import emit_task_tracking_artifacts
 
             tracking_tasks = self._derive_tasks_from_features(
-                parsed_plan.features, parsed_plan.dependency_graph,
+                parsed_plan.features,
+                parsed_plan.dependency_graph,
+                requirement_to_feature=(translation_quality or {}).get(
+                    "requirement_to_feature", {}
+                ),
+                artifact_to_feature=(translation_quality or {}).get(
+                    "artifact_to_feature", {}
+                ),
+                requirement_hints=requirement_hints or {},
             )
             tracking_result = emit_task_tracking_artifacts(
                 parsed_plan, complexity, tracking_tasks, tracking_config, output_dir,
@@ -1591,10 +2185,20 @@ class PlanIngestionWorkflow(WorkflowBase):
         force_route = config.get("force_route")
         review_rounds = int(config.get("review_rounds", 2))
         review_quality_tier = str(config.get("review_quality_tier", "flagship"))
+        contextcore_export_dir = config.get("contextcore_export_dir")
+        min_export_coverage = float(config.get("min_export_coverage", 0))
         scope = config.get("scope")
         warn_cost_usd = config.get("warn_cost_usd")
         max_cost_usd = config.get("max_cost_usd")
         context_files = _parse_context_files(config.get("context_files"))
+        requirements_path = config.get("requirements_path")
+        requirements_files = _parse_file_list(config.get("requirements_files"))
+        if requirements_path:
+            requirements_files = [str(requirements_path)] + requirements_files
+        low_quality_policy = str(config.get("low_quality_policy", "bias_artisan")).strip().lower()
+        min_requirements_coverage = float(config.get("min_requirements_coverage", 70))
+        min_artifact_mapping_coverage = float(config.get("min_artifact_mapping_coverage", 70))
+        max_contract_conflicts = int(config.get("max_contract_conflicts", 2))
 
         # Task tracking (opt-in)
         generate_task_tracking = config.get("generate_task_tracking", False)
@@ -1609,7 +2213,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 emit_ndjson_events=config.get("emit_ndjson_events", True),
             )
 
-        total_steps = 5  # parse, assess, transform, refine, emit
+        total_steps = 6  # preflight, parse, assess, transform, refine, emit
         current_step = 0
 
         def progress(msg: str):
@@ -1660,6 +2264,41 @@ class PlanIngestionWorkflow(WorkflowBase):
             # Read plan
             plan_text = plan_path.read_text(encoding="utf-8")
             step_costs: Dict[str, float] = {}
+            onboarding_metadata: Optional[Dict[str, Any]] = None
+            preflight_evidence: Dict[str, Any] = {"checksums": {}, "paths": {}, "coverage": {}}
+            requirements_hints_index: Dict[str, Dict[str, Any]] = {}
+
+            # --- PREFLIGHT ---
+            progress("Preflight")
+            preflight_step = StepResult(step_name="preflight", output="Running export contract checks")
+            onboarding_metadata, preflight_evidence, preflight_warnings, preflight_errors = (
+                self._preflight_export_contract(
+                    contextcore_export_dir=contextcore_export_dir,
+                    context_files=context_files,
+                    output_dir=output_dir,
+                    min_export_coverage=min_export_coverage,
+                )
+            )
+            if preflight_warnings:
+                preflight_step.output = (
+                    preflight_step.output
+                    + "; warnings: "
+                    + " | ".join(preflight_warnings[:5])
+                )
+            if preflight_errors:
+                preflight_step.error = " ; ".join(preflight_errors)
+            steps.append(preflight_step)
+            if preflight_step.error:
+                return _fail(preflight_step.error)
+            requirements_hints_index = _normalize_requirements_hints(onboarding_metadata)
+
+            # Load requirements corpus for routing quality + dual-document refine
+            requirements_docs = _load_requirements_documents(requirements_files, output_dir)
+            if requirements_files and not requirements_docs:
+                return _fail(
+                    "Requirements files were provided but none could be loaded. "
+                    "Check requirements_path/requirements_files paths."
+                )
 
             # --- MANIFEST LOADING (optional) ---
             manifest_context: Dict[str, Any] = {}
@@ -1705,6 +2344,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                 parsed_plan.title, len(parsed_plan.features),
             )
 
+            translation_quality = self._evaluate_translation_quality(
+                parsed_plan=parsed_plan,
+                requirements_docs=requirements_docs,
+                onboarding=onboarding_metadata,
+                requirements_hints=requirements_hints_index,
+            )
+
             cost_err = _check_cost("parse")
             if cost_err:
                 return cost_err
@@ -1723,6 +2369,47 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return _fail(assess_step.error)
             state.complexity = complexity
             state.route = complexity.route
+
+            low_quality_reasons: List[str] = []
+            if (
+                translation_quality["requirements_coverage_percent"]
+                < min_requirements_coverage
+            ):
+                low_quality_reasons.append(
+                    f"requirements_coverage={translation_quality['requirements_coverage_percent']:.1f}%"
+                )
+            if (
+                translation_quality["artifact_mapping_percent"]
+                < min_artifact_mapping_coverage
+            ):
+                low_quality_reasons.append(
+                    f"artifact_mapping={translation_quality['artifact_mapping_percent']:.1f}%"
+                )
+            if translation_quality["conflict_count"] > max_contract_conflicts:
+                low_quality_reasons.append(
+                    f"conflict_count={translation_quality['conflict_count']}"
+                )
+
+            if not force_route and low_quality_reasons:
+                details = ", ".join(low_quality_reasons)
+                if low_quality_policy == "fail":
+                    return _fail(
+                        "Translation quality gate failed: "
+                        + details
+                        + ". Either improve mappings or use low_quality_policy=bias_artisan."
+                    )
+                complexity.route = ContractorRoute.ARTISAN
+                state.route = ContractorRoute.ARTISAN
+                steps.append(
+                    StepResult(
+                        step_name="assess:quality-override",
+                        output=(
+                            "Low translation quality detected; routing forced to artisan. "
+                            + details
+                        ),
+                    )
+                )
+
             logger.debug(
                 "Complexity: %d → route=%s (threshold=%d)",
                 complexity.composite,
@@ -1767,6 +2454,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 review_quality_tier,
                 scope,
                 context_files,
+                list(requirements_docs.keys()) if requirements_docs else None,
                 warn_cost_usd,
                 max_cost_usd,
             )
@@ -1790,7 +2478,32 @@ class PlanIngestionWorkflow(WorkflowBase):
                 step_costs=step_costs,
                 tracking_config=tracking_config,
                 manifest_context=manifest_context,
+                translation_quality=translation_quality,
+                requirement_hints=requirements_hints_index,
             )
+
+            # Emit deterministic traceability report for downstream auditing.
+            file_ownership = (
+                onboarding_metadata.get("file_ownership")
+                if isinstance(onboarding_metadata, dict)
+                else None
+            )
+            trace_tasks = self._derive_tasks_from_features(
+                parsed_plan.features,
+                parsed_plan.dependency_graph,
+                file_ownership=file_ownership,
+                requirement_to_feature=translation_quality.get("requirement_to_feature", {}),
+                artifact_to_feature=translation_quality.get("artifact_to_feature", {}),
+                requirement_hints=requirements_hints_index,
+            )
+            trace_payload = self._build_traceability_artifact(
+                route=route,
+                parsed_plan=parsed_plan,
+                tasks=trace_tasks,
+                quality=translation_quality,
+                checksum_evidence=preflight_evidence.get("checksums", {}),
+            )
+            traceability_path = self._write_traceability_artifact(output_dir, trace_payload)
             state.review_config_path = str(config_path)
             if context_seed_path is not None:
                 state.context_seed_path = str(context_seed_path)
@@ -1798,6 +2511,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             emit_output = f"Wrote {config_path}"
             if context_seed_path is not None:
                 emit_output += f", {context_seed_path}"
+            emit_output += f", {traceability_path}"
             if tracking_result:
                 emit_output += f", {tracking_result.get('state_file_count', 0)} tracking files"
             emit_step = StepResult(
@@ -1821,6 +2535,16 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "review_config_path": str(config_path),
                 "complexity_score": complexity.composite,
                 "refine_rounds_completed": rounds_completed,
+                "traceability_path": str(traceability_path),
+                "translation_quality": {
+                    "requirements_coverage_percent": translation_quality.get(
+                        "requirements_coverage_percent", 100.0
+                    ),
+                    "artifact_mapping_percent": translation_quality.get(
+                        "artifact_mapping_percent", 100.0
+                    ),
+                    "conflict_count": translation_quality.get("conflict_count", 0),
+                },
             }
             if context_seed_path is not None:
                 output["context_seed_path"] = str(context_seed_path)

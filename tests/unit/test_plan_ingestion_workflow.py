@@ -329,6 +329,16 @@ class TestPlanIngestionValidation:
         })
         assert result.valid
 
+    def test_invalid_low_quality_policy(self, tmp_path):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+        result = self.wf.validate_config({
+            "plan_path": str(plan_file),
+            "low_quality_policy": "unknown",
+        })
+        assert not result.valid
+        assert any("low_quality_policy" in e for e in result.errors)
+
 
 # ---------------------------------------------------------------------------
 # TestExtractJson
@@ -536,6 +546,7 @@ class TestRefinePhase:
             review_quality_tier="flagship",
             scope=None,
             context_files=None,
+            feature_requirements=None,
             warn_cost_usd=None,
             max_cost_usd=None,
         )
@@ -576,6 +587,7 @@ class TestRefinePhase:
             review_quality_tier="flagship",
             scope="Review scope",
             context_files=["src/a.py"],
+            feature_requirements=["reqs/feature.md"],
             warn_cost_usd=1.0,
             max_cost_usd=5.0,
         )
@@ -592,6 +604,7 @@ class TestRefinePhase:
         assert call_config["reviewer_count"] == 2
         assert call_config["scope"] == "Review scope"
         assert call_config["context_files"] == ["src/a.py"]
+        assert call_config["feature_requirements"] == ["reqs/feature.md"]
 
 
 # ---------------------------------------------------------------------------
@@ -935,6 +948,167 @@ class TestEndToEnd:
         assert state["current_phase"] == "failed"
         assert state["error"] is not None
 
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_low_quality_policy_fail_blocks_before_transform(self, mock_resolve, MockReviewWf, tmp_path):
+        """If translation quality is low and policy=fail, workflow fails with diagnostics."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+        req_file = tmp_path / "requirements.md"
+        req_file.write_text("## Requirements\n- REQ-101: Must support OAuth2")
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.02),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.0)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "requirements_path": str(req_file),
+            "low_quality_policy": "fail",
+            "review_rounds": 0,
+        })
+
+        assert not result.success
+        assert "Translation quality gate failed" in result.error
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_traceability_artifact_emitted(self, mock_resolve, MockReviewWf, tmp_path):
+        """Workflow emits ingestion-traceability.json for downstream auditing."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.02),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.05)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 1,
+        })
+
+        assert result.success
+        assert "traceability_path" in result.output
+        trace_path = Path(result.output["traceability_path"])
+        assert trace_path.exists()
+        trace = json.loads(trace_path.read_text())
+        assert "translation_quality" in trace
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_requirements_hints_drive_traceability_without_requirements_docs(
+        self, mock_resolve, MockReviewWf, tmp_path
+    ):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+        export_dir = tmp_path / "export"
+        export_dir.mkdir(parents=True, exist_ok=True)
+        manifest_path = export_dir / "artifact-manifest.yaml"
+        project_context_path = export_dir / "project-context.yaml"
+        manifest_path.write_text("apiVersion: contextcore.io/v1\n")
+        project_context_path.write_text("apiVersion: contextcore.io/v1\n")
+        onboarding = {
+            "artifact_manifest_path": str(manifest_path),
+            "project_context_path": str(project_context_path),
+            "artifact_manifest_checksum": None,
+            "project_context_checksum": None,
+            "source_checksum": "sha256:test",
+            "resolved_artifact_parameters": {"dashboard": {"x": {"resolved": True}}},
+            "coverage": {"overallCoverage": 100, "gaps": []},
+            "requirements_hints": [
+                {
+                    "id": "REQ-101",
+                    "labels": ["nfr"],
+                    "acceptance_anchors": ["manifest.spec.requirements.availability"],
+                    "source_references": ["docs/requirements.md#REQ-101"],
+                }
+            ],
+        }
+        (export_dir / "onboarding-metadata.json").write_text(json.dumps(onboarding))
+
+        parse_with_requirement = json.dumps({
+            "title": "My Sample Plan",
+            "goals": ["Build a widget", "Test the widget"],
+            "features": [
+                {
+                    "feature_id": "F-001",
+                    "name": "Widget core",
+                    "description": "Implement REQ-101 in core widget",
+                    "target_files": ["src/widget.py"],
+                    "dependencies": [],
+                    "estimated_loc": 100,
+                    "labels": ["core"],
+                }
+            ],
+            "mentioned_files": ["src/widget.py"],
+            "dependency_graph": {},
+        })
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(parse_with_requirement, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_ARTISAN, cost=0.02),
+            _mock_generate_return(TRANSFORM_MARKDOWN, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.0)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "contextcore_export_dir": str(export_dir),
+            "review_rounds": 0,
+        })
+
+        assert result.success
+        assert result.output["route"] == "artisan"
+        assert result.output["translation_quality"]["requirements_coverage_percent"] == 100.0
+
+        seed = json.loads((tmp_path / "artisan-context-seed.json").read_text())
+        ctx = seed["tasks"][0]["config"]["context"]
+        assert "REQ-101" in ctx["requirement_ids"]
+        assert "manifest.spec.requirements.availability" in ctx["acceptance_obligations"]
+
+        trace = json.loads((tmp_path / "ingestion-traceability.json").read_text())
+        req = next(r for r in trace["requirement_mappings"] if r["requirement_id"] == "REQ-101")
+        assert req["status"] == "mapped"
+        assert req["task_ids"]
+
 
 # ---------------------------------------------------------------------------
 # TestArtisanContextSeed
@@ -1157,6 +1331,34 @@ class TestDeriveTasksFromFeatures:
         assert cfg["context"]["feature_id"] == "F-001"
         assert cfg["context"]["target_files"] == ["x.py"]
         assert cfg["context"]["estimated_loc"] == 150
+
+    def test_context_includes_requirement_traceability_fields(self):
+        features = [
+            ParsedFeature(
+                feature_id="F-001",
+                name="Auth feature",
+                description="Implements REQ-101",
+                target_files=["src/auth.py"],
+                estimated_loc=80,
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(
+            features,
+            {},
+            requirement_to_feature={"REQ-101": ["F-001"]},
+            artifact_to_feature={"checkout-prometheus_rule": ["F-001"]},
+            requirement_hints={
+                "REQ-101": {
+                    "acceptance_anchors": ["manifest.spec.requirements.availability"],
+                    "source_references": ["docs/requirements.md#req-101"],
+                }
+            },
+        )
+        ctx = tasks[0]["config"]["context"]
+        assert ctx["requirement_ids"] == ["REQ-101"]
+        assert "manifest.spec.requirements.availability" in ctx["acceptance_obligations"]
+        assert "docs/requirements.md#req-101" in ctx["source_references"]
+        assert any("requirement identifier match" in r for r in ctx["mapping_rationale"])
 
     def test_shared_module_detection_adds_prompt_hints(self):
         """Tasks with multi-file targets that include shared files get prompt_hints."""
