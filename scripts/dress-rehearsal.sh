@@ -10,6 +10,7 @@
 #   ARTISAN_SEED          — Path to enriched context seed JSON (required if not set)
 #   ARTISAN_OUTPUT_DIR    — Output directory for artifacts
 #   ARTISAN_PROJECT_ROOT  — Target project root (inferred from seed if unset)
+#   ARTISAN_RESUME        — Set to 1 to resume from last checkpoint
 #
 # Example (env vars):
 #   export ARTISAN_SEED=/path/to/artisan-context-seed.json
@@ -51,10 +52,14 @@ fi
 source "${SCRIPT_DIR}/artisan_common.sh"
 resolve_artisan_config
 
+RESUME_ARG=""
+[[ "${ARTISAN_RESUME:-0}" == "1" ]] && RESUME_ARG="--resume"
+
 STARTD8_OTEL=disabled python3 "${SCRIPT_DIR}/run_artisan_workflow.py" \
   --seed "$SEED" \
   --output-dir "$OUTPUT_DIR" \
   --project-root "$PROJECT_ROOT" \
   --task-filter "$TASK_ID" \
   --dress-rehearsal \
-  --design-max-tokens 8192
+  --design-max-tokens 8192 \
+  $RESUME_ARG

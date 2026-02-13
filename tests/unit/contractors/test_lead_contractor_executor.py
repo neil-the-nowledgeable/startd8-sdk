@@ -441,3 +441,102 @@ class TestGeneratorResolution:
         executor._generator = mock_gen
 
         assert executor._resolve_generator() is mock_gen
+
+
+# ============================================================================
+# Tests: _detect_downstream_files (Fix 1 — smart retry gate)
+# ============================================================================
+
+
+class TestDetectDownstreamFiles:
+    """Tests for _detect_downstream_files helper.
+
+    The smart retry gate detects files explicitly designated as
+    downstream/shared in the design doc so we can skip the expensive
+    retry when the drafter intentionally omitted them.
+    """
+
+    def test_detects_f002_plus_pattern(self):
+        from startd8.contractors.generators.lead_contractor import (
+            _detect_downstream_files,
+        )
+        design_doc = (
+            "├── __init__.py   ← THIS FILE\n"
+            "├── artifact_generators.py   ← Individual generator functions (shared, F-002+)\n"
+        )
+        result = _detect_downstream_files(
+            ["src/pkg/artifact_generators.py"],
+            design_doc,
+        )
+        assert result == ["src/pkg/artifact_generators.py"]
+
+    def test_detects_downstream_task_phrase(self):
+        from startd8.contractors.generators.lead_contractor import (
+            _detect_downstream_files,
+        )
+        design_doc = "artifact_generators.py — implemented by downstream tasks\n"
+        result = _detect_downstream_files(
+            ["src/pkg/artifact_generators.py"],
+            design_doc,
+        )
+        assert result == ["src/pkg/artifact_generators.py"]
+
+    def test_detects_later_task_phrase(self):
+        from startd8.contractors.generators.lead_contractor import (
+            _detect_downstream_files,
+        )
+        design_doc = "module.py will be implemented by later tasks in F-003\n"
+        result = _detect_downstream_files(
+            ["src/pkg/module.py"],
+            design_doc,
+        )
+        assert result == ["src/pkg/module.py"]
+
+    def test_non_downstream_not_flagged(self):
+        from startd8.contractors.generators.lead_contractor import (
+            _detect_downstream_files,
+        )
+        design_doc = (
+            "├── __init__.py   ← package root\n"
+            "├── module.py     ← core implementation\n"
+        )
+        result = _detect_downstream_files(
+            ["src/pkg/__init__.py", "src/pkg/module.py"],
+            design_doc,
+        )
+        assert result == []
+
+    def test_empty_design_doc(self):
+        from startd8.contractors.generators.lead_contractor import (
+            _detect_downstream_files,
+        )
+        result = _detect_downstream_files(
+            ["src/pkg/module.py"],
+            "",
+        )
+        assert result == []
+
+    def test_empty_unmatched(self):
+        from startd8.contractors.generators.lead_contractor import (
+            _detect_downstream_files,
+        )
+        result = _detect_downstream_files(
+            [],
+            "artifact_generators.py — shared, F-002+",
+        )
+        assert result == []
+
+    def test_mixed_downstream_and_real(self):
+        from startd8.contractors.generators.lead_contractor import (
+            _detect_downstream_files,
+        )
+        design_doc = (
+            "__init__.py — package root with registry\n"
+            "artifact_generators.py — shared, F-002+\n"
+        )
+        result = _detect_downstream_files(
+            ["src/pkg/__init__.py", "src/pkg/artifact_generators.py"],
+            design_doc,
+        )
+        # Only artifact_generators.py is downstream
+        assert result == ["src/pkg/artifact_generators.py"]

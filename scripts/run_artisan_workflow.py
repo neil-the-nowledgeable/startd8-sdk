@@ -244,6 +244,10 @@ def main() -> int:
         "--design-max-tokens", type=int, default=None,
         help="Override max_output_tokens for design phase LLM calls (e.g. 8192 to avoid truncation)",
     )
+    parser.add_argument(
+        "--force-implement", action="store_true",
+        help="Ignore cached generation_results; always run fresh IMPLEMENT (no resume from .startd8/state/)",
+    )
 
     # --dress-rehearsal and --adopt-prior are mutually exclusive:
     # dress-rehearsal generates *new* design artifacts into a staging dir,
@@ -400,6 +404,8 @@ def main() -> int:
         handler_kwargs["auto_commit"] = False
     if args.no_scaffold_test_first:
         handler_kwargs["scaffold_test_first"] = False
+    if args.force_implement:
+        handler_kwargs["force_implement"] = True
 
     handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():

@@ -1218,6 +1218,462 @@ class TestDeriveTasksFromFeatures:
         assert "prompt_hints" not in tasks[0]["config"]["context"]
         assert "prompt_hints" not in tasks[1]["config"]["context"]
 
+    # ── __init__.py ordering tests ────────────────────────────────────
+
+    def test_init_py_ordered_first(self):
+        """__init__.py should be first in target_files regardless of input order."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Package",
+                target_files=["src/pkg/module.py", "src/pkg/__init__.py"],
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        target_files = tasks[0]["config"]["context"]["target_files"]
+        assert target_files[0] == "src/pkg/__init__.py"
+        assert target_files[1] == "src/pkg/module.py"
+
+    def test_ordering_stable_without_init_py(self):
+        """Files without __init__.py are sorted alphabetically."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Modules",
+                target_files=["src/pkg/zebra.py", "src/pkg/alpha.py"],
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        target_files = tasks[0]["config"]["context"]["target_files"]
+        assert target_files == ["src/pkg/alpha.py", "src/pkg/zebra.py"]
+
+    def test_single_file_ordering_unchanged(self):
+        """Single-file tasks are unaffected by ordering logic."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Single",
+                target_files=["src/module.py"],
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        assert tasks[0]["config"]["context"]["target_files"] == ["src/module.py"]
+
+    # ── Multi-file risk metadata tests ────────────────────────────────
+
+    def test_multi_file_risk_metadata_present(self):
+        """Multi-file tasks get _multi_file_risk metadata in context."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Package",
+                target_files=["src/pkg/__init__.py", "src/pkg/module.py"],
+                estimated_loc=100,
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        ctx = tasks[0]["config"]["context"]
+        assert "_multi_file_risk" in ctx
+        risk = ctx["_multi_file_risk"]
+        assert risk["file_count"] == 2
+        assert risk["has_init_py"] is True
+        assert risk["high_loc"] is False
+
+    def test_multi_file_risk_high_loc(self):
+        """High estimated_loc (>200) is flagged in multi-file risk metadata."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="BigPkg",
+                target_files=["src/a.py", "src/b.py"],
+                estimated_loc=300,
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        risk = tasks[0]["config"]["context"]["_multi_file_risk"]
+        assert risk["high_loc"] is True
+        assert risk["has_init_py"] is False
+
+    def test_single_file_no_risk_metadata(self):
+        """Single-file tasks have no _multi_file_risk metadata."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Single",
+                target_files=["src/module.py"],
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        assert "_multi_file_risk" not in tasks[0]["config"]["context"]
+
+    def test_four_plus_files_logs_warning(self, caplog):
+        """Features with 4+ target files produce a warning log."""
+        import logging
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="BigFeature",
+                target_files=["a.py", "b.py", "c.py", "d.py"],
+            ),
+        ]
+        with caplog.at_level(logging.WARNING):
+            tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        assert any("4 target files" in r.message for r in caplog.records)
+        assert any("exceeds recommended" in r.message for r in caplog.records)
+
+
+# ===================================================================
+# File scope classification tests
+# ===================================================================
+
+
+class TestFileScopeClassification:
+    """Tests for _file_scope metadata in _derive_tasks_from_features."""
+
+    def test_shared_files_get_scope(self):
+        """Files appearing in multiple features get non-primary scope."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Init",
+                description="Package init", target_files=["pkg/__init__.py", "pkg/shared.py"],
+                estimated_loc=50,
+            ),
+            ParsedFeature(
+                feature_id="F-002", name="Consumer",
+                description="Uses shared", target_files=["pkg/shared.py", "pkg/consumer.py"],
+                dependencies=["F-001"], estimated_loc=80,
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(
+            features, {"F-002": ["F-001"]},
+        )
+
+        # F-001 owns shared.py (first claimer) — scope is "shared"
+        scope_1 = tasks[0]["config"]["context"].get("_file_scope", {})
+        assert scope_1.get("pkg/shared.py") == "shared"
+
+        # F-002 also claims shared.py but is not first — scope is "stub"
+        scope_2 = tasks[1]["config"]["context"].get("_file_scope", {})
+        assert scope_2.get("pkg/shared.py") == "stub"
+
+    def test_single_file_no_scope(self):
+        """Single-file features don't produce _file_scope."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Module",
+                description="Single module", target_files=["src/module.py"],
+                estimated_loc=50,
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
+        ctx = tasks[0]["config"]["context"]
+        # No shared files → _file_scope may be absent or all primary
+        scope = ctx.get("_file_scope", {})
+        assert all(v == "primary" for v in scope.values())
+
+    def test_file_ownership_from_export(self):
+        """file_ownership from ContextCore export is used for classification."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="Dashboard",
+                description="Generate dashboard",
+                target_files=["grafana/dashboards/api-dashboard.json", "grafana/dashboards/shared.json"],
+                estimated_loc=200,
+            ),
+        ]
+        file_ownership = {
+            "grafana/dashboards/api-dashboard.json": {
+                "artifact_ids": ["api-dashboard"],
+                "artifact_types": ["dashboard"],
+                "scope": "primary",
+                "task_ids": ["PI-001"],
+            },
+            "grafana/dashboards/shared.json": {
+                "artifact_ids": ["api-dashboard", "web-dashboard"],
+                "artifact_types": ["dashboard"],
+                "scope": "shared",
+                "task_ids": ["PI-001", "PI-002"],
+            },
+        }
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(
+            features, {}, file_ownership=file_ownership,
+        )
+        scope = tasks[0]["config"]["context"].get("_file_scope", {})
+        assert scope.get("grafana/dashboards/shared.json") == "shared"
+
+    def test_no_file_ownership_still_detects_cross_feature_sharing(self):
+        """Without export file_ownership, cross-feature sharing is still detected."""
+        features = [
+            ParsedFeature(
+                feature_id="F-001", name="A",
+                target_files=["pkg/__init__.py", "pkg/shared.py"],
+                estimated_loc=50,
+            ),
+            ParsedFeature(
+                feature_id="F-002", name="B",
+                target_files=["pkg/shared.py"],
+                dependencies=["F-001"], estimated_loc=30,
+            ),
+        ]
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(
+            features, {"F-002": ["F-001"]}, file_ownership=None,
+        )
+        # F-001 has shared.py and is first claimer
+        scope_1 = tasks[0]["config"]["context"].get("_file_scope", {})
+        assert scope_1.get("pkg/shared.py") == "shared"
+
+
+# ===================================================================
+# Gate 2a: _split_oversized_tasks tests
+# ===================================================================
+
+
+class TestSplitOversizedTasks:
+    """Tests for PlanIngestionWorkflow._split_oversized_tasks.
+
+    Gate 2a (defense-in-depth Principle 2): structurally enforce
+    max file count per task, even if the PARSE LLM ignored guidance.
+    """
+
+    def test_small_tasks_pass_through(self):
+        """Tasks with ≤3 files are returned unchanged."""
+        tasks = [
+            {
+                "task_id": "PI-001",
+                "title": "Small",
+                "task_type": "task",
+                "story_points": 3,
+                "priority": "high",
+                "labels": ["core"],
+                "depends_on": [],
+                "config": {
+                    "task_description": "Implement small module",
+                    "context": {
+                        "feature_id": "F-001",
+                        "target_files": ["src/a.py", "src/b.py"],
+                        "estimated_loc": 100,
+                    },
+                },
+            }
+        ]
+        result = PlanIngestionWorkflow._split_oversized_tasks(tasks)
+        assert len(result) == 1
+        assert result[0]["task_id"] == "PI-001"
+
+    def test_four_files_split_into_four_tasks(self):
+        """A 4-file task is split into 4 single-file sub-tasks."""
+        tasks = [
+            {
+                "task_id": "PI-001",
+                "title": "Big Feature",
+                "task_type": "task",
+                "story_points": 5,
+                "priority": "high",
+                "labels": ["core"],
+                "depends_on": ["PI-000"],
+                "config": {
+                    "task_description": "Implement big module",
+                    "context": {
+                        "feature_id": "F-001",
+                        "target_files": [
+                            "src/pkg/__init__.py",
+                            "src/pkg/alpha.py",
+                            "src/pkg/beta.py",
+                            "src/pkg/gamma.py",
+                        ],
+                        "estimated_loc": 400,
+                    },
+                },
+            }
+        ]
+        result = PlanIngestionWorkflow._split_oversized_tasks(tasks)
+        assert len(result) == 4
+
+        # Each sub-task has exactly one target file
+        for task in result:
+            ctx = task["config"]["context"]
+            assert len(ctx["target_files"]) == 1
+
+        # __init__.py should be first (sub-task 'a')
+        assert result[0]["task_id"] == "PI-001a"
+        assert result[0]["config"]["context"]["target_files"] == ["src/pkg/__init__.py"]
+
+    def test_init_py_is_first_subtask(self):
+        """__init__.py becomes sub-task 'a' so others can depend on it."""
+        tasks = [
+            {
+                "task_id": "PI-002",
+                "title": "Package",
+                "task_type": "task",
+                "story_points": 5,
+                "priority": "medium",
+                "labels": [],
+                "depends_on": [],
+                "config": {
+                    "task_description": "Build package",
+                    "context": {
+                        "feature_id": "F-002",
+                        "target_files": [
+                            "src/x.py",
+                            "src/__init__.py",
+                            "src/y.py",
+                            "src/z.py",
+                        ],
+                        "estimated_loc": 200,
+                    },
+                },
+            }
+        ]
+        result = PlanIngestionWorkflow._split_oversized_tasks(tasks)
+
+        # __init__.py is first
+        assert "src/__init__.py" in result[0]["config"]["context"]["target_files"][0]
+        init_id = result[0]["task_id"]
+
+        # Other sub-tasks depend on the init sub-task
+        for sub in result[1:]:
+            assert init_id in sub["depends_on"]
+
+    def test_parent_deps_preserved(self):
+        """Sub-tasks inherit the parent task's dependencies."""
+        tasks = [
+            {
+                "task_id": "PI-003",
+                "title": "Dependent Feature",
+                "task_type": "task",
+                "story_points": 5,
+                "priority": "high",
+                "labels": [],
+                "depends_on": ["PI-001", "PI-002"],
+                "config": {
+                    "task_description": "Depends on two others",
+                    "context": {
+                        "feature_id": "F-003",
+                        "target_files": ["a.py", "b.py", "c.py", "d.py"],
+                        "estimated_loc": 100,
+                    },
+                },
+            }
+        ]
+        result = PlanIngestionWorkflow._split_oversized_tasks(tasks)
+        for sub in result:
+            assert "PI-001" in sub["depends_on"]
+            assert "PI-002" in sub["depends_on"]
+
+    def test_split_metadata_present(self):
+        """Sub-tasks have _split_from and _split_index metadata."""
+        tasks = [
+            {
+                "task_id": "PI-004",
+                "title": "Split Me",
+                "task_type": "task",
+                "story_points": 5,
+                "priority": "low",
+                "labels": [],
+                "depends_on": [],
+                "config": {
+                    "task_description": "Should be split",
+                    "context": {
+                        "feature_id": "F-004",
+                        "target_files": ["a.py", "b.py", "c.py", "d.py"],
+                        "estimated_loc": 200,
+                    },
+                },
+            }
+        ]
+        result = PlanIngestionWorkflow._split_oversized_tasks(tasks)
+        for idx, sub in enumerate(result):
+            ctx = sub["config"]["context"]
+            assert ctx["_split_from"] == "PI-004"
+            assert ctx["_split_index"] == idx
+
+    def test_loc_divided_proportionally(self):
+        """Estimated LOC is divided across sub-tasks."""
+        tasks = [
+            {
+                "task_id": "PI-005",
+                "title": "Even Split",
+                "task_type": "task",
+                "story_points": 8,
+                "priority": "high",
+                "labels": [],
+                "depends_on": [],
+                "config": {
+                    "task_description": "400 LOC across 4 files",
+                    "context": {
+                        "feature_id": "F-005",
+                        "target_files": ["a.py", "b.py", "c.py", "d.py"],
+                        "estimated_loc": 400,
+                    },
+                },
+            }
+        ]
+        result = PlanIngestionWorkflow._split_oversized_tasks(tasks)
+        for sub in result:
+            assert sub["config"]["context"]["estimated_loc"] == 100
+
+    def test_custom_max_files(self):
+        """max_files parameter controls split threshold."""
+        tasks = [
+            {
+                "task_id": "PI-006",
+                "title": "Two Files",
+                "task_type": "task",
+                "story_points": 2,
+                "priority": "low",
+                "labels": [],
+                "depends_on": [],
+                "config": {
+                    "task_description": "Two files",
+                    "context": {
+                        "feature_id": "F-006",
+                        "target_files": ["a.py", "b.py"],
+                        "estimated_loc": 50,
+                    },
+                },
+            }
+        ]
+        # With max_files=1, even 2-file tasks get split
+        result = PlanIngestionWorkflow._split_oversized_tasks(tasks, max_files=1)
+        assert len(result) == 2
+
+    def test_mixed_tasks_only_oversized_split(self):
+        """Only tasks exceeding max_files are split; others pass through."""
+        tasks = [
+            {
+                "task_id": "PI-007",
+                "title": "Small",
+                "task_type": "task",
+                "story_points": 1,
+                "priority": "high",
+                "labels": [],
+                "depends_on": [],
+                "config": {
+                    "task_description": "One file",
+                    "context": {
+                        "feature_id": "F-007",
+                        "target_files": ["src/small.py"],
+                        "estimated_loc": 20,
+                    },
+                },
+            },
+            {
+                "task_id": "PI-008",
+                "title": "Big",
+                "task_type": "task",
+                "story_points": 8,
+                "priority": "low",
+                "labels": [],
+                "depends_on": ["PI-007"],
+                "config": {
+                    "task_description": "Four files",
+                    "context": {
+                        "feature_id": "F-008",
+                        "target_files": ["a.py", "b.py", "c.py", "d.py"],
+                        "estimated_loc": 200,
+                    },
+                },
+            },
+        ]
+        result = PlanIngestionWorkflow._split_oversized_tasks(tasks)
+        # PI-007 passes through, PI-008 is split into 4
+        assert len(result) == 5
+        assert result[0]["task_id"] == "PI-007"
+        assert result[1]["task_id"] == "PI-008a"
+
 
 # ---------------------------------------------------------------------------
 # TestEmitPhaseArtisanRoute

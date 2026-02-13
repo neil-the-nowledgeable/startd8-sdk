@@ -311,6 +311,8 @@ export ARTISAN_SEED=/path/to/artisan-context-seed.json
 | `ARTISAN_SEED` | **(Required)** Path to enriched context seed JSON |
 | `ARTISAN_OUTPUT_DIR` | Output directory (default: `seed_dir/artisan-design`) |
 | `ARTISAN_PROJECT_ROOT` | Target project root; inferred from seed if unset (walk up for `pyproject.toml` or `.contextcore.yaml`). Defaults to `.` with a warning for multi-repo setups. |
+| `ARTISAN_RESUME` | Set to `1` to resume from last checkpoint (use with same `--task-filter` as the interrupted run) |
+| `ARTISAN_FORCE_IMPLEMENT` | Set to `1` to ignore cached `generation_results`; always run fresh IMPLEMENT |
 
 **Project-root inference:** When `ARTISAN_PROJECT_ROOT` is unset, the script walks up from the seed's directory until it finds `pyproject.toml` or `.contextcore.yaml`. For multi-repo setups (e.g. SDK generating into wayfinder), set `ARTISAN_PROJECT_ROOT` explicitly.
 
@@ -332,6 +334,7 @@ Full 7-phase workflow runner.
 | `--dry-run` | Simulate without side effects (no LLM calls) |
 | `--dress-rehearsal` | Run real LLM calls through DESIGN; write to staging dir; default stop-after design |
 | `--adopt-prior [PATH]` | Adopt design artifacts from a prior dress-rehearsal/design-only run; auto-detects from `.dress-rehearsal/` if no path given |
+| `--force-implement` | Ignore cached `generation_results`; always run fresh IMPLEMENT (no resume from `.startd8/state/`) |
 | `--design-max-tokens INT` | Override max_output_tokens for design phase (e.g. 8192 to avoid truncation) |
 | `--no-auto-commit` | Disable auto-commit (default: commit each feature's generated code to git after implementation) |
 | `--cost-budget FLOAT` | Maximum total cost in USD |

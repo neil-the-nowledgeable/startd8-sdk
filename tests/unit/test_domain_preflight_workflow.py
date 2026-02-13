@@ -1279,3 +1279,87 @@ class TestEndToEndDomainPreflight:
         assert "scan" in step_names
         assert "classify_check_enrich" in step_names
         assert "enrich" in step_names
+
+
+# ===================================================================
+# Multi-file risk checks (Layer A defense-in-depth)
+# ===================================================================
+
+
+class TestMultiFileChecks:
+    """Tests for DomainPreflightWorkflow._multi_file_checks.
+
+    Layer A detection: fires at seed-enrichment time (before any LLM
+    calls) to surface multi-file generation risks in preflight reports.
+    """
+
+    def test_single_file_no_checks(self):
+        """Single-file tasks produce no multi-file checks."""
+        checks = DomainPreflightWorkflow._multi_file_checks(
+            ["src/pkg/module.py"]
+        )
+        assert checks == []
+
+    def test_empty_files_no_checks(self):
+        """Empty target list produces no checks."""
+        checks = DomainPreflightWorkflow._multi_file_checks([])
+        assert checks == []
+
+    def test_multi_file_split_risk(self):
+        """Two+ target files produce a split-risk warning."""
+        targets = ["src/pkg/__init__.py", "src/pkg/module.py"]
+        checks = DomainPreflightWorkflow._multi_file_checks(targets)
+        names = [c.check_name for c in checks]
+        assert "multi_file_split_risk" in names
+        risk = next(c for c in checks if c.check_name == "multi_file_split_risk")
+        assert risk.status == CheckStatus.WARN
+        assert "2 files" in risk.message
+
+    def test_init_py_warning(self):
+        """__init__.py among targets triggers a dedicated warning."""
+        targets = ["src/pkg/__init__.py", "src/pkg/module.py"]
+        checks = DomainPreflightWorkflow._multi_file_checks(targets)
+        names = [c.check_name for c in checks]
+        assert "init_py_in_multi_file" in names
+        init_check = next(
+            c for c in checks if c.check_name == "init_py_in_multi_file"
+        )
+        assert init_check.status == CheckStatus.WARN
+        assert "__init__.py" in init_check.message
+
+    def test_no_init_py_no_init_warning(self):
+        """Multi-file task without __init__.py omits the init-specific check."""
+        targets = ["src/pkg/foo.py", "src/pkg/bar.py"]
+        checks = DomainPreflightWorkflow._multi_file_checks(targets)
+        names = [c.check_name for c in checks]
+        assert "multi_file_split_risk" in names
+        assert "init_py_in_multi_file" not in names
+
+    def test_high_loc_warning(self):
+        """High estimated LOC on multi-file tasks triggers truncation warning."""
+        targets = ["src/pkg/__init__.py", "src/pkg/module.py"]
+        checks = DomainPreflightWorkflow._multi_file_checks(
+            targets, estimated_loc=300,
+        )
+        names = [c.check_name for c in checks]
+        assert "multi_file_high_loc" in names
+        loc_check = next(
+            c for c in checks if c.check_name == "multi_file_high_loc"
+        )
+        assert "300" in loc_check.message
+
+    def test_low_loc_no_high_loc_warning(self):
+        """Low estimated LOC does not trigger high-LOC check."""
+        targets = ["src/pkg/__init__.py", "src/pkg/module.py"]
+        checks = DomainPreflightWorkflow._multi_file_checks(
+            targets, estimated_loc=100,
+        )
+        names = [c.check_name for c in checks]
+        assert "multi_file_high_loc" not in names
+
+    def test_none_loc_no_high_loc_warning(self):
+        """No estimated_loc (None) does not trigger high-LOC check."""
+        targets = ["src/pkg/__init__.py", "src/pkg/module.py"]
+        checks = DomainPreflightWorkflow._multi_file_checks(targets)
+        names = [c.check_name for c in checks]
+        assert "multi_file_high_loc" not in names

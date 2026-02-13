@@ -95,6 +95,70 @@ WARNING [startd8.providers.registry] Overwriting existing provider: openai
 
 ---
 
+## 6. Multi-File Split Failure (IMPLEMENT Phase)
+
+**Symptom:**
+```
+ERROR Multi-file split failed: drafter output matched ['src/pkg/module.py'] but not ['src/pkg/__init__.py']
+```
+
+**Root cause:** When a task targets multiple files, the LLM drafter must produce a separate fenced code block per file. LLMs commonly omit `__init__.py` (treating it as "just imports") or drop files from high-LOC multi-file tasks due to output truncation.
+
+**Impact:** Missing files cause build failures; downstream tasks that `import` from the package root fail at `REVIEW` or `TEST`.
+
+### Troubleshooting Matrix (Three Questions diagnostic)
+
+| Question | Check | What to look for |
+|----------|-------|------------------|
+| **1. Is the contract complete?** (Plan Ingestion) | `artisan-context-seed.json` → task's `target_files` | Are all required files listed? Is `__init__.py` present? Did PARSE correctly group files? |
+| **2. Was the contract faithfully translated?** (Preflight / DESIGN) | `artisan-context-seed-enriched.json` → `_enrichment.environment_checks` | Do you see `multi_file_split_risk` and `init_py_in_multi_file` warnings? Was `design_calibration.max_output_tokens` sufficient? |
+| **3. Was the translated plan faithfully executed?** (IMPLEMENT) | `generation_results.json` → task entry; `workflow-execution-report.json` | Check `multi_file_split.matched_count` vs `target_count`. Check `_gate3_validation` for missing/stubbed files. |
+
+### Defense-in-depth layers (trace backward from symptom)
+
+```
+IMPLEMENT output incomplete (symptom)
+  └─ Gate 3 (enhanced): _gate3_validation shows missing_on_disk or stubbed_files?
+  │    └─ Downstream stubs? (downstream_stubbed ≠ []) → expected, not a failure
+  │    └─ Real stubs? (stubbed_files ≠ []) → generation failure, investigate below
+  │
+  └─ Smart retry gate: was retry skipped? (all unmatched files are downstream)
+  │    └─ Yes → correct optimization, downstream stubs are pre-created by Gate 2c
+  │    └─ No → retry fired, check Layer 5 below
+  │
+  └─ Layer 5: retry with role hints fired? (check "retry_used" in metadata)
+       └─ Layer 4: extraction heuristic matched __init__.py? (check debug logs)
+            └─ Layer 3: __init__.py constraint was in prompt_constraints?
+                 └─ Layer 2: MULTI_FILE_OUTPUT_FORMAT had verification checklist?
+                      └─ Layer 1: lead spec mentioned all target files?
+                           └─ Gate 2c: design-to-implement reconciliation?
+                           │    └─ Downstream files pre-stubbed on disk?
+                           │    └─ Downstream files excluded from drafter targets?
+                           │    └─ DOWNSTREAM FILE STUBS constraint in prompt?
+                           │
+                           └─ Gate 2b: _multi_file_risk metadata in seed?
+                           │    └─ LOC estimation mismatch detected? (Fix 3)
+                           │
+                           └─ Gate 2a: auto-split oversized tasks (>3 files)?
+                                └─ PARSE prompt: did LLM respect max 3-file guidance?
+
+  Review phase guard:
+  └─ Downstream stubs excluded from review code body?
+  └─ Reviewer NOT penalizing expected stub files?
+```
+
+**Mitigations (by severity):**
+
+| Severity | Action |
+|----------|--------|
+| Quick fix | `ARTISAN_FORCE_IMPLEMENT=1` to retry with all defense layers active |
+| Structural fix | Re-run plan ingestion — oversized tasks (>3 files) are now auto-split by Gate 2a |
+| Manual fix | Edit `artisan-context-seed.json` — split the multi-file task into single-file tasks with dependencies |
+| Prevention | Re-ingest with updated PARSE prompt (now includes file-grouping guidance) |
+| Downstream | Gate 2c auto-detects design-designated downstream files and pre-stubs them — no retry wasted |
+
+---
+
 ## Quick Command Reference
 
 **Dress rehearsal (recommended for proactive issue detection):**
@@ -110,6 +174,20 @@ ARTISAN_SEED=~/Documents/dev/wayfinder/out/manifest-generate-ingestion/artisan-c
 ./scripts/adopt-prior.sh PI-001
 # Or wayfinder convenience wrapper:
 ./scripts/adopt-prior-PI-001.sh
+```
+
+**Resume a single-feature run after interruption:**
+```bash
+ARTISAN_RESUME=1 ./scripts/adopt-prior.sh PI-001
+# Or with wayfinder wrapper:
+ARTISAN_RESUME=1 ./scripts/adopt-prior-PI-001.sh
+```
+
+**Force fresh IMPLEMENT (ignore cached generation_results):**
+```bash
+ARTISAN_FORCE_IMPLEMENT=1 ./scripts/adopt-prior.sh PI-001
+# Or directly:
+python3 scripts/run_artisan_workflow.py --seed ... --adopt-prior --force-implement --task-filter PI-001
 ```
 
 **Run with OTel disabled (cleaner logs):** Scripts set `STARTD8_OTEL=disabled` automatically.

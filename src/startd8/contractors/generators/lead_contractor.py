@@ -17,6 +17,54 @@ from ..protocols import (
 
 logger = get_logger("startd8.contractors.generators")
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _detect_downstream_files(
+    unmatched_files: List[str],
+    design_doc: str,
+) -> List[str]:
+    """Detect files that the design doc designates as downstream/shared.
+
+    Scans the design document for signals that a file is explicitly NOT
+    meant to be implemented by this task (e.g. "F-002+", "downstream",
+    "shared module", "implemented by later tasks").
+
+    Returns the subset of ``unmatched_files`` that match these patterns.
+    This enables the smart retry gate: if all unmatched files are
+    downstream, we skip the expensive retry and go straight to stub,
+    saving ~50% LLM cost.
+    """
+    if not design_doc or not unmatched_files:
+        return []
+
+    import re
+
+    # Patterns that indicate a file is downstream/shared
+    _DOWNSTREAM_PATTERNS = [
+        r"F-\d+\+",           # "F-002+" style references
+        r"downstream\s+task",
+        r"later\s+task",
+        r"shared,?\s+F-",     # "shared, F-002+"
+        r"implement(?:ed)?\s+by\s+(?:downstream|later|other)",
+        r"stub\s+(?:for|until)",
+    ]
+    _compiled = [re.compile(p, re.IGNORECASE) for p in _DOWNSTREAM_PATTERNS]
+
+    downstream: List[str] = []
+    for filepath in unmatched_files:
+        filename = filepath.rsplit("/", 1)[-1]
+        # Find lines mentioning this file in the design doc
+        for line in design_doc.split("\n"):
+            if filename in line:
+                if any(pat.search(line) for pat in _compiled):
+                    downstream.append(filepath)
+                    break
+
+    return downstream
+
 
 class LeadContractorCodeGenerator:
     """
@@ -156,7 +204,30 @@ class LeadContractorCodeGenerator:
                 else:
                     # Retry once with explicit feedback about missing files
                     unmatched = [f for f in target_files if f not in per_file_code]
-                    if unmatched and "_multi_file_retry" not in context:
+
+                    # ── Smart retry gate ──────────────────────────────────
+                    # Check if ALL unmatched files are downstream/shared stubs
+                    # (design doc says they belong to later tasks).  If so,
+                    # skip the expensive retry — the drafter intentionally
+                    # omitted them, and retrying won't change its mind.
+                    # Go straight to stub fallback, saving ~50% LLM cost.
+                    downstream_files = _detect_downstream_files(
+                        unmatched, context.get("design_document") or "",
+                    )
+                    all_unmatched_are_downstream = (
+                        len(downstream_files) > 0
+                        and set(unmatched) == set(downstream_files)
+                    )
+
+                    if all_unmatched_are_downstream:
+                        logger.info(
+                            "Smart retry gate: all %d unmatched files are "
+                            "downstream/shared (%s). Skipping retry — "
+                            "stub fallback will handle them.",
+                            len(downstream_files),
+                            downstream_files,
+                        )
+                    elif unmatched and "_multi_file_retry" not in context:
                         logger.warning(
                             "Multi-file split failed (missing %s). Retrying once with explicit feedback.",
                             unmatched,
@@ -164,15 +235,41 @@ class LeadContractorCodeGenerator:
                         retry_context = dict(context)
                         retry_context["_multi_file_retry"] = True
                         unmatched_list = "\n".join(f"  - {f}" for f in unmatched)
+                        # Layer 5 (defense-in-depth): per-file role hints
+                        # so the retry feedback tells the model *what* each
+                        # missing file should contain, not just that it's missing.
+                        role_hints = []
+                        for missing in unmatched:
+                            if missing.endswith("__init__.py"):
+                                role_hints.append(
+                                    f"  - `{missing}` — package root: must contain "
+                                    f"imports from sibling modules, __all__ list, "
+                                    f"and any package-level docstring."
+                                )
+                            else:
+                                role_hints.append(
+                                    f"  - `{missing}` — implementation module: "
+                                    f"must contain the main logic as described "
+                                    f"in the spec."
+                                )
+                        role_hint_text = "\n".join(role_hints)
+
                         retry_context["_multi_file_retry_initial_feedback"] = (
                             f"CRITICAL: Your previous attempt was missing code blocks for:\n"
                             f"{unmatched_list}\n\n"
+                            f"Expected role of each missing file:\n"
+                            f"{role_hint_text}\n\n"
                             f"You MUST produce a SEPARATE fenced code block for EVERY target file.\n"
                             f"Format: the first line inside each code block MUST be a comment "
                             f"with the full file path. Example:\n\n"
                             f"    ```python\n"
+                            f"    # src/package/__init__.py\n"
+                            f"    from .module import Foo\n"
+                            f"    __all__ = ['Foo']\n"
+                            f"    ```\n\n"
+                            f"    ```python\n"
                             f"    # src/package/module.py\n"
-                            f"    ...\n"
+                            f"    class Foo: ...\n"
                             f"    ```\n\n"
                             f"If a missing file is a shared module or interface stub, produce "
                             f"a minimal placeholder with imports, docstring, and empty "
@@ -187,15 +284,15 @@ class LeadContractorCodeGenerator:
                             target_files=target_files,
                         )
 
-                    # Defense-in-depth: after retry exhausted, generate stubs
-                    # for unmatched files rather than failing the entire task.
-                    # Stubs are minimal placeholders that downstream tasks or
-                    # manual edits can flesh out.
+                    # Defense-in-depth: after retry exhausted (or skipped via
+                    # smart retry gate), generate stubs for unmatched files
+                    # rather than failing the entire task.
                     logger.warning(
-                        "Multi-file split still incomplete after retry for %s. "
-                        "Generating stubs for unmatched files: %s",
+                        "Multi-file split incomplete for %s. "
+                        "Generating stubs for unmatched files: %s%s",
                         context.get("task_id", "unknown"),
                         unmatched,
+                        " (downstream — retry skipped)" if all_unmatched_are_downstream else "",
                     )
                     per_file_code = extract_multi_file_code(
                         final_implementation, target_files, stub_missing=True
@@ -212,7 +309,9 @@ class LeadContractorCodeGenerator:
                         )
 
             for target_file in target_files:
-                output_path = self.output_dir / Path(target_file).name
+                # Use full target path (e.g. src/pkg/__init__.py), not just filename.
+                # Defense Layer 1: correct path resolution prevents project-root writes.
+                output_path = self.output_dir / target_file
                 output_path.parent.mkdir(parents=True, exist_ok=True)
                 content = per_file_code.get(target_file, final_implementation)
                 output_path.write_text(content, encoding="utf-8")

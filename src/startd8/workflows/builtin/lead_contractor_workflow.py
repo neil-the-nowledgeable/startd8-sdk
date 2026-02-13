@@ -166,6 +166,10 @@ for each file listed below. Each block MUST have the file path as the first line
 REQUIRED files (you MUST produce ALL of these — do not skip any):
 {file_list}
 
+ORDERING: Produce __init__.py FIRST (if listed). It is the package root — other files
+import from it or are imported by it. Even a minimal __init__.py (imports + __all__) is
+required; omission causes the build to fail.
+
 Use this exact format for EACH file:
 ```
 # <full path to file>
@@ -184,23 +188,40 @@ __all__ = ["Foo"]
 class Foo: ...
 ```
 
-CRITICAL:
-- Include __init__.py if it is in the list — it is the package root and must not be omitted.
+## VERIFICATION CHECKLIST
+Before submitting, count your code blocks and verify each required file has one:
+{file_checklist}
+
+If any file above does not have a matching code block, add it now.
+
+CRITICAL RULES:
+- __init__.py MUST be its own code block — even if it only contains imports and __all__.
 - Every target file MUST have its own distinct block. No exceptions.
 - Do NOT combine multiple files into a single block.
-- Do NOT skip any file — missing blocks will cause the implementation to fail."""
+- Do NOT skip any file — missing blocks will cause the implementation to FAIL."""
 
 
 def _build_output_format(target_files: Optional[List[str]] = None) -> str:
     """Build the output format section for the draft prompt.
 
     Single-file tasks get a simple single-block format.
-    Multi-file tasks get explicit per-file fencing instructions.
+    Multi-file tasks get explicit per-file fencing instructions with a
+    verification checklist (Layer 2 defense-in-depth).
     """
     if not target_files or len(target_files) <= 1:
         return SINGLE_FILE_OUTPUT_FORMAT
-    file_list = "\n".join(f"- `{f}`" for f in target_files)
-    return MULTI_FILE_OUTPUT_FORMAT.format(file_list=file_list)
+
+    # Order __init__.py first so the model produces it before other files
+    ordered = sorted(
+        target_files,
+        key=lambda f: (0 if f.endswith("__init__.py") else 1, f),
+    )
+    file_list = "\n".join(f"- `{f}`" for f in ordered)
+    file_checklist = "\n".join(f"- [ ] `{f}` — has its own ``` code block" for f in ordered)
+    return MULTI_FILE_OUTPUT_FORMAT.format(
+        file_list=file_list,
+        file_checklist=file_checklist,
+    )
 
 
 REVIEW_PROMPT_TEMPLATE = """You are reviewing an implementation as the Lead Contractor.
@@ -818,6 +839,24 @@ class LeadContractorWorkflow(WorkflowBase):
         context_str = json.dumps(context, indent=2) if context else "No additional context provided."
         if output_format:
             context_str += f"\n\nExpected Output Format:\n{output_format}"
+
+        # Layer 1 (defense-in-depth): inject per-file manifest into the spec
+        # so the lead explicitly describes what each file should contain.
+        # This makes the drafter's job unambiguous — each file has a role.
+        target_files = context.get("target_files")
+        if target_files and len(target_files) > 1:
+            file_manifest = "\n".join(f"  - `{f}`" for f in target_files)
+            context_str = (
+                f"## Required Output Files\n"
+                f"This task produces MULTIPLE files. Your spec MUST describe "
+                f"the role and expected contents of EACH file:\n"
+                f"{file_manifest}\n\n"
+                f"In your Code Structure section, list each file separately "
+                f"with its classes/functions. The implementer will produce a "
+                f"separate code block per file — if the spec is unclear about "
+                f"what goes in a file, the implementer may omit it.\n\n"
+                + context_str
+            )
 
         prompt = SPEC_PROMPT_TEMPLATE.format(
             task_description=task_description,

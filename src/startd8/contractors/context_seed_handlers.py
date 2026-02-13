@@ -121,6 +121,8 @@ class HandlerConfig:
         development_timeout_seconds: Timeout for the DevelopmentPhase thread (None = no limit).
         scaffold_test_first: For artifact generator tasks, ensure test scaffolding exists
             before implementation (Item 12). Default True.
+        force_implement: If True, ignore cached generation_results and always run fresh
+            IMPLEMENT (no resume from .startd8/state/generation_results.json).
     """
 
     lead_agent: str = REVIEW_MODEL_CLAUDE_OPUS.agent_spec
@@ -138,6 +140,7 @@ class HandlerConfig:
     development_timeout_seconds: Optional[float] = None
     auto_commit: bool = True
     scaffold_test_first: bool = True
+    force_implement: bool = False
 
     @classmethod
     def from_config(
@@ -212,6 +215,10 @@ class SeedTask:
     design_doc_sections: list[str]
     # Artifact types this task generates (e.g. dashboard, prometheus_rule, servicemonitor)
     artifact_types_addressed: list[str]
+    # File scope from plan ingestion (defense-in-depth Principle 1):
+    # Maps target_file → "primary" | "shared" | "stub".
+    # When present, artisan uses this instead of re-deriving from design docs.
+    file_scope: dict[str, str]
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> SeedTask:
@@ -250,6 +257,7 @@ class SeedTask:
             existing_content_hash=enrichment.get("existing_content_hash"),
             design_doc_sections=context.get("design_doc_sections", []),
             artifact_types_addressed=context.get("artifact_types_addressed", []),
+            file_scope=context.get("_file_scope", {}),
         )
         if not task.task_id:
             raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
@@ -1136,6 +1144,17 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     f"overlapping files: {', '.join(overlapping)}"
                 )
 
+            # File scope from seed — contract-level classification
+            if task.file_scope:
+                non_primary = {
+                    f: s for f, s in task.file_scope.items()
+                    if s != "primary"
+                }
+                if non_primary:
+                    risk_flags.append(
+                        f"file_scope: {non_primary} (Gate 2c will pre-stub)"
+                    )
+
             if risk_flags:
                 logger.warning(
                     "IMPLEMENT pre-validation: task %s (%d files) has elevated "
@@ -1151,6 +1170,121 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     task.task_id,
                     len(task.target_files),
                 )
+
+    @staticmethod
+    def _validate_generation_completeness(
+        tasks: list[SeedTask],
+        generation_results: dict[str, "GenerationResult"],
+        project_root: Path,
+        downstream_map: dict[str, list[str]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Gate 3: post-IMPLEMENT validation of multi-file split completeness.
+
+        Per the Export Pipeline Analysis Guide's defense-in-depth Principle 1
+        (validate at every boundary): verifies that multi-file tasks actually
+        produced all their target files on disk.
+
+        Returns a list of validation findings (one per multi-file task that
+        has issues).  Empty list means all multi-file tasks are complete.
+
+        This is the last gate before output is accepted — it catches cases
+        where Gate 2 warnings were present but the drafter still omitted
+        files despite all mitigation layers.
+
+        Enhancement (defense-in-depth): ``downstream_map`` from Gate 2c
+        allows distinguishing **downstream stubs** (expected, pre-created)
+        from **generation failure stubs** (unexpected, needs attention).
+        """
+        findings: list[dict[str, Any]] = []
+        downstream_map = downstream_map or {}
+
+        for task in tasks:
+            if len(task.target_files) <= 1:
+                continue
+
+            gr = generation_results.get(task.task_id)
+            if gr is None:
+                continue  # Task wasn't processed (dep-blocked, skipped, etc.)
+
+            task_downstream = set(downstream_map.get(task.task_id, []))
+
+            # Check which target files actually exist on disk
+            generated_paths = {str(p) for p in (gr.generated_files or [])}
+            missing_on_disk: list[str] = []
+            stubbed: list[str] = []
+            downstream_stubbed: list[str] = []
+
+            for tf in task.target_files:
+                full_path = project_root / tf
+                if not full_path.exists():
+                    if tf in task_downstream:
+                        # Downstream file not on disk — unexpected since
+                        # Gate 2c should have pre-created it.
+                        missing_on_disk.append(tf)
+                    else:
+                        missing_on_disk.append(tf)
+                elif full_path.exists():
+                    # Check for stub sentinel (auto-generated placeholder)
+                    try:
+                        content = full_path.read_text(encoding="utf-8")
+                        is_stub = (
+                            "STUB_PLACEHOLDER" in content
+                            or "# AUTO-STUB" in content
+                            or "# STARTD8_AUTO_STUB" in content
+                            or "downstream — will be implemented by later tasks" in content
+                        )
+                        if is_stub:
+                            if tf in task_downstream:
+                                downstream_stubbed.append(tf)
+                            else:
+                                stubbed.append(tf)
+                    except Exception:
+                        pass
+
+            # Only report as issues if there are true failures (not downstream)
+            has_real_issues = bool(missing_on_disk or stubbed)
+
+            if has_real_issues or downstream_stubbed:
+                finding: dict[str, Any] = {
+                    "task_id": task.task_id,
+                    "target_file_count": len(task.target_files),
+                    "target_files": task.target_files,
+                    "missing_on_disk": missing_on_disk,
+                    "stubbed_files": stubbed,
+                    "downstream_stubbed": downstream_stubbed,
+                    "generation_success": gr.success,
+                    "has_real_issues": has_real_issues,
+                }
+                findings.append(finding)
+
+                if has_real_issues:
+                    level = "ERROR" if missing_on_disk else "WARN"
+                    logger.warning(
+                        "Gate 3 [%s]: task %s multi-file split incomplete — "
+                        "%d/%d files verified. Missing: %s. Stubbed: %s",
+                        level,
+                        task.task_id,
+                        len(task.target_files) - len(missing_on_disk) - len(stubbed),
+                        len(task.target_files),
+                        missing_on_disk or "(none)",
+                        stubbed or "(none)",
+                    )
+                if downstream_stubbed:
+                    logger.info(
+                        "Gate 3 [OK/downstream]: task %s — %d file(s) are "
+                        "expected downstream stubs (pre-created by Gate 2c): %s",
+                        task.task_id,
+                        len(downstream_stubbed),
+                        downstream_stubbed,
+                    )
+            else:
+                logger.info(
+                    "Gate 3 [OK]: task %s — all %d target files verified on disk",
+                    task.task_id,
+                    len(task.target_files),
+                )
+
+        return findings
 
     @staticmethod
     def _ensure_test_scaffolding_for_artifact_tasks(
@@ -1203,11 +1337,141 @@ class Test{class_name}:
             )
 
     @staticmethod
+    def _reconcile_design_downstream(
+        tasks: list[SeedTask],
+        design_results: dict[str, Any],
+        project_root: Path,
+    ) -> dict[str, list[str]]:
+        """Gate 2c: Reconcile design doc downstream designations with target_files.
+
+        Uses a two-layer detection strategy (defense-in-depth Principle 1):
+
+        **Layer 1 — Contract-level (seed ``_file_scope``):**
+        Plan ingestion already classified files as "primary", "shared", or
+        "stub" using ContextCore export's ``file_ownership`` and cross-feature
+        analysis.  When ``_file_scope`` is present, we trust it as the
+        authoritative source — it represents the contract answer to
+        "Is the contract complete?" (Principle 6, Question 1).
+
+        **Layer 2 — Runtime fallback (design doc parsing):**
+        When ``_file_scope`` is absent (older seeds, manual seeds), falls
+        back to scanning the design doc for downstream signals (e.g.
+        "F-002+", "implemented by later tasks").
+
+        For downstream/stub files:
+        1. **Pre-creates a stub** on disk so downstream tasks have a valid
+           import target immediately.
+        2. **Returns a mapping** task_id → [downstream_files] so callers can
+           shrink the drafter's target list and annotate metadata.
+
+        Args:
+            tasks: Parsed seed tasks from the PLAN phase.
+            design_results: Per-task design results from the DESIGN phase.
+            project_root: Root of the project for writing pre-stubs.
+
+        Returns:
+            Dict mapping task_id → list of downstream file paths that were
+            pre-stubbed. Empty dict if no downstream files found.
+        """
+        from startd8.contractors.generators.lead_contractor import (
+            _detect_downstream_files,
+        )
+        from startd8.utils.code_extraction import STUB_SENTINEL
+
+        downstream_map: dict[str, list[str]] = {}
+
+        for task in tasks:
+            if len(task.target_files) < 2:
+                continue
+
+            downstream: list[str] = []
+
+            # ── Layer 1: contract-level file scope from seed ──────────
+            # This is the authoritative source when available.
+            if task.file_scope:
+                downstream = [
+                    f for f in task.target_files
+                    if task.file_scope.get(f) in ("stub", "shared")
+                ]
+                if downstream:
+                    logger.info(
+                        "Gate 2c [contract]: task %s has %d non-primary files "
+                        "from seed _file_scope: %s",
+                        task.task_id, len(downstream),
+                        {f: task.file_scope[f] for f in downstream},
+                    )
+
+            # ── Layer 2: runtime fallback — parse design doc ──────────
+            # Only fall through when file_scope is absent (older/manual seeds).
+            # If file_scope exists, it's authoritative even if all files are
+            # "primary" — that means the contract says to implement everything.
+            if not downstream and not task.file_scope:
+                task_design = design_results.get(task.task_id, {})
+                if task_design.get("status") in ("designed", "adopted"):
+                    design_doc = task_design.get("design_document", "")
+                    if design_doc:
+                        downstream = _detect_downstream_files(
+                            task.target_files, design_doc,
+                        )
+                        if downstream:
+                            logger.info(
+                                "Gate 2c [runtime]: task %s has %d downstream "
+                                "files from design doc parsing: %s",
+                                task.task_id, len(downstream), downstream,
+                            )
+
+            if not downstream:
+                continue
+
+            # Safety: never remove ALL files — at least one must remain for
+            # the drafter to implement.
+            if len(downstream) >= len(task.target_files):
+                logger.warning(
+                    "Gate 2c: all %d target files for %s flagged as downstream "
+                    "— keeping all to avoid empty task. Files: %s",
+                    len(task.target_files), task.task_id, downstream,
+                )
+                continue
+
+            # Pre-create stubs on disk for downstream files
+            for fpath in downstream:
+                abs_path = project_root / fpath
+                abs_path.parent.mkdir(parents=True, exist_ok=True)
+                if not abs_path.exists():
+                    # Generate a meaningful stub based on file type
+                    module_name = abs_path.stem
+                    if module_name == "__init__":
+                        stub_content = (
+                            f'"""{abs_path.parent.name} package."""\n'
+                            f"{STUB_SENTINEL}  # downstream — will be implemented by later tasks\n"
+                        )
+                    else:
+                        stub_content = (
+                            f'"""{module_name} module — stub for downstream implementation."""\n'
+                            f"{STUB_SENTINEL}  # downstream — will be implemented by later tasks\n"
+                        )
+                    abs_path.write_text(stub_content, encoding="utf-8")
+                    logger.info(
+                        "Gate 2c: pre-stubbed downstream file %s for task %s",
+                        fpath, task.task_id,
+                    )
+
+            downstream_map[task.task_id] = downstream
+            logger.info(
+                "Gate 2c: task %s has %d downstream files (pre-stubbed): %s. "
+                "These will be excluded from drafter targets.",
+                task.task_id, len(downstream), downstream,
+            )
+
+        return downstream_map
+
+    @staticmethod
     def _tasks_to_chunks(
         tasks: list[SeedTask],
         max_retries: int = 2,
         design_results: dict[str, Any] | None = None,
         calibration_map: dict[str, dict[str, Any]] | None = None,
+        downstream_map: dict[str, list[str]] | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -1219,6 +1483,11 @@ class Test{class_name}:
                 raw design document text to inject into implementation prompts.
             calibration_map: Per-task calibration (design_calibration) with
                 optional implement_max_output_tokens for per-task token caps.
+            downstream_map: Gate 2c output — maps task_id → list of files
+                that were pre-stubbed as downstream.  These are excluded
+                from the drafter's ``file_targets`` and annotated in
+                chunk metadata so retry/review layers can distinguish
+                expected stubs from generation failures.
 
         Returns:
             Tuple of (chunks, skipped_reports). ``skipped_reports`` contains
@@ -1229,6 +1498,7 @@ class Test{class_name}:
         chunks: list[DevelopmentChunk] = []
         skipped: list[dict[str, Any]] = []
         design_results = design_results or {}
+        downstream_map = downstream_map or {}
 
         env_blocked_ids: set[str] = set()
         for task in tasks:
@@ -1274,6 +1544,107 @@ class Test{class_name}:
             task_cal = (calibration_map or {}).get(task.task_id, {})
             max_output_tokens = task_cal.get("implement_max_output_tokens")
 
+            # Initialize env_checks early so LOC mismatch and multi-file
+            # checks can both append to it.
+            env_checks = list(task.environment_checks)
+
+            # ── Fix 3: LOC estimation mismatch detection ─────────────────
+            # If the design doc exists, estimate its implied LOC from code
+            # blocks and compare against the seed's estimated_loc.  A large
+            # mismatch (>3x) means the depth tier was likely too low, which
+            # causes truncation, incomplete output, and wasted retries.
+            if design_doc_text and task.estimated_loc:
+                _code_line_count = sum(
+                    1 for line in design_doc_text.split("\n")
+                    if line.strip()
+                    and not line.strip().startswith("#")
+                    and not line.strip().startswith("```")
+                )
+                # Rough heuristic: design doc code blocks ≈ 60% of total
+                # lines are actual code.  Compare against seed estimate.
+                _implied_loc = int(_code_line_count * 0.6)
+                if _implied_loc > task.estimated_loc * 3:
+                    env_checks.append({
+                        "check_name": "loc_estimation_mismatch",
+                        "status": "warn",
+                        "message": (
+                            f"Design doc implies ~{_implied_loc} LOC but seed "
+                            f"estimates {task.estimated_loc} LOC (>{3}x mismatch)"
+                        ),
+                        "detail": (
+                            f"The design document for {task.task_id} contains "
+                            f"~{_code_line_count} non-empty lines, implying "
+                            f"~{_implied_loc} LOC of implementation. The seed "
+                            f"estimated {task.estimated_loc} LOC, which placed "
+                            f"this task in the '{task_cal.get('depth_tier', 'standard')}' "
+                            f"depth tier. Consider re-calibrating with a higher "
+                            f"estimated_loc or using --design-max-tokens to "
+                            f"increase the output token budget."
+                        ),
+                    })
+                    logger.warning(
+                        "LOC mismatch for task %s: design implies ~%d LOC, "
+                        "seed estimates %d LOC (depth_tier=%s). "
+                        "Output may be truncated or incomplete.",
+                        task.task_id,
+                        _implied_loc,
+                        task.estimated_loc,
+                        task_cal.get("depth_tier", "standard"),
+                    )
+
+            # ── Multi-file preflight checks ──────────────────────────────
+            # Surface risk signals as environment checks so they appear in
+            # preflight reports.  These are task-level (not per-file) checks
+            # derived from real-world failure patterns (PI-001 post-mortem).
+            if len(task.target_files) > 1:
+                env_checks.append({
+                    "check_name": "multi_file_split_risk",
+                    "status": "warn",
+                    "message": (
+                        f"Task targets {len(task.target_files)} files — "
+                        f"LLM may omit some code blocks"
+                    ),
+                    "detail": (
+                        f"Target files: {', '.join(task.target_files)}. "
+                        f"Multi-file tasks have higher risk of incomplete output. "
+                        f"Defense layers: prompt checklist, __init__.py constraint, "
+                        f"content-heuristic extraction, retry with role hints, "
+                        f"stub fallback."
+                    ),
+                })
+                init_files = [
+                    f for f in task.target_files if f.endswith("__init__.py")
+                ]
+                if init_files:
+                    env_checks.append({
+                        "check_name": "init_py_in_multi_file",
+                        "status": "warn",
+                        "message": (
+                            f"__init__.py among {len(task.target_files)} targets — "
+                            f"commonly skipped by LLM drafters"
+                        ),
+                        "detail": (
+                            f"Files: {', '.join(init_files)}. "
+                            f"Models treat __init__.py as optional because it's "
+                            f"'just imports'. Dedicated constraints and extraction "
+                            f"heuristics are active."
+                        ),
+                    })
+                # High-LOC multi-file: truncation risk compounds with split risk
+                if task.estimated_loc and task.estimated_loc > 200:
+                    env_checks.append({
+                        "check_name": "multi_file_high_loc",
+                        "status": "warn",
+                        "message": (
+                            f"Multi-file task with {task.estimated_loc} estimated LOC — "
+                            f"truncation may compound split failure"
+                        ),
+                        "detail": (
+                            "Consider splitting into single-file tasks, or increase "
+                            "implement_max_output_tokens in design_calibration."
+                        ),
+                    })
+
             # Multi-file format constraint: ensure LLM produces distinct blocks per file
             prompt_constraints = list(task.prompt_constraints)
             if len(task.target_files) > 1:
@@ -1289,12 +1660,61 @@ class Test{class_name}:
                     f"Every target file MUST have its own code block — omitting any "
                     f"file will cause the build to fail."
                 )
+                # Layer 3 (defense-in-depth): dedicated __init__.py constraint.
+                # Models commonly skip __init__.py because it's "just imports".
+                # This makes the requirement explicit and impossible to miss.
+                init_files = [f for f in task.target_files if f.endswith("__init__.py")]
+                if init_files:
+                    init_list = ", ".join(init_files)
+                    prompt_constraints.append(
+                        f"PACKAGE __init__.py REQUIRED — {init_list} MUST have "
+                        f"its own separate code block. Even a minimal file with "
+                        f"imports and __all__ is required. The build will FAIL "
+                        f"if any __init__.py is missing its own block."
+                    )
+
+                # ── Downstream file detection (Fix 2) ────────────────────
+                # If the design doc says a file is for downstream tasks,
+                # tell the drafter explicitly to produce a minimal stub for
+                # it.  This prevents the drafter from omitting it entirely
+                # (thinking "that's someone else's job") and avoids the
+                # expensive retry that won't change its mind.
+                from startd8.contractors.generators.lead_contractor import (
+                    _detect_downstream_files,
+                )
+                downstream = _detect_downstream_files(
+                    task.target_files, design_doc_text or "",
+                )
+                if downstream:
+                    ds_list = ", ".join(downstream)
+                    prompt_constraints.append(
+                        f"DOWNSTREAM FILE STUBS — the following files are marked "
+                        f"as shared/downstream in the design doc: {ds_list}. "
+                        f"You MUST still produce a code block for each one, but "
+                        f"it can be a MINIMAL stub: module docstring, imports, "
+                        f"empty __all__, and placeholder functions/classes. "
+                        f"A 5-line stub is acceptable — omitting the file is NOT."
+                    )
+                    logger.info(
+                        "IMPLEMENT: detected %d downstream files for task %s: %s",
+                        len(downstream), task.task_id, downstream,
+                    )
+
+            # ── Gate 2c: shrink file_targets for downstream files ────────
+            # If Gate 2c pre-stubbed some files, remove them from the
+            # drafter's target list so it only implements files it's supposed
+            # to.  Downstream files are already on disk as stubs.
+            task_downstream = downstream_map.get(task.task_id, [])
+            effective_targets = [
+                f for f in task.target_files
+                if f not in task_downstream
+            ] if task_downstream else task.target_files
 
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
                 dependencies=list(task.depends_on),
-                file_targets=task.target_files,
+                file_targets=effective_targets,
                 implementation_prompt=task.description,
                 test_commands=[],  # Post-gen validation via DomainChecklist
                 max_retries=max_retries,
@@ -1303,12 +1723,14 @@ class Test{class_name}:
                     "domain": task.domain,
                     "estimated_loc": task.estimated_loc,
                     "prompt_constraints": prompt_constraints,
-                    "environment_checks": task.environment_checks,
+                    "environment_checks": env_checks,
                     "post_generation_validators": task.post_generation_validators,
                     "title": task.title,
                     "design_document": design_doc_text,
                     "max_output_tokens": max_output_tokens,
                     "artifact_types_addressed": task.artifact_types_addressed,
+                    "downstream_files": task_downstream,
+                    "original_target_files": task.target_files if task_downstream else None,
                 },
             ))
 
@@ -1553,6 +1975,7 @@ class Test{class_name}:
         )
 
         # --- Resume check: load prior generation results if available ---
+        # Skip resume when force_implement is set (ignore cache, always run fresh).
         results_path = project_root / ".startd8" / "state" / "generation_results.json"
         # Backward compat: check legacy location
         if not results_path.exists():
@@ -1560,7 +1983,11 @@ class Test{class_name}:
             if _legacy.exists():
                 results_path = _legacy
         resumed = False
-        if results_path.exists() and not dry_run:
+        if (
+            results_path.exists()
+            and not dry_run
+            and not self.config.force_implement
+        ):
             try:
                 with open(results_path) as f:
                     saved = json.load(f)
@@ -1576,12 +2003,39 @@ class Test{class_name}:
                         iterations=data.get("iterations", 0),
                         model=data.get("model", "unknown"),
                     )
-                logger.info(
-                    "IMPLEMENT --resume: loaded %d generation results from %s",
-                    len(generation_results), results_path,
-                )
 
-                # Reconstruct output dict from resumed results
+                # Defense Layer 2: validate cached paths match task.target_files.
+                # Reject resume if any task has wrong paths (e.g. project_root/__init__.py
+                # instead of project_root/src/pkg/__init__.py).
+                task_map = {t.task_id: t for t in tasks}
+                invalid_tasks: list[str] = []
+                for tid, gr in generation_results.items():
+                    task = task_map.get(tid)
+                    if task is None or not gr.generated_files:
+                        continue
+                    expected = {
+                        str((project_root / tf).resolve())
+                        for tf in task.target_files
+                    }
+                    actual = {str(Path(p).resolve()) for p in gr.generated_files}
+                    if actual != expected:
+                        invalid_tasks.append(
+                            f"{tid} (expected {sorted(expected)}, got {sorted(actual)})"
+                        )
+                if invalid_tasks:
+                    logger.warning(
+                        "IMPLEMENT --resume: path mismatch for %s — invalidating cache, re-running",
+                        invalid_tasks,
+                    )
+                    generation_results = {}
+                    # Do not resume — fall through to fresh IMPLEMENT
+                else:
+                    logger.info(
+                        "IMPLEMENT --resume: loaded %d generation results from %s",
+                        len(generation_results), results_path,
+                    )
+
+                # Reconstruct output dict from resumed results (only if we kept cache)
                 total_cost = sum(r.cost_usd for r in generation_results.values())
                 domain_tasks: dict[str, list[str]] = defaultdict(list)
                 for task in tasks:
@@ -1626,7 +2080,8 @@ class Test{class_name}:
                         for tid, r in generation_results.items()
                     },
                 }
-                resumed = True
+                # Only resume when we have valid cached results (path validation passed)
+                resumed = len(generation_results) > 0
             except (json.JSONDecodeError, KeyError, TypeError) as exc:
                 logger.warning(
                     "IMPLEMENT --resume: could not load saved generation results: %s — re-running",
@@ -1644,11 +2099,20 @@ class Test{class_name}:
             # Inject design documents from the DESIGN phase into chunk metadata
             design_results = context.get("design_results", {})
             calibration_map = context.get("design_calibration", {})
+
+            # Gate 2c: Reconcile design doc downstream designations.
+            # Pre-stubs downstream files on disk and returns a mapping so
+            # _tasks_to_chunks can exclude them from drafter targets.
+            downstream_map = self._reconcile_design_downstream(
+                tasks, design_results, project_root,
+            )
+
             chunks, skipped_reports = self._tasks_to_chunks(
                 tasks,
                 max_retries=2,
                 design_results=design_results,
                 calibration_map=calibration_map,
+                downstream_map=downstream_map,
             )
 
             if not chunks:
@@ -1734,6 +2198,18 @@ class Test{class_name}:
                 dev_result, chunks, tasks, skipped_reports,
             )
 
+            # ── Gate 3: post-IMPLEMENT multi-file split validation ────
+            # Per defense-in-depth Principle 1 (validate at every
+            # boundary): verify that every multi-file task actually
+            # produced all its target files.  This is the last gate
+            # before output is accepted.
+            gate3 = self._validate_generation_completeness(
+                tasks, generation_results, project_root,
+                downstream_map=downstream_map,
+            )
+            if gate3:
+                output["_gate3_validation"] = gate3
+
             # Persist generation_results to disk for crash recovery
             # Always write to the canonical .startd8/state/ location
             save_path = project_root / ".startd8" / "state" / "generation_results.json"
@@ -1762,6 +2238,10 @@ class Test{class_name}:
 
         context["implementation"] = output
         context["generation_results"] = generation_results
+        # Propagate downstream_map to REVIEW phase so it can distinguish
+        # expected downstream stubs from generation failures.
+        if downstream_map:
+            context["_downstream_map"] = downstream_map
         duration = time.monotonic() - start
 
         logger.info(
@@ -2474,6 +2954,10 @@ PASS if score >= {pass_threshold} and no blocking issues.
         test_plan = test_results_ctx.get("test_plan", [])
         test_by_task = {t["task_id"]: t for t in test_plan if isinstance(t, dict)}
 
+        # Gate 2c downstream map — used to exclude downstream stubs from
+        # review scoring so they don't unfairly penalize the task.
+        downstream_map: dict[str, list[str]] = context.get("_downstream_map", {})
+
         logger.info("REVIEW phase: reviewing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
         review_items: list[dict[str, Any]] = []
@@ -2526,15 +3010,39 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 })
                 continue
 
-            # Read generated code for review
+            # Read generated code for review.
+            # Exclude downstream stub files (Gate 2c) from the review body
+            # so the reviewer doesn't penalize minimal placeholders that are
+            # intentionally deferred to later tasks.
+            task_downstream = set(downstream_map.get(task.task_id, []))
             code_parts = []
+            excluded_downstream = []
             for fpath in gen_result.generated_files:
                 try:
-                    if fpath.exists():
-                        content = fpath.read_text(encoding="utf-8")
-                        code_parts.append(f"# File: {fpath.name}\n{content}")
+                    if not fpath.exists():
+                        continue
+                    # Check if this file is a downstream stub
+                    rel_path = str(fpath)
+                    is_downstream = any(
+                        rel_path.endswith(ds) for ds in task_downstream
+                    )
+                    if is_downstream:
+                        excluded_downstream.append(fpath.name)
+                        continue
+
+                    content = fpath.read_text(encoding="utf-8")
+                    code_parts.append(f"# File: {fpath.name}\n{content}")
                 except (OSError, UnicodeDecodeError) as exc:
                     logger.warning("REVIEW: could not read %s: %s", fpath, exc)
+            if excluded_downstream:
+                code_parts.append(
+                    f"# NOTE: {len(excluded_downstream)} file(s) excluded from review "
+                    f"(downstream stubs for later tasks): {', '.join(excluded_downstream)}"
+                )
+                logger.info(
+                    "REVIEW: excluded %d downstream stub(s) from review for %s: %s",
+                    len(excluded_downstream), task.task_id, excluded_downstream,
+                )
             generated_code = "\n\n".join(code_parts)
             if not generated_code.strip():
                 review_items.append({
@@ -3002,6 +3510,7 @@ class ContextSeedHandlers:
         development_timeout_seconds: Optional[float] = None,
         auto_commit: Optional[bool] = None,
         scaffold_test_first: Optional[bool] = None,
+        force_implement: Optional[bool] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all seven workflow phases.
@@ -3046,6 +3555,7 @@ class ContextSeedHandlers:
             ("development_timeout_seconds", development_timeout_seconds),
             ("auto_commit", auto_commit),
             ("scaffold_test_first", scaffold_test_first),
+            ("force_implement", force_implement),
         ]:
             if val is not None:
                 cli_overrides[name] = val

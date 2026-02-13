@@ -48,6 +48,7 @@ def _make_seed_task(
     prompt_constraints: list[str] | None = None,
     domain: str = "backend",
     artifact_types_addressed: list[str] | None = None,
+    file_scope: dict[str, str] | None = None,
 ) -> SeedTask:
     """Create a SeedTask for testing."""
     return SeedTask(
@@ -71,6 +72,7 @@ def _make_seed_task(
         existing_content_hash=None,
         design_doc_sections=[],
         artifact_types_addressed=artifact_types_addressed or [],
+        file_scope=file_scope or {},
     )
 
 
@@ -818,3 +820,643 @@ class TestWriteGeneratedFilesStubRecovery:
         assert len(written) == 1
         assert (tmp_path / "src" / "only.py").read_text() == code
         assert "_stubbed_files" not in chunk.metadata
+
+
+# ============================================================================
+# Tests: Fix 2 — downstream file constraint injection
+# ============================================================================
+
+
+class TestDownstreamFileConstraint:
+    """Tests for downstream file detection in _tasks_to_chunks.
+
+    Fix 2: When the design doc says a file is for downstream tasks,
+    the prompt should include a DOWNSTREAM FILE STUBS constraint.
+    """
+
+    def test_downstream_file_adds_constraint(self):
+        """Multi-file task with downstream file in design doc gets stub constraint."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/artifact_generators.py",
+            ],
+        )
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": (
+                    "├── __init__.py   ← THIS FILE\n"
+                    "├── artifact_generators.py   ← shared, F-002+\n"
+                ),
+            },
+        }
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            [task], design_results=design_results,
+        )
+        constraints = chunks[0].metadata["prompt_constraints"]
+        downstream_constraints = [
+            c for c in constraints if "DOWNSTREAM FILE STUBS" in c
+        ]
+        assert len(downstream_constraints) == 1
+        assert "artifact_generators.py" in downstream_constraints[0]
+
+    def test_no_downstream_no_constraint(self):
+        """Multi-file task without downstream design doc references: no stub constraint."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/module.py",
+            ],
+        )
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": (
+                    "├── __init__.py   ← package root\n"
+                    "├── module.py     ← core implementation\n"
+                ),
+            },
+        }
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            [task], design_results=design_results,
+        )
+        constraints = chunks[0].metadata["prompt_constraints"]
+        downstream_constraints = [
+            c for c in constraints if "DOWNSTREAM FILE STUBS" in c
+        ]
+        assert len(downstream_constraints) == 0
+
+    def test_single_file_no_downstream_check(self):
+        """Single-file tasks skip downstream detection entirely."""
+        task = _make_seed_task(target_files=["src/module.py"])
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": "module.py — shared, F-002+\n",
+            },
+        }
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            [task], design_results=design_results,
+        )
+        constraints = chunks[0].metadata["prompt_constraints"]
+        downstream_constraints = [
+            c for c in constraints if "DOWNSTREAM" in c
+        ]
+        assert len(downstream_constraints) == 0
+
+
+# ============================================================================
+# Tests: Fix 3 — LOC estimation mismatch detection
+# ============================================================================
+
+
+class TestLocEstimationMismatch:
+    """Tests for LOC mismatch detection in _tasks_to_chunks.
+
+    Fix 3: When the design doc implies significantly more LOC than the
+    seed estimates, a warning env check should be added.
+    """
+
+    def test_large_mismatch_adds_warning(self):
+        """Design doc with >3x LOC vs seed estimate adds loc_estimation_mismatch check."""
+        # 600 non-empty lines * 0.6 = 360 implied LOC vs 100 estimated (3.6x)
+        big_design = "\n".join(
+            [f"line {i}: some code content here" for i in range(600)]
+        )
+        task = _make_seed_task(target_files=["src/module.py"])
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": big_design,
+            },
+        }
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            [task], design_results=design_results,
+        )
+        env_checks = chunks[0].metadata["environment_checks"]
+        loc_checks = [
+            c for c in env_checks if c.get("check_name") == "loc_estimation_mismatch"
+        ]
+        assert len(loc_checks) == 1
+        assert "100" in loc_checks[0]["message"]  # _make_seed_task default estimated_loc
+
+    def test_small_design_no_warning(self):
+        """Design doc within 3x of seed estimate produces no LOC mismatch warning."""
+        small_design = "\n".join(
+            [f"line {i}" for i in range(50)]
+        )
+        task = _make_seed_task(target_files=["src/module.py"])
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": small_design,
+            },
+        }
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            [task], design_results=design_results,
+        )
+        env_checks = chunks[0].metadata["environment_checks"]
+        loc_checks = [
+            c for c in env_checks if c.get("check_name") == "loc_estimation_mismatch"
+        ]
+        assert len(loc_checks) == 0
+
+    def test_no_design_doc_no_warning(self):
+        """Without a design doc, no LOC mismatch check is produced."""
+        task = _make_seed_task(target_files=["src/module.py"])
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks([task])
+        env_checks = chunks[0].metadata["environment_checks"]
+        loc_checks = [
+            c for c in env_checks if c.get("check_name") == "loc_estimation_mismatch"
+        ]
+        assert len(loc_checks) == 0
+
+
+# ============================================================================
+# Tests: Gate 3 — _validate_generation_completeness
+# ============================================================================
+
+
+class TestGate3ValidationCompleteness:
+    """Tests for ImplementPhaseHandler._validate_generation_completeness.
+
+    Gate 3 (defense-in-depth Principle 1): post-IMPLEMENT validation
+    that all multi-file target files were generated on disk.
+    """
+
+    def test_single_file_tasks_skipped(self, tmp_path):
+        """Single-file tasks are not validated (only multi-file)."""
+        task = _make_seed_task(target_files=["src/module.py"])
+        gr = _make_gen_result(success=True)
+        findings = ImplementPhaseHandler._validate_generation_completeness(
+            [task], {"T1": gr}, tmp_path,
+        )
+        assert findings == []
+
+    def test_all_files_present_no_findings(self, tmp_path):
+        """Multi-file task with all files on disk produces no findings."""
+        task = _make_seed_task(
+            target_files=["src/pkg/__init__.py", "src/pkg/module.py"],
+        )
+        # Create the files on disk
+        (tmp_path / "src" / "pkg").mkdir(parents=True)
+        (tmp_path / "src" / "pkg" / "__init__.py").write_text("from .module import Foo\n")
+        (tmp_path / "src" / "pkg" / "module.py").write_text("class Foo: pass\n")
+
+        gr = GenerationResult(
+            success=True,
+            generated_files=[
+                tmp_path / "src" / "pkg" / "__init__.py",
+                tmp_path / "src" / "pkg" / "module.py",
+            ],
+            input_tokens=500, output_tokens=300, cost_usd=0.01,
+            iterations=1, model="mock:mock",
+        )
+        findings = ImplementPhaseHandler._validate_generation_completeness(
+            [task], {"T1": gr}, tmp_path,
+        )
+        assert findings == []
+
+    def test_missing_file_produces_finding(self, tmp_path):
+        """Multi-file task with a missing file on disk produces a finding."""
+        task = _make_seed_task(
+            target_files=["src/pkg/__init__.py", "src/pkg/module.py"],
+        )
+        # Only create one file
+        (tmp_path / "src" / "pkg").mkdir(parents=True)
+        (tmp_path / "src" / "pkg" / "module.py").write_text("class Foo: pass\n")
+
+        gr = GenerationResult(
+            success=True,
+            generated_files=[tmp_path / "src" / "pkg" / "module.py"],
+            input_tokens=500, output_tokens=300, cost_usd=0.01,
+            iterations=1, model="mock:mock",
+        )
+        findings = ImplementPhaseHandler._validate_generation_completeness(
+            [task], {"T1": gr}, tmp_path,
+        )
+        assert len(findings) == 1
+        assert findings[0]["task_id"] == "T1"
+        assert "src/pkg/__init__.py" in findings[0]["missing_on_disk"]
+
+    def test_stubbed_file_produces_finding(self, tmp_path):
+        """Files with stub sentinel content are flagged."""
+        task = _make_seed_task(
+            target_files=["src/pkg/__init__.py", "src/pkg/module.py"],
+        )
+        (tmp_path / "src" / "pkg").mkdir(parents=True)
+        (tmp_path / "src" / "pkg" / "__init__.py").write_text(
+            "# STUB_PLACEHOLDER — auto-generated\n"
+        )
+        (tmp_path / "src" / "pkg" / "module.py").write_text("class Foo: pass\n")
+
+        gr = GenerationResult(
+            success=True,
+            generated_files=[
+                tmp_path / "src" / "pkg" / "__init__.py",
+                tmp_path / "src" / "pkg" / "module.py",
+            ],
+            input_tokens=500, output_tokens=300, cost_usd=0.01,
+            iterations=1, model="mock:mock",
+        )
+        findings = ImplementPhaseHandler._validate_generation_completeness(
+            [task], {"T1": gr}, tmp_path,
+        )
+        assert len(findings) == 1
+        assert "src/pkg/__init__.py" in findings[0]["stubbed_files"]
+
+    def test_task_not_in_results_skipped(self, tmp_path):
+        """Tasks not in generation_results are skipped (dep-blocked etc.)."""
+        task = _make_seed_task(
+            target_files=["src/pkg/__init__.py", "src/pkg/module.py"],
+        )
+        findings = ImplementPhaseHandler._validate_generation_completeness(
+            [task], {}, tmp_path,
+        )
+        assert findings == []
+
+
+# ============================================================================
+# Tests: Gate 2c — _reconcile_design_downstream
+# ============================================================================
+
+
+class TestReconcileDesignDownstream:
+    """Tests for Gate 2c: design-to-implement reconciliation.
+
+    Gate 2c scans design docs for files designated as downstream/shared,
+    pre-creates stub files on disk, and returns a mapping so _tasks_to_chunks
+    can exclude them from the drafter's target list.
+    """
+
+    def test_detects_downstream_and_prestubs(self, tmp_path):
+        """Downstream files are detected and pre-stubbed on disk."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/artifact_generators.py",
+            ],
+        )
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": (
+                    "├── __init__.py   ← THIS FILE\n"
+                    "├── artifact_generators.py   ← shared, F-002+\n"
+                ),
+            },
+        }
+
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], design_results, tmp_path,
+        )
+
+        assert "T1" in result
+        assert "src/pkg/artifact_generators.py" in result["T1"]
+        # Verify stub was created on disk
+        stub_path = tmp_path / "src/pkg/artifact_generators.py"
+        assert stub_path.exists()
+        content = stub_path.read_text()
+        assert "downstream" in content
+
+    def test_no_downstream_returns_empty(self, tmp_path):
+        """No downstream files found → empty mapping."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/module.py",
+            ],
+        )
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": (
+                    "├── __init__.py   ← package root\n"
+                    "├── module.py     ← core implementation\n"
+                ),
+            },
+        }
+
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], design_results, tmp_path,
+        )
+
+        assert result == {}
+
+    def test_single_file_task_skipped(self, tmp_path):
+        """Single-file tasks are always skipped."""
+        task = _make_seed_task(target_files=["src/module.py"])
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": "module.py — shared, F-002+\n",
+            },
+        }
+
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], design_results, tmp_path,
+        )
+        assert result == {}
+
+    def test_all_downstream_safety_guard(self, tmp_path):
+        """If all files are downstream, none are removed (safety guard)."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/a.py",
+                "src/pkg/b.py",
+            ],
+        )
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": (
+                    "a.py — shared, F-002+\n"
+                    "b.py — shared, F-003+\n"
+                ),
+            },
+        }
+
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], design_results, tmp_path,
+        )
+        # Safety: should NOT flag when all files are downstream
+        assert result == {}
+
+    def test_no_design_results_returns_empty(self, tmp_path):
+        """Missing design results → empty mapping."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/module.py",
+            ],
+        )
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], {}, tmp_path,
+        )
+        assert result == {}
+
+    def test_existing_file_not_overwritten(self, tmp_path):
+        """Pre-existing files are not overwritten by stubs."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/artifact_generators.py",
+            ],
+        )
+        # Pre-create the file
+        target = tmp_path / "src/pkg/artifact_generators.py"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("# existing content\n")
+
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": (
+                    "├── __init__.py   ← THIS FILE\n"
+                    "├── artifact_generators.py   ← shared, F-002+\n"
+                ),
+            },
+        }
+
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], design_results, tmp_path,
+        )
+
+        assert "T1" in result
+        # File should NOT be overwritten
+        assert target.read_text() == "# existing content\n"
+
+
+# ============================================================================
+# Tests: Gate 2c → _tasks_to_chunks integration (downstream_map)
+# ============================================================================
+
+
+class TestTasksToChunksDownstreamMap:
+    """Tests that _tasks_to_chunks correctly uses downstream_map."""
+
+    def test_downstream_files_excluded_from_targets(self):
+        """Downstream files should be removed from chunk file_targets."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/artifact_generators.py",
+            ],
+        )
+        downstream_map = {"T1": ["src/pkg/artifact_generators.py"]}
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            [task], downstream_map=downstream_map,
+        )
+
+        assert len(chunks) == 1
+        assert chunks[0].file_targets == ["src/pkg/__init__.py"]
+        # Metadata should record original targets and downstream info
+        assert chunks[0].metadata["downstream_files"] == [
+            "src/pkg/artifact_generators.py"
+        ]
+        assert chunks[0].metadata["original_target_files"] == [
+            "src/pkg/__init__.py",
+            "src/pkg/artifact_generators.py",
+        ]
+
+    def test_no_downstream_preserves_targets(self):
+        """Without downstream_map, file_targets are unchanged."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/module.py",
+            ],
+        )
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks([task])
+
+        assert len(chunks) == 1
+        assert chunks[0].file_targets == [
+            "src/pkg/__init__.py",
+            "src/pkg/module.py",
+        ]
+        assert chunks[0].metadata["downstream_files"] == []
+        assert chunks[0].metadata["original_target_files"] is None
+
+
+# ============================================================================
+# Tests: Gate 3 enhanced — downstream stub classification
+# ============================================================================
+
+
+class TestGate2cFileScopeFromSeed:
+    """Tests that Gate 2c uses _file_scope from seed as primary signal."""
+
+    def test_file_scope_stub_detected_without_design_doc(self, tmp_path):
+        """When file_scope says 'stub', Gate 2c flags it even without design doc."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/shared.py",
+            ],
+            file_scope={
+                "src/pkg/__init__.py": "primary",
+                "src/pkg/shared.py": "stub",
+            },
+        )
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], {}, tmp_path,
+        )
+        assert "T1" in result
+        assert "src/pkg/shared.py" in result["T1"]
+
+    def test_file_scope_shared_detected(self, tmp_path):
+        """Files with scope='shared' are flagged for pre-stubbing."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/shared.py",
+            ],
+            file_scope={
+                "src/pkg/__init__.py": "primary",
+                "src/pkg/shared.py": "shared",
+            },
+        )
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], {}, tmp_path,
+        )
+        assert "T1" in result
+        assert "src/pkg/shared.py" in result["T1"]
+
+    def test_file_scope_all_primary_no_downstream(self, tmp_path):
+        """When all files are primary, no downstream detected."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/module.py",
+            ],
+            file_scope={
+                "src/pkg/__init__.py": "primary",
+                "src/pkg/module.py": "primary",
+            },
+        )
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], {}, tmp_path,
+        )
+        assert result == {}
+
+    def test_file_scope_takes_priority_over_design_doc(self, tmp_path):
+        """file_scope from seed overrides design doc parsing."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/generators.py",
+            ],
+            # file_scope says both are primary
+            file_scope={
+                "src/pkg/__init__.py": "primary",
+                "src/pkg/generators.py": "primary",
+            },
+        )
+        # Design doc says generators.py is downstream
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": (
+                    "├── __init__.py   ← THIS FILE\n"
+                    "├── generators.py   ← shared, F-002+\n"
+                ),
+            },
+        }
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], design_results, tmp_path,
+        )
+        # file_scope says primary → no downstream (overrides design doc)
+        assert result == {}
+
+    def test_empty_file_scope_falls_back_to_design_doc(self, tmp_path):
+        """When file_scope is empty, falls back to design doc parsing."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/generators.py",
+            ],
+            file_scope={},  # Empty — no seed-level info
+        )
+        design_results = {
+            "T1": {
+                "status": "designed",
+                "design_document": (
+                    "├── __init__.py   ← THIS FILE\n"
+                    "├── generators.py   ← shared, F-002+\n"
+                ),
+            },
+        }
+        result = ImplementPhaseHandler._reconcile_design_downstream(
+            [task], design_results, tmp_path,
+        )
+        assert "T1" in result
+        assert "src/pkg/generators.py" in result["T1"]
+
+
+class TestGate3DownstreamClassification:
+    """Tests for Gate 3's ability to distinguish downstream vs failure stubs."""
+
+    def test_downstream_stub_classified_separately(self, tmp_path):
+        """Downstream stubs are in 'downstream_stubbed', not 'stubbed_files'."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/artifact_generators.py",
+            ],
+        )
+        gr = GenerationResult(
+            success=True,
+            generated_files=[
+                tmp_path / "src/pkg/__init__.py",
+                tmp_path / "src/pkg/artifact_generators.py",
+            ],
+        )
+
+        # Create both files, downstream one with stub marker
+        (tmp_path / "src/pkg").mkdir(parents=True)
+        (tmp_path / "src/pkg/__init__.py").write_text("# real code\nclass Foo: pass\n")
+        (tmp_path / "src/pkg/artifact_generators.py").write_text(
+            '"""stub"""\n# STARTD8_AUTO_STUB  # downstream — will be implemented by later tasks\n'
+        )
+
+        downstream_map = {"T1": ["src/pkg/artifact_generators.py"]}
+        findings = ImplementPhaseHandler._validate_generation_completeness(
+            [task], {"T1": gr}, tmp_path, downstream_map=downstream_map,
+        )
+
+        assert len(findings) == 1
+        finding = findings[0]
+        assert finding["downstream_stubbed"] == ["src/pkg/artifact_generators.py"]
+        assert finding["stubbed_files"] == []
+        assert finding["has_real_issues"] is False
+
+    def test_non_downstream_stub_still_flagged(self, tmp_path):
+        """Non-downstream stubs remain in 'stubbed_files' (real issues)."""
+        task = _make_seed_task(
+            target_files=[
+                "src/pkg/__init__.py",
+                "src/pkg/module.py",
+            ],
+        )
+        gr = GenerationResult(
+            success=True,
+            generated_files=[
+                tmp_path / "src/pkg/__init__.py",
+                tmp_path / "src/pkg/module.py",
+            ],
+        )
+
+        (tmp_path / "src/pkg").mkdir(parents=True)
+        (tmp_path / "src/pkg/__init__.py").write_text("# real code\n")
+        (tmp_path / "src/pkg/module.py").write_text("# STARTD8_AUTO_STUB\n")
+
+        # No downstream_map → stub is a real issue
+        findings = ImplementPhaseHandler._validate_generation_completeness(
+            [task], {"T1": gr}, tmp_path,
+        )
+
+        assert len(findings) == 1
+        assert findings[0]["stubbed_files"] == ["src/pkg/module.py"]
+        assert findings[0]["downstream_stubbed"] == []
+        assert findings[0]["has_real_issues"] is True

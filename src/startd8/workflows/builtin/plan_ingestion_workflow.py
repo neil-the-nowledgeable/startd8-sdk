@@ -136,6 +136,22 @@ Return a JSON object (no markdown fences) with exactly these keys:
   "dependency_graph": {{"F-001": ["F-002"]}}
 }}
 
+## target_files guidance
+
+Each feature becomes ONE implementation task sent to a code-generation LLM.
+Multi-file tasks are significantly harder for the generator — it must produce a
+separate code block per file, and commonly drops files (especially __init__.py).
+
+Rules for target_files:
+1. PREFER one primary file per feature. Split into separate features if files
+   can be implemented independently.
+2. Group files into ONE feature ONLY when they MUST be implemented atomically
+   (e.g. a module + its __init__.py that re-exports from it).
+3. NEVER exceed 3 target_files per feature. If a feature needs 4+ files,
+   decompose it into smaller features with dependencies between them.
+4. When __init__.py is among target_files, list it FIRST — it is the package
+   root that other files import from.
+
 design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
 artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
 
@@ -586,10 +602,33 @@ class PlanIngestionWorkflow(WorkflowBase):
     ) -> Tuple[Optional[ComplexityScore], StepResult]:
         t0 = time.time()
 
-        feature_summary = "\n".join(
-            f"  - {f.feature_id}: {f.name} (files: {len(f.target_files)}, deps: {len(f.dependencies)})"
-            for f in parsed_plan.features
-        )
+        # Build feature summary for the ASSESS prompt.
+        # Flag multi-file features so the complexity scorer can account
+        # for split risk in its cross_file_deps dimension.
+        _feat_lines = []
+        multi_file_count = 0
+        for f in parsed_plan.features:
+            has_init = any(
+                tf.endswith("__init__.py") for tf in f.target_files
+            )
+            suffix = ""
+            if len(f.target_files) > 1:
+                multi_file_count += 1
+                suffix = " ⚠ MULTI-FILE"
+                if has_init:
+                    suffix += "+__init__.py"
+            _feat_lines.append(
+                f"  - {f.feature_id}: {f.name} "
+                f"(files: {len(f.target_files)}, "
+                f"deps: {len(f.dependencies)}){suffix}"
+            )
+        feature_summary = "\n".join(_feat_lines)
+        if multi_file_count:
+            feature_summary += (
+                f"\n\n  NOTE: {multi_file_count} feature(s) target multiple "
+                f"files. Multi-file tasks have higher implementation risk — "
+                f"factor this into cross_file_deps scoring."
+            )
 
         prompt = _ASSESS_PROMPT.format(
             title=parsed_plan.title,
@@ -841,8 +880,18 @@ class PlanIngestionWorkflow(WorkflowBase):
     def _derive_tasks_from_features(
         features: List[ParsedFeature],
         dependency_graph: Dict[str, List[str]],
+        file_ownership: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """Convert ParsedFeatures into task dicts matching prime-route schema."""
+        """Convert ParsedFeatures into task dicts matching prime-route schema.
+
+        Args:
+            features: Parsed features from the PARSE phase.
+            dependency_graph: Feature dependency graph.
+            file_ownership: Optional file ownership mapping from ContextCore
+                export's onboarding-metadata.json.  When present, enables
+                contract-level file scope classification ("primary" vs "shared")
+                per Principle 1 of the Export Pipeline Analysis Guide.
+        """
         # Build a mapping from feature_id to task_id
         fid_to_tid: Dict[str, str] = {}
         for idx, feat in enumerate(features, start=1):
@@ -889,9 +938,19 @@ class PlanIngestionWorkflow(WorkflowBase):
             else:
                 priority = "low"
 
+            # ── Normalize target_files ordering ────────────────────────
+            # __init__.py first: it's the package root that other files
+            # import from.  Consistent ordering improves LLM output format
+            # compliance and matches the MULTI_FILE_OUTPUT_FORMAT contract
+            # in lead_contractor_workflow.py.
+            ordered_files = sorted(
+                feat.target_files,
+                key=lambda f: (0 if f.endswith("__init__.py") else 1, f),
+            )
+
             ctx: Dict[str, Any] = {
                 "feature_id": feat.feature_id,
-                "target_files": list(feat.target_files),
+                "target_files": ordered_files,
                 "estimated_loc": feat.estimated_loc,
             }
             if feat.design_doc_sections:
@@ -899,12 +958,70 @@ class PlanIngestionWorkflow(WorkflowBase):
             if feat.artifact_types_addressed:
                 ctx["artifact_types_addressed"] = list(feat.artifact_types_addressed)
 
+            # ── Multi-file risk metadata ──────────────────────────────
+            # Embed risk signals directly in the seed so downstream
+            # phases (preflight, IMPLEMENT) don't need to re-derive them.
+            if len(ordered_files) > 1:
+                has_init = any(f.endswith("__init__.py") for f in ordered_files)
+                ctx["_multi_file_risk"] = {
+                    "file_count": len(ordered_files),
+                    "has_init_py": has_init,
+                    "high_loc": bool(
+                        feat.estimated_loc and feat.estimated_loc > 200
+                    ),
+                }
+                if len(ordered_files) > 3:
+                    logger.warning(
+                        "Task %s has %d target files (exceeds recommended "
+                        "max of 3). Consider splitting into smaller features. "
+                        "Files: %s",
+                        tid,
+                        len(ordered_files),
+                        ", ".join(ordered_files),
+                    )
+
+            # ── File scope classification (defense-in-depth Principle 1) ──
+            # Classify each target file as "primary" (this task owns it) or
+            # "shared"/"stub" (other tasks also target it).  Sources:
+            #   1. file_ownership from ContextCore export (contract-level)
+            #   2. shared_files from feature cross-ref (plan-level)
+            # This metadata flows into the seed so downstream phases
+            # (Gate 2c, smart retry gate, review guard) use it directly
+            # instead of re-deriving from design docs at runtime.
+            _file_scope: Dict[str, str] = {}
+            for tf in ordered_files:
+                scope = "primary"
+                # Check contract-level ownership from export
+                if file_ownership:
+                    ownership_entry = file_ownership.get(tf)
+                    if ownership_entry and ownership_entry.get("scope") == "shared":
+                        scope = "shared"
+                # Check plan-level shared file detection
+                if tf in shared_files and len(shared_files[tf]) > 1:
+                    # File appears in multiple features — this task may
+                    # not be the primary owner
+                    owning_features = shared_files[tf]
+                    if feat.feature_id != owning_features[0]:
+                        # This task is NOT the first feature to claim the file
+                        scope = "stub"
+                    elif scope != "shared":
+                        scope = "shared"
+                _file_scope[tf] = scope
+
+            if any(s != "primary" for s in _file_scope.values()):
+                ctx["_file_scope"] = _file_scope
+                logger.info(
+                    "Task %s file scope: %s",
+                    tid,
+                    {f: s for f, s in _file_scope.items() if s != "primary"},
+                )
+
             # Auto-generate prompt hints for multi-file tasks with shared modules.
             # These are merged into prompt_constraints during SeedTask.from_seed_entry().
             prompt_hints: List[str] = []
-            if len(feat.target_files) > 1:
+            if len(ordered_files) > 1:
                 task_shared = [
-                    f for f in feat.target_files if f in shared_files
+                    f for f in ordered_files if f in shared_files
                 ]
                 if task_shared:
                     others_map = {
@@ -939,7 +1056,122 @@ class PlanIngestionWorkflow(WorkflowBase):
                 },
             })
 
+        # ── Gate 2a: structural enforcement of multi-file task limits ──
+        # Per defense-in-depth Principle 2 (adversarial thinking): even if
+        # the PARSE prompt says "max 3 files," the LLM may ignore it.
+        # Structurally split tasks that exceed the threshold so downstream
+        # phases always receive well-sized work items.
+        tasks = PlanIngestionWorkflow._split_oversized_tasks(tasks)
+
         return tasks
+
+    @staticmethod
+    def _split_oversized_tasks(
+        tasks: List[Dict[str, Any]],
+        max_files: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """Gate 2a: Split tasks with more than `max_files` target files.
+
+        Follows the Export Pipeline Analysis Guide's defense-in-depth
+        Principle 1 (validate at the boundary) and Principle 2 (treat
+        upstream as potentially adversarial).
+
+        For each oversized task:
+        - If an __init__.py is present, it becomes the first sub-task
+          and all subsequent sub-tasks depend on it.
+        - Remaining files become individual sub-tasks, each preserving
+          the parent's description, labels, and dependencies.
+        - Sub-tasks are numbered with a letter suffix (e.g. PI-001a,
+          PI-001b) to preserve traceability to the original feature.
+        - Estimated LOC is divided proportionally across sub-tasks.
+
+        Tasks with ≤ max_files are passed through unchanged.
+        """
+        result: List[Dict[str, Any]] = []
+
+        for task in tasks:
+            ctx = task.get("config", {}).get("context", {})
+            target_files = ctx.get("target_files", [])
+
+            if len(target_files) <= max_files:
+                result.append(task)
+                continue
+
+            # This task needs splitting.
+            parent_id = task["task_id"]
+            parent_deps = list(task.get("depends_on", []))
+            parent_desc = task.get("config", {}).get("task_description", "")
+            estimated_loc = ctx.get("estimated_loc", 0)
+            loc_per_file = max(estimated_loc // len(target_files), 10)
+
+            logger.info(
+                "Gate 2a: splitting task %s (%d files > max %d) into %d "
+                "sub-tasks",
+                parent_id,
+                len(target_files),
+                max_files,
+                len(target_files),
+            )
+
+            # Separate __init__.py (if any) — it becomes sub-task 'a'
+            # so other sub-tasks can depend on it.
+            init_files = [f for f in target_files if f.endswith("__init__.py")]
+            non_init_files = [f for f in target_files if not f.endswith("__init__.py")]
+            ordered = init_files + non_init_files
+
+            init_sub_id = None
+            for idx, target_file in enumerate(ordered):
+                suffix = chr(ord("a") + idx)
+                sub_id = f"{parent_id}{suffix}"
+
+                # Sub-task deps: parent's deps + init sub-task (if this
+                # isn't the init sub-task itself).
+                sub_deps = list(parent_deps)
+                if init_sub_id and sub_id != init_sub_id:
+                    sub_deps.append(init_sub_id)
+
+                if target_file.endswith("__init__.py"):
+                    init_sub_id = sub_id
+
+                sub_ctx: Dict[str, Any] = {
+                    "feature_id": ctx.get("feature_id", ""),
+                    "target_files": [target_file],
+                    "estimated_loc": loc_per_file,
+                    "_split_from": parent_id,
+                    "_split_index": idx,
+                }
+                # Carry forward optional context fields
+                for key in (
+                    "design_doc_sections",
+                    "artifact_types_addressed",
+                ):
+                    if key in ctx:
+                        sub_ctx[key] = ctx[key]
+
+                file_name = target_file.rsplit("/", 1)[-1]
+                sub_title = f"{task['title']} — {file_name}"
+
+                result.append({
+                    "task_id": sub_id,
+                    "title": sub_title,
+                    "task_type": task.get("task_type", "task"),
+                    "story_points": PlanIngestionWorkflow._estimate_story_points(
+                        loc_per_file
+                    ),
+                    "priority": task.get("priority", "medium"),
+                    "labels": list(task.get("labels", [])),
+                    "depends_on": sub_deps,
+                    "config": {
+                        "task_description": (
+                            f"{parent_desc}\n\n"
+                            f"[Auto-split from {parent_id}: implement "
+                            f"`{target_file}` only.]"
+                        ),
+                        "context": sub_ctx,
+                    },
+                })
+
+        return result
 
     # ------------------------------------------------------------------
     # Manifest + context helpers
@@ -1241,9 +1473,19 @@ class PlanIngestionWorkflow(WorkflowBase):
             costs = step_costs or {}
             total_cost = sum(costs.values())
 
+            # Load onboarding metadata early so file_ownership is available
+            # for _derive_tasks_from_features (defense-in-depth Principle 1).
+            onboarding_early = self._load_onboarding_metadata(
+                context_files, output_dir
+            ) if context_files else None
+            _file_ownership = (
+                onboarding_early.get("file_ownership") if onboarding_early else None
+            )
+
             tasks = self._derive_tasks_from_features(
                 parsed_plan.features,
                 parsed_plan.dependency_graph,
+                file_ownership=_file_ownership,
             )
 
             # Derive architectural context + design calibration
@@ -1260,7 +1502,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             }
 
             # Merge onboarding metadata if present in context files (Items 5, 7)
-            onboarding = self._load_onboarding_metadata(context_files, output_dir)
+            # Reuse the early load from before _derive_tasks_from_features.
+            onboarding = onboarding_early
             onboarding_var: Optional[Dict[str, Any]] = None
             source_checksum_val: Optional[str] = None
             if onboarding:

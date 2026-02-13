@@ -122,6 +122,7 @@ def _make_seed_task(
         existing_content_hash=None,
         design_doc_sections=overrides.get("design_doc_sections", []),
         artifact_types_addressed=overrides.get("artifact_types_addressed", []),
+        file_scope=overrides.get("file_scope", {}),
     )
 
 

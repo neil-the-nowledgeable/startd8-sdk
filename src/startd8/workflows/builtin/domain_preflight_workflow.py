@@ -375,6 +375,71 @@ class DomainPreflightWorkflow(WorkflowBase):
         contribution = PreflightRuleRegistry.evaluate_all(ctx)
         return contribution.checks
 
+    @staticmethod
+    def _multi_file_checks(
+        target_files: List[str],
+        estimated_loc: Optional[int] = None,
+    ) -> List[EnvironmentCheck]:
+        """Layer A (defense-in-depth): multi-file risk checks at seed enrichment.
+
+        These fire at the earliest detection point — before any LLM calls —
+        so dry-runs and dress-rehearsals surface the risk in their reports.
+        Complements Layer B (chunk-building in context_seed_handlers) and
+        Layer C (post-generation metadata in lead_contractor).
+        """
+        checks: List[EnvironmentCheck] = []
+        if len(target_files) <= 1:
+            return checks
+
+        checks.append(EnvironmentCheck(
+            check_name="multi_file_split_risk",
+            status=CheckStatus.WARN,
+            message=(
+                f"Task targets {len(target_files)} files — "
+                f"LLM may omit some code blocks"
+            ),
+            detail=(
+                f"Target files: {', '.join(target_files)}. "
+                f"Multi-file tasks have higher risk of incomplete output. "
+                f"Defense layers: prompt checklist, __init__.py constraint, "
+                f"content-heuristic extraction, retry with role hints, "
+                f"stub fallback."
+            ),
+        ))
+
+        init_files = [f for f in target_files if f.endswith("__init__.py")]
+        if init_files:
+            checks.append(EnvironmentCheck(
+                check_name="init_py_in_multi_file",
+                status=CheckStatus.WARN,
+                message=(
+                    f"__init__.py among {len(target_files)} targets — "
+                    f"commonly skipped by LLM drafters"
+                ),
+                detail=(
+                    f"Files: {', '.join(init_files)}. "
+                    f"Models treat __init__.py as optional because it's "
+                    f"'just imports'. Dedicated constraints and extraction "
+                    f"heuristics are active."
+                ),
+            ))
+
+        if estimated_loc and estimated_loc > 200:
+            checks.append(EnvironmentCheck(
+                check_name="multi_file_high_loc",
+                status=CheckStatus.WARN,
+                message=(
+                    f"Multi-file task with {estimated_loc} estimated LOC — "
+                    f"truncation may compound split failure"
+                ),
+                detail=(
+                    "Consider splitting into single-file tasks, or increase "
+                    "implement_max_output_tokens in design_calibration."
+                ),
+            ))
+
+        return checks
+
     # ------------------------------------------------------------------
     # Phase: ENRICH  (delegated to PreflightRuleRegistry)
     # ------------------------------------------------------------------
@@ -537,10 +602,22 @@ class DomainPreflightWorkflow(WorkflowBase):
                 domain = classification.domain
                 domain_summary[domain.value] = domain_summary.get(domain.value, 0) + 1
 
-                # Check
+                # Check — per-file domain checks
                 checks = self._run_environment_checks(
                     domain, target_file, project_root, available_deps,
                 )
+
+                # Layer A (defense-in-depth): multi-file risk checks.
+                # Fires at seed-enrichment time — the earliest detection
+                # point, before any LLM calls.
+                estimated_loc = task_config.get("context", {}).get(
+                    "estimated_loc"
+                )
+                multi_checks = self._multi_file_checks(
+                    target_files, estimated_loc=estimated_loc,
+                )
+                checks.extend(multi_checks)
+
                 for check in checks:
                     check_summary[check.status.value] = (
                         check_summary.get(check.status.value, 0) + 1

@@ -37,6 +37,7 @@ def _seed_task(task_id: str = "T1", title: str = "Feature A") -> SeedTask:
         existing_content_hash=None,
         design_doc_sections=[],
         artifact_types_addressed=[],
+        file_scope={},
     )
 
 

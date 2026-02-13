@@ -376,9 +376,31 @@ def _extract_by_fenced_blocks(
         else:
             unmatched_blocks.append((code_content, i))
 
-    # Strategy 3: order-based fallback when exactly one file and one block unmatched
+    # Strategy 3a (Layer 4 defense-in-depth): content-heuristic matching for
+    # __init__.py.  Models often produce a block with __all__, re-exports,
+    # or "from .module import ..." but forget to label it as __init__.py.
+    # Match unmatched blocks whose content looks like a package __init__ to
+    # the unmatched __init__.py target (if any).
     targets = target_files or list(basenames.values())
     unmatched_targets = [t for t in targets if t not in result]
+    init_targets = [t for t in unmatched_targets if t.endswith("__init__.py")]
+    if init_targets and unmatched_blocks:
+        for init_target in init_targets:
+            for idx, (content, block_idx) in enumerate(unmatched_blocks):
+                if _looks_like_init(content):
+                    result[init_target] = content.strip()
+                    unmatched_blocks.pop(idx)
+                    logger.debug(
+                        "Assigned unmatched block (idx=%d) to %s via "
+                        "__init__.py content heuristic",
+                        block_idx,
+                        init_target,
+                    )
+                    break
+        # Refresh unmatched targets after heuristic
+        unmatched_targets = [t for t in targets if t not in result]
+
+    # Strategy 3b: order-based fallback when exactly one file and one block unmatched
     if len(unmatched_targets) == 1 and len(unmatched_blocks) == 1:
         content, _ = unmatched_blocks[0]
         if content.strip():
@@ -389,6 +411,22 @@ def _extract_by_fenced_blocks(
             )
 
     return result
+
+
+def _looks_like_init(code: str) -> bool:
+    """Heuristic: does ``code`` look like a Python ``__init__.py``?
+
+    Checks for common patterns: ``__all__``, relative imports
+    (``from .foo import``), or the string ``__init__`` in a comment/docstring.
+    """
+    if not code:
+        return False
+    indicators = [
+        "__all__" in code,
+        "from ." in code,                       # relative imports
+        "__init__" in code.split("\n", 3)[0],    # filename in first line comment
+    ]
+    return any(indicators)
 
 
 def _match_basename(candidate: str, basenames: Dict[str, str]) -> Optional[str]:
