@@ -32,8 +32,12 @@ from __future__ import annotations
 import enum
 import json
 import logging
+import subprocess
+import sys
 import time
 import uuid
+
+import questionary
 from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import asdict, dataclass, field
@@ -1086,6 +1090,107 @@ class ArtisanContractorWorkflow:
 
         return 0, None
 
+    def _commit_changes(
+        self,
+        phase: WorkflowPhase,
+        feature_id: Optional[str] = None,
+    ) -> None:
+        """Commit changes to git after a successful phase."""
+        if self.config.dry_run:
+            return
+
+        project_root = Path(self.config.project_root or ".")
+
+        # Only commit if we are in a git repo
+        if not (project_root / ".git").exists():
+            return
+
+        try:
+            # Check for changes
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(project_root),
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+
+            if not status.stdout.strip():
+                return  # No changes to commit
+
+            # Add all changes
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=str(project_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            # Construct commit message
+            msg = f"Artisan: Completed phase {phase.value}"
+            if feature_id:
+                msg += f" for feature {feature_id}"
+
+            # Commit
+            subprocess.run(
+                ["git", "commit", "-m", msg],
+                cwd=str(project_root),
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self._logger.info(
+                "Committed changes for phase %s%s",
+                phase.value,
+                f" (feature {feature_id})" if feature_id else "",
+            )
+
+        except (subprocess.CalledProcessError, FileNotFoundError, Exception) as e:
+            # Construct a clear error message
+            if isinstance(e, subprocess.CalledProcessError):
+                stderr = e.stderr
+                if isinstance(stderr, bytes):
+                    stderr = stderr.decode()
+                stderr = stderr.strip() if stderr else ""
+
+                stdout = e.stdout
+                if isinstance(stdout, bytes):
+                    stdout = stdout.decode()
+                stdout = stdout.strip() if stdout else ""
+
+                error_msg = f"Git commit failed (exit code {e.returncode}):\nSTDOUT: {stdout}\nSTDERR: {stderr}"
+            elif isinstance(e, FileNotFoundError):
+                error_msg = "Git executable not found."
+            else:
+                error_msg = f"Unexpected error during git commit: {e}"
+
+            self._logger.error(error_msg)
+
+            # If interactive, prompt the user whether to continue
+            if sys.stdin.isatty():
+                try:
+                    should_continue = questionary.confirm(
+                        "Git commit failed. Do you want to continue the workflow anyway?",
+                        default=False
+                    ).ask()
+
+                    if not should_continue:
+                        raise WorkflowError(
+                            "Workflow aborted by user after git commit failure."
+                        ) from e
+
+                    self._logger.info("User chose to continue despite git commit failure.")
+                    return
+                except Exception as prompt_err:
+                    self._logger.warning(
+                        "Could not prompt user: %s. Continuing workflow.", prompt_err
+                    )
+            else:
+                self._logger.warning(
+                    "Non-interactive session: continuing workflow despite git failure."
+                )
+
     def _execute_phase(
         self,
         phase: WorkflowPhase,
@@ -1501,6 +1606,9 @@ class ArtisanContractorWorkflow:
             phase_result = self._execute_phase(phase, context, remaining)
             phase_results.append(phase_result)
 
+            if phase_result.status == PhaseStatus.COMPLETED:
+                self._commit_changes(phase)
+
             # Track cost
             cost_tracker.add(phase_result.cost)
 
@@ -1665,6 +1773,9 @@ class ArtisanContractorWorkflow:
             phase_results.append(phase_result)
             cost_tracker.add(phase_result.cost)
 
+            if phase_result.status == PhaseStatus.COMPLETED:
+                self._commit_changes(phase)
+
             # Persist checkpoint after global phase
             self._persist_checkpoint(
                 phase,
@@ -1795,6 +1906,9 @@ class ArtisanContractorWorkflow:
             phase_results.append(phase_result)
             cost_tracker.add(phase_result.cost)
 
+            if phase_result.status == PhaseStatus.COMPLETED:
+                self._commit_changes(phase)
+
             # Persist final checkpoint
             self._persist_checkpoint(
                 phase,
@@ -1909,7 +2023,10 @@ class ArtisanContractorWorkflow:
                         inner_phase, context, remaining_total_timeout
                     )
 
-                # Record the inner phase result
+                    if phase_result.status == PhaseStatus.COMPLETED:
+                        self._commit_changes(inner_phase, feature_id=feature_id)
+
+                    # Record the inner phase result
                     inner_results[inner_phase.value] = {
                         "status": phase_result.status.value,
                         "cost": phase_result.cost,
