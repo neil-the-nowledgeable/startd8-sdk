@@ -2116,6 +2116,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if sc and isinstance(sc, str):
                     artifacts["source_checksum"] = sc
                     source_checksum_val = sc
+                # Fix 2a: propagate parameter_sources for DESIGN/IMPLEMENT injection
+                ps = onboarding.get("parameter_sources")
+                if ps and isinstance(ps, dict):
+                    artifacts["parameter_sources"] = ps
+                # Fix 3a: propagate semantic_conventions for DESIGN/IMPLEMENT injection
+                sc_conv = onboarding.get("semantic_conventions")
+                if sc_conv and isinstance(sc_conv, dict):
+                    artifacts["semantic_conventions"] = sc_conv
+                # Fix 5: propagate output_conventions for SCAFFOLD validation
+                oc = onboarding.get("output_conventions")
+                if oc and isinstance(oc, dict):
+                    artifacts["output_conventions"] = oc
 
             context_files_list = _context_files_with_checksums(
                 context_files, base_dir=output_dir

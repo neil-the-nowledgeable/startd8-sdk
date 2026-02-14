@@ -70,6 +70,11 @@ def _make_plan_context(**overrides: Any) -> dict[str, Any]:
         "architectural_context": {},
         "design_calibration": {},
         "example_artifacts": {},
+        # Phase 2 data flow keys (all optional, default to None/{})
+        "source_checksum": None,
+        "parameter_sources": {},
+        "semantic_conventions": {},
+        "output_conventions": {},
     }
     base.update(overrides)
     return base

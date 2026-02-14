@@ -91,6 +91,11 @@ class PlanPhaseOutput(BaseModel):
     architectural_context: Dict[str, Any] = {}
     design_calibration: Dict[str, Any] = {}
     example_artifacts: Dict[str, Any] = {}
+    # Phase 2 data flow keys (from ContextCore onboarding enrichment)
+    source_checksum: Optional[str] = None
+    parameter_sources: Dict[str, Any] = {}
+    semantic_conventions: Dict[str, Any] = {}
+    output_conventions: Dict[str, Any] = {}
 
     @field_validator("tasks")
     @classmethod
@@ -224,6 +229,8 @@ _PHASE_EXIT_KEYS: Dict[str, List[str]] = {
         "plan_goals", "domain_summary", "preflight_summary",
         "total_estimated_loc", "architectural_context",
         "design_calibration", "example_artifacts",
+        "source_checksum", "parameter_sources",
+        "semantic_conventions", "output_conventions",
     ],
     "scaffold": ["scaffold"],
     "design": ["design_results"],

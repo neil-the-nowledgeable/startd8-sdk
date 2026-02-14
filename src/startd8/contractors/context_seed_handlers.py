@@ -523,6 +523,31 @@ class PlanPhaseHandler(AbstractPhaseHandler):
             "example_artifacts", {}
         )
 
+        # -- Phase 2 data flow fixes: extract ContextCore enrichment --
+        _artifacts = seed_data.get("artifacts") or {}
+
+        # Fix 1a: provenance chain — source_checksum
+        source_checksum = _artifacts.get("source_checksum")
+        context["source_checksum"] = source_checksum
+        if source_checksum:
+            logger.info(
+                "PLAN phase: source_checksum present — provenance chain active: %s",
+                source_checksum[:16],
+            )
+        else:
+            logger.warning(
+                "PLAN phase: source_checksum absent in seed — provenance chain broken"
+            )
+
+        # Fix 2b: parameter_sources for DESIGN/IMPLEMENT prompt injection
+        context["parameter_sources"] = _artifacts.get("parameter_sources", {})
+
+        # Fix 3b: semantic_conventions for DESIGN/IMPLEMENT prompt injection
+        context["semantic_conventions"] = _artifacts.get("semantic_conventions", {})
+
+        # Fix 5a: output_conventions for SCAFFOLD extension validation
+        context["output_conventions"] = _artifacts.get("output_conventions", {})
+
         output = {
             "plan_title": context["plan_title"],
             "task_count": len(sorted_tasks),
@@ -566,6 +591,10 @@ class PlanPhaseHandler(AbstractPhaseHandler):
             architectural_context=context.get("architectural_context", {}),
             design_calibration=context.get("design_calibration", {}),
             example_artifacts=context.get("example_artifacts", {}),
+            source_checksum=context.get("source_checksum"),
+            parameter_sources=context.get("parameter_sources", {}),
+            semantic_conventions=context.get("semantic_conventions", {}),
+            output_conventions=context.get("output_conventions", {}),
         )
 
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
@@ -627,6 +656,23 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
 
         dirs_missing = dirs_needed - dirs_exist - dirs_created
 
+        # Fix 5b: soft-validate target file extensions against output_conventions
+        output_conventions = context.get("output_conventions", {})
+        extension_warnings: list[str] = []
+        if output_conventions:
+            for task in tasks:
+                for atype in task.artifact_types_addressed:
+                    expected_ext = output_conventions.get(atype, {}).get("output_ext")
+                    if expected_ext:
+                        for tf in task.target_files:
+                            if not tf.endswith(expected_ext):
+                                msg = (
+                                    f"task {task.task_id} file {tf} doesn't match "
+                                    f"expected extension {expected_ext} for {atype}"
+                                )
+                                extension_warnings.append(msg)
+                                logger.warning("SCAFFOLD: %s", msg)
+
         output = {
             "directories_needed": sorted(dirs_needed),
             "directories_exist": sorted(dirs_exist),
@@ -635,6 +681,7 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
             "existing_target_files": files_existing,
             "skipped_targets": skipped_targets,
             "project_root": str(project_root),
+            "extension_warnings": extension_warnings,
         }
 
         # Store scaffold results in context
@@ -722,6 +769,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         prior_design_summaries: list[str] | None = None,
         calibration: dict[str, Any] | None = None,
         design_max_tokens_override: Optional[int] = None,
+        parameter_sources: dict[str, Any] | None = None,
+        semantic_conventions: dict[str, Any] | None = None,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -733,6 +782,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             calibration: Per-task calibration dict (depth_tier, sections, max_output_tokens).
             design_max_tokens_override: Override max_output_tokens for all design tasks
                 (from HandlerConfig.design_max_tokens). Takes precedence over calibration.
+            parameter_sources: Per-artifact-type parameter origin mapping from onboarding.
+            semantic_conventions: Metric/label naming conventions from onboarding.
         """
         from startd8.contractors.artisan_phases.design_documentation import (
             FeatureContext,
@@ -809,6 +860,28 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         # Task-specific design doc content hints (supplement structural sections)
         if task.design_doc_sections:
             additional_context["design_doc_sections"] = task.design_doc_sections
+
+        # Fix 2c: inject parameter_sources relevant to this task's artifact types
+        all_param_sources = parameter_sources or {}
+        if all_param_sources and task.artifact_types_addressed:
+            task_param_sources = {
+                atype: all_param_sources[atype]
+                for atype in task.artifact_types_addressed
+                if atype in all_param_sources
+            }
+            if task_param_sources:
+                param_lines = ["Parameter sources (from ContextCore manifest):"]
+                for atype, sources in task_param_sources.items():
+                    param_lines.append(f"  {atype}: {json.dumps(sources, indent=2)}")
+                additional_context["parameter_sources"] = "\n".join(param_lines)
+
+        # Fix 3c: inject semantic_conventions
+        sem_conv = semantic_conventions or {}
+        if sem_conv:
+            conv_lines = ["Semantic conventions:"]
+            for key, val in sem_conv.items():
+                conv_lines.append(f"  {key}: {val}")
+            additional_context["semantic_conventions"] = "\n".join(conv_lines)
 
         sections = cal.get("sections")
         max_output_tokens = (
@@ -990,6 +1063,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 prior_design_summaries=prior_summaries,
                 calibration=task_calibration,
                 design_max_tokens_override=self.config.design_max_tokens,
+                parameter_sources=context.get("parameter_sources", {}),
+                semantic_conventions=context.get("semantic_conventions", {}),
             )
 
             # Snapshot cost before this task
@@ -1502,6 +1577,8 @@ class Test{class_name}:
         design_results: dict[str, Any] | None = None,
         calibration_map: dict[str, dict[str, Any]] | None = None,
         downstream_map: dict[str, list[str]] | None = None,
+        parameter_sources: dict[str, Any] | None = None,
+        semantic_conventions: dict[str, Any] | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -1761,6 +1838,14 @@ class Test{class_name}:
                     "artifact_types_addressed": task.artifact_types_addressed,
                     "downstream_files": task_downstream,
                     "original_target_files": task.target_files if task_downstream else None,
+                    # Fix 2d: parameter_sources filtered by task's artifact types
+                    "parameter_sources": (
+                        (parameter_sources or {}).get(
+                            task.artifact_types_addressed[0], {}
+                        ) if task.artifact_types_addressed else {}
+                    ),
+                    # Fix 3c: semantic_conventions for code generation
+                    "semantic_conventions": semantic_conventions or {},
                 },
             ))
 
@@ -2150,6 +2235,8 @@ class Test{class_name}:
                 design_results=design_results,
                 calibration_map=calibration_map,
                 downstream_map=downstream_map,
+                parameter_sources=context.get("parameter_sources", {}),
+                semantic_conventions=context.get("semantic_conventions", {}),
             )
 
             if not chunks:
@@ -3385,6 +3472,11 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
         manifest = {
             "workflow_version": "0.4.0",
+            # Fix 1b: provenance chain — record source_checksum for Gate 3
+            "provenance": {
+                "source_checksum": context.get("source_checksum"),
+                "enriched_seed_path": str(context.get("enriched_seed_path", "")),
+            },
             "artifacts": artifacts,
             "task_status": task_status,
             "summary": {
