@@ -1,0 +1,1477 @@
+# StartD8 Architectural Review Functional Requirements
+# Version: 1.0.0
+# Created: 2026-02-14
+#
+# PURPOSE: Formal functional requirements for the Architectural Review Log Workflow,
+# implementing the Convergent Review Protocol (CRP).
+#
+# FORMAT: Matches startd8.workflow.functional-requirements.yaml (FR-xxx) pattern.
+# NAMESPACE: RV-xxx (Review Requirements)
+# STATUS: Each requirement tagged as implemented | partial | planned
+#
+# INPUT: docs/ARCHITECTURAL_REVIEW_WORKFLOW_PLAN.md,
+#        src/startd8/workflows/builtin/architectural_review_log_workflow.py,
+#        tests/unit/test_architectural_review_triage.py, code audit 2026-02-14
+# OUTPUT: Traceable requirements for the Convergent Review Protocol covering:
+#         Core Review Protocol, Domain Coverage, Triage and Decision,
+#         Dual-Document Mode, Agent Selection, Validation, State, Observability.
+
+manifest_id: startd8.architectural_review.functional_requirements
+version: "1.0.0"
+protocol_name: "Convergent Review Protocol (CRP)"
+
+# ==============================================================================
+# LAYER: CORE REVIEW PROTOCOL (RV-1xx)
+# Suggestion schema, appendix structure, round lifecycle, append-only invariants
+# ==============================================================================
+
+core_review_protocol_requirements:
+
+  - id: RV-100
+    description: "Each review round MUST start with a monotonically increasing round heading"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Output contains '#### Review Round R{n}' heading"
+      - "Round number n = max(existing rounds) + 1"
+      - "_validate_snippet() rejects missing heading"
+      - "_max_review_round() derives next round from document content"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet", "_max_review_round"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-101
+    description: "Each round MUST include reviewer metadata: Reviewer name/model, Date (UTC), Scope"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Output includes '- **Reviewer**: {label}'"
+      - "Output includes '- **Date**: {utc_timestamp}'"
+      - "Output includes '- **Scope**: {scope}'"
+
+    depends_on: [RV-100]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-102
+    description: "Suggestions MUST use the 7-column CRP table schema"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Table columns: ID, Area, Severity, Suggestion, Rationale, Proposed Placement, Validation Approach"
+      - "REQUIRED_COLUMNS constant defines exact column names"
+      - "_validate_snippet() enforces column presence and order"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      constants: ["REQUIRED_COLUMNS"]
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-103
+    description: "Suggestion IDs MUST follow R{round}-S{n} (plan) or R{round}-F{n} (feature) format"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Plan suggestions: R{round}-S1 through R{round}-S{max_suggestions}"
+      - "Feature suggestions: R{round}-F1 through R{round}-F{max_suggestions}"
+      - "_validate_snippet() validates ID pattern"
+      - "_extract_feature_snippet() splits by prefix"
+
+    depends_on: [RV-102]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet", "_extract_feature_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-104
+    description: "Area MUST be one of the allowed values"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Allowed: architecture, interfaces, data, risks, validation, ops, security"
+      - "ALLOWED_AREAS constant defines enum"
+      - "_validate_snippet() rejects unknown areas"
+
+    depends_on: [RV-102]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      constants: ["ALLOWED_AREAS"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-105
+    description: "Severity MUST be one of: critical, high, medium, low"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "ALLOWED_SEVERITIES constant defines enum"
+      - "_validate_snippet() rejects unknown severities"
+
+    depends_on: [RV-102]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      constants: ["ALLOWED_SEVERITIES"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-106
+    description: "Appendix A (Applied Suggestions) MUST contain ID, Suggestion summary, Source, Implementation/Validation Notes, Date"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Table: | ID | Suggestion | Source | Implementation / Validation Notes | Date |"
+      - "Rows inserted by _insert_appendix_rows() for ACCEPT decisions"
+      - "Placeholder '(none yet)' replaced on first insert"
+
+    depends_on: [RV-110]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      constants: ["APPENDIX_TEMPLATE"]
+      functions: ["_insert_appendix_rows"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-107
+    description: "Appendix B (Rejected Suggestions) MUST contain ID, Suggestion summary, Source, Rejection Rationale, Date"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Table: | ID | Suggestion | Source | Rejection Rationale | Date |"
+      - "Rows inserted by _insert_appendix_rows() for REJECT decisions"
+      - "Rejection rationale persists to prevent re-suggestion"
+
+    depends_on: [RV-110]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      constants: ["APPENDIX_TEMPLATE"]
+      functions: ["_insert_appendix_rows"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-108
+    description: "Appendix C (Incoming Suggestions) MUST be append-only"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Reviewers MUST NOT modify existing Appendix C entries"
+      - "_validate_snippet() rejects output containing Appendix A or B headers"
+      - "New rounds appended after existing content"
+
+    depends_on: [RV-110]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-109
+    description: "Reviewers MUST NOT rewrite or modify the document body"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Prompt instructs 'Do NOT rewrite the document'"
+      - "Output validated as appendable snippet only"
+      - "Validation rejects Appendix A/B modification attempts"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt", "_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-110
+    description: "Appendix structure MUST be auto-initialized when missing from target document"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "_ensure_appendix_exists() bootstraps APPENDIX_TEMPLATE when heading not found"
+      - "Template includes Reviewer Instructions, Appendix A/B/C with placeholder rows"
+      - "Idempotent — does not re-add if already present"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      constants: ["APPENDIX_HEADING", "APPENDIX_TEMPLATE"]
+      functions: ["_ensure_appendix_exists"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-111
+    description: "Reviewer prompts MUST include applied and rejected IDs to prevent re-suggestion"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "_build_prompt() includes applied_list and rejected_list in iteration_context"
+      - "Rejected list includes instruction to study rejection rationale"
+      - "Prompt instructs 'find what prior reviewers MISSED'"
+
+    depends_on: [RV-106, RV-107]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-112
+    description: "Reviewers MUST be able to endorse untriaged suggestions from prior rounds"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Prompt includes endorsement instructions with format"
+      - "_extract_untriaged_suggestions() parses **Endorsements** sections"
+      - "Endorsement counts tracked per suggestion ID"
+
+    depends_on: [RV-108]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_extract_untriaged_suggestions", "_build_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-113
+    description: "Pipe characters in table cells MUST be escaped as backslash-pipe"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "Prompt instructs pipe escaping"
+      - "_split_cells() handles escaped pipes via placeholder replacement"
+
+    depends_on: [RV-102]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_split_cells"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-114
+    description: "Per-round suggestion count MUST be configurable (default 10, max 25)"
+    status: implemented
+    type: protocol
+
+    acceptance_criteria:
+      - "max_suggestions config input with default=10"
+      - "validate_config() enforces 1-25 range"
+      - "Prompt uses max_suggestions in ID range instructions"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["validate_config", "_build_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-115
+    description: "Semantic duplicate detection via content hashing to prevent equivalent suggestions under different IDs"
+    status: planned
+    type: protocol
+
+    acceptance_criteria:
+      - "Parse suggestion rows and compute stable hash: hash(normalize(Area + Suggestion))"
+      - "Store in state JSON as seen_suggestion_hashes"
+      - "Include deduplicated summaries in next reviewer prompt"
+
+    depends_on: [RV-102, RV-700]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      notes: "Phase 2 enhancement from ARCHITECTURAL_REVIEW_WORKFLOW_PLAN.md"
+
+    verified_by: []
+
+# ==============================================================================
+# LAYER: DOMAIN COVERAGE (RV-2xx)
+# Area tracking, substantially addressed thresholds, two-tier priority steering
+# ==============================================================================
+
+domain_coverage_requirements:
+
+  - id: RV-200
+    description: "Every suggestion MUST be categorized into one of the defined review areas"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "ALLOWED_AREAS enforced in _validate_snippet()"
+      - "7 areas: architecture, interfaces, data, risks, validation, ops, security"
+
+    depends_on: [RV-104]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      constants: ["ALLOWED_AREAS"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-201
+    description: "System MUST track accepted suggestion count per area from Appendix A"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "_compute_substantially_addressed_from_doc() groups applied IDs by area"
+      - "Area mapping built from Appendix C suggestion rows"
+      - "Returns {area: [id1, id2, ...]} for areas meeting threshold"
+
+    depends_on: [RV-106, RV-200]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_compute_substantially_addressed_from_doc", "_compute_area_coverage"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-202
+    description: "An area is substantially addressed when accepted count >= configurable threshold (default 3)"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "_compute_substantially_addressed() returns areas with len(ids) >= threshold"
+      - "substantially_addressed_threshold config input (default 3)"
+
+    depends_on: [RV-201, RV-203]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_compute_substantially_addressed"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-203
+    description: "Substantially addressed threshold MUST be configurable per run"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "substantially_addressed_threshold config input"
+      - "Passed to _compute_substantially_addressed_from_doc()"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      config_key: substantially_addressed_threshold
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-204
+    description: "When uncovered areas exist, prompts MUST list them as priority with quantified gap data"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "Tier 1 block in _build_prompt() lists uncovered areas"
+      - "Per-area: accepted count, accepted IDs, gap to threshold"
+      - "Uses area_coverage dict for detailed info"
+
+    depends_on: [RV-201, RV-202]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt"]
+      notes: "Two-tier priority steering — Tier 1"
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-205
+    description: "Prompts MUST instruct reviewers to allocate at least max_suggestions-1 slots to priority areas"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "_build_prompt() includes allocation instruction in Tier 1 block"
+      - "'Allocate at least {max_suggestions - 1} of your {max_suggestions} suggestion slots'"
+
+    depends_on: [RV-204]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-206
+    description: "Addressed areas MUST be presented as secondary with genuine-gap-only instruction"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "Tier 2 block lists covered areas with accepted counts"
+      - "'only propose if you find a genuine gap the N accepted suggestions missed'"
+
+    depends_on: [RV-204]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt"]
+      notes: "Two-tier priority steering — Tier 2"
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-207
+    description: "When ALL areas are substantially addressed, system MUST enter gap-hunting mode"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "Gap-hunting prompt focuses on cross-cutting concerns, unstated assumptions, second-order effects"
+      - "'Do NOT rehash areas already well-covered'"
+      - "Explicit list: gaps between areas, unvalidated assumptions, second-order effects, edge cases"
+
+    depends_on: [RV-202]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt"]
+      notes: "Gap-hunting mode — all areas substantially addressed"
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-208
+    description: "An Areas Substantially Addressed section MUST be inserted/updated in the document"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "_insert_substantially_addressed_section() creates/updates section"
+      - "Lists covered areas with accepted suggestion counts and IDs"
+      - "Placed between Reviewer Instructions and Appendix A"
+
+    depends_on: [RV-202]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_insert_substantially_addressed_section"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-209
+    description: "An Areas Needing Further Review section MUST be inserted/updated"
+    status: implemented
+    type: domain_coverage
+
+    acceptance_criteria:
+      - "_insert_areas_needing_review_section() creates/updates section"
+      - "Lists uncovered areas with gap-to-threshold data"
+      - "Placed after Areas Substantially Addressed"
+
+    depends_on: [RV-201]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_insert_areas_needing_review_section"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+# ==============================================================================
+# LAYER: TRIAGE AND DECISION (RV-3xx)
+# Automated triage: classification, validation, and appendix routing
+# ==============================================================================
+
+triage_requirements:
+
+  - id: RV-300
+    description: "System MUST extract untriaged suggestions from Appendix C, excluding triaged IDs"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "_extract_untriaged_suggestions() filters by applied+rejected ID set"
+      - "Returns list of dicts with id, area, severity, suggestion, rationale, placement, validation, round"
+
+    depends_on: [RV-106, RV-107, RV-108]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_extract_untriaged_suggestions"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-301
+    description: "System MUST parse endorsement counts per suggestion from review round blocks"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "_extract_untriaged_suggestions() parses **Endorsements** sections"
+      - "Returns endorsement_counts: {suggestion_id: count}"
+      - "Regex matches R{n}-[SF]{n} patterns in endorsement text"
+
+    depends_on: [RV-112]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_extract_untriaged_suggestions"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-302
+    description: "Triage MUST use a dedicated LLM prompt with full context"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "_build_triage_prompt() includes: document context, applied/rejected history, endorsement counts, all untriaged suggestions"
+      - "Triage agent is a dedicated LLM call (not a reviewer)"
+
+    depends_on: [RV-300, RV-301]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_triage_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-303
+    description: "Triage output MUST be a JSON array with id, decision, summary, rationale, area fields"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "_build_triage_prompt() specifies JSON schema with examples"
+      - "_validate_triage_output() enforces required fields and valid values"
+      - "Decision must be exactly ACCEPT or REJECT"
+      - "Area must be in ALLOWED_AREAS"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_triage_output"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-304
+    description: "ACCEPT decisions MUST insert row into Appendix A"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "_apply_triage_decisions() routes accepted to _insert_appendix_rows() for Appendix A"
+      - "Row includes: ID, summary, source reviewer, implementation rationale, date"
+
+    depends_on: [RV-106, RV-303]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_apply_triage_decisions", "_insert_appendix_rows"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-305
+    description: "REJECT decisions MUST insert row into Appendix B with rationale"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "_apply_triage_decisions() routes rejected to _insert_appendix_rows() for Appendix B"
+      - "Row includes: ID, summary, source reviewer, rejection rationale, date"
+
+    depends_on: [RV-107, RV-303]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_apply_triage_decisions", "_insert_appendix_rows"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-306
+    description: "Partial triage results MUST be accepted — uncovered suggestions remain untriaged"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "_validate_triage_output() returns missing_ids for unprocessed suggestions"
+      - "Partial success accepted when some valid decisions present alongside errors"
+
+    depends_on: [RV-303]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_triage_output"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-307
+    description: "Triage MUST be togglable via enable_triage config (default enabled)"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "enable_triage config input (default True)"
+      - "When disabled, suggestions remain in Appendix C for manual triage"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      config_key: enable_triage
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-308
+    description: "Endorsement counts MUST be included in triage prompts"
+    status: implemented
+    type: triage
+
+    acceptance_criteria:
+      - "_build_triage_prompt() includes endorsement_info block"
+      - "Format: '{sid}: {count} endorsement(s)' per endorsed suggestion"
+      - "Instruction: 'suggestions endorsed by multiple reviewers should be weighted higher'"
+
+    depends_on: [RV-301]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_triage_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-309
+    description: "Cross-round semantic deduplication during triage"
+    status: planned
+    type: triage
+
+    acceptance_criteria:
+      - "Triage detects semantically equivalent suggestions across rounds"
+      - "Merges or flags duplicates rather than accepting both"
+      - "Uses hash-based or embedding-based similarity"
+
+    depends_on: [RV-115, RV-300]
+
+    implementation_hints:
+      notes: "Phase 2 enhancement paired with RV-115 hash-based dedup"
+
+    verified_by: []
+
+# ==============================================================================
+# LAYER: DUAL-DOCUMENT MODE (RV-4xx)
+# Simultaneous plan + feature requirements review with split routing
+# ==============================================================================
+
+dual_document_requirements:
+
+  - id: RV-400
+    description: "System MUST enter dual-document mode when feature_requirements config provided"
+    status: implemented
+    type: dual_document
+
+    acceptance_criteria:
+      - "_execute() resolves feature_doc_path from feature_requirements list"
+      - "First .md file from paths or directories used as feature document"
+      - "has_feature_doc flag controls dual-document behavior"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_get_feature_doc_path"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-401
+    description: "In dual-document mode, reviewers MUST produce Requirements Coverage mapping table"
+    status: implemented
+    type: dual_document
+
+    acceptance_criteria:
+      - "Coverage table: Feature Doc Section | Plan Step(s) | Coverage | Gaps"
+      - "Coverage values: Full / Partial / Missing"
+      - "_build_prompt() dual_doc_format includes MANDATORY coverage section"
+
+    depends_on: [RV-400]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-402
+    description: "Plan suggestions use S-prefix IDs; feature suggestions use F-prefix IDs"
+    status: implemented
+    type: dual_document
+
+    acceptance_criteria:
+      - "Plan: R{n}-S1..S{max}, Feature: R{n}-F1..F{max}"
+      - "Prompt instructs dual ID ranges"
+      - "_extract_feature_snippet() splits by Feature Requirements Suggestions heading"
+
+    depends_on: [RV-103]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_extract_feature_snippet", "_build_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-403
+    description: "S-prefix suggestions route to plan appendices; F-prefix to feature appendices"
+    status: implemented
+    type: dual_document
+
+    acceptance_criteria:
+      - "_execute() splits reviewer output and appends to respective documents"
+      - "Feature snippet extracted and appended to feature_doc_text"
+      - "Plan snippet (remainder) appended to doc_text"
+
+    depends_on: [RV-402]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-404
+    description: "Feature document MUST be auto-initialized with Appendix A/B/C if missing"
+    status: implemented
+    type: dual_document
+
+    acceptance_criteria:
+      - "_ensure_appendix_exists() called on feature_doc_text when init_if_missing=True"
+      - "Initialized feature doc written via atomic_write()"
+
+    depends_on: [RV-110, RV-400]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-405
+    description: "Feature requirements content MUST be included in reviewer prompt with traceability instructions"
+    status: implemented
+    type: dual_document
+
+    acceptance_criteria:
+      - "_build_prompt() includes requirements_block with feature content"
+      - "Instructions: evaluate plan-to-requirements traceability, flag gaps"
+
+    depends_on: [RV-400]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-406
+    description: "Triage MUST handle both S-prefix and F-prefix IDs with correct routing"
+    status: implemented
+    type: dual_document
+
+    acceptance_criteria:
+      - "_build_triage_prompt() includes suggestion type note for S vs F prefix"
+      - "Triage evaluates both types with same ACCEPT/REJECT criteria"
+      - "Routing by prefix to respective document appendices"
+
+    depends_on: [RV-303, RV-402]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_build_triage_prompt"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-407
+    description: "Requirements coverage analysis SHOULD be extractable as structured data"
+    status: planned
+    type: dual_document
+
+    acceptance_criteria:
+      - "Coverage table parsed into structured data (e.g., list of dicts)"
+      - "Available in workflow result output for downstream pipelines"
+      - "Enables programmatic gap analysis"
+
+    depends_on: [RV-401]
+
+    implementation_hints:
+      notes: "Currently embedded in reviewer markdown output; no structured extraction"
+
+    verified_by: []
+
+# ==============================================================================
+# LAYER: AGENT SELECTION AND QUALITY (RV-5xx)
+# Model selection strategy, tier system, provider handling
+# ==============================================================================
+
+agent_selection_requirements:
+
+  - id: RV-500
+    description: "Default models MUST be selected from model catalog based on quality_tier"
+    status: implemented
+    type: agent_selection
+
+    acceptance_criteria:
+      - "_select_default_agents() queries list_models_by_tier()"
+      - "Falls back to balanced tier if insufficient flagship models available"
+      - "Returns provider:model agent specs"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_select_default_agents"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-501
+    description: "Default quality tier MUST be flagship"
+    status: implemented
+    type: agent_selection
+
+    acceptance_criteria:
+      - "quality_tier config default is 'flagship'"
+      - "Optimizes for review quality over cost"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      config_key: quality_tier
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-502
+    description: "Provider allowlist MUST filter default model selection"
+    status: implemented
+    type: agent_selection
+
+    acceptance_criteria:
+      - "providers config restricts _select_default_agents() to specified providers"
+      - "Applied to both preferred list and catalog fallback"
+
+    depends_on: [RV-500]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_select_default_agents"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-503
+    description: "Reviewer count MUST be configurable (default 2, max 5)"
+    status: implemented
+    type: agent_selection
+
+    acceptance_criteria:
+      - "reviewer_count config input (default 2)"
+      - "validate_config() enforces 1-5 range"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      config_key: reviewer_count
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-504
+    description: "Reviewers MUST execute sequentially — each sees prior rounds"
+    status: implemented
+    type: agent_selection
+
+    acceptance_criteria:
+      - "Sequential loop in _execute(): each agent runs after prior completes"
+      - "Document updated between rounds — later reviewers see earlier suggestions"
+      - "next_round incremented after each round"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-505
+    description: "OpenAI model-not-found errors MUST trigger configurable fallback"
+    status: implemented
+    type: agent_selection
+
+    acceptance_criteria:
+      - "_looks_like_model_not_found_error() detects model access errors"
+      - "Retry with fallback_openai_model (default openai:gpt-4.1)"
+      - "Fallback togglable via fallback_on_model_not_found config"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_looks_like_model_not_found_error"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-506
+    description: "Gemini safety filter blocks MUST trigger retry with relaxed settings"
+    status: implemented
+    type: agent_selection
+
+    acceptance_criteria:
+      - "GeminiSafetyFilterError caught in review loop"
+      - "RELAXED_SAFETY_SETTINGS applied on retry"
+      - "Only technical content triggers — not harmful content"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      constants: ["RELAXED_SAFETY_SETTINGS"]
+
+    verified_by:
+      - tests/unit/test_gemini_safety_filter.py
+
+  - id: RV-507
+    description: "Custom Gemini safety settings MUST be applicable via config"
+    status: implemented
+    type: agent_selection
+
+    acceptance_criteria:
+      - "gemini_safety_settings config applied to all Gemini agents"
+      - "Overrides default safety settings"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      config_key: gemini_safety_settings
+
+    verified_by:
+      - tests/unit/test_gemini_safety_filter.py
+
+# ==============================================================================
+# LAYER: VALIDATION AND SAFETY (RV-6xx)
+# Snippet validation, retry mechanics, fail-fast, document integrity
+# ==============================================================================
+
+validation_requirements:
+
+  - id: RV-600
+    description: "Every reviewer output MUST be validated before appending"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "_validate_snippet() called after each agent response"
+      - "Invalid output is never appended to document"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-601
+    description: "Validation MUST reject output missing round heading"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "Checks for '#### Review Round R{n}' in snippet"
+      - "Returns (False, 'Missing required heading: ...', [])"
+
+    depends_on: [RV-100]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-602
+    description: "Validation MUST reject output containing Appendix A/B headers"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "Checks for forbidden strings: '### Appendix A', '### Appendix B'"
+      - "Prevents reviewers from modifying triaged sections"
+
+    depends_on: [RV-108]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-603
+    description: "Validation MUST verify suggestion table has all 7 required columns"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "Table header parsed and matched against REQUIRED_COLUMNS"
+      - "Column order and count must match"
+
+    depends_on: [RV-102]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-604
+    description: "Validation MUST verify Area values are in allowed enum"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "Each suggestion row's Area cell checked against ALLOWED_AREAS"
+      - "Case-insensitive comparison"
+
+    depends_on: [RV-104]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-605
+    description: "Validation MUST verify Severity values are in allowed enum"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "Each suggestion row's Severity cell checked against ALLOWED_SEVERITIES"
+      - "Case-insensitive comparison"
+
+    depends_on: [RV-105]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-606
+    description: "Validation MUST enforce suggestion count between 1 and max_suggestions"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "At least 1 suggestion row required"
+      - "At most max_suggestions rows allowed"
+
+    depends_on: [RV-114]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_validate_snippet"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-607
+    description: "Validation failure MUST trigger targeted retry with schema guidance"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "Retry loop in _execute() on validation failure"
+      - "Re-prompt includes validation error details"
+      - "Max retry attempts before failing the round"
+
+    depends_on: [RV-600]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-608
+    description: "Code-block fences MUST be stripped from LLM output before validation"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "_strip_code_fences() removes ```markdown, ```md, bare ``` fences"
+      - "_strip_json_fences() removes ```json fences"
+      - "Applied before _validate_snippet() and _validate_triage_output()"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_strip_code_fences", "_strip_json_fences"]
+
+    verified_by:
+      - tests/unit/test_gemini_safety_filter.py
+
+  - id: RV-609
+    description: "Document writes MUST use atomic write with backup"
+    status: implemented
+    type: validation
+
+    acceptance_criteria:
+      - "atomic_write() with backup=True for all document modifications"
+      - "Prevents corruption on crash or power loss"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      imports: ["atomic_write", "atomic_write_json"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+# ==============================================================================
+# LAYER: STATE AND PERSISTENCE (RV-7xx)
+# State tracking, round history, crash recovery
+# ==============================================================================
+
+state_requirements:
+
+  - id: RV-700
+    description: "Workflow state MUST be persisted to JSON after each review round"
+    status: implemented
+    type: state
+
+    acceptance_criteria:
+      - "atomic_write_json() to state_path after each round"
+      - "State includes round records and cumulative metrics"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-701
+    description: "State MUST include round records, cumulative metrics, and configuration"
+    status: implemented
+    type: state
+
+    acceptance_criteria:
+      - "_RoundRecord dataclass with round_number, reviewer, tokens, cost, status"
+      - "State JSON includes rounds array, total_input_tokens, total_output_tokens, total_cost"
+
+    depends_on: [RV-700]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-702
+    description: "Round numbering MUST be derived from document to survive state file loss"
+    status: implemented
+    type: state
+
+    acceptance_criteria:
+      - "_max_review_round() parses existing round headings from document"
+      - "next_round = max(existing) + 1"
+      - "State file is supplementary, not authoritative"
+
+    depends_on: [RV-100]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      functions: ["_max_review_round"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-703
+    description: "Concurrent access MUST be prevented via file locking"
+    status: implemented
+    type: state
+
+    acceptance_criteria:
+      - "FileLock(lock_path) context manager wraps entire _execute()"
+      - "Lock file at <doc_dir>/.startd8/architectural_review.lock"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      imports: ["FileLock"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-704
+    description: "State path MUST be configurable with sensible default"
+    status: implemented
+    type: state
+
+    acceptance_criteria:
+      - "state_path config input"
+      - "Default: <doc_dir>/.startd8/architectural_review_state.json"
+      - "Parent directories created automatically"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      config_key: state_path
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-705
+    description: "State SHOULD support incremental resume from last successful round"
+    status: planned
+    type: state
+
+    acceptance_criteria:
+      - "Resume flag or automatic detection of last completed round"
+      - "Skip already-completed agent rounds"
+      - "Round numbering from document already supports this (RV-702)"
+
+    depends_on: [RV-700, RV-702]
+
+    implementation_hints:
+      notes: "Round numbering from document supports natural resume; explicit resume flag not yet implemented"
+
+    verified_by: []
+
+# ==============================================================================
+# LAYER: OBSERVABILITY AND COST (RV-8xx)
+# Cost tracking, guardrails, telemetry, progress reporting
+# ==============================================================================
+
+observability_requirements:
+
+  - id: RV-800
+    description: "Per-round token usage (input + output) MUST be tracked and reported"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "token_usage_input() and token_usage_output() extracted per round"
+      - "Stored in _RoundRecord and accumulated in total_input_tokens, total_output_tokens"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      imports: ["token_usage_input", "token_usage_output"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-801
+    description: "Per-round cost MUST be tracked and accumulated"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "token_usage_cost() called per round"
+      - "total_cost accumulator updated after each round"
+      - "Cost reported in workflow result"
+
+    depends_on: [RV-800]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      imports: ["token_usage_cost"]
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-802
+    description: "Warning cost threshold MUST trigger logged warning when exceeded"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "warn_cost_usd config checked after each round"
+      - "_logger.warning() emitted when total_cost > warn_cost_usd"
+
+    depends_on: [RV-801]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      config_key: warn_cost_usd
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-803
+    description: "Maximum cost threshold MUST trigger fail-fast"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "max_cost_usd config checked after each round"
+      - "No further rounds executed when threshold exceeded"
+      - "Returns WorkflowResult with cost-exceeded error"
+
+    depends_on: [RV-801]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+      config_key: max_cost_usd
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-804
+    description: "Progress callbacks MUST fire after each round"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "_emit_progress() called per round with (completed, total, message)"
+      - "Enables UI progress bars and logging"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-805
+    description: "Workflow result MUST include triage decisions, area coverage, per-round records, cumulative metrics"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "WorkflowResult.output includes triage, rounds, total_* fields"
+      - "Triage output includes per-suggestion decision, summary, rationale"
+      - "Area coverage includes substantially_addressed_areas"
+
+    depends_on: [RV-303, RV-701]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+
+    verified_by:
+      - tests/unit/test_architectural_review_triage.py
+
+  - id: RV-806
+    description: "OTel span integration — each review round SHOULD emit a span"
+    status: planned
+    type: observability
+
+    acceptance_criteria:
+      - "Each round emits OTel span with: reviewer, round_number, token_usage, cost"
+      - "Span attributes follow startd8 semantic conventions"
+
+    depends_on: []
+
+    implementation_hints:
+      notes: "OTel spans not yet wired into architectural review workflow"
+
+    verified_by: []
+
+  - id: RV-807
+    description: "Triage decisions SHOULD be emittable as structured events"
+    status: planned
+    type: observability
+
+    acceptance_criteria:
+      - "Triage decisions emittable via ContextCore task tracking or event bus"
+      - "Enables downstream consumption of ACCEPT/REJECT signals"
+
+    depends_on: [RV-303]
+
+    implementation_hints:
+      notes: "Triage results in workflow output but not emitted as structured events"
+
+    verified_by: []

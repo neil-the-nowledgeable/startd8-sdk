@@ -256,7 +256,7 @@ The context propagation for ContextCore-enriched workflows is:
 | Issue ID | Description | Impact | Status |
 |----------|------------|--------|--------|
 | B-12 | Seed schema validation advisory-only | Malformed seeds get warnings but write anyway | Partially addressed (Phase 1) |
-| B-14 | No context file checksums in handoff | Context drift between design and implement undetected | Open (Phase 4) |
+| B-14 | No context file checksums in handoff | Context drift between design and implement undetected | Addressed (Phase 4) |
 | B-15 | No shared schema version across pipeline artifacts | No compatibility branching | Open (Phase 4) |
 | ~~B-16~~ | ~~Incomplete provenance chain~~ | ~~Gate 3 cannot verify pipeline integrity~~ | Addressed (Phases 2+3) |
 | A-12 | Seed lacks `_file_scope` and `file_ownership` | Defense-in-depth layers structurally present but functionally inert | In progress |
@@ -288,7 +288,7 @@ PLAN → SCAFFOLD → DESIGN ──────────────▶ IMPLE
 
 **Gap** (Issue B-13): No formal JSON schema for `design-handoff.json`. The `HandoffData` dataclass provides Python-side structure but no cross-language schema for validation.
 
-**Gap** (Issue B-14): No context file checksums. If the project's source files change between design and implement runs, the implementation half works from a design spec that may no longer match reality.
+**Gap** (Issue B-14): **Addressed (Phase 4).** Context file checksums are now computed at handoff write time and verified on load. The `--strict-handoff` flag converts mismatch warnings into hard errors.
 
 ### Pipeline Step Handoff
 
@@ -424,9 +424,9 @@ The pipeline boundary between ContextCore governance and StartD8 execution occur
 | ContextCore Contract | StartD8 Equivalent | Gap |
 |---------------------|-------------------|-----|
 | `TaskSpanContract` | OTel spans from `ContextCoreWorkflowAdapter` | Spans exist; not yet structured as formal contracts |
-| `HandoffContract` | `HandoffData` (design → implement split) | HandoffData is internal only; no ContextCore wrapping |
+| `HandoffContract` | `HandoffData` (design → implement split) | **Addressed (Phase 4)**: `wrap_handoff_in_contract()` wraps HandoffData in a ContextCore HandoffContract; `design-handoff-contract.json` written alongside handoff |
 | `ArtifactIntent` | `design_results` per-task entries | Design results are rich but not ArtifactIntent-shaped |
-| `GateResult` | Snippet validation (CRP), review scores (artisan) | Not formalized as GateResult; no structured evidence |
+| `GateResult` | Snippet validation (CRP), review scores (artisan) | **Addressed (Phase 4)**: `GateEmitter` in `gate_contracts.py` maps review scores, checkpoint results, and preflight reports to typed GateResult contracts emitted via EventBus |
 
 ---
 

@@ -20,7 +20,9 @@ from ..models import (
 )
 from ...orchestration import WorkflowTemplates
 from ...agents import BaseAgent
+from ...agents.pool import TimeoutConfig
 from ...utils.agent_resolution import resolve_agents
+from ...utils.retry import RetryConfig
 
 
 class DesignPolishWorkflow(WorkflowBase):
@@ -122,7 +124,11 @@ class DesignPolishWorkflow(WorkflowBase):
         # Resolve agents
         resolved_agents = agents or []
         if not resolved_agents and "agents" in config:
-            resolved_agents = resolve_agents(config["agents"])
+            resolved_agents = resolve_agents(
+                config["agents"],
+                timeout_config=TimeoutConfig(read=float(config.get("llm_read_timeout_seconds", 90))),
+                retry_config=RetryConfig(max_attempts=int(config.get("llm_max_attempts", 1))),
+            )
 
         if len(resolved_agents) != 3:
             return WorkflowResult.from_error(

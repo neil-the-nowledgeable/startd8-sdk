@@ -470,8 +470,8 @@ Six of seven artifact types have `derived_from` rules populated in `generate_art
 | Category | Count | Fixed/Addressed | Open | In Progress |
 |----------|-------|----------------|------|-------------|
 | **Session (A-series)** | 14 | 4 | 4 | 6 |
-| **Other sources (B-series)** | 19 | 12 | 7 | 0 |
-| **Total** | 33 | 16 | 11 | 6 |
+| **Other sources (B-series)** | 19 | 13 | 6 | 0 |
+| **Total** | 33 | 17 | 10 | 6 |
 
 ### Priority Next Actions
 

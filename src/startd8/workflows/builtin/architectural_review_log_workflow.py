@@ -42,8 +42,10 @@ from ..models import (
 from ...agents import BaseAgent
 from ...exceptions import GeminiSafetyFilterError
 from ...model_catalog import Models, list_models_by_tier
+from ...agents.pool import TimeoutConfig
 from ...utils.agent_resolution import resolve_agents
 from ...utils.file_operations import FileLock, atomic_write, atomic_write_json
+from ...utils.retry import RetryConfig
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
 _logger = logging.getLogger(__name__)
@@ -1341,6 +1343,20 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     default=3,
                     description="Minimum accepted suggestions per area to mark it as 'substantially addressed'",
                 ),
+                WorkflowInput(
+                    name="llm_read_timeout_seconds",
+                    type="number",
+                    required=False,
+                    default=90,
+                    description="Fast-fail read timeout for reviewer LLM calls",
+                ),
+                WorkflowInput(
+                    name="llm_max_attempts",
+                    type="number",
+                    required=False,
+                    default=1,
+                    description="Retry attempts for reviewer LLM calls (1 = fail fast)",
+                ),
             ],
         )
 
@@ -1361,6 +1377,22 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
         max_suggestions = config.get("max_suggestions", 10)
         if not isinstance(max_suggestions, int) or max_suggestions < 1 or max_suggestions > 25:
             errors.append("max_suggestions must be an int between 1 and 25")
+
+        llm_read_timeout_seconds = config.get("llm_read_timeout_seconds", 90)
+        try:
+            timeout_val = float(llm_read_timeout_seconds)
+            if timeout_val <= 0:
+                errors.append("llm_read_timeout_seconds must be > 0")
+        except (TypeError, ValueError):
+            errors.append("llm_read_timeout_seconds must be a positive number")
+
+        llm_max_attempts = config.get("llm_max_attempts", 1)
+        try:
+            attempts_val = int(llm_max_attempts)
+            if attempts_val < 1:
+                errors.append("llm_max_attempts must be >= 1")
+        except (TypeError, ValueError):
+            errors.append("llm_max_attempts must be an integer >= 1")
 
         if errors:
             return ValidationResult.failure(errors)
@@ -1383,6 +1415,10 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
         max_cost_usd = config.get("max_cost_usd")
         fallback_openai_model = str(config.get("fallback_openai_model") or "openai:gpt-4.1").strip()
         fallback_on_model_not_found = bool(config.get("fallback_on_model_not_found", True))
+        llm_read_timeout_seconds = float(config.get("llm_read_timeout_seconds", 90))
+        llm_max_attempts = int(config.get("llm_max_attempts", 1))
+        llm_timeout_config = TimeoutConfig(read=llm_read_timeout_seconds)
+        llm_retry_config = RetryConfig(max_attempts=llm_max_attempts)
 
         default_state_path = doc_path.parent / ".startd8" / "architectural_review_state.json"
         state_path = Path(config.get("state_path") or default_state_path).expanduser().resolve()
@@ -1397,13 +1433,21 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
         if agents:
             resolved_agents = agents
         elif explicit_specs:
-            resolved_agents = resolve_agents(explicit_specs)
+            resolved_agents = resolve_agents(
+                explicit_specs,
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
         else:
             quality_tier = str(config.get("quality_tier") or "flagship")
             providers = config.get("providers")
             reviewer_count = int(config.get("reviewer_count", 2))  # matches default in metadata
             default_specs = _select_default_agents(quality_tier, reviewer_count, providers)
-            resolved_agents = resolve_agents(default_specs)
+            resolved_agents = resolve_agents(
+                default_specs,
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
 
         if not resolved_agents:
             return WorkflowResult.from_error(self.metadata.workflow_id, "No agents available for architectural review")
@@ -1627,7 +1671,11 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             f"OpenAI model unavailable ({getattr(agent, 'model', '')}); retrying with {fallback_openai_model}",
                         )
                         try:
-                            fallback_agent = resolve_agents([fallback_openai_model])[0]
+                            fallback_agent = resolve_agents(
+                                [fallback_openai_model],
+                                timeout_config=llm_timeout_config,
+                                retry_config=llm_retry_config,
+                            )[0]
                             response_text, time_ms, token_usage = fallback_agent.generate(prompt)
                             agent = fallback_agent  # record agent/model that actually ran
                         except Exception as e2:

@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..logging_config import get_logger
 from ..security import sanitize_path
 from .checkpoint import CheckpointStatus, IntegrationCheckpoint
+from .gate_contracts import GateEmitter
 from .protocols import (
     CheckpointFailedCallback,
     CodeGenerator,
@@ -456,6 +457,14 @@ class PrimeContractorWorkflow:
             gen_paths = [Path(f) for f in feature.generated_files if Path(f).exists() and Path(f).suffix == '.py']
             if gen_paths:
                 pre_result = self.checkpoint.pre_validate(gen_paths)
+                # Emit GateResult for pre-merge validation (Phase 4, Item 10)
+                try:
+                    gate = GateEmitter.from_checkpoint_result(
+                        pre_result, workflow_id=feature.id, trace_id=None,
+                    )
+                    GateEmitter.emit(gate)
+                except Exception as gate_exc:
+                    logger.warning("Failed to emit pre-validate gate result: %s", gate_exc)
                 if pre_result.status == CheckpointStatus.FAILED:
                     error_msg = pre_result.message
                     if pre_result.errors:
@@ -552,6 +561,15 @@ class PrimeContractorWorkflow:
         if not self.dry_run:
             logger.info("Running integration checkpoints for '%s'...", feature.name)
             results = self.checkpoint.run_all_checkpoints(integrated_files, feature.name)
+            # Emit GateResult for each checkpoint result (Phase 4, Item 10)
+            for cr in results:
+                try:
+                    gate = GateEmitter.from_checkpoint_result(
+                        cr, workflow_id=feature.id, trace_id=None,
+                    )
+                    GateEmitter.emit(gate)
+                except Exception as gate_exc:
+                    logger.warning("Failed to emit checkpoint gate result: %s", gate_exc)
             all_passed = self.checkpoint.summarize_results(results)
             if not all_passed:
                 failed_checks = [r for r in results if r.status == CheckpointStatus.FAILED]

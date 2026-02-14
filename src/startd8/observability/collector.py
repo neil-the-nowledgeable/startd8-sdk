@@ -72,6 +72,7 @@ _EVENT_CATEGORIES = {
     "TRUNCATION_DETECTED": "truncation",
     "TRUNCATION_WARNING": "truncation",
     "TRUNCATION_PREFLIGHT_REJECT": "truncation",
+    "QUALITY_GATE_RESULT": "quality",
     "SYSTEM_ERROR": "system",
     "SYSTEM_WARNING": "system",
     "FRAMEWORK_INITIALIZED": "system",

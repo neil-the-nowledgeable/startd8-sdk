@@ -1,0 +1,2234 @@
+# StartD8 Artisan Contractor Functional Requirements
+# Version: 1.0.0
+# Created: 2026-02-14
+#
+# PURPOSE: Formal functional requirements for the Artisan Contractor Workflow,
+# covering current implementation, identified ContextCore data flow fixes, and
+# planned-but-unbuilt features from PLAN-artisan-contractor.md.
+#
+# FORMAT: Matches startd8.workflow.functional-requirements.yaml (FR-xxx) pattern.
+# NAMESPACE: AR-xxx (Artisan Requirements)
+# STATUS: Each requirement tagged as implemented | partial | planned
+#
+# INPUT: docs/PLAN-artisan-contractor.md, docs/ARTISAN_WORKFLOW_GUIDE.md,
+#        docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md, code audit 2026-02-14
+# OUTPUT: Traceable requirements for Phase Behavior, Orchestration, ContextCore
+#         Data Flow, Cost Model, Handoff/Recovery, Observability, Configuration,
+#         and Safety/Resilience.
+
+manifest_id: startd8.artisan.functional_requirements
+version: "1.0.0"
+
+# ==============================================================================
+# LAYER: PHASE BEHAVIOR (AR-1xx)
+# Per-phase input/behavior/output contracts for the 7-phase pipeline
+# ==============================================================================
+
+phase_behavior_requirements:
+
+  # ---------------------------------------------------------------------------
+  # PLAN Phase (AR-100 – AR-104)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-100
+    description: "PLAN phase loads enriched context seed JSON and populates shared workflow context"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads enriched seed JSON from the path in context['enriched_seed_path']"
+      - "Parses seed_data['tasks'] into list[SeedTask] via _parse_seed_tasks()"
+      - "Topologically sorts tasks by depends_on relationships"
+      - "Applies optional task_filter from context to restrict task set"
+      - "Sets context keys: tasks, task_index, plan_title, plan_goals, domain_summary"
+      - "Sets context keys: preflight_summary, total_estimated_loc, architectural_context"
+      - "Sets context keys: design_calibration, example_artifacts"
+      - "Returns cost=0.0 (no LLM calls)"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: PlanPhaseHandler
+      lines: "438-547"
+
+    verified_by:
+      - tests/unit/contractors/test_artisan_plan_deconstruction.py
+
+  - id: AR-101
+    description: "PLAN phase detects preflight failures and optionally aborts"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Extracts check_summary from seed_data['_preflight']"
+      - "Counts fail_count from check_summary"
+      - "Logs warning when fail_count > 0"
+      - "Raises ValueError when fail_count > 0 AND context['abort_on_preflight_fail'] is True"
+      - "Continues normally when fail_count > 0 but abort_on_preflight_fail is False or unset"
+
+    depends_on: [AR-100]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: PlanPhaseHandler
+      lines: "536-545"
+
+    verified_by:
+      - tests/unit/contractors/test_artisan_plan_deconstruction.py
+
+  - id: AR-102
+    description: "PLAN phase computes per-domain task distribution"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Iterates all filtered tasks and counts occurrences per task.domain"
+      - "Stores domain counts in context['domain_summary'] as dict[str, int]"
+      - "Logs task count, domain count, and preflight failure count"
+
+    depends_on: [AR-100]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: PlanPhaseHandler
+      lines: "490-534"
+
+    verified_by:
+      - tests/unit/contractors/test_artisan_plan_deconstruction.py
+
+  # ---------------------------------------------------------------------------
+  # SCAFFOLD Phase (AR-110 – AR-112)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-110
+    description: "SCAFFOLD phase creates missing parent directories for all task target files"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Iterates all tasks and their target_files"
+      - "Resolves each target file path relative to project_root"
+      - "Skips targets whose resolved parent falls outside project_root (path traversal protection)"
+      - "Creates missing parent directories in real mode (mkdir -p equivalent)"
+      - "Reports directories_missing list in dry-run mode without creating"
+      - "Tracks directories_needed, directories_exist, directories_created"
+      - "Tracks existing_target_files and skipped_targets"
+      - "Sets context['scaffold'] with all tracking information"
+
+    depends_on: [AR-100]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ScaffoldPhaseHandler
+      lines: "550-627"
+
+    verified_by:
+      - tests/unit/contractors/test_7phase_integration.py
+
+  - id: AR-111
+    description: "SCAFFOLD phase validates output conventions from onboarding metadata"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "If context['output_conventions'] is populated, reads per-artifact-type output_ext"
+      - "Warns when task target_files don't match expected file extensions for their artifact type"
+      - "Warning is non-blocking (soft validation)"
+      - "No effect when output_conventions is absent or empty"
+
+    depends_on: [AR-110, AR-307]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 5
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ScaffoldPhaseHandler
+
+  # ---------------------------------------------------------------------------
+  # DESIGN Phase (AR-120 – AR-126)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-120
+    description: "DESIGN phase generates design documents per task via dual-review orchestration"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Uses DesignDocumentationPhase with AgentLLMBackend"
+      - "Creates FeatureContext per task with name, description, target files, estimated LOC"
+      - "Runs dual-review: drafter generates, reviewer critiques, iterate until agreement or max_iterations"
+      - "Stores per-task design_results in context['design_results']"
+      - "Each result contains: design_document, feature_name, agreed, iterations, cost, status"
+      - "Status values: 'designed' (new), 'adopted' (reused from prior), 'env_blocked', 'design_failed'"
+
+    depends_on: [AR-100]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+      lines: "628-1044"
+
+    verified_by:
+      - tests/unit/contractors/test_design_phase_handler.py
+      - tests/unit/contractors/test_artisan_design_documentation.py
+
+  - id: AR-121
+    description: "DESIGN phase applies depth calibration per task based on estimated LOC"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads calibration_map from context['design_calibration']"
+      - "Per-task calibration includes depth_tier (brief/standard/comprehensive), sections, max_output_tokens"
+      - "Brief: <=50 LOC, Standard: 51-150 LOC, Comprehensive: >150 LOC"
+      - "max_output_tokens scales with depth tier"
+      - "HandlerConfig.design_max_tokens overrides per-task calibration when set"
+
+    depends_on: [AR-120]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+      lines: "894-920"
+
+    verified_by:
+      - tests/unit/contractors/test_design_quality_context.py
+
+  - id: AR-122
+    description: "DESIGN phase adopts prior design results when available"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Checks context['design_results'] for existing per-task results"
+      - "If a prior result has status 'designed' with a non-empty design_document, adopts it"
+      - "Adopted tasks set status='adopted' and skip LLM calls"
+      - "Tasks that failed or lack a design document are re-run"
+
+    depends_on: [AR-120]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_design_phase_handler.py
+
+  - id: AR-123
+    description: "DESIGN phase skips tasks with environment failures"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Tasks whose environment_checks contain failures are skipped"
+      - "Skipped tasks set status='env_blocked' in design_results"
+      - "No LLM cost incurred for skipped tasks"
+
+    depends_on: [AR-120]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_design_phase_handler.py
+
+  - id: AR-124
+    description: "DESIGN phase builds progressive cross-task context"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Accumulates prior_design_summaries from completed tasks"
+      - "Each summary is a truncated digest of the design document text"
+      - "Later tasks see summaries of earlier tasks for cross-task coherence"
+      - "Plan goals and architectural context are shared across all tasks"
+
+    depends_on: [AR-120]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+      lines: "891-900"
+
+    verified_by:
+      - tests/unit/contractors/test_design_quality_context.py
+
+  - id: AR-125
+    description: "DESIGN phase injects parameter_sources from onboarding into design prompts"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads context['parameter_sources'] (dict keyed by artifact type)"
+      - "For each task, selects parameter sources matching task.artifact_types_addressed"
+      - "Appends parameter source context to the design prompt"
+      - "No effect when parameter_sources is absent or empty"
+
+    depends_on: [AR-120, AR-304]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 2c
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+
+  - id: AR-126
+    description: "DESIGN phase injects semantic_conventions into design prompts"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads context['semantic_conventions'] (dict of metric names, label keys, namespaces)"
+      - "Appends semantic convention context to design prompts"
+      - "Especially relevant for dashboard and PrometheusRule artifact types"
+      - "No effect when semantic_conventions is absent or empty"
+
+    depends_on: [AR-120, AR-306]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 3c
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+
+  # ---------------------------------------------------------------------------
+  # IMPLEMENT Phase (AR-130 – AR-137)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-130
+    description: "IMPLEMENT phase converts SeedTasks to DevelopmentChunks and generates code"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Converts SeedTask list to DevelopmentChunk list via _tasks_to_chunks()"
+      - "Delegates to DevelopmentPhase with LeadContractorChunkExecutor"
+      - "Uses lead_agent and drafter_agent from HandlerConfig"
+      - "Runs async via thread-owned event loop"
+      - "Stores results in context['implementation'] and context['generation_results']"
+      - "generation_results maps task_id to GenerationResult"
+
+    depends_on: [AR-120]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      lines: "1045-2320"
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-131
+    description: "IMPLEMENT phase injects design documents from DESIGN phase into code generation"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads context['design_results'] for per-task design documents"
+      - "Includes design_document text in chunk metadata for generator context"
+      - "Tasks with status 'designed' or 'adopted' have their design doc injected"
+      - "Tasks without design results proceed without design context"
+
+    depends_on: [AR-130, AR-120]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      lines: "1540-1542"
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-132
+    description: "IMPLEMENT phase pre-validates multi-file tasks (Gate 2a)"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Before generation, validates multi-file tasks for completeness indicators"
+      - "Checks for __init__.py among targets (commonly skipped by drafters)"
+      - "Detects downstream file designations from design docs (Gate 2c)"
+      - "Pre-stubs downstream files on disk so imports resolve"
+      - "Excludes pre-stubbed downstream files from drafter targets"
+
+    depends_on: [AR-130]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      lines: "1595-1710"
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-133
+    description: "IMPLEMENT phase validates generation completeness after execution (Gate 3)"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "After all chunks execute, validates multi-file task completeness"
+      - "Detects tasks where some target files were not generated"
+      - "Reports validation issues in context['implementation']['_gate3_validation']"
+      - "Does not fail the phase — issues are advisory for REVIEW"
+
+    depends_on: [AR-130]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      lines: "1188-1230"
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-134
+    description: "IMPLEMENT phase supports resume from saved generation results"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "If context['generation_results'] is pre-populated (from checkpoint), uses cached results"
+      - "Only re-generates tasks that don't have existing successful results"
+      - "Preserves cost tracking from prior run"
+      - "force_implement flag overrides cached results (always regenerate)"
+
+    depends_on: [AR-130, AR-506]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_resume.py
+
+  - id: AR-135
+    description: "IMPLEMENT phase applies per-task implement token caps from design calibration"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads calibration_map from context['design_calibration']"
+      - "Per-task implement_max_output_tokens: brief=8192, standard=16384, comprehensive=32768"
+      - "Passes max_output_tokens to chunk metadata for the code generator"
+
+    depends_on: [AR-130, AR-121]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      lines: "1543-1545"
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-136
+    description: "IMPLEMENT phase auto-commits generated files per feature"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "When auto_commit=True in config, commits generated files after each feature"
+      - "Commit message includes task_id and title"
+      - "Disabled by --no-auto-commit CLI flag"
+
+    depends_on: [AR-130]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_implement_auto_commit.py
+
+  - id: AR-137
+    description: "IMPLEMENT phase injects parameter_sources into chunk metadata"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads context['parameter_sources'] for per-artifact-type parameter mappings"
+      - "Includes relevant parameter_sources in chunk metadata based on task artifact types"
+      - "Generator uses parameter_sources to identify which manifest fields to read"
+      - "No effect when parameter_sources is absent"
+
+    depends_on: [AR-130, AR-305]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 2d
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+
+  # ---------------------------------------------------------------------------
+  # TEST Phase (AR-140 – AR-142)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-140
+    description: "TEST phase runs post-generation validators as subprocesses"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Supports validators: pytest, mypy, ruff, ruff_format, black, pylint, syntax_check, import_check"
+      - "Each validator runs as a subprocess with configurable timeout (test_timeout_seconds)"
+      - "Only runs validators for tasks with successful generation"
+      - "Skips tasks where generation failed or was not attempted"
+      - "Truncates validator output to 4000 chars (head + tail preserved)"
+      - "Records per-validator results: validator name, command, passed, returncode, stdout, stderr"
+
+    depends_on: [AR-130]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: TestPhaseHandler
+      lines: "2324-2620"
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+      - tests/unit/contractors/test_artisan_test_construction.py
+
+  - id: AR-141
+    description: "TEST phase produces aggregated test results in context"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Sets context['test_results'] with: test_plan, total_validators, unique_validators"
+      - "Includes tasks_with_tests, total_passed, total_failed counts"
+      - "Includes per_task summary with status and pass/fail per task"
+
+    depends_on: [AR-140]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: TestPhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+  - id: AR-142
+    description: "TEST phase maps validator names to executable commands"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "_resolve_validator_command() maps validator names to subprocess args"
+      - "Uses sys.executable (running Python interpreter) for all Python-based validators"
+      - "Returns None for unknown validators (logged as warning, skipped)"
+      - "File arguments are resolved relative to project_root"
+
+    depends_on: [AR-140]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: TestPhaseHandler
+      lines: "2348-2388"
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+  # ---------------------------------------------------------------------------
+  # REVIEW Phase (AR-150 – AR-153)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-150
+    description: "REVIEW phase performs LLM-based quality review of generated implementations"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Uses lead_agent (configurable, default Opus) for review LLM calls"
+      - "Builds review prompt with: task description, constraints, generated code, test results"
+      - "Truncates code to review_max_code_chars (default configurable via HandlerConfig)"
+      - "Parses structured response: score (0-100), verdict (PASS/FAIL)"
+      - "Extracts strengths, issues (BLOCKING/MAJOR/MINOR), and suggestions"
+      - "Skips tasks without successful generation"
+
+    depends_on: [AR-140]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ReviewPhaseHandler
+      lines: "2694-3112"
+
+    verified_by:
+      - tests/unit/contractors/test_review_phase_handler.py
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+  - id: AR-151
+    description: "REVIEW phase produces aggregated review results in context"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Sets context['review_results'] with: review_items list, total_cost"
+      - "Includes preflight_summary, constraint_coverage, tasks_with_env_issues"
+      - "Includes total_passed, total_failed counts"
+      - "Includes per_task summary with status, score, verdict"
+
+    depends_on: [AR-150]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ReviewPhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_review_phase_handler.py
+
+  - id: AR-152
+    description: "REVIEW phase excludes downstream stub files from review body"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads context['_downstream_map'] from Gate 2c"
+      - "Excludes files flagged as downstream stubs from the code included in review prompts"
+      - "Prevents false negatives from reviewing minimal stubs as incomplete implementations"
+
+    depends_on: [AR-150, AR-132]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ReviewPhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_review_phase_handler.py
+
+  # ---------------------------------------------------------------------------
+  # FINALIZE Phase (AR-160 – AR-165)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-160
+    description: "FINALIZE phase collects generated artifacts with per-file sha256 checksums"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Iterates all tasks and their generated files from generation_results"
+      - "For each file that exists on disk: computes sha256, reads size_bytes and line_count"
+      - "Records task_id, path, exists, size_bytes, sha256, line_count, domain per artifact"
+      - "Uses hashlib.sha256 on raw file bytes"
+
+    depends_on: [AR-130]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+      lines: "3154-3200"
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+  - id: AR-161
+    description: "FINALIZE phase writes generation-manifest.json with machine-readable results"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Writes generation-manifest.json to output_dir via atomic_write_json"
+      - "Manifest contains: workflow_version, artifacts, task_status, summary"
+      - "task_status joins generation, test, and review data per task"
+      - "Per-task status includes: generated, files_count, generation_cost_usd, tests_passed, review_score, review_passed"
+      - "summary includes: plan_title, task_count, total_cost, status"
+      - "Overall status: 'success' (all OK), 'failed' (none OK), 'partial' (mixed)"
+
+    depends_on: [AR-160]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+      lines: "3233-3349"
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+  - id: AR-162
+    description: "FINALIZE phase writes workflow-execution-report.json with full summary"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Writes comprehensive execution report to output_dir"
+      - "Report includes: plan metadata, domain breakdown, preflight summary"
+      - "Report includes: scaffold info, implementation details, test results, review results"
+      - "Report includes: cost summary and overall status"
+      - "Sets context['workflow_summary'] with the full report dict"
+
+    depends_on: [AR-160]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+  - id: AR-163
+    description: "FINALIZE phase builds cost summary across all phases"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Aggregates implementation_cost, test_cost, review_cost from context"
+      - "Computes total_cost as sum of all phase costs"
+      - "Reports currency as 'USD'"
+      - "Test cost is 0.0 (validators are subprocess-based, no LLM cost)"
+
+    depends_on: [AR-160]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+      lines: "3210-3232"
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+  - id: AR-164
+    description: "FINALIZE manifest includes source_checksum for provenance chain closure"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Reads context['source_checksum'] (set by PLAN phase from seed)"
+      - "Adds provenance block to generation-manifest.json"
+      - "Provenance block contains: source_checksum, enriched_seed_path"
+      - "Enables Gate 3 (a2a-diagnose --artisan-dir) to verify provenance chain"
+
+    depends_on: [AR-161, AR-300]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 1b
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+
+  - id: AR-165
+    description: "FINALIZE manifest is readable by ContextCore a2a-diagnose Gate 3"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "generation-manifest.json structure is compatible with Three Questions Q3 checks"
+      - "Q3 checks can read: artifact list, per-task status, provenance block"
+      - "Q3 finalize-all-tasks-succeeded check reads summary.status"
+      - "Q3 implement-output-files check reads artifacts list"
+
+    depends_on: [AR-161, AR-164]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md AR-309
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+
+# ==============================================================================
+# LAYER: ORCHESTRATION (AR-2xx)
+# Workflow execution, phase sequencing, gates, timeout, budget, modes
+# ==============================================================================
+
+orchestration_requirements:
+
+  - id: AR-200
+    description: "Phases execute in fixed order: PLAN -> SCAFFOLD -> DESIGN -> IMPLEMENT -> TEST -> REVIEW -> FINALIZE"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "WorkflowPhase.ordered() returns all 7 phases in canonical order"
+      - "Orchestrator iterates phases in order, executing each handler"
+      - "Phase N cannot start before Phase N-1 completes successfully"
+      - "Phase ordering is invariant (cannot be reordered at runtime)"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+      class: ArtisanContractorWorkflow
+
+    verified_by:
+      - tests/unit/contractors/test_7phase_integration.py
+      - tests/e2e/contractors/test_artisan_e2e.py
+
+  - id: AR-201
+    description: "Phase gate enforcement via PhaseResult status"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "Each phase handler returns a dict with 'output', 'cost', 'metadata'"
+      - "Orchestrator wraps result in PhaseResult with status PASSED/FAILED/SKIPPED"
+      - "FAILED status halts workflow execution (subsequent phases not run)"
+      - "SKIPPED phases do not contribute cost"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_e2e.py
+
+  - id: AR-202
+    description: "Per-phase timeout enforcement"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "WorkflowConfig.phase_timeout_seconds sets per-phase wall-clock limit"
+      - "Phase execution wrapped in ThreadPoolExecutor future with timeout"
+      - "Timeout triggers graceful save of partial state"
+      - "TimeoutError raised with phase name and timeout value"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_timeout.py
+
+  - id: AR-203
+    description: "Total workflow timeout enforcement"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "WorkflowConfig.total_timeout_seconds sets workflow wall-clock limit"
+      - "Elapsed time tracked across all phases"
+      - "Timeout halts workflow at current phase boundary"
+      - "Partial results preserved via checkpoint"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_timeout.py
+
+  - id: AR-204
+    description: "Cost budget enforcement with CostBudgetExceededError"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "WorkflowConfig.cost_budget sets maximum total cost in USD"
+      - "Cumulative cost tracked after each phase"
+      - "CostBudgetExceededError raised when cumulative cost exceeds budget"
+      - "Phase that caused the breach completes; subsequent phases not started"
+      - "No enforcement when cost_budget is None"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_e2e.py
+
+  - id: AR-205
+    description: "Dry-run mode executes all phases without LLM calls"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "WorkflowConfig.dry_run=True propagated to all phase handlers"
+      - "Phase handlers check dry_run flag and skip LLM API calls"
+      - "Produces execution plan with task counts and estimated structure"
+      - "Total cost is 0.0 in dry-run mode"
+      - "No files created or modified (except dry-run report)"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/unit/contractors/test_7phase_integration.py
+      - tests/e2e/contractors/test_artisan_dry_run.py
+
+  - id: AR-206
+    description: "Feature-serial execution mode"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "WorkflowConfig.feature_serial=True changes execution strategy"
+      - "Each task completes DESIGN -> IMPLEMENT -> TEST -> REVIEW before the next task starts"
+      - "Phases that support feature_serial: DESIGN, IMPLEMENT, TEST, REVIEW"
+      - "PLAN, SCAFFOLD, FINALIZE always run once (not per-feature)"
+      - "Checkpoint tracks current_feature and current_feature_phase"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/unit/contractors/test_feature_serial_checkpoint.py
+
+  - id: AR-207
+    description: "Stop-after-phase support"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "CLI flag --stop-after PHASE halts workflow after specified phase"
+      - "Phases after the stop point are not executed"
+      - "If stop-after includes DESIGN, writes design-handoff.json"
+      - "Valid stop-after values match WorkflowPhase enum names"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: scripts/run_artisan_workflow.py
+
+    verified_by:
+      - tests/unit/contractors/test_7phase_integration.py
+
+  - id: AR-208
+    description: "Phase subset execution (design-only, implement-only)"
+    status: implemented
+    type: orchestration
+
+    acceptance_criteria:
+      - "Design-only: runs PLAN -> SCAFFOLD -> DESIGN, writes design-handoff.json"
+      - "Implement-only: loads design-handoff.json, runs IMPLEMENT -> TEST -> REVIEW -> FINALIZE"
+      - "Dedicated runner scripts for each half"
+      - "Implement-only reconstructs context from handoff file"
+
+    depends_on: [AR-200, AR-500]
+
+    implementation_hints:
+      files:
+        - scripts/run_artisan_design_only.py
+        - scripts/run_artisan_implement_only.py
+
+    verified_by:
+      - tests/unit/contractors/test_handoff.py
+
+  - id: AR-209
+    description: "Cost projection gate after PLAN phase"
+    status: planned
+    type: orchestration
+
+    acceptance_criteria:
+      - "After PLAN, project_cost() estimates total workflow cost from task count and depth tiers"
+      - "If projected cost exceeds cost_budget, raises CostProjectionExceededError"
+      - "Projection is conservative (overestimate preferred)"
+      - "Calibrated projection available after DESIGN (actual design costs inform IMPLEMENT estimate)"
+
+    depends_on: [AR-100, AR-204]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 19
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-210
+    description: "Phase skipping configuration"
+    status: planned
+    type: orchestration
+
+    acceptance_criteria:
+      - "skip_phases config accepts list of phase names"
+      - "Skippable phases: SCAFFOLD (if directories exist), TEST, REVIEW"
+      - "Non-skippable phases: PLAN, DESIGN, IMPLEMENT, FINALIZE"
+      - "Skipped phases emit phase_skipped event"
+
+    depends_on: [AR-200]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 42
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-211
+    description: "Advisory file lock prevents concurrent workflow instances"
+    status: planned
+    type: orchestration
+
+    acceptance_criteria:
+      - "acquire_workflow_lock() uses fcntl.flock() on .artisan_state.lock"
+      - "Raises WorkflowAlreadyRunningError if lock cannot be acquired"
+      - "Lock released on workflow completion or failure"
+      - "Lock file created in checkpoint_dir"
+
+    depends_on: [AR-200]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 34
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+# ==============================================================================
+# LAYER: CONTEXTCORE DATA FLOW (AR-3xx)
+# Onboarding metadata consumption, provenance chain, enrichment fields
+# ==============================================================================
+
+contextcore_data_flow_requirements:
+
+  - id: AR-300
+    description: "PLAN phase extracts source_checksum from seed and stores in context"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "Reads source_checksum from seed_data['artifacts']['source_checksum']"
+      - "Stores in context['source_checksum']"
+      - "Logs info with first 16 chars of checksum when present"
+      - "Logs warning when source_checksum is absent (provenance chain broken)"
+
+    depends_on: [AR-100]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 1a
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: PlanPhaseHandler
+
+  - id: AR-301
+    description: "source_checksum absence triggers warning but does not fail"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "Missing source_checksum is a WARNING, not an ERROR"
+      - "Workflow continues normally without source_checksum"
+      - "Context['source_checksum'] set to None when absent"
+      - "FINALIZE manifest provenance block records None"
+
+    depends_on: [AR-300]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 1a
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: PlanPhaseHandler
+
+  - id: AR-302
+    description: "FINALIZE manifest includes source_checksum in provenance block"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "generation-manifest.json gains a 'provenance' key"
+      - "provenance.source_checksum reads from context['source_checksum']"
+      - "provenance.enriched_seed_path reads from context['enriched_seed_path']"
+      - "Provenance block present even when source_checksum is None"
+
+    depends_on: [AR-300, AR-161]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 1b
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+
+  - id: AR-303
+    description: "Plan ingestion propagates parameter_sources from onboarding to seed"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "If onboarding metadata contains parameter_sources (dict), include in seed artifacts"
+      - "Seed artifacts['parameter_sources'] carries the full per-type mapping"
+      - "No effect when onboarding lacks parameter_sources"
+
+    depends_on: []
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 2a
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/plan_ingestion_workflow.py
+
+  - id: AR-304
+    description: "PLAN phase stores parameter_sources in context"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "Reads parameter_sources from seed_data['artifacts']['parameter_sources']"
+      - "Stores in context['parameter_sources'] (dict keyed by artifact type)"
+      - "Defaults to empty dict when absent"
+
+    depends_on: [AR-100, AR-303]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 2b
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: PlanPhaseHandler
+
+  - id: AR-305
+    description: "parameter_sources consumed in IMPLEMENT chunk metadata"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "Chunk metadata includes parameter_sources for the task's artifact type"
+      - "Generator can use parameter_sources to identify manifest field mappings"
+      - "No effect when parameter_sources is absent"
+
+    depends_on: [AR-304, AR-130]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 2d
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+
+  - id: AR-306
+    description: "Plan ingestion propagates semantic_conventions from onboarding to seed and context"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "If onboarding metadata contains semantic_conventions (dict), include in seed artifacts"
+      - "PLAN phase stores in context['semantic_conventions']"
+      - "Available to DESIGN and IMPLEMENT phases via context"
+      - "Defaults to empty dict when absent"
+
+    depends_on: [AR-100]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 3a-3b
+
+    implementation_hints:
+      files:
+        - src/startd8/workflows/builtin/plan_ingestion_workflow.py
+        - src/startd8/contractors/context_seed_handlers.py
+
+  - id: AR-307
+    description: "SCAFFOLD validates output conventions from onboarding metadata"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "If context['output_conventions'] is populated, validates file extensions"
+      - "Warns when target_files don't match expected output_ext for artifact type"
+      - "Non-blocking (warning only)"
+
+    depends_on: [AR-110]
+    source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md Fix 5
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ScaffoldPhaseHandler
+
+  - id: AR-308
+    description: "design_calibration_hints from onboarding cross-checked against per-task calibration"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "If onboarding contains design_calibration_hints (per artifact type), loads into context"
+      - "DESIGN phase can compare per-type hints against per-task depth tier from _derive_design_calibration"
+      - "Logs warning on mismatch (e.g., dashboard type expects comprehensive but task calibrated as brief)"
+      - "Advisory only — per-task calibration remains authoritative"
+
+    depends_on: [AR-121]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+
+  - id: AR-309
+    description: "FINALIZE manifest structure compatible with ContextCore a2a-diagnose Gate 3"
+    status: planned
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "generation-manifest.json can be parsed by Three Questions Q3 diagnostic"
+      - "Artifact list supports implement-output-files check"
+      - "summary.status supports finalize-all-tasks-succeeded check"
+      - "provenance block supports source_checksum chain verification"
+
+    depends_on: [AR-161, AR-164]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+
+  - id: AR-310
+    description: "Onboarding metadata loaded and validated during plan ingestion preflight"
+    status: implemented
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "_load_onboarding_metadata() loads from context_files or contextcore_export_dir"
+      - "_preflight_export_contract() validates onboarding metadata presence and checksums"
+      - "Warns when source_checksum is missing from onboarding metadata"
+      - "Errors when coverage percentage below --min-export-coverage threshold"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/plan_ingestion_workflow.py
+      lines: "984-1108, 1816-1856"
+
+    verified_by:
+      - tests/unit/test_plan_ingestion_workflow.py
+
+  - id: AR-311
+    description: "Coverage gaps propagated from onboarding to seed artifacts"
+    status: implemented
+    type: contextcore_data_flow
+
+    acceptance_criteria:
+      - "Onboarding coverage_gaps (list) extracted and stored in seed artifacts['coverage_gaps']"
+      - "Available to artisan PLAN phase for task scoping"
+
+    depends_on: [AR-310]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/plan_ingestion_workflow.py
+      lines: "2109-2111"
+
+    verified_by:
+      - tests/unit/test_plan_ingestion_workflow.py
+
+# ==============================================================================
+# LAYER: COST MODEL (AR-4xx)
+# Model tiers, budget tracking, cost projection, reporting
+# ==============================================================================
+
+cost_model_requirements:
+
+  - id: AR-400
+    description: "Three-tier model architecture with drafter, validator, and reviewer roles"
+    status: implemented
+    type: cost_model
+
+    acceptance_criteria:
+      - "DRAFT_MODEL_CLAUDE_HAIKU: fast, low-cost drafting (ModelRole.DRAFT)"
+      - "VALIDATE_MODEL_CLAUDE_SONNET: balanced validation/gating (ModelRole.VALIDATE)"
+      - "REVIEW_MODEL_CLAUDE_OPUS: flagship quality review (ModelRole.REVIEW)"
+      - "All three defined in protocols.py MODEL_CATALOG"
+      - "WorkflowConfig stores drafter_model, validator_model, reviewer_model IDs"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/protocols.py
+      lines: "454-494"
+
+    verified_by:
+      - tests/unit/contractors/test_artisan_models.py
+
+  - id: AR-401
+    description: "HandlerConfig defaults wire Opus as lead and Haiku as drafter"
+    status: implemented
+    type: cost_model
+
+    acceptance_criteria:
+      - "HandlerConfig.lead_agent defaults to REVIEW_MODEL_CLAUDE_OPUS.agent_spec"
+      - "HandlerConfig.drafter_agent defaults to DRAFT_MODEL_CLAUDE_HAIKU.agent_spec"
+      - "lead_agent serves both validator and reviewer roles in the artisan workflow"
+      - "Sonnet is the default for standalone LeadContractorCodeGenerator (not through artisan)"
+      - "Users can set --lead-agent to Sonnet for full 3-tier split"
+
+    depends_on: [AR-400]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: HandlerConfig
+      lines: "128-129"
+
+    verified_by:
+      - tests/unit/test_artisan_config.py
+
+  - id: AR-402
+    description: "Per-phase cost tracking"
+    status: implemented
+    type: cost_model
+
+    acceptance_criteria:
+      - "Each phase handler returns cost (float USD) in its result dict"
+      - "PLAN: cost=0.0 (no LLM calls)"
+      - "SCAFFOLD: cost=0.0 (no LLM calls)"
+      - "DESIGN: cost = sum of per-task LLM costs"
+      - "IMPLEMENT: cost = sum of per-chunk generation costs"
+      - "TEST: cost=0.0 (subprocess validators, no LLM)"
+      - "REVIEW: cost = sum of per-task review LLM costs"
+      - "FINALIZE: cost=0.0 (no LLM calls)"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_resume.py
+
+  - id: AR-403
+    description: "Cumulative cost aggregation across phases and resume boundaries"
+    status: implemented
+    type: cost_model
+
+    acceptance_criteria:
+      - "Orchestrator accumulates cost from each phase result"
+      - "Cumulative cost stored in checkpoint for resume"
+      - "On resume, cumulative cost starts from checkpoint value (not zero)"
+      - "Cost not double-counted for resumed phases"
+
+    depends_on: [AR-402, AR-506]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_resume.py
+
+  - id: AR-404
+    description: "CostBudgetExceededError raised when budget exceeded"
+    status: implemented
+    type: cost_model
+
+    acceptance_criteria:
+      - "After each phase, check cumulative_cost > cost_budget"
+      - "Raise CostBudgetExceededError with cumulative cost and budget limit"
+      - "Current phase completes before check (not interrupted mid-phase)"
+      - "No check when cost_budget is None"
+
+    depends_on: [AR-403]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_e2e.py
+
+  - id: AR-405
+    description: "Cost projection gate after PLAN, calibrated after DESIGN"
+    status: planned
+    type: cost_model
+
+    acceptance_criteria:
+      - "project_cost() after PLAN estimates total from task count, depth tiers, model pricing"
+      - "Raises CostProjectionExceededError if projection exceeds budget"
+      - "After DESIGN, recalibrates using actual design costs to improve IMPLEMENT estimate"
+      - "Projection is conservative (overestimate preferred to prevent mid-workflow budget breach)"
+
+    depends_on: [AR-100, AR-404]
+    source: docs/PLAN-artisan-contractor.md Section 14 criteria 19, 50
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-406
+    description: "60%+ token volume on low-cost model target"
+    status: partial
+    type: cost_model
+
+    acceptance_criteria:
+      - "Majority of token volume (input + output) processed by drafter model (Haiku)"
+      - "Validator/reviewer used only for review iterations and quality gates"
+      - "Token distribution measurable from OTel span attributes"
+      - "Target: >= 60% of total tokens on drafter tier"
+
+    depends_on: [AR-400]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 7
+
+    implementation_hints:
+      notes: "Architectural target — depends on task complexity and iteration count"
+
+  - id: AR-407
+    description: "Cost reporting in FINALIZE manifest"
+    status: implemented
+    type: cost_model
+
+    acceptance_criteria:
+      - "generation-manifest.json summary includes total_cost (float)"
+      - "Per-task task_status includes generation_cost_usd"
+      - "workflow-execution-report.json includes cost_summary breakdown"
+
+    depends_on: [AR-161, AR-163]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+# ==============================================================================
+# LAYER: HANDOFF AND RECOVERY (AR-5xx)
+# Two-half split, checkpoint, resume, state persistence
+# ==============================================================================
+
+handoff_recovery_requirements:
+
+  - id: AR-500
+    description: "Design handoff file format with versioned schema"
+    status: implemented
+    type: handoff
+
+    acceptance_criteria:
+      - "design-handoff.json contains: enriched_seed_path, project_root, output_dir, workflow_id"
+      - "Contains: completed_phases, design_results, scaffold"
+      - "Contains: context_files, example_artifacts, coverage_gaps"
+      - "Contains: schema_version (int=1) and schema_version_str"
+      - "Contains: created_at (ISO-8601 timestamp)"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/handoff.py
+      lines: "136-190"
+
+    verified_by:
+      - tests/unit/contractors/test_handoff.py
+
+  - id: AR-501
+    description: "write_design_handoff() uses atomic writes"
+    status: implemented
+    type: handoff
+
+    acceptance_criteria:
+      - "Uses atomic_write_json() to prevent partial writes on crash"
+      - "Creates parent directories if needed"
+      - "Overwrites existing handoff file"
+      - "Logs the output path on success"
+
+    depends_on: [AR-500]
+
+    implementation_hints:
+      file: src/startd8/contractors/handoff.py
+
+    verified_by:
+      - tests/unit/contractors/test_handoff.py
+
+  - id: AR-502
+    description: "load_design_handoff() validates schema and reconstructs context"
+    status: implemented
+    type: handoff
+
+    acceptance_criteria:
+      - "Reads design-handoff.json from path"
+      - "Validates schema_version for compatibility"
+      - "Reconstructs shared context dict from handoff data"
+      - "Populates design_results, scaffold, example_artifacts, coverage_gaps"
+      - "Sets enriched_seed_path for _ensure_context_loaded() fallback"
+
+    depends_on: [AR-500]
+
+    implementation_hints:
+      file: src/startd8/contractors/handoff.py
+      lines: "193-259"
+
+    verified_by:
+      - tests/unit/contractors/test_handoff.py
+
+  - id: AR-503
+    description: "Two-half split: design-only runs PLAN -> SCAFFOLD -> DESIGN"
+    status: implemented
+    type: handoff
+
+    acceptance_criteria:
+      - "Design-only runner executes PLAN, SCAFFOLD, DESIGN phases"
+      - "Writes design-handoff.json after DESIGN completes"
+      - "Does not execute IMPLEMENT, TEST, REVIEW, FINALIZE"
+      - "Equivalent to --stop-after design"
+
+    depends_on: [AR-200, AR-500]
+
+    implementation_hints:
+      file: scripts/run_artisan_design_only.py
+
+    verified_by:
+      - tests/unit/contractors/test_handoff.py
+
+  - id: AR-504
+    description: "Two-half split: implement-only runs IMPLEMENT -> TEST -> REVIEW -> FINALIZE"
+    status: implemented
+    type: handoff
+
+    acceptance_criteria:
+      - "Implement-only runner loads design-handoff.json"
+      - "Reconstructs context from handoff data"
+      - "Executes IMPLEMENT, TEST, REVIEW, FINALIZE phases"
+      - "Does not execute PLAN, SCAFFOLD, DESIGN"
+
+    depends_on: [AR-200, AR-502]
+
+    implementation_hints:
+      file: scripts/run_artisan_implement_only.py
+
+    verified_by:
+      - tests/unit/contractors/test_handoff.py
+
+  - id: AR-505
+    description: "Checkpoint persistence at phase level"
+    status: implemented
+    type: recovery
+
+    acceptance_criteria:
+      - "WorkflowCheckpoint captures: workflow_id, last_completed_phase, phase_results"
+      - "Captures: cumulative_cost, timestamp, status, metadata, context_snapshot"
+      - "Schema version 2 adds: completed_features, current_feature, current_feature_phase, feature_partial_results"
+      - "Saved to checkpoint_dir via JsonFileCheckpointStore or InMemoryCheckpointStore"
+      - "Checkpoint written after each phase completes"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_resume.py
+
+  - id: AR-506
+    description: "Resume from checkpoint skips completed phases"
+    status: implemented
+    type: recovery
+
+    acceptance_criteria:
+      - "On resume, loads checkpoint and identifies last_completed_phase"
+      - "Skips all phases up to and including last_completed_phase"
+      - "Restores context_snapshot from checkpoint"
+      - "Restores cumulative_cost from checkpoint"
+      - "Completed phases not re-executed"
+      - "Side effects not duplicated on resume"
+
+    depends_on: [AR-505]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_resume.py
+
+  - id: AR-507
+    description: "Adopt-prior design artifacts (--adopt-prior)"
+    status: implemented
+    type: handoff
+
+    acceptance_criteria:
+      - "--adopt-prior PATH loads design_results from a prior run"
+      - "Injects prior results into context before DESIGN phase"
+      - "DESIGN phase adopts valid prior results (status='adopted', skip LLM)"
+      - "Re-runs tasks that failed or lack valid design documents"
+      - "Auto-detects .dress-rehearsal/ directory if no explicit path"
+
+    depends_on: [AR-122]
+
+    implementation_hints:
+      file: scripts/run_artisan_workflow.py
+
+    verified_by:
+      - tests/unit/contractors/test_design_phase_handler.py
+
+  - id: AR-508
+    description: "Chunk-level resume tracking within IMPLEMENT phase"
+    status: planned
+    type: recovery
+
+    acceptance_criteria:
+      - "Track completed_chunks per iteration within state"
+      - "On resume, skip already-completed chunks"
+      - "Chunk results preserved across resume boundaries"
+      - "get_resume_chunk() returns the first incomplete chunk"
+
+    depends_on: [AR-505, AR-130]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 8
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+
+  - id: AR-509
+    description: "Config drift detection on resume"
+    status: planned
+    type: recovery
+
+    acceptance_criteria:
+      - "On resume, compare current config against config_field_hashes stored in checkpoint"
+      - "Per-field SHA256 comparison identifies exactly which fields changed"
+      - "Raises ConfigurationDriftError by default"
+      - "--force-resume-on-drift flag overrides and allows resume"
+
+    depends_on: [AR-505]
+    source: docs/PLAN-artisan-contractor.md Section 14 criteria 25, 45
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-510
+    description: "State-to-code integrity check on resume"
+    status: planned
+    type: recovery
+
+    acceptance_criteria:
+      - "On resume, verify that checkpoint state matches code on disk"
+      - "Check that generated files referenced in checkpoint still exist"
+      - "Raises StateCodeDesyncError if files were manually removed or modified"
+      - "Prevents resume after manual git reset that invalidates state"
+
+    depends_on: [AR-506]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 43
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-511
+    description: "State schema versioning and migration"
+    status: planned
+    type: recovery
+
+    acceptance_criteria:
+      - "Checkpoint includes _schema_version field"
+      - "_migrate() method upgrades older checkpoint formats"
+      - "Creates .json.bak backup before migration"
+      - "Restores backup on migration failure"
+
+    depends_on: [AR-505]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 46
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+# ==============================================================================
+# LAYER: OBSERVABILITY (AR-6xx)
+# OTel spans, events, manifests, reporting
+# ==============================================================================
+
+observability_requirements:
+
+  - id: AR-600
+    description: "Root OTel span per workflow execution"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "Root span named 'workflow.{workflow_id}'"
+      - "Span attributes include: cost_budget, timeout, model assignments"
+      - "Span includes drafter_model, validator_model, reviewer_model"
+      - "Span records error on workflow failure"
+      - "Span ends after workflow completion (success or failure)"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+      lines: "910-925"
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_e2e.py
+
+  - id: AR-601
+    description: "Child OTel spans per phase with attributes"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "Each phase creates a child span under the root workflow span"
+      - "Span name includes phase name"
+      - "Span attributes include phase-specific metadata"
+      - "Span records cost and duration"
+      - "Span records error if phase fails"
+
+    depends_on: [AR-600]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_e2e.py
+
+  - id: AR-602
+    description: "Model assignment attributes on workflow span"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "Root span includes workflow.drafter_model attribute"
+      - "Root span includes workflow.validator_model attribute"
+      - "Root span includes workflow.reviewer_model attribute"
+      - "Context also stores drafter_model, validator_model, reviewer_model for phase access"
+
+    depends_on: [AR-600, AR-400]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+      lines: "840-843, 917-921"
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_e2e.py
+
+  - id: AR-603
+    description: "Event emission per phase transition"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "Phase start and completion events emitted via event bus"
+      - "Events include phase name, status, cost, duration"
+      - "Error events emitted on phase failure"
+
+    depends_on: [AR-200]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_e2e.py
+
+  - id: AR-604
+    description: "generation-manifest.json output"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "Machine-readable JSON manifest written by FINALIZE"
+      - "Contains artifacts with sha256 checksums"
+      - "Contains per-task status rollup"
+      - "Contains cost summary"
+
+    depends_on: [AR-161]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
+
+  - id: AR-605
+    description: "Event externalization to .events.jsonl"
+    status: planned
+    type: observability
+
+    acceptance_criteria:
+      - "Append-only JSONL event log written during workflow execution"
+      - "Each event is one JSON line with type, timestamp, phase, data"
+      - "Uses fsync() for durability"
+      - "safe_read_events() tolerant of partial-write corruption"
+
+    depends_on: [AR-603]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 20
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-606
+    description: "Event dedup on re-save across resume"
+    status: planned
+    type: observability
+
+    acceptance_criteria:
+      - "_events_written_count cursor tracks position in JSONL"
+      - "On resume, appends only new events (no duplicates)"
+      - "Cursor persisted in checkpoint"
+
+    depends_on: [AR-605, AR-506]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 52
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-607
+    description: "OTel graceful degradation when not installed"
+    status: implemented
+    type: observability
+
+    acceptance_criteria:
+      - "try/except ImportError for opentelemetry imports"
+      - "No-op tracer when OTel packages absent"
+      - "No errors or warnings when OTel is not installed"
+      - "Zero performance overhead when OTel not available"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/unit/contractors/test_7phase_integration.py
+
+# ==============================================================================
+# LAYER: CONFIGURATION (AR-7xx)
+# HandlerConfig, WorkflowConfig, CLI flags
+# ==============================================================================
+
+configuration_requirements:
+
+  - id: AR-700
+    description: "HandlerConfig.from_config() 3-tier priority chain"
+    status: implemented
+    type: configuration
+
+    acceptance_criteria:
+      - "Priority: CLI overrides > env vars / config file (ConfigManager) > dataclass defaults"
+      - "CLI overrides passed as dict to from_config(cli_overrides=...)"
+      - "ConfigManager.get_artisan_setting() provides middle tier"
+      - "Dataclass defaults are lowest priority"
+      - "All HandlerConfig fields support override via this chain"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: HandlerConfig
+      lines: "147-200"
+
+    verified_by:
+      - tests/unit/test_artisan_config.py
+
+  - id: AR-701
+    description: "WorkflowConfig dataclass with all configuration fields"
+    status: implemented
+    type: configuration
+
+    acceptance_criteria:
+      - "workflow_id: str (UUID default)"
+      - "dry_run: bool (default False)"
+      - "total_timeout_seconds: Optional[float]"
+      - "phase_timeout_seconds: Optional[float]"
+      - "cost_budget: Optional[float]"
+      - "max_retries_per_phase: int (default 0)"
+      - "checkpoint_dir: Optional[str] (default '.startd8/checkpoints')"
+      - "tracer_name: str (default 'startd8.artisan_contractor')"
+      - "drafter_model, validator_model, reviewer_model: str (from catalog defaults)"
+      - "project_root: Optional[str]"
+      - "feature_serial: bool (default False)"
+      - "metadata: dict[str, Any] (default {})"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+      class: WorkflowConfig
+      lines: "270-302"
+
+    verified_by:
+      - tests/unit/test_artisan_config.py
+
+  - id: AR-702
+    description: "CLI flag mapping to WorkflowConfig and HandlerConfig"
+    status: implemented
+    type: configuration
+
+    acceptance_criteria:
+      - "--seed, --project-root, --output-dir map to runner args"
+      - "--dry-run maps to WorkflowConfig.dry_run"
+      - "--cost-budget maps to WorkflowConfig.cost_budget"
+      - "--timeout maps to WorkflowConfig.total_timeout_seconds"
+      - "--stop-after maps to phase subset logic"
+      - "--lead-agent, --drafter-agent map to HandlerConfig overrides"
+      - "--checkpoint-dir maps to WorkflowConfig.checkpoint_dir"
+      - "--resume flag triggers checkpoint load"
+
+    depends_on: [AR-700, AR-701]
+
+    implementation_hints:
+      file: scripts/run_artisan_workflow.py
+
+    verified_by:
+      - tests/unit/test_artisan_config.py
+
+  - id: AR-703
+    description: "Agent spec overrides via CLI"
+    status: implemented
+    type: configuration
+
+    acceptance_criteria:
+      - "--lead-agent SPEC overrides HandlerConfig.lead_agent"
+      - "--drafter-agent SPEC overrides HandlerConfig.drafter_agent"
+      - "Agent specs follow provider:model format (e.g., anthropic:claude-sonnet-4-5-20250929)"
+      - "Override propagated to all phase handlers"
+
+    depends_on: [AR-700]
+
+    implementation_hints:
+      file: scripts/run_artisan_workflow.py
+
+    verified_by:
+      - tests/unit/test_artisan_config.py
+
+  - id: AR-704
+    description: "Per-phase timeout override via CLI"
+    status: implemented
+    type: configuration
+
+    acceptance_criteria:
+      - "WorkflowConfig.phase_timeout_seconds applies to all phases uniformly"
+      - "No per-phase differentiation in current implementation"
+      - "None means no per-phase timeout (only total timeout applies)"
+
+    depends_on: [AR-202]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_timeout.py
+
+  - id: AR-705
+    description: "Design max tokens override via CLI"
+    status: implemented
+    type: configuration
+
+    acceptance_criteria:
+      - "--design-max-tokens INT overrides HandlerConfig.design_max_tokens"
+      - "Takes precedence over per-task design_calibration max_output_tokens"
+      - "Used to avoid truncation for complex design docs (e.g., 8192)"
+
+    depends_on: [AR-121]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: HandlerConfig
+      lines: "113-114"
+
+    verified_by:
+      - tests/unit/contractors/test_design_phase_handler.py
+
+  - id: AR-706
+    description: "Force-implement flag ignores cached generation results"
+    status: implemented
+    type: configuration
+
+    acceptance_criteria:
+      - "--force-implement flag clears cached generation_results before IMPLEMENT"
+      - "Forces fresh code generation for all tasks"
+      - "Useful when design changes require full regeneration"
+
+    depends_on: [AR-134]
+
+    implementation_hints:
+      file: scripts/run_artisan_workflow.py
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-707
+    description: "Auto-commit configuration"
+    status: implemented
+    type: configuration
+
+    acceptance_criteria:
+      - "Default behavior: auto-commit generated files per feature"
+      - "--no-auto-commit disables auto-commit"
+      - "Commit message includes task_id and title"
+
+    depends_on: [AR-136]
+
+    implementation_hints:
+      file: scripts/run_artisan_workflow.py
+
+    verified_by:
+      - tests/unit/contractors/test_implement_auto_commit.py
+
+# ==============================================================================
+# LAYER: SAFETY AND RESILIENCE (AR-8xx)
+# Pre-flight, domain checks, truncation, interactive mode, git safety
+# ==============================================================================
+
+safety_resilience_requirements:
+
+  - id: AR-800
+    description: "Pre-flight checks before LLM calls"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "PreFlightChecker validates: dependencies, API endpoints, git state, env vars, workspace"
+      - "Checks run before any LLM cost is incurred"
+      - "Failures reported as actionable error messages"
+      - "Preflight results stored in seed _preflight block"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_phases/preflight.py
+
+    verified_by:
+      - tests/unit/contractors/test_artisan_preflight.py
+      - tests/e2e/contractors/test_artisan_preflight_failure.py
+
+  - id: AR-801
+    description: "Domain-aware checklist constraints"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "DomainChecklist provides domain-specific validation rules"
+      - "Post-generation validation checks code against domain constraints"
+      - "Domains include: python-package-module, kubernetes-yaml, etc."
+      - "Constraint violations reported as warnings"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_phases/domain_checklist.py
+
+    verified_by:
+      - tests/unit/test_domain_preflight_workflow.py
+
+  - id: AR-802
+    description: "Truncation detection (heuristic + strict modes)"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "HandlerConfig.check_truncation enables heuristic truncation detection"
+      - "HandlerConfig.strict_truncation uses stricter detection threshold"
+      - "HandlerConfig.fail_on_truncation fails workflow on detected truncation"
+      - "Detection checks for incomplete code blocks, missing closures, cut-off patterns"
+
+    depends_on: []
+
+    implementation_hints:
+      file: src/startd8/truncation_detection.py
+      related: src/startd8/contractors/context_seed_handlers.py
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-803
+    description: "LOC mismatch detection between design and seed estimates"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "After DESIGN, estimates implied LOC from design doc code blocks"
+      - "Compares against seed estimated_loc"
+      - "Warns when mismatch exceeds 3x (design implies much more code than seed estimated)"
+      - "Suggests re-calibrating with higher estimated_loc or --design-max-tokens"
+
+    depends_on: [AR-131]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      lines: "1551-1593"
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-804
+    description: "Multi-file completeness gate (Gate 3)"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "After IMPLEMENT, validates that all target_files for multi-file tasks were generated"
+      - "Reports missing files as advisory gate validation issues"
+      - "Does not fail the workflow — issues surfaced for REVIEW phase"
+      - "Catches cases where drafter omitted files despite mitigation layers"
+
+    depends_on: [AR-133]
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      lines: "1188-1230"
+
+    verified_by:
+      - tests/unit/contractors/test_implement_phase_integration.py
+
+  - id: AR-805
+    description: "Interactive mode with Accept/Edit/Regenerate at phase gates"
+    status: planned
+    type: safety
+
+    acceptance_criteria:
+      - "At phase boundaries, prompt operator with Accept/Edit/Regenerate options"
+      - "Edit opens $EDITOR on serialized phase output (YAML)"
+      - "$EDITOR invocation hardened with shlex validation"
+      - "YAML loaded with yaml.safe_load() (no arbitrary code execution)"
+      - "Regenerate respects revision limits"
+
+    depends_on: [AR-201]
+    source: docs/PLAN-artisan-contractor.md Section 14 criteria 22, 26, 49
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-806
+    description: "Escalation mandatory human pause"
+    status: planned
+    type: safety
+
+    acceptance_criteria:
+      - "When reviewer re-proposes a rejected suggestion, triggers escalation"
+      - "Workflow pauses unless --force-continue-on-escalation is set"
+      - "on_pause_callback fires to notify operator"
+      - "Operator must resolve escalation before workflow continues"
+
+    depends_on: [AR-120]
+    source: docs/PLAN-artisan-contractor.md Section 14 criteria 3, 18
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+    verified_by:
+      - tests/e2e/contractors/test_artisan_escalation.py
+
+  - id: AR-807
+    description: "Git tag restore points per phase"
+    status: planned
+    type: safety
+
+    acceptance_criteria:
+      - "Creates annotated git tags: artisan/{workflow_id}/phase-{N}"
+      - "Tags created after each phase completes"
+      - "Enables rollback to any phase boundary"
+      - "Stale tags cleaned automatically on workflow start"
+      - "Annotated tags (git tag -a) enable timestamp-based retention"
+
+    depends_on: [AR-200]
+    source: docs/PLAN-artisan-contractor.md Section 14 criteria 5, 27, 60
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-808
+    description: "Advisory file lock prevents concurrent instances"
+    status: planned
+    type: safety
+
+    acceptance_criteria:
+      - "acquire_workflow_lock() on .artisan_state.lock file"
+      - "Uses fcntl.flock() for advisory locking"
+      - "Raises WorkflowAlreadyRunningError if lock held"
+      - "Lock released on completion or failure"
+
+    depends_on: [AR-200]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 34
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_contractor.py
+
+  - id: AR-809
+    description: "Stalled retry detection"
+    status: planned
+    type: safety
+
+    acceptance_criteria:
+      - "Detects when drafter output doesn't change between retry iterations"
+      - "Uses feedback_similarity_threshold to detect stalled retries"
+      - "Exits early with stalled_retry event instead of exhausting max_iterations"
+      - "Prevents wasting tokens on non-converging drafts"
+
+    depends_on: [AR-130]
+    source: docs/PLAN-artisan-contractor.md Section 14 criterion 38
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+
+# ==============================================================================
+# IMPLEMENTATION ORDER
+# ==============================================================================
+
+implementation_order:
+
+  phase_1:
+    name: "ContextCore Data Flow Fixes (High Priority)"
+    requirements:
+      - AR-300  # source_checksum extraction in PLAN
+      - AR-301  # source_checksum warning
+      - AR-302  # source_checksum in FINALIZE manifest
+      - AR-164  # FINALIZE provenance block
+      - AR-165  # Gate 3 compatibility
+    benefits_delivered:
+      - provenance_chain_closure
+      - gate_3_compliance
+
+  phase_2:
+    name: "Onboarding Metadata Consumption (Medium Priority)"
+    requirements:
+      - AR-303  # parameter_sources in seed
+      - AR-304  # parameter_sources in context
+      - AR-305  # parameter_sources in IMPLEMENT
+      - AR-125  # parameter_sources in DESIGN
+      - AR-306  # semantic_conventions
+      - AR-126  # semantic_conventions in DESIGN
+      - AR-137  # parameter_sources in chunk metadata
+      - AR-307  # output_conventions in SCAFFOLD
+      - AR-111  # output_conventions validation
+      - AR-308  # design_calibration_hints cross-check
+    benefits_delivered:
+      - enriched_code_generation
+      - convention_validation
+
+  phase_3:
+    name: "Recovery Hardening (Medium Priority)"
+    requirements:
+      - AR-508  # Chunk-level resume
+      - AR-509  # Config drift detection
+      - AR-510  # State-to-code integrity
+      - AR-511  # State schema migration
+    benefits_delivered:
+      - robust_resume
+      - drift_detection
+
+  phase_4:
+    name: "Orchestration Enhancements (Low Priority)"
+    requirements:
+      - AR-209  # Cost projection gate
+      - AR-210  # Phase skipping
+      - AR-211  # Advisory lock
+      - AR-405  # Cost projection calibrated
+      - AR-809  # Stalled retry detection
+    benefits_delivered:
+      - cost_projection
+      - operational_safety
+
+  phase_5:
+    name: "Interactive and Git Safety (Low Priority)"
+    requirements:
+      - AR-805  # Interactive mode
+      - AR-806  # Escalation pause
+      - AR-807  # Git tag restore points
+      - AR-808  # Advisory file lock
+      - AR-605  # Events JSONL
+      - AR-606  # Event dedup
+    benefits_delivered:
+      - interactive_operation
+      - git_safety
+      - event_durability
+
+# ==============================================================================
+# CROSS-REFERENCE: Requirement -> Benefit
+# ==============================================================================
+
+traceability:
+  phase_behavior:
+    requirements: [AR-100, AR-101, AR-102, AR-110, AR-111, AR-120, AR-121, AR-122, AR-123, AR-124, AR-125, AR-126, AR-130, AR-131, AR-132, AR-133, AR-134, AR-135, AR-136, AR-137, AR-140, AR-141, AR-142, AR-150, AR-151, AR-152, AR-160, AR-161, AR-162, AR-163, AR-164, AR-165]
+    count: 32
+  orchestration:
+    requirements: [AR-200, AR-201, AR-202, AR-203, AR-204, AR-205, AR-206, AR-207, AR-208, AR-209, AR-210, AR-211]
+    count: 12
+  contextcore_data_flow:
+    requirements: [AR-300, AR-301, AR-302, AR-303, AR-304, AR-305, AR-306, AR-307, AR-308, AR-309, AR-310, AR-311]
+    count: 12
+  cost_model:
+    requirements: [AR-400, AR-401, AR-402, AR-403, AR-404, AR-405, AR-406, AR-407]
+    count: 8
+  handoff_recovery:
+    requirements: [AR-500, AR-501, AR-502, AR-503, AR-504, AR-505, AR-506, AR-507, AR-508, AR-509, AR-510, AR-511]
+    count: 12
+  observability:
+    requirements: [AR-600, AR-601, AR-602, AR-603, AR-604, AR-605, AR-606, AR-607]
+    count: 8
+  configuration:
+    requirements: [AR-700, AR-701, AR-702, AR-703, AR-704, AR-705, AR-706, AR-707]
+    count: 8
+  safety_resilience:
+    requirements: [AR-800, AR-801, AR-802, AR-803, AR-804, AR-805, AR-806, AR-807, AR-808, AR-809]
+    count: 10
+
+# ==============================================================================
+# SUMMARY
+# ==============================================================================
+
+summary:
+  total_requirements: 102
+  by_layer:
+    phase_behavior: 32    # AR-1xx
+    orchestration: 12     # AR-2xx
+    contextcore_data_flow: 12  # AR-3xx
+    cost_model: 8         # AR-4xx
+    handoff_recovery: 12  # AR-5xx
+    observability: 8      # AR-6xx
+    configuration: 8      # AR-7xx
+    safety_resilience: 10 # AR-8xx
+  by_status:
+    implemented: 68
+    partial: 1
+    planned: 33
+  by_implementation_phase:
+    phase_1_contextcore: 5
+    phase_2_onboarding: 10
+    phase_3_recovery: 4
+    phase_4_orchestration: 5
+    phase_5_interactive: 6
+    already_implemented: 72

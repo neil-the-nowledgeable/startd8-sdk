@@ -385,6 +385,10 @@ event_types:
   - name: TRUNCATION_PREFLIGHT_REJECT
     category: truncation
 
+  # Quality gate events
+  - name: QUALITY_GATE_RESULT
+    category: quality
+
   # System events
   - name: SYSTEM_ERROR
     category: system

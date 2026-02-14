@@ -96,8 +96,18 @@ class ClaudeAgent(BaseAgent):
             )
         else:
             httpx_timeout = self.timeout_config.to_httpx_timeout()
-            self.client = Anthropic(api_key=api_key, timeout=httpx_timeout)
-            self.async_client = AsyncAnthropic(api_key=api_key, timeout=httpx_timeout)
+            # Disable Anthropic SDK-level retries so startd8 retry policy remains
+            # the single source of truth for fail-fast behavior.
+            self.client = Anthropic(
+                api_key=api_key,
+                timeout=httpx_timeout,
+                max_retries=0,
+            )
+            self.async_client = AsyncAnthropic(
+                api_key=api_key,
+                timeout=httpx_timeout,
+                max_retries=0,
+            )
 
         self.max_tokens = max_tokens
         self.system_prompt = system_prompt

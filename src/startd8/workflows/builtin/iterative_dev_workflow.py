@@ -19,7 +19,9 @@ from ..models import (
 )
 from ...iterative_workflow import IterativeDevWorkflow, IterativeWorkflowResult
 from ...agents import BaseAgent
+from ...agents.pool import TimeoutConfig
 from ...utils.agent_resolution import resolve_agents
+from ...utils.retry import RetryConfig
 
 
 class IterativeDevWorkflowWrapper(WorkflowBase):
@@ -136,16 +138,30 @@ class IterativeDevWorkflowWrapper(WorkflowBase):
     ) -> WorkflowResult:
         """Execute iterative dev workflow synchronously."""
         started_at = datetime.now()
+        timeout_config = TimeoutConfig(read=float(config.get("llm_read_timeout_seconds", 90)))
+        retry_config = RetryConfig(max_attempts=int(config.get("llm_max_attempts", 1)))
 
         # Resolve agents
         if agents and len(agents) >= 2:
             developer_agent = agents[0]
             reviewer_agent = agents[1]
         elif "developer_agent" in config and "reviewer_agent" in config:
-            developer_agent = resolve_agents([config["developer_agent"]])[0]
-            reviewer_agent = resolve_agents([config["reviewer_agent"]])[0]
+            developer_agent = resolve_agents(
+                [config["developer_agent"]],
+                timeout_config=timeout_config,
+                retry_config=retry_config,
+            )[0]
+            reviewer_agent = resolve_agents(
+                [config["reviewer_agent"]],
+                timeout_config=timeout_config,
+                retry_config=retry_config,
+            )[0]
         elif "agents" in config and len(config["agents"]) >= 2:
-            resolved = resolve_agents(config["agents"][:2])
+            resolved = resolve_agents(
+                config["agents"][:2],
+                timeout_config=timeout_config,
+                retry_config=retry_config,
+            )
             developer_agent = resolved[0]
             reviewer_agent = resolved[1]
         else:

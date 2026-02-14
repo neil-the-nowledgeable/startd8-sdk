@@ -19,7 +19,9 @@ from ..models import (
 )
 from ...orchestration import Pipeline, PipelineResult
 from ...agents import BaseAgent
+from ...agents.pool import TimeoutConfig
 from ...utils.agent_resolution import resolve_agents
+from ...utils.retry import RetryConfig
 
 
 class PipelineWorkflow(WorkflowBase):
@@ -131,11 +133,17 @@ class PipelineWorkflow(WorkflowBase):
     ) -> WorkflowResult:
         """Execute the pipeline synchronously."""
         started_at = datetime.now()
+        timeout_config = TimeoutConfig(read=float(config.get("llm_read_timeout_seconds", 90)))
+        retry_config = RetryConfig(max_attempts=int(config.get("llm_max_attempts", 1)))
 
         # Resolve agents from config or parameter
         resolved_agents = agents or []
         if not resolved_agents and "agents" in config:
-            resolved_agents = resolve_agents(config["agents"])
+            resolved_agents = resolve_agents(
+                config["agents"],
+                timeout_config=timeout_config,
+                retry_config=retry_config,
+            )
 
         # Build pipeline
         pipeline_name = config.get("pipeline_name", "pipeline")
@@ -158,7 +166,11 @@ class PipelineWorkflow(WorkflowBase):
                         )
                     step_agent = resolved_agents[agent_ref]
                 elif isinstance(agent_ref, str):
-                    step_agent = resolve_agents([agent_ref])[0]
+                    step_agent = resolve_agents(
+                        [agent_ref],
+                        timeout_config=timeout_config,
+                        retry_config=retry_config,
+                    )[0]
                 else:
                     step_agent = resolved_agents[0]
 
@@ -250,11 +262,17 @@ class PipelineWorkflow(WorkflowBase):
     ) -> WorkflowResult:
         """Execute the pipeline asynchronously."""
         started_at = datetime.now()
+        timeout_config = TimeoutConfig(read=float(config.get("llm_read_timeout_seconds", 90)))
+        retry_config = RetryConfig(max_attempts=int(config.get("llm_max_attempts", 1)))
 
         # Resolve agents from config or parameter
         resolved_agents = agents or []
         if not resolved_agents and "agents" in config:
-            resolved_agents = resolve_agents(config["agents"])
+            resolved_agents = resolve_agents(
+                config["agents"],
+                timeout_config=timeout_config,
+                retry_config=retry_config,
+            )
 
         # Build pipeline
         pipeline_name = config.get("pipeline_name", "pipeline")
@@ -276,7 +294,11 @@ class PipelineWorkflow(WorkflowBase):
                         )
                     step_agent = resolved_agents[agent_ref]
                 elif isinstance(agent_ref, str):
-                    step_agent = resolve_agents([agent_ref])[0]
+                    step_agent = resolve_agents(
+                        [agent_ref],
+                        timeout_config=timeout_config,
+                        retry_config=retry_config,
+                    )[0]
                 else:
                     step_agent = resolved_agents[0]
 

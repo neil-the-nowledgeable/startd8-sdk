@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from startd8.agents import BaseAgent
+from startd8.agents.pool import TimeoutConfig
 from startd8.costs.pricing import PricingService
 from startd8.utils.agent_resolution import resolve_agent_spec, resolve_agents
+from startd8.utils.retry import RetryConfig
 from startd8.workflows.base import WorkflowBase, ProgressCallback
 from startd8.workflows.models import (
     AgentCount,
@@ -456,6 +458,20 @@ class PolicyAnalysisWorkflow(WorkflowBase):
                     default="both",
                     description="Output format: both, structured, narrative",
                 ),
+                WorkflowInput(
+                    name="llm_read_timeout_seconds",
+                    type="number",
+                    required=False,
+                    default=90,
+                    description="Fast-fail read timeout for policy analysis LLM calls",
+                ),
+                WorkflowInput(
+                    name="llm_max_attempts",
+                    type="number",
+                    required=False,
+                    default=1,
+                    description="Retry attempts for policy analysis LLM calls (1 = fail fast)",
+                ),
             ],
         )
 
@@ -483,6 +499,22 @@ class PolicyAnalysisWorkflow(WorkflowBase):
         if output_format not in ("both", "structured", "narrative"):
             errors.append("output_format must be: both, structured, or narrative")
 
+        llm_read_timeout_seconds = config.get("llm_read_timeout_seconds", 90)
+        try:
+            timeout_val = float(llm_read_timeout_seconds)
+            if timeout_val <= 0:
+                errors.append("llm_read_timeout_seconds must be > 0")
+        except (TypeError, ValueError):
+            errors.append("llm_read_timeout_seconds must be a positive number")
+
+        llm_max_attempts = config.get("llm_max_attempts", 1)
+        try:
+            attempts_val = int(llm_max_attempts)
+            if attempts_val < 1:
+                errors.append("llm_max_attempts must be >= 1")
+        except (TypeError, ValueError):
+            errors.append("llm_max_attempts must be an integer >= 1")
+
         if errors:
             return ValidationResult.failure(errors)
         return ValidationResult.success()
@@ -509,8 +541,19 @@ class PolicyAnalysisWorkflow(WorkflowBase):
                     f"Input processing failed: {policy_input.extraction_error}",
                 )
 
+            llm_timeout_config = TimeoutConfig(
+                read=float(config.get("llm_read_timeout_seconds", 90))
+            )
+            llm_retry_config = RetryConfig(
+                max_attempts=int(config.get("llm_max_attempts", 1))
+            )
+
             # Resolve agents
-            resolved_agents = agents or resolve_agents(config.get("agents", []))
+            resolved_agents = agents or resolve_agents(
+                config.get("agents", []),
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
 
             # Phase 2: Parallel Analysis
             self._emit_progress(on_progress, 2, 4, f"Analyzing with {len(resolved_agents)} agents")
@@ -546,7 +589,11 @@ class PolicyAnalysisWorkflow(WorkflowBase):
             synthesis_agent_spec = config.get(
                 "synthesis_agent", "anthropic:claude-sonnet-4-20250514"
             )
-            synthesis_agent = resolve_agent_spec(synthesis_agent_spec)
+            synthesis_agent = resolve_agent_spec(
+                synthesis_agent_spec,
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
 
             structured_output, narrative_report, synthesis_step = await self._synthesize_analyses(
                 policy_input,

@@ -13,7 +13,9 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from startd8.agents import BaseAgent
+from startd8.agents.pool import TimeoutConfig
 from startd8.costs.pricing import PricingService
+from startd8.utils.retry import RetryConfig
 from startd8.utils.agent_resolution import resolve_agent_spec, resolve_agents
 from startd8.workflows.base import WorkflowBase, ProgressCallback
 from startd8.workflows.models import (
@@ -243,6 +245,20 @@ class PlainLanguageWorkflow(WorkflowBase):
                     required=False,
                     description="Agent for synthesizing multi-agent results (defaults to first agent)",
                 ),
+                WorkflowInput(
+                    name="llm_read_timeout_seconds",
+                    type="number",
+                    required=False,
+                    default=90,
+                    description="Fast-fail read timeout for simplification LLM calls",
+                ),
+                WorkflowInput(
+                    name="llm_max_attempts",
+                    type="number",
+                    required=False,
+                    default=1,
+                    description="Retry attempts for simplification LLM calls (1 = fail fast)",
+                ),
             ],
         )
 
@@ -265,6 +281,22 @@ class PlainLanguageWorkflow(WorkflowBase):
         agents = config.get("agents", [])
         if agents and len(agents) > 5:
             errors.append("Maximum 5 agents allowed in multi-agent mode")
+
+        llm_read_timeout_seconds = config.get("llm_read_timeout_seconds", 90)
+        try:
+            timeout_val = float(llm_read_timeout_seconds)
+            if timeout_val <= 0:
+                errors.append("llm_read_timeout_seconds must be > 0")
+        except (TypeError, ValueError):
+            errors.append("llm_read_timeout_seconds must be a positive number")
+
+        llm_max_attempts = config.get("llm_max_attempts", 1)
+        try:
+            attempts_val = int(llm_max_attempts)
+            if attempts_val < 1:
+                errors.append("llm_max_attempts must be >= 1")
+        except (TypeError, ValueError):
+            errors.append("llm_max_attempts must be an integer >= 1")
 
         if errors:
             return ValidationResult.failure(errors)
@@ -292,6 +324,12 @@ class PlainLanguageWorkflow(WorkflowBase):
             title = config.get("title", "Untitled Content")
             content_type = parse_content_type(config.get("content_type"))
             reading_level = parse_reading_level(config.get("reading_level"))
+            llm_timeout_config = TimeoutConfig(
+                read=float(config.get("llm_read_timeout_seconds", 90))
+            )
+            llm_retry_config = RetryConfig(
+                max_attempts=int(config.get("llm_max_attempts", 1))
+            )
 
             # Create input object
             simplification_input = SimplificationInput(
@@ -304,11 +342,21 @@ class PlainLanguageWorkflow(WorkflowBase):
             # Resolve agents
             if is_multi_agent:
                 self._emit_progress(on_progress, 1, 3, f"Simplifying with {len(agent_specs)} agents")
-                resolved_agents = agents or resolve_agents(agent_specs)
+                resolved_agents = agents or resolve_agents(
+                    agent_specs,
+                    timeout_config=llm_timeout_config,
+                    retry_config=llm_retry_config,
+                )
             else:
                 self._emit_progress(on_progress, 1, 2, "Simplifying content")
                 single_agent_spec = config.get("agent", "anthropic:claude-sonnet-4-20250514")
-                resolved_agents = [resolve_agent_spec(single_agent_spec)]
+                resolved_agents = [
+                    resolve_agent_spec(
+                        single_agent_spec,
+                        timeout_config=llm_timeout_config,
+                        retry_config=llm_retry_config,
+                    )
+                ]
 
             # Run simplification
             if is_multi_agent:
@@ -334,7 +382,11 @@ class PlainLanguageWorkflow(WorkflowBase):
                 # Synthesize
                 self._emit_progress(on_progress, 2, 3, "Synthesizing best explanation")
                 synthesis_spec = config.get("synthesis_agent") or agent_specs[0]
-                synthesis_agent = resolve_agent_spec(synthesis_spec)
+                synthesis_agent = resolve_agent_spec(
+                    synthesis_spec,
+                    timeout_config=llm_timeout_config,
+                    retry_config=llm_retry_config,
+                )
                 final_output, synthesis_step = await self._synthesize_simplifications(
                     simplification_input, agent_outputs, synthesis_agent, reading_level
                 )

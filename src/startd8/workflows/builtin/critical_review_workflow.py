@@ -20,7 +20,9 @@ from ..models import (
     ValidationResult,
 )
 from ...agents import BaseAgent
+from ...agents.pool import TimeoutConfig
 from ...utils.agent_resolution import resolve_agents
+from ...utils.retry import RetryConfig
 
 
 # Default review prompt template
@@ -119,6 +121,20 @@ class CriticalReviewWorkflow(WorkflowBase):
                     required=False,
                     description="Custom review prompt template (use {document_content} placeholder)"
                 ),
+                WorkflowInput(
+                    name="llm_read_timeout_seconds",
+                    type="number",
+                    required=False,
+                    default=90,
+                    description="Fast-fail read timeout for review LLM calls"
+                ),
+                WorkflowInput(
+                    name="llm_max_attempts",
+                    type="number",
+                    required=False,
+                    default=1,
+                    description="Retry attempts for review LLM calls (1 = fail fast)"
+                ),
             ]
         )
 
@@ -143,6 +159,22 @@ class CriticalReviewWorkflow(WorkflowBase):
         if template and "{document_content}" not in template:
             errors.append("Custom review_template must contain {document_content} placeholder")
 
+        llm_read_timeout_seconds = config.get("llm_read_timeout_seconds", 90)
+        try:
+            timeout_val = float(llm_read_timeout_seconds)
+            if timeout_val <= 0:
+                errors.append("llm_read_timeout_seconds must be > 0")
+        except (TypeError, ValueError):
+            errors.append("llm_read_timeout_seconds must be a positive number")
+
+        llm_max_attempts = config.get("llm_max_attempts", 1)
+        try:
+            attempts_val = int(llm_max_attempts)
+            if attempts_val < 1:
+                errors.append("llm_max_attempts must be >= 1")
+        except (TypeError, ValueError):
+            errors.append("llm_max_attempts must be an integer >= 1")
+
         if errors:
             return ValidationResult.failure(errors)
         return ValidationResult.success()
@@ -155,11 +187,21 @@ class CriticalReviewWorkflow(WorkflowBase):
     ) -> WorkflowResult:
         """Execute critical review workflow synchronously."""
         started_at = datetime.now()
+        llm_timeout_config = TimeoutConfig(
+            read=float(config.get("llm_read_timeout_seconds", 90))
+        )
+        llm_retry_config = RetryConfig(
+            max_attempts=int(config.get("llm_max_attempts", 1))
+        )
 
         # Resolve agents
         resolved_agents = agents or []
         if not resolved_agents and "agents" in config:
-            resolved_agents = resolve_agents(config["agents"])
+            resolved_agents = resolve_agents(
+                config["agents"],
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
 
         if not resolved_agents:
             return WorkflowResult.from_error(
@@ -358,11 +400,21 @@ class CriticalReviewWorkflow(WorkflowBase):
     ) -> WorkflowResult:
         """Execute critical review workflow asynchronously (FR-150)."""
         started_at = datetime.now()
+        llm_timeout_config = TimeoutConfig(
+            read=float(config.get("llm_read_timeout_seconds", 90))
+        )
+        llm_retry_config = RetryConfig(
+            max_attempts=int(config.get("llm_max_attempts", 1))
+        )
 
         # Resolve agents
         resolved_agents = agents or []
         if not resolved_agents and "agents" in config:
-            resolved_agents = resolve_agents(config["agents"])
+            resolved_agents = resolve_agents(
+                config["agents"],
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
 
         if not resolved_agents:
             return WorkflowResult.from_error(

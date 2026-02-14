@@ -34,8 +34,10 @@ from ..models import (
     ValidationResult,
 )
 from ...agents import BaseAgent
+from ...agents.pool import TimeoutConfig
 from ...utils.agent_resolution import resolve_agents
 from ...utils.file_operations import FileLock, atomic_write, atomic_write_json
+from ...utils.retry import RetryConfig
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
 
@@ -292,6 +294,20 @@ class DocReviewLogWorkflow(WorkflowBase):
                     required=False,
                     description="Optional path for the workflow state JSON (defaults to <doc_dir>/.startd8/doc_review_state.json)",
                 ),
+                WorkflowInput(
+                    name="llm_read_timeout_seconds",
+                    type="number",
+                    required=False,
+                    default=90,
+                    description="Fast-fail read timeout for reviewer LLM calls",
+                ),
+                WorkflowInput(
+                    name="llm_max_attempts",
+                    type="number",
+                    required=False,
+                    default=1,
+                    description="Retry attempts for reviewer LLM calls (1 = fail fast)",
+                ),
             ],
         )
 
@@ -313,6 +329,22 @@ class DocReviewLogWorkflow(WorkflowBase):
         if not isinstance(max_suggestions, int) or max_suggestions < 1 or max_suggestions > 25:
             errors.append("max_suggestions must be an int between 1 and 25")
 
+        llm_read_timeout_seconds = config.get("llm_read_timeout_seconds", 90)
+        try:
+            timeout_val = float(llm_read_timeout_seconds)
+            if timeout_val <= 0:
+                errors.append("llm_read_timeout_seconds must be > 0")
+        except (TypeError, ValueError):
+            errors.append("llm_read_timeout_seconds must be a positive number")
+
+        llm_max_attempts = config.get("llm_max_attempts", 1)
+        try:
+            attempts_val = int(llm_max_attempts)
+            if attempts_val < 1:
+                errors.append("llm_max_attempts must be >= 1")
+        except (TypeError, ValueError):
+            errors.append("llm_max_attempts must be an integer >= 1")
+
         if errors:
             return ValidationResult.failure(errors)
         return ValidationResult.success()
@@ -328,7 +360,17 @@ class DocReviewLogWorkflow(WorkflowBase):
         # Resolve agents (workflow requires sequential list)
         resolved_agents = agents or []
         if not resolved_agents:
-            resolved_agents = resolve_agents(config["agents"])
+            llm_timeout_config = TimeoutConfig(
+                read=float(config.get("llm_read_timeout_seconds", 90))
+            )
+            llm_retry_config = RetryConfig(
+                max_attempts=int(config.get("llm_max_attempts", 1))
+            )
+            resolved_agents = resolve_agents(
+                config["agents"],
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
 
         doc_path = Path(str(config["document_path"])).expanduser().resolve()
         init_if_missing = bool(config.get("init_if_missing", True))

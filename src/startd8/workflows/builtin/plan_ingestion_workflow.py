@@ -29,10 +29,12 @@ from ..models import (
     WorkflowResult,
 )
 from ...agents import BaseAgent
+from ...agents.pool import TimeoutConfig
 from ...model_catalog import Models
 from ...utils.agent_resolution import resolve_agent_spec
 from ...utils.code_extraction import extract_code_from_response
 from ...utils.file_operations import atomic_write, atomic_write_json
+from ...utils.retry import RetryConfig
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
 from .plan_ingestion_models import (
@@ -316,9 +318,28 @@ DEPTH_TIERS: Dict[str, Dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 def _extract_json_from_response(response: str) -> dict:
-    """Extract JSON from an LLM response, handling code fences."""
-    text = extract_code_from_response(response, language="json")
-    return json.loads(text)
+    """Extract JSON from an LLM response, handling wrappers and code fences."""
+    text = extract_code_from_response(response, language="json").strip()
+    candidates: List[str] = [text]
+
+    for source in (text, response):
+        start = source.find("{")
+        end = source.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            snippet = source[start : end + 1].strip()
+            if snippet and snippet not in candidates:
+                candidates.append(snippet)
+
+    last_error: Optional[Exception] = None
+    for candidate in candidates:
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError as exc:
+            last_error = exc
+
+    if last_error:
+        raise last_error
+    raise ValueError("No JSON object found in response")
 
 
 def _parse_context_files(
@@ -336,6 +357,216 @@ def _parse_file_list(raw: Union[str, list, None]) -> List[str]:
     """Parse an optional file list from string or list input."""
     parsed = _parse_context_files(raw)
     return parsed or []
+
+
+def _as_bool(value: Any, default: bool) -> bool:
+    """Parse bool-ish config values safely."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    return bool(value)
+
+
+def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
+    """Best-effort parser used when LLM parse fails/times out."""
+    lines = plan_text.splitlines()
+
+    title = "Untitled Plan"
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            title = stripped[2:].strip()
+            break
+
+    goals: List[str] = []
+    in_goals = False
+    for line in lines:
+        stripped = line.strip()
+        if re.match(r"^##\s+goals\b", stripped, flags=re.IGNORECASE):
+            in_goals = True
+            continue
+        if in_goals and stripped.startswith("## "):
+            break
+        if in_goals and (stripped.startswith("- ") or stripped.startswith("* ")):
+            goals.append(stripped[2:].strip())
+
+    features: List[ParsedFeature] = []
+    current_title: Optional[str] = None
+    current_lines: List[str] = []
+
+    def flush_feature() -> None:
+        nonlocal current_title, current_lines
+        if current_title is None:
+            return
+        raw = current_title.strip()
+        m = re.match(r"^(F-\d{1,4})\s*[:\-]\s*(.+)$", raw, flags=re.IGNORECASE)
+        if m:
+            feature_id = m.group(1).upper()
+            name = m.group(2).strip()
+        else:
+            feature_id = f"F-{len(features) + 1:03d}"
+            name = raw
+
+        description = "\n".join(l for l in current_lines if l.strip()).strip()
+        file_matches = re.findall(
+            r"`([^`]+\.[A-Za-z0-9]+)`|([A-Za-z0-9_./-]+\.[A-Za-z0-9]+)",
+            description,
+        )
+        target_files = sorted({
+            (a or b).strip(".,:;()[]{}")
+            for a, b in file_matches
+            if (a or b)
+        })
+
+        dep_matches = re.findall(r"\bF-\d{1,4}\b", description, flags=re.IGNORECASE)
+        dependencies = sorted({d.upper() for d in dep_matches if d.upper() != feature_id})
+
+        features.append(ParsedFeature(
+            feature_id=feature_id,
+            name=name,
+            description=description,
+            target_files=target_files,
+            dependencies=dependencies,
+            estimated_loc=80,
+        ))
+        current_title = None
+        current_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("### "):
+            flush_feature()
+            current_title = stripped[4:].strip()
+            current_lines = []
+            continue
+        if current_title is not None:
+            current_lines.append(line)
+    flush_feature()
+
+    if not features:
+        features.append(ParsedFeature(
+            feature_id="F-001",
+            name=title,
+            description=plan_text[:2000].strip(),
+            target_files=[],
+            dependencies=[],
+            estimated_loc=100,
+        ))
+
+    mentioned_files = sorted({
+        tf
+        for feature in features
+        for tf in feature.target_files
+    })
+    dependency_graph = {f.feature_id: f.dependencies for f in features if f.dependencies}
+
+    return ParsedPlan(
+        title=title,
+        goals=goals,
+        features=features,
+        dependency_graph=dependency_graph,
+        mentioned_files=mentioned_files,
+        raw_text=plan_text,
+    )
+
+
+def _heuristic_assess_complexity(
+    parsed_plan: ParsedPlan,
+    threshold: int,
+    force_route: Optional[str] = None,
+) -> ComplexityScore:
+    """Deterministic complexity score when assess LLM is unavailable."""
+    feature_count = len(parsed_plan.features)
+    cross_file_deps = sum(1 for f in parsed_plan.features if len(f.target_files) > 1) * 20
+    api_surface = min(100, len(parsed_plan.mentioned_files) * 3)
+    test_complexity = min(100, sum(1 for f in parsed_plan.features if "test" in f.name.lower()) * 25)
+    integration_depth = min(100, sum(len(f.dependencies) for f in parsed_plan.features) * 15)
+    domain_novelty = 40
+    ambiguity = 30
+    composite = min(
+        100,
+        int(
+            feature_count * 6
+            + cross_file_deps * 0.2
+            + api_surface * 0.2
+            + integration_depth * 0.2
+            + test_complexity * 0.1
+        ),
+    )
+    if force_route:
+        route = ContractorRoute(force_route)
+    else:
+        route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
+    return ComplexityScore(
+        feature_count=feature_count,
+        cross_file_deps=cross_file_deps,
+        api_surface=api_surface,
+        test_complexity=test_complexity,
+        integration_depth=integration_depth,
+        domain_novelty=domain_novelty,
+        ambiguity=ambiguity,
+        composite=composite,
+        reasoning="Heuristic fallback scoring (LLM assess unavailable)",
+        route=route,
+    )
+
+
+def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute) -> str:
+    """Deterministic fallback transform when LLM transform fails."""
+    if route == ContractorRoute.PRIME:
+        tasks = []
+        for idx, feature in enumerate(parsed_plan.features, start=1):
+            tasks.append({
+                "task_id": f"PI-{idx:03d}",
+                "title": feature.name or feature.feature_id,
+                "task_type": "task",
+                "story_points": max(1, PlanIngestionWorkflow._estimate_story_points(feature.estimated_loc)),
+                "priority": "medium",
+                "labels": feature.labels or [],
+                "depends_on": [],
+                "config": {
+                    "task_description": feature.description or feature.name or feature.feature_id,
+                    "context": {
+                        "feature_id": feature.feature_id,
+                        "target_files": feature.target_files,
+                        "estimated_loc": feature.estimated_loc,
+                    },
+                },
+            })
+        payload = {
+            "project": {
+                "id": "plan-ingestion-fallback",
+                "name": parsed_plan.title,
+                "sprint_id": "sprint-fallback",
+            },
+            "tasks": tasks,
+        }
+        return yaml.safe_dump(payload, sort_keys=False, allow_unicode=False)
+
+    lines: List[str] = [f"# {parsed_plan.title}", "", "## Overview"]
+    lines.append("Fallback transform output generated without LLM assistance.")
+    lines.extend(["", "## Goals"])
+    if parsed_plan.goals:
+        lines.extend(f"- {goal}" for goal in parsed_plan.goals)
+    else:
+        lines.append("- (No explicit goals extracted)")
+    lines.extend(["", "## Phase Breakdown"])
+    for idx, feature in enumerate(parsed_plan.features, start=1):
+        lines.append(f"### Phase {idx}: {feature.name or feature.feature_id}")
+        lines.append(feature.description or "No description provided.")
+        if feature.target_files:
+            lines.append("")
+            lines.append("Target files:")
+            lines.extend(f"- `{tf}`" for tf in feature.target_files)
+    lines.append("")
+    return "\n".join(lines).strip() + "\n"
 
 
 def _safe_json_load(path: Path) -> Optional[Dict[str, Any]]:
@@ -633,6 +864,27 @@ class PlanIngestionWorkflow(WorkflowBase):
                     required=False,
                     description="Explicit path to .contextcore.yaml (overrides auto-discovery)",
                 ),
+                WorkflowInput(
+                    name="llm_read_timeout_seconds",
+                    type="number",
+                    required=False,
+                    default=90,
+                    description="Fast-fail read timeout for parse/assess/transform LLM calls",
+                ),
+                WorkflowInput(
+                    name="llm_max_attempts",
+                    type="number",
+                    required=False,
+                    default=1,
+                    description="Retry attempts for parse/assess/transform LLM calls (1 = fail fast)",
+                ),
+                WorkflowInput(
+                    name="enable_heuristic_parse_fallback",
+                    type="boolean",
+                    required=False,
+                    default=True,
+                    description="If parse LLM fails, continue with deterministic markdown parser",
+                ),
             ],
         )
 
@@ -672,6 +924,26 @@ class PlanIngestionWorkflow(WorkflowBase):
             if fval < 0 or fval > 100:
                 errors.append(f"{key} must be between 0 and 100")
 
+        timeout_val = config.get("llm_read_timeout_seconds")
+        if timeout_val is not None:
+            try:
+                timeout_float = float(timeout_val)
+            except (TypeError, ValueError):
+                errors.append("llm_read_timeout_seconds must be a positive number")
+            else:
+                if timeout_float <= 0:
+                    errors.append("llm_read_timeout_seconds must be greater than 0")
+
+        max_attempts = config.get("llm_max_attempts")
+        if max_attempts is not None:
+            try:
+                attempts = int(max_attempts)
+            except (TypeError, ValueError):
+                errors.append("llm_max_attempts must be an integer >= 1")
+            else:
+                if attempts < 1:
+                    errors.append("llm_max_attempts must be >= 1")
+
         for path_key in ("requirements_path", "contextcore_export_dir"):
             raw = config.get(path_key)
             if not raw:
@@ -688,13 +960,33 @@ class PlanIngestionWorkflow(WorkflowBase):
     # Agent resolution
     # ------------------------------------------------------------------
 
-    def _resolve_assessor_agent(self, config: Dict[str, Any]) -> BaseAgent:
+    def _resolve_assessor_agent(
+        self,
+        config: Dict[str, Any],
+        timeout_config: Optional[TimeoutConfig] = None,
+        retry_config: Optional[RetryConfig] = None,
+    ) -> BaseAgent:
         spec = config.get("assessor_agent") or Models.CLAUDE_SONNET_LATEST
-        return resolve_agent_spec(str(spec), name="plan-assessor")
+        return resolve_agent_spec(
+            str(spec),
+            name="plan-assessor",
+            timeout_config=timeout_config,
+            retry_config=retry_config,
+        )
 
-    def _resolve_transformer_agent(self, config: Dict[str, Any]) -> BaseAgent:
+    def _resolve_transformer_agent(
+        self,
+        config: Dict[str, Any],
+        timeout_config: Optional[TimeoutConfig] = None,
+        retry_config: Optional[RetryConfig] = None,
+    ) -> BaseAgent:
         spec = config.get("transformer_agent") or Models.CLAUDE_SONNET_LATEST
-        agent = resolve_agent_spec(str(spec), name="plan-transformer")
+        agent = resolve_agent_spec(
+            str(spec),
+            name="plan-transformer",
+            timeout_config=timeout_config,
+            retry_config=retry_config,
+        )
         # Transform phase generates large YAML/markdown; bump token limit
         if hasattr(agent, "max_tokens") and agent.max_tokens < 64000:
             agent.max_tokens = 64000
@@ -710,7 +1002,21 @@ class PlanIngestionWorkflow(WorkflowBase):
         t0 = time.time()
         prompt = _PARSE_PROMPT.format(plan_text=plan_text)
 
-        response_text, time_ms, token_usage = agent.generate(prompt)
+        try:
+            response_text, time_ms, token_usage = agent.generate(prompt)
+        except Exception as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return None, StepResult(
+                step_name="parse",
+                agent_name=agent.name,
+                input=prompt[:_INPUT_TRUNCATION],
+                output="",
+                time_ms=elapsed_ms,
+                input_tokens=0,
+                output_tokens=0,
+                cost=0.0,
+                error=f"Parse agent call failed: {exc}",
+            )
         elapsed_ms = int((time.time() - t0) * 1000)
 
         in_tok = token_usage_input(token_usage) if token_usage else 0
@@ -821,7 +1127,21 @@ class PlanIngestionWorkflow(WorkflowBase):
             threshold=threshold,
         )
 
-        response_text, time_ms, token_usage = agent.generate(prompt)
+        try:
+            response_text, time_ms, token_usage = agent.generate(prompt)
+        except Exception as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return None, StepResult(
+                step_name="assess",
+                agent_name=agent.name,
+                input=prompt[:_INPUT_TRUNCATION],
+                output="",
+                time_ms=elapsed_ms,
+                input_tokens=0,
+                output_tokens=0,
+                cost=0.0,
+                error=f"Assess agent call failed: {exc}",
+            )
         elapsed_ms = int((time.time() - t0) * 1000)
 
         in_tok = token_usage_input(token_usage) if token_usage else 0
@@ -925,7 +1245,21 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
             out_filename = "PLAN-ingested.md"
 
-        response_text, time_ms, token_usage = agent.generate(prompt)
+        try:
+            response_text, time_ms, token_usage = agent.generate(prompt)
+        except Exception as exc:
+            elapsed_ms = int((time.time() - t0) * 1000)
+            return None, StepResult(
+                step_name="transform",
+                agent_name=agent.name,
+                input=prompt[:_INPUT_TRUNCATION],
+                output="",
+                time_ms=elapsed_ms,
+                input_tokens=0,
+                output_tokens=0,
+                cost=0.0,
+                error=f"Transform agent call failed: {exc}",
+            )
         elapsed_ms = int((time.time() - t0) * 1000)
 
         in_tok = token_usage_input(token_usage) if token_usage else 0
@@ -1477,6 +1811,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         feature_requirements: Optional[List[str]],
         warn_cost_usd: Optional[float],
         max_cost_usd: Optional[float],
+        llm_read_timeout_seconds: Optional[float] = None,
+        llm_max_attempts: Optional[int] = None,
     ) -> Tuple[int, List[StepResult], float]:
         if review_rounds <= 0:
             return 0, [], 0.0
@@ -1502,6 +1838,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             review_config["warn_cost_usd"] = warn_cost_usd
         if max_cost_usd is not None:
             review_config["max_cost_usd"] = max_cost_usd
+        if llm_read_timeout_seconds is not None:
+            review_config["llm_read_timeout_seconds"] = float(llm_read_timeout_seconds)
+        if llm_max_attempts is not None:
+            review_config["llm_max_attempts"] = int(llm_max_attempts)
 
         result = review_wf.run(review_config)
 
@@ -2367,6 +2707,14 @@ class PlanIngestionWorkflow(WorkflowBase):
         min_requirements_coverage = float(config.get("min_requirements_coverage", 70))
         min_artifact_mapping_coverage = float(config.get("min_artifact_mapping_coverage", 70))
         max_contract_conflicts = int(config.get("max_contract_conflicts", 2))
+        llm_read_timeout_seconds = float(config.get("llm_read_timeout_seconds", 90))
+        llm_max_attempts = int(config.get("llm_max_attempts", 1))
+        enable_heuristic_parse_fallback = _as_bool(
+            config.get("enable_heuristic_parse_fallback"),
+            True,
+        )
+        llm_timeout_config = TimeoutConfig(read=llm_read_timeout_seconds)
+        llm_retry_config = RetryConfig(max_attempts=llm_max_attempts)
 
         # Task tracking (opt-in)
         generate_task_tracking = config.get("generate_task_tracking", False)
@@ -2521,14 +2869,33 @@ class PlanIngestionWorkflow(WorkflowBase):
             # --- PARSE ---
             progress("Parse")
             state.current_phase = IngestionPhase.PARSE
-            assessor = self._resolve_assessor_agent(config)
+            assessor = self._resolve_assessor_agent(
+                config,
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
 
             parsed_plan, parse_step = self._phase_parse(plan_text, assessor)
             steps.append(parse_step)
             state.total_cost += parse_step.cost
             step_costs["parse"] = parse_step.cost
             if parse_step.error:
-                return _fail(parse_step.error)
+                if enable_heuristic_parse_fallback:
+                    parsed_plan = _heuristic_parse_plan(plan_text)
+                    fallback_step = StepResult(
+                        step_name="parse:fallback",
+                        output=(
+                            "Primary parse failed; continuing with deterministic fallback parser. "
+                            f"Reason: {parse_step.error}"
+                        ),
+                    )
+                    steps.append(fallback_step)
+                    logger.warning(
+                        "Parse fallback activated due to primary parse failure: %s",
+                        parse_step.error,
+                    )
+                else:
+                    return _fail(parse_step.error)
             state.parsed_plan = parsed_plan
             logger.debug(
                 "Parsed plan: '%s' with %d features",
@@ -2557,7 +2924,26 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.total_cost += assess_step.cost
             step_costs["assess"] = assess_step.cost
             if assess_step.error:
-                return _fail(assess_step.error)
+                if enable_heuristic_parse_fallback:
+                    complexity = _heuristic_assess_complexity(
+                        parsed_plan,
+                        threshold=threshold,
+                        force_route=force_route,
+                    )
+                    fallback_step = StepResult(
+                        step_name="assess:fallback",
+                        output=(
+                            "Primary assess failed; continuing with deterministic fallback scoring. "
+                            f"Reason: {assess_step.error}"
+                        ),
+                    )
+                    steps.append(fallback_step)
+                    logger.warning(
+                        "Assess fallback activated due to primary assess failure: %s",
+                        assess_step.error,
+                    )
+                else:
+                    return _fail(assess_step.error)
             state.complexity = complexity
             state.route = complexity.route
 
@@ -2619,7 +3005,11 @@ class PlanIngestionWorkflow(WorkflowBase):
             # --- TRANSFORM ---
             progress("Transform")
             state.current_phase = IngestionPhase.TRANSFORM
-            transformer = self._resolve_transformer_agent(config)
+            transformer = self._resolve_transformer_agent(
+                config,
+                timeout_config=llm_timeout_config,
+                retry_config=llm_retry_config,
+            )
 
             doc_path, transform_step = self._phase_transform(
                 parsed_plan, route, transformer, output_dir,
@@ -2628,7 +3018,30 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.total_cost += transform_step.cost
             step_costs["transform"] = transform_step.cost
             if transform_step.error:
-                return _fail(transform_step.error)
+                if enable_heuristic_parse_fallback:
+                    fallback_content = _heuristic_transform_content(parsed_plan, route)
+                    output_dir.mkdir(parents=True, exist_ok=True)
+                    fallback_name = (
+                        "plan-ingestion-tasks.yaml"
+                        if route == ContractorRoute.PRIME
+                        else "PLAN-ingested.md"
+                    )
+                    doc_path = output_dir / fallback_name
+                    atomic_write(doc_path, fallback_content)
+                    fallback_step = StepResult(
+                        step_name="transform:fallback",
+                        output=(
+                            f"Wrote {doc_path} via deterministic fallback transform. "
+                            f"Reason: {transform_step.error}"
+                        ),
+                    )
+                    steps.append(fallback_step)
+                    logger.warning(
+                        "Transform fallback activated due to primary transform failure: %s",
+                        transform_step.error,
+                    )
+                else:
+                    return _fail(transform_step.error)
             state.plan_document_path = str(doc_path)
 
             cost_err = _check_cost("transform")
@@ -2657,6 +3070,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 list(requirements_docs.keys()) if requirements_docs else None,
                 warn_cost_usd,
                 max_cost_usd,
+                llm_read_timeout_seconds=llm_read_timeout_seconds,
+                llm_max_attempts=llm_max_attempts,
             )
             steps.extend(refine_steps)
             state.total_cost += refine_cost

@@ -21,7 +21,9 @@ from ..models import (
 from ...document_enhancement import DocumentEnhancementChain
 from ...models import DocumentEnhancementConfig, AgentConfig
 from ...agents import BaseAgent
+from ...agents.pool import TimeoutConfig
 from ...utils.agent_resolution import resolve_agents
+from ...utils.retry import RetryConfig
 
 
 class DocEnhancementWorkflow(WorkflowBase):
@@ -135,7 +137,11 @@ class DocEnhancementWorkflow(WorkflowBase):
         # Resolve agents
         resolved_agents = agents or []
         if not resolved_agents and "agents" in config:
-            resolved_agents = resolve_agents(config["agents"])
+            resolved_agents = resolve_agents(
+                config["agents"],
+                timeout_config=TimeoutConfig(read=float(config.get("llm_read_timeout_seconds", 90))),
+                retry_config=RetryConfig(max_attempts=int(config.get("llm_max_attempts", 1))),
+            )
 
         if not resolved_agents:
             return WorkflowResult.from_error(

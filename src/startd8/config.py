@@ -97,6 +97,7 @@ class ConfigManager:
                 "development_timeout_seconds": None,
                 "auto_commit": None,
                 "scaffold_test_first": None,
+                "force_implement": None,
             },
             "resilience": {
                 "level": "standard",  # off, minimal, standard, aggressive, custom
@@ -425,7 +426,7 @@ class ConfigManager:
 
 _ARTISAN_BOOL_KEYS = {
     "fail_on_truncation", "check_truncation", "strict_truncation",
-    "scaffold_test_first",
+    "scaffold_test_first", "force_implement",
 }
 _ARTISAN_INT_KEYS = {
     "max_iterations", "pass_threshold", "max_tokens", "design_max_tokens",

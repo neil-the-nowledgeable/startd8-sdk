@@ -339,6 +339,26 @@ class TestPlanIngestionValidation:
         assert not result.valid
         assert any("low_quality_policy" in e for e in result.errors)
 
+    def test_invalid_llm_timeout(self, tmp_path):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+        result = self.wf.validate_config({
+            "plan_path": str(plan_file),
+            "llm_read_timeout_seconds": 0,
+        })
+        assert not result.valid
+        assert any("llm_read_timeout_seconds" in e for e in result.errors)
+
+    def test_invalid_llm_max_attempts(self, tmp_path):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+        result = self.wf.validate_config({
+            "plan_path": str(plan_file),
+            "llm_max_attempts": 0,
+        })
+        assert not result.valid
+        assert any("llm_max_attempts" in e for e in result.errors)
+
 
 # ---------------------------------------------------------------------------
 # TestExtractJson
@@ -357,6 +377,11 @@ class TestExtractJson:
     def test_malformed_json_raises(self):
         with pytest.raises((json.JSONDecodeError, ValueError)):
             _extract_json_from_response("not json at all")
+
+    def test_json_embedded_in_prose(self):
+        text = 'Here is the payload: {"key":"value","count":2}. Thanks.'
+        data = _extract_json_from_response(text)
+        assert data == {"key": "value", "count": 2}
 
 
 # ---------------------------------------------------------------------------
@@ -783,6 +808,107 @@ class TestEndToEnd:
 
     @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
     @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_parse_timeout_uses_fallback_parser(self, mock_resolve, MockReviewWf, tmp_path):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            RuntimeError("Request timed out"),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.02),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.0)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 0,
+            "enable_heuristic_parse_fallback": True,
+        })
+
+        assert result.success
+        assert result.output["route"] == "prime"
+        assert any(step.step_name == "parse:fallback" for step in result.steps)
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_assess_timeout_uses_fallback_scoring(self, mock_resolve, MockReviewWf, tmp_path):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            RuntimeError("Assessment timed out"),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.0)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 0,
+            "enable_heuristic_parse_fallback": True,
+        })
+
+        assert result.success
+        assert any(step.step_name == "assess:fallback" for step in result.steps)
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_transform_timeout_uses_fallback_render(self, mock_resolve, MockReviewWf, tmp_path):
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.02),
+            RuntimeError("Transform timed out"),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.0)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 0,
+            "enable_heuristic_parse_fallback": True,
+        })
+
+        assert result.success
+        assert any(step.step_name == "transform:fallback" for step in result.steps)
+        assert (tmp_path / "plan-ingestion-tasks.yaml").exists()
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
     def test_cost_accumulation(self, mock_resolve, MockReviewWf, tmp_path):
         plan_file = tmp_path / "plan.md"
         plan_file.write_text(SAMPLE_PLAN)
@@ -939,6 +1065,7 @@ class TestEndToEnd:
         result = self.wf.run({
             "plan_path": str(plan_file),
             "output_dir": str(tmp_path),
+            "enable_heuristic_parse_fallback": False,
         })
 
         assert not result.success

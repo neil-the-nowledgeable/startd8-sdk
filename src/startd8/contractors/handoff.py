@@ -35,16 +35,16 @@ from __future__ import annotations
 
 import json
 import hashlib
-import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from startd8.logging_config import get_logger
 from startd8.utils.file_operations import atomic_write_json
 from startd8.workflows.builtin.schema_versions import ARTISAN_SCHEMA_VERSION
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 DESIGN_HANDOFF_FILENAME = "design-handoff.json"
 DESIGN_HANDOFF_CONTRACT_FILENAME = "design-handoff-contract.json"
