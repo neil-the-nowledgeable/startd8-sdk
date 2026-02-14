@@ -318,28 +318,175 @@ DEPTH_TIERS: Dict[str, Dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 
 def _extract_json_from_response(response: str) -> dict:
-    """Extract JSON from an LLM response, handling wrappers and code fences."""
-    text = extract_code_from_response(response, language="json").strip()
-    candidates: List[str] = [text]
+    """Extract JSON from an LLM response, handling code fences."""
+    text = extract_code_from_response(response, language="json")
+    return json.loads(text)
 
-    for source in (text, response):
-        start = source.find("{")
-        end = source.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            snippet = source[start : end + 1].strip()
-            if snippet and snippet not in candidates:
-                candidates.append(snippet)
 
-    last_error: Optional[Exception] = None
-    for candidate in candidates:
-        try:
-            return json.loads(candidate)
-        except json.JSONDecodeError as exc:
-            last_error = exc
+def _as_bool(raw: Any, default: bool) -> bool:
+    """Parse truthy/falsy user config values with a default."""
+    if raw is None:
+        return default
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, (int, float)):
+        return bool(raw)
+    text = str(raw).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    return default
 
-    if last_error:
-        raise last_error
-    raise ValueError("No JSON object found in response")
+
+def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
+    """Deterministic fallback parser when LLM parse fails."""
+    title_match = re.search(r"^\s*#\s+(.+)$", plan_text, flags=re.MULTILINE)
+    title = title_match.group(1).strip() if title_match else "Untitled Plan"
+
+    goal_lines: List[str] = []
+    in_goals = False
+    for line in plan_text.splitlines():
+        if re.match(r"^\s*##\s+goals?\s*$", line, flags=re.IGNORECASE):
+            in_goals = True
+            continue
+        if in_goals and re.match(r"^\s*##\s+", line):
+            in_goals = False
+        if in_goals:
+            m = re.match(r"^\s*[-*]\s+(.+)$", line)
+            if m:
+                goal_lines.append(m.group(1).strip())
+
+    features: List[ParsedFeature] = []
+    for idx, m in enumerate(
+        re.finditer(r"^\s*###\s+([A-Za-z]+-\d+)\s*:\s*(.+)$", plan_text, flags=re.MULTILINE),
+        start=1,
+    ):
+        fid = m.group(1).upper()
+        name = m.group(2).strip()
+        start_pos = m.end()
+        next_match = re.search(r"^\s*###\s+", plan_text[start_pos:], flags=re.MULTILINE)
+        end_pos = start_pos + (next_match.start() if next_match else len(plan_text[start_pos:]))
+        block = plan_text[start_pos:end_pos]
+        files = sorted(
+            set(
+                re.findall(
+                    r"`([A-Za-z0-9_./-]+\.[A-Za-z0-9_]+)`",
+                    block,
+                )
+            )
+        )
+        deps = sorted(set(re.findall(r"\b([A-Za-z]+-\d+)\b", block)))
+        deps = [d.upper() for d in deps if d.upper() != fid]
+        features.append(
+            ParsedFeature(
+                feature_id=fid,
+                name=name,
+                description=block.strip().splitlines()[0].strip() if block.strip() else name,
+                target_files=files,
+                dependencies=deps,
+                estimated_loc=120,
+                labels=[],
+            )
+        )
+
+    if not features:
+        features = [
+            ParsedFeature(
+                feature_id="F-001",
+                name=title,
+                description="Fallback parsed feature from plan text",
+                target_files=[],
+                dependencies=[],
+                estimated_loc=120,
+                labels=[],
+            )
+        ]
+
+    mentioned_files = sorted(
+        set(
+            re.findall(
+                r"(?:^|[\s(])([A-Za-z0-9_./-]+/[A-Za-z0-9_./-]+\.[A-Za-z0-9_]+)(?:$|[\s),])",
+                plan_text,
+            )
+        )
+    )
+    dep_graph = {f.feature_id: list(f.dependencies) for f in features if f.dependencies}
+    return ParsedPlan(
+        title=title,
+        goals=goal_lines,
+        features=features,
+        dependency_graph=dep_graph,
+        mentioned_files=mentioned_files,
+        raw_text=plan_text,
+    )
+
+
+def _heuristic_assess_complexity(
+    parsed_plan: ParsedPlan,
+    *,
+    threshold: int,
+    force_route: Optional[str],
+) -> ComplexityScore:
+    """Deterministic fallback complexity assessment."""
+    feature_count = len(parsed_plan.features)
+    cross_file_deps = sum(len(f.dependencies) for f in parsed_plan.features)
+    api_surface = min(100, max(10, feature_count * 8))
+    test_complexity = min(100, max(10, feature_count * 6))
+    integration_depth = min(100, max(10, cross_file_deps * 10))
+    domain_novelty = 40
+    ambiguity = 45
+    composite = int(
+        (api_surface + test_complexity + integration_depth + domain_novelty + ambiguity) / 5
+    )
+    if force_route:
+        route = ContractorRoute(force_route)
+    else:
+        route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
+    return ComplexityScore(
+        feature_count=feature_count,
+        cross_file_deps=cross_file_deps,
+        api_surface=api_surface,
+        test_complexity=test_complexity,
+        integration_depth=integration_depth,
+        domain_novelty=domain_novelty,
+        ambiguity=ambiguity,
+        composite=composite,
+        reasoning="Heuristic fallback complexity used after assess failure",
+        route=route,
+    )
+
+
+def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute) -> str:
+    """Deterministic fallback transform output."""
+    if route == ContractorRoute.PRIME:
+        tasks = []
+        for idx, f in enumerate(parsed_plan.features, start=1):
+            tasks.append(
+                {
+                    "task_id": f"PI-{idx:03d}",
+                    "title": f.name,
+                    "task_type": "task",
+                    "priority": "medium",
+                    "story_points": 3,
+                    "labels": list(f.labels) or ["implementation"],
+                    "config": {
+                        "task_description": f.description or f.name,
+                        "context": {"feature_id": f.feature_id, "target_files": list(f.target_files)},
+                    },
+                }
+            )
+        return yaml.safe_dump({"tasks": tasks}, sort_keys=False)
+
+    lines = [f"# {parsed_plan.title}", "", "## Overview"]
+    if parsed_plan.goals:
+        lines.extend([f"- {g}" for g in parsed_plan.goals])
+    else:
+        lines.append("Generated via heuristic fallback transform.")
+    lines.extend(["", "## Phase Breakdown"])
+    for f in parsed_plan.features:
+        lines.extend([f"### {f.feature_id}: {f.name}", f.description or f.name, ""])
+    return "\n".join(lines).strip() + "\n"
 
 
 def _parse_context_files(
@@ -357,216 +504,6 @@ def _parse_file_list(raw: Union[str, list, None]) -> List[str]:
     """Parse an optional file list from string or list input."""
     parsed = _parse_context_files(raw)
     return parsed or []
-
-
-def _as_bool(value: Any, default: bool) -> bool:
-    """Parse bool-ish config values safely."""
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in {"1", "true", "yes", "on"}:
-            return True
-        if normalized in {"0", "false", "no", "off"}:
-            return False
-    return bool(value)
-
-
-def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
-    """Best-effort parser used when LLM parse fails/times out."""
-    lines = plan_text.splitlines()
-
-    title = "Untitled Plan"
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("# "):
-            title = stripped[2:].strip()
-            break
-
-    goals: List[str] = []
-    in_goals = False
-    for line in lines:
-        stripped = line.strip()
-        if re.match(r"^##\s+goals\b", stripped, flags=re.IGNORECASE):
-            in_goals = True
-            continue
-        if in_goals and stripped.startswith("## "):
-            break
-        if in_goals and (stripped.startswith("- ") or stripped.startswith("* ")):
-            goals.append(stripped[2:].strip())
-
-    features: List[ParsedFeature] = []
-    current_title: Optional[str] = None
-    current_lines: List[str] = []
-
-    def flush_feature() -> None:
-        nonlocal current_title, current_lines
-        if current_title is None:
-            return
-        raw = current_title.strip()
-        m = re.match(r"^(F-\d{1,4})\s*[:\-]\s*(.+)$", raw, flags=re.IGNORECASE)
-        if m:
-            feature_id = m.group(1).upper()
-            name = m.group(2).strip()
-        else:
-            feature_id = f"F-{len(features) + 1:03d}"
-            name = raw
-
-        description = "\n".join(l for l in current_lines if l.strip()).strip()
-        file_matches = re.findall(
-            r"`([^`]+\.[A-Za-z0-9]+)`|([A-Za-z0-9_./-]+\.[A-Za-z0-9]+)",
-            description,
-        )
-        target_files = sorted({
-            (a or b).strip(".,:;()[]{}")
-            for a, b in file_matches
-            if (a or b)
-        })
-
-        dep_matches = re.findall(r"\bF-\d{1,4}\b", description, flags=re.IGNORECASE)
-        dependencies = sorted({d.upper() for d in dep_matches if d.upper() != feature_id})
-
-        features.append(ParsedFeature(
-            feature_id=feature_id,
-            name=name,
-            description=description,
-            target_files=target_files,
-            dependencies=dependencies,
-            estimated_loc=80,
-        ))
-        current_title = None
-        current_lines = []
-
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("### "):
-            flush_feature()
-            current_title = stripped[4:].strip()
-            current_lines = []
-            continue
-        if current_title is not None:
-            current_lines.append(line)
-    flush_feature()
-
-    if not features:
-        features.append(ParsedFeature(
-            feature_id="F-001",
-            name=title,
-            description=plan_text[:2000].strip(),
-            target_files=[],
-            dependencies=[],
-            estimated_loc=100,
-        ))
-
-    mentioned_files = sorted({
-        tf
-        for feature in features
-        for tf in feature.target_files
-    })
-    dependency_graph = {f.feature_id: f.dependencies for f in features if f.dependencies}
-
-    return ParsedPlan(
-        title=title,
-        goals=goals,
-        features=features,
-        dependency_graph=dependency_graph,
-        mentioned_files=mentioned_files,
-        raw_text=plan_text,
-    )
-
-
-def _heuristic_assess_complexity(
-    parsed_plan: ParsedPlan,
-    threshold: int,
-    force_route: Optional[str] = None,
-) -> ComplexityScore:
-    """Deterministic complexity score when assess LLM is unavailable."""
-    feature_count = len(parsed_plan.features)
-    cross_file_deps = sum(1 for f in parsed_plan.features if len(f.target_files) > 1) * 20
-    api_surface = min(100, len(parsed_plan.mentioned_files) * 3)
-    test_complexity = min(100, sum(1 for f in parsed_plan.features if "test" in f.name.lower()) * 25)
-    integration_depth = min(100, sum(len(f.dependencies) for f in parsed_plan.features) * 15)
-    domain_novelty = 40
-    ambiguity = 30
-    composite = min(
-        100,
-        int(
-            feature_count * 6
-            + cross_file_deps * 0.2
-            + api_surface * 0.2
-            + integration_depth * 0.2
-            + test_complexity * 0.1
-        ),
-    )
-    if force_route:
-        route = ContractorRoute(force_route)
-    else:
-        route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
-    return ComplexityScore(
-        feature_count=feature_count,
-        cross_file_deps=cross_file_deps,
-        api_surface=api_surface,
-        test_complexity=test_complexity,
-        integration_depth=integration_depth,
-        domain_novelty=domain_novelty,
-        ambiguity=ambiguity,
-        composite=composite,
-        reasoning="Heuristic fallback scoring (LLM assess unavailable)",
-        route=route,
-    )
-
-
-def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute) -> str:
-    """Deterministic fallback transform when LLM transform fails."""
-    if route == ContractorRoute.PRIME:
-        tasks = []
-        for idx, feature in enumerate(parsed_plan.features, start=1):
-            tasks.append({
-                "task_id": f"PI-{idx:03d}",
-                "title": feature.name or feature.feature_id,
-                "task_type": "task",
-                "story_points": max(1, PlanIngestionWorkflow._estimate_story_points(feature.estimated_loc)),
-                "priority": "medium",
-                "labels": feature.labels or [],
-                "depends_on": [],
-                "config": {
-                    "task_description": feature.description or feature.name or feature.feature_id,
-                    "context": {
-                        "feature_id": feature.feature_id,
-                        "target_files": feature.target_files,
-                        "estimated_loc": feature.estimated_loc,
-                    },
-                },
-            })
-        payload = {
-            "project": {
-                "id": "plan-ingestion-fallback",
-                "name": parsed_plan.title,
-                "sprint_id": "sprint-fallback",
-            },
-            "tasks": tasks,
-        }
-        return yaml.safe_dump(payload, sort_keys=False, allow_unicode=False)
-
-    lines: List[str] = [f"# {parsed_plan.title}", "", "## Overview"]
-    lines.append("Fallback transform output generated without LLM assistance.")
-    lines.extend(["", "## Goals"])
-    if parsed_plan.goals:
-        lines.extend(f"- {goal}" for goal in parsed_plan.goals)
-    else:
-        lines.append("- (No explicit goals extracted)")
-    lines.extend(["", "## Phase Breakdown"])
-    for idx, feature in enumerate(parsed_plan.features, start=1):
-        lines.append(f"### Phase {idx}: {feature.name or feature.feature_id}")
-        lines.append(feature.description or "No description provided.")
-        if feature.target_files:
-            lines.append("")
-            lines.append("Target files:")
-            lines.extend(f"- `{tf}`" for tf in feature.target_files)
-    lines.append("")
-    return "\n".join(lines).strip() + "\n"
 
 
 def _safe_json_load(path: Path) -> Optional[Dict[str, Any]]:
@@ -601,10 +538,76 @@ def _normalize_artifact_type(raw: str) -> str:
 
 def _artifact_type_from_id(artifact_id: str) -> Optional[str]:
     """Derive artifact type from artifact ID suffix when possible."""
-    if "-" not in artifact_id:
-        return None
-    suffix = artifact_id.split("-", 1)[1]
-    return _normalize_artifact_type(suffix)
+    aid = artifact_id.strip().lower()
+    explicit_suffix_map = {
+        "-dashboard": "dashboard",
+        "_dashboard": "dashboard",
+        "-loki-rules": "loki_rule",
+        "_loki_rules": "loki_rule",
+        "-notification": "notification_policy",
+        "_notification": "notification_policy",
+        "-prometheus-rules": "prometheus_rule",
+        "_prometheus_rules": "prometheus_rule",
+        "-runbook": "runbook",
+        "_runbook": "runbook",
+        "-service-monitor": "service_monitor",
+        "_service_monitor": "service_monitor",
+        "-slo": "slo_definition",
+        "_slo": "slo_definition",
+    }
+    for suffix, artifact_type in explicit_suffix_map.items():
+        if aid.endswith(suffix):
+            return artifact_type
+    if "-" in aid:
+        suffix = aid.split("-", 1)[1]
+        return _normalize_artifact_type(suffix)
+    if "_" in aid:
+        suffix = aid.split("_", 1)[1]
+        return _normalize_artifact_type(suffix)
+    return None
+
+
+def _artifact_target_from_id(artifact_id: str, artifact_type: str) -> Optional[str]:
+    """Extract target slug from artifact id using known type suffix patterns."""
+    aid = artifact_id.strip()
+    type_patterns = {
+        "dashboard": ["-dashboard", "_dashboard"],
+        "loki_rule": ["-loki-rules", "_loki_rules"],
+        "notification_policy": ["-notification", "_notification"],
+        "prometheus_rule": ["-prometheus-rules", "_prometheus_rules"],
+        "runbook": ["-runbook", "_runbook"],
+        "service_monitor": ["-service-monitor", "_service_monitor"],
+        "slo_definition": ["-slo", "_slo"],
+    }
+    for suffix in type_patterns.get(artifact_type, []):
+        if aid.lower().endswith(suffix):
+            raw_target = aid[: -len(suffix)]
+            target = raw_target.replace("_", "-").strip("-_")
+            return target or None
+    return None
+
+
+def _derive_target_files_from_artifact_ids(
+    artifact_ids: List[str],
+    output_path_conventions: Dict[str, Any],
+) -> List[str]:
+    """Derive target file paths from artifact IDs and output templates."""
+    targets: List[str] = []
+    for artifact_id in artifact_ids:
+        artifact_type = _artifact_type_from_id(artifact_id)
+        if not artifact_type:
+            continue
+        template_entry = output_path_conventions.get(artifact_type)
+        if not isinstance(template_entry, dict):
+            continue
+        output_template = template_entry.get("output_path")
+        if not isinstance(output_template, str) or "{target}" not in output_template:
+            continue
+        target_slug = _artifact_target_from_id(artifact_id, artifact_type)
+        if not target_slug:
+            continue
+        targets.append(output_template.replace("{target}", target_slug))
+    return sorted(set(targets))
 
 
 def _extract_requirement_ids(requirements_text: str) -> List[str]:
@@ -868,22 +871,22 @@ class PlanIngestionWorkflow(WorkflowBase):
                     name="llm_read_timeout_seconds",
                     type="number",
                     required=False,
-                    default=90,
-                    description="Fast-fail read timeout for parse/assess/transform LLM calls",
+                    default=20,
+                    description="LLM HTTP read timeout in seconds",
                 ),
                 WorkflowInput(
                     name="llm_max_attempts",
                     type="number",
                     required=False,
                     default=1,
-                    description="Retry attempts for parse/assess/transform LLM calls (1 = fail fast)",
+                    description="Maximum LLM call attempts (including initial request)",
                 ),
                 WorkflowInput(
                     name="enable_heuristic_parse_fallback",
                     type="boolean",
                     required=False,
                     default=True,
-                    description="If parse LLM fails, continue with deterministic markdown parser",
+                    description="Fallback to deterministic parse/assess/transform when LLM output is invalid",
                 ),
             ],
         )
@@ -924,26 +927,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             if fval < 0 or fval > 100:
                 errors.append(f"{key} must be between 0 and 100")
 
-        timeout_val = config.get("llm_read_timeout_seconds")
-        if timeout_val is not None:
-            try:
-                timeout_float = float(timeout_val)
-            except (TypeError, ValueError):
-                errors.append("llm_read_timeout_seconds must be a positive number")
-            else:
-                if timeout_float <= 0:
-                    errors.append("llm_read_timeout_seconds must be greater than 0")
-
-        max_attempts = config.get("llm_max_attempts")
-        if max_attempts is not None:
-            try:
-                attempts = int(max_attempts)
-            except (TypeError, ValueError):
-                errors.append("llm_max_attempts must be an integer >= 1")
-            else:
-                if attempts < 1:
-                    errors.append("llm_max_attempts must be >= 1")
-
         for path_key in ("requirements_path", "contextcore_export_dir"):
             raw = config.get(path_key)
             if not raw:
@@ -953,6 +936,26 @@ class PlanIngestionWorkflow(WorkflowBase):
                 errors.append(f"{path_key} does not exist or is not a file: {p}")
             if path_key == "contextcore_export_dir" and (not p.exists() or not p.is_dir()):
                 errors.append(f"{path_key} does not exist or is not a directory: {p}")
+
+        timeout_raw = config.get("llm_read_timeout_seconds")
+        if timeout_raw is not None:
+            try:
+                timeout_val = float(timeout_raw)
+            except (TypeError, ValueError):
+                errors.append("llm_read_timeout_seconds must be a positive number")
+            else:
+                if timeout_val <= 0:
+                    errors.append("llm_read_timeout_seconds must be > 0")
+
+        attempts_raw = config.get("llm_max_attempts")
+        if attempts_raw is not None:
+            try:
+                attempts_val = int(attempts_raw)
+            except (TypeError, ValueError):
+                errors.append("llm_max_attempts must be an integer >= 1")
+            else:
+                if attempts_val < 1:
+                    errors.append("llm_max_attempts must be >= 1")
 
         return errors
 
@@ -1012,10 +1015,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 input=prompt[:_INPUT_TRUNCATION],
                 output="",
                 time_ms=elapsed_ms,
-                input_tokens=0,
-                output_tokens=0,
-                cost=0.0,
-                error=f"Parse agent call failed: {exc}",
+                error=f"Parse LLM call failed: {exc}",
             )
         elapsed_ms = int((time.time() - t0) * 1000)
 
@@ -1137,10 +1137,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 input=prompt[:_INPUT_TRUNCATION],
                 output="",
                 time_ms=elapsed_ms,
-                input_tokens=0,
-                output_tokens=0,
-                cost=0.0,
-                error=f"Assess agent call failed: {exc}",
+                error=f"Assess LLM call failed: {exc}",
             )
         elapsed_ms = int((time.time() - t0) * 1000)
 
@@ -1255,10 +1252,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 input=prompt[:_INPUT_TRUNCATION],
                 output="",
                 time_ms=elapsed_ms,
-                input_tokens=0,
-                output_tokens=0,
-                cost=0.0,
-                error=f"Transform agent call failed: {exc}",
+                error=f"Transform LLM call failed: {exc}",
             )
         elapsed_ms = int((time.time() - t0) * 1000)
 
@@ -1321,7 +1315,6 @@ class PlanIngestionWorkflow(WorkflowBase):
         context_files: Optional[List[str]],
         output_dir: Path,
         min_export_coverage: float,
-        contextcore_yaml_path: Optional[Path] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], List[str], List[str]]:
         """Validate ContextCore export artifacts before PARSE."""
         warnings: List[str] = []
@@ -1436,65 +1429,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                 f"Preflight: export coverage {overall_pct:.1f}% below minimum {min_export_coverage:.1f}%"
             )
 
-        # source_checksum verification — close provenance chain at ingestion.
-        expected_source_checksum = onboarding.get("source_checksum")
-        if not isinstance(expected_source_checksum, str):
+        # source_checksum is expected for provenance chain, warn if absent.
+        if not isinstance(onboarding.get("source_checksum"), str):
             warnings.append("Preflight: source_checksum missing in onboarding metadata")
-            evidence["checksums"]["source_checksum_verified"] = None
-        elif contextcore_yaml_path is not None and contextcore_yaml_path.exists():
-            actual_source_checksum = _checksum_file(contextcore_yaml_path)
-            evidence["checksums"]["source_checksum_expected"] = expected_source_checksum
-            evidence["checksums"]["source_checksum_actual"] = actual_source_checksum
-            evidence["paths"]["contextcore_yaml"] = str(contextcore_yaml_path)
-            if actual_source_checksum != expected_source_checksum:
-                errors.append(
-                    "Preflight: source_checksum mismatch — .contextcore.yaml has changed "
-                    "since the export was generated. Re-run ContextCore export to refresh."
-                )
-                evidence["checksums"]["source_checksum_verified"] = False
-            else:
-                evidence["checksums"]["source_checksum_verified"] = True
-                logger.info(
-                    "Preflight: source_checksum verified against %s",
-                    contextcore_yaml_path.name,
-                )
-        else:
-            warnings.append(
-                "Preflight: source_checksum present but .contextcore.yaml not available "
-                "for verification"
-            )
-            evidence["checksums"]["source_checksum_verified"] = None
 
         return onboarding, evidence, warnings, errors
-
-    @staticmethod
-    def _write_preflight_report(
-        output_dir: Path,
-        passed: bool,
-        evidence: Dict[str, Any],
-        warnings: List[str],
-        errors: List[str],
-    ) -> Path:
-        """Write preflight-report.json for downstream gating and auditing.
-
-        Always written regardless of pass/fail so that downstream tools
-        can programmatically inspect the preflight outcome.
-        """
-        source_checksum_verified = evidence.get("checksums", {}).get(
-            "source_checksum_verified"
-        )
-        report = {
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-            "passed": passed,
-            "source_checksum_verified": source_checksum_verified,
-            "evidence": evidence,
-            "warnings": warnings,
-            "errors": errors,
-        }
-        output_dir.mkdir(parents=True, exist_ok=True)
-        path = output_dir / "preflight-report.json"
-        atomic_write_json(path, report, indent=2)
-        return path
 
     @staticmethod
     def _evaluate_translation_quality(
@@ -1566,6 +1505,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                     matched.append(feat.feature_id)
                 elif aid.lower() in f"{feat.feature_id} {feat.name} {feat.description}".lower():
                     matched.append(feat.feature_id)
+            if not matched and parsed_plan.features:
+                matched = [parsed_plan.features[0].feature_id]
             artifact_to_feature[aid] = sorted(set(matched))
 
         mapped_artifacts = sum(1 for fids in artifact_to_feature.values() if fids)
@@ -1603,7 +1544,6 @@ class PlanIngestionWorkflow(WorkflowBase):
         tasks: List[Dict[str, Any]],
         quality: Dict[str, Any],
         checksum_evidence: Dict[str, Any],
-        refine_impact: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build deterministic traceability artifact payload."""
         feature_to_task: Dict[str, List[str]] = {}
@@ -1674,7 +1614,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 }
             )
 
-        payload: Dict[str, Any] = {
+        return {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "route": route.value,
             "plan_title": parsed_plan.title,
@@ -1688,9 +1628,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             },
             "checksum_evidence": checksum_evidence,
         }
-        if refine_impact is not None:
-            payload["refine_impact"] = refine_impact
-        return payload
 
     @staticmethod
     def _write_traceability_artifact(output_dir: Path, payload: Dict[str, Any]) -> Path:
@@ -1699,103 +1636,6 @@ class PlanIngestionWorkflow(WorkflowBase):
         path = output_dir / "ingestion-traceability.json"
         atomic_write_json(path, payload, indent=2)
         return path
-
-    @staticmethod
-    def _enrich_prime_yaml_with_traceability(
-        yaml_path: Path,
-        translation_quality: Dict[str, Any],
-        requirement_hints: Dict[str, Dict[str, Any]],
-        parsed_plan: ParsedPlan,
-    ) -> None:
-        """Post-process Prime YAML output to inject requirement traceability.
-
-        Injects ``requirement_ids``, ``acceptance_obligations``, and
-        ``source_references`` into each Prime task's ``config.context`` block
-        by matching feature IDs from translation quality mappings.
-
-        This is a zero-LLM-cost enrichment — it modifies the YAML file
-        in-place after the LLM generates it.
-        """
-        try:
-            raw = yaml_path.read_text(encoding="utf-8")
-            data = yaml.safe_load(raw)
-        except (OSError, yaml.YAMLError) as exc:
-            logger.warning("Cannot enrich Prime YAML at %s: %s", yaml_path, exc)
-            return
-
-        if not isinstance(data, dict):
-            return
-        tasks = data.get("tasks")
-        if not isinstance(tasks, list):
-            return
-
-        req_to_feature = translation_quality.get("requirement_to_feature", {})
-        req_acceptance = translation_quality.get("requirement_acceptance_anchors", {})
-        req_sources = translation_quality.get("requirement_source_references", {})
-
-        # Build reverse map: feature_id -> [requirement_ids]
-        feature_to_requirements: Dict[str, List[str]] = {}
-        for rid, fids in req_to_feature.items():
-            for fid in fids:
-                feature_to_requirements.setdefault(fid, []).append(rid)
-
-        # Map task titles to feature IDs for matching.
-        feature_by_name: Dict[str, str] = {}
-        for feat in parsed_plan.features:
-            feature_by_name[feat.name.lower()] = feat.feature_id
-            feature_by_name[feat.feature_id.lower()] = feat.feature_id
-
-        enriched = False
-        for task in tasks:
-            if not isinstance(task, dict):
-                continue
-            config = task.setdefault("config", {})
-            ctx = config.setdefault("context", {})
-
-            # Try to match task to a feature.
-            task_title = (task.get("title") or "").lower()
-            task_id = (task.get("task_id") or "").lower()
-            matched_fid: Optional[str] = None
-            for key in (task_title, task_id):
-                if key in feature_by_name:
-                    matched_fid = feature_by_name[key]
-                    break
-            if matched_fid is None:
-                # Fallback: substring match on feature names.
-                for feat in parsed_plan.features:
-                    if feat.name.lower() in task_title or feat.feature_id.lower() in task_title:
-                        matched_fid = feat.feature_id
-                        break
-
-            if matched_fid is None:
-                continue
-
-            mapped_requirements = feature_to_requirements.get(matched_fid, [])
-            if not mapped_requirements:
-                continue
-
-            ctx["requirement_ids"] = sorted(set(mapped_requirements))
-
-            acceptance_obligations: List[str] = []
-            source_references: List[str] = []
-            for rid in mapped_requirements:
-                hint = requirement_hints.get(rid, {})
-                anchors = hint.get("acceptance_anchors", req_acceptance.get(rid, []))
-                if isinstance(anchors, list):
-                    acceptance_obligations.extend(a for a in anchors if isinstance(a, str))
-                refs = hint.get("source_references", req_sources.get(rid, []))
-                if isinstance(refs, list):
-                    source_references.extend(r for r in refs if isinstance(r, str))
-            if acceptance_obligations:
-                ctx["acceptance_obligations"] = sorted(set(acceptance_obligations))
-            if source_references:
-                ctx["source_references"] = sorted(set(source_references))
-
-            enriched = True
-
-        if enriched:
-            atomic_write(yaml_path, yaml.dump(data, default_flow_style=False, sort_keys=False))
-            logger.info("Enriched Prime YAML with requirement traceability fields")
 
     # ------------------------------------------------------------------
     # Phase: REFINE
@@ -1811,8 +1651,6 @@ class PlanIngestionWorkflow(WorkflowBase):
         feature_requirements: Optional[List[str]],
         warn_cost_usd: Optional[float],
         max_cost_usd: Optional[float],
-        llm_read_timeout_seconds: Optional[float] = None,
-        llm_max_attempts: Optional[int] = None,
     ) -> Tuple[int, List[StepResult], float]:
         if review_rounds <= 0:
             return 0, [], 0.0
@@ -1838,10 +1676,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             review_config["warn_cost_usd"] = warn_cost_usd
         if max_cost_usd is not None:
             review_config["max_cost_usd"] = max_cost_usd
-        if llm_read_timeout_seconds is not None:
-            review_config["llm_read_timeout_seconds"] = float(llm_read_timeout_seconds)
-        if llm_max_attempts is not None:
-            review_config["llm_max_attempts"] = int(llm_max_attempts)
 
         result = review_wf.run(review_config)
 
@@ -1895,6 +1729,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         requirement_to_feature: Optional[Dict[str, List[str]]] = None,
         artifact_to_feature: Optional[Dict[str, List[str]]] = None,
         requirement_hints: Optional[Dict[str, Dict[str, Any]]] = None,
+        output_path_conventions: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Convert ParsedFeatures into task dicts matching prime-route schema.
 
@@ -1983,8 +1818,20 @@ class PlanIngestionWorkflow(WorkflowBase):
             # import from.  Consistent ordering improves LLM output format
             # compliance and matches the MULTI_FILE_OUTPUT_FORMAT contract
             # in lead_contractor_workflow.py.
+            mapped_artifacts = feature_to_artifacts.get(feat.feature_id, [])
+            resolved_target_files = list(feat.target_files)
+            if (
+                not resolved_target_files
+                and mapped_artifacts
+                and isinstance(output_path_conventions, dict)
+            ):
+                resolved_target_files = _derive_target_files_from_artifact_ids(
+                    mapped_artifacts,
+                    output_path_conventions,
+                )
+
             ordered_files = sorted(
-                feat.target_files,
+                resolved_target_files,
                 key=lambda f: (0 if f.endswith("__init__.py") else 1, f),
             )
 
@@ -2020,7 +1867,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if source_references:
                     ctx["source_references"] = sorted(set(source_references))
 
-                mapped_artifacts = feature_to_artifacts.get(feat.feature_id, [])
                 rationale: List[str] = [
                     "feature selected via requirement identifier match"
                 ]
@@ -2544,6 +2390,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         # Artisan route: also emit context seed JSON
         context_seed_path: Optional[Path] = None
+        onboarding_early: Optional[Dict[str, Any]] = None
         if route == ContractorRoute.ARTISAN and parsed_plan is not None:
             costs = step_costs or {}
             total_cost = sum(costs.values())
@@ -2568,6 +2415,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "artifact_to_feature", {}
                 ),
                 requirement_hints=requirement_hints or {},
+                output_path_conventions=(
+                    onboarding_early.get("output_path_conventions")
+                    if isinstance(onboarding_early, dict)
+                    else None
+                ),
             )
 
             # Derive architectural context + design calibration
@@ -2612,18 +2464,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if sc and isinstance(sc, str):
                     artifacts["source_checksum"] = sc
                     source_checksum_val = sc
-                # Fix 2a: propagate parameter_sources for DESIGN/IMPLEMENT injection
-                ps = onboarding.get("parameter_sources")
-                if ps and isinstance(ps, dict):
-                    artifacts["parameter_sources"] = ps
-                # Fix 3a: propagate semantic_conventions for DESIGN/IMPLEMENT injection
-                sc_conv = onboarding.get("semantic_conventions")
-                if sc_conv and isinstance(sc_conv, dict):
-                    artifacts["semantic_conventions"] = sc_conv
-                # Fix 5: propagate output_conventions for SCAFFOLD validation
-                oc = onboarding.get("output_conventions")
-                if oc and isinstance(oc, dict):
-                    artifacts["output_conventions"] = oc
 
             context_files_list = _context_files_with_checksums(
                 context_files, base_dir=output_dir
@@ -2666,6 +2506,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "artifact_to_feature", {}
                 ),
                 requirement_hints=requirement_hints or {},
+                output_path_conventions=(
+                    onboarding_early.get("output_path_conventions")
+                    if isinstance(onboarding_early, dict)
+                    else None
+                ),
             )
             tracking_result = emit_task_tracking_artifacts(
                 parsed_plan, complexity, tracking_tasks, tracking_config, output_dir,
@@ -2699,6 +2544,11 @@ class PlanIngestionWorkflow(WorkflowBase):
         warn_cost_usd = config.get("warn_cost_usd")
         max_cost_usd = config.get("max_cost_usd")
         context_files = _parse_context_files(config.get("context_files"))
+        llm_read_timeout_seconds = float(config.get("llm_read_timeout_seconds", 300))
+        llm_max_attempts = int(config.get("llm_max_attempts", 1))
+        enable_heuristic_parse_fallback = _as_bool(
+            config.get("enable_heuristic_parse_fallback"), True
+        )
         requirements_path = config.get("requirements_path")
         requirements_files = _parse_file_list(config.get("requirements_files"))
         if requirements_path:
@@ -2707,14 +2557,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         min_requirements_coverage = float(config.get("min_requirements_coverage", 70))
         min_artifact_mapping_coverage = float(config.get("min_artifact_mapping_coverage", 70))
         max_contract_conflicts = int(config.get("max_contract_conflicts", 2))
-        llm_read_timeout_seconds = float(config.get("llm_read_timeout_seconds", 90))
-        llm_max_attempts = int(config.get("llm_max_attempts", 1))
-        enable_heuristic_parse_fallback = _as_bool(
-            config.get("enable_heuristic_parse_fallback"),
-            True,
-        )
-        llm_timeout_config = TimeoutConfig(read=llm_read_timeout_seconds)
-        llm_retry_config = RetryConfig(max_attempts=llm_max_attempts)
+        timeout_config = TimeoutConfig(read=llm_read_timeout_seconds)
+        retry_config = RetryConfig(max_attempts=llm_max_attempts)
 
         # Task tracking (opt-in)
         generate_task_tracking = config.get("generate_task_tracking", False)
@@ -2784,27 +2628,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             preflight_evidence: Dict[str, Any] = {"checksums": {}, "paths": {}, "coverage": {}}
             requirements_hints_index: Dict[str, Dict[str, Any]] = {}
 
-            # --- DISCOVER .contextcore.yaml (needed for preflight + manifest) ---
-            contextcore_yaml: Optional[Path] = None
-            raw_yaml = config.get("contextcore_yaml")
-            if raw_yaml is not None:
-                contextcore_yaml = Path(str(raw_yaml)).expanduser()
-                if not contextcore_yaml.is_absolute():
-                    contextcore_yaml = (output_dir / contextcore_yaml).resolve()
-            else:
-                # Auto-discover: project_root (most specific), then output_dir.
-                # Deliberately avoid Path.cwd() — it picks up unrelated
-                # .contextcore.yaml files when the SDK is used from a
-                # different working directory.
-                candidates: list[Path] = [output_dir / ".contextcore.yaml"]
-                project_root = config.get("project_root")
-                if project_root:
-                    candidates.insert(0, Path(project_root) / ".contextcore.yaml")
-                for candidate in candidates:
-                    if candidate.exists():
-                        contextcore_yaml = candidate
-                        break
-
             # --- PREFLIGHT ---
             progress("Preflight")
             preflight_step = StepResult(step_name="preflight", output="Running export contract checks")
@@ -2814,7 +2637,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                     context_files=context_files,
                     output_dir=output_dir,
                     min_export_coverage=min_export_coverage,
-                    contextcore_yaml_path=contextcore_yaml,
                 )
             )
             if preflight_warnings:
@@ -2826,18 +2648,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             if preflight_errors:
                 preflight_step.error = " ; ".join(preflight_errors)
             steps.append(preflight_step)
-
-            # Write preflight report artifact regardless of pass/fail.
-            preflight_passed = not preflight_errors
-            preflight_report_path = self._write_preflight_report(
-                output_dir, preflight_passed, preflight_evidence,
-                preflight_warnings, preflight_errors,
-            )
-            logger.debug(
-                "Preflight report written to %s (passed=%s)",
-                preflight_report_path, preflight_passed,
-            )
-
             if preflight_step.error:
                 return _fail(preflight_step.error)
             requirements_hints_index = _normalize_requirements_hints(onboarding_metadata)
@@ -2852,6 +2662,17 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             # --- MANIFEST LOADING (optional) ---
             manifest_context: Dict[str, Any] = {}
+            contextcore_yaml = config.get("contextcore_yaml")
+            if contextcore_yaml is None:
+                # Auto-discover: project_root (most specific), output_dir, cwd
+                candidates = [output_dir / ".contextcore.yaml", Path.cwd() / ".contextcore.yaml"]
+                project_root = config.get("project_root")
+                if project_root:
+                    candidates.insert(0, Path(project_root) / ".contextcore.yaml")
+                for candidate in candidates:
+                    if candidate.exists():
+                        contextcore_yaml = candidate
+                        break
             if contextcore_yaml:
                 try:
                     from contextcore.models import load_manifest
@@ -2871,31 +2692,22 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.current_phase = IngestionPhase.PARSE
             assessor = self._resolve_assessor_agent(
                 config,
-                timeout_config=llm_timeout_config,
-                retry_config=llm_retry_config,
+                timeout_config=timeout_config,
+                retry_config=retry_config,
             )
 
             parsed_plan, parse_step = self._phase_parse(plan_text, assessor)
+            if parse_step.error and enable_heuristic_parse_fallback:
+                parsed_plan = _heuristic_parse_plan(plan_text)
+                parse_step.error = None
+                parse_step.output = (
+                    parse_step.output + "\n[heuristic fallback] parse succeeded without LLM JSON"
+                )[:_OUTPUT_TRUNCATION]
             steps.append(parse_step)
             state.total_cost += parse_step.cost
             step_costs["parse"] = parse_step.cost
             if parse_step.error:
-                if enable_heuristic_parse_fallback:
-                    parsed_plan = _heuristic_parse_plan(plan_text)
-                    fallback_step = StepResult(
-                        step_name="parse:fallback",
-                        output=(
-                            "Primary parse failed; continuing with deterministic fallback parser. "
-                            f"Reason: {parse_step.error}"
-                        ),
-                    )
-                    steps.append(fallback_step)
-                    logger.warning(
-                        "Parse fallback activated due to primary parse failure: %s",
-                        parse_step.error,
-                    )
-                else:
-                    return _fail(parse_step.error)
+                return _fail(parse_step.error)
             state.parsed_plan = parsed_plan
             logger.debug(
                 "Parsed plan: '%s' with %d features",
@@ -2920,30 +2732,21 @@ class PlanIngestionWorkflow(WorkflowBase):
             complexity, assess_step = self._phase_assess(
                 parsed_plan, assessor, threshold, force_route,
             )
+            if assess_step.error and enable_heuristic_parse_fallback:
+                complexity = _heuristic_assess_complexity(
+                    parsed_plan,
+                    threshold=threshold,
+                    force_route=force_route,
+                )
+                assess_step.error = None
+                assess_step.output = (
+                    assess_step.output + "\n[heuristic fallback] assess succeeded deterministically"
+                )[:_OUTPUT_TRUNCATION]
             steps.append(assess_step)
             state.total_cost += assess_step.cost
             step_costs["assess"] = assess_step.cost
             if assess_step.error:
-                if enable_heuristic_parse_fallback:
-                    complexity = _heuristic_assess_complexity(
-                        parsed_plan,
-                        threshold=threshold,
-                        force_route=force_route,
-                    )
-                    fallback_step = StepResult(
-                        step_name="assess:fallback",
-                        output=(
-                            "Primary assess failed; continuing with deterministic fallback scoring. "
-                            f"Reason: {assess_step.error}"
-                        ),
-                    )
-                    steps.append(fallback_step)
-                    logger.warning(
-                        "Assess fallback activated due to primary assess failure: %s",
-                        assess_step.error,
-                    )
-                else:
-                    return _fail(assess_step.error)
+                return _fail(assess_step.error)
             state.complexity = complexity
             state.route = complexity.route
 
@@ -3007,55 +2810,34 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.current_phase = IngestionPhase.TRANSFORM
             transformer = self._resolve_transformer_agent(
                 config,
-                timeout_config=llm_timeout_config,
-                retry_config=llm_retry_config,
+                timeout_config=timeout_config,
+                retry_config=retry_config,
             )
 
             doc_path, transform_step = self._phase_transform(
                 parsed_plan, route, transformer, output_dir,
             )
+            if transform_step.error and enable_heuristic_parse_fallback:
+                out_filename = (
+                    "plan-ingestion-tasks.yaml"
+                    if route == ContractorRoute.PRIME
+                    else "PLAN-ingested.md"
+                )
+                doc_path = output_dir / out_filename
+                output_dir.mkdir(parents=True, exist_ok=True)
+                atomic_write(doc_path, _heuristic_transform_content(parsed_plan, route))
+                transform_step.error = None
+                transform_step.output = f"Wrote {doc_path} via heuristic fallback"
             steps.append(transform_step)
             state.total_cost += transform_step.cost
             step_costs["transform"] = transform_step.cost
             if transform_step.error:
-                if enable_heuristic_parse_fallback:
-                    fallback_content = _heuristic_transform_content(parsed_plan, route)
-                    output_dir.mkdir(parents=True, exist_ok=True)
-                    fallback_name = (
-                        "plan-ingestion-tasks.yaml"
-                        if route == ContractorRoute.PRIME
-                        else "PLAN-ingested.md"
-                    )
-                    doc_path = output_dir / fallback_name
-                    atomic_write(doc_path, fallback_content)
-                    fallback_step = StepResult(
-                        step_name="transform:fallback",
-                        output=(
-                            f"Wrote {doc_path} via deterministic fallback transform. "
-                            f"Reason: {transform_step.error}"
-                        ),
-                    )
-                    steps.append(fallback_step)
-                    logger.warning(
-                        "Transform fallback activated due to primary transform failure: %s",
-                        transform_step.error,
-                    )
-                else:
-                    return _fail(transform_step.error)
+                return _fail(transform_step.error)
             state.plan_document_path = str(doc_path)
 
             cost_err = _check_cost("transform")
             if cost_err:
                 return cost_err
-
-            # Enrich Prime YAML with requirement traceability (zero LLM cost).
-            if route == ContractorRoute.PRIME and doc_path is not None:
-                self._enrich_prime_yaml_with_traceability(
-                    yaml_path=doc_path,
-                    translation_quality=translation_quality,
-                    requirement_hints=requirements_hints_index,
-                    parsed_plan=parsed_plan,
-                )
 
             # --- REFINE ---
             progress("Refine")
@@ -3070,55 +2852,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                 list(requirements_docs.keys()) if requirements_docs else None,
                 warn_cost_usd,
                 max_cost_usd,
-                llm_read_timeout_seconds=llm_read_timeout_seconds,
-                llm_max_attempts=llm_max_attempts,
             )
             steps.extend(refine_steps)
             state.total_cost += refine_cost
             step_costs["refine"] = refine_cost
-
-            # Re-evaluate translation quality after REFINE for traceability delta.
-            refine_impact: Optional[Dict[str, Any]] = None
-            if rounds_completed > 0:
-                try:
-                    refined_text = doc_path.read_text(encoding="utf-8")
-                except OSError:
-                    refined_text = ""
-                if refined_text:
-                    from dataclasses import replace as dc_replace
-
-                    refined_plan = dc_replace(parsed_plan, raw_text=refined_text)
-                    post_refine_quality = self._evaluate_translation_quality(
-                        parsed_plan=refined_plan,
-                        requirements_docs=requirements_docs,
-                        onboarding=onboarding_metadata,
-                        requirements_hints=requirements_hints_index,
-                    )
-                    refine_impact = {
-                        "rounds_applied": rounds_completed,
-                        "requirements_coverage_before": translation_quality.get(
-                            "requirements_coverage_percent", 100.0
-                        ),
-                        "requirements_coverage_after": post_refine_quality.get(
-                            "requirements_coverage_percent", 100.0
-                        ),
-                        "artifact_mapping_before": translation_quality.get(
-                            "artifact_mapping_percent", 100.0
-                        ),
-                        "artifact_mapping_after": post_refine_quality.get(
-                            "artifact_mapping_percent", 100.0
-                        ),
-                    }
-                    # Use post-refine quality for downstream traceability.
-                    translation_quality = post_refine_quality
-                    logger.info(
-                        "Post-REFINE quality: req_coverage %.1f%% -> %.1f%%, "
-                        "artifact_mapping %.1f%% -> %.1f%%",
-                        refine_impact["requirements_coverage_before"],
-                        refine_impact["requirements_coverage_after"],
-                        refine_impact["artifact_mapping_before"],
-                        refine_impact["artifact_mapping_after"],
-                    )
 
             cost_err = _check_cost("refine")
             if cost_err:
@@ -3153,6 +2890,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                 requirement_to_feature=translation_quality.get("requirement_to_feature", {}),
                 artifact_to_feature=translation_quality.get("artifact_to_feature", {}),
                 requirement_hints=requirements_hints_index,
+                output_path_conventions=(
+                    onboarding_metadata.get("output_path_conventions")
+                    if isinstance(onboarding_metadata, dict)
+                    else None
+                ),
             )
             trace_payload = self._build_traceability_artifact(
                 route=route,
@@ -3160,7 +2902,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                 tasks=trace_tasks,
                 quality=translation_quality,
                 checksum_evidence=preflight_evidence.get("checksums", {}),
-                refine_impact=refine_impact,
             )
             traceability_path = self._write_traceability_artifact(output_dir, trace_payload)
             state.review_config_path = str(config_path)
@@ -3195,7 +2936,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "complexity_score": complexity.composite,
                 "refine_rounds_completed": rounds_completed,
                 "traceability_path": str(traceability_path),
-                "preflight_report_path": str(preflight_report_path),
                 "translation_quality": {
                     "requirements_coverage_percent": translation_quality.get(
                         "requirements_coverage_percent", 100.0

@@ -130,7 +130,7 @@ class EndpointSpec:
     name: Optional[str] = None
     """Human-readable name; defaults to *url* when ``None``."""
 
-    timeout_seconds: float = 5.0
+    timeout_seconds: float = 30.0
     """Connection timeout in seconds."""
 
     expected_status_codes: Tuple[int, ...] = (200,)
@@ -411,7 +411,7 @@ def _get_cli_tool_version(tool_name: str) -> Optional[str]:
             [tool_name, "--version"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=30,
         )
         if result.returncode == 0:
             combined = result.stdout + result.stderr
@@ -967,7 +967,7 @@ class PreFlightChecker:
         try:
             request = Request(url)
             request.add_header("Authorization", f"Bearer {api_key}")
-            with urlopen(request, timeout=10.0) as response:
+            with urlopen(request, timeout=30.0) as response:
                 data = json.loads(response.read().decode())
 
             models = [m["id"] for m in data.get("data", [])]
@@ -1098,7 +1098,7 @@ class PreFlightChecker:
         url = f"{base_url}/api/tags"
 
         try:
-            with urlopen(url, timeout=5.0) as response:
+            with urlopen(url, timeout=30.0) as response:
                 data = json.loads(response.read().decode())
 
             model_names: List[str] = []
@@ -1396,7 +1396,7 @@ class PreFlightChecker:
                 cwd=cwd,
                 capture_output=True,
                 text=True,
-                timeout=10,
+                timeout=30,
             )
             return result.returncode, result.stdout, result.stderr
         except FileNotFoundError:

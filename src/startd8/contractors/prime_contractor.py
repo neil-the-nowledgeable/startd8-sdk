@@ -122,7 +122,7 @@ class PrimeContractorWorkflow:
         Returns:
             Tuple of (is_clean, dirty_files)
         """
-        result = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        result = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, cwd=self.project_root, timeout=300)
         dirty_files = [line.strip() for line in result.stdout.strip().split('\n') if line]
         return (len(dirty_files) == 0, dirty_files)
 
@@ -135,7 +135,7 @@ class PrimeContractorWorkflow:
         """
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         stash_message = f'prime-contractor-snapshot-{timestamp}'
-        result = subprocess.run(['git', 'stash', 'push', '-m', stash_message], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        result = subprocess.run(['git', 'stash', 'push', '-m', stash_message], capture_output=True, text=True, cwd=self.project_root, timeout=300)
         if 'No local changes to save' in result.stdout:
             return None
         if result.returncode == 0:
@@ -145,8 +145,8 @@ class PrimeContractorWorkflow:
 
     def is_file_dirty(self, path: Path) -> bool:
         """Check if a specific file has uncommitted changes."""
-        result_staged = subprocess.run(['git', 'diff', '--cached', '--name-only', str(path)], capture_output=True, text=True, cwd=self.project_root, timeout=30)
-        result_unstaged = subprocess.run(['git', 'diff', '--name-only', str(path)], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        result_staged = subprocess.run(['git', 'diff', '--cached', '--name-only', str(path)], capture_output=True, text=True, cwd=self.project_root, timeout=300)
+        result_unstaged = subprocess.run(['git', 'diff', '--name-only', str(path)], capture_output=True, text=True, cwd=self.project_root, timeout=300)
         return bool(result_staged.stdout.strip() or result_unstaged.stdout.strip())
 
     def protect_dirty_target(self, path: Path) -> bool:
@@ -167,18 +167,18 @@ class PrimeContractorWorkflow:
         """Get current recovery status information."""
         backup_files = list(self.project_root.glob('**/*.backup'))
         snapshot_files = list(self.project_root.rglob('*.pre_integration'))
-        result = subprocess.run(['git', 'stash', 'list'], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        result = subprocess.run(['git', 'stash', 'list'], capture_output=True, text=True, cwd=self.project_root, timeout=300)
         stashes = [line for line in result.stdout.strip().split('\n') if line and 'prime-contractor-snapshot' in line]
         return {'stash_ref': self.stash_ref, 'stashes': stashes, 'backup_files': [str(f) for f in backup_files], 'snapshot_files': [str(f) for f in snapshot_files], 'has_recovery_options': bool(stashes or backup_files or snapshot_files)}
 
     def recover_from_stash(self) -> bool:
         """Recover from the most recent prime-contractor stash."""
-        result = subprocess.run(['git', 'stash', 'list'], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+        result = subprocess.run(['git', 'stash', 'list'], capture_output=True, text=True, cwd=self.project_root, timeout=300)
         for line in result.stdout.strip().split('\n'):
             if 'prime-contractor-snapshot' in line:
                 stash_id = line.split(':')[0]
                 logger.info('Recovering from stash: %s', line)
-                pop_result = subprocess.run(['git', 'stash', 'pop', stash_id], capture_output=True, text=True, cwd=self.project_root, timeout=30)
+                pop_result = subprocess.run(['git', 'stash', 'pop', stash_id], capture_output=True, text=True, cwd=self.project_root, timeout=300)
                 if pop_result.returncode == 0:
                     logger.info('Stash recovery successful')
                     return True
@@ -601,9 +601,9 @@ class PrimeContractorWorkflow:
     def _commit_feature(self, feature: FeatureSpec, files: List[Path]):
         """Commit the integrated feature to git."""
         for file_path in files:
-            subprocess.run(['git', 'add', str(file_path)], cwd=self.project_root, capture_output=True, timeout=30)
+            subprocess.run(['git', 'add', str(file_path)], cwd=self.project_root, capture_output=True, timeout=300)
         commit_msg = f'feat: Integrate {feature.name}\n\nIntegrated via Prime Contractor workflow'
-        result = subprocess.run(['git', 'commit', '-m', commit_msg], cwd=self.project_root, capture_output=True, text=True, timeout=30)
+        result = subprocess.run(['git', 'commit', '-m', commit_msg], cwd=self.project_root, capture_output=True, text=True, timeout=300)
         if result.returncode == 0:
             logger.info('Committed: %s', feature.name)
         else:
