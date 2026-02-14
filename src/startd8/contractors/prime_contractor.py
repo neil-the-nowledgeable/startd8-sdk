@@ -91,7 +91,7 @@ class PrimeContractorWorkflow:
         self.code_generator = code_generator
         self.instrumentor = instrumentor or registry.get_default_instrumentor()()
         import os as _os
-        _os.environ.setdefault('STARTD8_OTEL', 'enabled')
+        _os.environ.setdefault('STARTD8_OTEL', 'auto')
         from ..otel import auto_configure_otel
         auto_configure_otel()
         self.size_estimator = size_estimator or registry.get_default_size_estimator()()

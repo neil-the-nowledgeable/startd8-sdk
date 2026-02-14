@@ -18,20 +18,22 @@ class TestAutoConfigureOtel:
     """Tests for auto_configure_otel()."""
 
     def test_auto_by_default_with_otel(self):
-        """Unset STARTD8_OTEL defaults to 'auto'; configures when OTel available."""
+        """Unset STARTD8_OTEL defaults to 'auto'; skips when endpoint is unset."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("STARTD8_OTEL", None)
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
             import startd8.otel as otel_mod
             otel_mod._configured = False
             original = otel_mod.OTEL_AVAILABLE
             otel_mod.OTEL_AVAILABLE = True
             try:
-                mock_result = {"tracer": "t", "meter": "m", "resource_attributes": {}}
-                with patch.object(otel_mod, "_otlp_endpoint_reachable", return_value=True), \
-                     patch.object(otel_mod, "configure_otel", return_value=mock_result) as mock_configure:
+                with patch.object(otel_mod, "_otlp_endpoint_reachable") as mock_reach, \
+                     patch.object(otel_mod, "configure_otel") as mock_configure:
                     result = otel_mod.auto_configure_otel()
-                mock_configure.assert_called_once()
-                assert result["tracer"] == "t"
+                mock_reach.assert_not_called()
+                mock_configure.assert_not_called()
+                assert result["tracer"] is None
+                assert result["meter"] is None
             finally:
                 otel_mod.OTEL_AVAILABLE = original
 
@@ -111,7 +113,10 @@ class TestAutoConfigureOtel:
 
     def test_auto_mode_with_otel(self):
         """STARTD8_OTEL=auto with OTel available and endpoint reachable = configures."""
-        with patch.dict(os.environ, {"STARTD8_OTEL": "auto"}):
+        with patch.dict(os.environ, {
+            "STARTD8_OTEL": "auto",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://collector:4317",
+        }):
             import startd8.otel as otel_mod
             otel_mod._configured = False
             original = otel_mod.OTEL_AVAILABLE

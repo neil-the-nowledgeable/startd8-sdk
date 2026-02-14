@@ -469,12 +469,14 @@ def auto_configure_otel() -> Dict[str, Any]:
     Auto-configure OTel based on the STARTD8_OTEL environment variable.
 
     Modes:
-        - ``enabled``: Always configure OTel with default endpoint.
-        - ``auto`` (default): Configure only if OTel packages are installed (silent no-op otherwise).
+        - ``enabled``: Always configure OTel (default endpoint if none provided).
+        - ``auto`` (default): Configure only when OTel is installed and an
+          explicit ``OTEL_EXPORTER_OTLP_ENDPOINT`` is provided.
         - ``disabled``: Do nothing.
 
-    The OTLP endpoint is read from ``OTEL_EXPORTER_OTLP_ENDPOINT`` or
-    defaults to ``http://localhost:4317``.
+    Endpoint behavior:
+        - In ``auto`` mode, no endpoint means no OTLP setup.
+        - In ``enabled`` mode, endpoint defaults to ``http://localhost:4317``.
 
     Returns:
         Dict with 'tracer', 'meter', 'resource_attributes' keys (values may be None).
@@ -494,7 +496,21 @@ def auto_configure_otel() -> Dict[str, Any]:
     if mode not in ("enabled", "auto"):
         return {"tracer": None, "meter": None, "resource_attributes": {}}
 
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+
+    # In auto mode, require explicit endpoint configuration. This avoids
+    # recurring localhost retry noise when no collector is intended.
+    if mode == "auto" and not endpoint:
+        _otel_logger = logging.getLogger("startd8.otel")
+        _otel_logger.info(
+            "OTLP endpoint not configured; skipping telemetry export in auto mode. "
+            "Set OTEL_EXPORTER_OTLP_ENDPOINT to enable exporter wiring."
+        )
+        return {"tracer": None, "meter": None, "resource_attributes": {}}
+
+    if mode == "enabled" and not endpoint:
+        endpoint = "http://localhost:4317"
+
     config = OTelConfig(otlp_endpoint=endpoint)
 
     # In auto mode: skip OTLP entirely when endpoint is unreachable to avoid
