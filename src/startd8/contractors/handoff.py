@@ -81,20 +81,19 @@ HANDOFF_SCHEMA: dict[str, Any] = {
 def _validate_handoff(data: dict[str, Any]) -> None:
     """Validate handoff JSON against schema before write (Item 13).
 
-    Uses jsonschema if installed; no-op otherwise.
+    Requires jsonschema (included in dev dependencies).  Raises on
+    validation failure rather than silently writing an invalid handoff.
     """
     try:
-        import jsonschema
-
-        jsonschema.validate(data, HANDOFF_SCHEMA)
-        logger.debug("Design handoff validated against schema")
+        import jsonschema  # noqa: F811
     except ImportError:
-        pass  # Graceful fallback — jsonschema not installed
-    except Exception as e:
-        logger.warning(
-            "Design handoff schema validation failed: %s — writing anyway",
-            str(e),
+        raise ImportError(
+            "jsonschema is required for handoff validation. "
+            "Install it with: pip install jsonschema"
         )
+
+    jsonschema.validate(data, HANDOFF_SCHEMA)
+    logger.debug("Design handoff validated against schema")
 
 
 @dataclass
@@ -257,3 +256,69 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         schema_version_str=raw.get("schema_version_str")
         or _SCHEMA_VERSION_TO_STR.get(version, ARTISAN_SCHEMA_VERSION),
     )
+
+
+def validate_handoff_against_context(
+    handoff: HandoffData,
+    context: dict[str, Any],
+) -> list[str]:
+    """Cross-validate a loaded handoff against the current context dict.
+
+    Checks that:
+    - design_results task IDs match the task IDs in context["tasks"]
+    - enriched_seed_path matches context["enriched_seed_path"]
+    - project_root matches context["project_root"]
+
+    Returns:
+        List of warning messages (empty if everything is consistent).
+        Does **not** raise — callers decide whether to abort or log.
+    """
+    warnings: list[str] = []
+
+    # Task ID cross-check
+    tasks = context.get("tasks")
+    if tasks and handoff.design_results:
+        context_task_ids = set()
+        for t in tasks:
+            tid = getattr(t, "task_id", None) or (t.get("task_id") if isinstance(t, dict) else None)
+            if tid:
+                context_task_ids.add(tid)
+
+        handoff_task_ids = set(handoff.design_results.keys())
+
+        in_handoff_not_context = handoff_task_ids - context_task_ids
+        in_context_not_handoff = context_task_ids - handoff_task_ids
+
+        if in_handoff_not_context:
+            warnings.append(
+                f"Handoff design_results contains task IDs not in context tasks: "
+                f"{sorted(in_handoff_not_context)}"
+            )
+        if in_context_not_handoff:
+            warnings.append(
+                f"Context tasks contains task IDs not in handoff design_results: "
+                f"{sorted(in_context_not_handoff)}"
+            )
+
+    # Path consistency checks
+    ctx_seed = context.get("enriched_seed_path", "")
+    if ctx_seed and handoff.enriched_seed_path and ctx_seed != handoff.enriched_seed_path:
+        warnings.append(
+            f"enriched_seed_path mismatch: context={ctx_seed!r}, "
+            f"handoff={handoff.enriched_seed_path!r}"
+        )
+
+    ctx_root = context.get("project_root", "")
+    if ctx_root and handoff.project_root and str(ctx_root) != str(handoff.project_root):
+        warnings.append(
+            f"project_root mismatch: context={ctx_root!r}, "
+            f"handoff={handoff.project_root!r}"
+        )
+
+    if warnings:
+        for w in warnings:
+            logger.warning("Handoff cross-validation: %s", w)
+    else:
+        logger.debug("Handoff cross-validation passed — context and handoff are consistent")
+
+    return warnings

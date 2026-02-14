@@ -457,7 +457,35 @@ class TestOrchestratorWithDesign:
         for p in phases:
             workflow.register_handler(p, DefaultPhaseHandler())
 
-        result = workflow.execute(context={})
+        # Pre-populate context with keys required by phase entry/exit
+        # validation (context_schema.py).  DefaultPhaseHandler is a no-op
+        # that doesn't write context keys, so we supply them upfront.
+        from dataclasses import dataclass as _dc, field as _f
+
+        @_dc
+        class _FakeTask:
+            task_id: str = "T1"
+
+        context: dict[str, Any] = {
+            # PLAN entry + exit
+            "enriched_seed_path": str(tmp_path / "seed.json"),
+            "tasks": [_FakeTask()],
+            "task_index": {"T1": _FakeTask()},
+            "plan_title": "Test",
+            "plan_goals": [],
+            "domain_summary": {},
+            "preflight_summary": {},
+            "total_estimated_loc": 0,
+            # SCAFFOLD exit
+            "scaffold": {
+                "directories_needed": [],
+                "directories_created": [],
+                "project_root": str(tmp_path),
+            },
+            # DESIGN exit
+            "design_results": {"T1": {"status": "agreed"}},
+        }
+        result = workflow.execute(context=context)
 
         assert result.status == WorkflowStatus.COMPLETED
         assert len(result.phase_results) == 3

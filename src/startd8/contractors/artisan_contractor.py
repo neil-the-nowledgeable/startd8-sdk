@@ -41,6 +41,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
+from startd8.contractors.context_schema import (
+    PhaseContextError,
+    validate_phase_entry,
+    validate_phase_exit,
+)
 from startd8.contractors.protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
     REVIEW_MODEL_CLAUDE_OPUS,
@@ -1120,9 +1125,15 @@ class ArtisanContractorWorkflow:
 
             with span_context as span:
                 try:
+                    # --- Context contract: entry validation ---
+                    validate_phase_entry(phase, context)
+
                     result_dict = self._run_handler_with_timeout(
                         handler, phase, context, effective_timeout
                     )
+
+                    # --- Context contract: exit validation ---
+                    validate_phase_exit(phase, context)
 
                     phase_end = time.monotonic()
                     duration = phase_end - phase_start

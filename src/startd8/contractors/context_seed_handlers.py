@@ -75,6 +75,15 @@ from startd8.utils.token_usage import (
     token_usage_output,
 )
 
+from startd8.contractors.context_schema import (
+    DesignPhaseOutput,
+    FinalizePhaseOutput,
+    ImplementPhaseOutput,
+    PlanPhaseOutput,
+    ReviewPhaseOutput,
+    ScaffoldPhaseOutput,
+    ValidationPhaseOutput,
+)
 from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -544,6 +553,21 @@ class PlanPhaseHandler(AbstractPhaseHandler):
                     "Address preflight issues before proceeding, or run without --abort-on-preflight-fail."
                 )
 
+        # Context contract: validate PLAN output model
+        PlanPhaseOutput(
+            enriched_seed_path=context["enriched_seed_path"],
+            tasks=context["tasks"],
+            task_index=context["task_index"],
+            plan_title=context["plan_title"],
+            plan_goals=context["plan_goals"],
+            domain_summary=context["domain_summary"],
+            preflight_summary=context["preflight_summary"],
+            total_estimated_loc=context["total_estimated_loc"],
+            architectural_context=context.get("architectural_context", {}),
+            design_calibration=context.get("design_calibration", {}),
+            example_artifacts=context.get("example_artifacts", {}),
+        )
+
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
 
@@ -615,6 +639,9 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
 
         # Store scaffold results in context
         context["scaffold"] = output
+
+        # Context contract: validate SCAFFOLD output model
+        ScaffoldPhaseOutput(scaffold=context["scaffold"])
 
         duration = time.monotonic() - start
         logger.info(
@@ -1017,6 +1044,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 }
 
         context["design_results"] = design_results
+
+        # Context contract: validate DESIGN output model
+        DesignPhaseOutput(design_results=context["design_results"])
 
         env_blocked = sum(
             1 for r in design_results.values()
@@ -1958,6 +1988,13 @@ class Test{class_name}:
             }
             context["implementation"] = output
             context["generation_results"] = {}
+
+            # Context contract: validate IMPLEMENT output model (dry-run path)
+            ImplementPhaseOutput(
+                implementation=context["implementation"],
+                generation_results=context["generation_results"],
+            )
+
             duration = time.monotonic() - start
             logger.info(
                 "IMPLEMENT phase complete (dry-run): %d tasks (%.2fs)",
@@ -2127,6 +2164,13 @@ class Test{class_name}:
                 }
                 context["implementation"] = output
                 context["generation_results"] = {}
+
+                # Context contract: validate IMPLEMENT output model (no-chunks path)
+                ImplementPhaseOutput(
+                    implementation=context["implementation"],
+                    generation_results=context["generation_results"],
+                )
+
                 duration = time.monotonic() - start
                 return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
@@ -2242,6 +2286,13 @@ class Test{class_name}:
         # expected downstream stubs from generation failures.
         if downstream_map:
             context["_downstream_map"] = downstream_map
+
+        # Context contract: validate IMPLEMENT output model (normal path)
+        ImplementPhaseOutput(
+            implementation=context["implementation"],
+            generation_results=context["generation_results"],
+        )
+
         duration = time.monotonic() - start
 
         logger.info(
@@ -2681,6 +2732,10 @@ class TestPhaseHandler(AbstractPhaseHandler):
         }
 
         context["test_results"] = output
+
+        # Context contract: validate TEST output model
+        ValidationPhaseOutput(test_results=context["test_results"])
+
         duration = time.monotonic() - start
 
         logger.info(
@@ -3101,6 +3156,10 @@ PASS if score >= {pass_threshold} and no blocking issues.
         }
 
         context["review_results"] = output
+
+        # Context contract: validate REVIEW output model
+        ReviewPhaseOutput(review_results=context["review_results"])
+
         duration = time.monotonic() - start
 
         logger.info(
@@ -3455,6 +3514,10 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                 summary["manifest_path"] = str(manifest_path)
 
         context["workflow_summary"] = summary
+
+        # Context contract: validate FINALIZE output model
+        FinalizePhaseOutput(workflow_summary=context["workflow_summary"])
+
         duration = time.monotonic() - start
 
         logger.info(
