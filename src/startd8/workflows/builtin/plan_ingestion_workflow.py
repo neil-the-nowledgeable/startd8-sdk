@@ -987,6 +987,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         context_files: Optional[List[str]],
         output_dir: Path,
         min_export_coverage: float,
+        contextcore_yaml_path: Optional[Path] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], List[str], List[str]]:
         """Validate ContextCore export artifacts before PARSE."""
         warnings: List[str] = []
@@ -1101,11 +1102,65 @@ class PlanIngestionWorkflow(WorkflowBase):
                 f"Preflight: export coverage {overall_pct:.1f}% below minimum {min_export_coverage:.1f}%"
             )
 
-        # source_checksum is expected for provenance chain, warn if absent.
-        if not isinstance(onboarding.get("source_checksum"), str):
+        # source_checksum verification — close provenance chain at ingestion.
+        expected_source_checksum = onboarding.get("source_checksum")
+        if not isinstance(expected_source_checksum, str):
             warnings.append("Preflight: source_checksum missing in onboarding metadata")
+            evidence["checksums"]["source_checksum_verified"] = None
+        elif contextcore_yaml_path is not None and contextcore_yaml_path.exists():
+            actual_source_checksum = _checksum_file(contextcore_yaml_path)
+            evidence["checksums"]["source_checksum_expected"] = expected_source_checksum
+            evidence["checksums"]["source_checksum_actual"] = actual_source_checksum
+            evidence["paths"]["contextcore_yaml"] = str(contextcore_yaml_path)
+            if actual_source_checksum != expected_source_checksum:
+                errors.append(
+                    "Preflight: source_checksum mismatch — .contextcore.yaml has changed "
+                    "since the export was generated. Re-run ContextCore export to refresh."
+                )
+                evidence["checksums"]["source_checksum_verified"] = False
+            else:
+                evidence["checksums"]["source_checksum_verified"] = True
+                logger.info(
+                    "Preflight: source_checksum verified against %s",
+                    contextcore_yaml_path.name,
+                )
+        else:
+            warnings.append(
+                "Preflight: source_checksum present but .contextcore.yaml not available "
+                "for verification"
+            )
+            evidence["checksums"]["source_checksum_verified"] = None
 
         return onboarding, evidence, warnings, errors
+
+    @staticmethod
+    def _write_preflight_report(
+        output_dir: Path,
+        passed: bool,
+        evidence: Dict[str, Any],
+        warnings: List[str],
+        errors: List[str],
+    ) -> Path:
+        """Write preflight-report.json for downstream gating and auditing.
+
+        Always written regardless of pass/fail so that downstream tools
+        can programmatically inspect the preflight outcome.
+        """
+        source_checksum_verified = evidence.get("checksums", {}).get(
+            "source_checksum_verified"
+        )
+        report = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "passed": passed,
+            "source_checksum_verified": source_checksum_verified,
+            "evidence": evidence,
+            "warnings": warnings,
+            "errors": errors,
+        }
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "preflight-report.json"
+        atomic_write_json(path, report, indent=2)
+        return path
 
     @staticmethod
     def _evaluate_translation_quality(
@@ -1214,6 +1269,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         tasks: List[Dict[str, Any]],
         quality: Dict[str, Any],
         checksum_evidence: Dict[str, Any],
+        refine_impact: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Build deterministic traceability artifact payload."""
         feature_to_task: Dict[str, List[str]] = {}
@@ -1284,7 +1340,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 }
             )
 
-        return {
+        payload: Dict[str, Any] = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
             "route": route.value,
             "plan_title": parsed_plan.title,
@@ -1298,6 +1354,9 @@ class PlanIngestionWorkflow(WorkflowBase):
             },
             "checksum_evidence": checksum_evidence,
         }
+        if refine_impact is not None:
+            payload["refine_impact"] = refine_impact
+        return payload
 
     @staticmethod
     def _write_traceability_artifact(output_dir: Path, payload: Dict[str, Any]) -> Path:
@@ -1306,6 +1365,103 @@ class PlanIngestionWorkflow(WorkflowBase):
         path = output_dir / "ingestion-traceability.json"
         atomic_write_json(path, payload, indent=2)
         return path
+
+    @staticmethod
+    def _enrich_prime_yaml_with_traceability(
+        yaml_path: Path,
+        translation_quality: Dict[str, Any],
+        requirement_hints: Dict[str, Dict[str, Any]],
+        parsed_plan: ParsedPlan,
+    ) -> None:
+        """Post-process Prime YAML output to inject requirement traceability.
+
+        Injects ``requirement_ids``, ``acceptance_obligations``, and
+        ``source_references`` into each Prime task's ``config.context`` block
+        by matching feature IDs from translation quality mappings.
+
+        This is a zero-LLM-cost enrichment — it modifies the YAML file
+        in-place after the LLM generates it.
+        """
+        try:
+            raw = yaml_path.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw)
+        except (OSError, yaml.YAMLError) as exc:
+            logger.warning("Cannot enrich Prime YAML at %s: %s", yaml_path, exc)
+            return
+
+        if not isinstance(data, dict):
+            return
+        tasks = data.get("tasks")
+        if not isinstance(tasks, list):
+            return
+
+        req_to_feature = translation_quality.get("requirement_to_feature", {})
+        req_acceptance = translation_quality.get("requirement_acceptance_anchors", {})
+        req_sources = translation_quality.get("requirement_source_references", {})
+
+        # Build reverse map: feature_id -> [requirement_ids]
+        feature_to_requirements: Dict[str, List[str]] = {}
+        for rid, fids in req_to_feature.items():
+            for fid in fids:
+                feature_to_requirements.setdefault(fid, []).append(rid)
+
+        # Map task titles to feature IDs for matching.
+        feature_by_name: Dict[str, str] = {}
+        for feat in parsed_plan.features:
+            feature_by_name[feat.name.lower()] = feat.feature_id
+            feature_by_name[feat.feature_id.lower()] = feat.feature_id
+
+        enriched = False
+        for task in tasks:
+            if not isinstance(task, dict):
+                continue
+            config = task.setdefault("config", {})
+            ctx = config.setdefault("context", {})
+
+            # Try to match task to a feature.
+            task_title = (task.get("title") or "").lower()
+            task_id = (task.get("task_id") or "").lower()
+            matched_fid: Optional[str] = None
+            for key in (task_title, task_id):
+                if key in feature_by_name:
+                    matched_fid = feature_by_name[key]
+                    break
+            if matched_fid is None:
+                # Fallback: substring match on feature names.
+                for feat in parsed_plan.features:
+                    if feat.name.lower() in task_title or feat.feature_id.lower() in task_title:
+                        matched_fid = feat.feature_id
+                        break
+
+            if matched_fid is None:
+                continue
+
+            mapped_requirements = feature_to_requirements.get(matched_fid, [])
+            if not mapped_requirements:
+                continue
+
+            ctx["requirement_ids"] = sorted(set(mapped_requirements))
+
+            acceptance_obligations: List[str] = []
+            source_references: List[str] = []
+            for rid in mapped_requirements:
+                hint = requirement_hints.get(rid, {})
+                anchors = hint.get("acceptance_anchors", req_acceptance.get(rid, []))
+                if isinstance(anchors, list):
+                    acceptance_obligations.extend(a for a in anchors if isinstance(a, str))
+                refs = hint.get("source_references", req_sources.get(rid, []))
+                if isinstance(refs, list):
+                    source_references.extend(r for r in refs if isinstance(r, str))
+            if acceptance_obligations:
+                ctx["acceptance_obligations"] = sorted(set(acceptance_obligations))
+            if source_references:
+                ctx["source_references"] = sorted(set(source_references))
+
+            enriched = True
+
+        if enriched:
+            atomic_write(yaml_path, yaml.dump(data, default_flow_style=False, sort_keys=False))
+            logger.info("Enriched Prime YAML with requirement traceability fields")
 
     # ------------------------------------------------------------------
     # Phase: REFINE
@@ -2280,6 +2436,27 @@ class PlanIngestionWorkflow(WorkflowBase):
             preflight_evidence: Dict[str, Any] = {"checksums": {}, "paths": {}, "coverage": {}}
             requirements_hints_index: Dict[str, Dict[str, Any]] = {}
 
+            # --- DISCOVER .contextcore.yaml (needed for preflight + manifest) ---
+            contextcore_yaml: Optional[Path] = None
+            raw_yaml = config.get("contextcore_yaml")
+            if raw_yaml is not None:
+                contextcore_yaml = Path(str(raw_yaml)).expanduser()
+                if not contextcore_yaml.is_absolute():
+                    contextcore_yaml = (output_dir / contextcore_yaml).resolve()
+            else:
+                # Auto-discover: project_root (most specific), then output_dir.
+                # Deliberately avoid Path.cwd() — it picks up unrelated
+                # .contextcore.yaml files when the SDK is used from a
+                # different working directory.
+                candidates: list[Path] = [output_dir / ".contextcore.yaml"]
+                project_root = config.get("project_root")
+                if project_root:
+                    candidates.insert(0, Path(project_root) / ".contextcore.yaml")
+                for candidate in candidates:
+                    if candidate.exists():
+                        contextcore_yaml = candidate
+                        break
+
             # --- PREFLIGHT ---
             progress("Preflight")
             preflight_step = StepResult(step_name="preflight", output="Running export contract checks")
@@ -2289,6 +2466,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     context_files=context_files,
                     output_dir=output_dir,
                     min_export_coverage=min_export_coverage,
+                    contextcore_yaml_path=contextcore_yaml,
                 )
             )
             if preflight_warnings:
@@ -2300,6 +2478,18 @@ class PlanIngestionWorkflow(WorkflowBase):
             if preflight_errors:
                 preflight_step.error = " ; ".join(preflight_errors)
             steps.append(preflight_step)
+
+            # Write preflight report artifact regardless of pass/fail.
+            preflight_passed = not preflight_errors
+            preflight_report_path = self._write_preflight_report(
+                output_dir, preflight_passed, preflight_evidence,
+                preflight_warnings, preflight_errors,
+            )
+            logger.debug(
+                "Preflight report written to %s (passed=%s)",
+                preflight_report_path, preflight_passed,
+            )
+
             if preflight_step.error:
                 return _fail(preflight_step.error)
             requirements_hints_index = _normalize_requirements_hints(onboarding_metadata)
@@ -2314,17 +2504,6 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             # --- MANIFEST LOADING (optional) ---
             manifest_context: Dict[str, Any] = {}
-            contextcore_yaml = config.get("contextcore_yaml")
-            if contextcore_yaml is None:
-                # Auto-discover: project_root (most specific), output_dir, cwd
-                candidates = [output_dir / ".contextcore.yaml", Path.cwd() / ".contextcore.yaml"]
-                project_root = config.get("project_root")
-                if project_root:
-                    candidates.insert(0, Path(project_root) / ".contextcore.yaml")
-                for candidate in candidates:
-                    if candidate.exists():
-                        contextcore_yaml = candidate
-                        break
             if contextcore_yaml:
                 try:
                     from contextcore.models import load_manifest
@@ -2456,6 +2635,15 @@ class PlanIngestionWorkflow(WorkflowBase):
             if cost_err:
                 return cost_err
 
+            # Enrich Prime YAML with requirement traceability (zero LLM cost).
+            if route == ContractorRoute.PRIME and doc_path is not None:
+                self._enrich_prime_yaml_with_traceability(
+                    yaml_path=doc_path,
+                    translation_quality=translation_quality,
+                    requirement_hints=requirements_hints_index,
+                    parsed_plan=parsed_plan,
+                )
+
             # --- REFINE ---
             progress("Refine")
             state.current_phase = IngestionPhase.REFINE
@@ -2473,6 +2661,49 @@ class PlanIngestionWorkflow(WorkflowBase):
             steps.extend(refine_steps)
             state.total_cost += refine_cost
             step_costs["refine"] = refine_cost
+
+            # Re-evaluate translation quality after REFINE for traceability delta.
+            refine_impact: Optional[Dict[str, Any]] = None
+            if rounds_completed > 0:
+                try:
+                    refined_text = doc_path.read_text(encoding="utf-8")
+                except OSError:
+                    refined_text = ""
+                if refined_text:
+                    from dataclasses import replace as dc_replace
+
+                    refined_plan = dc_replace(parsed_plan, raw_text=refined_text)
+                    post_refine_quality = self._evaluate_translation_quality(
+                        parsed_plan=refined_plan,
+                        requirements_docs=requirements_docs,
+                        onboarding=onboarding_metadata,
+                        requirements_hints=requirements_hints_index,
+                    )
+                    refine_impact = {
+                        "rounds_applied": rounds_completed,
+                        "requirements_coverage_before": translation_quality.get(
+                            "requirements_coverage_percent", 100.0
+                        ),
+                        "requirements_coverage_after": post_refine_quality.get(
+                            "requirements_coverage_percent", 100.0
+                        ),
+                        "artifact_mapping_before": translation_quality.get(
+                            "artifact_mapping_percent", 100.0
+                        ),
+                        "artifact_mapping_after": post_refine_quality.get(
+                            "artifact_mapping_percent", 100.0
+                        ),
+                    }
+                    # Use post-refine quality for downstream traceability.
+                    translation_quality = post_refine_quality
+                    logger.info(
+                        "Post-REFINE quality: req_coverage %.1f%% -> %.1f%%, "
+                        "artifact_mapping %.1f%% -> %.1f%%",
+                        refine_impact["requirements_coverage_before"],
+                        refine_impact["requirements_coverage_after"],
+                        refine_impact["artifact_mapping_before"],
+                        refine_impact["artifact_mapping_after"],
+                    )
 
             cost_err = _check_cost("refine")
             if cost_err:
@@ -2514,6 +2745,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 tasks=trace_tasks,
                 quality=translation_quality,
                 checksum_evidence=preflight_evidence.get("checksums", {}),
+                refine_impact=refine_impact,
             )
             traceability_path = self._write_traceability_artifact(output_dir, trace_payload)
             state.review_config_path = str(config_path)
@@ -2548,6 +2780,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "complexity_score": complexity.composite,
                 "refine_rounds_completed": rounds_completed,
                 "traceability_path": str(traceability_path),
+                "preflight_report_path": str(preflight_report_path),
                 "translation_quality": {
                     "requirements_coverage_percent": translation_quality.get(
                         "requirements_coverage_percent", 100.0
