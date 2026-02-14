@@ -712,6 +712,64 @@ def show_template(
 
 
 # =============================================================================
+# Doctor Commands
+# =============================================================================
+
+doctor_app = typer.Typer(
+    name="doctor",
+    help="Environment diagnostics commands"
+)
+app.add_typer(doctor_app, name="doctor")
+
+
+@doctor_app.command("otel")
+def doctor_otel(
+    timeout: float = typer.Option(
+        1.0, "--timeout",
+        help="Collector reachability timeout in seconds"
+    ),
+    fail_on_error: bool = typer.Option(
+        False, "--fail-on-error",
+        help="Exit non-zero when OTel state severity is error"
+    ),
+):
+    """Diagnose effective OpenTelemetry mode, endpoint, and readiness."""
+    from .otel import get_otel_runtime_state
+
+    state = get_otel_runtime_state(connectivity_timeout=timeout)
+
+    table = Table(title="OpenTelemetry Runtime State")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="green")
+    table.add_row("Mode", str(state.get("mode")))
+    table.add_row("OTel packages available", str(state.get("otel_available")))
+    table.add_row("Endpoint (env)", state.get("endpoint_env") or "<unset>")
+    table.add_row("Endpoint (effective)", state.get("endpoint_effective") or "<none>")
+    table.add_row("Endpoint reachable", str(state.get("endpoint_reachable")))
+    table.add_row("Fail-fast active", str(state.get("fail_fast")))
+    table.add_row("Will configure exporters", str(state.get("will_configure")))
+    table.add_row("Severity", str(state.get("severity")))
+    table.add_row("Reason", str(state.get("reason")))
+    console.print(table)
+
+    message = state.get("message") or ""
+    if state.get("severity") == "error":
+        console.print(f"[red]{message}[/red]")
+    elif state.get("severity") == "warning":
+        console.print(f"[yellow]{message}[/yellow]")
+    else:
+        console.print(f"[green]{message}[/green]")
+
+    console.print("\n[bold]Recommended profiles[/bold]")
+    console.print("- Local default: STARTD8_OTEL=auto")
+    console.print("- Disable fully: STARTD8_OTEL=disabled")
+    console.print("- Enforce export: STARTD8_OTEL=enabled + OTEL_EXPORTER_OTLP_ENDPOINT=<collector>")
+
+    if fail_on_error and state.get("severity") == "error":
+        raise typer.Exit(2)
+
+
+# =============================================================================
 # Job Queue Commands
 # =============================================================================
 

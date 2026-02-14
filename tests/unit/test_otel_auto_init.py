@@ -68,7 +68,10 @@ class TestAutoConfigureOtel:
 
     def test_enabled_calls_configure(self):
         """STARTD8_OTEL=enabled triggers configure_otel()."""
-        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled"}):
+        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled"}, clear=False):
+            os.environ.pop("CI", None)
+            os.environ.pop("STARTD8_OTEL_FAIL_FAST", None)
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
             import startd8.otel as otel_mod
             otel_mod._configured = False
 
@@ -82,7 +85,9 @@ class TestAutoConfigureOtel:
 
     def test_double_init_prevented(self):
         """Calling auto_configure_otel() twice only configures once."""
-        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled"}):
+        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled"}, clear=False):
+            os.environ.pop("CI", None)
+            os.environ.pop("STARTD8_OTEL_FAIL_FAST", None)
             import startd8.otel as otel_mod
             otel_mod._configured = False
 
@@ -133,7 +138,9 @@ class TestAutoConfigureOtel:
 
     def test_enabled_skips_connectivity_check(self):
         """STARTD8_OTEL=enabled configures OTLP even when endpoint unreachable."""
-        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled"}):
+        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled"}, clear=False):
+            os.environ.pop("CI", None)
+            os.environ.pop("STARTD8_OTEL_FAIL_FAST", None)
             import startd8.otel as otel_mod
             otel_mod._configured = False
             mock_result = {"tracer": "t", "meter": "m", "resource_attributes": {}}
@@ -148,7 +155,9 @@ class TestAutoConfigureOtel:
         with patch.dict(os.environ, {
             "STARTD8_OTEL": "enabled",
             "OTEL_EXPORTER_OTLP_ENDPOINT": "http://custom:4317",
-        }):
+        }, clear=False):
+            os.environ.pop("CI", None)
+            os.environ.pop("STARTD8_OTEL_FAIL_FAST", None)
             import startd8.otel as otel_mod
             otel_mod._configured = False
 
@@ -175,6 +184,51 @@ class TestAutoConfigureOtel:
                 assert result["meter"] is None
             finally:
                 otel_mod.OTEL_AVAILABLE = original
+
+    def test_enabled_missing_endpoint_fail_fast_skips_without_hard_fail(self):
+        """Fail-fast policy logs/skips by default (no hard raise)."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled", "STARTD8_OTEL_FAIL_FAST": "1"}, clear=False):
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            os.environ.pop("CI", None)
+            os.environ.pop("STARTD8_OTEL_HARD_FAIL", None)
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+            with patch.object(otel_mod, "configure_otel") as mock_configure:
+                result = otel_mod.auto_configure_otel()
+                assert result["tracer"] is None
+            mock_configure.assert_not_called()
+
+    def test_enabled_missing_endpoint_hard_fail_raises(self):
+        """Hard-fail env forces startup error on invalid enabled config."""
+        with patch.dict(
+            os.environ,
+            {
+                "STARTD8_OTEL": "enabled",
+                "STARTD8_OTEL_FAIL_FAST": "1",
+                "STARTD8_OTEL_HARD_FAIL": "1",
+            },
+            clear=False,
+        ):
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            os.environ.pop("CI", None)
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+            with patch.object(otel_mod, "configure_otel") as mock_configure:
+                try:
+                    otel_mod.auto_configure_otel()
+                    assert False, "Expected RuntimeError"
+                except RuntimeError:
+                    pass
+            mock_configure.assert_not_called()
+
+    def test_get_runtime_state_enabled_in_ci_requires_endpoint(self):
+        """CI + enabled without endpoint reports error severity."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "enabled", "CI": "true"}, clear=False):
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            import startd8.otel as otel_mod
+            state = otel_mod.get_otel_runtime_state()
+            assert state["severity"] == "error"
+            assert state["reason"] == "enabled_missing_endpoint_fail_fast"
 
 
 class TestOtlpEndpointReachable:

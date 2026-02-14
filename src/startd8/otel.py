@@ -464,6 +464,127 @@ def _otlp_endpoint_reachable(endpoint: str, timeout: float = 1.0) -> bool:
         return False
 
 
+def _is_truthy_env(value: Optional[str]) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def get_otel_runtime_state(connectivity_timeout: float = 1.0) -> Dict[str, Any]:
+    """
+    Resolve effective OTel behavior from environment + runtime conditions.
+
+    Returns a structured dict suitable for diagnostics and auto-configuration:
+        - mode: effective mode (enabled|auto|disabled)
+        - otel_available: whether OTel packages are importable
+        - endpoint_env: endpoint explicitly set by env (may be empty)
+        - endpoint_effective: endpoint used if exporter is configured
+        - fail_fast: whether strict fail-fast policy is active
+        - will_configure: whether exporters should be configured
+        - severity: info|warning|error
+        - reason: machine-readable reason code
+        - message: human-readable explanation
+        - endpoint_reachable: optional bool when checked
+    """
+    mode = os.getenv("STARTD8_OTEL", "auto").strip().lower()
+    if mode not in {"enabled", "auto", "disabled"}:
+        mode = "auto"
+
+    endpoint_env = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    ci_mode = _is_truthy_env(os.getenv("CI"))
+    fail_fast = _is_truthy_env(os.getenv("STARTD8_OTEL_FAIL_FAST")) or ci_mode
+
+    state: Dict[str, Any] = {
+        "mode": mode,
+        "otel_available": OTEL_AVAILABLE,
+        "endpoint_env": endpoint_env,
+        "endpoint_effective": None,
+        "fail_fast": fail_fast,
+        "will_configure": False,
+        "severity": "info",
+        "reason": "unknown",
+        "message": "",
+        "endpoint_reachable": None,
+    }
+
+    if mode == "disabled":
+        state.update(
+            reason="disabled_mode",
+            message="OpenTelemetry disabled by STARTD8_OTEL=disabled.",
+        )
+        return state
+
+    if not OTEL_AVAILABLE:
+        state.update(
+            severity="warning",
+            reason="otel_packages_missing",
+            message="OpenTelemetry packages are not installed; telemetry is unavailable.",
+        )
+        return state
+
+    if mode == "auto":
+        if not endpoint_env:
+            state.update(
+                reason="auto_endpoint_unset",
+                message=(
+                    "STARTD8_OTEL=auto with no OTEL_EXPORTER_OTLP_ENDPOINT; "
+                    "telemetry export is skipped."
+                ),
+            )
+            return state
+
+        reachable = _otlp_endpoint_reachable(endpoint_env, timeout=connectivity_timeout)
+        state["endpoint_effective"] = endpoint_env
+        state["endpoint_reachable"] = reachable
+        if reachable:
+            state.update(
+                will_configure=True,
+                reason="auto_endpoint_reachable",
+                message=f"Collector reachable at {endpoint_env}; telemetry export enabled.",
+            )
+        else:
+            state.update(
+                severity="warning",
+                reason="auto_endpoint_unreachable",
+                message=(
+                    f"Collector unreachable at {endpoint_env}; telemetry export skipped in auto mode."
+                ),
+            )
+        return state
+
+    # mode == "enabled"
+    endpoint_effective = endpoint_env or "http://localhost:4317"
+    state["endpoint_effective"] = endpoint_effective
+
+    if fail_fast and not endpoint_env:
+        state.update(
+            severity="error",
+            reason="enabled_missing_endpoint_fail_fast",
+            message=(
+                "STARTD8_OTEL=enabled requires OTEL_EXPORTER_OTLP_ENDPOINT when fail-fast is active."
+            ),
+        )
+        return state
+
+    if fail_fast:
+        reachable = _otlp_endpoint_reachable(endpoint_effective, timeout=connectivity_timeout)
+        state["endpoint_reachable"] = reachable
+        if not reachable:
+            state.update(
+                severity="error",
+                reason="enabled_endpoint_unreachable_fail_fast",
+                message=(
+                    f"Collector unreachable at {endpoint_effective}; fail-fast prevents startup."
+                ),
+            )
+            return state
+
+    state.update(
+        will_configure=True,
+        reason="enabled_mode",
+        message=f"Telemetry export enabled to {endpoint_effective}.",
+    )
+    return state
+
+
 def auto_configure_otel() -> Dict[str, Any]:
     """
     Auto-configure OTel based on the STARTD8_OTEL environment variable.
@@ -485,45 +606,19 @@ def auto_configure_otel() -> Dict[str, Any]:
     if _configured:
         return {"tracer": None, "meter": None, "resource_attributes": {}}
 
-    mode = os.getenv("STARTD8_OTEL", "auto").lower().strip()
+    state = get_otel_runtime_state()
+    _otel_logger = logging.getLogger("startd8.otel")
 
-    if mode == "disabled":
+    if not state["will_configure"]:
+        if state["severity"] == "error":
+            _otel_logger.error("%s", state["message"])
+            if _is_truthy_env(os.getenv("STARTD8_OTEL_HARD_FAIL")):
+                raise RuntimeError(state["message"])
+            return {"tracer": None, "meter": None, "resource_attributes": {}}
+        _otel_logger.info("%s", state["message"])
         return {"tracer": None, "meter": None, "resource_attributes": {}}
 
-    if mode == "auto" and not OTEL_AVAILABLE:
-        return {"tracer": None, "meter": None, "resource_attributes": {}}
-
-    if mode not in ("enabled", "auto"):
-        return {"tracer": None, "meter": None, "resource_attributes": {}}
-
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
-
-    # In auto mode, require explicit endpoint configuration. This avoids
-    # recurring localhost retry noise when no collector is intended.
-    if mode == "auto" and not endpoint:
-        _otel_logger = logging.getLogger("startd8.otel")
-        _otel_logger.info(
-            "OTLP endpoint not configured; skipping telemetry export in auto mode. "
-            "Set OTEL_EXPORTER_OTLP_ENDPOINT to enable exporter wiring."
-        )
-        return {"tracer": None, "meter": None, "resource_attributes": {}}
-
-    if mode == "enabled" and not endpoint:
-        endpoint = "http://localhost:4317"
-
-    config = OTelConfig(otlp_endpoint=endpoint)
-
-    # In auto mode: skip OTLP entirely when endpoint is unreachable to avoid
-    # retry noise and ERROR logs from the exporter when no collector is running.
-    if mode == "auto" and not _otlp_endpoint_reachable(endpoint):
-        _otel_logger = logging.getLogger("startd8.otel")
-        _otel_logger.info(
-            "OTLP endpoint unreachable (%s), skipping telemetry export. "
-            "Set STARTD8_OTEL=enabled to force, or STARTD8_OTEL=disabled to suppress.",
-            endpoint,
-        )
-        return {"tracer": None, "meter": None, "resource_attributes": {}}
-
+    config = OTelConfig(otlp_endpoint=state["endpoint_effective"])
     result = configure_otel(config)
     _configured = True
     return result
@@ -578,6 +673,7 @@ __all__ = [
     "configure_otel",
     "configure_otel_with_openllmetry",
     "auto_configure_otel",
+    "get_otel_runtime_state",
     "shutdown_otel",
     "add_project_context_to_span",
 ]
