@@ -54,6 +54,9 @@ from startd8.contractors.handoff import (  # noqa: E402
     write_design_handoff,
 )
 
+_MIN_PHASE_TIMEOUT_SECONDS = 2400.0
+_MIN_IMPLEMENT_TIMEOUT_SECONDS = 2400.0
+
 
 def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
     """Extract artifact paths and context_files from seed for handoff."""
@@ -187,12 +190,18 @@ def main() -> int:
         help="TOTAL workflow timeout in seconds (wall-clock cap across all phases)",
     )
     parser.add_argument(
-        "--phase-timeout", type=float, default=None,
-        help="Per-phase timeout in seconds (each phase gets this much time)",
+        "--phase-timeout", type=float, default=_MIN_PHASE_TIMEOUT_SECONDS,
+        help=(
+            "Per-phase timeout in seconds (each phase gets this much time). "
+            f"Minimum/default: {int(_MIN_PHASE_TIMEOUT_SECONDS)}"
+        ),
     )
     parser.add_argument(
-        "--implement-timeout", type=float, default=None,
-        help="IMPLEMENT phase internal DevelopmentPhase thread timeout in seconds",
+        "--implement-timeout", type=float, default=_MIN_IMPLEMENT_TIMEOUT_SECONDS,
+        help=(
+            "IMPLEMENT phase internal DevelopmentPhase thread timeout in seconds. "
+            f"Minimum/default: {int(_MIN_IMPLEMENT_TIMEOUT_SECONDS)}"
+        ),
     )
     parser.add_argument(
         "--checkpoint-dir", default=".startd8/checkpoints",
@@ -277,6 +286,22 @@ def main() -> int:
     setup_logging(verbose=args.verbose)
 
     logger = logging.getLogger("run_artisan_workflow")
+
+    # Keep timeouts sane for long multi-task artisan runs.
+    if args.phase_timeout is not None and args.phase_timeout < _MIN_PHASE_TIMEOUT_SECONDS:
+        logger.warning(
+            "--phase-timeout=%s is below recommended minimum; using %s",
+            args.phase_timeout,
+            int(_MIN_PHASE_TIMEOUT_SECONDS),
+        )
+        args.phase_timeout = _MIN_PHASE_TIMEOUT_SECONDS
+    if args.implement_timeout is not None and args.implement_timeout < _MIN_IMPLEMENT_TIMEOUT_SECONDS:
+        logger.warning(
+            "--implement-timeout=%s is below recommended minimum; using %s",
+            args.implement_timeout,
+            int(_MIN_IMPLEMENT_TIMEOUT_SECONDS),
+        )
+        args.implement_timeout = _MIN_IMPLEMENT_TIMEOUT_SECONDS
 
     # Validate seed path
     seed_path = Path(args.seed)
