@@ -414,9 +414,9 @@ Task config has `feature_id`, `target_files`, `estimated_loc` but no `artifact_t
 ### B-14: No Context File List or Checksums in Handoff
 
 **Source**: IMPROVEMENT_SUGGESTIONS_2026-02-12.md (Item 14)  
-**Status**: Open
+**Status**: Addressed (Phase 4)
 
-The design handoff does not record which context files (and their checksums) the design was based on. If context changes between design and implement, there's no detection.
+The design handoff now includes a `context_files` list with SHA-256 checksums computed at write time. The implementation phase validates these checksums on load and warns (or fails, with `--strict-handoff`) if drift is detected.
 
 ---
 

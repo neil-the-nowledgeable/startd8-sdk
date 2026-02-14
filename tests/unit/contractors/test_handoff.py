@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -14,6 +15,9 @@ from startd8.contractors.handoff import (
     HandoffData,
     load_design_handoff,
     write_design_handoff,
+    compute_context_checksums,
+    verify_context_checksums,
+    HandoffContextDriftError,
 )
 from startd8.workflows.builtin.schema_versions import ARTISAN_SCHEMA_VERSION
 
@@ -32,6 +36,13 @@ def handoff_kwargs():
         "design_results": {"T1": {"status": "agreed", "cost": 0.05}},
         "scaffold": {"directories_created": ["/abs/path/to/project/src"]},
     }
+
+
+@pytest.fixture(autouse=True)
+def mock_validation():
+    """Mock schema validation to avoid jsonschema dependency during tests."""
+    with patch("startd8.contractors.handoff._validate_handoff"):
+        yield
 
 
 # ── write_design_handoff ─────────────────────────────────────────────
@@ -202,5 +213,53 @@ class TestHandoffSchema:
             "coverage_gaps": [],
             "created_at": "2026-02-12T00:00:00Z",
             "schema_version": 1,
+            "schema_version_str": "v1.0.0",
         }
         jsonschema.validate(valid, HANDOFF_SCHEMA)
+
+
+# ── Checksum tests (Item 12) ─────────────────────────────────────────────
+
+
+class TestChecksums:
+    def test_compute_checksums(self, tmp_path):
+        f = tmp_path / "test.txt"
+        f.write_text("hello", encoding="utf-8")
+        
+        ctx = [{"path": str(f)}]
+        enriched = compute_context_checksums(ctx)
+        
+        assert enriched[0]["checksum"]
+        # echo -n "hello" | shasum -a 256 -> 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824
+        assert enriched[0]["checksum"] == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+
+    def test_verify_checksums_pass(self, tmp_path):
+        f = tmp_path / "test.txt"
+        f.write_text("hello", encoding="utf-8")
+        
+        ctx = [{"path": str(f), "checksum": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}]
+        warnings = verify_context_checksums(ctx)
+        assert not warnings
+
+    def test_verify_checksums_drift(self, tmp_path):
+        f = tmp_path / "test.txt"
+        f.write_text("changed", encoding="utf-8")
+        
+        ctx = [{"path": str(f), "checksum": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}]
+        warnings = verify_context_checksums(ctx)
+        assert len(warnings) == 1
+        assert "Drift detected" in warnings[0] or "drift detected" in warnings[0]
+
+    def test_verify_checksums_strict(self, tmp_path):
+        f = tmp_path / "test.txt"
+        f.write_text("changed", encoding="utf-8")
+        
+        ctx = [{"path": str(f), "checksum": "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"}]
+        with pytest.raises(HandoffContextDriftError):
+            verify_context_checksums(ctx, strict=True)
+            
+    def test_verify_missing_file(self, tmp_path):
+        ctx = [{"path": str(tmp_path / "gone.txt"), "checksum": "abc"}]
+        warnings = verify_context_checksums(ctx)
+        assert len(warnings) == 1
+        assert "Context file missing" in warnings[0]

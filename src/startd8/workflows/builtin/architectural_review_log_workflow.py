@@ -1,12 +1,22 @@
 """
-ArchitecturalReviewLogWorkflow - High-quality sequential architectural review with append-only review rounds.
+ArchitecturalReviewLogWorkflow — Convergent Review Protocol (CRP) implementation.
 
-This workflow is a strategic variation of doc-review-log:
-- Defaults to 1+ flagship models (high quality) when agents are not explicitly provided
-- Runs models sequentially (one after another)
-- Appends suggestions to the SAME document (Appendix C) in an append-only fashion
-- Uses Applied/Rejected appendices as memory so later reviewers avoid re-suggesting rejected/applied items
-- Enforces a strict suggestion-table schema to keep feedback actionable and triage-ready
+Implements the Convergent Review Protocol: a structured, iterative, domain-aware
+review process that converges toward full coverage across defined review areas.
+
+CRP characteristics:
+- Structured 7-column suggestion schema (ID, Area, Severity, Suggestion, Rationale, Proposed Placement, Validation Approach)
+- Three-appendix triage structure: Applied (A), Rejected with rationale (B), Incoming (C)
+- Round-based iteration with sequential reviewers, each building on triaged prior rounds
+- Domain coverage tracking with per-area "substantially addressed" thresholds
+- Two-tier priority steering: uncovered areas get Tier 1 priority; covered areas deprioritized
+- Convergence: process narrows as areas cross threshold; enters gap-hunting mode when all covered
+- Endorsement system for building consensus on untriaged suggestions
+- Dual-document mode for simultaneous plan + feature requirements review
+
+Defaults to flagship models. Enforces a strict suggestion-table schema.
+See docs/ARCHITECTURAL_REVIEW_REQUIREMENTS.md for full functional requirements (RV-xxx).
+See docs/capability-index/startd8.architectural-review.functional-requirements.yaml for canonical YAML.
 """
 
 from __future__ import annotations
@@ -52,11 +62,13 @@ RELAXED_SAFETY_SETTINGS = [
 APPENDIX_HEADING = "## Appendix: Iterative Review Log (Applied / Rejected Suggestions)"
 
 # This matches the appendix scaffold we already introduced in target docs.
+# The appendix structure implements the Convergent Review Protocol (CRP) —
+# see docs/ARCHITECTURAL_REVIEW_REQUIREMENTS.md for formal definition.
 APPENDIX_TEMPLATE = """---
 
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
 
-This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
+This appendix implements the **Convergent Review Protocol (CRP)** — an iterative, domain-aware review process that converges toward full coverage. It is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
 
 ### Reviewer Instructions (for humans + models)
 

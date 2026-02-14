@@ -38,7 +38,7 @@ The **Artisan Contractor** is a 7-phase workflow orchestrator that goes beyond t
 | **Design** | Implicit (LLM decides structure) | Explicit DESIGN phase with design documents per task |
 | **Phase control** | Single loop | 7 discrete phases with handlers, checkpoints, and budget gates |
 | **Execution model** | All-in-one | Supports split execution (design-only, implement-only) |
-| **Cost model** | Single agent tier | 3-tier: Haiku (drafter) / Sonnet (validator) / Opus (reviewer) |
+| **Cost model** | Single agent tier | 3-tier architecture: Haiku (drafter) / Sonnet (validator) / Opus (reviewer). Default runtime: 2-tier (Haiku + Opus via `HandlerConfig`) |
 | **Resume** | Feature-level | Phase-level checkpoints with JSON persistence |
 
 ### When to Use
@@ -147,7 +147,9 @@ LLM-based quality review of generated implementations. Checks constraint coverag
 
 #### 7. FINALIZE
 
-Collects all artifacts, computes cost summaries, and writes a comprehensive execution report.
+Collects all artifacts (with per-artifact sha256 checksums, line counts, and domain classification), computes cost summaries, and writes a comprehensive execution report (`generation-manifest.json`) with per-task status rollup joining generation, test, and review outcomes.
+
+> **Provenance gap:** The artisan seed carries `source_checksum` from the ContextCore export, but FINALIZE does not currently verify it against the original export or record it in the manifest. End-to-end provenance chain verification is planned but not yet implemented.
 
 **Context keys set:** `workflow_summary`
 
@@ -516,15 +518,17 @@ Tasks with failing environment checks are automatically skipped by the DESIGN an
 
 ## Cost Model
 
-The artisan workflow uses a 3-tier model hierarchy:
+The artisan workflow defines a 3-tier model architecture:
 
-| Role | Default Model | Purpose | Relative Cost |
-|------|--------------|---------|---------------|
+| Role | Catalog Default | Purpose | Relative Cost |
+|------|----------------|---------|---------------|
 | **Drafter** | `claude-haiku-4-5-20251008` | Generate initial drafts cheaply | Low |
 | **Validator** | `claude-sonnet-4-5-20250929` | Validate and refine | Medium |
 | **Reviewer** | `claude-opus-4-6` | Independent quality review | High |
 
 The core principle is **cheap drafts, expensive validation**. The drafter generates many attempts cheaply while the validator and reviewer ensure quality.
+
+> **Runtime defaults vs catalog defaults:** The `HandlerConfig` exposes two agent roles: `lead_agent` (defaults to Opus) and `drafter_agent` (defaults to Haiku). In the artisan orchestrator, `lead_agent` serves both the validator and reviewer roles — so the default runtime behavior is **2-tier** (Opus + Haiku). The Sonnet validator tier is the default for standalone `LeadContractorCodeGenerator` usage and can be activated in the artisan workflow by setting `--lead-agent anthropic:claude-sonnet-4-5-20250929`. The `WorkflowConfig` tracks all three model IDs (`drafter_model`, `validator_model`, `reviewer_model`) for metadata and OTel span attributes regardless of which agents are actually used.
 
 ### Budget Enforcement
 

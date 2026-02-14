@@ -38,7 +38,8 @@ Phases 1–3 are now implemented. The remaining work is Phase 4 (Cross-System In
 - **Phase 1 (Context Contract)** — Pydantic v2 models for per-phase context validation, boundary validation, and handoff schema enforcement
 - **Phase 2 (Data Flow Fixes)** — Fixes 1-5 from [`ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md`](../plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md) implemented: provenance chain, `parameter_sources`, `semantic_conventions`, and `output_conventions` propagation
 - **Phase 3 (Ingestion Strengthening)** — Export preflight with source_checksum verification, `preflight-report.json` artifact, `ingestion-traceability.json` with `refine_impact`, Prime YAML requirement enrichment
-- **Remaining issues**: 11 open from 33 cataloged ([`ARTISAN_WORKFLOW_ISSUES_CATALOG.md`](../ARTISAN_WORKFLOW_ISSUES_CATALOG.md)) — B-14 (no context checksums in handoff), B-15 (no shared schema version), B-12 (seed schema enforcement advisory-only) are addressed in Phase 4
+- **Phase 4 (Cross-System Integration)** — COMPLETED. GateResult contracts emitted from internal quality gates (review, preflight), HandoffData wrapped in HandoffContract, and context checksums added to handoff (closing B-14).
+- **Remaining issues**: 10 open from 33 cataloged ([`ARTISAN_WORKFLOW_ISSUES_CATALOG.md`](../ARTISAN_WORKFLOW_ISSUES_CATALOG.md)) — B-15 (no shared schema version) and B-12 (seed schema enforcement advisory-only) remain open.
 
 This document captures the implemented state, the remaining gaps, and the next phase.
 
@@ -451,8 +452,8 @@ The pipeline boundary between ContextCore governance and StartD8 execution occur
 | **No message protocol between pipeline steps** | Pipeline steps exchange raw strings; no envelope, no metadata | Medium — limits composability |
 | **No agent capability declaration** | Agents don't express what they can do; orchestrators must know | Low — current architecture doesn't need it |
 | **No request-response events** | EventBus is notification-only; no way to ask an agent a question via events | Low — orchestrator-centric model handles this |
-| **Events not emitted as ContextCore GateResults** | Internal quality gates (snippet validation, review scores) produce ad-hoc results, not typed GateResult contracts | Medium — limits cross-system observability |
-| **No context checksums in handoff** | Design-to-implement handoff doesn't detect context drift (B-14) | Medium |
+| **Events not emitted as ContextCore GateResults** | Internal quality gates (snippet validation, review scores) produce ad-hoc results, not typed GateResult contracts | Addressed (Phase 4) |
+| **No context checksums in handoff** | Design-to-implement handoff doesn't detect context drift (B-14) | Addressed (Phase 4) |
 | **No shared schema version** | Seed, handoff, and manifest use independent version schemes (B-15) | Low |
 
 ---
@@ -479,11 +480,11 @@ Given the deliberate pause to polish requirements, the recommended sequence is:
 8. **Traceability artifact hardened** (Recommendation 6) — `ingestion-traceability.json` includes `refine_impact` (before/after metrics from CRP refinement)
 9. **Requirements-aware refine** (Recommendation 5) — CRP dual-document mode wired into plan ingestion; Prime YAML output enriched with `requirement_ids`, `acceptance_obligations`, `source_references`
 
-### Phase 4: Cross-System Integration
+### Phase 4: Cross-System Integration — COMPLETED
 
-10. **Emit GateResult contracts** from internal quality gates — makes StartD8 quality signals visible to ContextCore governance dashboards
-11. **Wrap HandoffData in HandoffContract** — enables ContextCore to validate design→implement handoffs
-12. **Add context checksums to handoff** — close Issue B-14; detect context drift
+10. **Emit GateResult contracts** from internal quality gates — makes StartD8 quality signals visible to ContextCore governance dashboards (Implemented in `gate_contracts.py` + `ReviewPhaseHandler` + `PreflightReport`)
+11. **Wrap HandoffData in HandoffContract** — enables ContextCore to validate design→implement handoffs (Implemented in `handoff.py`)
+12. **Add context checksums to handoff** — close Issue B-14; detect context drift (Implemented in `handoff.py` + `run_artisan_implement_only.py`)
 
 ---
 

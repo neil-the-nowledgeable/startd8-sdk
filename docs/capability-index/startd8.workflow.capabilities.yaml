@@ -503,20 +503,28 @@ capabilities:
   - capability_id: startd8.workflow.builtin.architectural_review_log
     category: action
     maturity: stable
-    summary: "Iterative multi-agent architectural review with append-only structured triage and dual-document mode"
+    summary: "Convergent Review Protocol (CRP): iterative multi-agent architectural review with domain coverage convergence and dual-document mode"
     audiences: [workflow_user, ai_agent, workflow_developer]
-    user_benefit: "Automated multi-round design review with persistent acceptance/rejection tracking"
+    user_benefit: "Automated multi-round design review that converges toward full domain coverage with persistent acceptance/rejection tracking"
     delivers_benefit: workflow.execution.validated_run
+    protocol: "Convergent Review Protocol (CRP)"
+    requirements_doc: docs/ARCHITECTURAL_REVIEW_REQUIREMENTS.md
+    requirements_yaml: docs/capability-index/startd8.architectural-review.functional-requirements.yaml
     description:
       developer: |
-        ArchitecturalReviewLogWorkflow: N reviewer agents append suggestions to Appendix C,
+        ArchitecturalReviewLogWorkflow implements the Convergent Review Protocol (CRP):
+        N reviewer agents append structured suggestions (7-column schema) to Appendix C,
         automated triage classifies as ACCEPT/REJECT into Appendix A/B, computes per-area
-        coverage, and inserts "Areas Substantially Addressed" + "Areas Needing Further Review"
+        coverage across 7 domains (Architecture, Interfaces, Data, Risks, Validation, Ops,
+        Security), and inserts "Areas Substantially Addressed" + "Areas Needing Further Review"
         sections. Two-tier prompt steering prioritizes uncovered areas with quantified gap data.
+        Process converges as areas cross the substantially-addressed threshold; enters
+        gap-hunting mode when all areas are covered.
         v2.6.0: Dual-document mode when feature_requirements points to a .md file — reviewers
         produce Requirements Coverage mappings and split suggestions: S-prefix IDs for plan doc,
         F-prefix IDs for feature doc. Triage routes to appropriate document appendices. Feature
         doc auto-initialized with Appendix A/B/C structure if missing.
+        See docs/ARCHITECTURAL_REVIEW_REQUIREMENTS.md for 76 formal requirements (RV-xxx).
       user: |
         Run iterative architectural review with automated triage:
         startd8 workflow run architectural-review-log --document_path plan.md --reviewer_count 2
@@ -549,7 +557,8 @@ capabilities:
       developer: |
         ArtisanContractorWorkflow: 7-phase orchestrator (PLAN → SCAFFOLD → DESIGN → IMPLEMENT →
         TEST → REVIEW → FINALIZE). Phase handlers registered via ContextSeedHandlers.create_all().
-        3-tier cost model: Haiku drafter, Sonnet validator, Opus reviewer. Supports phase subsets,
+        3-tier cost model architecture: Haiku drafter, Sonnet validator, Opus reviewer (default
+        runtime 2-tier: Haiku+Opus via HandlerConfig; Sonnet tier activable via --lead-agent). Supports phase subsets,
         cost budget enforcement, per-phase and total timeouts, checkpoint persistence, OTel tracing.
         v2.6.0: DesignPhaseHandler enriched with architectural context (manifest goals, constraints,
         shared modules, dependency clusters, import conventions, domain concepts) and per-task

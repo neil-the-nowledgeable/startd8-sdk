@@ -21,7 +21,7 @@ Startd8 provides a powerful pipeline orchestration system for chaining multiple 
 | Critical Review | `critical-review` | Multi-agent review | Multi-agent |
 | Lead Contractor | `lead-contractor` | Spec-driven iteration | Config-based |
 | Lead Contractor + ContextCore | `lead-contractor-contextcore` | Spec-driven + tracking | Config-based |
-| **Artisan Contractor** | `artisan-contractor` | **7-phase design+implement** | **3-tier (Haiku/Sonnet/Opus)** |
+| **Artisan Contractor** | `artisan-contractor` | **7-phase design+implement** | **3-tier architecture (Haiku/Sonnet/Opus); default runtime: Haiku+Opus** |
 | Policy Analysis | `policy-analysis` | Parallel critical analysis | 2-5 agents |
 | Plain Language | `plain-language` | Content simplification | 1-5 agents |
 
@@ -533,7 +533,7 @@ python3 scripts/run_artisan_implement_only.py \
 
 ### Cost Model
 
-Uses a 3-tier model hierarchy — Haiku (drafter), Sonnet (validator), Opus (reviewer) — following the principle of cheap drafts and expensive validation.
+Uses a 3-tier model architecture — Haiku (drafter), Sonnet (validator), Opus (reviewer) — following the principle of cheap drafts and expensive validation. The default `HandlerConfig` runs 2-tier (Haiku drafter + Opus lead) since `lead_agent` defaults to Opus; set `--lead-agent` to Sonnet for the full 3-tier split.
 
 ### Key Features
 

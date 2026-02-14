@@ -53,6 +53,8 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+from startd8.contractors.gate_contracts import GateEmitter
+
 __all__ = [
     "CheckStatus",
     "CheckCategory",
@@ -503,12 +505,26 @@ class PreFlightChecker:
         finished_at = _utc_iso()
         total_ms = _elapsed_ms(wall_start)
 
-        return PreFlightReport(
+        report = PreFlightReport(
             results=self._results,
             started_at=started_at,
             finished_at=finished_at,
             total_duration_ms=total_ms,
         )
+
+        try:
+            # Emit quality gate result (Item 10)
+            # Try to get workflow_id from config if available, otherwise fallback
+            workflow_id = getattr(self.config, "workflow_id", "unknown")
+            gate_result = GateEmitter.from_preflight_report(
+                report=report,
+                workflow_id=workflow_id,
+            )
+            GateEmitter.emit(gate_result)
+        except Exception:
+            pass  # Fail safe
+
+        return report
 
     def _is_category_enabled(self, category: CheckCategory) -> bool:
         if self.config.enabled_categories is None:

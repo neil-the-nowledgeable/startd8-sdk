@@ -68,6 +68,9 @@ class EventType(Enum):
     TRUNCATION_WARNING = auto()
     TRUNCATION_PREFLIGHT_REJECT = auto()
 
+    # Quality Gate events
+    QUALITY_GATE_RESULT = auto()
+
     # System events
     SYSTEM_ERROR = auto()
     SYSTEM_WARNING = auto()

@@ -47,7 +47,7 @@ from startd8.contractors.artisan_contractor import (
     WorkflowStatus,
 )
 from startd8.contractors.context_seed_handlers import ContextSeedHandlers
-from startd8.contractors.handoff import load_design_handoff
+from startd8.contractors.handoff import load_design_handoff, verify_context_checksums, HandoffContextDriftError
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -105,6 +105,29 @@ def print_phase_results(result: WorkflowResult) -> None:
     print("\n" + "=" * 70)
 
 
+def _update_contract_status(output_dir: str | Path, status: str, error: str | None = None) -> None:
+    """Update the status of the handoff contract file if it exists."""
+    try:
+        contract_path = Path(output_dir) / "design-handoff-contract.json"
+        if not contract_path.exists():
+            return
+
+        data = json.loads(contract_path.read_text(encoding="utf-8"))
+        data["status"] = status
+        if error:
+            data["error"] = str(error)
+        
+        # Basic atomic write
+        tmp = contract_path.with_suffix(".tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, default=str)
+        tmp.replace(contract_path)
+    except Exception as exc:
+        logging.getLogger("run_artisan_implement_only").warning(
+            "Failed to update contract status: %s", exc
+        )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run implementation workflow (IMPLEMENT → TEST → REVIEW → FINALIZE)",
@@ -151,6 +174,10 @@ def main() -> int:
         help="Drafter agent spec for code generation",
     )
     parser.add_argument(
+        "--strict-handoff", action="store_true",
+        help="Fail if context files have changed since design phase",
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable debug logging",
     )
@@ -172,8 +199,12 @@ def main() -> int:
         # Explicit handoff file
         try:
             handoff = load_design_handoff(args.handoff)
-        except (FileNotFoundError, ValueError) as exc:
-            logger.error("Failed to load handoff: %s", exc)
+            # Item 12: Verify checksums
+            warnings = verify_context_checksums(handoff.context_files, strict=args.strict_handoff)
+            for w in warnings:
+                logger.warning(w)
+        except (FileNotFoundError, ValueError, HandoffContextDriftError) as exc:
+            logger.error("Failed to load/verify handoff: %s", exc)
             return 1
 
         seed_path = handoff.enriched_seed_path
@@ -190,14 +221,18 @@ def main() -> int:
         # Auto-detect handoff in output directory
         try:
             handoff = load_design_handoff(args.output_dir)
+            # Item 12: Verify checksums
+            warnings = verify_context_checksums(handoff.context_files, strict=args.strict_handoff)
+            for w in warnings:
+                logger.warning(w)
         except FileNotFoundError:
             logger.error(
                 "No design-handoff.json found in %s. "
                 "Use --handoff or --seed instead.", args.output_dir,
             )
             return 1
-        except ValueError as exc:
-            logger.error("Invalid handoff in %s: %s", args.output_dir, exc)
+        except (ValueError, HandoffContextDriftError) as exc:
+            logger.error("Invalid/drifted handoff in %s: %s", args.output_dir, exc)
             return 1
 
         seed_path = handoff.enriched_seed_path
@@ -283,10 +318,15 @@ def main() -> int:
         logger.info("Continuing from design workflow: %s", handoff_workflow_id)
 
     # --- Execute ---
+    if output_dir:
+        _update_contract_status(output_dir, "in_progress")
+
     try:
         result = workflow.execute(context=initial_context)
     except Exception as exc:
         logger.error("Workflow failed: %s", exc, exc_info=True)
+        if output_dir:
+            _update_contract_status(output_dir, "failed", str(exc))
         return 1
 
     # --- Print results ---
@@ -324,7 +364,12 @@ def main() -> int:
         logger.info("Dry run — skipping result file write")
 
     if result.status == WorkflowStatus.COMPLETED:
+        if output_dir:
+            _update_contract_status(output_dir, "completed")
         return 0
+    
+    if output_dir:
+        _update_contract_status(output_dir, "failed", f"Workflow status: {result.status.value}")
     return 1
 
 

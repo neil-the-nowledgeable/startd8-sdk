@@ -88,6 +88,8 @@ from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
 
+from startd8.contractors.gate_contracts import GateEmitter
+
 __all__ = [
     "HandlerConfig",
     "ContextSeedHandlers",
@@ -3214,6 +3216,18 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 total_failed += 1
 
             review_items.append(review)
+
+            # Emit quality gate result (Item 10)
+            try:
+                gate_result = GateEmitter.from_review_result(
+                    task_id=task.task_id,
+                    review_dict=review,
+                    workflow_id=context.get("workflow_id", "unknown"),
+                    trace_id=context.get("trace_id"),
+                )
+                GateEmitter.emit(gate_result)
+            except Exception as e:
+                logger.warning("Failed to emit review gate result for %s: %s", task.task_id, e)
 
         per_task: dict[str, Any] = {}
         for item in review_items:

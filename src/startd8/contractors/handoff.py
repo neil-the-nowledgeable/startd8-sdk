@@ -34,6 +34,8 @@ and write_design_handoff validates before write when jsonschema is installed.
 from __future__ import annotations
 
 import json
+import hashlib
+import logging
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,15 +44,31 @@ from typing import Any
 from startd8.utils.file_operations import atomic_write_json
 from startd8.workflows.builtin.schema_versions import ARTISAN_SCHEMA_VERSION
 
-from ..logging_config import get_logger
-
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
 DESIGN_HANDOFF_FILENAME = "design-handoff.json"
+DESIGN_HANDOFF_CONTRACT_FILENAME = "design-handoff-contract.json"
 SCHEMA_VERSION = 1  # Integer for backward compat; schema_version_str = ARTISAN_SCHEMA_VERSION
 
 # Map integer schema_version to string for legacy handoffs missing schema_version_str.
 _SCHEMA_VERSION_TO_STR: dict[int, str] = {1: ARTISAN_SCHEMA_VERSION}
+
+# Lazy import helpers for ContextCore contracts
+try:
+    from contextcore.contracts.a2a.models import (
+        HandoffContract,
+        HandoffPriority,
+        HandoffContractStatus,
+        ExpectedOutput,
+    )
+    CONTEXTCORE_AVAILABLE = True
+except ImportError:
+    CONTEXTCORE_AVAILABLE = False
+    HandoffContract = Any
+    HandoffPriority = Any
+    HandoffContractStatus = Any
+    ExpectedOutput = Any
+
 
 # JSON Schema for design-handoff.json (Item 13 — validation before write)
 HANDOFF_SCHEMA: dict[str, Any] = {
@@ -76,6 +94,11 @@ HANDOFF_SCHEMA: dict[str, Any] = {
     },
     "additionalProperties": True,
 }
+
+
+class HandoffContextDriftError(Exception):
+    """Raised when context files have changed since handoff creation."""
+    pass
 
 
 def _validate_handoff(data: dict[str, Any]) -> None:
@@ -132,6 +155,156 @@ class HandoffData:
     schema_version_str: str = ARTISAN_SCHEMA_VERSION
 
 
+def compute_context_checksums(context_files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Compute SHA-256 checksums for context files if missing.
+
+    Args:
+        context_files: List of dicts, each with at least 'path'.
+
+    Returns:
+        New list of dicts with 'checksum' populated where possible.
+    """
+    enriched = []
+    for item in context_files:
+        new_item = item.copy()
+        path_str = new_item.get("path")
+        
+        if path_str and not new_item.get("checksum"):
+            path = Path(path_str)
+            if path.exists() and path.is_file():
+                try:
+                    # Read file and compute hash
+                    content = path.read_bytes()
+                    checksum = hashlib.sha256(content).hexdigest()
+                    new_item["checksum"] = checksum
+                except Exception as exc:
+                    logger.warning("Failed to compute checksum for %s: %s", path, exc)
+        
+        enriched.append(new_item)
+    return enriched
+
+
+def verify_context_checksums(context_files: list[dict[str, Any]], strict: bool = False) -> list[str]:
+    """Verify context files match their checksums.
+
+    Args:
+        context_files: List of dicts with 'path' and optional 'checksum'.
+        strict: If True, raise HandoffContextDriftError on first mismatch.
+
+    Returns:
+        List of warning messages describing mismatches or missing files.
+    """
+    warnings = []
+    
+    for item in context_files:
+        path_str = item.get("path")
+        expected_checksum = item.get("checksum")
+        
+        if not path_str or not expected_checksum:
+            continue
+            
+        path = Path(path_str)
+        if not path.exists():
+            msg = f"Context file missing: {path}"
+            warnings.append(msg)
+            if strict:
+                raise HandoffContextDriftError(msg)
+            continue
+            
+        try:
+            content = path.read_bytes()
+            actual_checksum = hashlib.sha256(content).hexdigest()
+            
+            if actual_checksum != expected_checksum:
+                msg = f"Context drift detected for {path}: expected {expected_checksum[:8]}, got {actual_checksum[:8]}"
+                warnings.append(msg)
+                if strict:
+                    raise HandoffContextDriftError(msg)
+                    
+        except Exception as exc:
+            msg = f"Failed to verify checksum for {path}: {exc}"
+            warnings.append(msg)
+            if strict:
+                raise HandoffContextDriftError(msg)
+
+    return warnings
+
+
+def wrap_handoff_in_contract(
+    handoff_data: HandoffData,
+    project_id: str | None = None,
+    trace_id: str | None = None
+) -> HandoffContract | dict[str, Any]:
+    """Wrap HandoffData in a HandoffContract.
+
+    Args:
+        handoff_data: The populated HandoffData object.
+        project_id: Optional ContextCore project ID.
+        trace_id: Optional trace ID.
+
+    Returns:
+        HandoffContract object (if contextcore installed) or dict.
+    """
+    inputs = {
+        "enriched_seed_path": handoff_data.enriched_seed_path,
+        "design_results": handoff_data.design_results,
+        "scaffold": handoff_data.scaffold,
+        "context_files": handoff_data.context_files,
+        "workflow_id": handoff_data.workflow_id
+    }
+    
+    # Contract fields
+    contract_data = {
+        "schema_version": "v1",
+        "handoff_id": handoff_data.workflow_id,
+        "project_id": project_id,
+        "trace_id": trace_id,
+        "parent_task_id": None,  # Could be passed in if available
+        "from_agent": "artisan-design-half",
+        "to_agent": "artisan-implement-half",
+        "capability_id": "artisan.design-to-implement",
+        "priority": "normal",
+        "inputs": inputs,
+        "expected_output": {
+            "type": "implementation_artifacts",
+            "schema_ref": "generation-manifest.json"
+        },
+        "status": "pending",
+        "result_trace_id": None,
+        "error": None,
+        "created_at": datetime.now(timezone.utc),
+        "deadline": None
+    }
+    
+    if CONTEXTCORE_AVAILABLE:
+        # Map strings to enums if needed, or rely on Pydantic casting
+        # HandoffPriority.NORMAL, HandoffContractStatus.PENDING
+        try:
+            return HandoffContract(
+                schema_version=contract_data["schema_version"],
+                handoff_id=contract_data["handoff_id"],
+                project_id=contract_data["project_id"],
+                trace_id=contract_data["trace_id"],
+                parent_task_id=contract_data["parent_task_id"],
+                from_agent=contract_data["from_agent"],
+                to_agent=contract_data["to_agent"],
+                capability_id=contract_data["capability_id"],
+                priority=HandoffPriority.NORMAL,
+                inputs=contract_data["inputs"],
+                expected_output=ExpectedOutput(**contract_data["expected_output"]),
+                status=HandoffContractStatus.PENDING,
+                created_at=contract_data["created_at"]
+            )
+        except Exception as e:
+            logger.warning("Failed to create HandoffContract object: %s. Returning dict.", e)
+            contract_data["created_at"] = contract_data["created_at"].isoformat()
+            return contract_data
+    else:
+        # Fallback dict
+        contract_data["created_at"] = contract_data["created_at"].isoformat()
+        return contract_data
+
+
 def write_design_handoff(
     output_dir: str,
     enriched_seed_path: str,
@@ -160,6 +333,9 @@ def write_design_handoff(
     Returns:
         Path to the written handoff file.
     """
+    # Item 12: Compute checksums for context files before handoff
+    enriched_context_files = compute_context_checksums(context_files or [])
+
     handoff = HandoffData(
         enriched_seed_path=enriched_seed_path,
         project_root=project_root,
@@ -170,7 +346,7 @@ def write_design_handoff(
         scaffold=scaffold or {},
         artifact_manifest_path=artifact_manifest_path,
         project_context_path=project_context_path,
-        context_files=context_files or [],
+        context_files=enriched_context_files,
         example_artifacts=example_artifacts or {},
         coverage_gaps=coverage_gaps or [],
         created_at=datetime.now(timezone.utc).isoformat(),
@@ -186,6 +362,25 @@ def write_design_handoff(
     atomic_write_json(out_path, data, indent=2, default=str)
 
     logger.info("Wrote design handoff: %s", out_path)
+    
+    # Item 11: Write contract file alongside handoff (best effort)
+    try:
+        contract = wrap_handoff_in_contract(handoff)
+        contract_path = Path(output_dir) / DESIGN_HANDOFF_CONTRACT_FILENAME
+        
+        contract_dict = {}
+        if hasattr(contract, "model_dump"):
+            contract_dict = contract.model_dump(mode="json")
+        elif isinstance(contract, dict):
+            contract_dict = contract
+            
+        if contract_dict:
+            atomic_write_json(contract_path, contract_dict, indent=2, default=str)
+            logger.debug("Wrote design handoff contract: %s", contract_path)
+            
+    except Exception as e:
+        logger.warning("Failed to write handoff contract: %s", e)
+
     return out_path
 
 
