@@ -1,0 +1,268 @@
+"""Tests for LokiRule helper functions.
+
+Validates the helper utilities used by the LokiRule generator:
+- _pascal: kebab/snake-case to PascalCase conversion
+- _find_service: manifest service lookup with fallback
+- _validate_logql_basic: lightweight LogQL syntax validation
+- _build_logql_expr: structured rule spec to LogQL expression builder
+- _default_log_rules: automatic default rule generation
+"""
+
+import pytest
+
+from contextcore.generators.loki_rule import (
+    _pascal,
+    _find_service,
+    _validate_logql_basic,
+    _build_logql_expr,
+    _default_log_rules,
+)
+
+
+# ---------------------------------------------------------------------------
+# _pascal tests
+# ---------------------------------------------------------------------------
+class TestPascal:
+    """Tests for the _pascal kebab/snake to PascalCase converter."""
+
+    def test_simple(self):
+        """Single word lowercase converts to Capitalized."""
+        assert _pascal("cartservice") == "Cartservice"
+
+    def test_hyphenated(self):
+        """Hyphen-separated words convert to PascalCase."""
+        assert _pascal("product-catalog") == "ProductCatalog"
+
+    def test_underscored(self):
+        """Underscore-separated words convert to PascalCase."""
+        assert _pascal("shipping_service") == "ShippingService"
+
+    def test_empty(self):
+        """Empty string returns empty string."""
+        assert _pascal("") == ""
+
+    def test_mixed_separators(self):
+        """Both hyphens and underscores are handled."""
+        assert _pascal("my-cool_service") == "MyCoolService"
+
+    def test_already_capitalized(self):
+        """Already capitalized words are preserved."""
+        assert _pascal("Frontend") == "Frontend"
+
+    def test_multiple_separators_in_sequence(self):
+        """Consecutive separators produce empty parts which are filtered out."""
+        assert _pascal("my--service") == "MyService"
+
+    def test_leading_separator(self):
+        """Leading separator is handled gracefully."""
+        assert _pascal("-service") == "Service"
+
+    def test_trailing_separator(self):
+        """Trailing separator is handled gracefully."""
+        assert _pascal("service-") == "Service"
+
+
+# ---------------------------------------------------------------------------
+# _find_service tests
+# ---------------------------------------------------------------------------
+class TestFindService:
+    """Tests for the _find_service manifest lookup function."""
+
+    def test_found(self):
+        """Service found in manifest returns the service dict."""
+        manifest = {"services": [{"name": "cartservice", "namespace": "prod"}]}
+        result = _find_service(manifest, "cartservice")
+        assert result["namespace"] == "prod"
+
+    def test_not_found_returns_fallback(self):
+        """Service not found returns fallback dict with name and default namespace."""
+        manifest = {"services": []}
+        result = _find_service(manifest, "missing")
+        assert result["name"] == "missing"
+        assert result["namespace"] == "default"
+
+    def test_empty_manifest(self):
+        """Missing 'services' key in manifest triggers fallback."""
+        manifest = {}
+        result = _find_service(manifest, "test")
+        assert result["name"] == "test"
+
+    def test_multiple_services(self):
+        """Correct service is found among multiple services."""
+        manifest = {
+            "services": [
+                {"name": "a", "namespace": "ns-a"},
+                {"name": "b", "namespace": "ns-b"},
+            ]
+        }
+        assert _find_service(manifest, "b")["namespace"] == "ns-b"
+
+    def test_service_with_extra_fields(self):
+        """Extra fields in service dict are preserved."""
+        manifest = {
+            "services": [
+                {"name": "svc", "namespace": "ns", "replicas": 3, "image": "img:v1"}
+            ]
+        }
+        result = _find_service(manifest, "svc")
+        assert result["replicas"] == 3
+
+
+# ---------------------------------------------------------------------------
+# _validate_logql_basic tests
+# ---------------------------------------------------------------------------
+class TestValidateLogqlBasic:
+    """Tests for lightweight LogQL syntax validation."""
+
+    def test_balanced(self):
+        """Valid expression with balanced braces and parens produces no warnings."""
+        assert _validate_logql_basic('{app="test"} |= "error"') == []
+
+    def test_unbalanced_braces(self):
+        """Missing closing brace produces warning."""
+        warnings = _validate_logql_basic('{app="test" |= "error"')
+        assert any("Unbalanced braces" in w for w in warnings)
+
+    def test_unbalanced_parentheses(self):
+        """Missing closing paren produces warning."""
+        warnings = _validate_logql_basic('count_over_time({app="test"} [5m]')
+        assert any("Unbalanced parentheses" in w for w in warnings)
+
+    def test_empty(self):
+        """Empty string produces warning."""
+        warnings = _validate_logql_basic("")
+        assert any("empty" in w.lower() for w in warnings)
+
+    def test_whitespace_only(self):
+        """Whitespace-only string produces warning."""
+        warnings = _validate_logql_basic("   ")
+        assert any("empty" in w.lower() for w in warnings)
+
+    def test_no_selector(self):
+        """Expression without stream selector produces warning."""
+        warnings = _validate_logql_basic('"error"')
+        assert any("no stream selector" in w.lower() for w in warnings)
+
+    def test_none_input(self):
+        """None input is treated as empty."""
+        warnings = _validate_logql_basic(None)
+        assert any("empty" in w.lower() for w in warnings)
+
+    def test_valid_complex_expression(self):
+        """Complex valid expression produces no warnings."""
+        expr = 'sum(rate({namespace="ns", container="svc"} |= "error" [5m])) > 0.5'
+        assert _validate_logql_basic(expr) == []
+
+    def test_multiple_errors(self):
+        """Multiple issues produce multiple warnings."""
+        # Unbalanced brace — at minimum one warning expected
+        warnings = _validate_logql_basic('{app="test"')
+        assert len(warnings) >= 1
+
+
+# ---------------------------------------------------------------------------
+# _build_logql_expr tests
+# ---------------------------------------------------------------------------
+class TestBuildLogqlExpr:
+    """Tests for LogQL expression construction from structured fields."""
+
+    def test_default_fields(self):
+        """Default fields produce correct structure with count_over_time and error filter."""
+        expr = _build_logql_expr({}, "myservice", {"namespace": "prod"})
+        assert "namespace" in expr
+        assert "myservice" in expr
+        assert "count_over_time" in expr
+        assert '|= "error"' in expr
+
+    def test_custom_fields(self):
+        """Custom filter_pattern, aggregation, interval, threshold, and comparator are used."""
+        rule_spec = {
+            "filter_pattern": '|= "timeout"',
+            "aggregation": "sum",
+            "range_interval": "10m",
+            "threshold": 5,
+            "comparator": ">=",
+        }
+        expr = _build_logql_expr(rule_spec, "svc", {"namespace": "ns"})
+        assert "sum(" in expr
+        assert '|= "timeout"' in expr
+        assert "[10m]" in expr
+        assert ">= 5" in expr
+
+    def test_additional_selectors(self):
+        """Additional log_selector fields are merged into the stream selector."""
+        rule_spec = {"log_selector": {"job": "custom"}}
+        expr = _build_logql_expr(rule_spec, "svc", {"namespace": "ns"})
+        assert 'job="custom"' in expr
+
+    def test_default_namespace(self):
+        """Missing namespace in service_manifest defaults to 'default'."""
+        expr = _build_logql_expr({}, "svc", {})
+        assert 'namespace="default"' in expr
+
+    def test_container_selector_included(self):
+        """Service name is always included as container selector."""
+        expr = _build_logql_expr({}, "mycontainer", {"namespace": "ns"})
+        assert 'container="mycontainer"' in expr
+
+    def test_threshold_defaults_to_zero(self):
+        """Threshold defaults to 0 when not specified."""
+        expr = _build_logql_expr({}, "svc", {"namespace": "ns"})
+        assert "> 0" in expr
+
+
+# ---------------------------------------------------------------------------
+# _default_log_rules tests
+# ---------------------------------------------------------------------------
+class TestDefaultLogRules:
+    """Tests for automatic default rule generation."""
+
+    def test_returns_two_rules(self):
+        """Two default rules are generated (error rate + critical log)."""
+        rules = _default_log_rules("cartservice", {"namespace": "prod"})
+        assert len(rules) == 2
+
+    def test_rule_names_use_pascal(self):
+        """Alert names use PascalCase conversion of service name."""
+        rules = _default_log_rules("cart-service", {"namespace": "ns"})
+        assert rules[0]["alert_name"] == "CartServiceHighErrorRate"
+        assert rules[1]["alert_name"] == "CartServiceCriticalLogDetected"
+
+    def test_severities(self):
+        """First rule is warning, second is critical."""
+        rules = _default_log_rules("svc", {"namespace": "ns"})
+        assert rules[0]["severity"] == "warning"
+        assert rules[1]["severity"] == "critical"
+
+    def test_namespace_in_expr(self):
+        """Service namespace is included in generated expressions."""
+        rules = _default_log_rules("svc", {"namespace": "my-ns"})
+        assert 'namespace="my-ns"' in rules[0]["expr"]
+        assert 'namespace="my-ns"' in rules[1]["expr"]
+
+    def test_default_namespace(self):
+        """Missing namespace defaults to 'default'."""
+        rules = _default_log_rules("svc", {})
+        assert 'namespace="default"' in rules[0]["expr"]
+
+    def test_error_pattern_in_first_rule(self):
+        """First rule checks for 'error' pattern."""
+        rules = _default_log_rules("svc", {"namespace": "ns"})
+        assert '|= "error"' in rules[0]["expr"]
+
+    def test_critical_pattern_in_second_rule(self):
+        """Second rule checks for 'CRITICAL' pattern."""
+        rules = _default_log_rules("svc", {"namespace": "ns"})
+        assert '|= "CRITICAL"' in rules[1]["expr"]
+
+    def test_for_durations(self):
+        """First rule has 5m evaluation window, second has 1m."""
+        rules = _default_log_rules("svc", {"namespace": "ns"})
+        assert rules[0]["for_duration"] == "5m"
+        assert rules[1]["for_duration"] == "1m"
+
+    def test_labels_are_empty_dicts(self):
+        """Default rules have empty custom label dicts."""
+        rules = _default_log_rules("svc", {"namespace": "ns"})
+        assert rules[0]["labels"] == {}
+        assert rules[1]["labels"] == {}
