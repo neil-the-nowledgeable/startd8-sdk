@@ -1737,6 +1737,28 @@ class Test{class_name}:
                         task_cal.get("depth_tier", "standard"),
                     )
 
+                    # ── Defense-in-depth: auto-recalibrate token budget ────
+                    # The design phase expanded scope beyond the seed
+                    # estimate.  Bump implement tokens to prevent
+                    # truncation rather than just warning about it.
+                    # Tiers: <=150 LOC → 32768, <=400 LOC → 49152, >400 → 65536
+                    if _implied_loc <= 150:
+                        _recal_tokens = 32768
+                    elif _implied_loc <= 400:
+                        _recal_tokens = 49152
+                    else:
+                        _recal_tokens = 65536
+                    if max_output_tokens is None or _recal_tokens > max_output_tokens:
+                        logger.info(
+                            "Auto-recalibrating implement tokens for %s: "
+                            "%s → %d (design implies ~%d LOC)",
+                            task.task_id,
+                            max_output_tokens,
+                            _recal_tokens,
+                            _implied_loc,
+                        )
+                        max_output_tokens = _recal_tokens
+
             # ── Multi-file preflight checks ──────────────────────────────
             # Surface risk signals as environment checks so they appear in
             # preflight reports.  These are task-level (not per-file) checks

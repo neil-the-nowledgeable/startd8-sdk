@@ -2376,12 +2376,13 @@ class PlanIngestionWorkflow(WorkflowBase):
             tier = DEPTH_TIERS[tier_name]
 
             # Implement phase token caps: code gen needs more than design.
-            # brief=8192, standard=16384, comprehensive=32768
+            # Claude models support 64K output; previous 16K default caused
+            # truncation on medium-complexity tasks (PI-003/PI-005 post-mortem).
             implement_tokens = {
-                "brief": 8192,
-                "standard": 16384,
-                "comprehensive": 32768,
-            }.get(tier_name, 16384)
+                "brief": 16384,
+                "standard": 32768,
+                "comprehensive": 49152,
+            }.get(tier_name, 32768)
 
             calibration[task["task_id"]] = {
                 "depth_tier": tier_name,
