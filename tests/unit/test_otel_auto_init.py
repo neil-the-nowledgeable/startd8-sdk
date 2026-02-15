@@ -446,3 +446,290 @@ class TestPipelineSpanNesting:
         assert result.final_output is not None
         assert len(result.steps) == 1
         assert result.steps[0]["step_name"] == "s1"
+
+
+class TestAutoProbeResolutionCascade:
+    """Tests for the 3-tier auto-probe resolution cascade."""
+
+    def test_runtime_state_auto_discovered_default(self):
+        """Auto mode with no env/config probes localhost:4317 (reachable)."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "auto"}, clear=False):
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            import startd8.otel as otel_mod
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                with patch.object(otel_mod, "_otlp_endpoint_reachable", return_value=True), \
+                     patch.object(otel_mod, "_resolve_config_endpoint", return_value=None):
+                    state = otel_mod.get_otel_runtime_state()
+                assert state["will_configure"] is True
+                assert state["reason"] == "auto_discovered_default"
+                assert state["endpoint_effective"] == "http://localhost:4317"
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+    def test_runtime_state_auto_no_collector_found(self):
+        """Auto mode with no env/config probes localhost:4317 (unreachable)."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "auto"}, clear=False):
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            import startd8.otel as otel_mod
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                with patch.object(otel_mod, "_otlp_endpoint_reachable", return_value=False), \
+                     patch.object(otel_mod, "_resolve_config_endpoint", return_value=None):
+                    state = otel_mod.get_otel_runtime_state()
+                assert state["will_configure"] is False
+                assert state["reason"] == "auto_no_collector_found"
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+    def test_runtime_state_config_endpoint_reachable(self):
+        """Auto mode uses config file endpoint when env var is unset."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "auto"}, clear=False):
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            import startd8.otel as otel_mod
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                with patch.object(otel_mod, "_resolve_config_endpoint", return_value="http://config-host:4317"), \
+                     patch.object(otel_mod, "_otlp_endpoint_reachable", return_value=True):
+                    state = otel_mod.get_otel_runtime_state()
+                assert state["will_configure"] is True
+                assert state["reason"] == "auto_config_endpoint_reachable"
+                assert state["endpoint_effective"] == "http://config-host:4317"
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+    def test_runtime_state_config_endpoint_unreachable(self):
+        """Auto mode: config endpoint unreachable → skip (no fallback to default)."""
+        with patch.dict(os.environ, {"STARTD8_OTEL": "auto"}, clear=False):
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            import startd8.otel as otel_mod
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                with patch.object(otel_mod, "_resolve_config_endpoint", return_value="http://dead:4317"), \
+                     patch.object(otel_mod, "_otlp_endpoint_reachable", return_value=False):
+                    state = otel_mod.get_otel_runtime_state()
+                assert state["will_configure"] is False
+                assert state["reason"] == "auto_config_endpoint_unreachable"
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+    def test_env_var_takes_priority_over_config(self):
+        """Env var endpoint is tried before config endpoint."""
+        with patch.dict(os.environ, {
+            "STARTD8_OTEL": "auto",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://env-host:4317",
+        }):
+            import startd8.otel as otel_mod
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                with patch.object(otel_mod, "_otlp_endpoint_reachable", return_value=True), \
+                     patch.object(otel_mod, "_resolve_config_endpoint", return_value="http://config-host:4317") as mock_cfg:
+                    state = otel_mod.get_otel_runtime_state()
+                assert state["will_configure"] is True
+                assert state["reason"] == "auto_endpoint_reachable"
+                assert state["endpoint_effective"] == "http://env-host:4317"
+                # Config endpoint should NOT have been checked
+                mock_cfg.assert_not_called()
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+    def test_config_mode_used_when_env_unset(self):
+        """Config file mode is used when STARTD8_OTEL env var is unset."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("STARTD8_OTEL", None)
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            import startd8.otel as otel_mod
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                with patch.object(otel_mod, "_resolve_config_mode", return_value="disabled"):
+                    state = otel_mod.get_otel_runtime_state()
+                assert state["mode"] == "disabled"
+                assert state["reason"] == "disabled_mode"
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+
+class TestConfigFileResolution:
+    """Tests for _resolve_config_endpoint() and _resolve_config_mode()."""
+
+    def test_resolve_config_endpoint_from_file(self):
+        """Reads otel.endpoint from config file."""
+        import startd8.otel as otel_mod
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / ".startd8"
+            config_dir.mkdir()
+            config_path = config_dir / "config.json"
+            config_path.write_text(json.dumps({
+                "otel": {"endpoint": "http://my-collector:4317"}
+            }))
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
+                result = otel_mod._resolve_config_endpoint()
+            assert result == "http://my-collector:4317"
+
+    def test_resolve_config_endpoint_missing_file(self):
+        """Returns None when config file doesn't exist."""
+        import startd8.otel as otel_mod
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
+                result = otel_mod._resolve_config_endpoint()
+            assert result is None
+
+    def test_resolve_config_endpoint_null_value(self):
+        """Returns None when otel.endpoint is null."""
+        import startd8.otel as otel_mod
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / ".startd8" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(json.dumps({"otel": {"endpoint": None}}))
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
+                result = otel_mod._resolve_config_endpoint()
+            assert result is None
+
+    def test_resolve_config_mode_from_file(self):
+        """Reads otel.mode from config file."""
+        import startd8.otel as otel_mod
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / ".startd8" / "config.json"
+            config_path.parent.mkdir(parents=True)
+            config_path.write_text(json.dumps({"otel": {"mode": "enabled"}}))
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
+                result = otel_mod._resolve_config_mode()
+            assert result == "enabled"
+
+    def test_resolve_config_mode_missing_file(self):
+        """Returns None when config file doesn't exist."""
+        import startd8.otel as otel_mod
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with patch.object(Path, "home", return_value=Path(tmpdir)):
+                result = otel_mod._resolve_config_mode()
+            assert result is None
+
+
+class TestTelemetryBanner:
+    """Tests for format_telemetry_banner()."""
+
+    def test_banner_active_auto_discovered(self):
+        """Banner for auto-discovered collector."""
+        from startd8.otel import format_telemetry_banner
+        state = {
+            "will_configure": True,
+            "reason": "auto_discovered_default",
+            "endpoint_effective": "http://localhost:4317",
+        }
+        banner = format_telemetry_banner(state)
+        assert "ACTIVE" in banner
+        assert "localhost:4317" in banner
+        assert "auto-discovered" in banner
+
+    def test_banner_active_env_var(self):
+        """Banner for env var endpoint."""
+        from startd8.otel import format_telemetry_banner
+        state = {
+            "will_configure": True,
+            "reason": "auto_endpoint_reachable",
+            "endpoint_effective": "http://collector:4317",
+        }
+        banner = format_telemetry_banner(state)
+        assert "ACTIVE" in banner
+        assert "env var" in banner
+
+    def test_banner_active_config_file(self):
+        """Banner for config file endpoint."""
+        from startd8.otel import format_telemetry_banner
+        state = {
+            "will_configure": True,
+            "reason": "auto_config_endpoint_reachable",
+            "endpoint_effective": "http://config:4317",
+        }
+        banner = format_telemetry_banner(state)
+        assert "ACTIVE" in banner
+        assert "config file" in banner
+
+    def test_banner_inactive_no_collector(self):
+        """Banner when no collector found."""
+        from startd8.otel import format_telemetry_banner
+        state = {
+            "will_configure": False,
+            "reason": "auto_no_collector_found",
+            "endpoint_effective": "http://localhost:4317",
+        }
+        banner = format_telemetry_banner(state)
+        assert "INACTIVE" in banner
+        assert "no collector found" in banner
+
+    def test_banner_inactive_disabled(self):
+        """Banner when disabled explicitly."""
+        from startd8.otel import format_telemetry_banner
+        state = {
+            "will_configure": False,
+            "reason": "disabled_mode",
+            "endpoint_effective": None,
+        }
+        banner = format_telemetry_banner(state)
+        assert "INACTIVE" in banner
+        assert "disabled" in banner
+
+    def test_banner_inactive_packages_missing(self):
+        """Banner when OTel packages not installed."""
+        from startd8.otel import format_telemetry_banner
+        state = {
+            "will_configure": False,
+            "reason": "otel_packages_missing",
+            "endpoint_effective": None,
+        }
+        banner = format_telemetry_banner(state)
+        assert "INACTIVE" in banner
+        assert "not installed" in banner
+
+
+class TestConfigManagerOtel:
+    """Tests for ConfigManager OTel settings."""
+
+    def test_get_set_clear_otel_setting(self):
+        """OTel settings round-trip through get/set/clear."""
+        from startd8.config import ConfigManager
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = ConfigManager(config_dir=Path(tmpdir))
+
+            # Default is None
+            assert mgr.get_otel_setting("endpoint") is None
+            assert mgr.get_otel_setting("mode") is None
+
+            # Set values
+            mgr.set_otel_setting("endpoint", "http://test:4317")
+            mgr.set_otel_setting("mode", "enabled")
+            assert mgr.get_otel_setting("endpoint") == "http://test:4317"
+            assert mgr.get_otel_setting("mode") == "enabled"
+
+            # Clear
+            mgr.clear_otel_setting("endpoint")
+            assert mgr.get_otel_setting("endpoint") is None
+            # mode should still be set
+            assert mgr.get_otel_setting("mode") == "enabled"
+
+    def test_otel_setting_persists_to_disk(self):
+        """OTel settings survive ConfigManager reload."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            from startd8.config import ConfigManager
+            mgr1 = ConfigManager(config_dir=Path(tmpdir))
+            mgr1.set_otel_setting("endpoint", "http://persisted:4317")
+
+            # Reload from disk
+            mgr2 = ConfigManager(config_dir=Path(tmpdir))
+            assert mgr2.get_otel_setting("endpoint") == "http://persisted:4317"
+
+    def test_otel_default_in_config(self):
+        """Default config includes otel section."""
+        from startd8.config import ConfigManager
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = ConfigManager(config_dir=Path(tmpdir))
+            config = mgr.export_config()
+            assert "otel" in config
+            assert config["otel"]["endpoint"] is None
+            assert config["otel"]["mode"] is None
