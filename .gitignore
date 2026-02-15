@@ -119,3 +119,10 @@ scripts/DASHBOARD_SETUP_GUIDE.md
 scripts/QUICK_START_SEMANTIC_CONVENTIONS.md
 scripts/README_CONTEXTCORE_INTEGRATION.md
 scripts/README_SEMANTIC_CONVENTIONS.md
+
+# ---------------------------------------------------------------------------
+# Jsonnet mixin build artifacts
+# ---------------------------------------------------------------------------
+startd8-mixin/vendor/
+startd8-mixin/generated/
+startd8-mixin/jsonnetfile.lock.json
