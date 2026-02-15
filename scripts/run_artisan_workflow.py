@@ -277,6 +277,14 @@ def main() -> int:
         "--force-implement", action="store_true",
         help="Ignore cached generation_results; always run fresh IMPLEMENT (no resume from .startd8/state/)",
     )
+    parser.add_argument(
+        "--force-design", action="store_true",
+        help="Ignore cached design handoff; always run fresh DESIGN with LLM calls",
+    )
+    parser.add_argument(
+        "--force-review", action="store_true",
+        help="Ignore cached review_results; always run fresh REVIEW with LLM calls",
+    )
 
     # --dress-rehearsal and --adopt-prior are mutually exclusive:
     # dress-rehearsal generates *new* design artifacts into a staging dir,
@@ -518,6 +526,10 @@ def main() -> int:
         handler_kwargs["scaffold_test_first"] = False
     if args.force_implement:
         handler_kwargs["force_implement"] = True
+    if args.force_design:
+        handler_kwargs["force_design"] = True
+    if args.force_review:
+        handler_kwargs["force_review"] = True
 
     handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():

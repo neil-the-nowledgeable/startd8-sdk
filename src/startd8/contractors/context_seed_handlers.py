@@ -178,6 +178,8 @@ class HandlerConfig:
     auto_commit: bool = True
     scaffold_test_first: bool = True
     force_implement: bool = False
+    force_design: bool = False
+    force_review: bool = False
 
     @classmethod
     def from_config(
@@ -1036,6 +1038,29 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         # Prior design_results injected via --adopt-prior (or checkpoint resume)
         prior_design_results: dict[str, dict[str, Any]] = context.get("design_results", {})
 
+        # --- Auto-load prior design results from disk (handoff.json) ---
+        # Mirror IMPLEMENT's auto-cache pattern: check disk first, adopt
+        # automatically. --adopt-prior injects via context; this covers the
+        # case where no flag was passed but a handoff exists from a prior run.
+        if not prior_design_results and not dry_run and not self.config.force_design:
+            if self.output_dir:
+                from startd8.contractors.handoff import load_design_handoff, DESIGN_HANDOFF_FILENAME
+                handoff_path = Path(self.output_dir) / DESIGN_HANDOFF_FILENAME
+                if handoff_path.exists():
+                    try:
+                        handoff = load_design_handoff(handoff_path)
+                        if handoff.design_results:
+                            prior_design_results = handoff.design_results
+                            logger.info(
+                                "DESIGN: auto-loaded %d prior design result(s) from %s",
+                                len(prior_design_results), handoff_path,
+                            )
+                    except (FileNotFoundError, ValueError) as exc:
+                        logger.warning(
+                            "DESIGN: failed to auto-load handoff from %s: %s",
+                            handoff_path, exc,
+                        )
+
         # Extract shared context for cross-task design quality
         plan_goals = context.get("plan_goals", [])
         arch_context = context.get("architectural_context", {})
@@ -1179,6 +1204,23 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         # Context contract: validate DESIGN output model
         DesignPhaseOutput(design_results=context["design_results"])
+
+        # Persist design results for auto-adoption on re-run
+        if design_results and not dry_run and self.output_dir:
+            from startd8.contractors.handoff import write_design_handoff
+            try:
+                handoff_path = write_design_handoff(
+                    output_dir=self.output_dir,
+                    enriched_seed_path=context.get("enriched_seed_path", ""),
+                    project_root=context.get("project_root", ""),
+                    workflow_id=context.get("workflow_id", "unknown"),
+                    completed_phases=["DESIGN"],
+                    design_results=design_results,
+                    scaffold=context.get("scaffold", {}),
+                )
+                logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
+            except Exception as exc:
+                logger.warning("DESIGN: failed to write handoff: %s", exc)
 
         env_blocked = sum(
             1 for r in design_results.values()
@@ -3256,6 +3298,31 @@ PASS if score >= {pass_threshold} and no blocking issues.
         total_failed = 0
         previous_task_started_mono: Optional[float] = None
 
+        # --- Resume check: load prior review results if available ---
+        project_root_str = context.get("project_root")
+        review_cache_path = (
+            Path(project_root_str) / ".startd8" / "state" / "review_results.json"
+            if project_root_str else None
+        )
+        cached_reviews: dict[str, dict[str, Any]] = {}
+
+        if (
+            review_cache_path
+            and review_cache_path.exists()
+            and not dry_run
+            and not self.config.force_review
+        ):
+            try:
+                with open(review_cache_path) as f:
+                    cached_reviews = json.load(f)
+                logger.info(
+                    "REVIEW: loaded %d cached review result(s) from %s",
+                    len(cached_reviews), review_cache_path,
+                )
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.warning("REVIEW: failed to load cache from %s: %s", review_cache_path, exc)
+                cached_reviews = {}
+
         for idx, task in enumerate(tasks, start=1):
             previous_task_started_mono = _log_task_timing(
                 "REVIEW",
@@ -3355,6 +3422,26 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 continue
             task_test = test_by_task.get(task.task_id, {})
 
+            # Check cache before LLM call
+            cached = cached_reviews.get(task.task_id)
+            if cached and cached.get("status") == "reviewed":
+                review = {**cached, "review_status": "cached"}
+                review["title"] = task.title
+                review["domain"] = task.domain
+                review["constraint_count"] = len(task.prompt_constraints)
+                review["env_failures"] = len(env_fails)
+                review["env_warnings"] = len(env_warns)
+                if review.get("passed", False):
+                    total_passed += 1
+                else:
+                    total_failed += 1
+                review_items.append(review)
+                logger.info(
+                    "REVIEW: using cached result for %s (score=%s, passed=%s)",
+                    task.task_id, cached.get("score"), cached.get("passed"),
+                )
+                continue
+
             review = self._review_task(task, generated_code, task_test)
             review["title"] = task.title
             review["domain"] = task.domain
@@ -3391,7 +3478,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             status = item.get("review_status", "unknown")
             per_task[task_id] = {
                 "status": status,
-                "passed": item.get("passed") if status == "reviewed" else None,
+                "passed": item.get("passed") if status in ("reviewed", "cached") else None,
                 "score": item.get("score"),
                 "verdict": item.get("verdict"),
             }
@@ -3414,6 +3501,32 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         # Context contract: validate REVIEW output model
         ReviewPhaseOutput(review_results=context["review_results"])
+
+        # Persist review results for cache on re-run
+        if review_cache_path and not dry_run:
+            serializable = {}
+            for item in review_items:
+                tid = item.get("task_id")
+                if tid and item.get("review_status") in ("reviewed", "cached"):
+                    serializable[tid] = {
+                        "task_id": tid,
+                        "score": item.get("score"),
+                        "verdict": item.get("verdict"),
+                        "passed": item.get("passed"),
+                        "cost": item.get("cost", 0.0),
+                        "tokens": item.get("tokens", {}),
+                        "status": "reviewed",
+                        "strengths": item.get("strengths", []),
+                        "issues": item.get("issues", []),
+                        "suggestions": item.get("suggestions", []),
+                    }
+            if serializable:
+                review_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(review_cache_path, serializable, indent=2)
+                logger.info(
+                    "REVIEW: saved %d review results to %s",
+                    len(serializable), review_cache_path,
+                )
 
         duration = time.monotonic() - start
 
@@ -3938,6 +4051,8 @@ class ContextSeedHandlers:
         auto_commit: Optional[bool] = None,
         scaffold_test_first: Optional[bool] = None,
         force_implement: Optional[bool] = None,
+        force_design: Optional[bool] = None,
+        force_review: Optional[bool] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all seven workflow phases.
@@ -3959,6 +4074,8 @@ class ContextSeedHandlers:
             development_timeout_seconds: Timeout for development thread.
             auto_commit: Commit each feature's generated code to git.
             scaffold_test_first: Scaffold test files for artifact tasks before impl.
+            force_design: Ignore cached design handoff; always run fresh DESIGN.
+            force_review: Ignore cached review results; always run fresh REVIEW.
             code_generator: Optional pre-configured CodeGenerator instance.
 
         Returns:
@@ -3983,6 +4100,8 @@ class ContextSeedHandlers:
             ("auto_commit", auto_commit),
             ("scaffold_test_first", scaffold_test_first),
             ("force_implement", force_implement),
+            ("force_design", force_design),
+            ("force_review", force_review),
         ]:
             if val is not None:
                 cli_overrides[name] = val
