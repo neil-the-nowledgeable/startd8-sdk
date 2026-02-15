@@ -45,7 +45,7 @@ class ClaudeAgent(BaseAgent):
         name: str = "claude",
         model: str = "claude-sonnet-4-20250514",  # Claude Sonnet 4 - best balance of capability and cost
         api_key: Optional[str] = None,
-        max_tokens: int = 16384,
+        max_tokens: int = 32768,
         cost_tracker: Optional['CostTracker'] = None,
         budget_manager: Optional['BudgetManager'] = None,
         retry_config: Optional[RetryConfig] = None,

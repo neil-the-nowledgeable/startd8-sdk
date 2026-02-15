@@ -64,7 +64,7 @@ class ConfigManager:
             "models": {
                 "claude": {
                     "default": "claude-sonnet-4-20250514",
-                    "max_tokens": 8192
+                    "max_tokens": 32768
                 },
                 "gpt4": {
                     "default": "gpt-4o",

@@ -56,6 +56,7 @@ from startd8.contractors.handoff import (  # noqa: E402
 
 _MIN_PHASE_TIMEOUT_SECONDS = 2400.0
 _MIN_IMPLEMENT_TIMEOUT_SECONDS = 2400.0
+_DEFAULT_TEST_TIMEOUT_SECONDS = 300
 
 
 def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
@@ -204,6 +205,13 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--test-timeout", type=int, default=_DEFAULT_TEST_TIMEOUT_SECONDS,
+        help=(
+            "TEST phase per-validator subprocess timeout in seconds. "
+            f"Default: {_DEFAULT_TEST_TIMEOUT_SECONDS}"
+        ),
+    )
+    parser.add_argument(
         "--checkpoint-dir", default=".startd8/checkpoints",
         help="Directory for checkpoint files (default: .startd8/checkpoints)",
     )
@@ -251,7 +259,19 @@ def main() -> int:
     )
     parser.add_argument(
         "--design-max-tokens", type=int, default=None,
-        help="Override max_output_tokens for design phase LLM calls (e.g. 8192 to avoid truncation)",
+        help=(
+            "Override max_output_tokens for design phase LLM calls. "
+            "Use 16384 or 32768 for complex plans to avoid truncation (stop_reason=max_tokens). "
+            "When unset, uses per-task calibration from plan-ingestion seed."
+        ),
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=None,
+        help=(
+            "Override max_tokens for agent creation (applies to implement phase). "
+            "When unset, uses per-task implement_max_output_tokens from "
+            "design_calibration, then provider default (32768 for Anthropic)."
+        ),
     )
     parser.add_argument(
         "--force-implement", action="store_true",
@@ -302,6 +322,12 @@ def main() -> int:
             int(_MIN_IMPLEMENT_TIMEOUT_SECONDS),
         )
         args.implement_timeout = _MIN_IMPLEMENT_TIMEOUT_SECONDS
+    if args.test_timeout is not None and args.test_timeout < 60:
+        logger.warning(
+            "--test-timeout=%s is below minimum; using 60",
+            args.test_timeout,
+        )
+        args.test_timeout = 60
 
     # Validate seed path
     seed_path = Path(args.seed)
@@ -421,10 +447,14 @@ def main() -> int:
         handler_kwargs["lead_agent"] = args.lead_agent
     if args.drafter_agent:
         handler_kwargs["drafter_agent"] = args.drafter_agent
+    if args.max_tokens is not None:
+        handler_kwargs["max_tokens"] = args.max_tokens
     if args.design_max_tokens is not None:
         handler_kwargs["design_max_tokens"] = args.design_max_tokens
     if args.implement_timeout is not None:
         handler_kwargs["development_timeout_seconds"] = args.implement_timeout
+    if args.test_timeout is not None:
+        handler_kwargs["test_timeout_seconds"] = args.test_timeout
     if args.no_auto_commit:
         handler_kwargs["auto_commit"] = False
     if args.no_scaffold_test_first:

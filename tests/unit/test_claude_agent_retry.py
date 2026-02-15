@@ -409,7 +409,7 @@ class TestClaudeAgentMakeApiCall:
             assert result is mock_response
             agent.async_client.messages.create.assert_called_once_with(
                 model="claude-3-opus-20240229",
-                max_tokens=16384,
+                max_tokens=32768,
                 messages=[{"role": "user", "content": "Test prompt"}]
             )
 
