@@ -1740,13 +1740,15 @@ class Test{class_name}:
                     # The design phase expanded scope beyond the seed
                     # estimate.  Bump implement tokens to prevent
                     # truncation rather than just warning about it.
-                    # Tiers: <=150 LOC → 32768, <=400 LOC → 49152, >400 → 65536
+                    # Tiers: <=150 LOC → 32768, <=400 LOC → 49152, >400 → 64000
+                    # Cap at 64000: lowest common max across lead (opus)
+                    # and drafter (haiku) models in the pipeline.
                     if _implied_loc <= 150:
                         _recal_tokens = 32768
                     elif _implied_loc <= 400:
                         _recal_tokens = 49152
                     else:
-                        _recal_tokens = 65536
+                        _recal_tokens = 64000
                     if max_output_tokens is None or _recal_tokens > max_output_tokens:
                         logger.info(
                             "Auto-recalibrating implement tokens for %s: "

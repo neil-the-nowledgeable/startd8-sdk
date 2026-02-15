@@ -237,7 +237,16 @@ Key patterns:
 - `ContextCoreConfig` - Configuration for project/task/sprint IDs
 - `ContextCoreWorkflowAdapter` - Wraps workflows with OTel span tracking
 - `ContextCoreTaskRunner` - Multi-task runner with dependency resolution
+- `ContextCoreTaskSource` - Loads tasks from `~/.contextcore/state/{project}/` (single-project only)
 - OTel semantic conventions: `CONTEXTCORE_PROJECT_ID`, `CONTEXTCORE_TASK_ID`, etc.
+
+**SpanState v2 compliance** (when emitting ContextCore state files via `task_tracking_emitter`):
+- Top-level `status` field is **required**: `"OK"` / `"ERROR"` / `"UNSET"` (distinct from `task.status` attribute)
+- `task.status` must use ContextCore canonical enum: `backlog|todo|in_progress|in_review|blocked|done|cancelled` — NOT `"pending"`
+- `task.type` must use canonical enum: `epic|story|task|subtask|bug|spike|incident` — custom classifiers go in `task.labels`
+- `task.percent_complete` attribute required for Grafana gauge panels
+- Zero-point `task.created` event with `percent_complete: 0` required for burndown charts
+- See `ContextCore/docs/plans/WEAVER_CROSS_REPO_ALIGNMENT_REQUIREMENTS.md` (REQ-8) for cross-repo dashboard alignment
 
 ### Session Tracking
 
@@ -314,6 +323,8 @@ Agents are specified as `provider:model` strings:
 - Don't modify the `__all__` exports without updating tests
 - Don't use `logging.getLogger()` directly in `contractors/` or other SDK modules — logs silently miss Loki
 - Don't hardcode model version strings — use `model_catalog.py` centralized defaults
+- Don't use ad-hoc status strings in `task_tracking_emitter` — use ContextCore's canonical `TaskStatus` enum values from `contracts/types.py` (`todo`, not `pending`)
+- Don't omit the top-level `status` field when creating ContextCore state files — SpanState v2 requires it (`UNSET`/`OK`/`ERROR`)
 
 ### Environment Variables
 ```bash

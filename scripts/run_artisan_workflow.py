@@ -307,6 +307,18 @@ def main() -> int:
 
     logger = logging.getLogger("run_artisan_workflow")
 
+    # Auto-configure OTel (metrics + traces) so artisan workflow data
+    # reaches Mimir/Tempo/Loki via the collector.  In "auto" mode this
+    # is a no-op when no collector is reachable.
+    try:
+        from startd8.otel import auto_configure_otel, format_telemetry_banner, get_otel_runtime_state
+        otel_state = get_otel_runtime_state()
+        logger.info(format_telemetry_banner(otel_state))
+        if otel_state["will_configure"]:
+            auto_configure_otel()
+    except Exception as exc:
+        logger.debug("OTel auto-configure skipped: %s", exc)
+
     # Keep timeouts sane for long multi-task artisan runs.
     if args.phase_timeout is not None and args.phase_timeout < _MIN_PHASE_TIMEOUT_SECONDS:
         logger.warning(
