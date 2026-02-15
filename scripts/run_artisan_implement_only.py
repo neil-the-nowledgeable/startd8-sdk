@@ -49,6 +49,8 @@ from startd8.contractors.artisan_contractor import (
 from startd8.contractors.context_seed_handlers import ContextSeedHandlers
 from startd8.contractors.handoff import load_design_handoff, verify_context_checksums, HandoffContextDriftError
 
+_DEFAULT_TEST_TIMEOUT_SECONDS = 300
+
 
 def setup_logging(verbose: bool = False) -> None:
     """Configure logging for the workflow run."""
@@ -166,6 +168,13 @@ def main() -> int:
         help="Total workflow timeout in seconds",
     )
     parser.add_argument(
+        "--test-timeout", type=int, default=_DEFAULT_TEST_TIMEOUT_SECONDS,
+        help=(
+            "TEST phase per-validator subprocess timeout in seconds "
+            f"(default: {_DEFAULT_TEST_TIMEOUT_SECONDS})"
+        ),
+    )
+    parser.add_argument(
         "--lead-agent", default=None,
         help="Lead agent spec for implementation",
     )
@@ -186,6 +195,13 @@ def main() -> int:
     setup_logging(verbose=args.verbose)
 
     logger = logging.getLogger("run_artisan_implement_only")
+
+    if args.test_timeout is not None and args.test_timeout < 60:
+        logger.warning(
+            "--test-timeout=%s is below minimum; using 60",
+            args.test_timeout,
+        )
+        args.test_timeout = 60
 
     # --- Resolve context source ---
     seed_path: str | None = None
@@ -296,6 +312,8 @@ def main() -> int:
         handler_kwargs["lead_agent"] = args.lead_agent
     if args.drafter_agent:
         handler_kwargs["drafter_agent"] = args.drafter_agent
+    if args.test_timeout is not None:
+        handler_kwargs["test_timeout_seconds"] = args.test_timeout
 
     # Create all handlers but only register the 4 implementation-phase handlers
     all_handlers = ContextSeedHandlers.create_all(**handler_kwargs)

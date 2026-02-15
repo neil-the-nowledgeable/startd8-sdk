@@ -411,26 +411,32 @@ capabilities:
   - capability_id: startd8.integration.contextcore
     category: integration
     maturity: beta
-    summary: "ContextCore workflow adapter and task runner with OTel span tracking and dependency resolution"
+    summary: "ContextCore workflow adapter, task runner, and task source with OTel span tracking and automatic task discovery"
     audiences: [workflow_developer, integration_developer]
     description:
       developer: |
         ContextCoreConfig for project/task/sprint IDs. ContextCoreWorkflowAdapter wraps any
         workflow with OTel span tracking. ContextCoreTaskRunner for multi-task execution with
-        dependency resolution. Semantic conventions: CONTEXTCORE_PROJECT_ID, CONTEXTCORE_TASK_ID.
+        dependency resolution. ContextCoreTaskSource for automatic discovery and loading of
+        pending tasks from ContextCore state files (~/.contextcore/state/<project>/).
+        Semantic conventions: CONTEXTCORE_PROJECT_ID, CONTEXTCORE_TASK_ID.
         Task tracking emitter generates ContextCore-compatible state files from parsed plans.
       agent: |
-        from startd8.integrations.contextcore import ContextCoreWorkflowAdapter.
+        from startd8.integrations.contextcore import ContextCoreWorkflowAdapter, ContextCoreTaskSource.
         adapter = ContextCoreWorkflowAdapter(workflow, config=ContextCoreConfig(...)).
-    triggers: ["contextcore", "task tracking", "project tracking", "otel spans"]
+        source = ContextCoreTaskSource(project_id); tasks = source.get_pending_tasks().
+    triggers: ["contextcore", "task tracking", "project tracking", "otel spans", "task discovery"]
     evidence:
       - type: code
         ref: src/startd8/integrations/contextcore.py
-        description: "ContextCoreWorkflowAdapter, ContextCoreTaskRunner, ContextCoreConfig"
+        description: "ContextCoreWorkflowAdapter, ContextCoreTaskRunner, ContextCoreConfig, ContextCoreTaskSource"
       - type: code
         ref: src/startd8/workflows/builtin/task_tracking_emitter.py
         description: "emit_task_tracking_artifacts() for ContextCore state files"
-    confidence: 0.8
+      - type: docs
+        ref: docs/CONTEXTCORE_WORKFLOW_AUTOMATION.md
+        description: "Guide for automated workflow execution from ContextCore tasks"
+    confidence: 0.85
 
   - capability_id: startd8.integration.mcp
     category: integration

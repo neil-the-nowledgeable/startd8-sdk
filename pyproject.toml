@@ -94,6 +94,8 @@ policy-analysis = "startd8.workflows.builtin.policy_analysis_workflow:PolicyAnal
 plain-language = "startd8.workflows.builtin.plain_language_workflow:PlainLanguageWorkflow"
 plan-ingestion = "startd8.workflows.builtin.plan_ingestion_workflow:PlanIngestionWorkflow"
 domain-preflight = "startd8.workflows.builtin.domain_preflight_workflow:DomainPreflightWorkflow"
+convergent-review = "startd8.workflows.builtin.convergent_review_workflow:ConvergentReviewWorkflow"
+architectural-review-log = "startd8.workflows.builtin.architectural_review_log_workflow:ArchitecturalReviewLogWorkflow"
 
 # Prime Contractor entry points for plugin discovery
 [project.entry-points."startd8.preflight_rules"]

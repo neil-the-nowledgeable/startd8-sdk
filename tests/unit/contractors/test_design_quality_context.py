@@ -242,21 +242,37 @@ class TestArchitecturalContext:
 # ============================================================================
 
 
+class _ImportBlocker:
+    """Makes 'from contextcore.agent.size_estimation import SizeEstimator' raise ImportError."""
+
+    def __getattr__(self, name: str) -> None:
+        raise ImportError("Blocked for test determinism")
+
+
 class TestDesignCalibration:
+    """Design calibration uses DEPTH_TIERS and LOC-based fallback when contextcore is unavailable."""
+
+    @pytest.fixture(autouse=True)
+    def _no_contextcore_estimator(self):
+        """Force LOC-based fallback so tests are deterministic (SizeEstimator can vary by env)."""
+        import sys
+
+        with patch.dict(sys.modules, {"contextcore.agent.size_estimation": _ImportBlocker()}):
+            yield
 
     def test_depth_tiers_constants(self):
         assert "brief" in DEPTH_TIERS
         assert "standard" in DEPTH_TIERS
         assert "comprehensive" in DEPTH_TIERS
-        assert DEPTH_TIERS["brief"]["max_tokens"] == 2048
-        assert DEPTH_TIERS["standard"]["max_tokens"] == 4096
-        assert DEPTH_TIERS["comprehensive"]["max_tokens"] == 8192
+        assert DEPTH_TIERS["brief"]["max_tokens"] == 4096
+        assert DEPTH_TIERS["standard"]["max_tokens"] == 8192
+        assert DEPTH_TIERS["comprehensive"]["max_tokens"] == 16384
 
     def test_brief_for_small_tasks(self):
         tasks = [_make_task_dict("T1", estimated_loc=30)]
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "brief"
-        assert cal["T1"]["max_output_tokens"] == 2048
+        assert cal["T1"]["max_output_tokens"] == 4096
         assert cal["T1"]["implement_max_output_tokens"] == 8192
         assert len(cal["T1"]["sections"]) == 3
 
@@ -264,7 +280,7 @@ class TestDesignCalibration:
         tasks = [_make_task_dict("T1", estimated_loc=100)]
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "standard"
-        assert cal["T1"]["max_output_tokens"] == 4096
+        assert cal["T1"]["max_output_tokens"] == 8192
         assert cal["T1"]["implement_max_output_tokens"] == 16384
         assert len(cal["T1"]["sections"]) == 5
 
@@ -272,7 +288,7 @@ class TestDesignCalibration:
         tasks = [_make_task_dict("T1", estimated_loc=200)]
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "comprehensive"
-        assert cal["T1"]["max_output_tokens"] == 8192
+        assert cal["T1"]["max_output_tokens"] == 16384
         assert cal["T1"]["implement_max_output_tokens"] == 32768
         assert len(cal["T1"]["sections"]) == 7
 

@@ -103,6 +103,32 @@ __all__ = [
 ]
 
 
+def _log_task_timing(
+    phase: str,
+    task_id: str,
+    index: int,
+    total: int,
+    phase_started_mono: float,
+    previous_task_started_mono: Optional[float],
+) -> float:
+    """Log elapsed and inter-task timing for a phase task loop."""
+    now = time.monotonic()
+    elapsed_s = now - phase_started_mono
+    elapsed_m = elapsed_s / 60.0
+    delta_s = 0.0 if previous_task_started_mono is None else now - previous_task_started_mono
+    logger.info(
+        "%s task %d/%d: %s (elapsed %.1fs / %.2fmin, +%.1fs since previous task)",
+        phase,
+        index,
+        total,
+        task_id,
+        elapsed_s,
+        elapsed_m,
+        delta_s,
+    )
+    return now
+
+
 # ============================================================================
 # Handler configuration
 # ============================================================================
@@ -995,8 +1021,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         arch_context = context.get("architectural_context", {})
         calibration_map = context.get("design_calibration", {})
         prior_summaries: list[str] = []
+        previous_task_started_mono: Optional[float] = None
 
-        for task in tasks:
+        for idx, task in enumerate(tasks, start=1):
+            previous_task_started_mono = _log_task_timing(
+                "DESIGN",
+                task.task_id,
+                idx,
+                len(tasks),
+                start,
+                previous_task_started_mono,
+            )
             # Skip tasks with env failures
             env_fails = [
                 c for c in task.environment_checks
@@ -1608,6 +1643,7 @@ class Test{class_name}:
         skipped: list[dict[str, Any]] = []
         design_results = design_results or {}
         downstream_map = downstream_map or {}
+        active_task_ids = {t.task_id for t in tasks}
 
         env_blocked_ids: set[str] = set()
         for task in tasks:
@@ -1819,10 +1855,15 @@ class Test{class_name}:
                 if f not in task_downstream
             ] if task_downstream else task.target_files
 
+            # Strip dependencies on tasks not in this run (already completed
+            # or filtered out by --task-filter).  The plan validator rejects
+            # references to non-existent chunks.
+            in_scope_deps = [d for d in task.depends_on if d in active_task_ids]
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
-                dependencies=list(task.depends_on),
+                dependencies=in_scope_deps,
                 file_targets=effective_targets,
                 implementation_prompt=task.description,
                 test_commands=[],  # Post-gen validation via DomainChecklist
@@ -2211,6 +2252,8 @@ class Test{class_name}:
                     "IMPLEMENT --resume: could not load saved generation results: %s — re-running",
                     exc,
                 )
+
+        downstream_map: dict[str, list[str]] = {}
 
         if not resumed:
             # Item 12: scaffold test files for artifact generator tasks first
@@ -2727,8 +2770,17 @@ class TestPhaseHandler(AbstractPhaseHandler):
         validator_counts: dict[str, int] = defaultdict(int)
         total_passed = 0
         total_failed = 0
+        previous_task_started_mono: Optional[float] = None
 
-        for task in tasks:
+        for idx, task in enumerate(tasks, start=1):
+            previous_task_started_mono = _log_task_timing(
+                "TEST",
+                task.task_id,
+                idx,
+                len(tasks),
+                start,
+                previous_task_started_mono,
+            )
             validators = task.post_generation_validators
             for v in validators:
                 validator_counts[v] += 1
@@ -3109,8 +3161,17 @@ PASS if score >= {pass_threshold} and no blocking issues.
         total_cost = 0.0
         total_passed = 0
         total_failed = 0
+        previous_task_started_mono: Optional[float] = None
 
-        for task in tasks:
+        for idx, task in enumerate(tasks, start=1):
+            previous_task_started_mono = _log_task_timing(
+                "REVIEW",
+                task.task_id,
+                idx,
+                len(tasks),
+                start,
+                previous_task_started_mono,
+            )
             # Count constraint types (always, for coverage report)
             for constraint in task.prompt_constraints:
                 key = constraint.split("(")[0].strip()[:60]

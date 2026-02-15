@@ -55,6 +55,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -1613,10 +1614,12 @@ class DevelopmentPhase:
         # --- Build lookup and context ---
         chunk_map = {c.chunk_id: c for c in plan.chunks}
         max_parallel = plan.config.get("max_parallel", self.max_parallel)
+        phase_started_mono = time.monotonic()
         context: Dict[str, Any] = {
             "plan_id": plan.plan_id,
             "dry_run": plan.config.get("dry_run", False),
             "example_artifacts": plan.config.get("example_artifacts", {}),
+            "_dev_phase_started_mono": phase_started_mono,
         }
 
         # --- Execute tiers ---
@@ -1799,6 +1802,31 @@ class DevelopmentPhase:
         self.logger.info(
             f"Executing {len(eligible)} eligible chunk(s) (max_parallel={max_parallel})"
         )
+        previous_chunk_queued_mono: Optional[float] = None
+        phase_started_mono = context.get("_dev_phase_started_mono")
+        for idx, cid in enumerate(eligible, start=1):
+            now = time.monotonic()
+            elapsed_s = (
+                now - phase_started_mono
+                if isinstance(phase_started_mono, (int, float))
+                else 0.0
+            )
+            elapsed_m = elapsed_s / 60.0
+            delta_s = (
+                0.0
+                if previous_chunk_queued_mono is None
+                else now - previous_chunk_queued_mono
+            )
+            self.logger.info(
+                "IMPLEMENT chunk %d/%d queued: %s (elapsed %.1fs / %.2fmin, +%.1fs since previous chunk)",
+                idx,
+                len(eligible),
+                cid,
+                elapsed_s,
+                elapsed_m,
+                delta_s,
+            )
+            previous_chunk_queued_mono = now
 
         semaphore = asyncio.Semaphore(max_parallel)
 
@@ -1846,8 +1874,20 @@ class DevelopmentPhase:
         while state.attempts < max_attempts:
             state.attempts += 1
             attempt_label = f"{state.attempts}/{max_attempts}"
-
-            self.logger.info(f"Chunk {chunk.chunk_id}: attempt {attempt_label}")
+            phase_started_mono = context.get("_dev_phase_started_mono")
+            elapsed_s = (
+                time.monotonic() - phase_started_mono
+                if isinstance(phase_started_mono, (int, float))
+                else 0.0
+            )
+            elapsed_m = elapsed_s / 60.0
+            self.logger.info(
+                "Chunk %s: attempt %s (phase elapsed %.1fs / %.2fmin)",
+                chunk.chunk_id,
+                attempt_label,
+                elapsed_s,
+                elapsed_m,
+            )
 
             # --- QUEUED ---
             state.status = ChunkStatus.QUEUED

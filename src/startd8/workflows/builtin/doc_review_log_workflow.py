@@ -34,10 +34,8 @@ from ..models import (
     ValidationResult,
 )
 from ...agents import BaseAgent
-from ...agents.pool import TimeoutConfig
 from ...utils.agent_resolution import resolve_agents
 from ...utils.file_operations import FileLock, atomic_write, atomic_write_json
-from ...utils.retry import RetryConfig
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
 
@@ -77,17 +75,9 @@ def _now_utc_iso() -> str:
 
 
 def _split_cells(row: str) -> List[str]:
-    """Split a markdown table row into cells, handling escaped pipes.
-
-    Escaped pipes (\\|) within cell content are preserved and unescaped.
-    Unescaped pipes are treated as cell delimiters.
-    """
-    # Replace escaped pipes with a placeholder that won't appear in real content
-    placeholder = "\x00PIPE\x00"
-    escaped = row.strip().strip("|").replace("\\|", placeholder)
-    # Split on unescaped pipes
-    cells = [c.strip().replace(placeholder, "|") for c in escaped.split("|")]
-    return cells
+    # Markdown tables: | a | b | c |
+    parts = [c.strip() for c in row.strip().strip("|").split("|")]
+    return parts
 
 
 def _extract_table_ids(doc: str, section_heading: str) -> List[str]:
@@ -294,20 +284,6 @@ class DocReviewLogWorkflow(WorkflowBase):
                     required=False,
                     description="Optional path for the workflow state JSON (defaults to <doc_dir>/.startd8/doc_review_state.json)",
                 ),
-                WorkflowInput(
-                    name="llm_read_timeout_seconds",
-                    type="number",
-                    required=False,
-                    default=90,
-                    description="Fast-fail read timeout for reviewer LLM calls",
-                ),
-                WorkflowInput(
-                    name="llm_max_attempts",
-                    type="number",
-                    required=False,
-                    default=1,
-                    description="Retry attempts for reviewer LLM calls (1 = fail fast)",
-                ),
             ],
         )
 
@@ -329,22 +305,6 @@ class DocReviewLogWorkflow(WorkflowBase):
         if not isinstance(max_suggestions, int) or max_suggestions < 1 or max_suggestions > 25:
             errors.append("max_suggestions must be an int between 1 and 25")
 
-        llm_read_timeout_seconds = config.get("llm_read_timeout_seconds", 90)
-        try:
-            timeout_val = float(llm_read_timeout_seconds)
-            if timeout_val <= 0:
-                errors.append("llm_read_timeout_seconds must be > 0")
-        except (TypeError, ValueError):
-            errors.append("llm_read_timeout_seconds must be a positive number")
-
-        llm_max_attempts = config.get("llm_max_attempts", 1)
-        try:
-            attempts_val = int(llm_max_attempts)
-            if attempts_val < 1:
-                errors.append("llm_max_attempts must be >= 1")
-        except (TypeError, ValueError):
-            errors.append("llm_max_attempts must be an integer >= 1")
-
         if errors:
             return ValidationResult.failure(errors)
         return ValidationResult.success()
@@ -360,17 +320,7 @@ class DocReviewLogWorkflow(WorkflowBase):
         # Resolve agents (workflow requires sequential list)
         resolved_agents = agents or []
         if not resolved_agents:
-            llm_timeout_config = TimeoutConfig(
-                read=float(config.get("llm_read_timeout_seconds", 90))
-            )
-            llm_retry_config = RetryConfig(
-                max_attempts=int(config.get("llm_max_attempts", 1))
-            )
-            resolved_agents = resolve_agents(
-                config["agents"],
-                timeout_config=llm_timeout_config,
-                retry_config=llm_retry_config,
-            )
+            resolved_agents = resolve_agents(config["agents"])
 
         doc_path = Path(str(config["document_path"])).expanduser().resolve()
         init_if_missing = bool(config.get("init_if_missing", True))

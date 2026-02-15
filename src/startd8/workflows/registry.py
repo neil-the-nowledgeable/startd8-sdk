@@ -249,13 +249,18 @@ class WorkflowRegistry:
             logger.debug(f"DocReviewLog workflow not available: {e}")
 
         try:
-            from .builtin.architectural_review_log_workflow import (
-                ArchitecturalReviewLogWorkflow,
-            )
+            from .builtin.architectural_review_log_workflow import ArchitecturalReviewLogWorkflow
             cls.register(ArchitecturalReviewLogWorkflow())
             logger.debug("Registered built-in ArchitecturalReviewLog workflow")
         except ImportError as e:
             logger.debug(f"ArchitecturalReviewLog workflow not available: {e}")
+
+        try:
+            from .builtin.convergent_review_workflow import ConvergentReviewWorkflow
+            cls.register(ConvergentReviewWorkflow())
+            logger.debug("Registered built-in ConvergentReview workflow")
+        except ImportError as e:
+            logger.debug(f"ConvergentReview workflow not available: {e}")
 
         try:
             from .builtin.plan_ingestion_workflow import PlanIngestionWorkflow

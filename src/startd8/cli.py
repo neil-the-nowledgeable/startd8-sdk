@@ -712,64 +712,6 @@ def show_template(
 
 
 # =============================================================================
-# Doctor Commands
-# =============================================================================
-
-doctor_app = typer.Typer(
-    name="doctor",
-    help="Environment diagnostics commands"
-)
-app.add_typer(doctor_app, name="doctor")
-
-
-@doctor_app.command("otel")
-def doctor_otel(
-    timeout: float = typer.Option(
-        1.0, "--timeout",
-        help="Collector reachability timeout in seconds"
-    ),
-    fail_on_error: bool = typer.Option(
-        False, "--fail-on-error",
-        help="Exit non-zero when OTel state severity is error"
-    ),
-):
-    """Diagnose effective OpenTelemetry mode, endpoint, and readiness."""
-    from .otel import get_otel_runtime_state
-
-    state = get_otel_runtime_state(connectivity_timeout=timeout)
-
-    table = Table(title="OpenTelemetry Runtime State")
-    table.add_column("Field", style="cyan")
-    table.add_column("Value", style="green")
-    table.add_row("Mode", str(state.get("mode")))
-    table.add_row("OTel packages available", str(state.get("otel_available")))
-    table.add_row("Endpoint (env)", state.get("endpoint_env") or "<unset>")
-    table.add_row("Endpoint (effective)", state.get("endpoint_effective") or "<none>")
-    table.add_row("Endpoint reachable", str(state.get("endpoint_reachable")))
-    table.add_row("Fail-fast active", str(state.get("fail_fast")))
-    table.add_row("Will configure exporters", str(state.get("will_configure")))
-    table.add_row("Severity", str(state.get("severity")))
-    table.add_row("Reason", str(state.get("reason")))
-    console.print(table)
-
-    message = state.get("message") or ""
-    if state.get("severity") == "error":
-        console.print(f"[red]{message}[/red]")
-    elif state.get("severity") == "warning":
-        console.print(f"[yellow]{message}[/yellow]")
-    else:
-        console.print(f"[green]{message}[/green]")
-
-    console.print("\n[bold]Recommended profiles[/bold]")
-    console.print("- Local default: STARTD8_OTEL=auto")
-    console.print("- Disable fully: STARTD8_OTEL=disabled")
-    console.print("- Enforce export: STARTD8_OTEL=enabled + OTEL_EXPORTER_OTLP_ENDPOINT=<collector>")
-
-    if fail_on_error and state.get("severity") == "error":
-        raise typer.Exit(2)
-
-
-# =============================================================================
 # Job Queue Commands
 # =============================================================================
 
@@ -1247,26 +1189,6 @@ def workflow_run(
     import json
     import sys
 
-    def _print_plan_ingestion_output(out: dict) -> None:
-        """Format plan-ingestion output as a structured table."""
-        table = Table(title="Plan Ingestion")
-        table.add_column("", style="cyan", width=22)
-        table.add_column("", style="green")
-        table.add_row("Route", str(out.get("route", "—")))
-        table.add_row("Complexity", str(out.get("complexity_score", "—")))
-        table.add_row("Refine rounds", str(out.get("refine_rounds_completed", "—")))
-        table.add_row("Plan document", str(out.get("plan_document_path", "—")))
-        table.add_row("Review config", str(out.get("review_config_path", "—")))
-        if out.get("context_seed_path"):
-            table.add_row("Context seed", str(out["context_seed_path"]))
-        if out.get("task_tracking"):
-            tr = out["task_tracking"]
-            summary = f"{tr.get('state_file_count', 0)} tracking files"
-            if tr.get("state_dir"):
-                summary += f" → {tr['state_dir']}"
-            table.add_row("Task tracking", summary)
-        console.print(table)
-
     WorkflowRegistry = _load_workflow_registry()
     WorkflowRegistry.discover()
 
@@ -1370,32 +1292,13 @@ def workflow_run(
         output_file.write_text(str(result.output))
         console.print(f"[green]Output written to: {output_file}[/green]")
     elif result.output:
-        # Format plan-ingestion output as structured table
-        if (
-            result.workflow_id == "plan-ingestion"
-            and isinstance(result.output, dict)
-        ):
-            _print_plan_ingestion_output(result.output)
-        elif isinstance(result.output, dict):
-            # Generic dict: key-value table
-            table = Table(title="Output")
-            table.add_column("Key", style="cyan")
-            table.add_column("Value", style="green")
-            for k, v in result.output.items():
-                val_str = str(v)
-                if isinstance(v, dict):
-                    j = json.dumps(v, indent=2)
-                    val_str = j[:200] + ("..." if len(j) > 200 else "")
-                table.add_row(k, val_str)
-            console.print(table)
+        console.print("\n[bold]Output:[/bold]")
+        output_str = str(result.output)
+        if len(output_str) > 500:
+            console.print(output_str[:500] + "...")
+            console.print(f"[dim]({len(output_str)} characters total)[/dim]")
         else:
-            output_str = str(result.output)
-            console.print("\n[bold]Output:[/bold]")
-            if len(output_str) > 500:
-                console.print(output_str[:500] + "...")
-                console.print(f"[dim]({len(output_str)} characters total)[/dim]")
-            else:
-                console.print(output_str)
+            console.print(output_str)
 
     if not result.success:
         raise typer.Exit(1)
@@ -1637,99 +1540,6 @@ def serve(
     if api_key:
         console.print(f"  [dim]API key auth enabled for POST endpoints[/dim]")
     uvicorn.run(server_app, host=host, port=port)
-
-
-# =============================================================================
-# Config Commands
-# =============================================================================
-
-config_app = typer.Typer(
-    name="config",
-    help="Persistent configuration management"
-)
-app.add_typer(config_app, name="config")
-
-
-def _kebab_to_snake(key: str) -> str:
-    """Convert kebab-case CLI key to snake_case config key."""
-    return key.replace("-", "_")
-
-
-@config_app.command("artisan-show")
-def config_artisan_show():
-    """Show resolved artisan workflow configuration.
-
-    Displays each setting's current value and where it came from
-    (env, config, or default).
-    """
-    import os as _os
-    from .config import get_config_manager, _coerce_artisan_value
-
-    cfg_mgr = get_config_manager()
-    artisan_cfg = cfg_mgr.get_artisan_config()
-
-    # Import HandlerConfig to access dataclass defaults
-    from .contractors.context_seed_handlers import HandlerConfig
-    import dataclasses as _dc
-
-    defaults = {f.name: f.default for f in _dc.fields(HandlerConfig)}
-
-    table = Table(title="Artisan Workflow Configuration")
-    table.add_column("Setting", style="cyan")
-    table.add_column("Value", style="green")
-    table.add_column("Source", style="magenta")
-
-    for key in sorted(artisan_cfg.keys()):
-        env_var = f"STARTD8_ARTISAN_{key.upper()}"
-        env_val = _os.getenv(env_var)
-        cfg_val = artisan_cfg.get(key)
-
-        if env_val is not None:
-            display_val = str(_coerce_artisan_value(key, env_val))
-            source = f"env ({env_var})"
-        elif cfg_val is not None:
-            display_val = str(cfg_val)
-            source = "config"
-        else:
-            default_val = defaults.get(key)
-            display_val = str(default_val) if default_val is not None else "None"
-            source = "default"
-
-        # Display kebab-case for consistency with CLI args
-        display_key = key.replace("_", "-")
-        table.add_row(display_key, display_val, source)
-
-    console.print(table)
-    console.print(f"\n[dim]Config file: {cfg_mgr.get_config_file_path()}[/dim]")
-
-
-@config_app.command("artisan-set")
-def config_artisan_set(
-    key: str = typer.Argument(..., help="Setting name (kebab-case, e.g. drafter-agent)"),
-    value: str = typer.Argument(..., help="Value to set"),
-):
-    """Set a persistent artisan workflow setting."""
-    from .config import get_config_manager, _coerce_artisan_value
-
-    snake_key = _kebab_to_snake(key)
-    typed_value = _coerce_artisan_value(snake_key, value)
-
-    cfg_mgr = get_config_manager()
-    cfg_mgr.set_artisan_setting(snake_key, typed_value)
-    console.print(f"[green]Set artisan.{snake_key} = {typed_value!r}[/green]")
-
-
-@config_app.command("artisan-clear")
-def config_artisan_clear(
-    key: str = typer.Argument(..., help="Setting name (kebab-case, e.g. drafter-agent)"),
-):
-    """Clear a persistent artisan setting (revert to default)."""
-    from .config import get_config_manager
-
-    snake_key = _kebab_to_snake(key)
-    cfg_mgr = get_config_manager()
-    cfg_mgr.clear_artisan_setting(snake_key)
-    console.print(f"[green]Cleared artisan.{snake_key} (will use default)[/green]")
 
 
 if __name__ == "__main__":

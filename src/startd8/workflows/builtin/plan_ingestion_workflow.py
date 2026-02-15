@@ -278,10 +278,12 @@ _REQ_ID_PATTERN = re.compile(r"\b(?:REQ|FR|NFR|R)[-_]?\d+\b", re.IGNORECASE)
 
 # Depth tier calibration — channel adaptation pattern
 # (brief/standard/comprehensive map to feature complexity)
+# Design docs can hit limits with multiple sections + code blocks + reviewer iterations.
+# Claude 4.5 supports up to 64K output; these values avoid truncation (stop_reason=max_tokens).
 DEPTH_TIERS: Dict[str, Dict[str, Any]] = {
     "brief": {
         "sections": ["Overview", "Architecture", "Testing Strategy"],
-        "max_tokens": 2048,
+        "max_tokens": 4096,
         "guidance": (
             "Concise design sketch. Focus on the interface contract and "
             "key test cases. This is a small feature — avoid over-engineering."
@@ -292,7 +294,7 @@ DEPTH_TIERS: Dict[str, Dict[str, Any]] = {
             "Overview", "Architecture", "Data Model",
             "Error Handling", "Testing Strategy",
         ],
-        "max_tokens": 4096,
+        "max_tokens": 8192,
         "guidance": (
             "Standard design doc. Include data model and error handling "
             "but keep depth proportional to the feature's scope."
@@ -304,7 +306,7 @@ DEPTH_TIERS: Dict[str, Dict[str, Any]] = {
             "API Contracts", "Error Handling",
             "Security Considerations", "Testing Strategy",
         ],
-        "max_tokens": 8192,
+        "max_tokens": 16384,
         "guidance": (
             "Comprehensive design. All sections are warranted for this "
             "complex feature — address security and API contracts thoroughly."
@@ -1315,6 +1317,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         context_files: Optional[List[str]],
         output_dir: Path,
         min_export_coverage: float,
+        contextcore_yaml_path: Optional[Path] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], List[str], List[str]]:
         """Validate ContextCore export artifacts before PARSE."""
         warnings: List[str] = []
@@ -1429,9 +1432,34 @@ class PlanIngestionWorkflow(WorkflowBase):
                 f"Preflight: export coverage {overall_pct:.1f}% below minimum {min_export_coverage:.1f}%"
             )
 
-        # source_checksum is expected for provenance chain, warn if absent.
-        if not isinstance(onboarding.get("source_checksum"), str):
+        # source_checksum verification against .contextcore.yaml
+        expected_source_checksum = onboarding.get("source_checksum")
+        if not isinstance(expected_source_checksum, str):
             warnings.append("Preflight: source_checksum missing in onboarding metadata")
+            evidence["checksums"]["source_checksum_verified"] = None
+        elif contextcore_yaml_path is None:
+            warnings.append(
+                "Preflight: .contextcore.yaml not available for verification"
+            )
+            evidence["checksums"]["source_checksum_verified"] = None
+        elif not contextcore_yaml_path.exists():
+            warnings.append(
+                "Preflight: .contextcore.yaml not available for verification"
+            )
+            evidence["checksums"]["source_checksum_verified"] = None
+        else:
+            actual_checksum = _checksum_file(contextcore_yaml_path)
+            evidence["checksums"]["source_checksum_expected"] = expected_source_checksum
+            evidence["checksums"]["source_checksum_actual"] = actual_checksum
+            evidence["paths"]["contextcore_yaml"] = str(contextcore_yaml_path)
+            if actual_checksum == expected_source_checksum:
+                evidence["checksums"]["source_checksum_verified"] = True
+            else:
+                evidence["checksums"]["source_checksum_verified"] = False
+                errors.append(
+                    f"Preflight: source_checksum mismatch "
+                    f"(expected={expected_source_checksum}, actual={actual_checksum})"
+                )
 
         return onboarding, evidence, warnings, errors
 
@@ -1634,6 +1662,33 @@ class PlanIngestionWorkflow(WorkflowBase):
         """Write ingestion-traceability.json and return the path."""
         output_dir.mkdir(parents=True, exist_ok=True)
         path = output_dir / "ingestion-traceability.json"
+        atomic_write_json(path, payload, indent=2)
+        return path
+
+    @staticmethod
+    def _write_preflight_report(
+        output_dir: Path,
+        *,
+        passed: bool,
+        evidence: Dict[str, Any],
+        warnings: List[str],
+        errors: List[str],
+    ) -> Path:
+        """Write preflight-report.json and return the path."""
+        from datetime import datetime, timezone
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        path = output_dir / "preflight-report.json"
+        payload = {
+            "passed": passed,
+            "source_checksum_verified": evidence.get("checksums", {}).get(
+                "source_checksum_verified"
+            ),
+            "evidence": evidence,
+            "warnings": warnings,
+            "errors": errors,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
         atomic_write_json(path, payload, indent=2)
         return path
 

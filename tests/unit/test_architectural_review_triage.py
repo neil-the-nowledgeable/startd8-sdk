@@ -1096,7 +1096,7 @@ class TestBuildPromptRequirements:
             scope="Test",
             requirements_content="## Feature: Auth\n\nMust support OAuth2.",
         )
-        assert "adequately covers the feature requirements" in prompt
+        assert "adequately addresses each requirement" in prompt
         assert "under-addressed" in prompt
 
     def test_requirements_instruction_absent_when_no_requirements(self):
@@ -1108,7 +1108,7 @@ class TestBuildPromptRequirements:
             scope="Test",
             requirements_content="",
         )
-        assert "adequately covers the feature requirements" not in prompt
+        assert "adequately addresses each requirement" not in prompt
 
     def test_dual_doc_format_present_when_has_feature_requirements(self):
         prompt = _build_prompt(
@@ -1139,7 +1139,7 @@ class TestBuildPromptRequirements:
         assert "Dual-Document Output" not in prompt
         assert "Feature Requirements Suggestions" not in prompt
         # Should still have the passive instruction
-        assert "adequately covers the feature requirements" in prompt
+        assert "adequately addresses each requirement" in prompt
 
 
 # ---------------------------------------------------------------------------
