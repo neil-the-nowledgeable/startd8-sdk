@@ -1,0 +1,199 @@
+"""Template rendering tests for prometheus_rule.yaml.j2."""
+
+import yaml
+import pytest
+
+from contextcore.generators.jinja_env import get_jinja_env
+
+
+@pytest.fixture
+def jinja_env():
+    return get_jinja_env()
+
+
+def _render(jinja_env, context):
+    """Render template and parse as YAML, returning the parsed dict."""
+    template = jinja_env.get_template("prometheus_rule.yaml.j2")
+    rendered = template.render(**context)
+    return yaml.safe_load(rendered)
+
+
+def _find_rule(doc, alert_suffix):
+    """Find a rule whose alert name ends with the given suffix."""
+    rules = doc["spec"]["groups"][0]["rules"]
+    for rule in rules:
+        if rule["alert"].endswith(alert_suffix):
+            return rule
+    raise AssertionError(
+        f"No rule ending with '{alert_suffix}' found. "
+        f"Available: {[r['alert'] for r in rules]}"
+    )
+
+
+class TestRendersValidYAML:
+    def test_renders_valid_yaml(self, jinja_env, sample_context):
+        """Rendered output must parse as valid YAML."""
+        template = jinja_env.get_template("prometheus_rule.yaml.j2")
+        rendered = template.render(**sample_context)
+        doc = yaml.safe_load(rendered)
+        assert doc["apiVersion"] == "monitoring.coreos.com/v1"
+        assert doc["kind"] == "PrometheusRule"
+
+    def test_metadata_name(self, jinja_env, sample_context):
+        doc = _render(jinja_env, sample_context)
+        assert doc["metadata"]["name"] == "frontend-alerts"
+
+    def test_metadata_namespace(self, jinja_env, sample_context):
+        doc = _render(jinja_env, sample_context)
+        assert doc["metadata"]["namespace"] == "online-boutique"
+
+    def test_metadata_labels(self, jinja_env, sample_context):
+        doc = _render(jinja_env, sample_context)
+        labels = doc["metadata"]["labels"]
+        assert labels["app"] == "frontend"
+        assert labels["prometheus"] == "k8s"
+        assert labels["role"] == "alert-rules"
+        assert labels["generated-by"] == "contextcore"
+
+
+class TestHighLatencyAlert:
+    def test_contains_high_latency_alert(self, jinja_env, sample_context):
+        """Must contain a HighLatency alert rule."""
+        doc = _render(jinja_env, sample_context)
+        rules = doc["spec"]["groups"][0]["rules"]
+        alert_names = [r["alert"] for r in rules]
+        assert "FrontendHighLatency" in alert_names
+
+    def test_latency_quantile_precomputed(self, jinja_env, sample_context):
+        """latency_quantile=0.99 should appear directly in histogram_quantile()."""
+        sample_context["latency_quantile"] = 0.99
+        doc = _render(jinja_env, sample_context)
+        latency_rule = _find_rule(doc, "HighLatency")
+        assert "0.99" in latency_rule["expr"]
+
+    def test_latency_threshold_converted_from_ms(self, jinja_env, sample_context):
+        """500ms in manifest → 0.5 in PromQL expr."""
+        sample_context["latency_threshold_seconds"] = 0.5
+        doc = _render(jinja_env, sample_context)
+        latency_rule = _find_rule(doc, "HighLatency")
+        assert "> 0.5" in latency_rule["expr"]
+
+    def test_latency_severity_label(self, jinja_env, sample_context):
+        doc = _render(jinja_env, sample_context)
+        latency_rule = _find_rule(doc, "HighLatency")
+        assert latency_rule["labels"]["severity"] == "warning"
+        assert latency_rule["labels"]["alert_type"] == "latency"
+
+    def test_latency_for_duration(self, jinja_env, sample_context):
+        doc = _render(jinja_env, sample_context)
+        latency_rule = _find_rule(doc, "HighLatency")
+        assert latency_rule["for"] == "5m"
+
+    def test_namespace_selector_in_expr(self, jinja_env, sample_context):
+        """When namespace_selector is set, namespace appears in PromQL selector."""
+        doc = _render(jinja_env, sample_context)
+        latency_rule = _find_rule(doc, "HighLatency")
+        assert 'namespace="online-boutique"' in latency_rule["expr"]
+
+    def test_no_namespace_selector_when_none(self, jinja_env, sample_context):
+        """When namespace_selector is None/falsy, namespace should NOT appear in PromQL."""
+        sample_context["namespace_selector"] = None
+        doc = _render(jinja_env, sample_context)
+        latency_rule = _find_rule(doc, "HighLatency")
+        assert "namespace=" not in latency_rule["expr"]
+
+
+class TestLowAvailabilityAlert:
+    def test_contains_low_availability_alert(self, jinja_env, sample_context):
+        """Must contain a LowAvailability alert rule."""
+        doc = _render(jinja_env, sample_context)
+        rules = doc["spec"]["groups"][0]["rules"]
+        alert_names = [r["alert"] for r in rules]
+        assert "FrontendLowAvailability" in alert_names
+
+    def test_availability_target_in_expr(self, jinja_env, sample_context):
+        """availability_target=0.999 appears in PromQL expr."""
+        doc = _render(jinja_env, sample_context)
+        avail_rule = _find_rule(doc, "LowAvailability")
+        assert "< 0.999" in avail_rule["expr"]
+
+    def test_availability_zero_traffic_guard(self, jinja_env, sample_context):
+        """LowAvailability expr must include a > 0 guard against division by zero."""
+        doc = _render(jinja_env, sample_context)
+        avail_rule = _find_rule(doc, "LowAvailability")
+        assert "> 0" in avail_rule["expr"]
+
+    def test_availability_severity_label(self, jinja_env, sample_context):
+        doc = _render(jinja_env, sample_context)
+        avail_rule = _find_rule(doc, "LowAvailability")
+        assert avail_rule["labels"]["severity"] == "critical"
+        assert avail_rule["labels"]["alert_type"] == "availability"
+
+    def test_availability_description_percentage(self, jinja_env, sample_context):
+        """Description should contain the target as a percentage."""
+        doc = _render(jinja_env, sample_context)
+        avail_rule = _find_rule(doc, "LowAvailability")
+        assert "99.9%" in avail_rule["annotations"]["description"]
+
+
+class TestDerivationRules:
+    def test_derivation_rules_comment_present(self, jinja_env, sample_context):
+        """Raw rendered string must contain derivation_rules tracing."""
+        template = jinja_env.get_template("prometheus_rule.yaml.j2")
+        raw = template.render(**sample_context)
+        assert "derivation_rules:" in raw
+        assert "manifest.slo.latency.threshold_ms" in raw
+
+    def test_derivation_rules_annotation_present(self, jinja_env, sample_context):
+        """Structured derivation-rules annotation must be present."""
+        doc = _render(jinja_env, sample_context)
+        annotations = doc["metadata"]["annotations"]
+        assert "contextcore.dev/derivation-rules" in annotations
+        dr = annotations["contextcore.dev/derivation-rules"]
+        assert "manifest.slo.latency.threshold_ms" in dr
+        assert "manifest.service.name" in dr
+        assert "manifest.service.namespace" in dr
+        assert "manifest.slo.availability.target" in dr
+
+    def test_generated_at_annotation(self, jinja_env, sample_context):
+        doc = _render(jinja_env, sample_context)
+        annotations = doc["metadata"]["annotations"]
+        assert annotations["contextcore.dev/generated-at"] == "2024-01-01T00:00:00Z"
+
+    def test_manifest_ref_annotation(self, jinja_env, sample_context):
+        doc = _render(jinja_env, sample_context)
+        annotations = doc["metadata"]["annotations"]
+        assert annotations["contextcore.dev/manifest-ref"] == "manifests/frontend.yaml"
+
+
+class TestDefaultValues:
+    def test_default_namespace(self, jinja_env, minimal_context):
+        """Template renders with only required fields, defaults fill the rest."""
+        template = jinja_env.get_template("prometheus_rule.yaml.j2")
+        rendered = template.render(**minimal_context)
+        doc = yaml.safe_load(rendered)
+        assert doc["metadata"]["namespace"] == "monitoring"
+
+    def test_default_evaluation_interval(self, jinja_env, minimal_context):
+        template = jinja_env.get_template("prometheus_rule.yaml.j2")
+        rendered = template.render(**minimal_context)
+        doc = yaml.safe_load(rendered)
+        assert doc["spec"]["groups"][0]["interval"] == "30s"
+
+    def test_default_for_duration(self, jinja_env, minimal_context):
+        template = jinja_env.get_template("prometheus_rule.yaml.j2")
+        rendered = template.render(**minimal_context)
+        doc = yaml.safe_load(rendered)
+        rules = doc["spec"]["groups"][0]["rules"]
+        for rule in rules:
+            assert rule["for"] == "5m"
+
+    def test_default_latency_severity(self, jinja_env, minimal_context):
+        doc = _render(jinja_env, minimal_context)
+        latency_rule = _find_rule(doc, "HighLatency")
+        assert latency_rule["labels"]["severity"] == "warning"
+
+    def test_default_availability_severity(self, jinja_env, minimal_context):
+        doc = _render(jinja_env, minimal_context)
+        avail_rule = _find_rule(doc, "LowAvailability")
+        assert avail_rule["labels"]["severity"] == "critical"
