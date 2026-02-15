@@ -783,7 +783,13 @@ class ArtisanContractorWorkflow:
         exception: Optional[Exception] = None,
         extra: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Best-effort error recording — never raises."""
+        """Best-effort error recording — never raises.
+
+        Skipped when ``dry_run=True`` to prevent test executions from
+        polluting the production error store.
+        """
+        if self.config.dry_run:
+            return
         try:
             store = self.error_store
             if store is None:
