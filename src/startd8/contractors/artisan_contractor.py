@@ -47,6 +47,7 @@ from typing import Any, Optional
 
 from startd8.contractors.context_schema import (
     PhaseContextError,
+    validate_phase_boundary,
     validate_phase_entry,
     validate_phase_exit,
 )
@@ -713,6 +714,7 @@ class ArtisanContractorWorkflow:
         handlers: Optional[dict[WorkflowPhase, AbstractPhaseHandler]] = None,
         checkpoint_store: Optional[CheckpointStore] = None,
         phases: Optional[list[WorkflowPhase]] = None,
+        contract_path: Optional[Path] = None,
     ) -> None:
         """Initialize the workflow orchestrator.
 
@@ -726,11 +728,17 @@ class ArtisanContractorWorkflow:
                               Otherwise :class:`InMemoryCheckpointStore`.
             phases: Ordered list of phases to execute. Defaults to
                     ``WorkflowPhase.ordered()``.
+            contract_path: Optional path to a context propagation contract
+                           YAML file.  When provided, enrichment fields are
+                           validated at phase boundaries and propagation events
+                           are emitted.  Fully opt-in — ``None`` preserves
+                           existing behavior.
         """
         self.config = config or WorkflowConfig()
         self.phases = phases or WorkflowPhase.ordered()
         self.handlers: dict[WorkflowPhase, AbstractPhaseHandler] = dict(handlers or {})
         self._default_handler = DefaultPhaseHandler()
+        self._contract_path = contract_path
         self._logger = logging.getLogger(
             f"artisan_contractor.{self.config.workflow_id}"
         )
@@ -1246,6 +1254,20 @@ class ArtisanContractorWorkflow:
                 try:
                     # --- Context contract: entry validation ---
                     validate_phase_entry(phase, context)
+
+                    # --- Enrichment validation (opt-in via contract_path) ---
+                    if self._contract_path:
+                        enrichment_result = validate_phase_boundary(
+                            phase, context, "entry", self._contract_path
+                        )
+                        if enrichment_result:
+                            try:
+                                from contextcore.contracts.propagation.otel import (
+                                    emit_boundary_result,
+                                )
+                                emit_boundary_result(enrichment_result)
+                            except ImportError:
+                                pass
 
                     result_dict = self._run_handler_with_timeout(
                         handler, phase, context, effective_timeout

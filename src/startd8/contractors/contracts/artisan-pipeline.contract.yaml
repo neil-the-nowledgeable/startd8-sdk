@@ -1,0 +1,249 @@
+# =============================================================================
+# Artisan Pipeline Context Propagation Contract
+# =============================================================================
+# Declares what context fields each phase requires, produces, and which
+# enrichment fields must propagate end-to-end through the pipeline.
+#
+# Schema: contextcore.contracts.propagation.schema.ContextContract
+# Version convention follows Weaver (start at 0.1.0 to signal instability).
+# =============================================================================
+
+schema_version: "0.1.0"
+pipeline_id: artisan
+description: >
+  Context propagation contract for the 7-phase Artisan contractor workflow.
+  Defines entry/exit requirements per phase and three end-to-end propagation
+  chains for domain classification, validator routing, and calibration.
+
+phases:
+
+  plan:
+    description: "Preflight checks + plan deconstruction"
+    entry:
+      required:
+        - name: project_root
+          type: str
+          severity: blocking
+          description: "Absolute path to project root directory"
+    exit:
+      required:
+        - name: enriched_seed_path
+          type: str
+          severity: blocking
+          description: "Path to the enriched seed YAML file"
+        - name: tasks
+          type: list
+          severity: blocking
+          description: "List of SeedTask objects from plan deconstruction"
+        - name: task_index
+          type: dict
+          severity: blocking
+          description: "Task ID to SeedTask mapping for O(1) lookups"
+        - name: plan_title
+          type: str
+          severity: blocking
+        - name: plan_goals
+          type: list
+          severity: blocking
+        - name: domain_summary
+          type: dict
+          severity: blocking
+          description: "Domain classification results from preflight"
+        - name: preflight_summary
+          type: dict
+          severity: blocking
+        - name: total_estimated_loc
+          type: int
+          severity: blocking
+      optional:
+        - name: architectural_context
+          type: dict
+          severity: advisory
+        - name: design_calibration
+          type: dict
+          severity: advisory
+          description: "Calibration data for output size limits"
+        - name: example_artifacts
+          type: dict
+          severity: advisory
+
+  scaffold:
+    description: "Lessons discovery and project scaffolding"
+    entry:
+      required:
+        - name: tasks
+          type: list
+          severity: blocking
+        - name: task_index
+          type: dict
+          severity: blocking
+        - name: project_root
+          type: str
+          severity: blocking
+    exit:
+      required:
+        - name: scaffold
+          type: dict
+          severity: blocking
+          description: "Scaffold results with directories_needed, directories_created, project_root"
+
+  design:
+    description: "Design documentation generation"
+    entry:
+      required:
+        - name: tasks
+          type: list
+          severity: blocking
+        - name: task_index
+          type: dict
+          severity: blocking
+    exit:
+      required:
+        - name: design_results
+          type: dict
+          severity: blocking
+
+  implement:
+    description: "Test construction + code development"
+    entry:
+      required:
+        - name: tasks
+          type: list
+          severity: blocking
+        - name: design_results
+          type: dict
+          severity: blocking
+      enrichment:
+        - name: domain_summary.domain
+          type: str
+          severity: warning
+          default: "unknown"
+          source_phase: plan
+          description: "Domain classification from preflight (e.g. web_application, data_pipeline)"
+        - name: domain_summary.prompt_constraints
+          type: list
+          severity: warning
+          default: []
+          source_phase: plan
+          description: "Domain-specific prompt constraints for code generation"
+        - name: domain_summary.post_generation_validators
+          type: list
+          severity: warning
+          default: []
+          source_phase: plan
+          description: "Domain-specific validators to run after code generation"
+        - name: design_calibration
+          type: dict
+          severity: advisory
+          default: {}
+          source_phase: plan
+          description: "Output size calibration data (max_output_tokens, etc.)"
+    exit:
+      required:
+        - name: implementation
+          type: dict
+          severity: blocking
+        - name: generation_results
+          type: dict
+          severity: blocking
+
+  test:
+    description: "Final testing and validation"
+    entry:
+      required:
+        - name: tasks
+          type: list
+          severity: blocking
+        - name: generation_results
+          type: dict
+          severity: blocking
+      enrichment:
+        - name: domain_summary.post_generation_validators
+          type: list
+          severity: warning
+          default: []
+          source_phase: plan
+          description: "Validators routed from plan phase for test execution"
+    exit:
+      required:
+        - name: test_results
+          type: dict
+          severity: blocking
+
+  review:
+    description: "Final assembly and validation"
+    entry:
+      required:
+        - name: generation_results
+          type: dict
+          severity: blocking
+    exit:
+      required:
+        - name: review_results
+          type: dict
+          severity: blocking
+
+  finalize:
+    description: "Retrospective, lessons learned, propagation validation"
+    entry:
+      required:
+        - name: tasks
+          type: list
+          severity: blocking
+        - name: generation_results
+          type: dict
+          severity: blocking
+    exit:
+      required:
+        - name: workflow_summary
+          type: dict
+          severity: blocking
+
+# =============================================================================
+# Propagation Chains
+# =============================================================================
+# End-to-end field flow declarations.  Each chain tracks a field from its
+# source phase through waypoints to its destination.
+
+propagation_chains:
+
+  - chain_id: domain_to_implement
+    description: >
+      Domain classification flows from plan preflight to implement phase
+      where it constrains code generation prompts.
+    source:
+      phase: plan
+      field: domain_summary.domain
+    waypoints: []
+    destination:
+      phase: implement
+      field: domain_summary.domain
+    severity: warning
+    verification: "dest not in (None, '', 'unknown')"
+
+  - chain_id: validators_to_test
+    description: >
+      Post-generation validators flow from plan enrichment through implement
+      to the test phase where they are resolved and executed.
+    source:
+      phase: plan
+      field: domain_summary.post_generation_validators
+    waypoints:
+      - phase: implement
+        field: domain_summary.post_generation_validators
+    destination:
+      phase: test
+      field: domain_summary.post_generation_validators
+    severity: warning
+
+  - chain_id: calibration_to_implement
+    description: >
+      Design calibration data flows from plan to implement where it sets
+      max_output_tokens and other generation constraints.
+    source:
+      phase: plan
+      field: design_calibration
+    destination:
+      phase: implement
+      field: design_calibration
+    severity: advisory

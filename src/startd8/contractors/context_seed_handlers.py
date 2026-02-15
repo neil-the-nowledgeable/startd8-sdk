@@ -3461,6 +3461,10 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
     ) -> dict[str, Any]:
         """Check that all tasks received expected context fields.
 
+        Attempts to use the contract-based PropagationTracker for chain
+        validation with OTel emission.  Falls back to the original inline
+        implementation if contextcore propagation module is not available.
+
         Args:
             context: Workflow context containing ``tasks`` list.
 
@@ -3468,6 +3472,43 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             Dict with ``total``, ``complete``, ``defaulted``, and
             optionally ``defaulted_tasks`` listing task IDs that fell back.
         """
+        # Try contract-based validation first
+        try:
+            from contextcore.contracts.propagation import (
+                ContractLoader,
+                PropagationTracker,
+                emit_propagation_summary,
+            )
+            from pathlib import Path
+
+            contract_yaml = Path(__file__).parent / "contracts" / "artisan-pipeline.contract.yaml"
+            if contract_yaml.exists():
+                contract = ContractLoader().load(contract_yaml)
+                tracker = PropagationTracker()
+                chain_results = tracker.validate_all_chains(contract, context)
+                emit_propagation_summary(chain_results)
+
+                # Convert chain results to legacy format for backward compat
+                from contextcore.contracts.types import ChainStatus
+                intact = sum(1 for r in chain_results if r.status == ChainStatus.INTACT)
+                total = len(chain_results)
+                return {
+                    "total": total,
+                    "complete": intact,
+                    "defaulted": total - intact,
+                    "defaulted_tasks": [
+                        r.chain_id for r in chain_results
+                        if r.status != ChainStatus.INTACT
+                    ],
+                }
+        except ImportError:
+            pass  # contextcore propagation not available — use fallback
+        except Exception as exc:
+            logger.warning(
+                "Contract-based propagation validation failed, using fallback: %s", exc
+            )
+
+        # Fallback: original inline implementation
         tasks = context.get("tasks", [])
         results: dict[str, Any] = {
             "total": len(tasks),

@@ -11,6 +11,7 @@ design rationale and docs/ARTISAN_REQUIREMENTS.md for per-phase context keys.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
@@ -341,3 +342,69 @@ def validate_phase_exit(phase: Any, context: Dict[str, Any]) -> None:
         model_cls.__name__,
         len(keys),
     )
+
+
+# ============================================================================
+# Contract-aware boundary validation (Layer 1 extension)
+# ============================================================================
+
+
+def validate_phase_boundary(
+    phase: Any,
+    context: Dict[str, Any],
+    direction: str = "entry",
+    contract_path: Optional[Path] = None,
+) -> Any:
+    """Extended validation with optional contract-aware enrichment checking.
+
+    Always runs the existing blocking validation (``validate_phase_entry`` or
+    ``validate_phase_exit``).  When a *contract_path* is provided and the
+    ``contextcore.contracts.propagation`` package is importable, additionally
+    validates enrichment fields and tracks propagation provenance.
+
+    This function preserves full backward compatibility — callers that do not
+    pass *contract_path* get identical behavior to calling
+    ``validate_phase_entry``/``validate_phase_exit`` directly.
+
+    Args:
+        phase: A ``WorkflowPhase`` enum member (or anything with ``.value``).
+        context: The shared mutable context dict.
+        direction: ``"entry"`` or ``"exit"``.
+        contract_path: Optional path to a propagation contract YAML file.
+
+    Returns:
+        A ``ContractValidationResult`` if contract validation ran, else ``None``.
+
+    Raises:
+        PhaseContextError: If blocking validation fails (same as before).
+    """
+    # 1. Always run existing validation (blocking fields)
+    if direction == "entry":
+        validate_phase_entry(phase, context)  # raises PhaseContextError
+    else:
+        validate_phase_exit(phase, context)  # raises PhaseContextError
+
+    # 2. If contract available, validate enrichment + track propagation
+    if contract_path is not None:
+        try:
+            from contextcore.contracts.propagation import (
+                BoundaryValidator,
+                ContractLoader,
+            )
+        except ImportError:
+            _logger.debug(
+                "contextcore.contracts.propagation not available — "
+                "skipping contract validation"
+            )
+            return None
+
+        phase_value = phase.value if hasattr(phase, "value") else str(phase)
+        contract = ContractLoader().load(contract_path)
+        validator = BoundaryValidator()
+
+        if direction == "entry":
+            return validator.validate_enrichment(phase_value, context, contract)
+        else:
+            return validator.validate_exit(phase_value, context, contract)
+
+    return None
