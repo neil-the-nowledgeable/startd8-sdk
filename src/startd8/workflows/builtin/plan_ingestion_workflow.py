@@ -2384,6 +2384,23 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "comprehensive": 49152,
             }.get(tier_name, 32768)
 
+            # --- WCP-005: Domain-aware token adjustment ---
+            enrichment = task.get("_enrichment", {})
+            domain = enrichment.get("domain", "unknown")
+            domain_token_multipliers = {
+                "config-toml": 0.5,
+                "config-yaml": 0.5,
+                "config-json": 0.5,
+                "non-python": 0.6,
+                "python-test": 0.8,
+                "python-single-module": 1.0,
+                "python-package-module": 1.0,
+                "unknown": 1.0,
+            }
+            domain_multiplier = domain_token_multipliers.get(domain, 1.0)
+            if domain_multiplier != 1.0:
+                implement_tokens = int(implement_tokens * domain_multiplier)
+
             calibration[task["task_id"]] = {
                 "depth_tier": tier_name,
                 "sections": tier["sections"],

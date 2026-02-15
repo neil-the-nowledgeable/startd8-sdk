@@ -1908,6 +1908,21 @@ class DevelopmentPhase:
                             chunk.chunk_id, enrichment.domain.value,
                             len(enrichment.prompt_constraints),
                         )
+                        # --- WCP-003: Emit context.propagated span event ---
+                        try:
+                            from opentelemetry import trace
+                            span = trace.get_current_span()
+                            if span and span.is_recording():
+                                span.add_event("context.propagated", attributes={
+                                    "context.field": "domain_constraints",
+                                    "context.value": enrichment.domain.value,
+                                    "context.source_phase": "domain_checklist",
+                                    "context.target_phase": "implement",
+                                    "context.task_id": chunk.chunk_id,
+                                    "context.constraint_count": len(enrichment.prompt_constraints),
+                                })
+                        except Exception:
+                            pass  # OTel not available — non-fatal
                 except Exception as e:
                     self.logger.warning(
                         "Chunk %s: domain checklist failed (non-fatal): %s",

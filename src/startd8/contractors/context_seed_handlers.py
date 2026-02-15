@@ -271,6 +271,26 @@ class SeedTask:
             if hint not in constraints:
                 constraints.append(hint)
 
+        # --- WCP-003: Emit context.defaulted span event when domain is missing ---
+        domain = enrichment.get("domain", "unknown")
+        if domain == "unknown":
+            try:
+                from opentelemetry import trace
+                span = trace.get_current_span()
+                if span and span.is_recording():
+                    span.add_event("context.defaulted", attributes={
+                        "context.field": "domain",
+                        "context.default_value": "unknown",
+                        "context.expected_source": "domain_preflight._enrichment",
+                        "context.task_id": entry.get("task_id", ""),
+                    })
+            except Exception:
+                pass  # OTel not available — non-fatal
+            logger.debug(
+                "SeedTask %s: domain defaulted to 'unknown' (enrichment missing or incomplete)",
+                entry.get("task_id", "?"),
+            )
+
         task = cls(
             task_id=entry.get("task_id", ""),
             title=entry.get("title", ""),
@@ -283,7 +303,7 @@ class SeedTask:
             target_files=context.get("target_files", []),
             estimated_loc=context.get("estimated_loc", 0),
             feature_id=context.get("feature_id", ""),
-            domain=enrichment.get("domain", "unknown"),
+            domain=domain,
             domain_reasoning=enrichment.get("domain_reasoning", ""),
             environment_checks=enrichment.get("environment_checks", []),
             prompt_constraints=constraints,
@@ -1209,9 +1229,13 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         self,
         handler_config: Optional[HandlerConfig] = None,
         code_generator: Optional[CodeGenerator] = None,
+        enriched_seed_path: Optional[Path] = None,
+        project_root: Optional[Path] = None,
     ) -> None:
         self.config = handler_config or HandlerConfig()
         self._code_generator = code_generator
+        self._enriched_seed_path = enriched_seed_path
+        self._project_root = project_root
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -2367,11 +2391,34 @@ class Test{class_name}:
             state_store = JsonFileStateStore(
                 directory=str(project_root / ".startd8" / "state"),
             )
+            # --- WCP-006: Wire DomainChecklist to DevelopmentPhase ---
+            domain_checklist = None
+            enriched_seed_path = (
+                self._enriched_seed_path
+                or context.get("enriched_seed_path")
+            )
+            if enriched_seed_path:
+                try:
+                    from startd8.contractors.artisan_phases.domain_checklist import DomainChecklist
+                    domain_checklist = DomainChecklist(
+                        project_root=project_root,
+                        enriched_seed_path=Path(enriched_seed_path),
+                    )
+                    logger.info(
+                        "IMPLEMENT: DomainChecklist configured (seed=%s)",
+                        enriched_seed_path,
+                    )
+                except Exception as e:
+                    logger.warning(
+                        "IMPLEMENT: DomainChecklist init failed (non-fatal): %s", e,
+                    )
+
             dev_phase = DevelopmentPhase(
                 executor=executor,
                 test_runner=DefaultTestRunner(),
                 state_store=state_store,
                 max_parallel=4,
+                domain_checklist=domain_checklist,
             )
 
             # Bridge sync → async
@@ -2589,6 +2636,29 @@ class TestPhaseHandler(AbstractPhaseHandler):
             if module_name:
                 return [py, "-c", f"import {module_name}"]
             return None
+
+        # --- WCP-008: Enrichment-produced domain validators ---
+        # These are AST-based validators from domain preflight rules.
+        # They run as in-process checks via a wrapper script.
+        enrichment_validators = {
+            "relative_imports_valid",
+            "deps_available",
+            "no_circular_imports",
+            "no_markdown_fences",
+            "merge_damage",
+            "no_relative_imports",
+            "definition_ordering",
+            "test_naming",
+            "no_hardcoded_secrets",
+            "no_substring_tag_matching",
+        }
+        if validator_name in enrichment_validators:
+            # Run the validator via the preflight rules_validators module
+            return [
+                py, "-c",
+                f"from startd8.workflows.builtin.preflight_rules.rules_validators import run_validator; "
+                f"run_validator({validator_name!r}, {file_args!r})",
+            ]
 
         logger.warning("TEST: unknown validator %r — skipping", validator_name)
         return None
@@ -3381,6 +3451,69 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         self.config = handler_config or HandlerConfig()
 
     # ------------------------------------------------------------------
+    # WCP-004: Propagation completeness validation
+    # ------------------------------------------------------------------
+
+    REQUIRED_CONTEXT_FIELDS = ["domain", "domain_reasoning", "prompt_constraints"]
+
+    def _validate_propagation_completeness(
+        self, context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Check that all tasks received expected context fields.
+
+        Args:
+            context: Workflow context containing ``tasks`` list.
+
+        Returns:
+            Dict with ``total``, ``complete``, ``defaulted``, and
+            optionally ``defaulted_tasks`` listing task IDs that fell back.
+        """
+        tasks = context.get("tasks", [])
+        results: dict[str, Any] = {
+            "total": len(tasks),
+            "complete": 0,
+            "defaulted": 0,
+            "defaulted_tasks": [],
+        }
+
+        for task in tasks:
+            all_present = True
+            for field in self.REQUIRED_CONTEXT_FIELDS:
+                value = getattr(task, field, None)
+                if value in (None, "", "unknown", []):
+                    results["defaulted"] += 1
+                    results["defaulted_tasks"].append(
+                        getattr(task, "task_id", "?"),
+                    )
+                    logger.warning(
+                        "FINALIZE: context field '%s' not propagated for task %s",
+                        field,
+                        getattr(task, "task_id", "?"),
+                    )
+                    all_present = False
+                    break
+            if all_present:
+                results["complete"] += 1
+
+        # Emit span event for propagation summary
+        try:
+            from opentelemetry import trace
+            span = trace.get_current_span()
+            if span and span.is_recording():
+                span.add_event("context.propagation_summary", attributes={
+                    "context.total_tasks": results["total"],
+                    "context.complete": results["complete"],
+                    "context.defaulted": results["defaulted"],
+                    "context.completeness_pct": round(
+                        results["complete"] / max(results["total"], 1) * 100, 1
+                    ),
+                })
+        except Exception:
+            pass  # OTel not available — non-fatal
+
+        return results
+
+    # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
@@ -3825,6 +3958,7 @@ class ContextSeedHandlers:
             WorkflowPhase.IMPLEMENT: ImplementPhaseHandler(
                 handler_config=config,
                 code_generator=code_generator,
+                enriched_seed_path=Path(enriched_seed_path),
             ),
             WorkflowPhase.TEST: TestPhaseHandler(handler_config=config),
             WorkflowPhase.REVIEW: ReviewPhaseHandler(handler_config=config),
