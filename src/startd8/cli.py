@@ -1507,6 +1507,119 @@ def workflow_templates():
     console.print("[dim]Usage: startd8 workflow new <name> --template <template>[/dim]")
 
 
+# =============================================================================
+# OTel Telemetry Commands
+# =============================================================================
+
+
+@app.command("otel-status")
+def otel_status():
+    """Show OpenTelemetry telemetry status and diagnostics."""
+    from .otel import get_otel_runtime_state, format_telemetry_banner, OTEL_AVAILABLE
+
+    state = get_otel_runtime_state()
+    banner = format_telemetry_banner(state)
+
+    # Determine status color
+    if state["will_configure"]:
+        status_style = "green"
+        status_label = "ACTIVE"
+    elif state["severity"] == "error":
+        status_style = "red"
+        status_label = "ERROR"
+    else:
+        status_style = "yellow"
+        status_label = "INACTIVE"
+
+    # Build detail lines
+    import os
+    endpoint_env = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "")
+    mode_env = os.getenv("STARTD8_OTEL", "")
+
+    # Config file values
+    from .otel import _resolve_config_endpoint, _resolve_config_mode
+    config_endpoint = _resolve_config_endpoint() or "(not set)"
+    config_mode = _resolve_config_mode() or "(not set)"
+
+    lines = [
+        f"[bold {status_style}]Status: {status_label}[/bold {status_style}]",
+        f"[bold]Banner:[/bold] {banner}",
+        "",
+        f"[bold]Mode:[/bold]",
+        f"  Env (STARTD8_OTEL):       {mode_env or '(not set)'}",
+        f"  Config file:              {config_mode}",
+        f"  Effective:                {state['mode']}",
+        "",
+        f"[bold]Endpoint:[/bold]",
+        f"  Env (OTEL_EXPORTER_...):  {endpoint_env or '(not set)'}",
+        f"  Config file:              {config_endpoint}",
+        f"  Effective:                {state['endpoint_effective'] or '(none)'}",
+        "",
+        f"[bold]OTel packages installed:[/bold] {'Yes' if OTEL_AVAILABLE else 'No'}",
+        f"[bold]Endpoint reachable:[/bold]     {state['endpoint_reachable'] if state['endpoint_reachable'] is not None else 'not checked'}",
+        f"[bold]Fail-fast:[/bold]              {state['fail_fast']}",
+        f"[bold]Reason:[/bold]                 {state['reason']}",
+    ]
+
+    # Actionable suggestions
+    if not state["will_configure"]:
+        lines.append("")
+        lines.append("[bold]Suggestions:[/bold]")
+        if not OTEL_AVAILABLE:
+            lines.append("  - Install OTel: pip install opentelemetry-sdk opentelemetry-exporter-otlp-proto-grpc")
+        elif state["reason"] == "disabled_mode":
+            lines.append("  - Remove STARTD8_OTEL=disabled or set to 'auto'")
+        elif state["reason"] in ("auto_no_collector_found", "auto_endpoint_unreachable", "auto_config_endpoint_unreachable"):
+            lines.append("  - Start a collector on localhost:4317 (e.g. Alloy, OTel Collector)")
+            lines.append("  - Or persist: startd8 otel-configure --endpoint http://your-collector:4317")
+        elif state["reason"] == "enabled_missing_endpoint_fail_fast":
+            lines.append("  - Set OTEL_EXPORTER_OTLP_ENDPOINT or run: startd8 otel-configure --endpoint ...")
+
+    console.print(Panel("\n".join(lines), title="OpenTelemetry Status", border_style=status_style))
+
+
+@app.command("otel-configure")
+def otel_configure(
+    endpoint: Optional[str] = typer.Option(None, "--endpoint", "-e", help="OTLP endpoint URL (e.g. http://localhost:4317)"),
+    mode: Optional[str] = typer.Option(None, "--mode", "-m", help="OTel mode: enabled, auto, or disabled"),
+    clear: bool = typer.Option(False, "--clear", help="Clear all OTel config settings"),
+):
+    """Persist OTel telemetry settings to ~/.startd8/config.json.
+
+    Example:
+        startd8 otel-configure --endpoint http://localhost:4317
+        startd8 otel-configure --mode enabled
+        startd8 otel-configure --clear
+    """
+    from .config import get_config_manager
+
+    config_mgr = get_config_manager()
+
+    if clear:
+        config_mgr.clear_otel_setting("endpoint")
+        config_mgr.clear_otel_setting("mode")
+        console.print("[green]Cleared OTel config settings.[/green]")
+        return
+
+    if endpoint is None and mode is None:
+        console.print("[yellow]Provide --endpoint and/or --mode, or --clear.[/yellow]")
+        raise typer.Exit(1)
+
+    if mode is not None:
+        if mode not in ("enabled", "auto", "disabled"):
+            console.print(f"[red]Invalid mode: {mode}. Must be enabled, auto, or disabled.[/red]")
+            raise typer.Exit(1)
+        config_mgr.set_otel_setting("mode", mode)
+        console.print(f"[green]Set otel.mode = {mode}[/green]")
+
+    if endpoint is not None:
+        config_mgr.set_otel_setting("endpoint", endpoint)
+        console.print(f"[green]Set otel.endpoint = {endpoint}[/green]")
+
+    console.print(f"[dim]Config saved to: {config_mgr.get_config_file_path()}[/dim]")
+    console.print("[dim]Run 'startd8 otel-status' to verify.[/dim]")
+
+
 @app.command("serve")
 def serve(
     port: int = typer.Option(8080, "--port", "-p", help="Server port"),

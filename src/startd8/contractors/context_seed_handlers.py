@@ -1722,15 +1722,14 @@ class Test{class_name}:
                             f"~{_implied_loc} LOC of implementation. The seed "
                             f"estimated {task.estimated_loc} LOC, which placed "
                             f"this task in the '{task_cal.get('depth_tier', 'standard')}' "
-                            f"depth tier. Consider re-calibrating with a higher "
-                            f"estimated_loc or using --design-max-tokens to "
-                            f"increase the output token budget."
+                            f"depth tier. Token budget will be auto-recalibrated "
+                            f"based on design-implied LOC."
                         ),
                     })
                     logger.warning(
                         "LOC mismatch for task %s: design implies ~%d LOC, "
                         "seed estimates %d LOC (depth_tier=%s). "
-                        "Output may be truncated or incomplete.",
+                        "Token budget will be auto-recalibrated.",
                         task.task_id,
                         _implied_loc,
                         task.estimated_loc,

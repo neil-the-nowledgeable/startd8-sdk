@@ -7,18 +7,24 @@ Phase 1E tests covering:
 - AgentFramework(enable_otel=True) triggers configure
 - arun() creates spans
 - Pipeline parent→step span nesting
+- Defense-in-depth auto-probe cascade (env → config → localhost:4317)
+- Config file OTel settings
+- Telemetry banner formatting
 """
 
 import os
+import json
 import asyncio
+import tempfile
+from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 
 class TestAutoConfigureOtel:
     """Tests for auto_configure_otel()."""
 
-    def test_auto_by_default_with_otel(self):
-        """Unset STARTD8_OTEL defaults to 'auto'; skips when endpoint is unset."""
+    def test_auto_by_default_with_otel_no_collector(self):
+        """Unset STARTD8_OTEL defaults to 'auto'; auto-probes localhost:4317 (unreachable → skip)."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("STARTD8_OTEL", None)
             os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
@@ -27,13 +33,36 @@ class TestAutoConfigureOtel:
             original = otel_mod.OTEL_AVAILABLE
             otel_mod.OTEL_AVAILABLE = True
             try:
-                with patch.object(otel_mod, "_otlp_endpoint_reachable") as mock_reach, \
+                with patch.object(otel_mod, "_otlp_endpoint_reachable", return_value=False) as mock_reach, \
+                     patch.object(otel_mod, "_resolve_config_endpoint", return_value=None), \
                      patch.object(otel_mod, "configure_otel") as mock_configure:
                     result = otel_mod.auto_configure_otel()
-                mock_reach.assert_not_called()
+                # Auto-probe should be called on localhost:4317
+                mock_reach.assert_called_once()
                 mock_configure.assert_not_called()
                 assert result["tracer"] is None
                 assert result["meter"] is None
+            finally:
+                otel_mod.OTEL_AVAILABLE = original
+
+    def test_auto_by_default_with_otel_collector_found(self):
+        """Unset STARTD8_OTEL defaults to 'auto'; auto-probes localhost:4317 (reachable → configure)."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("STARTD8_OTEL", None)
+            os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)
+            import startd8.otel as otel_mod
+            otel_mod._configured = False
+            original = otel_mod.OTEL_AVAILABLE
+            otel_mod.OTEL_AVAILABLE = True
+            try:
+                mock_result = {"tracer": "t", "meter": "m", "resource_attributes": {}}
+                with patch.object(otel_mod, "_otlp_endpoint_reachable", return_value=True), \
+                     patch.object(otel_mod, "_resolve_config_endpoint", return_value=None), \
+                     patch.object(otel_mod, "configure_otel", return_value=mock_result) as mock_configure:
+                    result = otel_mod.auto_configure_otel()
+                mock_configure.assert_called_once()
+                assert result["tracer"] == "t"
+                assert otel_mod._configured is True
             finally:
                 otel_mod.OTEL_AVAILABLE = original
 
@@ -169,8 +198,11 @@ class TestAutoConfigureOtel:
             assert call_args.otlp_endpoint == "http://custom:4317"
 
     def test_auto_skips_when_endpoint_unreachable(self):
-        """STARTD8_OTEL=auto skips OTLP when endpoint is unreachable."""
-        with patch.dict(os.environ, {"STARTD8_OTEL": "auto"}):
+        """STARTD8_OTEL=auto skips OTLP when explicit endpoint is unreachable."""
+        with patch.dict(os.environ, {
+            "STARTD8_OTEL": "auto",
+            "OTEL_EXPORTER_OTLP_ENDPOINT": "http://unreachable:4317",
+        }):
             import startd8.otel as otel_mod
             otel_mod._configured = False
             original = otel_mod.OTEL_AVAILABLE

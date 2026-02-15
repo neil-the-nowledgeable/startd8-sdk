@@ -24,6 +24,7 @@ import logging
 import os
 import socket
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -464,6 +465,48 @@ def _otlp_endpoint_reachable(endpoint: str, timeout: float = 1.0) -> bool:
         return False
 
 
+_DEFAULT_OTLP_ENDPOINT = "http://localhost:4317"
+
+
+def _resolve_config_endpoint() -> Optional[str]:
+    """Read ``otel.endpoint`` from ``~/.startd8/config.json``.
+
+    Reads the config file directly (JSON) to avoid circular imports
+    with :mod:`startd8.config`.  Returns *None* when the file is
+    absent, unparseable, or the value is not set.
+    """
+    import json as _json
+    config_path = Path.home() / ".startd8" / "config.json"
+    try:
+        with open(config_path, "r") as fh:
+            data = _json.load(fh)
+        val = data.get("otel", {}).get("endpoint")
+        if val and isinstance(val, str) and val.strip():
+            return val.strip()
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
+def _resolve_config_mode() -> Optional[str]:
+    """Read ``otel.mode`` from ``~/.startd8/config.json``.
+
+    Returns *None* when the file is absent, unparseable, or the value
+    is not set.
+    """
+    import json as _json
+    config_path = Path.home() / ".startd8" / "config.json"
+    try:
+        with open(config_path, "r") as fh:
+            data = _json.load(fh)
+        val = data.get("otel", {}).get("mode")
+        if val and isinstance(val, str) and val.strip():
+            return val.strip().lower()
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    return None
+
+
 def _is_truthy_env(value: Optional[str]) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
@@ -484,7 +527,9 @@ def get_otel_runtime_state(connectivity_timeout: float = 1.0) -> Dict[str, Any]:
         - message: human-readable explanation
         - endpoint_reachable: optional bool when checked
     """
-    mode = os.getenv("STARTD8_OTEL", "auto").strip().lower()
+    mode = os.getenv("STARTD8_OTEL", "").strip().lower()
+    if not mode:
+        mode = _resolve_config_mode() or "auto"
     if mode not in {"enabled", "auto", "disabled"}:
         mode = "auto"
 
@@ -521,32 +566,66 @@ def get_otel_runtime_state(connectivity_timeout: float = 1.0) -> Dict[str, Any]:
         return state
 
     if mode == "auto":
-        if not endpoint_env:
-            state.update(
-                reason="auto_endpoint_unset",
-                message=(
-                    "STARTD8_OTEL=auto with no OTEL_EXPORTER_OTLP_ENDPOINT; "
-                    "telemetry export is skipped."
-                ),
-            )
+        # Resolution cascade: env var → config file → auto-probe default
+        if endpoint_env:
+            # Tier 1: explicit env var
+            candidate = endpoint_env
+            reachable = _otlp_endpoint_reachable(candidate, timeout=connectivity_timeout)
+            state["endpoint_effective"] = candidate
+            state["endpoint_reachable"] = reachable
+            if reachable:
+                state.update(
+                    will_configure=True,
+                    reason="auto_endpoint_reachable",
+                    message=f"Collector reachable at {candidate}; telemetry export enabled.",
+                )
+            else:
+                state.update(
+                    severity="warning",
+                    reason="auto_endpoint_unreachable",
+                    message=(
+                        f"Collector unreachable at {candidate}; telemetry export skipped in auto mode."
+                    ),
+                )
             return state
 
-        reachable = _otlp_endpoint_reachable(endpoint_env, timeout=connectivity_timeout)
-        state["endpoint_effective"] = endpoint_env
+        # Tier 2: config file endpoint
+        config_endpoint = _resolve_config_endpoint()
+        if config_endpoint:
+            reachable = _otlp_endpoint_reachable(config_endpoint, timeout=connectivity_timeout)
+            state["endpoint_effective"] = config_endpoint
+            state["endpoint_reachable"] = reachable
+            if reachable:
+                state.update(
+                    will_configure=True,
+                    reason="auto_config_endpoint_reachable",
+                    message=f"Collector reachable at {config_endpoint} (from config); telemetry export enabled.",
+                )
+            else:
+                state.update(
+                    severity="warning",
+                    reason="auto_config_endpoint_unreachable",
+                    message=(
+                        f"Collector unreachable at {config_endpoint} (from config); telemetry export skipped."
+                    ),
+                )
+            return state
+
+        # Tier 3: auto-probe default endpoint
+        default_ep = _DEFAULT_OTLP_ENDPOINT
+        reachable = _otlp_endpoint_reachable(default_ep, timeout=connectivity_timeout)
+        state["endpoint_effective"] = default_ep
         state["endpoint_reachable"] = reachable
         if reachable:
             state.update(
                 will_configure=True,
-                reason="auto_endpoint_reachable",
-                message=f"Collector reachable at {endpoint_env}; telemetry export enabled.",
+                reason="auto_discovered_default",
+                message=f"Collector auto-discovered at {default_ep}; telemetry export enabled.",
             )
         else:
             state.update(
-                severity="warning",
-                reason="auto_endpoint_unreachable",
-                message=(
-                    f"Collector unreachable at {endpoint_env}; telemetry export skipped in auto mode."
-                ),
+                reason="auto_no_collector_found",
+                message="No collector found; telemetry export skipped.",
             )
         return state
 
@@ -585,19 +664,58 @@ def get_otel_runtime_state(connectivity_timeout: float = 1.0) -> Dict[str, Any]:
     return state
 
 
+def format_telemetry_banner(state: Dict[str, Any]) -> str:
+    """Format a one-line telemetry status banner from runtime state.
+
+    Args:
+        state: Dict returned by :func:`get_otel_runtime_state`.
+
+    Returns:
+        Human-readable one-liner like
+        ``"Telemetry: ACTIVE -> localhost:4317 (auto-discovered)"``
+    """
+    reason = state.get("reason", "unknown")
+    endpoint = state.get("endpoint_effective") or ""
+
+    if state.get("will_configure"):
+        # Derive a human-readable source hint
+        source_hints = {
+            "auto_endpoint_reachable": "env var",
+            "auto_config_endpoint_reachable": "config file",
+            "auto_discovered_default": "auto-discovered",
+            "enabled_mode": "enabled mode",
+        }
+        hint = source_hints.get(reason, reason)
+        return f"Telemetry: ACTIVE -> {endpoint} ({hint})"
+
+    inactive_hints = {
+        "disabled_mode": "disabled by STARTD8_OTEL=disabled",
+        "otel_packages_missing": "OTel packages not installed",
+        "auto_no_collector_found": "no collector found",
+        "auto_endpoint_unreachable": f"collector unreachable at {endpoint}",
+        "auto_config_endpoint_unreachable": f"collector unreachable at {endpoint} (config)",
+        "auto_endpoint_unset": "no endpoint configured",
+        "enabled_missing_endpoint_fail_fast": "missing endpoint (fail-fast)",
+        "enabled_endpoint_unreachable_fail_fast": f"collector unreachable at {endpoint} (fail-fast)",
+    }
+    hint = inactive_hints.get(reason, reason)
+    return f"Telemetry: INACTIVE -- {hint}"
+
+
 def auto_configure_otel() -> Dict[str, Any]:
     """
     Auto-configure OTel based on the STARTD8_OTEL environment variable.
 
     Modes:
         - ``enabled``: Always configure OTel (default endpoint if none provided).
-        - ``auto`` (default): Configure only when OTel is installed and an
-          explicit ``OTEL_EXPORTER_OTLP_ENDPOINT`` is provided.
+        - ``auto`` (default): Configure only when OTel is installed and a
+          collector is reachable (env var, config file, or localhost:4317).
         - ``disabled``: Do nothing.
 
-    Endpoint behavior:
-        - In ``auto`` mode, no endpoint means no OTLP setup.
-        - In ``enabled`` mode, endpoint defaults to ``http://localhost:4317``.
+    Resolution cascade (auto mode):
+        1. ``OTEL_EXPORTER_OTLP_ENDPOINT`` env var
+        2. ``~/.startd8/config.json`` → ``otel.endpoint``
+        3. Auto-probe ``http://localhost:4317``
 
     Returns:
         Dict with 'tracer', 'meter', 'resource_attributes' keys (values may be None).
@@ -609,13 +727,15 @@ def auto_configure_otel() -> Dict[str, Any]:
     state = get_otel_runtime_state()
     _otel_logger = logging.getLogger("startd8.otel")
 
+    banner = format_telemetry_banner(state)
+    _otel_logger.info("%s", banner)
+
     if not state["will_configure"]:
         if state["severity"] == "error":
             _otel_logger.error("%s", state["message"])
             if _is_truthy_env(os.getenv("STARTD8_OTEL_HARD_FAIL")):
                 raise RuntimeError(state["message"])
             return {"tracer": None, "meter": None, "resource_attributes": {}}
-        _otel_logger.info("%s", state["message"])
         return {"tracer": None, "meter": None, "resource_attributes": {}}
 
     config = OTelConfig(otlp_endpoint=state["endpoint_effective"])
@@ -674,6 +794,7 @@ __all__ = [
     "configure_otel_with_openllmetry",
     "auto_configure_otel",
     "get_otel_runtime_state",
+    "format_telemetry_banner",
     "shutdown_otel",
     "add_project_context_to_span",
 ]

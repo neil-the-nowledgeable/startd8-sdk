@@ -922,6 +922,14 @@ class ArtisanContractorWorkflow:
             for idx in range(start_index):
                 phase_results.append(self._build_skipped_result(self.phases[idx]))
 
+        # Emit telemetry status banner
+        try:
+            from startd8.otel import get_otel_runtime_state, format_telemetry_banner
+            _telem_state = get_otel_runtime_state()
+            self._logger.info(format_telemetry_banner(_telem_state))
+        except Exception:
+            pass
+
         # Start OTel root span
         root_span_context = self.tracer.start_as_current_span(
             f"workflow.{config.workflow_id}",

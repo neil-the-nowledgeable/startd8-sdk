@@ -81,6 +81,10 @@ class ConfigManager:
                 "show_mock_in_workflows": False,  # Show mock agents in workflow agent selection
                 "agents_per_page": 10
             },
+            "otel": {
+                "endpoint": None,
+                "mode": None,
+            },
             "artisan": {
                 "lead_agent": None,
                 "drafter_agent": None,
@@ -344,6 +348,53 @@ class ConfigManager:
         """
         self._config["resilience"] = config.to_dict()
         self._save_config()
+
+    # OTel Configuration
+
+    def get_otel_setting(self, key: str, default: Any = None) -> Any:
+        """Get a single OTel setting with env var override.
+
+        Priority: env var ``STARTD8_OTEL_{KEY}`` > config file > *default*.
+
+        Args:
+            key: Setting name (snake_case, e.g. ``"endpoint"``).
+            default: Fallback if not set anywhere.
+
+        Returns:
+            The resolved value.
+        """
+        env_var = f"STARTD8_OTEL_{key.upper()}"
+        env_val = os.getenv(env_var)
+        if env_val is not None:
+            return env_val
+
+        cfg_val = self._config.get("otel", {}).get(key)
+        if cfg_val is not None:
+            return cfg_val
+
+        return default
+
+    def set_otel_setting(self, key: str, value: Any) -> None:
+        """Persist an OTel setting to the config file.
+
+        Args:
+            key: Setting name (snake_case).
+            value: The value to store.
+        """
+        if "otel" not in self._config:
+            self._config["otel"] = dict(self._default_config()["otel"])
+        self._config["otel"][key] = value
+        self._save_config()
+
+    def clear_otel_setting(self, key: str) -> None:
+        """Reset an OTel setting back to None (use default).
+
+        Args:
+            key: Setting name (snake_case).
+        """
+        if "otel" in self._config and key in self._config["otel"]:
+            self._config["otel"][key] = None
+            self._save_config()
 
     # Artisan Workflow Configuration
 
