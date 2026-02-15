@@ -116,6 +116,7 @@ class BaseAgent(ABC):
         self.model = model
         self.cost_tracker = cost_tracker
         self.budget_manager = budget_manager
+        self._sync_loop: Optional[asyncio.AbstractEventLoop] = None
 
     @property
     def agent_name(self) -> str:
@@ -127,6 +128,19 @@ class BaseAgent(ABC):
         """
         return self.name
 
+    def _get_event_loop(self) -> asyncio.AbstractEventLoop:
+        """Get or create a persistent event loop for synchronous bridge calls.
+
+        Using a persistent loop (instead of ``asyncio.run()`` which
+        creates/destroys a loop per call) prevents ``RuntimeError: Event
+        loop is closed`` from httpx connections that outlive the loop
+        that created them.  This is required on Python 3.12+ where
+        asyncio teardown is stricter about pending transports.
+        """
+        if self._sync_loop is None or self._sync_loop.is_closed():
+            self._sync_loop = asyncio.new_event_loop()
+        return self._sync_loop
+
     def cleanup(self):
         """
         Cleanup resources synchronously.
@@ -134,8 +148,13 @@ class BaseAgent(ABC):
         This should be called before the event loop closes to ensure
         async clients are properly closed.
         """
-        # Base implementation - subclasses should override if they have async clients
-        pass
+        # Close the persistent sync loop if we own one
+        if self._sync_loop is not None and not self._sync_loop.is_closed():
+            try:
+                self._sync_loop.close()
+            except Exception:
+                pass
+            self._sync_loop = None
 
     async def acleanup(self):
         """
@@ -206,8 +225,11 @@ class BaseAgent(ABC):
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            # No running loop, safe to use asyncio.run
-            return asyncio.run(self.agenerate(prompt, **kwargs))
+            # No running loop — use a persistent loop to keep httpx
+            # connections alive across calls (prevents Python >=3.12
+            # "Event loop is closed" errors from asyncio.run teardown).
+            loop = self._get_event_loop()
+            return loop.run_until_complete(self.agenerate(prompt, **kwargs))
 
         # Running inside an existing event loop (e.g. Jupyter/FastAPI).
         # Bridge by running the coroutine in a new thread + event loop.
@@ -510,8 +532,9 @@ class BaseAgent(ABC):
             try:
                 asyncio.get_running_loop()
             except RuntimeError:
-                # No running loop, safe to use asyncio.run directly
-                response_text, response_time_ms, token_usage = asyncio.run(
+                # No running loop — use persistent loop (same as generate())
+                loop = self._get_event_loop()
+                response_text, response_time_ms, token_usage = loop.run_until_complete(
                     self._run_with_cost_tracking(
                         prompt=prompt,
                         prompt_id=prompt_id,

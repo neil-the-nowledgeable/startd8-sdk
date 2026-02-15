@@ -459,12 +459,12 @@ class OpenAICompatibleAgent(BaseAgent):
         """
         Cleanup async client resources.
 
-        Handles cleanup gracefully even if event loop is closed.
-        Suppresses RuntimeError when event loop is closed.
+        Uses the persistent sync loop (from BaseAgent) when available so
+        that httpx connections are closed on the same loop that created
+        them, avoiding ``RuntimeError: Event loop is closed``.
         """
         if hasattr(self, 'async_client') and self.async_client:
             try:
-                # Check if we can access the underlying httpx client
                 client = None
                 if hasattr(self.async_client, '_client'):
                     client = self.async_client._client
@@ -472,47 +472,42 @@ class OpenAICompatibleAgent(BaseAgent):
                     client = self.async_client.client
 
                 if client and hasattr(client, 'aclose'):
-                    # Try to close if event loop is available
-                    try:
-                        loop = asyncio.get_running_loop()
-                        if not loop.is_closed():
-                            # Schedule cleanup task
-                            try:
-                                asyncio.create_task(client.aclose())
-                            except RuntimeError:
-                                # Event loop closing, can't schedule tasks
-                                pass
-                    except RuntimeError:
-                        # No running loop - event loop may be closed
-                        # Try to get event loop, but handle closed case gracefully
+                    # Prefer the persistent sync loop — it created the
+                    # connections so closing on it avoids cross-loop errors.
+                    loop = getattr(self, '_sync_loop', None)
+                    if loop is not None and not loop.is_closed():
                         try:
-                            loop = asyncio.get_event_loop()
+                            loop.run_until_complete(client.aclose())
+                        except RuntimeError:
+                            pass
+                    else:
+                        # Fallback: try whatever loop is available
+                        try:
+                            loop = asyncio.get_running_loop()
                             if not loop.is_closed():
                                 try:
-                                    loop.run_until_complete(client.aclose())
-                                except RuntimeError as e:
-                                    # Event loop is closing/closed - suppress error
-                                    if 'Event loop is closed' not in str(e):
-                                        # Only suppress the specific "Event loop is closed" error
-                                        pass
+                                    asyncio.create_task(client.aclose())
+                                except RuntimeError:
+                                    pass
                         except RuntimeError:
-                            # Event loop is closed or doesn't exist
-                            # httpx will cleanup on Python exit - suppress error
-                            pass
-            except RuntimeError as e:
-                # Suppress "Event loop is closed" errors during cleanup
-                if 'Event loop is closed' not in str(e):
-                    # Re-raise if it's a different RuntimeError
-                    raise
+                            try:
+                                loop = asyncio.get_event_loop()
+                                if not loop.is_closed():
+                                    try:
+                                        loop.run_until_complete(client.aclose())
+                                    except RuntimeError:
+                                        pass
+                            except RuntimeError:
+                                pass
             except Exception as e:
-                # Ignore all other cleanup errors
-                # Log at debug level for troubleshooting
                 logger.debug(
                     f"Error during {self.__class__.__name__} cleanup (ignored): {e}",
                     exc_info=False,
                     extra={"agent_name": self.name, "error_type": type(e).__name__}
                 )
                 pass
+        # Close the persistent event loop last (after async clients)
+        super().cleanup()
 
     async def acleanup(self):
         """Async cleanup - properly closes async client"""
