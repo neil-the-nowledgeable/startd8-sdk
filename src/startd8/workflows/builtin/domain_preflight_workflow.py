@@ -587,7 +587,14 @@ class DomainPreflightWorkflow(WorkflowBase):
 
                 # Use first target file for classification
                 target_file = target_files[0] if target_files else ""
+                task_title = task.get("title", "")
+                task_labels = task.get("labels", [])
                 if not target_file:
+                    logger.warning(
+                        "DOMAIN unclassified: %s (%s) — no target files. "
+                        "labels=%s, title=%r",
+                        task_id, task_title, task_labels, task_title,
+                    )
                     enrichments.append(TaskEnrichment(
                         task_id=task_id,
                         domain=TaskDomain.UNKNOWN,
@@ -601,6 +608,21 @@ class DomainPreflightWorkflow(WorkflowBase):
                 classification.task_id = task_id
                 domain = classification.domain
                 domain_summary[domain.value] = domain_summary.get(domain.value, 0) + 1
+
+                if domain == TaskDomain.UNKNOWN:
+                    logger.warning(
+                        "DOMAIN unclassified: %s (%s) → unknown. "
+                        "target=%s, labels=%s, reasoning=%s",
+                        task_id, task_title, target_file,
+                        task_labels, classification.reasoning,
+                    )
+                else:
+                    logger.info(
+                        "DOMAIN classified: %s (%s) → %s. "
+                        "target=%s, reasoning=%s",
+                        task_id, task_title, domain.value,
+                        target_file, classification.reasoning,
+                    )
 
                 # Check — per-file domain checks
                 checks = self._run_environment_checks(

@@ -396,6 +396,51 @@ def main() -> int:
         if not task_filter:
             parser.error("--task-filter requires at least one non-empty task ID")
 
+    # ------------------------------------------------------------------
+    # Auto-enrich: detect unenriched seed and run DomainPreflightWorkflow
+    # ------------------------------------------------------------------
+    try:
+        seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
+        tasks = seed_data.get("tasks", [])
+        has_enrichment = any(
+            t.get("_enrichment") for t in tasks
+        )
+        if tasks and not has_enrichment:
+            logger.info(
+                "Seed lacks _enrichment data — running DomainPreflightWorkflow "
+                "to classify domains and add prompt constraints"
+            )
+            from startd8.workflows.builtin.domain_preflight_workflow import (
+                DomainPreflightWorkflow,
+            )
+            preflight = DomainPreflightWorkflow()
+            preflight_result = preflight.run({
+                "context_seed_path": str(seed_path),
+                "project_root": str(Path(args.project_root).resolve()),
+            })
+            if preflight_result.success:
+                enriched_path = Path(
+                    preflight_result.output["enriched_seed_path"]
+                )
+                logger.info(
+                    "Auto-enriched seed written: %s (domains: %s)",
+                    enriched_path,
+                    preflight_result.output.get("domain_summary", {}),
+                )
+                # Use the enriched seed going forward
+                seed_path = enriched_path
+            else:
+                logger.warning(
+                    "DomainPreflightWorkflow failed: %s — continuing "
+                    "with unenriched seed",
+                    preflight_result.error,
+                )
+    except Exception as exc:
+        logger.warning(
+            "Auto-enrichment check failed: %s — continuing with original seed",
+            exc,
+        )
+
     # Deterministic workflow ID when filtering to specific tasks so that
     # --resume reliably finds the checkpoint for the same task(s).
     workflow_kwargs: dict[str, Any] = {}
