@@ -120,7 +120,7 @@ class TestMCPGatewayConfig:
         assert config.max_connections == 10
         assert config.connection_timeout_seconds == 30.0
         assert config.model == "claude-sonnet-4-20250514"
-        assert config.default_max_tokens == 8192
+        assert config.default_max_tokens == 32768
         assert config.audit_enabled is True
         assert config.audit_log_responses is False
     

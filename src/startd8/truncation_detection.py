@@ -62,15 +62,15 @@ class PreFlightEstimate:
     exceeds_limit: bool
     suggested_action: str  # "generate", "decompose", "reject"
     reasoning: str
-    safe_line_limit: int = 150
-    safe_token_limit: int = 500
+    safe_line_limit: int = 300
+    safe_token_limit: int = 2000
 
 
 def estimate_output_size(
     task_description: str,
     inputs: Optional[Dict[str, Any]] = None,
-    safe_line_limit: int = 150,
-    safe_token_limit: int = 500,
+    safe_line_limit: int = 300,
+    safe_token_limit: int = 2000,
 ) -> PreFlightEstimate:
     """
     Estimate output size BEFORE generation for proactive truncation prevention.

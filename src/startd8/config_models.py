@@ -105,7 +105,7 @@ class ModelRegistry(BaseModel):
                 "claude-3-5-sonnet-20241022": ModelConfig(
                     name="claude-3-5-sonnet-20241022",
                     provider="anthropic",
-                    default_max_tokens=8192
+                    default_max_tokens=32768
                 ),
                 "claude-3-haiku-20240307": ModelConfig(
                     name="claude-3-haiku-20240307",

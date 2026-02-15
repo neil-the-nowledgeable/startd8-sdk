@@ -103,7 +103,7 @@ class SkillAgentConfig:
     name: str
     description: str = ""
     model: str = "claude-sonnet-4-20250514"
-    max_tokens: int = 8192
+    max_tokens: int = 32768
     timeout_ms: int = 30000
     cost_tracking_enabled: bool = False
     tags: List[str] = field(default_factory=list)

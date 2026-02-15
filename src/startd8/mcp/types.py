@@ -226,7 +226,7 @@ class MCPGatewayConfig:
     
     # MCP server settings
     model: str = "claude-sonnet-4-20250514"
-    default_max_tokens: int = 8192
+    default_max_tokens: int = 32768
     
     # Sub-component configs
     circuit_breaker: CircuitBreakerConfig = field(default_factory=CircuitBreakerConfig)

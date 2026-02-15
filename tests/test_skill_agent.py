@@ -35,7 +35,7 @@ class TestSkillAgentConfig:
         assert config.skill_id == "test-skill"
         assert config.name == "Test Skill"
         assert config.model == "claude-sonnet-4-20250514"
-        assert config.max_tokens == 8192
+        assert config.max_tokens == 32768
         assert config.timeout_ms == 30000
         assert config.cost_tracking_enabled is False
         assert config.tags == []

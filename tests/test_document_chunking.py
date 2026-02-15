@@ -318,7 +318,7 @@ class TestLargeDocumentConfig:
         config = LargeDocumentConfig()
         
         assert config.max_chars_single_pass == 50_000
-        assert config.max_tokens_single_pass == 12_000
+        assert config.max_tokens_single_pass == 24_000
         assert config.target_chunk_chars == 20_000
         assert config.preserve_sections is True
     

@@ -15,7 +15,7 @@ class TestTimeoutConfig:
 
         config = TimeoutConfig()
         assert config.connect == 10.0
-        assert config.read == 300.0
+        assert config.read == 600.0
         assert config.write == 30.0
         assert config.pool == 10.0
 
@@ -97,7 +97,7 @@ class TestClaudeAgentTimeout:
         default = ClaudeAgent.DEFAULT_TIMEOUT_CONFIG
         assert isinstance(default, TimeoutConfig)
         assert default.connect == 10.0
-        assert default.read == 300.0
+        assert default.read == 600.0
 
     def test_uses_default_timeout_when_none(self):
         """When timeout_config is None, uses DEFAULT_TIMEOUT_CONFIG"""
@@ -151,7 +151,7 @@ class TestGPT4AgentTimeout:
         default = GPT4Agent.DEFAULT_TIMEOUT_CONFIG
         assert isinstance(default, TimeoutConfig)
         assert default.connect == 10.0
-        assert default.read == 300.0
+        assert default.read == 600.0
 
     def test_uses_default_timeout_when_none(self):
         """When timeout_config is None, uses DEFAULT_TIMEOUT_CONFIG"""
@@ -199,7 +199,7 @@ class TestGeminiAgentTimeout:
         default = GeminiAgent.DEFAULT_TIMEOUT_CONFIG
         assert isinstance(default, TimeoutConfig)
         assert default.connect == 10.0
-        assert default.read == 300.0
+        assert default.read == 600.0
 
     def test_uses_default_timeout_when_none(self):
         """When timeout_config is None, uses DEFAULT_TIMEOUT_CONFIG"""
@@ -245,7 +245,7 @@ class TestOpenAICompatibleAgentTimeout:
         default = OpenAICompatibleAgent.DEFAULT_TIMEOUT_CONFIG
         assert isinstance(default, TimeoutConfig)
         assert default.connect == 10.0
-        assert default.read == 300.0
+        assert default.read == 600.0
 
     def test_uses_default_timeout_when_none(self):
         """When timeout_config is None, uses DEFAULT_TIMEOUT_CONFIG"""

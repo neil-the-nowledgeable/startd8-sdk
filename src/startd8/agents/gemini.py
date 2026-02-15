@@ -47,7 +47,7 @@ class GeminiAgent(BaseAgent):
         name: str = "gemini",
         model: str = "gemini-2.0-flash",  # Gemini 2.0 Flash - latest stable model
         api_key: Optional[str] = None,
-        max_tokens: int = 16384,
+        max_tokens: int = 32768,
         temperature: float = 0.7,
         cost_tracker: Optional['CostTracker'] = None,
         budget_manager: Optional['BudgetManager'] = None,

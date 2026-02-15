@@ -44,7 +44,7 @@ class TimeoutConfig:
 
     Attributes:
         connect: Timeout for establishing a connection. Default: 10.0
-        read: Timeout for reading response data. Default: 300.0
+        read: Timeout for reading response data. Default: 600.0
         write: Timeout for sending request data. Default: 30.0
         pool: Timeout for acquiring a connection from the pool. Default: 10.0
 
@@ -57,13 +57,13 @@ class TimeoutConfig:
         agent = ClaudeAgent(name="claude", timeout_config=fast_timeout)
 
         # Long timeouts for very complex requests
-        slow_timeout = TimeoutConfig(read=600.0)
+        slow_timeout = TimeoutConfig(read=900.0)
         agent = ClaudeAgent(name="claude", timeout_config=slow_timeout)
         ```
     """
 
     connect: float = 10.0
-    read: float = 300.0
+    read: float = 600.0
     write: float = 30.0
     pool: float = 10.0
 

@@ -243,7 +243,7 @@ class GeminiProvider:
                 name=name,
                 model=model,  # Use mapped model, not original
                 api_key=config.get('api_key'),
-                max_tokens=config.get('max_tokens', 16384),  # Increased from 4096 to prevent truncation
+                max_tokens=config.get('max_tokens', 32768),  # 32K default prevents truncation; Gemini 2.0+ supports 65K
                 temperature=config.get('temperature', 0.7),
                 cost_tracker=config.get('cost_tracker'),
                 budget_manager=config.get('budget_manager'),

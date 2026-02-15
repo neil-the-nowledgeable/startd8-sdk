@@ -72,7 +72,7 @@ class LargeDocumentConfig:
     """Configuration for large document detection and processing."""
     # Detection thresholds
     max_chars_single_pass: int = 50_000  # ~12,500 tokens
-    max_tokens_single_pass: int = 12_000  # Conservative for most models
+    max_tokens_single_pass: int = 24_000  # Modern models handle 32K+ easily
     
     # Chunking settings
     target_chunk_chars: int = 20_000  # ~5,000 tokens per chunk
