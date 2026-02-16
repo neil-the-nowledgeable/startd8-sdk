@@ -86,6 +86,15 @@ _ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
 }
 
 
+def _sha256_file_hex(path: Path) -> str:
+    """Compute SHA-256 hex digest of a file."""
+    hasher = sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(8192), b""):
+            hasher.update(chunk)
+    return hasher.hexdigest()
+
+
 def _validate_context_seed(data: Dict[str, Any]) -> None:
     """Validate context seed against JSON schema before write (Item 6).
 
@@ -2210,6 +2219,141 @@ class PlanIngestionWorkflow(WorkflowBase):
         return ctx
 
     @staticmethod
+    def _extend_inventory_with_ingestion(
+        output_dir: Path,
+        doc_path: Path,
+        context_seed_path: Path,
+        design_calibration: Optional[Dict[str, Any]],
+        context_files: Optional[List[str]],
+        source_checksum_val: Optional[str],
+    ) -> None:
+        """Extend the artifact inventory with ingestion-stage entries.
+
+        Finds run-provenance.json in the export output directory (derived
+        from context_files) and extends it with plan_document,
+        refine_suggestions, design_calibration, and task_decomposition entries.
+        """
+        from startd8.utils.artifact_inventory import extend_inventory
+
+        # Derive export output directory from context_files
+        export_dir: Optional[Path] = None
+        if context_files:
+            for raw_path in context_files:
+                p = Path(raw_path.strip()).expanduser()
+                if p.name == "onboarding-metadata.json":
+                    export_dir = p.parent if p.is_absolute() else (output_dir / p).resolve().parent
+                    break
+                if p.name == "run-provenance.json":
+                    export_dir = p.parent if p.is_absolute() else (output_dir / p).resolve().parent
+                    break
+
+        # Fall back to output_dir itself
+        if not export_dir:
+            export_dir = output_dir
+
+        # Also check output_dir for run-provenance.json (common when export
+        # and ingestion share the same output directory)
+        if not (export_dir / "run-provenance.json").exists():
+            if (output_dir / "run-provenance.json").exists():
+                export_dir = output_dir
+            else:
+                logger.debug(
+                    "artifact_inventory: no run-provenance.json found — "
+                    "skipping inventory extension"
+                )
+                return
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        freshness = {}
+        if source_checksum_val:
+            freshness["source_checksum"] = source_checksum_val
+            freshness["source_file"] = ".contextcore.yaml"
+
+        entries: List[Dict[str, Any]] = []
+
+        # plan_document
+        if doc_path.exists():
+            entries.append({
+                "artifact_id": "ingestion.plan_document",
+                "role": "plan_document",
+                "description": "Structured plan with architecture, risk register, phase breakdown",
+                "produced_by": "startd8.workflow.plan_ingestion",
+                "stage": "ingestion",
+                "source_file": doc_path.name,
+                "sha256": _sha256_file_hex(doc_path),
+                "produced_at": now_iso,
+                "freshness": freshness,
+                "consumers": ["artisan.design"],
+                "consumption_hint": (
+                    "Load architecture and risk sections as additional context "
+                    "for design prompt."
+                ),
+            })
+
+        # refine_suggestions — stored in the plan document appendix
+        if doc_path.exists():
+            plan_text = doc_path.read_text(encoding="utf-8")
+            if "Appendix C" in plan_text or "refine" in plan_text.lower():
+                entries.append({
+                    "artifact_id": "ingestion.refine_suggestions",
+                    "role": "refine_suggestions",
+                    "description": "Architectural review suggestions from REFINE phase",
+                    "produced_by": "startd8.workflow.plan_ingestion.refine",
+                    "stage": "ingestion",
+                    "source_file": doc_path.name,
+                    "json_path": "Appendix C",
+                    "sha256": _sha256_file_hex(doc_path),
+                    "produced_at": now_iso,
+                    "freshness": freshness,
+                    "consumers": ["artisan.design"],
+                    "consumption_hint": (
+                        "Extract per-task suggestions and inject into FeatureContext. "
+                        "Eliminates redundant architectural review in DESIGN."
+                    ),
+                })
+
+        # design_calibration
+        if design_calibration and context_seed_path.exists():
+            import hashlib as _hashlib
+            cal_json = json.dumps(design_calibration, sort_keys=True, default=str)
+            entries.append({
+                "artifact_id": "ingestion.design_calibration",
+                "role": "design_calibration",
+                "description": "Per-task depth tier, calibrated section list, max output tokens",
+                "produced_by": "startd8.workflow.plan_ingestion.emit",
+                "stage": "ingestion",
+                "source_file": context_seed_path.name,
+                "json_path": "$.design_calibration",
+                "sha256": _hashlib.sha256(cal_json.encode()).hexdigest(),
+                "produced_at": now_iso,
+                "freshness": freshness,
+                "consumers": ["artisan.design"],
+                "consumption_hint": (
+                    "Already consumed via seed. Listed for inventory completeness."
+                ),
+            })
+
+        # task_decomposition
+        if context_seed_path.exists():
+            entries.append({
+                "artifact_id": "ingestion.task_decomposition",
+                "role": "task_decomposition",
+                "description": "Per-task descriptions, file targets, complexity assessment",
+                "produced_by": "startd8.workflow.plan_ingestion.emit",
+                "stage": "ingestion",
+                "source_file": context_seed_path.name,
+                "json_path": "$.tasks",
+                "sha256": _sha256_file_hex(context_seed_path),
+                "produced_at": now_iso,
+                "freshness": freshness,
+                "consumers": ["artisan.plan", "artisan.design"],
+                "consumption_hint": "Use for task ordering and feature context.",
+            })
+
+        if entries:
+            extend_inventory(export_dir, entries)
+
+    @staticmethod
     def _load_onboarding_metadata(
         context_files: Optional[List[str]],
         output_dir: Path,
@@ -2563,6 +2707,16 @@ class PlanIngestionWorkflow(WorkflowBase):
             _validate_context_seed(seed_dict)
             context_seed_path = output_dir / "artisan-context-seed.json"
             atomic_write_json(context_seed_path, seed_dict, indent=2)
+
+            # Mottainai: extend artifact inventory with ingestion-stage entries
+            self._extend_inventory_with_ingestion(
+                output_dir=output_dir,
+                doc_path=doc_path,
+                context_seed_path=context_seed_path,
+                design_calibration=design_calibration,
+                context_files=context_files,
+                source_checksum_val=source_checksum_val,
+            )
 
         # Task tracking artifact generation (opt-in)
         tracking_result = None

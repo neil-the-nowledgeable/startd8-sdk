@@ -85,6 +85,11 @@ from startd8.contractors.context_schema import (
     ValidationPhaseOutput,
 )
 from startd8.logging_config import get_logger
+from startd8.utils.artifact_inventory import (
+    load_artifact_content,
+    load_inventory,
+    lookup_artifact,
+)
 
 logger = get_logger(__name__)
 
@@ -849,6 +854,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
         prior_design_text: str | None = None,
+        inv_derivation_rules: dict[str, Any] | None = None,
+        inv_resolved_parameters: dict[str, Any] | None = None,
+        inv_output_contracts: dict[str, Any] | None = None,
+        inv_refine_suggestions: str | None = None,
+        inv_plan_document: str | None = None,
+        inv_calibration_hints: dict[str, Any] | None = None,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -961,6 +972,67 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 conv_lines.append(f"  {key}: {val}")
             additional_context["semantic_conventions"] = "\n".join(conv_lines)
 
+        # Mottainai: inject inventory artifacts into additional_context
+        if inv_derivation_rules and task.artifact_types_addressed:
+            task_rules = {
+                atype: inv_derivation_rules[atype]
+                for atype in task.artifact_types_addressed
+                if atype in inv_derivation_rules
+            }
+            if task_rules:
+                additional_context["derivation_rules"] = task_rules
+
+        if inv_resolved_parameters and task.artifact_types_addressed:
+            # resolved_parameters may be keyed by artifact ID or artifact type
+            task_params = {
+                k: v for k, v in inv_resolved_parameters.items()
+                if any(atype in k for atype in task.artifact_types_addressed)
+            }
+            if task_params:
+                additional_context["resolved_parameters"] = task_params
+
+        if inv_output_contracts and task.artifact_types_addressed:
+            task_contracts = {
+                atype: inv_output_contracts[atype]
+                for atype in task.artifact_types_addressed
+                if atype in inv_output_contracts
+            }
+            if task_contracts:
+                additional_context["output_contracts"] = task_contracts
+
+        # Mottainai: inject refine suggestions relevant to this task
+        if inv_refine_suggestions:
+            task_suggestions = DesignPhaseHandler._extract_task_suggestions(
+                inv_refine_suggestions, task.task_id,
+                getattr(task, "feature_id", None),
+            )
+            if task_suggestions:
+                additional_context["refine_suggestions"] = task_suggestions
+
+        # Mottainai: inject plan architecture and risks sections
+        if inv_plan_document:
+            arch_section = DesignPhaseHandler._extract_plan_section(
+                inv_plan_document, "Architecture",
+            )
+            if arch_section:
+                additional_context["plan_architecture"] = arch_section
+            risk_section = DesignPhaseHandler._extract_plan_section(
+                inv_plan_document, "Risk",
+            )
+            if risk_section:
+                additional_context["plan_risks"] = risk_section
+
+        # Mottainai: calibration hints override depth_guidance when not already set
+        if inv_calibration_hints and not depth_guidance and task.artifact_types_addressed:
+            for atype in task.artifact_types_addressed:
+                hint = inv_calibration_hints.get(atype)
+                if hint and hint.get("expected_depth"):
+                    depth_guidance = hint["expected_depth"]
+                    additional_context["calibration_override_source"] = (
+                        "export.calibration_hints"
+                    )
+                    break  # Use first matching type's calibration
+
         sections = cal.get("sections")
         max_output_tokens = (
             design_max_tokens_override
@@ -979,6 +1051,70 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             depth_guidance=depth_guidance,
             prior_design=prior_design_text,
         )
+
+    @staticmethod
+    def _extract_task_suggestions(
+        refine_text: str, task_id: str, feature_id: str | None
+    ) -> str:
+        """Extract refine suggestions relevant to a specific task.
+
+        Extracts plan-level suggestions (S-prefix) and feature-matching
+        suggestions (F-prefix) from the REFINE phase output text.
+        """
+        if not refine_text:
+            return ""
+        lines = refine_text.splitlines()
+        relevant: list[str] = []
+        for line in lines:
+            stripped = line.strip()
+            # Plan-level suggestions start with S- prefix
+            if stripped.startswith("S-"):
+                relevant.append(stripped)
+            # Feature-specific suggestions start with F- prefix
+            elif stripped.startswith("F-"):
+                # Match by task_id or feature_id
+                if task_id and task_id in stripped:
+                    relevant.append(stripped)
+                elif feature_id and feature_id in stripped:
+                    relevant.append(stripped)
+        return "\n".join(relevant) if relevant else ""
+
+    @staticmethod
+    def _extract_plan_section(plan_text: str, section_name: str) -> str:
+        """Extract a named markdown section from plan text.
+
+        Looks for ``## {section_name}`` or ``### {section_name}`` headers
+        and returns content up to the next header of same or higher level.
+        """
+        import re
+
+        if not plan_text:
+            return ""
+        # Find the section header (## or ###)
+        pattern = rf"^(#{2,3})\s+{re.escape(section_name)}.*$"
+        match = re.search(pattern, plan_text, re.MULTILINE | re.IGNORECASE)
+        if not match:
+            return ""
+
+        start = match.end()
+        header_level = len(match.group(1))
+
+        # Find the next header of same or higher level
+        next_header = re.search(
+            rf"^#{{{1},{header_level}}}\s+",
+            plan_text[start:],
+            re.MULTILINE,
+        )
+        if next_header:
+            end = start + next_header.start()
+        else:
+            end = len(plan_text)
+
+        section = plan_text[start:end].strip()
+        # Truncate to avoid massive context injection
+        if len(section) > 2000:
+            section = section[:2000] + "\n... (truncated)"
+        return section
 
     @staticmethod
     def _run_design_async(
@@ -1125,6 +1261,73 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         prior_summaries: list[str] = []
         previous_task_started_mono: Optional[float] = None
 
+        # Mottainai: load artifact inventory from export-stage provenance
+        inv_derivation_rules: dict[str, Any] | None = None
+        inv_resolved_parameters: dict[str, Any] | None = None
+        inv_output_contracts: dict[str, Any] | None = None
+        inv_refine_suggestions: str | None = None
+        inv_plan_document: str | None = None
+        inv_calibration_hints: dict[str, Any] | None = None
+
+        inventory_dir = None
+        if self.output_dir:
+            # Derive export output dir: check output_dir first, then parent
+            for candidate in [Path(self.output_dir), Path(self.output_dir).parent]:
+                if (candidate / "run-provenance.json").exists():
+                    inventory_dir = candidate
+                    break
+        # Also check enriched_seed_path parent (common in artisan runs)
+        if not inventory_dir:
+            seed_path = context.get("enriched_seed_path", "")
+            if seed_path:
+                candidate = Path(seed_path).parent
+                if (candidate / "run-provenance.json").exists():
+                    inventory_dir = candidate
+
+        if inventory_dir:
+            inventory = load_inventory(inventory_dir)
+            if inventory:
+                for role, var_name in [
+                    ("derivation_rules", "inv_derivation_rules"),
+                    ("resolved_parameters", "inv_resolved_parameters"),
+                    ("output_contracts", "inv_output_contracts"),
+                    ("calibration_hints", "inv_calibration_hints"),
+                ]:
+                    entry, outcome = lookup_artifact(inventory, role)
+                    if entry and outcome == "hit":
+                        data = load_artifact_content(entry, inventory_dir)
+                        if data and isinstance(data, dict):
+                            if var_name == "inv_derivation_rules":
+                                inv_derivation_rules = data
+                            elif var_name == "inv_resolved_parameters":
+                                inv_resolved_parameters = data
+                            elif var_name == "inv_output_contracts":
+                                inv_output_contracts = data
+                            elif var_name == "inv_calibration_hints":
+                                inv_calibration_hints = data
+
+                # Refine suggestions (text, not dict)
+                entry, outcome = lookup_artifact(inventory, "refine_suggestions")
+                if entry and outcome == "hit":
+                    data = load_artifact_content(entry, inventory_dir)
+                    if isinstance(data, str):
+                        inv_refine_suggestions = data
+
+                # Plan document (text)
+                entry, outcome = lookup_artifact(inventory, "plan_document")
+                if entry and outcome == "hit":
+                    # plan_document may be a markdown file read as text
+                    source_file = entry.get("source_file", "")
+                    if source_file:
+                        plan_path = inventory_dir / source_file
+                        if plan_path.exists():
+                            try:
+                                inv_plan_document = plan_path.read_text(
+                                    encoding="utf-8"
+                                )
+                            except OSError:
+                                pass
+
         for idx, task in enumerate(tasks, start=1):
             previous_task_started_mono = _log_task_timing(
                 "DESIGN",
@@ -1216,6 +1419,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 parameter_sources=context.get("parameter_sources", {}),
                 semantic_conventions=context.get("semantic_conventions", {}),
                 prior_design_text=prior_design_text,
+                inv_derivation_rules=inv_derivation_rules,
+                inv_resolved_parameters=inv_resolved_parameters,
+                inv_output_contracts=inv_output_contracts,
+                inv_refine_suggestions=inv_refine_suggestions,
+                inv_plan_document=inv_plan_document,
+                inv_calibration_hints=inv_calibration_hints,
             )
 
             # Snapshot cost before this task
