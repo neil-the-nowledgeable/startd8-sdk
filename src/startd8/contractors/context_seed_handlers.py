@@ -179,10 +179,17 @@ class HandlerConfig:
     scaffold_test_first: bool = True
     force_implement: bool = False
     force_design: bool = False
+    refine_design: bool = False
     force_review: bool = False
     design_agent: Optional[str] = None
     review_agent: Optional[str] = None
     enable_prompt_caching: bool = False
+
+    def __post_init__(self) -> None:
+        if self.force_design and self.refine_design:
+            raise ValueError(
+                "force_design and refine_design are mutually exclusive"
+            )
 
     @classmethod
     def from_config(
@@ -841,6 +848,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         design_max_tokens_override: Optional[int] = None,
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
+        prior_design_text: str | None = None,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -969,6 +977,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             sections=sections,
             max_output_tokens=max_output_tokens,
             depth_guidance=depth_guidance,
+            prior_design=prior_design_text,
         )
 
     @staticmethod
@@ -1054,6 +1063,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         tasks_agreed = 0
         tasks_failed = 0
         tasks_adopted = 0
+        tasks_refined = 0
 
         # Prior design_results injected via --adopt-prior (or checkpoint resume)
         prior_design_results: dict[str, dict[str, Any]] = context.get("design_results", {})
@@ -1137,41 +1147,52 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 continue
 
             # ----------------------------------------------------------
-            # Adopt prior design result (from dress-rehearsal / prior run)
+            # Three-way branch: adopt / refine / fresh generation
             # ----------------------------------------------------------
             prior = prior_design_results.get(task.task_id, {})
+            prior_design_text: str | None = None
+
             if (
                 prior.get("status") == "designed"
                 and prior.get("design_document")
             ):
-                design_results[task.task_id] = {
-                    **prior,
-                    "status": "adopted",
-                    "adopted_from": "prior_design_results",
-                }
-                tasks_adopted += 1
-                if prior.get("agreed"):
-                    tasks_agreed += 1
+                if self.config.refine_design:
+                    # Refine mode: pass prior design to LLM for improvement
+                    prior_design_text = prior["design_document"]
+                    logger.info(
+                        "DESIGN: will refine prior design for %s via LLM",
+                        task.task_id,
+                    )
+                else:
+                    # Adopt as-is (existing behavior)
+                    design_results[task.task_id] = {
+                        **prior,
+                        "status": "adopted",
+                        "adopted_from": "prior_design_results",
+                    }
+                    tasks_adopted += 1
+                    if prior.get("agreed"):
+                        tasks_agreed += 1
 
-                # Feed into cross-task progressive context
-                doc_text = prior["design_document"]
-                first_line = doc_text[:300].split("\n")[0]
-                prior_summaries.append(
-                    f"{task.task_id} ({task.title}): {first_line}"
-                )
+                    # Feed into cross-task progressive context
+                    doc_text = prior["design_document"]
+                    first_line = doc_text[:300].split("\n")[0]
+                    prior_summaries.append(
+                        f"{task.task_id} ({task.title}): {first_line}"
+                    )
 
-                # Copy design doc to current output_dir if configured
-                if self.output_dir:
-                    out_path = Path(self.output_dir) / f"{task.task_id}-design.md"
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    out_path.write_text(doc_text, encoding="utf-8")
-                    design_results[task.task_id]["output_file"] = str(out_path)
+                    # Copy design doc to current output_dir if configured
+                    if self.output_dir:
+                        out_path = Path(self.output_dir) / f"{task.task_id}-design.md"
+                        out_path.parent.mkdir(parents=True, exist_ok=True)
+                        out_path.write_text(doc_text, encoding="utf-8")
+                        design_results[task.task_id]["output_file"] = str(out_path)
 
-                logger.info(
-                    "DESIGN: adopted prior result for %s (agreed=%s, cost=$%.4f)",
-                    task.task_id, prior.get("agreed"), prior.get("cost", 0.0),
-                )
-                continue
+                    logger.info(
+                        "DESIGN: adopted prior result for %s (agreed=%s, cost=$%.4f)",
+                        task.task_id, prior.get("agreed"), prior.get("cost", 0.0),
+                    )
+                    continue
 
             if dry_run:
                 design_results[task.task_id] = {
@@ -1194,6 +1215,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 design_max_tokens_override=self.config.design_max_tokens,
                 parameter_sources=context.get("parameter_sources", {}),
                 semantic_conventions=context.get("semantic_conventions", {}),
+                prior_design_text=prior_design_text,
             )
 
             # Snapshot cost before this task
@@ -1210,11 +1232,14 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 total_cost += task_cost
 
                 serialized = self._serialize_result(result)
-                serialized["status"] = "designed"
+                serialized["status"] = "refined" if prior_design_text else "designed"
                 serialized["cost"] = task_cost
                 design_results[task.task_id] = serialized
 
-                tasks_designed += 1
+                if prior_design_text:
+                    tasks_refined += 1
+                else:
+                    tasks_designed += 1
                 if result.agreed:
                     tasks_agreed += 1
 
@@ -1275,10 +1300,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         )
         output: dict[str, Any] = {
             "tasks_designed": tasks_designed,
+            "tasks_refined": tasks_refined,
             "tasks_adopted": tasks_adopted,
             "tasks_agreed": tasks_agreed,
             "tasks_failed": tasks_failed,
-            "tasks_skipped": len(tasks) - tasks_designed - tasks_adopted - tasks_failed - env_blocked,
+            "tasks_skipped": len(tasks) - tasks_designed - tasks_refined - tasks_adopted - tasks_failed - env_blocked,
             "total_cost": total_cost,
         }
         if self.output_dir:
@@ -1286,8 +1312,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         duration = time.monotonic() - start
         logger.info(
-            "DESIGN phase complete: %d designed, %d adopted, %d agreed, %d failed, $%.4f cost (%.2fs)",
-            tasks_designed, tasks_adopted, tasks_agreed, tasks_failed, total_cost, duration,
+            "DESIGN phase complete: %d designed, %d refined, %d adopted, %d agreed, %d failed, $%.4f cost (%.2fs)",
+            tasks_designed, tasks_refined, tasks_adopted, tasks_agreed, tasks_failed, total_cost, duration,
         )
 
         return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
@@ -1662,7 +1688,7 @@ class Test{class_name}:
             # "primary" — that means the contract says to implement everything.
             if not downstream and not task.file_scope:
                 task_design = design_results.get(task.task_id, {})
-                if task_design.get("status") in ("designed", "adopted"):
+                if task_design.get("status") in ("designed", "adopted", "refined"):
                     design_doc = task_design.get("design_document", "")
                     if design_doc:
                         downstream = _detect_downstream_files(
@@ -1795,7 +1821,7 @@ class Test{class_name}:
             # "adopted" status indicates reuse from a prior run (dress-rehearsal).
             design_doc_text = None
             task_design = design_results.get(task.task_id, {})
-            if task_design.get("status") in ("designed", "adopted"):
+            if task_design.get("status") in ("designed", "adopted", "refined"):
                 design_doc_text = task_design.get("design_document")
 
             # Per-task implement token cap from design_calibration
@@ -4109,6 +4135,7 @@ class ContextSeedHandlers:
         scaffold_test_first: Optional[bool] = None,
         force_implement: Optional[bool] = None,
         force_design: Optional[bool] = None,
+        refine_design: Optional[bool] = None,
         force_review: Optional[bool] = None,
         design_agent: Optional[str] = None,
         review_agent: Optional[str] = None,
@@ -4135,6 +4162,7 @@ class ContextSeedHandlers:
             auto_commit: Commit each feature's generated code to git.
             scaffold_test_first: Scaffold test files for artifact tasks before impl.
             force_design: Ignore cached design handoff; always run fresh DESIGN.
+            refine_design: Pass prior designs to LLM for refinement instead of adopting.
             force_review: Ignore cached review results; always run fresh REVIEW.
             design_agent: Agent spec for design phase (falls back to lead_agent).
             review_agent: Agent spec for review phase (falls back to lead_agent).
@@ -4164,6 +4192,7 @@ class ContextSeedHandlers:
             ("scaffold_test_first", scaffold_test_first),
             ("force_implement", force_implement),
             ("force_design", force_design),
+            ("refine_design", refine_design),
             ("force_review", force_review),
             ("design_agent", design_agent),
             ("review_agent", review_agent),

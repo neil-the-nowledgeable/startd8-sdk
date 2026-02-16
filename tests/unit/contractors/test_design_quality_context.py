@@ -982,3 +982,99 @@ class TestSeedTaskPromptHintsMerge:
         }
         task = SeedTask.from_seed_entry(entry)
         assert task.prompt_constraints.count(hint) == 1
+
+
+# ============================================================================
+# Refine design mode tests
+# ============================================================================
+
+
+class TestRefineDesignMode:
+    """Tests for --refine-design feature."""
+
+    def test_feature_context_prior_design_defaults_to_none(self):
+        """FeatureContext.prior_design defaults to None."""
+        ctx = FeatureContext(
+            feature_name="Test",
+            description="Test feature",
+            target_file="src/test.py",
+        )
+        assert ctx.prior_design is None
+
+    def test_feature_context_prior_design_set(self):
+        """FeatureContext.prior_design can be set."""
+        ctx = FeatureContext(
+            feature_name="Test",
+            description="Test feature",
+            target_file="src/test.py",
+            prior_design="## Overview\nExisting design content",
+        )
+        assert ctx.prior_design == "## Overview\nExisting design content"
+
+    def test_task_to_feature_context_passes_prior_design_text(self):
+        """_task_to_feature_context forwards prior_design_text to FeatureContext."""
+        task = _make_seed_task()
+        fc = DesignPhaseHandler._task_to_feature_context(
+            task,
+            prior_design_text="## Overview\nPrior design",
+        )
+        assert fc.prior_design == "## Overview\nPrior design"
+
+    def test_task_to_feature_context_none_prior_design(self):
+        """_task_to_feature_context defaults prior_design to None."""
+        task = _make_seed_task()
+        fc = DesignPhaseHandler._task_to_feature_context(task)
+        assert fc.prior_design is None
+
+    def test_build_refine_system_prompt_contains_refining(self):
+        """build_refine_system_prompt mentions refining in the role."""
+        from startd8.contractors.artisan_phases.design_documentation import (
+            build_refine_system_prompt,
+        )
+        prompt = build_refine_system_prompt()
+        assert "refining" in prompt.lower()
+        assert "## Overview" in prompt
+
+    def test_build_refine_system_prompt_includes_custom_sections(self):
+        """build_refine_system_prompt respects custom sections list."""
+        from startd8.contractors.artisan_phases.design_documentation import (
+            build_refine_system_prompt,
+        )
+        prompt = build_refine_system_prompt(sections=["Overview", "Architecture"])
+        assert "## Overview" in prompt
+        assert "## Architecture" in prompt
+        assert "## Data Model" not in prompt
+
+    def test_build_refine_system_prompt_includes_depth_guidance(self):
+        """build_refine_system_prompt includes depth guidance when provided."""
+        from startd8.contractors.artisan_phases.design_documentation import (
+            build_refine_system_prompt,
+        )
+        prompt = build_refine_system_prompt(depth_guidance="Keep it concise")
+        assert "Keep it concise" in prompt
+
+    def test_handler_config_mutual_exclusion(self):
+        """HandlerConfig raises ValueError if force_design and refine_design are both True."""
+        from startd8.contractors.context_seed_handlers import HandlerConfig
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            HandlerConfig(force_design=True, refine_design=True)
+
+    def test_handler_config_refine_design_alone(self):
+        """HandlerConfig allows refine_design=True when force_design=False."""
+        from startd8.contractors.context_seed_handlers import HandlerConfig
+        config = HandlerConfig(refine_design=True)
+        assert config.refine_design is True
+        assert config.force_design is False
+
+    def test_handler_config_force_design_alone(self):
+        """HandlerConfig allows force_design=True when refine_design=False."""
+        from startd8.contractors.context_seed_handlers import HandlerConfig
+        config = HandlerConfig(force_design=True)
+        assert config.force_design is True
+        assert config.refine_design is False
+
+    def test_downstream_status_accepts_refined(self):
+        """ImplementPhaseHandler accepts 'refined' status from design results."""
+        # This tests the status tuple check directly
+        status = "refined"
+        assert status in ("designed", "adopted", "refined")

@@ -103,6 +103,7 @@ class ConfigManager:
                 "scaffold_test_first": None,
                 "force_implement": None,
                 "force_design": None,
+                "refine_design": None,
                 "force_review": None,
                 "design_agent": None,
                 "review_agent": None,
@@ -483,7 +484,7 @@ class ConfigManager:
 _ARTISAN_BOOL_KEYS = {
     "fail_on_truncation", "check_truncation", "strict_truncation",
     "scaffold_test_first", "force_implement",
-    "force_design", "force_review",
+    "force_design", "refine_design", "force_review",
     "enable_prompt_caching",
 }
 _ARTISAN_INT_KEYS = {

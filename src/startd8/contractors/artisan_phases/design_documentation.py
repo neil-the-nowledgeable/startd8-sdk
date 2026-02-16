@@ -60,6 +60,8 @@ __all__ = [
     "parse_design_document",
     "parse_review_verdict",
     "build_design_system_prompt",
+    "build_refine_system_prompt",
+    "REFINE_DESIGN_USER_PROMPT_TEMPLATE",
 ]
 
 # Configure logging
@@ -144,6 +146,7 @@ class FeatureContext:
     sections: list[str] | None = None
     max_output_tokens: int | None = None
     depth_guidance: str | None = None
+    prior_design: str | None = None
 
 
 @dataclass
@@ -374,6 +377,62 @@ DESIGN_GENERATION_USER_PROMPT_TEMPLATE = (
     "**Additional Context:** {additional_context}\n\n"
     "{revision_guidance}"
 )
+
+REFINE_DESIGN_USER_PROMPT_TEMPLATE = (
+    "Refine and improve the following existing design document for this feature.\n\n"
+    "**Feature Name:** {feature_name}\n\n"
+    "**Description:** {description}\n\n"
+    "**Target File:** {target_file}\n\n"
+    "**Constraints:** {constraints}\n\n"
+    "**Additional Context:** {additional_context}\n\n"
+    "---\n\n"
+    "**Existing Design Document (to refine):**\n\n"
+    "{prior_design}\n\n"
+    "---\n\n"
+    "**Refinement Instructions:**\n"
+    "- Preserve sections and decisions that are still valid.\n"
+    "- Improve specificity, correctness, and completeness.\n"
+    "- Address any gaps, ambiguities, or inconsistencies.\n"
+    "- Update sections that conflict with the constraints or additional context above.\n"
+    "- Maintain the same section structure (## headers).\n\n"
+    "{revision_guidance}"
+)
+
+
+def build_refine_system_prompt(
+    sections: list[str] | None = None,
+    depth_guidance: str | None = None,
+) -> str:
+    """Build a system prompt for refining an existing design document."""
+    if sections is None:
+        sections = _DEFAULT_SECTIONS
+    section_list = "\n".join(f"- ## {s}" for s in sections)
+
+    depth_line = ""
+    if depth_guidance:
+        depth_line = f"\n\n**Scope guidance:** {depth_guidance}"
+
+    return (
+        "You are a senior software architect refining an existing design "
+        "document.\n\n"
+        "You have been given a prior design document that may be partially "
+        "correct, outdated, or incomplete. Your job is to preserve sound "
+        "decisions and strengthen weak areas.\n\n"
+        "Your output must contain exactly these sections with markdown headers "
+        "(## Section Name):\n"
+        f"{section_list}\n\n"
+        "Rules:\n"
+        "- Preserve sections and decisions that are still valid and well-reasoned.\n"
+        "- Improve specificity, correctness, and completeness where needed.\n"
+        "- Scale depth to the feature's complexity.\n"
+        "- Put the most important information first within each section "
+        "(progressive disclosure).\n"
+        "- When Additional Context mentions project goals, constraints, or "
+        "shared modules, address them directly — don't invent requirements "
+        "outside the stated scope."
+        f"{depth_line}"
+    )
+
 
 _REVIEW_JSON_SCHEMA = (
     "{{\n"
@@ -944,30 +1003,51 @@ class DesignDocumentationPhase:
         else:
             additional_context_str = "None"
 
-        prompt = DESIGN_GENERATION_USER_PROMPT_TEMPLATE.format(
-            feature_name=context.feature_name,
-            description=context.description,
-            target_file=context.target_file,
-            constraints=(
-                ", ".join(context.constraints)
-                if context.constraints
-                else "None"
-            ),
-            additional_context=additional_context_str,
-            revision_guidance=revision_guidance,
+        constraints_str = (
+            ", ".join(context.constraints)
+            if context.constraints
+            else "None"
         )
 
-        logger.info(
-            "Generating design document for '%s' (iteration %d)",
-            context.feature_name,
-            iteration,
-        )
-
-        # Dynamic system prompt based on calibrated sections
-        system_prompt = build_design_system_prompt(
-            context.sections,
-            depth_guidance=context.depth_guidance,
-        )
+        if context.prior_design is not None:
+            # Refine mode: pass prior design to LLM for improvement
+            prompt = REFINE_DESIGN_USER_PROMPT_TEMPLATE.format(
+                feature_name=context.feature_name,
+                description=context.description,
+                target_file=context.target_file,
+                constraints=constraints_str,
+                additional_context=additional_context_str,
+                prior_design=context.prior_design,
+                revision_guidance=revision_guidance,
+            )
+            logger.info(
+                "Refining existing design document for '%s' (iteration %d)",
+                context.feature_name,
+                iteration,
+            )
+            system_prompt = build_refine_system_prompt(
+                context.sections,
+                depth_guidance=context.depth_guidance,
+            )
+        else:
+            # Fresh generation (default)
+            prompt = DESIGN_GENERATION_USER_PROMPT_TEMPLATE.format(
+                feature_name=context.feature_name,
+                description=context.description,
+                target_file=context.target_file,
+                constraints=constraints_str,
+                additional_context=additional_context_str,
+                revision_guidance=revision_guidance,
+            )
+            logger.info(
+                "Generating design document for '%s' (iteration %d)",
+                context.feature_name,
+                iteration,
+            )
+            system_prompt = build_design_system_prompt(
+                context.sections,
+                depth_guidance=context.depth_guidance,
+            )
 
         raw_text = await self.llm.generate(
             prompt=prompt,

@@ -135,6 +135,7 @@ def print_phase_results(result: WorkflowResult) -> None:
 
             elif pr.phase == WorkflowPhase.DESIGN:
                 print(f"      Tasks designed: {pr.output.get('tasks_designed', '?')}")
+                print(f"      Tasks refined:  {pr.output.get('tasks_refined', '?')}")
                 print(f"      Agreed: {pr.output.get('tasks_agreed', '?')}")
                 if pr.output.get("output_dir"):
                     print(f"      Output: {pr.output['output_dir']}")
@@ -289,9 +290,14 @@ def main() -> int:
         "--force-implement", action="store_true",
         help="Ignore cached generation_results; always run fresh IMPLEMENT (no resume from .startd8/state/)",
     )
-    parser.add_argument(
+    design_mode_group = parser.add_mutually_exclusive_group()
+    design_mode_group.add_argument(
         "--force-design", action="store_true",
         help="Ignore cached design handoff; always run fresh DESIGN with LLM calls",
+    )
+    design_mode_group.add_argument(
+        "--refine-design", action="store_true",
+        help="Pass prior designs to LLM for refinement instead of adopting as-is",
     )
     parser.add_argument(
         "--force-review", action="store_true",
@@ -565,6 +571,8 @@ def main() -> int:
         handler_kwargs["force_implement"] = True
     if args.force_design:
         handler_kwargs["force_design"] = True
+    if args.refine_design:
+        handler_kwargs["refine_design"] = True
     if args.force_review:
         handler_kwargs["force_review"] = True
     if args.design_agent:
