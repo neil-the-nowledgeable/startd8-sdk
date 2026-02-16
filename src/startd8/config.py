@@ -104,6 +104,9 @@ class ConfigManager:
                 "force_implement": None,
                 "force_design": None,
                 "force_review": None,
+                "design_agent": None,
+                "review_agent": None,
+                "enable_prompt_caching": None,
             },
             "resilience": {
                 "level": "standard",  # off, minimal, standard, aggressive, custom
@@ -481,6 +484,7 @@ _ARTISAN_BOOL_KEYS = {
     "fail_on_truncation", "check_truncation", "strict_truncation",
     "scaffold_test_first", "force_implement",
     "force_design", "force_review",
+    "enable_prompt_caching",
 }
 _ARTISAN_INT_KEYS = {
     "max_iterations", "pass_threshold", "max_tokens", "design_max_tokens",

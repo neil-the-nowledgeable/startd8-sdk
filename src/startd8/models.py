@@ -29,6 +29,14 @@ class TokenUsage(BaseModel):
         default=None,
         description="API finish reason (e.g., 'end_turn', 'stop', 'max_tokens', 'length')"
     )
+    cache_creation_input_tokens: Optional[int] = Field(
+        default=None,
+        description="Input tokens written to cache (Anthropic prompt caching)",
+    )
+    cache_read_input_tokens: Optional[int] = Field(
+        default=None,
+        description="Input tokens read from cache (Anthropic prompt caching)",
+    )
 
     @property
     def was_truncated(self) -> bool:

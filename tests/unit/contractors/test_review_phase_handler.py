@@ -149,6 +149,7 @@ class TestResolveReviewAgent:
             handler.config.lead_agent,
             name="context-seed-reviewer",
             temperature=0.1,
+            enable_prompt_caching=False,
         )
 
 

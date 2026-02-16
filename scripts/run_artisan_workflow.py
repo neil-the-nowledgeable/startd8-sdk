@@ -237,6 +237,18 @@ def main() -> int:
         help="Drafter agent spec (default: from ContextSeedHandlers defaults)",
     )
     parser.add_argument(
+        "--design-agent", default=None,
+        help="Design phase agent spec (default: falls back to --lead-agent)",
+    )
+    parser.add_argument(
+        "--review-agent", default=None,
+        help="Review phase agent spec (default: falls back to --lead-agent)",
+    )
+    parser.add_argument(
+        "--enable-prompt-caching", action="store_true",
+        help="Enable Anthropic prompt caching (90%% input cost reduction on cache hits)",
+    )
+    parser.add_argument(
         "--no-auto-commit", action="store_true",
         help="Disable auto-commit (default: commit each feature's generated code to git after implementation)",
     )
@@ -555,6 +567,12 @@ def main() -> int:
         handler_kwargs["force_design"] = True
     if args.force_review:
         handler_kwargs["force_review"] = True
+    if args.design_agent:
+        handler_kwargs["design_agent"] = args.design_agent
+    if args.review_agent:
+        handler_kwargs["review_agent"] = args.review_agent
+    if args.enable_prompt_caching:
+        handler_kwargs["enable_prompt_caching"] = True
 
     handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():

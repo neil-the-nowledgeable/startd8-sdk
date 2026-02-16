@@ -53,6 +53,7 @@ class ClaudeAgent(BaseAgent):
         timeout_config: Optional[TimeoutConfig] = None,
         use_connection_pool: bool = False,
         system_prompt: Optional[str] = None,
+        enable_prompt_caching: bool = False,
     ):
         """
         Initialize Claude agent
@@ -73,6 +74,8 @@ class ClaudeAgent(BaseAgent):
             system_prompt: Optional system prompt for stronger instruction-following.
                 Sent as the separate ``system`` parameter in the Anthropic API.
                 Can be overridden per-call via ``agenerate(prompt, system_prompt=...)``.
+            enable_prompt_caching: If True, add cache_control blocks to system prompts
+                for Anthropic prompt caching (90% input cost reduction on cache hits).
         """
         super().__init__(name, model, cost_tracker, budget_manager)
 
@@ -111,6 +114,7 @@ class ClaudeAgent(BaseAgent):
 
         self.max_tokens = max_tokens
         self.system_prompt = system_prompt
+        self.enable_prompt_caching = enable_prompt_caching
 
         # Configure retry behavior
         if retry_config is not None:
@@ -242,7 +246,16 @@ class ClaudeAgent(BaseAgent):
             ],
         }
         if system_prompt is not None:
-            kwargs["system"] = system_prompt
+            if self.enable_prompt_caching:
+                kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": system_prompt,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            else:
+                kwargs["system"] = system_prompt
         return await self.async_client.messages.create(**kwargs)
 
     async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
@@ -366,13 +379,31 @@ class ClaudeAgent(BaseAgent):
         # Anthropic uses: "end_turn" (natural), "max_tokens" (truncated), "stop_sequence"
         stop_reason = getattr(response, 'stop_reason', None)
 
+        _raw_creation = getattr(response.usage, 'cache_creation_input_tokens', None)
+        _raw_read = getattr(response.usage, 'cache_read_input_tokens', None)
+        cache_creation = _raw_creation if isinstance(_raw_creation, int) else None
+        cache_read = _raw_read if isinstance(_raw_read, int) else None
+
         token_usage = TokenUsage(
             input=response.usage.input_tokens,
             output=response.usage.output_tokens,
             total=response.usage.input_tokens + response.usage.output_tokens,
             model_name=self.model,
             finish_reason=stop_reason,
+            cache_creation_input_tokens=cache_creation,
+            cache_read_input_tokens=cache_read,
         )
+
+        if cache_read and cache_read > 0:
+            logger.info(
+                "Prompt cache hit: %d tokens read from cache (%s)",
+                cache_read, self.name,
+            )
+        elif cache_creation and cache_creation > 0:
+            logger.debug(
+                "Prompt cache created: %d tokens written (%s)",
+                cache_creation, self.name,
+            )
 
         # Log warning if response was truncated
         if token_usage.was_truncated:

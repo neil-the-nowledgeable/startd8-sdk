@@ -180,6 +180,9 @@ class HandlerConfig:
     force_implement: bool = False
     force_design: bool = False
     force_review: bool = False
+    design_agent: Optional[str] = None
+    review_agent: Optional[str] = None
+    enable_prompt_caching: bool = False
 
     @classmethod
     def from_config(
@@ -805,7 +808,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             AgentLLMBackend,
         )
 
-        self._llm_backend = AgentLLMBackend(agent_spec=self.config.lead_agent)
+        agent_spec = self.config.design_agent or self.config.lead_agent
+        self._llm_backend = AgentLLMBackend(
+            agent_spec=agent_spec,
+            enable_prompt_caching=self.config.enable_prompt_caching,
+        )
         return self._llm_backend
 
     def _get_design_phase(self) -> Any:
@@ -3136,15 +3143,18 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         from startd8.utils.agent_resolution import resolve_agent_spec
 
+        agent_spec = self.config.review_agent or self.config.lead_agent
+
         resolve_kwargs: dict[str, Any] = {
             "name": "context-seed-reviewer",
             "temperature": self.config.review_temperature,
+            "enable_prompt_caching": self.config.enable_prompt_caching,
         }
         if self.config.max_tokens is not None:
             resolve_kwargs["max_tokens"] = self.config.max_tokens
 
         self._review_agent = resolve_agent_spec(
-            self.config.lead_agent,
+            agent_spec,
             **resolve_kwargs,
         )
         return self._review_agent
@@ -4100,6 +4110,9 @@ class ContextSeedHandlers:
         force_implement: Optional[bool] = None,
         force_design: Optional[bool] = None,
         force_review: Optional[bool] = None,
+        design_agent: Optional[str] = None,
+        review_agent: Optional[str] = None,
+        enable_prompt_caching: Optional[bool] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all seven workflow phases.
@@ -4123,6 +4136,9 @@ class ContextSeedHandlers:
             scaffold_test_first: Scaffold test files for artifact tasks before impl.
             force_design: Ignore cached design handoff; always run fresh DESIGN.
             force_review: Ignore cached review results; always run fresh REVIEW.
+            design_agent: Agent spec for design phase (falls back to lead_agent).
+            review_agent: Agent spec for review phase (falls back to lead_agent).
+            enable_prompt_caching: Enable Anthropic prompt caching.
             code_generator: Optional pre-configured CodeGenerator instance.
 
         Returns:
@@ -4149,6 +4165,9 @@ class ContextSeedHandlers:
             ("force_implement", force_implement),
             ("force_design", force_design),
             ("force_review", force_review),
+            ("design_agent", design_agent),
+            ("review_agent", review_agent),
+            ("enable_prompt_caching", enable_prompt_caching),
         ]:
             if val is not None:
                 cli_overrides[name] = val
