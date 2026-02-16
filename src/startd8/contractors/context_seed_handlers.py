@@ -487,9 +487,10 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     )
 
     # Restore Phase 2 data flow keys as defense-in-depth fallback.
-    # These are normally set by PLAN and persisted via _CHECKPOINT_CONTEXT_KEYS,
-    # but if the checkpoint serialization failed for any of them, re-extract
-    # from the seed rather than silently losing them.
+    # These originate from PLAN phase (via the enriched seed's artifacts and
+    # top-level keys) and are persisted via _CHECKPOINT_CONTEXT_KEYS, but if
+    # checkpoint serialization dropped any of them, re-extract from the seed
+    # rather than silently losing them.
     _artifacts = seed_data.get("artifacts") or {}
     context.setdefault("source_checksum", _artifacts.get("source_checksum"))
     context.setdefault("parameter_sources", _artifacts.get("parameter_sources", {}))
@@ -1081,6 +1082,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                 validation_warnings.extend(checksum_warnings)
 
                             if validation_warnings:
+                                for w in validation_warnings:
+                                    logger.warning("DESIGN: handoff validation: %s", w)
                                 logger.warning(
                                     "DESIGN: handoff has %d validation warning(s) — "
                                     "adopting anyway (use --force-design to regenerate)",
@@ -1092,7 +1095,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                 "DESIGN: auto-loaded %d prior design result(s) from %s",
                                 len(prior_design_results), handoff_path,
                             )
-                    except (FileNotFoundError, ValueError) as exc:
+                    except (FileNotFoundError, ValueError, KeyError, TypeError) as exc:
                         logger.warning(
                             "DESIGN: failed to auto-load handoff from %s: %s",
                             handoff_path, exc,
@@ -1256,8 +1259,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     scaffold=context.get("scaffold", {}),
                 )
                 logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
-            except Exception as exc:
-                logger.warning("DESIGN: failed to write handoff: %s", exc)
+            except (OSError, ValueError, TypeError) as exc:
+                logger.warning("DESIGN: failed to write handoff: %s", exc, exc_info=True)
 
         env_blocked = sum(
             1 for r in design_results.values()
@@ -3340,7 +3343,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         project_root_str = context.get("project_root")
         review_cache_path = (
             Path(project_root_str) / ".startd8" / "state" / "review_results.json"
-            if project_root_str else None
+            if project_root_str and project_root_str.strip() else None
         )
         cached_reviews: dict[str, dict[str, Any]] = {}
 
@@ -3351,7 +3354,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             and not self.config.force_review
         ):
             try:
-                with open(review_cache_path) as f:
+                with open(review_cache_path, encoding="utf-8") as f:
                     cached_reviews = json.load(f)
                 logger.info(
                     "REVIEW: loaded %d cached review result(s) from %s",
@@ -3542,28 +3545,34 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         # Persist review results for cache on re-run
         if review_cache_path and not dry_run:
-            serializable = {}
-            for item in review_items:
-                tid = item.get("task_id")
-                if tid and item.get("review_status") in ("reviewed", "cached"):
-                    serializable[tid] = {
-                        "task_id": tid,
-                        "score": item.get("score"),
-                        "verdict": item.get("verdict"),
-                        "passed": item.get("passed"),
-                        "cost": item.get("cost", 0.0),
-                        "tokens": item.get("tokens", {}),
-                        "status": "reviewed",
-                        "strengths": item.get("strengths", []),
-                        "issues": item.get("issues", []),
-                        "suggestions": item.get("suggestions", []),
-                    }
-            if serializable:
-                review_cache_path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_json(review_cache_path, serializable, indent=2)
-                logger.info(
-                    "REVIEW: saved %d review results to %s",
-                    len(serializable), review_cache_path,
+            try:
+                serializable = {}
+                for item in review_items:
+                    tid = item.get("task_id")
+                    if tid and item.get("review_status") in ("reviewed", "cached"):
+                        serializable[tid] = {
+                            "task_id": tid,
+                            "score": item.get("score"),
+                            "verdict": item.get("verdict"),
+                            "passed": item.get("passed"),
+                            "cost": item.get("cost", 0.0),
+                            "tokens": item.get("tokens", {}),
+                            "status": "reviewed",
+                            "strengths": item.get("strengths", []),
+                            "issues": item.get("issues", []),
+                            "suggestions": item.get("suggestions", []),
+                        }
+                if serializable:
+                    review_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write_json(review_cache_path, serializable, indent=2)
+                    logger.info(
+                        "REVIEW: saved %d review results to %s",
+                        len(serializable), review_cache_path,
+                    )
+            except (OSError, TypeError) as exc:
+                logger.warning(
+                    "REVIEW: failed to write cache to %s: %s",
+                    review_cache_path, exc, exc_info=True,
                 )
 
         duration = time.monotonic() - start

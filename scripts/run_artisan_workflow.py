@@ -422,15 +422,15 @@ def main() -> int:
     # Check for a prior enriched seed on disk before paying for a new
     # DomainPreflightWorkflow run.  Convention: enriched seeds live at
     # {stem}-enriched{suffix} alongside the original seed file.
+    base_stem = seed_path.stem.removesuffix("-enriched")
+    all_suffixes = "".join(seed_path.suffixes)
     enriched_candidate = seed_path.with_name(
-        seed_path.stem.removesuffix("-enriched") + "-enriched" + "".join(seed_path.suffixes)
+        base_stem + "-enriched" + all_suffixes
     )
     if enriched_candidate != seed_path and enriched_candidate.exists():
         # Staleness check: if the base seed is newer than the enriched
         # version, the enriched version is stale and must be regenerated.
-        base_seed = seed_path.with_name(
-            seed_path.stem.removesuffix("-enriched") + "".join(seed_path.suffixes)
-        )
+        base_seed = seed_path.with_name(base_stem + all_suffixes)
         if base_seed.exists() and base_seed.stat().st_mtime > enriched_candidate.stat().st_mtime:
             logger.warning(
                 "Enriched seed is stale (base seed modified after enrichment) — "
