@@ -125,6 +125,10 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "design_calibration", "task_filter", "project_root",
     "design_results", "test_results", "review_results",
     "abort_on_preflight_fail",
+    # Phase 2 data flow keys — lost on resume without these:
+    "source_checksum", "parameter_sources", "semantic_conventions",
+    "output_conventions", "scaffold", "example_artifacts",
+    "workflow_id",
 })
 
 
@@ -859,6 +863,9 @@ class ArtisanContractorWorkflow:
         """
         if context is None:
             context = {}
+
+        # Inject workflow_id so phase handlers can reference it
+        context.setdefault("workflow_id", self.config.workflow_id)
 
         # Inject model assignments so phase handlers can look them up
         context.setdefault("drafter_model", self.config.drafter_model)

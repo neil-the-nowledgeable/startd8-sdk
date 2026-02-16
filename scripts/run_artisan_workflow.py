@@ -417,8 +417,33 @@ def main() -> int:
             parser.error("--task-filter requires at least one non-empty task ID")
 
     # ------------------------------------------------------------------
-    # Auto-enrich: detect unenriched seed and run DomainPreflightWorkflow
+    # Auto-enrich: prefer existing enriched seed, else run preflight
     # ------------------------------------------------------------------
+    # Check for a prior enriched seed on disk before paying for a new
+    # DomainPreflightWorkflow run.  Convention: enriched seeds live at
+    # {stem}-enriched{suffix} alongside the original seed file.
+    enriched_candidate = seed_path.with_name(
+        seed_path.stem.removesuffix("-enriched") + "-enriched" + "".join(seed_path.suffixes)
+    )
+    if enriched_candidate != seed_path and enriched_candidate.exists():
+        # Staleness check: if the base seed is newer than the enriched
+        # version, the enriched version is stale and must be regenerated.
+        base_seed = seed_path.with_name(
+            seed_path.stem.removesuffix("-enriched") + "".join(seed_path.suffixes)
+        )
+        if base_seed.exists() and base_seed.stat().st_mtime > enriched_candidate.stat().st_mtime:
+            logger.warning(
+                "Enriched seed is stale (base seed modified after enrichment) — "
+                "will re-run DomainPreflightWorkflow. base=%s enriched=%s",
+                base_seed, enriched_candidate,
+            )
+        else:
+            logger.info(
+                "Found enriched seed on disk — using %s (skip DomainPreflightWorkflow)",
+                enriched_candidate,
+            )
+            seed_path = enriched_candidate
+
     try:
         seed_data = json.loads(seed_path.read_text(encoding="utf-8"))
         tasks = seed_data.get("tasks", [])

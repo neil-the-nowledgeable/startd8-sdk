@@ -486,6 +486,18 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
         "example_artifacts", {}
     )
 
+    # Restore Phase 2 data flow keys as defense-in-depth fallback.
+    # These are normally set by PLAN and persisted via _CHECKPOINT_CONTEXT_KEYS,
+    # but if the checkpoint serialization failed for any of them, re-extract
+    # from the seed rather than silently losing them.
+    _artifacts = seed_data.get("artifacts") or {}
+    context.setdefault("source_checksum", _artifacts.get("source_checksum"))
+    context.setdefault("parameter_sources", _artifacts.get("parameter_sources", {}))
+    context.setdefault("semantic_conventions", _artifacts.get("semantic_conventions", {}))
+    context.setdefault("output_conventions", _artifacts.get("output_conventions", {}))
+    context.setdefault("architectural_context", seed_data.get("architectural_context", {}))
+    context.setdefault("design_calibration", seed_data.get("design_calibration", {}))
+
     return _apply_runtime_task_selection(tasks)
 
 
@@ -1044,12 +1056,37 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         # case where no flag was passed but a handoff exists from a prior run.
         if not prior_design_results and not dry_run and not self.config.force_design:
             if self.output_dir:
-                from startd8.contractors.handoff import load_design_handoff, DESIGN_HANDOFF_FILENAME
+                from startd8.contractors.handoff import (
+                    load_design_handoff,
+                    DESIGN_HANDOFF_FILENAME,
+                    validate_handoff_against_context,
+                    verify_context_checksums,
+                )
                 handoff_path = Path(self.output_dir) / DESIGN_HANDOFF_FILENAME
                 if handoff_path.exists():
                     try:
                         handoff = load_design_handoff(handoff_path)
                         if handoff.design_results:
+                            # Cross-validate handoff against current context
+                            validation_warnings = validate_handoff_against_context(
+                                handoff, context,
+                            )
+                            # Verify context file checksums for drift
+                            if handoff.context_files:
+                                checksum_warnings = verify_context_checksums(
+                                    handoff.context_files,
+                                )
+                                for w in checksum_warnings:
+                                    logger.warning("DESIGN: handoff checksum: %s", w)
+                                validation_warnings.extend(checksum_warnings)
+
+                            if validation_warnings:
+                                logger.warning(
+                                    "DESIGN: handoff has %d validation warning(s) — "
+                                    "adopting anyway (use --force-design to regenerate)",
+                                    len(validation_warnings),
+                                )
+
                             prior_design_results = handoff.design_results
                             logger.info(
                                 "DESIGN: auto-loaded %d prior design result(s) from %s",
@@ -1214,7 +1251,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     enriched_seed_path=context.get("enriched_seed_path", ""),
                     project_root=context.get("project_root", ""),
                     workflow_id=context.get("workflow_id", "unknown"),
-                    completed_phases=["DESIGN"],
+                    completed_phases=["design"],
                     design_results=design_results,
                     scaffold=context.get("scaffold", {}),
                 )
@@ -2521,7 +2558,8 @@ class Test{class_name}:
             )
 
         # --- Auto-commit each feature's generated files ---
-        if self.config.auto_commit and generation_results:
+        # Skip on resume: files were already committed in the prior run.
+        if self.config.auto_commit and generation_results and not resumed:
             self._commit_features(generation_results, tasks, project_root)
 
         context["implementation"] = output
