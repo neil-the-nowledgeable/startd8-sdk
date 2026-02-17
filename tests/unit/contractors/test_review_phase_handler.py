@@ -963,8 +963,8 @@ class TestReviewCacheHashEdgeCases:
         result = ReviewPhaseHandler._hash_generated_code(gr)
         assert result is None
 
-    def test_hash_with_multiple_files_is_order_dependent(self, tmp_path):
-        """Hash(a, b) != Hash(b, a) — documents that file order matters."""
+    def test_hash_with_multiple_files_is_order_independent(self, tmp_path):
+        """Hash(a, b) == Hash(b, a) — file order does not affect hash."""
         fa = _write_gen_file(tmp_path, "a.py", "aaa")
         fb = _write_gen_file(tmp_path, "b.py", "bbb")
 
@@ -976,7 +976,7 @@ class TestReviewCacheHashEdgeCases:
 
         assert hash_ab is not None
         assert hash_ba is not None
-        assert hash_ab != hash_ba
+        assert hash_ab == hash_ba
 
     def test_hash_with_deleted_file_skips_missing(self, tmp_path):
         """One file exists, one deleted → hash computed from existing only."""
@@ -1154,3 +1154,31 @@ class TestReviewCacheExceptionHandling:
 
         handler._mock_review_task.assert_called_once()
         assert result["metadata"]["resumed"] is False
+
+
+# ============================================================================
+# Tests: REVIEW cache write failure is non-fatal
+# ============================================================================
+
+
+class TestReviewCacheWriteFailureNonFatal:
+    """Verify REVIEW cache write failures don't crash the phase."""
+
+    def test_write_failure_is_non_fatal(self, tmp_path):
+        """When atomic_write_json raises, REVIEW completes successfully."""
+        f1 = _write_gen_file(tmp_path, "code.py", "x = 1")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+
+        tasks = [_make_seed_task(task_id="T1")]
+
+        with patch(
+            "startd8.contractors.context_seed_handlers.atomic_write_json",
+            side_effect=OSError("disk full"),
+        ):
+            result, handler = _run_review_execute_with_cache(
+                tmp_path, tasks, {"T1": gen_result},
+            )
+
+        # Phase should complete despite write failure
+        handler._mock_review_task.assert_called_once()
+        assert result["output"]["total_passed"] == 1

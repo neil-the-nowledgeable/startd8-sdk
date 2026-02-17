@@ -2787,6 +2787,9 @@ class Test{class_name}:
                             for tid, r in generation_results.items()
                             if tid in current_task_ids
                         },
+                        # Structural parity with fresh-run output
+                        "development_result_summary": "resumed from cache",
+                        "execution_order": [list(current_task_ids)],
                     }
                     resumed = True
             except (json.JSONDecodeError, KeyError, TypeError, OSError, ValueError, UnicodeDecodeError) as exc:
@@ -2955,45 +2958,51 @@ class Test{class_name}:
             if not _has_explicit_project_root:
                 logger.info("IMPLEMENT: no explicit project_root — skipping cache save")
             else:
-                save_path = project_root / ".startd8" / "state" / "generation_results.json"
-                serializable_tasks = {}
-                for tid, gr in generation_results.items():
-                    content_hashes: dict[str, str] = {}
-                    for p in gr.generated_files:
-                        fp = Path(p)
-                        if fp.exists():
-                            content_hashes[str(p)] = hashlib.sha256(
-                                fp.read_bytes()
-                            ).hexdigest()
-                    serializable_tasks[tid] = {
-                        "success": gr.success,
-                        "generated_files": [str(p) for p in gr.generated_files],
-                        "content_hashes": content_hashes,
-                        "error": gr.error,
-                        "input_tokens": gr.input_tokens,
-                        "output_tokens": gr.output_tokens,
-                        "cost_usd": gr.cost_usd,
-                        "iterations": gr.iterations,
-                        "model": gr.model,
+                try:
+                    save_path = project_root / ".startd8" / "state" / "generation_results.json"
+                    serializable_tasks = {}
+                    for tid, gr in generation_results.items():
+                        content_hashes: dict[str, str] = {}
+                        for p in gr.generated_files:
+                            fp = Path(p)
+                            if fp.exists():
+                                content_hashes[str(p)] = hashlib.sha256(
+                                    fp.read_bytes()
+                                ).hexdigest()
+                        serializable_tasks[tid] = {
+                            "success": gr.success,
+                            "generated_files": [str(p) for p in gr.generated_files],
+                            "content_hashes": content_hashes,
+                            "error": gr.error,
+                            "input_tokens": gr.input_tokens,
+                            "output_tokens": gr.output_tokens,
+                            "cost_usd": gr.cost_usd,
+                            "iterations": gr.iterations,
+                            "model": gr.model,
+                        }
+                    # Persist downstream_map so REVIEW can restore it on resume
+                    cache_envelope: dict[str, Any] = {
+                        "_cache_meta": {
+                            "schema_version": _CACHE_SCHEMA_VERSION,
+                            "created_at": datetime.datetime.now(
+                                datetime.timezone.utc
+                            ).isoformat(),
+                            "source_checksum": context.get("source_checksum"),
+                        },
+                        "downstream_map": downstream_map,
+                        "tasks": serializable_tasks,
                     }
-                # Fix 1: Persist downstream_map so REVIEW can restore it on resume
-                cache_envelope: dict[str, Any] = {
-                    "_cache_meta": {
-                        "schema_version": _CACHE_SCHEMA_VERSION,
-                        "created_at": datetime.datetime.now(
-                            datetime.timezone.utc
-                        ).isoformat(),
-                        "source_checksum": context.get("source_checksum"),
-                    },
-                    "downstream_map": downstream_map,
-                    "tasks": serializable_tasks,
-                }
-                save_path.parent.mkdir(parents=True, exist_ok=True)
-                atomic_write_json(save_path, cache_envelope, indent=2)
-                logger.info(
-                    "IMPLEMENT: saved %d generation results (v2) to %s",
-                    len(generation_results), save_path,
-                )
+                    save_path.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write_json(save_path, cache_envelope, indent=2)
+                    logger.info(
+                        "IMPLEMENT: saved %d generation results (v2) to %s",
+                        len(generation_results), save_path,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "IMPLEMENT: failed to write cache: %s (non-fatal)",
+                        exc, exc_info=True,
+                    )
 
         # --- Auto-commit each feature's generated files ---
         # Skip on resume: files were already committed in the prior run.
@@ -3760,11 +3769,15 @@ PASS if score >= {pass_threshold} and no blocking issues.
     def _hash_generated_code(gen_result: GenerationResult) -> str | None:
         """Compute SHA-256 of concatenated generated file contents.
 
+        Files are sorted by path before hashing so the result is
+        order-independent (file order in GenerationResult may vary
+        between runs).
+
         Returns hex digest, or None if no files are readable.
         """
         h = hashlib.sha256()
         any_read = False
-        for fpath in gen_result.generated_files:
+        for fpath in sorted(gen_result.generated_files, key=str):
             try:
                 if not Path(fpath).exists():
                     continue
@@ -4132,9 +4145,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                         "REVIEW: saved %d review results (v2) to %s",
                         len(serializable_tasks), review_cache_path,
                     )
-            except (OSError, TypeError) as exc:
+            except Exception as exc:
                 logger.warning(
-                    "REVIEW: failed to write cache to %s: %s",
+                    "REVIEW: failed to write cache to %s: %s (non-fatal)",
                     review_cache_path, exc, exc_info=True,
                 )
 

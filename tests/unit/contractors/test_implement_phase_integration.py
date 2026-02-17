@@ -28,6 +28,7 @@ from startd8.contractors.artisan_phases.development import (
     LLMChunkExecutor,
 )
 from startd8.contractors.context_seed_handlers import (
+    HandlerConfig,
     ImplementPhaseHandler,
     SeedTask,
     WorkflowPhase,
@@ -2393,3 +2394,174 @@ class TestResumeCacheExceptionHandling:
         # Should not raise — falls through to fresh run
         result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
         assert result["metadata"]["resumed"] is False
+
+
+# ============================================================================
+# Tests: force_implement bypasses cache
+# ============================================================================
+
+
+class TestForceImplementBypassesCache:
+    """Verify force_implement=True ignores valid cache on disk."""
+
+    def test_force_implement_bypasses_valid_cache(self, tmp_path):
+        """force_implement=True → valid cache on disk is ignored → fresh run."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+
+        (tmp_path / "src").mkdir(parents=True)
+        (tmp_path / "src" / "feature.py").write_text("# generated")
+
+        cache_data = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [str(tmp_path / "src/feature.py")],
+                "error": None,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "cost_usd": 0.50,
+                "iterations": 1,
+                "model": "test:model",
+            },
+        })
+        (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
+
+        handler = ImplementPhaseHandler(HandlerConfig(force_implement=True))
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        gen_result = _make_gen_result(success=True, cost=0.30)
+        chunk = DevelopmentChunk(
+            chunk_id="T1", description="test", dependencies=[],
+            file_targets=["src/feature.py"], implementation_prompt="test",
+            test_commands=[], metadata={
+                "feature_id": "F1", "title": "T1", "domain": "backend",
+                "estimated_loc": 100, "prompt_constraints": [],
+                "post_generation_validators": [],
+                "_generation_result": gen_result,
+            },
+        )
+        state = ChunkState(chunk_id="T1", status=ChunkStatus.PASSED, attempts=1)
+        dev_result = DevelopmentResult(
+            plan_id="test", success=True,
+            chunk_states={"T1": state},
+            execution_order=[["T1"]],
+            total_duration_seconds=1.0, summary="1 passed",
+        )
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk], []),
+        ), patch.object(
+            ImplementPhaseHandler, "_run_development_phase",
+            return_value=dev_result,
+        ) as mock_run:
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        # Cache bypassed — _run_development_phase must be called
+        mock_run.assert_called_once()
+        assert result["metadata"]["resumed"] is False
+        assert result["cost"] == pytest.approx(0.30)
+
+
+# ============================================================================
+# Tests: IMPLEMENT resume output structural parity
+# ============================================================================
+
+
+class TestResumeOutputStructuralParity:
+    """Verify resumed output dict has the same keys as fresh-run output."""
+
+    def test_resumed_output_has_development_result_summary(self, tmp_path):
+        """Resumed output includes development_result_summary and execution_order."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+
+        (tmp_path / "src").mkdir(parents=True)
+        (tmp_path / "src" / "feature.py").write_text("# generated")
+
+        cache_data = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [str(tmp_path / "src/feature.py")],
+                "error": None,
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cost_usd": 0.10,
+                "iterations": 1,
+                "model": "test:model",
+            },
+        })
+        (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(ImplementPhaseHandler, "_run_development_phase"):
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        output = result["output"]
+        assert "development_result_summary" in output
+        assert output["development_result_summary"] == "resumed from cache"
+        assert "execution_order" in output
+        assert isinstance(output["execution_order"], list)
+
+
+# ============================================================================
+# Tests: Cache write failure is non-fatal
+# ============================================================================
+
+
+class TestCacheWriteFailureNonFatal:
+    """Verify IMPLEMENT cache write failures don't crash the phase."""
+
+    def test_write_failure_is_non_fatal(self, tmp_path):
+        """When atomic_write_json raises, IMPLEMENT completes successfully."""
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        gen_result = _make_gen_result(success=True, cost=0.10)
+        chunk = DevelopmentChunk(
+            chunk_id="T1", description="test", dependencies=[],
+            file_targets=["src/feature.py"], implementation_prompt="test",
+            test_commands=[], metadata={
+                "feature_id": "F1", "title": "T1", "domain": "backend",
+                "estimated_loc": 100, "prompt_constraints": [],
+                "post_generation_validators": [],
+                "_generation_result": gen_result,
+            },
+        )
+        state = ChunkState(chunk_id="T1", status=ChunkStatus.PASSED, attempts=1)
+        dev_result = DevelopmentResult(
+            plan_id="test", success=True,
+            chunk_states={"T1": state},
+            execution_order=[["T1"]],
+            total_duration_seconds=1.0, summary="1 passed",
+        )
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk], []),
+        ), patch.object(
+            ImplementPhaseHandler, "_run_development_phase",
+            return_value=dev_result,
+        ), patch(
+            "startd8.contractors.context_seed_handlers.atomic_write_json",
+            side_effect=OSError("disk full"),
+        ):
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        # Phase should complete successfully despite write failure
+        assert result["cost"] == pytest.approx(0.10)
+        assert "T1" in context["generation_results"]
