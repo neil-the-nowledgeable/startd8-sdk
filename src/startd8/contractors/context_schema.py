@@ -210,19 +210,19 @@ class DesignPhaseOutput(BaseModel):
 
 
 class ImplementPhaseOutput(BaseModel):
-    """Output of the IMPLEMENT phase."""
+    """Output of the IMPLEMENT phase.
+
+    Note: ``generation_results`` values are ``GenerationResult`` objects
+    (NamedTuples), not plain dicts.  ``arbitrary_types_allowed`` is set
+    because Pydantic cannot validate NamedTuples by default.  No
+    field validator is needed — Pydantic's ``Dict[str, Any]`` type
+    already enforces that the top-level value is a dict.
+    """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     implementation: Dict[str, Any]
     generation_results: Dict[str, Any]
-
-    @field_validator("generation_results")
-    @classmethod
-    def generation_results_has_required_structure(cls, v: Dict[str, Any]) -> Dict[str, Any]:
-        if not isinstance(v, dict):
-            raise ValueError("generation_results must be a dict")
-        return v
 
 
 class ValidationPhaseOutput(BaseModel):

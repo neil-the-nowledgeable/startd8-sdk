@@ -96,6 +96,49 @@ logger = get_logger(__name__)
 
 _CACHE_SCHEMA_VERSION = 2
 
+# Maximum file size for hash computation (50 MB).  Files larger than this
+# are skipped to prevent memory spikes during cache validation.
+_MAX_GEN_FILE_HASH_BYTES = 50 * 1024 * 1024
+
+
+def _compute_gen_file_hash(
+    file_paths: list[Any],
+    max_file_size: int = _MAX_GEN_FILE_HASH_BYTES,
+) -> str | None:
+    """Compute SHA-256 of concatenated generated file contents.
+
+    Files are sorted by string path before hashing so the digest is
+    deterministic regardless of file ordering in GenerationResult.
+
+    Args:
+        file_paths: Paths to generated files (Path objects or strings).
+        max_file_size: Skip files larger than this (bytes) to prevent
+            memory spikes on unexpectedly large artifacts.
+
+    Returns:
+        Hex digest, or ``None`` if no files are readable.
+    """
+    h = hashlib.sha256()
+    any_read = False
+    for fp in sorted(str(p) for p in file_paths):
+        p = Path(fp)
+        try:
+            if not p.is_file():
+                continue
+            st = p.stat()
+            if st.st_size > max_file_size:
+                logger.debug(
+                    "Skipping oversized file for hash: %s (%d bytes)",
+                    p, st.st_size,
+                )
+                continue
+            h.update(p.read_bytes())
+            any_read = True
+        except OSError:
+            continue
+    return h.hexdigest() if any_read else None
+
+
 from startd8.contractors.gate_contracts import GateEmitter
 
 __all__ = [
@@ -3624,11 +3667,15 @@ class TestPhaseHandler(AbstractPhaseHandler):
             )
             return None
         elif cached_checksum is not None or source_checksum is not None:
+            # One side has a checksum and the other doesn't — we can't
+            # confirm integrity but this is common during the first run
+            # after cache creation (seed lacks checksum) or after a
+            # rebuild (context gains one).  Log for visibility.
             logger.warning(
-                "TEST: Layer 1 (source checksum): partial checksum — "
-                "cache has %s, current has %s — cannot verify integrity",
-                "checksum" if cached_checksum else "None",
-                "checksum" if source_checksum else "None",
+                "TEST: only one side has source_checksum "
+                "(cached=%s, context=%s) — skipping Layer 1 comparison",
+                "present" if cached_checksum else "absent",
+                "present" if source_checksum else "absent",
             )
 
         # Layer 2: Per-task generation file hash — verify generated code
@@ -3639,26 +3686,17 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 gen_result = generation_results.get(tid)
                 if gen_result is None:
                     continue
-                # Compute current hash of generated files
                 current_files = getattr(gen_result, "generated_files", [])
                 if not current_files:
                     continue
-                h = hashlib.sha256()
-                any_read = False
-                for fp in sorted(str(p) for p in current_files):
-                    p = Path(fp)
-                    if p.is_file():
-                        h.update(p.read_bytes())
-                        any_read = True
-                if any_read:
-                    current_hash = h.hexdigest()
-                    if current_hash != cached_hash:
-                        logger.warning(
-                            "TEST: generation file hash mismatch for %s "
-                            "(cached=%s, current=%s) — re-running",
-                            tid, cached_hash[:12], current_hash[:12],
-                        )
-                        return None
+                current_hash = _compute_gen_file_hash(current_files)
+                if current_hash is not None and current_hash != cached_hash:
+                    logger.warning(
+                        "TEST: generation file hash mismatch for %s "
+                        "(cached=%s, current=%s) — re-running",
+                        tid, cached_hash[:12], current_hash[:12],
+                    )
+                    return None
 
         cached_output = saved.get("output")
         if not isinstance(cached_output, dict):
@@ -3721,6 +3759,10 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 )
                 if cached_output is not None:
                     context["test_results"] = cached_output
+                    # Construct-to-validate: build the Pydantic model to
+                    # verify the cached dict still passes schema checks
+                    # (e.g. required keys, per_task type).  Discarded
+                    # immediately — we only need the validation side-effect.
                     ValidationPhaseOutput(test_results=cached_output)
                     duration = time.monotonic() - start
                     logger.info(
@@ -3881,15 +3923,9 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     gen_files = getattr(gen_result, "generated_files", [])
                     if not gen_files:
                         continue
-                    h = hashlib.sha256()
-                    any_read = False
-                    for fp in sorted(str(p) for p in gen_files):
-                        p = Path(fp)
-                        if p.is_file():
-                            h.update(p.read_bytes())
-                            any_read = True
-                    if any_read:
-                        gen_file_hashes[task.task_id] = h.hexdigest()
+                    file_hash = _compute_gen_file_hash(gen_files)
+                    if file_hash is not None:
+                        gen_file_hashes[task.task_id] = file_hash
 
                 cache_envelope: dict[str, Any] = {
                     "_cache_meta": {
@@ -4245,6 +4281,31 @@ PASS if score >= {pass_threshold} and no blocking issues.
             }
 
     # ------------------------------------------------------------------
+    # Review helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_error_review_entry(
+        task: SeedTask,
+        exc: Exception,
+        env_fails: list[dict[str, Any]],
+        env_warns: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Build a review_items entry for a task that raised during review."""
+        return {
+            "task_id": task.task_id,
+            "title": task.title,
+            "domain": task.domain,
+            "constraint_count": len(task.prompt_constraints),
+            "env_failures": len(env_fails),
+            "env_warnings": len(env_warns),
+            "review_status": "error",
+            "error": str(exc),
+            "passed": False,
+            "score": 0,
+        }
+
+    # ------------------------------------------------------------------
     # Resume-cache helpers (v2 defense-in-depth)
     # ------------------------------------------------------------------
 
@@ -4252,23 +4313,13 @@ PASS if score >= {pass_threshold} and no blocking issues.
     def _hash_generated_code(gen_result: GenerationResult) -> str | None:
         """Compute SHA-256 of concatenated generated file contents.
 
-        Files are sorted by path before hashing so the result is
-        order-independent (file order in GenerationResult may vary
-        between runs).
+        Delegates to the module-level ``_compute_gen_file_hash`` helper
+        which sorts files by path for deterministic digests and skips
+        oversized files.
 
         Returns hex digest, or None if no files are readable.
         """
-        h = hashlib.sha256()
-        any_read = False
-        for fpath in sorted(gen_result.generated_files, key=str):
-            try:
-                if not Path(fpath).exists():
-                    continue
-                h.update(Path(fpath).read_bytes())
-                any_read = True
-            except OSError:
-                continue
-        return h.hexdigest() if any_read else None
+        return _compute_gen_file_hash(gen_result.generated_files)
 
     def _validate_review_cache(
         self,
@@ -4316,11 +4367,14 @@ PASS if score >= {pass_threshold} and no blocking issues.
             )
             return {}
         elif cached_checksum is not None or source_checksum is not None:
+            # One side has a checksum and the other doesn't — we can't
+            # confirm integrity but this is common during the first run
+            # after cache creation or after a rebuild.
             logger.warning(
-                "REVIEW: Layer 1 (source checksum): partial checksum — "
-                "cache has %s, current has %s — cannot verify integrity",
-                "checksum" if cached_checksum else "None",
-                "checksum" if source_checksum else "None",
+                "REVIEW: only one side has source_checksum "
+                "(cached=%s, context=%s) — skipping Layer 1 comparison",
+                "present" if cached_checksum else "absent",
+                "present" if source_checksum else "absent",
             )
 
         tasks_data = saved.get("tasks", {})
@@ -4579,18 +4633,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "REVIEW: unexpected error for task %s: %s",
                     task.task_id, exc, exc_info=True,
                 )
-                review_items.append({
-                    "task_id": task.task_id,
-                    "title": task.title,
-                    "domain": task.domain,
-                    "constraint_count": len(task.prompt_constraints),
-                    "env_failures": len(env_fails),
-                    "env_warnings": len(env_warns),
-                    "review_status": "error",
-                    "error": str(exc),
-                    "passed": False,
-                    "score": 0,
-                })
+                review_items.append(
+                    self._make_error_review_entry(task, exc, env_fails, env_warns)
+                )
                 total_failed += 1
 
         per_task: dict[str, Any] = {}

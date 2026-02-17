@@ -359,10 +359,8 @@ class TestBP4PartialChecksumWarning:
         import inspect
         source = inspect.getsource(ReviewPhaseHandler)
 
-        assert "partial checksum" in source
-        assert (
-            "REVIEW: Layer 1 (source checksum): partial checksum" in source
-        )
+        assert "only one side has source_checksum" in source
+        assert "REVIEW: only one side has source_checksum" in source
 
     def test_partial_checksum_does_not_reject_cache(self):
         """Partial checksum should warn but NOT invalidate the cache."""
