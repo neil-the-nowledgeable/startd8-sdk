@@ -1608,8 +1608,10 @@ class TestResumeCachePartialCoverage:
 
         # Key assertion: DevelopmentPhase was NOT called (resume used cache)
         mock_run.assert_not_called()
-        # Resumed cost should reflect only T1's cached cost
-        assert result["cost"] == pytest.approx(0.50)
+        # Fix 2: Resumed cost is 0.0 (no LLM calls), historical cost in metadata
+        assert result["cost"] == pytest.approx(0.0)
+        assert result["metadata"]["resumed"] is True
+        assert result["metadata"]["resumed_cost"] == pytest.approx(0.50)
 
     def test_resumed_cost_scoped_to_current_tasks(self, tmp_path):
         """Resumed cost sums only current tasks, not all cached tasks."""
@@ -1650,8 +1652,9 @@ class TestResumeCachePartialCoverage:
         with patch.object(ImplementPhaseHandler, "_run_development_phase"):
             result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
 
-        # Cost should be $0.50 (T1 only), NOT $1.30 (T1 + T-old)
-        assert result["cost"] == pytest.approx(0.50)
+        # Fix 2: Resumed cost is 0.0 (no LLM calls); historical is T1 only ($0.50)
+        assert result["cost"] == pytest.approx(0.0)
+        assert result["metadata"]["resumed_cost"] == pytest.approx(0.50)
 
 
 # ============================================================================
@@ -2146,3 +2149,247 @@ class TestResumeCacheWriteV2:
         assert result is not None
         assert "T1" in result
         assert result["T1"].success is True
+
+
+# ============================================================================
+# Tests: Fix 1 — downstream_map persistence in cache
+# ============================================================================
+
+
+class TestResumeCacheDownstreamMapPersistence:
+    """Verify downstream_map survives a cache write → resume roundtrip."""
+
+    def test_downstream_map_roundtrip(self, tmp_path):
+        """downstream_map written to cache is restored on resume."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+
+        (tmp_path / "src" / "pkg").mkdir(parents=True)
+        (tmp_path / "src" / "pkg" / "__init__.py").write_text("# init")
+        (tmp_path / "src" / "pkg" / "shared.py").write_text("# stub")
+
+        file_path = str(tmp_path / "src" / "pkg" / "__init__.py")
+        cache_data = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [file_path],
+                "error": None,
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cost_usd": 0.10,
+                "iterations": 1,
+                "model": "test:model",
+            },
+        })
+        # Inject downstream_map into cache (simulating what the write path does)
+        cache_data["downstream_map"] = {"T1": ["src/pkg/shared.py"]}
+        (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(
+            task_id="T1",
+            target_files=["src/pkg/__init__.py"],
+        )]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(ImplementPhaseHandler, "_run_development_phase"):
+            handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        # downstream_map should be restored in context
+        assert context.get("_downstream_map") == {"T1": ["src/pkg/shared.py"]}
+
+    def test_missing_downstream_map_defaults_to_empty(self, tmp_path):
+        """Cache without downstream_map key defaults to empty dict."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+
+        (tmp_path / "src").mkdir(parents=True)
+        (tmp_path / "src" / "feature.py").write_text("# generated")
+
+        cache_data = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [str(tmp_path / "src/feature.py")],
+                "error": None,
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cost_usd": 0.10,
+                "iterations": 1,
+                "model": "test:model",
+            },
+        })
+        # No downstream_map key in cache
+        (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(ImplementPhaseHandler, "_run_development_phase"):
+            handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        # No downstream_map → empty dict, so _downstream_map not set in context
+        # (the code only sets it when downstream_map is truthy)
+        assert context.get("_downstream_map", {}) == {}
+
+
+# ============================================================================
+# Tests: Fix 2 — resumed IMPLEMENT reports zero cost
+# ============================================================================
+
+
+class TestResumeCostReporting:
+    """Verify resumed IMPLEMENT reports cost=0.0 with historical cost in metadata."""
+
+    def test_resumed_reports_zero_cost(self, tmp_path):
+        """Resumed IMPLEMENT returns cost=0.0 (no LLM calls made)."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+
+        (tmp_path / "src").mkdir(parents=True)
+        (tmp_path / "src" / "feature.py").write_text("# generated")
+
+        cache_data = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [str(tmp_path / "src/feature.py")],
+                "error": None,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "cost_usd": 0.75,
+                "iterations": 2,
+                "model": "test:model",
+            },
+        })
+        (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(ImplementPhaseHandler, "_run_development_phase"):
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        assert result["cost"] == pytest.approx(0.0)
+        assert result["metadata"]["resumed_cost"] == pytest.approx(0.75)
+
+    def test_fresh_run_reports_actual_cost(self, tmp_path):
+        """Fresh (non-resumed) IMPLEMENT reports actual LLM cost."""
+        gen_result = _make_gen_result(success=True, cost=0.42)
+        chunk = DevelopmentChunk(
+            chunk_id="T1", description="test", dependencies=[],
+            file_targets=["src/feature.py"], implementation_prompt="test",
+            test_commands=[], metadata={
+                "feature_id": "F1", "title": "T1", "domain": "backend",
+                "estimated_loc": 100, "prompt_constraints": [],
+                "post_generation_validators": [],
+                "_generation_result": gen_result,
+            },
+        )
+        state = ChunkState(chunk_id="T1", status=ChunkStatus.PASSED, attempts=1)
+        dev_result = DevelopmentResult(
+            plan_id="test", success=True,
+            chunk_states={"T1": state},
+            execution_order=[["T1"]],
+            total_duration_seconds=1.0, summary="1 passed",
+        )
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk], []),
+        ), patch.object(
+            ImplementPhaseHandler, "_run_development_phase",
+            return_value=dev_result,
+        ):
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        assert result["cost"] == pytest.approx(0.42)
+        assert result["metadata"]["resumed"] is False
+        assert "resumed_cost" not in result["metadata"]
+
+
+# ============================================================================
+# Tests: Fix 3 — broadened exception handling in cache loading
+# ============================================================================
+
+
+class TestResumeCacheExceptionHandling:
+    """Verify corrupt/inaccessible cache files gracefully fall through."""
+
+    def test_corrupt_binary_cache_falls_through(self, tmp_path):
+        """Binary garbage in cache file doesn't crash — falls through to fresh run."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+        (state_dir / "generation_results.json").write_bytes(b"\x80\x81\xff\xfe")
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        gen_result = _make_gen_result(success=True, cost=0.10)
+        chunk = DevelopmentChunk(
+            chunk_id="T1", description="test", dependencies=[],
+            file_targets=["src/feature.py"], implementation_prompt="test",
+            test_commands=[], metadata={
+                "feature_id": "F1", "title": "T1", "domain": "backend",
+                "estimated_loc": 100, "prompt_constraints": [],
+                "post_generation_validators": [],
+                "_generation_result": gen_result,
+            },
+        )
+        state = ChunkState(chunk_id="T1", status=ChunkStatus.PASSED, attempts=1)
+        dev_result = DevelopmentResult(
+            plan_id="test", success=True,
+            chunk_states={"T1": state},
+            execution_order=[["T1"]],
+            total_duration_seconds=1.0, summary="1 passed",
+        )
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk], []),
+        ), patch.object(
+            ImplementPhaseHandler, "_run_development_phase",
+            return_value=dev_result,
+        ) as mock_run:
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        # Should have fallen through to fresh run
+        mock_run.assert_called_once()
+        assert result["metadata"]["resumed"] is False
+
+    def test_malformed_json_cache_falls_through(self, tmp_path):
+        """Syntactically invalid JSON in cache file falls through to fresh run."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+        (state_dir / "generation_results.json").write_text("{not valid json!")
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_env_fail_task("T1")]  # env-blocked so no LLM needed
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        # Should not raise — falls through to fresh run
+        result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+        assert result["metadata"]["resumed"] is False

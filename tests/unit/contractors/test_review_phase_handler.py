@@ -1029,3 +1029,128 @@ class TestReviewCacheGateEmitterInteraction:
         calls = mock_gate_cls.from_review_result.call_args_list
         assert len(calls) == 1
         assert calls[0][1]["task_id"] == "T2"
+
+
+# ============================================================================
+# Tests: Fix 5 — resumed flag and task counts in REVIEW metadata
+# ============================================================================
+
+
+class TestReviewResumeMetadata:
+    """Verify REVIEW returns resumed flag and cached/fresh task counts."""
+
+    def test_all_cached_sets_resumed_true(self, tmp_path):
+        """When all tasks use cache, metadata.resumed=True."""
+        f1 = _write_gen_file(tmp_path, "a.py", "# task 1")
+        gr1 = GenerationResult(success=True, generated_files=[f1])
+        code_hash = ReviewPhaseHandler._hash_generated_code(gr1)
+
+        cache_data = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry(task_id="T1", code_hash=code_hash)},
+        )
+
+        tasks = [_make_seed_task(task_id="T1")]
+        result, _ = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gr1},
+            cache_data=cache_data,
+        )
+
+        assert result["metadata"]["resumed"] is True
+        assert result["metadata"]["cached_task_count"] == 1
+        assert result["metadata"]["fresh_task_count"] == 0
+
+    def test_all_fresh_sets_resumed_false(self, tmp_path):
+        """When no tasks use cache, metadata.resumed=False."""
+        f1 = _write_gen_file(tmp_path, "a.py", "# task 1")
+        gr1 = GenerationResult(success=True, generated_files=[f1])
+
+        tasks = [_make_seed_task(task_id="T1")]
+        result, _ = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gr1},
+        )
+
+        assert result["metadata"]["resumed"] is False
+        assert result["metadata"]["cached_task_count"] == 0
+        assert result["metadata"]["fresh_task_count"] == 1
+
+    def test_mixed_cached_and_fresh(self, tmp_path):
+        """Mix of cached and fresh tasks reports correct counts."""
+        f1 = _write_gen_file(tmp_path, "a.py", "# task 1")
+        f2 = _write_gen_file(tmp_path, "b.py", "# task 2")
+        gr1 = GenerationResult(success=True, generated_files=[f1])
+        gr2 = GenerationResult(success=True, generated_files=[f2])
+
+        code_hash_t1 = ReviewPhaseHandler._hash_generated_code(gr1)
+        cache_data = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry(task_id="T1", code_hash=code_hash_t1)},
+        )
+
+        tasks = [_make_seed_task(task_id="T1"), _make_seed_task(task_id="T2")]
+        result, _ = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gr1, "T2": gr2},
+            cache_data=cache_data,
+        )
+
+        assert result["metadata"]["resumed"] is True
+        assert result["metadata"]["cached_task_count"] == 1
+        assert result["metadata"]["fresh_task_count"] == 1
+
+    def test_dry_run_resumed_false(self):
+        """Dry-run always reports resumed=False."""
+        tasks = [_make_seed_task(task_id="T1")]
+        handler = ReviewPhaseHandler()
+        ctx = _build_context(tasks)
+        result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=True)
+
+        assert result["metadata"]["resumed"] is False
+        assert result["metadata"]["cached_task_count"] == 0
+        assert result["metadata"]["fresh_task_count"] == 0
+
+
+# ============================================================================
+# Tests: Fix 3 — broadened exception handling in REVIEW cache loading
+# ============================================================================
+
+
+class TestReviewCacheExceptionHandling:
+    """Verify corrupt/inaccessible REVIEW cache files gracefully fall through."""
+
+    def test_corrupt_binary_cache_falls_through(self, tmp_path):
+        """Binary garbage in review cache file doesn't crash."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        state_dir = project_root / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+        (state_dir / "review_results.json").write_bytes(b"\x80\x81\xff\xfe")
+
+        f1 = _write_gen_file(tmp_path, "code.py", "x = 1")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+
+        tasks = [_make_seed_task(task_id="T1")]
+        result, handler = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gen_result},
+            # Don't pass cache_data — file already written manually
+        )
+
+        # Should have fallen through to fresh review (not crashed)
+        handler._mock_review_task.assert_called_once()
+        assert result["metadata"]["resumed"] is False
+
+    def test_malformed_json_cache_falls_through(self, tmp_path):
+        """Invalid JSON in review cache file falls through to fresh review."""
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+        state_dir = project_root / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+        (state_dir / "review_results.json").write_text("{not valid json!")
+
+        f1 = _write_gen_file(tmp_path, "code.py", "x = 1")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+
+        tasks = [_make_seed_task(task_id="T1")]
+        result, handler = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gen_result},
+        )
+
+        handler._mock_review_task.assert_called_once()
+        assert result["metadata"]["resumed"] is False

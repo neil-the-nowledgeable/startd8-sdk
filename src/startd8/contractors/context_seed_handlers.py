@@ -2636,7 +2636,9 @@ class Test{class_name}:
     ) -> dict[str, Any]:
         start = time.monotonic()
         tasks: list[SeedTask] = _ensure_context_loaded(context)
-        project_root = Path(context.get("project_root", "."))
+        _project_root_str = context.get("project_root")
+        project_root = Path(_project_root_str) if _project_root_str and _project_root_str.strip() else Path(".")
+        _has_explicit_project_root = bool(_project_root_str and _project_root_str.strip())
 
         logger.info("IMPLEMENT phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
@@ -2690,7 +2692,7 @@ class Test{class_name}:
                 "IMPLEMENT phase complete (dry-run): %d tasks (%.2fs)",
                 len(task_reports), duration,
             )
-            return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
+            return {"output": output, "cost": 0.0, "metadata": {"duration": duration, "resumed": False}}
 
         # --- Real-mode path: delegate to DevelopmentPhase ---
         from startd8.contractors.artisan_phases.development import (
@@ -2703,6 +2705,7 @@ class Test{class_name}:
 
         # --- Resume check: load prior generation results if available ---
         # Skip resume when force_implement is set (ignore cache, always run fresh).
+        # Skip when no explicit project_root (matches REVIEW's pattern).
         results_path = project_root / ".startd8" / "state" / "generation_results.json"
         # Backward compat: check legacy location
         if not results_path.exists():
@@ -2710,8 +2713,12 @@ class Test{class_name}:
             if _legacy.exists():
                 results_path = _legacy
         resumed = False
+        downstream_map: dict[str, list[str]] = {}
+        if not _has_explicit_project_root:
+            logger.info("IMPLEMENT: no explicit project_root — skipping cache load")
         if (
-            results_path.exists()
+            _has_explicit_project_root
+            and results_path.exists()
             and not dry_run
             and not self.config.force_implement
         ):
@@ -2726,11 +2733,17 @@ class Test{class_name}:
                     generation_results = validated
                     current_task_ids = {t.task_id for t in tasks}
 
-                    # Reconstruct output dict from resumed results
-                    total_cost = sum(
+                    # Fix 1: Restore downstream_map from cache
+                    downstream_map = saved.get("downstream_map", {})
+
+                    # Fix 2: Report zero cost for resumed phase (no LLM
+                    # calls were made).  Track historical cost separately.
+                    total_cost = 0.0
+                    resumed_cost = sum(
                         r.cost_usd for tid, r in generation_results.items()
                         if tid in current_task_ids
                     )
+
                     domain_tasks: dict[str, list[str]] = defaultdict(list)
                     for task in tasks:
                         domain_tasks[task.domain].append(task.task_id)
@@ -2776,13 +2789,11 @@ class Test{class_name}:
                         },
                     }
                     resumed = True
-            except (json.JSONDecodeError, KeyError, TypeError) as exc:
+            except (json.JSONDecodeError, KeyError, TypeError, OSError, ValueError, UnicodeDecodeError) as exc:
                 logger.warning(
                     "IMPLEMENT --resume: could not load cache: %s — re-running",
                     exc,
                 )
-
-        downstream_map: dict[str, list[str]] = {}
 
         if not resumed:
             # Item 12: scaffold test files for artifact generator tasks first
@@ -2833,7 +2844,7 @@ class Test{class_name}:
                 )
 
                 duration = time.monotonic() - start
-                return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
+                return {"output": output, "cost": 0.0, "metadata": {"duration": duration, "resumed": False}}
 
             # Build executor (inject pre-configured generator if provided)
             executor = LeadContractorChunkExecutor(
@@ -2939,44 +2950,50 @@ class Test{class_name}:
                 output["_gate3_validation"] = gate3
 
             # Persist generation_results to disk for crash recovery (v2 envelope)
-            # Always write to the canonical .startd8/state/ location
-            save_path = project_root / ".startd8" / "state" / "generation_results.json"
-            serializable_tasks = {}
-            for tid, gr in generation_results.items():
-                content_hashes: dict[str, str] = {}
-                for p in gr.generated_files:
-                    fp = Path(p)
-                    if fp.exists():
-                        content_hashes[str(p)] = hashlib.sha256(
-                            fp.read_bytes()
-                        ).hexdigest()
-                serializable_tasks[tid] = {
-                    "success": gr.success,
-                    "generated_files": [str(p) for p in gr.generated_files],
-                    "content_hashes": content_hashes,
-                    "error": gr.error,
-                    "input_tokens": gr.input_tokens,
-                    "output_tokens": gr.output_tokens,
-                    "cost_usd": gr.cost_usd,
-                    "iterations": gr.iterations,
-                    "model": gr.model,
+            # Always write to the canonical .startd8/state/ location.
+            # Skip when no explicit project_root (matches REVIEW's pattern).
+            if not _has_explicit_project_root:
+                logger.info("IMPLEMENT: no explicit project_root — skipping cache save")
+            else:
+                save_path = project_root / ".startd8" / "state" / "generation_results.json"
+                serializable_tasks = {}
+                for tid, gr in generation_results.items():
+                    content_hashes: dict[str, str] = {}
+                    for p in gr.generated_files:
+                        fp = Path(p)
+                        if fp.exists():
+                            content_hashes[str(p)] = hashlib.sha256(
+                                fp.read_bytes()
+                            ).hexdigest()
+                    serializable_tasks[tid] = {
+                        "success": gr.success,
+                        "generated_files": [str(p) for p in gr.generated_files],
+                        "content_hashes": content_hashes,
+                        "error": gr.error,
+                        "input_tokens": gr.input_tokens,
+                        "output_tokens": gr.output_tokens,
+                        "cost_usd": gr.cost_usd,
+                        "iterations": gr.iterations,
+                        "model": gr.model,
+                    }
+                # Fix 1: Persist downstream_map so REVIEW can restore it on resume
+                cache_envelope: dict[str, Any] = {
+                    "_cache_meta": {
+                        "schema_version": _CACHE_SCHEMA_VERSION,
+                        "created_at": datetime.datetime.now(
+                            datetime.timezone.utc
+                        ).isoformat(),
+                        "source_checksum": context.get("source_checksum"),
+                    },
+                    "downstream_map": downstream_map,
+                    "tasks": serializable_tasks,
                 }
-            cache_envelope: dict[str, Any] = {
-                "_cache_meta": {
-                    "schema_version": _CACHE_SCHEMA_VERSION,
-                    "created_at": datetime.datetime.now(
-                        datetime.timezone.utc
-                    ).isoformat(),
-                    "source_checksum": context.get("source_checksum"),
-                },
-                "tasks": serializable_tasks,
-            }
-            save_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(save_path, cache_envelope, indent=2)
-            logger.info(
-                "IMPLEMENT: saved %d generation results (v2) to %s",
-                len(generation_results), save_path,
-            )
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(save_path, cache_envelope, indent=2)
+                logger.info(
+                    "IMPLEMENT: saved %d generation results (v2) to %s",
+                    len(generation_results), save_path,
+                )
 
         # --- Auto-commit each feature's generated files ---
         # Skip on resume: files were already committed in the prior run.
@@ -3006,7 +3023,13 @@ class Test{class_name}:
             duration,
         )
 
-        return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
+        # Fix 5: Include resumed flag in metadata so orchestrator can
+        # distinguish cached from fresh phases.
+        metadata: dict[str, Any] = {"duration": duration, "resumed": resumed}
+        if resumed:
+            metadata["resumed_cost"] = resumed_cost  # type: ignore[possibly-undefined]
+
+        return {"output": output, "cost": total_cost, "metadata": metadata}
 
     def _commit_features(
         self,
@@ -3884,7 +3907,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "REVIEW: loaded %d validated cached review result(s) from %s",
                     len(cached_reviews), review_cache_path,
                 )
-            except (json.JSONDecodeError, OSError) as exc:
+            except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
                 logger.warning("REVIEW: failed to load cache from %s: %s", review_cache_path, exc)
                 cached_reviews = {}
 
@@ -4122,8 +4145,28 @@ PASS if score >= {pass_threshold} and no blocking issues.
             len(review_items), total_passed, total_failed, total_cost, duration,
         )
 
+        # Fix 5: Track per-task cache usage for metadata
+        cached_task_count = sum(
+            1 for item in review_items
+            if item.get("review_status") == "cached"
+        )
+        fresh_task_count = sum(
+            1 for item in review_items
+            if item.get("review_status") == "reviewed"
+        )
+        resumed_any = cached_task_count > 0
+
         # "cost" is the authoritative phase cost; output["total_cost"] is for reporting
-        return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
+        return {
+            "output": output,
+            "cost": total_cost,
+            "metadata": {
+                "duration": duration,
+                "resumed": resumed_any,
+                "cached_task_count": cached_task_count,
+                "fresh_task_count": fresh_task_count,
+            },
+        }
 
 
 class FinalizePhaseHandler(AbstractPhaseHandler):
