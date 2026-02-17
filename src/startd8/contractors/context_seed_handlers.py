@@ -3730,6 +3730,104 @@ PASS if score >= {pass_threshold} and no blocking issues.
             }
 
     # ------------------------------------------------------------------
+    # Resume-cache helpers (v2 defense-in-depth)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _hash_generated_code(gen_result: GenerationResult) -> str | None:
+        """Compute SHA-256 of concatenated generated file contents.
+
+        Returns hex digest, or None if no files are readable.
+        """
+        h = hashlib.sha256()
+        any_read = False
+        for fpath in gen_result.generated_files:
+            try:
+                if not Path(fpath).exists():
+                    continue
+                h.update(Path(fpath).read_bytes())
+                any_read = True
+            except OSError:
+                continue
+        return h.hexdigest() if any_read else None
+
+    def _validate_review_cache(
+        self,
+        saved: dict[str, Any],
+        generation_results: dict[str, GenerationResult],
+        source_checksum: str | None,
+    ) -> dict[str, dict[str, Any]]:
+        """Validate a saved review cache through 4 ordered layers.
+
+        Returns a dict of task_id → cached review data for entries that
+        pass all layers. Empty dict if cache-wide validation fails.
+
+        Layers (cheapest → most expensive):
+            0: Schema version — _cache_meta exists, schema_version == _CACHE_SCHEMA_VERSION
+            1: Source checksum — _cache_meta.source_checksum matches context
+            2: Per-task status — entry has status == "reviewed"
+            3: Per-task code hash — reviewed_code_hash matches current generated code
+        """
+        # Layer 0: Schema version
+        cache_meta = saved.get("_cache_meta")
+        if not isinstance(cache_meta, dict):
+            logger.warning(
+                "REVIEW: cache missing _cache_meta (v1 or corrupt) — ignoring"
+            )
+            return {}
+        schema_version = cache_meta.get("schema_version")
+        if schema_version != _CACHE_SCHEMA_VERSION:
+            logger.warning(
+                "REVIEW: cache schema_version=%s (expected %d) — ignoring",
+                schema_version, _CACHE_SCHEMA_VERSION,
+            )
+            return {}
+
+        # Layer 1: Source checksum
+        cached_checksum = cache_meta.get("source_checksum")
+        if (
+            cached_checksum is not None
+            and source_checksum is not None
+            and cached_checksum != source_checksum
+        ):
+            logger.warning(
+                "REVIEW: source_checksum mismatch "
+                "(cached=%s, current=%s) — ignoring entire cache",
+                cached_checksum, source_checksum,
+            )
+            return {}
+
+        tasks_data = saved.get("tasks", {})
+        valid: dict[str, dict[str, Any]] = {}
+
+        for tid, entry in tasks_data.items():
+            # Layer 2: Per-task status
+            if entry.get("status") != "reviewed":
+                logger.info(
+                    "REVIEW: skipping cached entry %s (status=%s)",
+                    tid, entry.get("status"),
+                )
+                continue
+
+            # Layer 3: Per-task code hash
+            cached_hash = entry.get("reviewed_code_hash")
+            if cached_hash is not None:
+                gen_result = generation_results.get(tid)
+                if gen_result is not None:
+                    current_hash = self._hash_generated_code(gen_result)
+                    if current_hash is not None and current_hash != cached_hash:
+                        logger.warning(
+                            "REVIEW: code hash mismatch for %s "
+                            "(cached=%s, current=%s) — skipping entry",
+                            tid, cached_hash[:12], current_hash[:12],
+                        )
+                        continue
+
+            valid[tid] = entry
+
+        return valid
+
+    # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
 
@@ -3776,9 +3874,14 @@ PASS if score >= {pass_threshold} and no blocking issues.
         ):
             try:
                 with open(review_cache_path, encoding="utf-8") as f:
-                    cached_reviews = json.load(f)
+                    raw_cache = json.load(f)
+                cached_reviews = self._validate_review_cache(
+                    raw_cache,
+                    generation_results,
+                    context.get("source_checksum"),
+                )
                 logger.info(
-                    "REVIEW: loaded %d cached review result(s) from %s",
+                    "REVIEW: loaded %d validated cached review result(s) from %s",
                     len(cached_reviews), review_cache_path,
                 )
             except (json.JSONDecodeError, OSError) as exc:
@@ -3884,9 +3987,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 continue
             task_test = test_by_task.get(task.task_id, {})
 
-            # Check cache before LLM call
+            # Check pre-validated cache before LLM call
             cached = cached_reviews.get(task.task_id)
-            if cached and cached.get("status") == "reviewed":
+            if cached:
                 review = {**cached, "review_status": "cached"}
                 review["title"] = task.title
                 review["domain"] = task.domain
@@ -3964,14 +4067,19 @@ PASS if score >= {pass_threshold} and no blocking issues.
         # Context contract: validate REVIEW output model
         ReviewPhaseOutput(review_results=context["review_results"])
 
-        # Persist review results for cache on re-run
+        # Persist review results for cache on re-run (v2 envelope)
         if review_cache_path and not dry_run:
             try:
-                serializable = {}
+                serializable_tasks: dict[str, Any] = {}
                 for item in review_items:
                     tid = item.get("task_id")
                     if tid and item.get("review_status") in ("reviewed", "cached"):
-                        serializable[tid] = {
+                        # Compute code hash for staleness detection on next load
+                        code_hash: str | None = None
+                        gen_result = generation_results.get(tid)
+                        if gen_result is not None:
+                            code_hash = self._hash_generated_code(gen_result)
+                        serializable_tasks[tid] = {
                             "task_id": tid,
                             "score": item.get("score"),
                             "verdict": item.get("verdict"),
@@ -3982,13 +4090,24 @@ PASS if score >= {pass_threshold} and no blocking issues.
                             "strengths": item.get("strengths", []),
                             "issues": item.get("issues", []),
                             "suggestions": item.get("suggestions", []),
+                            "reviewed_code_hash": code_hash,
                         }
-                if serializable:
+                if serializable_tasks:
+                    cache_envelope: dict[str, Any] = {
+                        "_cache_meta": {
+                            "schema_version": _CACHE_SCHEMA_VERSION,
+                            "created_at": datetime.datetime.now(
+                                datetime.timezone.utc
+                            ).isoformat(),
+                            "source_checksum": context.get("source_checksum"),
+                        },
+                        "tasks": serializable_tasks,
+                    }
                     review_cache_path.parent.mkdir(parents=True, exist_ok=True)
-                    atomic_write_json(review_cache_path, serializable, indent=2)
+                    atomic_write_json(review_cache_path, cache_envelope, indent=2)
                     logger.info(
-                        "REVIEW: saved %d review results to %s",
-                        len(serializable), review_cache_path,
+                        "REVIEW: saved %d review results (v2) to %s",
+                        len(serializable_tasks), review_cache_path,
                     )
             except (OSError, TypeError) as exc:
                 logger.warning(

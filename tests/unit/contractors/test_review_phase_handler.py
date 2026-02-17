@@ -14,6 +14,7 @@ Covers:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -27,6 +28,7 @@ from startd8.contractors.context_seed_handlers import (
     ReviewPhaseHandler,
     SeedTask,
     WorkflowPhase,
+    _CACHE_SCHEMA_VERSION,
 )
 from startd8.contractors.protocols import GenerationResult
 
@@ -444,3 +446,259 @@ class TestParseReviewResponse:
 
         assert parsed["score"] == 100
         assert parsed["passed"] is True
+
+
+# ============================================================================
+# Review cache v2 defense-in-depth
+# ============================================================================
+
+
+def _make_v2_review_cache(task_data, source_checksum=None):
+    """Build a v2 review cache envelope for testing."""
+    return {
+        "_cache_meta": {
+            "schema_version": _CACHE_SCHEMA_VERSION,
+            "created_at": "2026-02-16T00:00:00+00:00",
+            "source_checksum": source_checksum,
+        },
+        "tasks": task_data,
+    }
+
+
+def _make_reviewed_entry(
+    task_id="T1",
+    score=90,
+    verdict="PASS",
+    passed=True,
+    code_hash=None,
+):
+    """Build a single cached review entry."""
+    entry = {
+        "task_id": task_id,
+        "score": score,
+        "verdict": verdict,
+        "passed": passed,
+        "cost": 0.005,
+        "tokens": {"input": 500, "output": 200},
+        "status": "reviewed",
+        "strengths": ["Good"],
+        "issues": [],
+        "suggestions": [],
+    }
+    if code_hash is not None:
+        entry["reviewed_code_hash"] = code_hash
+    return entry
+
+
+class TestReviewCacheDefenseInDepth:
+    """Tests for _validate_review_cache() — 4-layer defense-in-depth."""
+
+    def test_v1_cache_rejected(self):
+        """Layer 0: flat dict without _cache_meta → rejected."""
+        handler = ReviewPhaseHandler()
+        saved = {"T1": {"status": "reviewed", "score": 90}}
+        result = handler._validate_review_cache(saved, {}, None)
+        assert result == {}
+
+    def test_wrong_schema_version_rejected(self):
+        """Layer 0: wrong schema_version → rejected."""
+        handler = ReviewPhaseHandler()
+        saved = {
+            "_cache_meta": {
+                "schema_version": 99,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "source_checksum": None,
+            },
+            "tasks": {"T1": _make_reviewed_entry()},
+        }
+        result = handler._validate_review_cache(saved, {}, None)
+        assert result == {}
+
+    def test_source_checksum_mismatch_rejects_all(self):
+        """Layer 1: source checksum mismatch → reject entire cache."""
+        handler = ReviewPhaseHandler()
+        saved = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry()},
+            source_checksum="old_checksum",
+        )
+        result = handler._validate_review_cache(saved, {}, "new_checksum")
+        assert result == {}
+
+    def test_source_checksum_absent_accepted(self):
+        """Layer 1: if either checksum is None, skip the check."""
+        handler = ReviewPhaseHandler()
+        # Cached checksum is None
+        saved = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry()},
+            source_checksum=None,
+        )
+        result = handler._validate_review_cache(saved, {}, "any_checksum")
+        assert "T1" in result
+
+        # Current checksum is None
+        saved2 = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry()},
+            source_checksum="some_checksum",
+        )
+        result2 = handler._validate_review_cache(saved2, {}, None)
+        assert "T1" in result2
+
+    def test_reviewed_entry_accepted(self):
+        """Layer 2: entry with status=reviewed passes."""
+        handler = ReviewPhaseHandler()
+        saved = _make_v2_review_cache({"T1": _make_reviewed_entry()})
+        result = handler._validate_review_cache(saved, {}, None)
+        assert "T1" in result
+        assert result["T1"]["score"] == 90
+
+    def test_non_reviewed_entry_filtered(self):
+        """Layer 2: entry with status != reviewed is filtered out."""
+        handler = ReviewPhaseHandler()
+        entry = _make_reviewed_entry()
+        entry["status"] = "review_error"
+        saved = _make_v2_review_cache({"T1": entry})
+        result = handler._validate_review_cache(saved, {}, None)
+        assert "T1" not in result
+
+    def test_code_hash_match_accepted(self, tmp_path):
+        """Layer 3: matching code hash → entry accepted."""
+        handler = ReviewPhaseHandler()
+        f1 = tmp_path / "module.py"
+        f1.write_text("def foo(): pass", encoding="utf-8")
+
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+        code_hash = ReviewPhaseHandler._hash_generated_code(gen_result)
+
+        entry = _make_reviewed_entry(code_hash=code_hash)
+        saved = _make_v2_review_cache({"T1": entry})
+        result = handler._validate_review_cache(saved, {"T1": gen_result}, None)
+        assert "T1" in result
+
+    def test_code_hash_mismatch_rejected(self, tmp_path):
+        """Layer 3: code changed since review → entry rejected."""
+        handler = ReviewPhaseHandler()
+        f1 = tmp_path / "module.py"
+        f1.write_text("def foo(): pass", encoding="utf-8")
+
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+
+        # Cached with a different hash (old code)
+        entry = _make_reviewed_entry(code_hash="deadbeef" * 8)
+        saved = _make_v2_review_cache({"T1": entry})
+        result = handler._validate_review_cache(saved, {"T1": gen_result}, None)
+        assert "T1" not in result
+
+    def test_code_hash_absent_accepted(self):
+        """Layer 3: no reviewed_code_hash in entry → accepted (additive field)."""
+        handler = ReviewPhaseHandler()
+        entry = _make_reviewed_entry()  # no code_hash kwarg → field absent
+        assert "reviewed_code_hash" not in entry
+        saved = _make_v2_review_cache({"T1": entry})
+        result = handler._validate_review_cache(saved, {}, None)
+        assert "T1" in result
+
+    def test_valid_v2_cache_roundtrip(self, tmp_path):
+        """Layers 0-3: fully valid cache returns all entries."""
+        handler = ReviewPhaseHandler()
+        f1 = tmp_path / "a.py"
+        f1.write_text("# task 1", encoding="utf-8")
+        f2 = tmp_path / "b.py"
+        f2.write_text("# task 2", encoding="utf-8")
+
+        gr1 = GenerationResult(success=True, generated_files=[f1])
+        gr2 = GenerationResult(success=True, generated_files=[f2])
+
+        h1 = ReviewPhaseHandler._hash_generated_code(gr1)
+        h2 = ReviewPhaseHandler._hash_generated_code(gr2)
+
+        saved = _make_v2_review_cache(
+            {
+                "T1": _make_reviewed_entry(task_id="T1", code_hash=h1),
+                "T2": _make_reviewed_entry(task_id="T2", code_hash=h2),
+            },
+            source_checksum="abc123",
+        )
+        result = handler._validate_review_cache(
+            saved, {"T1": gr1, "T2": gr2}, "abc123",
+        )
+        assert set(result.keys()) == {"T1", "T2"}
+
+
+class TestReviewCacheWriteV2:
+    """Tests for v2 envelope written by execute()."""
+
+    def test_write_produces_v2_envelope(self, tmp_path):
+        """Written cache has _cache_meta.schema_version and tasks key."""
+        f1 = _write_gen_file(tmp_path, "code.py", "x = 1")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+
+        response = _make_review_response(score=90, verdict="PASS")
+        handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
+        handler._review_agent = _make_mock_agent(response)
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        tasks = [_make_seed_task(task_id="T1")]
+        ctx = _build_context(tasks, generation_results={"T1": gen_result})
+        ctx["project_root"] = str(project_root)
+
+        handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
+
+        import json
+        cache_path = project_root / ".startd8" / "state" / "review_results.json"
+        assert cache_path.exists()
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "_cache_meta" in data
+        assert data["_cache_meta"]["schema_version"] == _CACHE_SCHEMA_VERSION
+        assert "created_at" in data["_cache_meta"]
+        assert "tasks" in data
+        assert "T1" in data["tasks"]
+
+    def test_write_includes_code_hash(self, tmp_path):
+        """Per-task reviewed_code_hash matches SHA-256 of generated files."""
+        f1 = _write_gen_file(tmp_path, "code.py", "x = 1")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+        expected_hash = hashlib.sha256(f1.read_bytes()).hexdigest()
+
+        response = _make_review_response(score=90, verdict="PASS")
+        handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
+        handler._review_agent = _make_mock_agent(response)
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        tasks = [_make_seed_task(task_id="T1")]
+        ctx = _build_context(tasks, generation_results={"T1": gen_result})
+        ctx["project_root"] = str(project_root)
+
+        handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
+
+        import json
+        cache_path = project_root / ".startd8" / "state" / "review_results.json"
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert data["tasks"]["T1"]["reviewed_code_hash"] == expected_hash
+
+    def test_write_includes_source_checksum(self, tmp_path):
+        """_cache_meta.source_checksum is taken from context."""
+        f1 = _write_gen_file(tmp_path, "code.py", "x = 1")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+
+        response = _make_review_response(score=90, verdict="PASS")
+        handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
+        handler._review_agent = _make_mock_agent(response)
+
+        project_root = tmp_path / "project"
+        project_root.mkdir()
+
+        tasks = [_make_seed_task(task_id="T1")]
+        ctx = _build_context(tasks, generation_results={"T1": gen_result})
+        ctx["project_root"] = str(project_root)
+        ctx["source_checksum"] = "my_plan_checksum"
+
+        handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
+
+        import json
+        cache_path = project_root / ".startd8" / "state" / "review_results.json"
+        data = json.loads(cache_path.read_text(encoding="utf-8"))
+        assert data["_cache_meta"]["source_checksum"] == "my_plan_checksum"
