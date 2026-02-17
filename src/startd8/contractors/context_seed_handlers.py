@@ -788,9 +788,15 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
                 if parent.exists():
                     dirs_exist.add(parent_rel)
                 elif not dry_run:
-                    parent.mkdir(parents=True, exist_ok=True)
-                    dirs_created.add(parent_rel)
-                    logger.info("Created directory: %s", parent)
+                    try:
+                        parent.mkdir(parents=True, exist_ok=True)
+                        dirs_created.add(parent_rel)
+                        logger.info("Created directory: %s", parent)
+                    except OSError as exc:
+                        logger.warning(
+                            "SCAFFOLD: could not create directory %s: %s",
+                            parent, exc,
+                        )
 
                 if target_path.exists():
                     files_existing.append(target)
@@ -4013,6 +4019,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
         generated_code: str,
         test_results: dict[str, Any],
         design_document: str | None = None,
+        parameter_sources: dict[str, Any] | None = None,
+        semantic_conventions: dict[str, Any] | None = None,
     ) -> str:
         """Build the review prompt for a single task.
 
@@ -4022,6 +4030,10 @@ PASS if score >= {pass_threshold} and no blocking issues.
             test_results: Test results from the TEST phase.
             design_document: Optional design document from DESIGN phase
                 for compliance checking.
+            parameter_sources: Optional parameter source mappings for
+                the reviewer to verify correct parameter usage.
+            semantic_conventions: Optional semantic convention mappings
+                for the reviewer to verify naming compliance.
 
         Returns:
             Formatted review prompt string.
@@ -4079,6 +4091,27 @@ PASS if score >= {pass_threshold} and no blocking issues.
             prompt = prompt.replace(
                 "## Review Instructions",
                 design_compliance_section + "\n## Review Instructions",
+            )
+
+        # ── Inject parameter_sources / semantic_conventions ────────────
+        extra_sections: list[str] = []
+        if parameter_sources:
+            extra_sections.append(
+                "\n## Parameter Sources\n"
+                + "\n".join(f"- **{k}**: {v}" for k, v in parameter_sources.items())
+                + "\nVerify the implementation uses the correct parameter names and sources.\n"
+            )
+        if semantic_conventions:
+            extra_sections.append(
+                "\n## Semantic Conventions\n"
+                + "\n".join(f"- **{k}**: {v}" for k, v in semantic_conventions.items())
+                + "\nVerify the implementation follows these naming conventions.\n"
+            )
+        if extra_sections:
+            extra = "\n".join(extra_sections)
+            prompt = prompt.replace(
+                "## Review Instructions",
+                extra + "\n## Review Instructions",
             )
 
         return prompt
@@ -4161,6 +4194,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
         generated_code: str,
         test_results: dict[str, Any],
         design_document: str | None = None,
+        parameter_sources: dict[str, Any] | None = None,
+        semantic_conventions: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Conduct LLM review for a single task.
 
@@ -4170,6 +4205,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
             test_results: Test results for context.
             design_document: Optional design document from DESIGN phase
                 for compliance checking.
+            parameter_sources: Optional parameter source mappings.
+            semantic_conventions: Optional semantic convention mappings.
 
         Returns:
             Review result dict with score, verdict, cost.
@@ -4179,6 +4216,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
             prompt = self._build_review_prompt(
                 task, generated_code, test_results,
                 design_document=design_document,
+                parameter_sources=parameter_sources,
+                semantic_conventions=semantic_conventions,
             )
             response_text, _time_ms, token_usage = agent.generate(
                 prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
@@ -4412,126 +4451,147 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 continue
 
             # --- Real-mode path ---
-            gen_result = generation_results.get(task.task_id)
+            try:
+                gen_result = generation_results.get(task.task_id)
 
-            # Skip tasks that were not generated successfully
-            if gen_result is None or not gen_result.success:
-                review_items.append({
-                    "task_id": task.task_id,
-                    "title": task.title,
-                    "domain": task.domain,
-                    "constraint_count": len(task.prompt_constraints),
-                    "env_failures": len(env_fails),
-                    "env_warnings": len(env_warns),
-                    "review_status": "skipped_no_generation",
-                })
-                continue
+                # Skip tasks that were not generated successfully
+                if gen_result is None or not gen_result.success:
+                    review_items.append({
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "domain": task.domain,
+                        "constraint_count": len(task.prompt_constraints),
+                        "env_failures": len(env_fails),
+                        "env_warnings": len(env_warns),
+                        "review_status": "skipped_no_generation",
+                    })
+                    continue
 
-            # Read generated code for review.
-            # Exclude downstream stub files (Gate 2c) from the review body
-            # so the reviewer doesn't penalize minimal placeholders that are
-            # intentionally deferred to later tasks.
-            task_downstream = set(downstream_map.get(task.task_id, []))
-            code_parts = []
-            excluded_downstream = []
-            for fpath in gen_result.generated_files:
-                try:
-                    if not fpath.exists():
-                        continue
-                    # Check if this file is a downstream stub
-                    rel_path = str(fpath)
-                    is_downstream = any(
-                        rel_path.endswith(ds) for ds in task_downstream
+                # Read generated code for review.
+                # Exclude downstream stub files (Gate 2c) from the review body
+                # so the reviewer doesn't penalize minimal placeholders that are
+                # intentionally deferred to later tasks.
+                task_downstream = set(downstream_map.get(task.task_id, []))
+                code_parts = []
+                excluded_downstream = []
+                for fpath in gen_result.generated_files:
+                    try:
+                        if not fpath.exists():
+                            continue
+                        # Check if this file is a downstream stub
+                        rel_path = str(fpath)
+                        is_downstream = any(
+                            rel_path.endswith(ds) for ds in task_downstream
+                        )
+                        if is_downstream:
+                            excluded_downstream.append(fpath.name)
+                            continue
+
+                        content = fpath.read_text(encoding="utf-8")
+                        code_parts.append(f"# File: {fpath.name}\n{content}")
+                    except (OSError, UnicodeDecodeError) as exc:
+                        logger.warning("REVIEW: could not read %s: %s", fpath, exc)
+                if excluded_downstream:
+                    code_parts.append(
+                        f"# NOTE: {len(excluded_downstream)} file(s) excluded from review "
+                        f"(downstream stubs for later tasks): {', '.join(excluded_downstream)}"
                     )
-                    if is_downstream:
-                        excluded_downstream.append(fpath.name)
-                        continue
+                    logger.info(
+                        "REVIEW: excluded %d downstream stub(s) from review for %s: %s",
+                        len(excluded_downstream), task.task_id, excluded_downstream,
+                    )
+                generated_code = "\n\n".join(code_parts)
+                if not generated_code.strip():
+                    review_items.append({
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "domain": task.domain,
+                        "constraint_count": len(task.prompt_constraints),
+                        "env_failures": len(env_fails),
+                        "env_warnings": len(env_warns),
+                        "review_status": "skipped_no_code",
+                    })
+                    continue
+                task_test = test_by_task.get(task.task_id, {})
 
-                    content = fpath.read_text(encoding="utf-8")
-                    code_parts.append(f"# File: {fpath.name}\n{content}")
-                except (OSError, UnicodeDecodeError) as exc:
-                    logger.warning("REVIEW: could not read %s: %s", fpath, exc)
-            if excluded_downstream:
-                code_parts.append(
-                    f"# NOTE: {len(excluded_downstream)} file(s) excluded from review "
-                    f"(downstream stubs for later tasks): {', '.join(excluded_downstream)}"
-                )
-                logger.info(
-                    "REVIEW: excluded %d downstream stub(s) from review for %s: %s",
-                    len(excluded_downstream), task.task_id, excluded_downstream,
-                )
-            generated_code = "\n\n".join(code_parts)
-            if not generated_code.strip():
-                review_items.append({
-                    "task_id": task.task_id,
-                    "title": task.title,
-                    "domain": task.domain,
-                    "constraint_count": len(task.prompt_constraints),
-                    "env_failures": len(env_fails),
-                    "env_warnings": len(env_warns),
-                    "review_status": "skipped_no_code",
-                })
-                continue
-            task_test = test_by_task.get(task.task_id, {})
+                # Check pre-validated cache before LLM call
+                cached = cached_reviews.get(task.task_id)
+                if cached:
+                    review = {**cached, "review_status": "cached"}
+                    review["title"] = task.title
+                    review["domain"] = task.domain
+                    review["constraint_count"] = len(task.prompt_constraints)
+                    review["env_failures"] = len(env_fails)
+                    review["env_warnings"] = len(env_warns)
+                    if review.get("passed", False):
+                        total_passed += 1
+                    else:
+                        total_failed += 1
+                    review_items.append(review)
+                    logger.info(
+                        "REVIEW: using cached result for %s (score=%s, passed=%s)",
+                        task.task_id, cached.get("score"), cached.get("passed"),
+                    )
+                    continue
 
-            # Check pre-validated cache before LLM call
-            cached = cached_reviews.get(task.task_id)
-            if cached:
-                review = {**cached, "review_status": "cached"}
+                # ── Layer 4: Thread design document into REVIEW ────────────
+                design_results = context.get("design_results", {})
+                task_design = design_results.get(task.task_id, {})
+                task_design_doc = (
+                    task_design.get("design_document")
+                    if task_design.get("status") in ("designed", "adopted", "refined")
+                    else None
+                )
+                review = self._review_task(
+                    task, generated_code, task_test,
+                    design_document=task_design_doc,
+                    parameter_sources=context.get("parameter_sources"),
+                    semantic_conventions=context.get("semantic_conventions"),
+                )
                 review["title"] = task.title
                 review["domain"] = task.domain
                 review["constraint_count"] = len(task.prompt_constraints)
                 review["env_failures"] = len(env_fails)
                 review["env_warnings"] = len(env_warns)
+                review["review_status"] = review.get("status", "reviewed")
+
+                total_cost += review.get("cost", 0.0)
                 if review.get("passed", False):
                     total_passed += 1
                 else:
                     total_failed += 1
+
                 review_items.append(review)
-                logger.info(
-                    "REVIEW: using cached result for %s (score=%s, passed=%s)",
-                    task.task_id, cached.get("score"), cached.get("passed"),
+
+                # Emit quality gate result (Item 10)
+                try:
+                    gate_result = GateEmitter.from_review_result(
+                        task_id=task.task_id,
+                        review_dict=review,
+                        workflow_id=context.get("workflow_id", "unknown"),
+                        trace_id=context.get("trace_id"),
+                    )
+                    GateEmitter.emit(gate_result)
+                except Exception as e:
+                    logger.warning("Failed to emit review gate result for %s: %s", task.task_id, e)
+            except Exception as exc:
+                logger.warning(
+                    "REVIEW: unexpected error for task %s: %s",
+                    task.task_id, exc, exc_info=True,
                 )
-                continue
-
-            # ── Layer 4: Thread design document into REVIEW ────────────
-            design_results = context.get("design_results", {})
-            task_design = design_results.get(task.task_id, {})
-            task_design_doc = (
-                task_design.get("design_document")
-                if task_design.get("status") in ("designed", "adopted", "refined")
-                else None
-            )
-            review = self._review_task(
-                task, generated_code, task_test,
-                design_document=task_design_doc,
-            )
-            review["title"] = task.title
-            review["domain"] = task.domain
-            review["constraint_count"] = len(task.prompt_constraints)
-            review["env_failures"] = len(env_fails)
-            review["env_warnings"] = len(env_warns)
-            review["review_status"] = review.get("status", "reviewed")
-
-            total_cost += review.get("cost", 0.0)
-            if review.get("passed", False):
-                total_passed += 1
-            else:
+                review_items.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "domain": task.domain,
+                    "constraint_count": len(task.prompt_constraints),
+                    "env_failures": len(env_fails),
+                    "env_warnings": len(env_warns),
+                    "review_status": "error",
+                    "error": str(exc),
+                    "passed": False,
+                    "score": 0,
+                })
                 total_failed += 1
-
-            review_items.append(review)
-
-            # Emit quality gate result (Item 10)
-            try:
-                gate_result = GateEmitter.from_review_result(
-                    task_id=task.task_id,
-                    review_dict=review,
-                    workflow_id=context.get("workflow_id", "unknown"),
-                    trace_id=context.get("trace_id"),
-                )
-                GateEmitter.emit(gate_result)
-            except Exception as e:
-                logger.warning("Failed to emit review gate result for %s: %s", task.task_id, e)
 
         per_task: dict[str, Any] = {}
         for item in review_items:
@@ -4539,12 +4599,21 @@ PASS if score >= {pass_threshold} and no blocking issues.
             if not task_id:
                 continue
             status = item.get("review_status", "unknown")
-            per_task[task_id] = {
-                "status": status,
-                "passed": item.get("passed") if status in ("reviewed", "cached") else None,
-                "score": item.get("score"),
-                "verdict": item.get("verdict"),
-            }
+            if status == "error":
+                per_task[task_id] = {
+                    "status": "error",
+                    "passed": False,
+                    "score": 0,
+                    "verdict": "ERROR",
+                    "error": item.get("error", ""),
+                }
+            else:
+                per_task[task_id] = {
+                    "status": status,
+                    "passed": item.get("passed") if status in ("reviewed", "cached") else None,
+                    "score": item.get("score"),
+                    "verdict": item.get("verdict"),
+                }
 
         output = {
             "review_items": review_items,
@@ -4815,15 +4884,22 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                         "domain": task.domain if task else "unknown",
                     }
                     if hasattr(fpath, "exists") and fpath.exists():
-                        raw_bytes = fpath.read_bytes()
-                        artifact["size_bytes"] = len(raw_bytes)
-                        artifact["sha256"] = hashlib.sha256(raw_bytes).hexdigest()
                         try:
-                            text = raw_bytes.decode("utf-8", errors="strict")
-                            artifact["line_count"] = len(text.splitlines())
-                        except (UnicodeDecodeError, ValueError):
-                            # Binary file — line count not applicable
-                            artifact["line_count"] = None
+                            raw_bytes = fpath.read_bytes()
+                            artifact["size_bytes"] = len(raw_bytes)
+                            artifact["sha256"] = hashlib.sha256(raw_bytes).hexdigest()
+                            try:
+                                text = raw_bytes.decode("utf-8", errors="strict")
+                                artifact["line_count"] = len(text.splitlines())
+                            except (UnicodeDecodeError, ValueError):
+                                # Binary file — line count not applicable
+                                artifact["line_count"] = None
+                        except OSError as exc:
+                            logger.warning(
+                                "FINALIZE: could not read artifact %s: %s",
+                                fpath, exc,
+                            )
+                            artifact["read_error"] = str(exc)
                     artifacts.append(artifact)
 
         return artifacts

@@ -116,13 +116,24 @@ def _make_test_context(ctx: dict[str, Any]) -> dict[str, Any]:
 
 def _make_review_context(ctx: dict[str, Any]) -> dict[str, Any]:
     """Extend to pass REVIEW validation."""
-    ctx["review_results"] = {"total_passed": 2, "total_failed": 0}
+    ctx["review_results"] = {
+        "review_items": [],
+        "total_passed": 2,
+        "total_failed": 0,
+        "per_task": {},
+    }
     return ctx
 
 
 def _make_finalize_context(ctx: dict[str, Any]) -> dict[str, Any]:
     """Extend to pass FINALIZE validation."""
-    ctx["workflow_summary"] = {"status": "complete", "artifact_count": 4}
+    ctx["workflow_summary"] = {
+        "plan_title": "Test Plan",
+        "task_count": 4,
+        "status": "complete",
+        "cost_summary": {"total_cost": 0.0},
+        "artifact_count": 4,
+    }
     return ctx
 
 
@@ -459,13 +470,23 @@ class TestValidationPhaseOutput:
 
 class TestReviewPhaseOutput:
     def test_valid(self):
-        model = ReviewPhaseOutput(review_results={"total_passed": 3})
+        model = ReviewPhaseOutput(review_results={
+            "review_items": [],
+            "total_passed": 3,
+            "total_failed": 0,
+            "per_task": {},
+        })
         assert model.review_results["total_passed"] == 3
 
 
 class TestFinalizePhaseOutput:
     def test_valid(self):
-        model = FinalizePhaseOutput(workflow_summary={"status": "done"})
+        model = FinalizePhaseOutput(workflow_summary={
+            "plan_title": "Test",
+            "task_count": 1,
+            "status": "done",
+            "cost_summary": {},
+        })
         assert model.workflow_summary["status"] == "done"
 
 

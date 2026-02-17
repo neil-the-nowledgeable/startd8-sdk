@@ -212,6 +212,11 @@ phases:
         - name: review_results
           type: dict
           severity: blocking
+          quality:
+            metric: total_passed
+            threshold: 1
+            on_below: warning
+            description: "At least one task should pass review"
           evaluation:
             required: true
             policy: any_evaluator

@@ -217,6 +217,13 @@ class ImplementPhaseOutput(BaseModel):
     implementation: Dict[str, Any]
     generation_results: Dict[str, Any]
 
+    @field_validator("generation_results")
+    @classmethod
+    def generation_results_has_required_structure(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(v, dict):
+            raise ValueError("generation_results must be a dict")
+        return v
+
 
 class ValidationPhaseOutput(BaseModel):
     """Output of the TEST phase (named ValidationPhaseOutput to avoid pytest collection)."""
@@ -240,11 +247,31 @@ class ReviewPhaseOutput(BaseModel):
 
     review_results: Dict[str, Any]
 
+    @field_validator("review_results")
+    @classmethod
+    def review_results_has_required_structure(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        required = {"review_items", "total_passed", "total_failed", "per_task"}
+        missing = required - set(v.keys())
+        if missing:
+            raise ValueError(f"review_results missing required keys: {sorted(missing)}")
+        if not isinstance(v.get("per_task"), dict):
+            raise ValueError("review_results['per_task'] must be a dict")
+        return v
+
 
 class FinalizePhaseOutput(BaseModel):
     """Output of the FINALIZE phase."""
 
     workflow_summary: Dict[str, Any]
+
+    @field_validator("workflow_summary")
+    @classmethod
+    def workflow_summary_has_required_structure(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        required = {"plan_title", "task_count", "status", "cost_summary"}
+        missing = required - set(v.keys())
+        if missing:
+            raise ValueError(f"workflow_summary missing required keys: {sorted(missing)}")
+        return v
 
 
 # ============================================================================
