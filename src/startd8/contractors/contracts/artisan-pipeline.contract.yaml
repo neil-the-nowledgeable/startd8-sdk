@@ -102,6 +102,11 @@ phases:
         - name: design_results
           type: dict
           severity: blocking
+          quality:
+            metric: section_count
+            threshold: 2
+            on_below: warning
+            description: "Design output should have at least 2 sections (architecture + implementation notes)"
 
   implement:
     description: "Test construction + code development"
@@ -113,6 +118,11 @@ phases:
         - name: design_results
           type: dict
           severity: blocking
+          quality:
+            metric: line_count
+            threshold: 50
+            on_below: blocking
+            description: "Design doc must have substance (>= 50 lines) before IMPLEMENT consumes it"
       enrichment:
         - name: domain_summary.domain
           type: str
@@ -146,6 +156,11 @@ phases:
         - name: generation_results
           type: dict
           severity: blocking
+          quality:
+            metric: line_count
+            threshold: 10
+            on_below: warning
+            description: "Generation results should have meaningful content"
 
   test:
     description: "Final testing and validation"
@@ -157,6 +172,11 @@ phases:
         - name: generation_results
           type: dict
           severity: blocking
+          quality:
+            metric: line_count
+            threshold: 10
+            on_below: warning
+            description: "Generation results entering TEST should not be empty stubs"
       enrichment:
         - name: domain_summary.post_generation_validators
           type: list
@@ -177,11 +197,21 @@ phases:
         - name: generation_results
           type: dict
           severity: blocking
+          quality:
+            metric: line_count
+            threshold: 10
+            on_below: warning
+            description: "Generation results entering REVIEW should have substance"
     exit:
       required:
         - name: review_results
           type: dict
           severity: blocking
+          evaluation:
+            required: true
+            policy: any_evaluator
+            on_unevaluated: warning
+            on_below_threshold: advisory
 
   finalize:
     description: "Retrospective, lessons learned, propagation validation"

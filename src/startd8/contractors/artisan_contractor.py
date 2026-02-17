@@ -732,16 +732,24 @@ class ArtisanContractorWorkflow:
                               Otherwise :class:`InMemoryCheckpointStore`.
             phases: Ordered list of phases to execute. Defaults to
                     ``WorkflowPhase.ordered()``.
-            contract_path: Optional path to a context propagation contract
-                           YAML file.  When provided, enrichment fields are
-                           validated at phase boundaries and propagation events
-                           are emitted.  Fully opt-in — ``None`` preserves
-                           existing behavior.
+            contract_path: Path to a context propagation contract YAML file.
+                           When provided, enrichment fields are validated at
+                           phase boundaries and propagation events are emitted.
+                           When ``None`` (default), auto-discovers
+                           ``contracts/artisan-pipeline.contract.yaml`` adjacent
+                           to this module if it exists.
         """
         self.config = config or WorkflowConfig()
         self.phases = phases or WorkflowPhase.ordered()
         self.handlers: dict[WorkflowPhase, AbstractPhaseHandler] = dict(handlers or {})
         self._default_handler = DefaultPhaseHandler()
+
+        # Auto-discover contract YAML when no explicit path is provided.
+        # Mirrors the discovery pattern in context_seed_handlers.py.
+        if contract_path is None:
+            _default = Path(__file__).parent / "contracts" / "artisan-pipeline.contract.yaml"
+            if _default.exists():
+                contract_path = _default
         self._contract_path = contract_path
         self._logger = logging.getLogger(
             f"artisan_contractor.{self.config.workflow_id}"
