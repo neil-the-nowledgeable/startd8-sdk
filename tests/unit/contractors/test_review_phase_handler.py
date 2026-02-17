@@ -702,3 +702,330 @@ class TestReviewCacheWriteV2:
         cache_path = project_root / ".startd8" / "state" / "review_results.json"
         data = json.loads(cache_path.read_text(encoding="utf-8"))
         assert data["_cache_meta"]["source_checksum"] == "my_plan_checksum"
+
+
+# ============================================================================
+# Integration helper: execute() with pre-populated cache
+# ============================================================================
+
+
+def _run_review_execute_with_cache(
+    tmp_path: Path,
+    tasks: list[SeedTask],
+    gen_results: dict[str, GenerationResult],
+    cache_data: dict[str, Any] | None = None,
+    force_review: bool = False,
+    dry_run: bool = False,
+    source_checksum: str | None = None,
+    review_side_effect=None,
+) -> tuple[dict[str, Any], ReviewPhaseHandler]:
+    """Set up cache file, mock agent, call execute(), return (result, handler).
+
+    Args:
+        tmp_path: pytest tmp_path for project_root.
+        tasks: SeedTask list to review.
+        gen_results: task_id → GenerationResult mapping.
+        cache_data: If provided, written to .startd8/state/review_results.json.
+        force_review: Passed through to HandlerConfig.
+        dry_run: Passed through to execute().
+        source_checksum: Added to context for cache validation.
+        review_side_effect: If provided, used as _review_task side_effect.
+            Defaults to a lambda returning score=85, PASS for each task.
+
+    Returns:
+        (execute_result, handler) tuple.
+    """
+    import json as _json
+
+    project_root = tmp_path / "project"
+    project_root.mkdir(exist_ok=True)
+
+    # Write cache file if provided
+    if cache_data is not None:
+        state_dir = project_root / ".startd8" / "state"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        (state_dir / "review_results.json").write_text(
+            _json.dumps(cache_data), encoding="utf-8",
+        )
+
+    handler = ReviewPhaseHandler(HandlerConfig(
+        pass_threshold=80,
+        force_review=force_review,
+    ))
+
+    # Default review side effect: return PASS with score=85
+    if review_side_effect is None:
+        def _default_review(task, code, test_results):
+            return {
+                "task_id": task.task_id,
+                "score": 85,
+                "verdict": "PASS",
+                "passed": True,
+                "cost": 0.005,
+                "tokens": {"input": 500, "output": 200},
+                "status": "reviewed",
+                "strengths": ["Good"],
+                "issues": [],
+                "suggestions": [],
+            }
+        review_side_effect = _default_review
+
+    ctx = _build_context(tasks, generation_results=gen_results)
+    ctx["project_root"] = str(project_root)
+    if source_checksum is not None:
+        ctx["source_checksum"] = source_checksum
+
+    with patch.object(
+        ReviewPhaseHandler, "_review_task", side_effect=review_side_effect,
+    ) as mock_review:
+        result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=dry_run)
+
+    # Attach mock for caller assertions
+    handler._mock_review_task = mock_review  # type: ignore[attr-defined]
+
+    return result, handler
+
+
+# ============================================================================
+# Tests: execute()-level integration (cache roundtrip)
+# ============================================================================
+
+
+class TestReviewCacheExecuteIntegration:
+    """Full execute() cycle tests verifying cache write → reload behavior.
+
+    Unlike the unit-level TestReviewCacheDefenseInDepth which tests
+    _validate_review_cache() in isolation, these tests exercise the
+    complete execute() path with _review_task mocked.
+    """
+
+    def test_roundtrip_write_then_reload_accepts(self, tmp_path):
+        """Execute writes v2 cache → second execute() loads it → cached tasks skip LLM."""
+        import json as _json
+
+        f1 = _write_gen_file(tmp_path, "module.py", "def hello(): return 'hi'")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+        tasks = [_make_seed_task(task_id="T1")]
+
+        # --- First execute: writes cache ---
+        result1, handler1 = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gen_result},
+        )
+        assert result1["output"]["total_passed"] == 1
+        handler1._mock_review_task.assert_called_once()
+
+        # Verify cache was written
+        project_root = tmp_path / "project"
+        cache_path = project_root / ".startd8" / "state" / "review_results.json"
+        assert cache_path.exists()
+        cache_data = _json.loads(cache_path.read_text(encoding="utf-8"))
+        assert "T1" in cache_data["tasks"]
+
+        # --- Second execute: should use cache, no LLM call ---
+        result2, handler2 = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gen_result},
+            cache_data=cache_data,
+        )
+        handler2._mock_review_task.assert_not_called()
+        items = result2["output"]["review_items"]
+        assert len(items) == 1
+        assert items[0]["review_status"] == "cached"
+        assert items[0]["passed"] is True
+
+    def test_modified_code_invalidates_cached_entry(self, tmp_path):
+        """Execute writes cache → modify file → second execute detects hash mismatch."""
+        import json as _json
+
+        f1 = _write_gen_file(tmp_path, "module.py", "def hello(): return 'hi'")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+        tasks = [_make_seed_task(task_id="T1")]
+
+        # First execute writes cache
+        result1, _ = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gen_result},
+        )
+        project_root = tmp_path / "project"
+        cache_path = project_root / ".startd8" / "state" / "review_results.json"
+        cache_data = _json.loads(cache_path.read_text(encoding="utf-8"))
+
+        # Modify the generated file on disk (hash will change)
+        f1.write_text("def hello(): return 'MODIFIED'", encoding="utf-8")
+
+        # Second execute: cache hash mismatch → re-reviews
+        result2, handler2 = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gen_result},
+            cache_data=cache_data,
+        )
+        handler2._mock_review_task.assert_called_once()
+        items = result2["output"]["review_items"]
+        assert items[0]["review_status"] == "reviewed"
+
+    def test_partial_cache_hit_mixed_with_fresh(self, tmp_path):
+        """Cache has T1 but not T2 → T1 uses cache, T2 gets fresh review."""
+        f1 = _write_gen_file(tmp_path, "a.py", "# task 1 code")
+        f2 = _write_gen_file(tmp_path, "b.py", "# task 2 code")
+        gr1 = GenerationResult(success=True, generated_files=[f1])
+        gr2 = GenerationResult(success=True, generated_files=[f2])
+
+        code_hash_t1 = ReviewPhaseHandler._hash_generated_code(gr1)
+
+        cache_data = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry(task_id="T1", code_hash=code_hash_t1)},
+        )
+
+        tasks = [_make_seed_task(task_id="T1"), _make_seed_task(task_id="T2")]
+        result, handler = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gr1, "T2": gr2},
+            cache_data=cache_data,
+        )
+
+        # T1 should be cached, T2 should be fresh-reviewed
+        items = result["output"]["review_items"]
+        item_by_id = {it["task_id"]: it for it in items}
+        assert item_by_id["T1"]["review_status"] == "cached"
+        assert item_by_id["T2"]["review_status"] == "reviewed"
+
+        # _review_task called only for T2
+        handler._mock_review_task.assert_called_once()
+        call_task = handler._mock_review_task.call_args[0][0]
+        assert call_task.task_id == "T2"
+
+        # Cost: only T2's fresh review contributes
+        assert result["output"]["total_cost"] == pytest.approx(0.005)
+        assert result["cost"] == pytest.approx(0.005)
+
+    def test_force_review_bypasses_cache(self, tmp_path):
+        """force_review=True → valid cache on disk is ignored → all tasks fresh."""
+        f1 = _write_gen_file(tmp_path, "module.py", "def foo(): pass")
+        gr = GenerationResult(success=True, generated_files=[f1])
+        code_hash = ReviewPhaseHandler._hash_generated_code(gr)
+
+        cache_data = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry(task_id="T1", code_hash=code_hash)},
+        )
+
+        tasks = [_make_seed_task(task_id="T1")]
+        result, handler = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gr},
+            cache_data=cache_data,
+            force_review=True,
+        )
+
+        # Cache bypassed — _review_task must be called
+        handler._mock_review_task.assert_called_once()
+        items = result["output"]["review_items"]
+        assert items[0]["review_status"] == "reviewed"
+
+    def test_dry_run_does_not_load_or_write_cache(self, tmp_path):
+        """dry_run=True → cache file on disk untouched, not loaded."""
+        import json as _json
+
+        f1 = _write_gen_file(tmp_path, "module.py", "x = 1")
+        gr = GenerationResult(success=True, generated_files=[f1])
+        code_hash = ReviewPhaseHandler._hash_generated_code(gr)
+
+        cache_data = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry(task_id="T1", code_hash=code_hash)},
+        )
+
+        tasks = [_make_seed_task(task_id="T1")]
+        result, handler = _run_review_execute_with_cache(
+            tmp_path, tasks, {"T1": gr},
+            cache_data=cache_data,
+            dry_run=True,
+        )
+
+        # Dry run: _review_task not called (dry_run skips review entirely)
+        handler._mock_review_task.assert_not_called()
+        items = result["output"]["review_items"]
+        assert items[0]["review_status"] == "dry_run_pending"
+
+        # Cache file should be unchanged (dry_run doesn't write)
+        project_root = tmp_path / "project"
+        cache_path = project_root / ".startd8" / "state" / "review_results.json"
+        # File should still contain only T1 from the original cache
+        current = _json.loads(cache_path.read_text(encoding="utf-8"))
+        assert current == cache_data
+
+
+# ============================================================================
+# Tests: _hash_generated_code edge cases
+# ============================================================================
+
+
+class TestReviewCacheHashEdgeCases:
+    """Boundary conditions for _hash_generated_code()."""
+
+    def test_hash_with_no_readable_files_returns_none(self, tmp_path):
+        """All files missing/unreadable → returns None."""
+        nonexistent = tmp_path / "ghost.py"
+        gr = GenerationResult(success=True, generated_files=[nonexistent])
+        result = ReviewPhaseHandler._hash_generated_code(gr)
+        assert result is None
+
+    def test_hash_with_multiple_files_is_order_dependent(self, tmp_path):
+        """Hash(a, b) != Hash(b, a) — documents that file order matters."""
+        fa = _write_gen_file(tmp_path, "a.py", "aaa")
+        fb = _write_gen_file(tmp_path, "b.py", "bbb")
+
+        gr_ab = GenerationResult(success=True, generated_files=[fa, fb])
+        gr_ba = GenerationResult(success=True, generated_files=[fb, fa])
+
+        hash_ab = ReviewPhaseHandler._hash_generated_code(gr_ab)
+        hash_ba = ReviewPhaseHandler._hash_generated_code(gr_ba)
+
+        assert hash_ab is not None
+        assert hash_ba is not None
+        assert hash_ab != hash_ba
+
+    def test_hash_with_deleted_file_skips_missing(self, tmp_path):
+        """One file exists, one deleted → hash computed from existing only."""
+        fa = _write_gen_file(tmp_path, "exists.py", "content")
+        fb = _write_gen_file(tmp_path, "will_delete.py", "gone")
+        fb.unlink()  # delete it
+
+        gr = GenerationResult(success=True, generated_files=[fa, fb])
+        result = ReviewPhaseHandler._hash_generated_code(gr)
+
+        # Should still return a hash (from fa only)
+        assert result is not None
+
+        # It should match the hash of just fa
+        gr_single = GenerationResult(success=True, generated_files=[fa])
+        assert result == ReviewPhaseHandler._hash_generated_code(gr_single)
+
+
+# ============================================================================
+# Tests: GateEmitter interaction with cached reviews
+# ============================================================================
+
+
+class TestReviewCacheGateEmitterInteraction:
+    """Verify GateEmitter is only fired for fresh reviews, not cached ones."""
+
+    def test_gate_emitter_not_fired_for_cached_reviews(self, tmp_path):
+        """Cached reviews skip GateEmitter; only fresh reviews emit gates."""
+        f1 = _write_gen_file(tmp_path, "a.py", "# task 1")
+        f2 = _write_gen_file(tmp_path, "b.py", "# task 2")
+        gr1 = GenerationResult(success=True, generated_files=[f1])
+        gr2 = GenerationResult(success=True, generated_files=[f2])
+
+        code_hash_t1 = ReviewPhaseHandler._hash_generated_code(gr1)
+        cache_data = _make_v2_review_cache(
+            {"T1": _make_reviewed_entry(task_id="T1", code_hash=code_hash_t1)},
+        )
+
+        tasks = [_make_seed_task(task_id="T1"), _make_seed_task(task_id="T2")]
+
+        with patch(
+            "startd8.contractors.context_seed_handlers.GateEmitter"
+        ) as mock_gate_cls:
+            result, handler = _run_review_execute_with_cache(
+                tmp_path, tasks, {"T1": gr1, "T2": gr2},
+                cache_data=cache_data,
+            )
+
+        # GateEmitter.from_review_result should be called only for T2 (fresh)
+        calls = mock_gate_cls.from_review_result.call_args_list
+        assert len(calls) == 1
+        assert calls[0][1]["task_id"] == "T2"
