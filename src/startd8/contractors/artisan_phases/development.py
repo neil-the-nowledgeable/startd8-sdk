@@ -971,15 +971,63 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         """
         parts: List[str] = []
 
-        # Prepend design document from DESIGN phase (primary context for drafter)
+        # Prepend target file format hint so the drafter knows WHAT to generate
+        # before reading the design doc (which may contain test examples).
+        if chunk.file_targets:
+            parts.append("## Target Files\n")
+            parts.append(
+                "You MUST generate the following file(s). Focus on implementing "
+                "the PRIMARY artifact — do NOT generate test code.\n"
+            )
+            for target in chunk.file_targets:
+                ext = target.rsplit(".", 1)[-1] if "." in target else ""
+                fmt_hint = {
+                    "yaml": "Valid YAML configuration",
+                    "yml": "Valid YAML configuration",
+                    "json": "Valid JSON",
+                    "md": "Markdown document",
+                    "py": "Python module",
+                }.get(ext, "")
+                parts.append(f"- `{target}`" + (f" ({fmt_hint})" if fmt_hint else ""))
+            parts.append("\n---\n")
+
+        # ── Layer 2: Authoritative design document framing ────────────
+        # When a design document is present and substantial, make it the
+        # AUTHORITATIVE specification and demote the task summary to a label.
+        # This prevents the LLM from latching onto the shorter task
+        # description and ignoring the comprehensive design.
         design_doc = chunk.metadata.get("design_document")
         if design_doc:
-            parts.append("## Design Document\n")
-            parts.append("The following design document was approved during the DESIGN phase.")
-            parts.append("Implement exactly what is specified below:\n")
+            design_lines = len(design_doc.strip().splitlines())
+            design_sections = sum(
+                1
+                for line in design_doc.splitlines()
+                if line.strip().startswith("##")
+            )
+
+            parts.append("## AUTHORITATIVE Design Document\n")
+            parts.append(
+                "The following design document was approved during the DESIGN phase. "
+                "It is the AUTHORITATIVE specification for this task.\n"
+            )
+            parts.append(
+                "**CRITICAL:** This design document OVERRIDES the Task Summary below "
+                "when they differ in scope or detail. The Task Summary is only a brief "
+                "label. The design document defines the FULL scope of what must be "
+                "implemented — all sections, rules, structures, and patterns specified "
+                "in the design MUST appear in your output.\n"
+            )
+            parts.append(
+                f"**Design Scope:** {design_lines} lines across {design_sections} "
+                f"sections. A partial implementation that omits designed sections "
+                f"will be rejected in review.\n"
+            )
             parts.append(design_doc)
             parts.append("\n---\n")
-            parts.append("## Task Summary\n")
+            parts.append(
+                "## Task Summary (label only — see AUTHORITATIVE Design Document "
+                "above for full scope)\n"
+            )
 
         parts.append(chunk.description)
 
@@ -1081,6 +1129,42 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             chunk.metadata["iterations"] = result.iterations
 
             if result.success:
+                # ── Layer 3: Post-generation scope validation ────────────
+                design_doc = chunk.metadata.get("design_document")
+                if design_doc and result.generated_files:
+                    design_lines = len(design_doc.strip().splitlines())
+                    total_output_lines = 0
+                    for gen_file in result.generated_files:
+                        try:
+                            if gen_file.exists():
+                                total_output_lines += len(
+                                    gen_file.read_text(encoding="utf-8")
+                                    .strip()
+                                    .splitlines()
+                                )
+                        except (OSError, UnicodeDecodeError):
+                            pass
+
+                    scope_ratio = (
+                        total_output_lines / design_lines
+                        if design_lines > 0
+                        else 1.0
+                    )
+                    if scope_ratio < 0.25 and total_output_lines < 100:
+                        self.logger.warning(
+                            "SCOPE MISMATCH: chunk %s output (%d lines) is %.0f%% "
+                            "of design (%d lines) — possible partial implementation",
+                            chunk.chunk_id,
+                            total_output_lines,
+                            scope_ratio * 100,
+                            design_lines,
+                        )
+                        chunk.metadata["_scope_mismatch"] = {
+                            "design_lines": design_lines,
+                            "output_lines": total_output_lines,
+                            "ratio": round(scope_ratio, 2),
+                        }
+
                 self.logger.info(
                     "Chunk %s: generation succeeded (%d files, $%.4f, %d iterations)",
                     chunk.chunk_id,

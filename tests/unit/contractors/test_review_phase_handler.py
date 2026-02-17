@@ -755,7 +755,7 @@ def _run_review_execute_with_cache(
 
     # Default review side effect: return PASS with score=85
     if review_side_effect is None:
-        def _default_review(task, code, test_results):
+        def _default_review(task, code, test_results, **kwargs):
             return {
                 "task_id": task.task_id,
                 "score": 85,

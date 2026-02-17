@@ -2036,6 +2036,34 @@ class Test{class_name}:
             if task_design.get("status") in ("designed", "adopted", "refined"):
                 design_doc_text = task_design.get("design_document")
 
+            # ── Layer 1: DESIGN→IMPLEMENT boundary validation (DP-2) ────
+            if task_design.get("status") in ("designed", "adopted", "refined"):
+                if not design_doc_text or len(design_doc_text.strip()) < 50:
+                    logger.warning(
+                        "DESIGN→IMPLEMENT boundary: task %s has status '%s' but "
+                        "design_document is empty/trivial (%d chars) — falling back "
+                        "to task description only (DP-2: no silent defaults)",
+                        task.task_id,
+                        task_design.get("status"),
+                        len(design_doc_text.strip()) if design_doc_text else 0,
+                    )
+                    design_doc_text = None
+                else:
+                    _design_lines = len(design_doc_text.strip().splitlines())
+                    _design_sections = sum(
+                        1
+                        for line in design_doc_text.splitlines()
+                        if line.strip().startswith("##")
+                    )
+                    logger.info(
+                        "DESIGN→IMPLEMENT boundary: task %s design document "
+                        "propagated (%d chars, %d lines, %d sections)",
+                        task.task_id,
+                        len(design_doc_text),
+                        _design_lines,
+                        _design_sections,
+                    )
+
             # Per-task implement token cap from design_calibration
             task_cal = (calibration_map or {}).get(task.task_id, {})
             max_output_tokens = task_cal.get("implement_max_output_tokens")
@@ -2299,6 +2327,16 @@ class Test{class_name}:
                     "semantic_conventions": semantic_conventions or {},
                 },
             ))
+
+        # ── Layer 1: aggregate handoff log ────────────────────────────
+        tasks_with_design = sum(
+            1 for c in chunks if c.metadata.get("design_document")
+        )
+        logger.info(
+            "DESIGN→IMPLEMENT handoff: %d/%d tasks have design documents",
+            tasks_with_design,
+            len(chunks),
+        )
 
         return chunks, skipped
 
@@ -3607,6 +3645,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         task: SeedTask,
         generated_code: str,
         test_results: dict[str, Any],
+        design_document: str | None = None,
     ) -> str:
         """Build the review prompt for a single task.
 
@@ -3614,6 +3653,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
             task: The seed task.
             generated_code: The code that was generated.
             test_results: Test results from the TEST phase.
+            design_document: Optional design document from DESIGN phase
+                for compliance checking.
 
         Returns:
             Formatted review prompt string.
@@ -3634,7 +3675,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         if len(test_str) > max_test:
             test_for_prompt += f"\n... [truncated — {len(test_str) - max_test} chars omitted] ..."
 
-        return self.REVIEW_PROMPT_TEMPLATE.format(
+        prompt = self.REVIEW_PROMPT_TEMPLATE.format(
             task_id=task.task_id,
             title=task.title,
             domain=task.domain,
@@ -3644,6 +3685,36 @@ PASS if score >= {pass_threshold} and no blocking issues.
             test_results=test_for_prompt,
             pass_threshold=self.config.pass_threshold,
         )
+
+        # ── Layer 4: Inject design compliance section ────────────────
+        if design_document:
+            max_design = 8000
+            design_for_prompt = design_document[:max_design]
+            if len(design_document) > max_design:
+                design_for_prompt += (
+                    f"\n\n# ... [{len(design_document) - max_design} chars truncated] ..."
+                )
+            design_lines = len(design_document.strip().splitlines())
+            design_sections = sum(
+                1
+                for line in design_document.splitlines()
+                if line.strip().startswith("##")
+            )
+            design_compliance_section = (
+                f"\n## Design Document (from DESIGN phase — {design_lines} lines, "
+                f"{design_sections} sections)\n"
+                f"The implementation was built from this design specification. "
+                f"**You MUST check that the implementation covers ALL sections "
+                f"and requirements from this design.** Score lower if major "
+                f"sections are missing or only partially implemented.\n\n"
+                f"```\n{design_for_prompt}\n```\n"
+            )
+            prompt = prompt.replace(
+                "## Review Instructions",
+                design_compliance_section + "\n## Review Instructions",
+            )
+
+        return prompt
 
     def _parse_review_response(self, response: str) -> dict[str, Any]:
         """Parse score, verdict, and issues from the LLM review response.
@@ -3722,6 +3793,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         task: SeedTask,
         generated_code: str,
         test_results: dict[str, Any],
+        design_document: str | None = None,
     ) -> dict[str, Any]:
         """Conduct LLM review for a single task.
 
@@ -3729,13 +3801,18 @@ PASS if score >= {pass_threshold} and no blocking issues.
             task: The seed task.
             generated_code: Code to review.
             test_results: Test results for context.
+            design_document: Optional design document from DESIGN phase
+                for compliance checking.
 
         Returns:
             Review result dict with score, verdict, cost.
         """
         try:
             agent = self._resolve_review_agent()
-            prompt = self._build_review_prompt(task, generated_code, test_results)
+            prompt = self._build_review_prompt(
+                task, generated_code, test_results,
+                design_document=design_document,
+            )
             response_text, _time_ms, token_usage = agent.generate(
                 prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
             )
@@ -4043,7 +4120,18 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 )
                 continue
 
-            review = self._review_task(task, generated_code, task_test)
+            # ── Layer 4: Thread design document into REVIEW ────────────
+            design_results = context.get("design_results", {})
+            task_design = design_results.get(task.task_id, {})
+            task_design_doc = (
+                task_design.get("design_document")
+                if task_design.get("status") in ("designed", "adopted", "refined")
+                else None
+            )
+            review = self._review_task(
+                task, generated_code, task_test,
+                design_document=task_design_doc,
+            )
             review["title"] = task.title
             review["domain"] = task.domain
             review["constraint_count"] = len(task.prompt_constraints)

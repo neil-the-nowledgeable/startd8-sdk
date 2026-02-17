@@ -540,3 +540,73 @@ class TestDetectDownstreamFiles:
         )
         # Only artifact_generators.py is downstream
         assert result == ["src/pkg/artifact_generators.py"]
+
+
+# ============================================================================
+# Tests: _build_task_description target file format hint
+# ============================================================================
+
+
+class TestBuildTaskDescriptionTargetHint:
+    """Verify that _build_task_description prepends target file format hints."""
+
+    def test_yaml_target_includes_format_hint(self):
+        """YAML file target shows 'Valid YAML configuration' hint."""
+        chunk = _make_chunk(
+            file_targets=["alertmanager/notification.yaml"],
+            metadata={
+                "prompt_constraints": [],
+                "design_document": None,
+            },
+        )
+        executor = LeadContractorChunkExecutor(output_dir=Path("/tmp"))
+        desc = executor._build_task_description(chunk, {})
+
+        assert "## Target Files" in desc
+        assert "`alertmanager/notification.yaml`" in desc
+        assert "Valid YAML configuration" in desc
+        assert "do not generate test code" in desc.lower()
+
+    def test_json_target_includes_format_hint(self):
+        """JSON file target shows 'Valid JSON' hint."""
+        chunk = _make_chunk(
+            file_targets=["grafana/dashboard.json"],
+            metadata={
+                "prompt_constraints": [],
+                "design_document": None,
+            },
+        )
+        executor = LeadContractorChunkExecutor(output_dir=Path("/tmp"))
+        desc = executor._build_task_description(chunk, {})
+
+        assert "Valid JSON" in desc
+
+    def test_python_target_includes_format_hint(self):
+        """Python file target shows 'Python module' hint."""
+        chunk = _make_chunk(
+            file_targets=["src/feature.py"],
+            metadata={
+                "prompt_constraints": [],
+                "design_document": None,
+            },
+        )
+        executor = LeadContractorChunkExecutor(output_dir=Path("/tmp"))
+        desc = executor._build_task_description(chunk, {})
+
+        assert "Python module" in desc
+
+    def test_target_hint_before_design_doc(self):
+        """Target file hint appears BEFORE the design document."""
+        chunk = _make_chunk(
+            file_targets=["config/app.yaml"],
+            metadata={
+                "prompt_constraints": [],
+                "design_document": "# Design Doc\nSome design content here.",
+            },
+        )
+        executor = LeadContractorChunkExecutor(output_dir=Path("/tmp"))
+        desc = executor._build_task_description(chunk, {})
+
+        target_pos = desc.index("## Target Files")
+        design_pos = desc.index("## AUTHORITATIVE Design Document")
+        assert target_pos < design_pos
