@@ -105,7 +105,12 @@ def _make_implement_context(ctx: dict[str, Any]) -> dict[str, Any]:
 
 def _make_test_context(ctx: dict[str, Any]) -> dict[str, Any]:
     """Extend to pass TEST validation."""
-    ctx["test_results"] = {"total_passed": 2, "total_failed": 0}
+    ctx["test_results"] = {
+        "test_plan": [],
+        "total_passed": 2,
+        "total_failed": 0,
+        "per_task": {},
+    }
     return ctx
 
 
@@ -443,7 +448,12 @@ class TestImplementPhaseOutput:
 
 class TestValidationPhaseOutput:
     def test_valid(self):
-        model = ValidationPhaseOutput(test_results={"total_passed": 5})
+        model = ValidationPhaseOutput(test_results={
+            "test_plan": [],
+            "total_passed": 5,
+            "total_failed": 0,
+            "per_task": {},
+        })
         assert model.test_results["total_passed"] == 5
 
 

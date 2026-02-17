@@ -1142,12 +1142,16 @@ class LLMTestGenerator:
         agent_spec: str,
         max_tokens: int = 64000,
         max_retries: int = 2,
+        parameter_sources: Optional[Dict[str, Any]] = None,
+        semantic_conventions: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._agent_spec = agent_spec
         self._max_tokens = max_tokens
         if max_retries < 0:
             raise ValueError(f"max_retries must be >= 0, got {max_retries}")
         self._max_retries = max_retries
+        self._parameter_sources = parameter_sources
+        self._semantic_conventions = semantic_conventions
 
         # Lazily resolved agent (cached after first call)
         self._agent: Optional[Any] = None
@@ -1305,20 +1309,38 @@ class LLMTestGenerator:
         )
         module_paths = self._collect_module_paths(design)
 
+        # Build optional context sections
+        extra_sections: List[str] = []
+        if self._parameter_sources:
+            extra_sections.append(
+                "\n## Parameter Sources\n\n"
+                + "\n".join(f"- **{k}**: {v}" for k, v in self._parameter_sources.items())
+            )
+        if self._semantic_conventions:
+            extra_sections.append(
+                "\n## Semantic Conventions\n\n"
+                + "\n".join(f"- **{k}**: {v}" for k, v in self._semantic_conventions.items())
+            )
+        extra_context = "\n".join(extra_sections)
+
         if implementation_code:
-            return _LLM_TEST_FROM_IMPL_PROMPT.format(
+            prompt = _LLM_TEST_FROM_IMPL_PROMPT.format(
                 feature_name=design.feature_name,
                 feature_description=design.description or "(no description)",
                 design_content=design_content,
                 implementation_code=implementation_code,
                 module_paths=module_paths,
             )
-        return _LLM_TEST_FROM_DESIGN_PROMPT.format(
-            feature_name=design.feature_name,
-            feature_description=design.description or "(no description)",
-            design_content=design_content,
-            module_paths=module_paths,
-        )
+        else:
+            prompt = _LLM_TEST_FROM_DESIGN_PROMPT.format(
+                feature_name=design.feature_name,
+                feature_description=design.description or "(no description)",
+                design_content=design_content,
+                module_paths=module_paths,
+            )
+        if extra_context:
+            prompt += extra_context
+        return prompt
 
     def _build_retry_prompt(
         self,
@@ -1597,6 +1619,8 @@ class TestConstructionPhase:
         implementation_code: Optional[str] = None,
         design_phase_doc: Optional["DesignPhaseDocument"] = None,
         max_retries: int = 2,
+        parameter_sources: Optional[Dict[str, Any]] = None,
+        semantic_conventions: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the Test Construction Phase.
@@ -1618,6 +1642,10 @@ class TestConstructionPhase:
                 sections).  Provides richer context to the LLM.
             max_retries: Maximum error-informed retry attempts when
                 pytest collection fails (LLM path only).
+            parameter_sources: Optional dict of parameter source
+                mappings forwarded to the LLM for context.
+            semantic_conventions: Optional dict of semantic convention
+                mappings forwarded to the LLM for context.
         """
         self.raw_design = design_doc
         self.output_dir = output_dir or Path(
@@ -1628,6 +1656,8 @@ class TestConstructionPhase:
         self.implementation_code = implementation_code
         self.design_phase_doc = design_phase_doc
         self.max_retries = max_retries
+        self.parameter_sources = parameter_sources
+        self.semantic_conventions = semantic_conventions
         self.status = PhaseStatus.NOT_STARTED
         self._result: Optional[PhaseResult] = None
 
@@ -1934,6 +1964,8 @@ class TestConstructionPhase:
             llm_gen = LLMTestGenerator(
                 agent_spec=self.agent_spec,
                 max_retries=self.max_retries,
+                parameter_sources=self.parameter_sources,
+                semantic_conventions=self.semantic_conventions,
             )
 
             try:

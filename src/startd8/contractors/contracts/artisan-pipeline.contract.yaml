@@ -189,6 +189,11 @@ phases:
         - name: test_results
           type: dict
           severity: blocking
+          quality:
+            metric: total_passed
+            threshold: 1
+            on_below: warning
+            description: "At least one task should pass its validators"
 
   review:
     description: "Final assembly and validation"

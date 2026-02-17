@@ -223,6 +223,17 @@ class ValidationPhaseOutput(BaseModel):
 
     test_results: Dict[str, Any]
 
+    @field_validator("test_results")
+    @classmethod
+    def test_results_has_required_structure(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        required = {"test_plan", "total_passed", "total_failed", "per_task"}
+        missing = required - set(v.keys())
+        if missing:
+            raise ValueError(f"test_results missing required keys: {sorted(missing)}")
+        if not isinstance(v.get("per_task"), dict):
+            raise ValueError("test_results['per_task'] must be a dict")
+        return v
+
 
 class ReviewPhaseOutput(BaseModel):
     """Output of the REVIEW phase."""

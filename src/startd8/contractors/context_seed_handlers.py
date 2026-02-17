@@ -179,7 +179,7 @@ class HandlerConfig:
     fail_on_truncation: bool = True
     check_truncation: bool = True
     strict_truncation: bool = False
-    test_timeout_seconds: int = 120
+    test_timeout_seconds: int = 300  # Aligned with FinalTestingPhase.pytest_timeout
     review_temperature: float = 0.0
     review_max_code_chars: int = 8000
     development_timeout_seconds: Optional[float] = None
@@ -189,6 +189,7 @@ class HandlerConfig:
     force_design: bool = False
     refine_design: bool = False
     force_review: bool = False
+    force_test: bool = False
     design_agent: Optional[str] = None
     review_agent: Optional[str] = None
     enable_prompt_caching: bool = False
@@ -3567,6 +3568,114 @@ class TestPhaseHandler(AbstractPhaseHandler):
         }
 
     # ------------------------------------------------------------------
+    # Resume cache validation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_test_cache(
+        saved: dict[str, Any],
+        tasks: list[Any],
+        generation_results: dict[str, Any],
+        source_checksum: str | None,
+    ) -> dict[str, Any] | None:
+        """Validate a saved test_results cache through 3 ordered layers.
+
+        Returns the cached output dict if all layers pass, or None if the
+        cache should be rejected (caller falls through to fresh TEST).
+
+        Layers (cheapest → most expensive):
+            0: Schema version — _cache_meta exists, schema_version == _CACHE_SCHEMA_VERSION
+            1: Source checksum — _cache_meta.source_checksum matches context
+            2: Per-task generation file hash — cached results valid only if
+               generated code hasn't changed since tests ran.
+        """
+        # Layer 0: Schema version
+        cache_meta = saved.get("_cache_meta")
+        if not isinstance(cache_meta, dict):
+            logger.warning(
+                "TEST: cache missing _cache_meta (v1 or corrupt) — re-running"
+            )
+            return None
+        schema_version = cache_meta.get("schema_version")
+        if schema_version != _CACHE_SCHEMA_VERSION:
+            logger.warning(
+                "TEST: cache schema_version=%s (expected %d) — re-running",
+                schema_version, _CACHE_SCHEMA_VERSION,
+            )
+            return None
+
+        # Layer 1: Source checksum
+        cached_checksum = cache_meta.get("source_checksum")
+        if (
+            cached_checksum is not None
+            and source_checksum is not None
+            and cached_checksum != source_checksum
+        ):
+            logger.warning(
+                "TEST: source_checksum mismatch "
+                "(cached=%s, current=%s) — re-running",
+                cached_checksum, source_checksum,
+            )
+            return None
+        elif cached_checksum is not None or source_checksum is not None:
+            logger.warning(
+                "TEST: Layer 1 (source checksum): partial checksum — "
+                "cache has %s, current has %s — cannot verify integrity",
+                "checksum" if cached_checksum else "None",
+                "checksum" if source_checksum else "None",
+            )
+
+        # Layer 2: Per-task generation file hash — verify generated code
+        # hasn't changed since tests were run.
+        cached_gen_hashes = cache_meta.get("generation_file_hashes", {})
+        if cached_gen_hashes:
+            for tid, cached_hash in cached_gen_hashes.items():
+                gen_result = generation_results.get(tid)
+                if gen_result is None:
+                    continue
+                # Compute current hash of generated files
+                current_files = getattr(gen_result, "generated_files", [])
+                if not current_files:
+                    continue
+                h = hashlib.sha256()
+                any_read = False
+                for fp in sorted(str(p) for p in current_files):
+                    p = Path(fp)
+                    if p.is_file():
+                        h.update(p.read_bytes())
+                        any_read = True
+                if any_read:
+                    current_hash = h.hexdigest()
+                    if current_hash != cached_hash:
+                        logger.warning(
+                            "TEST: generation file hash mismatch for %s "
+                            "(cached=%s, current=%s) — re-running",
+                            tid, cached_hash[:12], current_hash[:12],
+                        )
+                        return None
+
+        cached_output = saved.get("output")
+        if not isinstance(cached_output, dict):
+            logger.warning("TEST: cache missing 'output' key — re-running")
+            return None
+
+        # Verify all current task IDs are covered
+        current_ids = {t.task_id for t in tasks}
+        cached_per_task = cached_output.get("per_task", {})
+        missing = current_ids - set(cached_per_task.keys())
+        if missing:
+            logger.warning(
+                "TEST: cache missing tasks %s — re-running", sorted(missing),
+            )
+            return None
+
+        logger.info(
+            "TEST: cache valid — resuming with %d cached task results",
+            len(cached_per_task),
+        )
+        return cached_output
+
+    # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
 
@@ -3582,6 +3691,42 @@ class TestPhaseHandler(AbstractPhaseHandler):
         generation_results: dict[str, GenerationResult] = context.get("generation_results", {})
 
         logger.info("TEST phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
+
+        # --- Resume check: load prior test results if available ---
+        _has_explicit_project_root = bool(context.get("project_root", "").strip())
+        test_cache_path = (
+            project_root / ".startd8" / "state" / "test_results.json"
+            if _has_explicit_project_root else None
+        )
+        if (
+            test_cache_path
+            and test_cache_path.exists()
+            and not dry_run
+            and not self.config.force_test
+        ):
+            try:
+                with open(test_cache_path, encoding="utf-8") as f:
+                    raw_cache = json.load(f)
+                cached_output = self._validate_test_cache(
+                    raw_cache,
+                    tasks,
+                    generation_results,
+                    context.get("source_checksum"),
+                )
+                if cached_output is not None:
+                    context["test_results"] = cached_output
+                    ValidationPhaseOutput(test_results=cached_output)
+                    duration = time.monotonic() - start
+                    logger.info(
+                        "TEST phase complete (resumed from cache): "
+                        "%d passed, %d failed (%.2fs)",
+                        cached_output.get("total_passed", 0),
+                        cached_output.get("total_failed", 0),
+                        duration,
+                    )
+                    return {"output": cached_output, "cost": 0.0, "metadata": {"duration": duration, "resumed": True}}
+            except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+                logger.warning("TEST: failed to load cache from %s: %s", test_cache_path, exc)
 
         test_plan: list[dict[str, Any]] = []
         validator_counts: dict[str, int] = defaultdict(int)
@@ -3616,32 +3761,49 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 continue
 
             # --- Real-mode path ---
-            gen_result = generation_results.get(task.task_id)
+            try:
+                gen_result = generation_results.get(task.task_id)
 
-            # Skip tasks that were not generated
-            if gen_result is None or not gen_result.success:
+                # Skip tasks that were not generated
+                if gen_result is None or not gen_result.success:
+                    test_plan.append({
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "domain": task.domain,
+                        "validators": validators,
+                        "validator_count": len(validators),
+                        "status": "skipped_no_generation",
+                    })
+                    continue
+
+                # Run validators
+                task_test_result = self._run_validators_for_task(
+                    task, project_root, gen_result,
+                )
+                task_test_result["status"] = (
+                    "passed" if task_test_result["all_passed"] else "failed"
+                )
+                test_plan.append(task_test_result)
+
+                if task_test_result["all_passed"]:
+                    total_passed += 1
+                else:
+                    total_failed += 1
+            except Exception as exc:
+                logger.warning(
+                    "TEST: unexpected error for task %s: %s",
+                    task.task_id, exc, exc_info=True,
+                )
                 test_plan.append({
                     "task_id": task.task_id,
                     "title": task.title,
                     "domain": task.domain,
-                    "validators": validators,
-                    "validator_count": len(validators),
-                    "status": "skipped_no_generation",
+                    "validators_run": 0,
+                    "all_passed": False,
+                    "results": [],
+                    "status": "error",
+                    "error": str(exc),
                 })
-                continue
-
-            # Run validators
-            task_test_result = self._run_validators_for_task(
-                task, project_root, gen_result,
-            )
-            task_test_result["status"] = (
-                "passed" if task_test_result["all_passed"] else "failed"
-            )
-            test_plan.append(task_test_result)
-
-            if task_test_result["all_passed"]:
-                total_passed += 1
-            else:
                 total_failed += 1
 
         per_task: dict[str, Any] = {}
@@ -3672,6 +3834,13 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "passed": None,
                     "validators_run": 0,
                 }
+            elif entry.get("status") == "error":
+                per_task[task_id] = {
+                    "status": "error",
+                    "passed": False,
+                    "validators_run": 0,
+                    "error": entry.get("error", ""),
+                }
             else:
                 per_task[task_id] = {
                     "status": entry.get("status", "unknown"),
@@ -3693,6 +3862,51 @@ class TestPhaseHandler(AbstractPhaseHandler):
 
         # Context contract: validate TEST output model
         ValidationPhaseOutput(test_results=context["test_results"])
+
+        # --- Cache write: persist test results for resume ---
+        if test_cache_path and not dry_run:
+            try:
+                # Compute per-task generation file hashes for cache invalidation
+                gen_file_hashes: dict[str, str] = {}
+                for task in tasks:
+                    gen_result = generation_results.get(task.task_id)
+                    if gen_result is None:
+                        continue
+                    gen_files = getattr(gen_result, "generated_files", [])
+                    if not gen_files:
+                        continue
+                    h = hashlib.sha256()
+                    any_read = False
+                    for fp in sorted(str(p) for p in gen_files):
+                        p = Path(fp)
+                        if p.is_file():
+                            h.update(p.read_bytes())
+                            any_read = True
+                    if any_read:
+                        gen_file_hashes[task.task_id] = h.hexdigest()
+
+                cache_envelope: dict[str, Any] = {
+                    "_cache_meta": {
+                        "schema_version": _CACHE_SCHEMA_VERSION,
+                        "created_at": datetime.datetime.now(
+                            datetime.timezone.utc
+                        ).isoformat(),
+                        "source_checksum": context.get("source_checksum"),
+                        "generation_file_hashes": gen_file_hashes,
+                    },
+                    "output": output,
+                }
+                test_cache_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(test_cache_path, cache_envelope, indent=2)
+                logger.info(
+                    "TEST: saved %d task results (v2) to %s",
+                    len(per_task), test_cache_path,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "TEST: failed to write cache to %s: %s (non-fatal)",
+                    test_cache_path, exc, exc_info=True,
+                )
 
         duration = time.monotonic() - start
 
@@ -4945,6 +5159,7 @@ class ContextSeedHandlers:
         force_design: Optional[bool] = None,
         refine_design: Optional[bool] = None,
         force_review: Optional[bool] = None,
+        force_test: Optional[bool] = None,
         design_agent: Optional[str] = None,
         review_agent: Optional[str] = None,
         enable_prompt_caching: Optional[bool] = None,
@@ -4972,6 +5187,7 @@ class ContextSeedHandlers:
             force_design: Ignore cached design handoff; always run fresh DESIGN.
             refine_design: Pass prior designs to LLM for refinement instead of adopting.
             force_review: Ignore cached review results; always run fresh REVIEW.
+            force_test: Ignore cached test results; always run fresh TEST.
             design_agent: Agent spec for design phase (falls back to lead_agent).
             review_agent: Agent spec for review phase (falls back to lead_agent).
             enable_prompt_caching: Enable Anthropic prompt caching.
@@ -5002,6 +5218,7 @@ class ContextSeedHandlers:
             ("force_design", force_design),
             ("refine_design", refine_design),
             ("force_review", force_review),
+            ("force_test", force_test),
             ("design_agent", design_agent),
             ("review_agent", review_agent),
             ("enable_prompt_caching", enable_prompt_caching),
