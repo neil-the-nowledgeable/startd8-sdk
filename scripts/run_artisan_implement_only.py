@@ -47,7 +47,7 @@ from startd8.contractors.artisan_contractor import (
     WorkflowStatus,
 )
 from startd8.contractors.context_seed_handlers import ContextSeedHandlers
-from startd8.contractors.handoff import load_design_handoff, verify_context_checksums, HandoffContextDriftError
+from startd8.contractors.handoff import load_design_handoff, verify_context_checksums, verify_source_checksum, HandoffContextDriftError
 
 _DEFAULT_TEST_TIMEOUT_SECONDS = 300
 
@@ -223,6 +223,11 @@ def main() -> int:
             logger.error("Failed to load/verify handoff: %s", exc)
             return 1
 
+        # BP-2: Verify enriched seed hasn't drifted since design
+        source_warning = verify_source_checksum(handoff)
+        if source_warning:
+            logger.warning(source_warning)
+
         seed_path = handoff.enriched_seed_path
         project_root = args.project_root or handoff.project_root
         if args.project_root:
@@ -250,6 +255,11 @@ def main() -> int:
         except (ValueError, HandoffContextDriftError) as exc:
             logger.error("Invalid/drifted handoff in %s: %s", args.output_dir, exc)
             return 1
+
+        # BP-2: Verify enriched seed hasn't drifted since design
+        source_warning = verify_source_checksum(handoff)
+        if source_warning:
+            logger.warning(source_warning)
 
         seed_path = handoff.enriched_seed_path
         project_root = args.project_root or handoff.project_root

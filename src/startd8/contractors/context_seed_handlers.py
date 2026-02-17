@@ -2176,15 +2176,19 @@ class Test{class_name}:
                 design_doc_text = task_design.get("design_document")
 
             # ── Layer 1: DESIGN→IMPLEMENT boundary validation (DP-2) ────
+            # Defense-in-depth: per-task line-count pre-check before the
+            # phase-level contract exit validator (BP-3).  Metric aligned
+            # with artisan-pipeline.contract.yaml: line_count >= 50.
             if task_design.get("status") in ("designed", "adopted", "refined"):
-                if not design_doc_text or len(design_doc_text.strip()) < 50:
+                _line_count = len(design_doc_text.strip().splitlines()) if design_doc_text else 0
+                if not design_doc_text or _line_count < 50:
                     logger.warning(
                         "DESIGN→IMPLEMENT boundary: task %s has status '%s' but "
-                        "design_document is empty/trivial (%d chars) — falling back "
+                        "design_document is empty/trivial (%d lines) — falling back "
                         "to task description only (DP-2: no silent defaults)",
                         task.task_id,
                         task_design.get("status"),
-                        len(design_doc_text.strip()) if design_doc_text else 0,
+                        _line_count,
                     )
                     design_doc_text = None
                 else:
@@ -2457,10 +2461,13 @@ class Test{class_name}:
                     "downstream_files": task_downstream,
                     "original_target_files": task.target_files if task_downstream else None,
                     # Fix 2d: parameter_sources filtered by task's artifact types
+                    # BP-5: merge sources for all artifact types (not just first)
                     "parameter_sources": (
-                        (parameter_sources or {}).get(
-                            task.artifact_types_addressed[0], {}
-                        ) if task.artifact_types_addressed else {}
+                        {
+                            atype: (parameter_sources or {}).get(atype, {})
+                            for atype in task.artifact_types_addressed
+                            if atype in (parameter_sources or {})
+                        } if task.artifact_types_addressed else {}
                     ),
                     # Fix 3c: semantic_conventions for code generation
                     "semantic_conventions": semantic_conventions or {},
@@ -2727,6 +2734,13 @@ class Test{class_name}:
                 cached_checksum, source_checksum,
             )
             return None
+        elif cached_checksum is not None or source_checksum is not None:
+            logger.warning(
+                "IMPLEMENT --resume: Layer 3 (source checksum): partial checksum — "
+                "cache has %s, current has %s — cannot verify integrity",
+                "checksum" if cached_checksum else "None",
+                "checksum" if source_checksum else "None",
+            )
 
         # Parse GenerationResult objects from successful entries
         generation_results: dict[str, GenerationResult] = {}
@@ -4048,6 +4062,13 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 cached_checksum, source_checksum,
             )
             return {}
+        elif cached_checksum is not None or source_checksum is not None:
+            logger.warning(
+                "REVIEW: Layer 1 (source checksum): partial checksum — "
+                "cache has %s, current has %s — cannot verify integrity",
+                "checksum" if cached_checksum else "None",
+                "checksum" if source_checksum else "None",
+            )
 
         tasks_data = saved.get("tasks", {})
         valid: dict[str, dict[str, Any]] = {}

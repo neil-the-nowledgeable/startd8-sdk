@@ -1291,6 +1291,20 @@ class ArtisanContractorWorkflow:
                     # --- Context contract: exit validation ---
                     validate_phase_exit(phase, context)
 
+                    # --- Enrichment validation on exit (quality + evaluation gates) ---
+                    if self._contract_path:
+                        exit_result = validate_phase_boundary(
+                            phase, context, "exit", self._contract_path
+                        )
+                        if exit_result:
+                            try:
+                                from contextcore.contracts.propagation.otel import (
+                                    emit_boundary_result,
+                                )
+                                emit_boundary_result(exit_result)
+                            except ImportError:
+                                pass
+
                     phase_end = time.monotonic()
                     duration = phase_end - phase_start
 

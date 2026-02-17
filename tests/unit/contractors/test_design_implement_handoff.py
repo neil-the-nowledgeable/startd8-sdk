@@ -95,36 +95,56 @@ def _make_chunk(
 
 SUBSTANTIAL_DESIGN_DOC = """## Overview
 This module implements the Prometheus alerting rules for the observability stack.
+It covers availability, capacity, recording rules, SLO burn rates, and more.
 
 ## Rule Group 1: Availability Alerts
 - Service down alert (5m threshold)
 - Error rate > 5% alert (10m window)
 - Latency P99 > 500ms
+- Health check endpoint failure
 
 ## Rule Group 2: Capacity Alerts
 - Disk usage > 80%
 - Memory pressure > 90%
 - CPU saturation > 75%
+- Network I/O saturation
 
 ## Rule Group 3: Recording Rules
 - record: namespace:http_requests_total:rate5m
 - record: namespace:http_errors_total:rate5m
 - record: namespace:http_duration_seconds:p99
+- record: namespace:http_requests_inflight:avg
 
 ## Rule Group 4: SLO Burn Rate
 - 1h burn rate > 14.4x budget
 - 6h burn rate > 6x budget
 - 3d burn rate > 1x budget
+- 30d trailing availability
 
 ## Rule Group 5: Dependency Health
 - Upstream timeout rate
 - Circuit breaker open count
 - Database connection pool exhaustion
+- Cache hit ratio degradation
 
 ## Rule Group 6: Metric Guards
 - Stale metric detection (no data for 15m)
 - Cardinality explosion guard
 - Label consistency checks
+- Series churn rate alerting
+
+## Rule Group 7: Deployment Safety
+- Rollout error rate spike (canary vs baseline)
+- Pod restart loop detection
+- OOMKill frequency threshold
+- Readiness probe failure rate
+
+## Implementation Notes
+- All rules use standard Prometheus recording rule syntax
+- Alert severity labels: critical, warning, info
+- Runbook URLs follow pattern: https://runbooks.example.com/{alert_name}
+- Inhibition rules prevent alert storms during planned maintenance
+- For expressions use rate() over 5m unless SLO window requires otherwise
 """.strip()
 
 

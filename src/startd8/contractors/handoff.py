@@ -88,6 +88,7 @@ HANDOFF_SCHEMA: dict[str, Any] = {
         "context_files": {"type": "array", "items": {"type": "object"}},
         "example_artifacts": {"type": "object"},
         "coverage_gaps": {"type": "array", "items": {"type": "string"}},
+        "source_checksum": {"type": ["string", "null"]},
         "created_at": {"type": "string"},
         "schema_version": {"type": "integer"},
         "schema_version_str": {"type": "string"},
@@ -150,6 +151,8 @@ class HandoffData:
     example_artifacts: dict[str, Any] = field(default_factory=dict)
     # Coverage gaps — artifact types to generate first (Item 11)
     coverage_gaps: list[str] = field(default_factory=list)
+    # SHA-256 of the enriched seed file at design time (provenance chain)
+    source_checksum: str | None = None
     created_at: str = ""
     schema_version: int = SCHEMA_VERSION
     schema_version_str: str = ARTISAN_SCHEMA_VERSION
@@ -228,6 +231,36 @@ def verify_context_checksums(context_files: list[dict[str, Any]], strict: bool =
                 raise HandoffContextDriftError(msg)
 
     return warnings
+
+
+def verify_source_checksum(handoff: HandoffData) -> str | None:
+    """Verify the enriched seed file hasn't changed since the handoff was written.
+
+    Compares the handoff's ``source_checksum`` against the current SHA-256 of
+    the enriched seed file.
+
+    Returns:
+        Warning message if mismatch detected, ``None`` if OK or unable to verify.
+    """
+    if not handoff.source_checksum:
+        return None
+
+    seed_path = Path(handoff.enriched_seed_path) if handoff.enriched_seed_path else None
+    if not seed_path or not seed_path.exists():
+        return None
+
+    try:
+        current = hashlib.sha256(seed_path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+    if current != handoff.source_checksum:
+        return (
+            f"Source checksum drift: enriched seed {seed_path.name} changed since "
+            f"design handoff (expected {handoff.source_checksum[:8]}…, "
+            f"got {current[:8]}…)"
+        )
+    return None
 
 
 def wrap_handoff_in_contract(
@@ -318,6 +351,7 @@ def write_design_handoff(
     context_files: list[dict[str, Any]] | None = None,
     example_artifacts: dict[str, Any] | None = None,
     coverage_gaps: list[str] | None = None,
+    source_checksum: str | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -329,12 +363,27 @@ def write_design_handoff(
         completed_phases: List of completed phase value strings.
         design_results: Per-task design results dict.
         scaffold: Scaffold phase summary dict.
+        source_checksum: SHA-256 of the enriched seed file for provenance.
 
     Returns:
         Path to the written handoff file.
     """
     # Item 12: Compute checksums for context files before handoff
     enriched_context_files = compute_context_checksums(context_files or [])
+
+    # Compute source_checksum from enriched seed if not provided
+    if source_checksum is None and enriched_seed_path:
+        seed_path = Path(enriched_seed_path)
+        if seed_path.exists() and seed_path.is_file():
+            try:
+                source_checksum = hashlib.sha256(
+                    seed_path.read_bytes()
+                ).hexdigest()
+            except OSError as exc:
+                logger.warning(
+                    "Failed to compute source_checksum for %s: %s",
+                    seed_path, exc,
+                )
 
     handoff = HandoffData(
         enriched_seed_path=enriched_seed_path,
@@ -349,6 +398,7 @@ def write_design_handoff(
         context_files=enriched_context_files,
         example_artifacts=example_artifacts or {},
         coverage_gaps=coverage_gaps or [],
+        source_checksum=source_checksum,
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,
         schema_version_str=ARTISAN_SCHEMA_VERSION,
@@ -446,6 +496,7 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         context_files=raw.get("context_files", []),
         example_artifacts=raw.get("example_artifacts", {}),
         coverage_gaps=raw.get("coverage_gaps", []),
+        source_checksum=raw.get("source_checksum"),
         created_at=raw.get("created_at", ""),
         schema_version=version,
         schema_version_str=raw.get("schema_version_str")

@@ -165,6 +165,7 @@ def main() -> int:
             context_files=extras.get("context_files", []),
             example_artifacts=extras.get("example_artifacts", {}),
             coverage_gaps=extras.get("coverage_gaps", []),
+            source_checksum=initial_context.get("source_checksum"),
         )
         logger.info("Wrote design handoff: %s", handoff_path)
 

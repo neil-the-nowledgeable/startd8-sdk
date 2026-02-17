@@ -249,7 +249,8 @@ class TestParameterSources:
 
         assert len(chunks) == 1
         meta = chunks[0].metadata
-        assert meta["parameter_sources"] == param_sources["dashboard"]
+        # BP-5: parameter_sources now keyed by artifact type (multi-type support)
+        assert meta["parameter_sources"] == {"dashboard": param_sources["dashboard"]}
 
 
 # ── Fix 3: semantic_conventions ──────────────────────────────────────
