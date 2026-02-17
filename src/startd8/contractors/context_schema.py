@@ -104,6 +104,10 @@ class PlanPhaseOutput(BaseModel):
     onboarding_output_contracts: Optional[Dict[str, Any]] = None
     onboarding_calibration_hints: Optional[Dict[str, Any]] = None
     onboarding_open_questions: Optional[List[Dict[str, Any]]] = None
+    onboarding_dependency_graph: Optional[Dict[str, Any]] = None
+    # Mottainai B2+B3: plan document text for DESIGN fallback when
+    # artifact inventory (run-provenance.json) is unavailable.
+    plan_document_text: Optional[str] = None
 
     @field_validator("tasks")
     @classmethod

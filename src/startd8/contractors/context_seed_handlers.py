@@ -643,18 +643,43 @@ class PlanPhaseHandler(AbstractPhaseHandler):
             "design_calibration_hints"
         )
         context["onboarding_open_questions"] = _onboarding.get("open_questions")
+        # B4: artifact dependency graph from ContextCore export
+        context["onboarding_dependency_graph"] = _onboarding.get(
+            "artifact_dependency_graph"
+        )
         _fwd_count = sum(
             1 for k in [
                 "onboarding_derivation_rules", "onboarding_resolved_parameters",
                 "onboarding_output_contracts", "onboarding_calibration_hints",
-                "onboarding_open_questions",
+                "onboarding_open_questions", "onboarding_dependency_graph",
             ] if context.get(k)
         )
         if _fwd_count:
             logger.info(
-                "PLAN phase: forwarded %d/5 onboarding inventory fields into context",
+                "PLAN phase: forwarded %d/6 onboarding inventory fields into context",
                 _fwd_count,
             )
+
+        # Mottainai B2+B3: read the plan document (produced by TRANSFORM)
+        # directly from the seed's artifacts so DESIGN can use it as fallback
+        # when the inventory path (run-provenance.json) is unavailable.
+        plan_doc_path_str = _artifacts.get("plan_document_path")
+        if plan_doc_path_str:
+            plan_doc_path = Path(plan_doc_path_str)
+            # Resolve relative to enriched_seed_path parent (same output dir)
+            if not plan_doc_path.is_absolute():
+                seed_parent = Path(self.enriched_seed_path).parent
+                plan_doc_path = seed_parent / plan_doc_path
+            if plan_doc_path.exists():
+                try:
+                    plan_text = plan_doc_path.read_text(encoding="utf-8")
+                    context["plan_document_text"] = plan_text
+                    logger.info(
+                        "PLAN phase: loaded plan document (%d chars) for DESIGN fallback",
+                        len(plan_text),
+                    )
+                except OSError:
+                    pass
 
         output = {
             "plan_title": context["plan_title"],
@@ -708,6 +733,8 @@ class PlanPhaseHandler(AbstractPhaseHandler):
             onboarding_output_contracts=context.get("onboarding_output_contracts"),
             onboarding_calibration_hints=context.get("onboarding_calibration_hints"),
             onboarding_open_questions=context.get("onboarding_open_questions"),
+            onboarding_dependency_graph=context.get("onboarding_dependency_graph"),
+            plan_document_text=context.get("plan_document_text"),
         )
 
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
@@ -896,6 +923,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         inv_plan_document: str | None = None,
         inv_calibration_hints: dict[str, Any] | None = None,
         inv_open_questions: list[dict[str, Any]] | None = None,
+        inv_dependency_graph: dict[str, list[str]] | None = None,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -1079,6 +1107,24 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             if formatted.strip():
                 additional_context["open_questions"] = (
                     "The following questions are flagged as unresolved:\n" + formatted
+                )
+
+        # Mottainai B4: inject artifact dependency info so DESIGN decisions
+        # account for deterministic inter-artifact dependencies from export
+        # rather than re-inferring them via LLM (Gap 4).
+        if inv_dependency_graph and task.artifact_types_addressed:
+            task_deps: dict[str, list[str]] = {}
+            for atype in task.artifact_types_addressed:
+                # Graph may be keyed by artifact_id or artifact_type
+                deps = inv_dependency_graph.get(atype, [])
+                if deps:
+                    task_deps[atype] = deps
+            if task_deps:
+                formatted_deps = "; ".join(
+                    f"{k} depends on: {', '.join(v)}" for k, v in task_deps.items()
+                )
+                additional_context["artifact_dependencies"] = (
+                    f"Known artifact dependencies: {formatted_deps}"
                 )
 
         sections = cal.get("sections")
@@ -1404,6 +1450,23 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 _fb_count,
             )
 
+        # Mottainai B2+B3 fallback: when inventory didn't find plan_document
+        # or refine_suggestions, use the plan document text loaded by PLAN phase
+        # directly from the seed's artifacts.plan_document_path.
+        if inv_plan_document is None:
+            plan_text = context.get("plan_document_text")
+            if plan_text and isinstance(plan_text, str):
+                inv_plan_document = plan_text
+                logger.info(
+                    "DESIGN: plan_document loaded from seed fallback (%d chars)",
+                    len(plan_text),
+                )
+        if inv_refine_suggestions is None and inv_plan_document:
+            # REFINE suggestions live inside the plan document (Appendix C).
+            # When loaded via seed fallback, the full plan text IS the source.
+            inv_refine_suggestions = inv_plan_document
+            logger.info("DESIGN: refine_suggestions derived from plan document text")
+
         for idx, task in enumerate(tasks, start=1):
             previous_task_started_mono = _log_task_timing(
                 "DESIGN",
@@ -1502,6 +1565,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 inv_plan_document=inv_plan_document,
                 inv_calibration_hints=inv_calibration_hints,
                 inv_open_questions=context.get("onboarding_open_questions"),
+                inv_dependency_graph=context.get("onboarding_dependency_graph"),
             )
 
             # Snapshot cost before this task
@@ -1575,6 +1639,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     completed_phases=["design"],
                     design_results=design_results,
                     scaffold=context.get("scaffold", {}),
+                    source_checksum=context.get("source_checksum"),
                 )
                 logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
             except (OSError, ValueError, TypeError) as exc:
