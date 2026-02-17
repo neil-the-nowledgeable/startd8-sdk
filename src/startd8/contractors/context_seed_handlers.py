@@ -629,6 +629,33 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         # Fix 5a: output_conventions for SCAFFOLD extension validation
         context["output_conventions"] = _artifacts.get("output_conventions", {})
 
+        # Mottainai: forward inventory-equivalent fields from onboarding so
+        # DESIGN phase can fall back to them when artifact inventory is absent.
+        _onboarding = seed_data.get("onboarding") or {}
+        context["onboarding_derivation_rules"] = _onboarding.get("derivation_rules")
+        context["onboarding_resolved_parameters"] = _onboarding.get(
+            "resolved_artifact_parameters"
+        )
+        context["onboarding_output_contracts"] = _onboarding.get(
+            "expected_output_contracts"
+        )
+        context["onboarding_calibration_hints"] = _onboarding.get(
+            "design_calibration_hints"
+        )
+        context["onboarding_open_questions"] = _onboarding.get("open_questions")
+        _fwd_count = sum(
+            1 for k in [
+                "onboarding_derivation_rules", "onboarding_resolved_parameters",
+                "onboarding_output_contracts", "onboarding_calibration_hints",
+                "onboarding_open_questions",
+            ] if context.get(k)
+        )
+        if _fwd_count:
+            logger.info(
+                "PLAN phase: forwarded %d/5 onboarding inventory fields into context",
+                _fwd_count,
+            )
+
         output = {
             "plan_title": context["plan_title"],
             "task_count": len(sorted_tasks),
@@ -676,6 +703,11 @@ class PlanPhaseHandler(AbstractPhaseHandler):
             parameter_sources=context.get("parameter_sources", {}),
             semantic_conventions=context.get("semantic_conventions", {}),
             output_conventions=context.get("output_conventions", {}),
+            onboarding_derivation_rules=context.get("onboarding_derivation_rules"),
+            onboarding_resolved_parameters=context.get("onboarding_resolved_parameters"),
+            onboarding_output_contracts=context.get("onboarding_output_contracts"),
+            onboarding_calibration_hints=context.get("onboarding_calibration_hints"),
+            onboarding_open_questions=context.get("onboarding_open_questions"),
         )
 
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
@@ -863,6 +895,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         inv_refine_suggestions: str | None = None,
         inv_plan_document: str | None = None,
         inv_calibration_hints: dict[str, Any] | None = None,
+        inv_open_questions: list[dict[str, Any]] | None = None,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -1035,6 +1068,18 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         "export.calibration_hints"
                     )
                     break  # Use first matching type's calibration
+
+        # Mottainai: surface open questions from ContextCore guidance so DESIGN
+        # decisions are made with awareness of flagged uncertainties (Gap 7).
+        if inv_open_questions and isinstance(inv_open_questions, list):
+            formatted = "\n".join(
+                f"- {q['question'] if isinstance(q, dict) else q}"
+                for q in inv_open_questions[:10]
+            )
+            if formatted.strip():
+                additional_context["open_questions"] = (
+                    "The following questions are flagged as unresolved:\n" + formatted
+                )
 
         sections = cal.get("sections")
         max_output_tokens = (
@@ -1331,6 +1376,34 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             except OSError:
                                 pass
 
+        # Mottainai fallback: when inventory lookup didn't find these fields,
+        # try the onboarding-metadata forwarded through the seed by PLAN phase.
+        _fallback_map = [
+            ("inv_derivation_rules", "onboarding_derivation_rules"),
+            ("inv_resolved_parameters", "onboarding_resolved_parameters"),
+            ("inv_output_contracts", "onboarding_output_contracts"),
+            ("inv_calibration_hints", "onboarding_calibration_hints"),
+        ]
+        _fb_count = 0
+        for local_var, ctx_key in _fallback_map:
+            if locals()[local_var] is None:
+                fb_val = context.get(ctx_key)
+                if fb_val and isinstance(fb_val, dict):
+                    if local_var == "inv_derivation_rules":
+                        inv_derivation_rules = fb_val
+                    elif local_var == "inv_resolved_parameters":
+                        inv_resolved_parameters = fb_val
+                    elif local_var == "inv_output_contracts":
+                        inv_output_contracts = fb_val
+                    elif local_var == "inv_calibration_hints":
+                        inv_calibration_hints = fb_val
+                    _fb_count += 1
+        if _fb_count:
+            logger.info(
+                "DESIGN: %d inventory field(s) loaded from onboarding fallback",
+                _fb_count,
+            )
+
         for idx, task in enumerate(tasks, start=1):
             previous_task_started_mono = _log_task_timing(
                 "DESIGN",
@@ -1428,6 +1501,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 inv_refine_suggestions=inv_refine_suggestions,
                 inv_plan_document=inv_plan_document,
                 inv_calibration_hints=inv_calibration_hints,
+                inv_open_questions=context.get("onboarding_open_questions"),
             )
 
             # Snapshot cost before this task

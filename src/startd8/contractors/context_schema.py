@@ -97,6 +97,13 @@ class PlanPhaseOutput(BaseModel):
     parameter_sources: Dict[str, Any] = {}
     semantic_conventions: Dict[str, Any] = {}
     output_conventions: Dict[str, Any] = {}
+    # Mottainai: onboarding-metadata inventory fields forwarded into context
+    # so DESIGN can fall back to them when artifact inventory is absent.
+    onboarding_derivation_rules: Optional[Dict[str, Any]] = None
+    onboarding_resolved_parameters: Optional[Dict[str, Any]] = None
+    onboarding_output_contracts: Optional[Dict[str, Any]] = None
+    onboarding_calibration_hints: Optional[Dict[str, Any]] = None
+    onboarding_open_questions: Optional[List[Dict[str, Any]]] = None
 
     @field_validator("tasks")
     @classmethod
@@ -126,6 +133,36 @@ class PlanPhaseOutput(BaseModel):
             raise ValueError("enriched_seed_path must not be empty")
         return v
 
+    @field_validator("domain_summary")
+    @classmethod
+    def domain_summary_not_empty(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if not v:
+            raise ValueError("domain_summary must contain at least one domain entry")
+        return v
+
+    @model_validator(mode="after")
+    def check_enrichment_completeness(self) -> "PlanPhaseOutput":
+        """Advisory warnings for structurally empty enrichment fields.
+
+        These fields CAN be empty (e.g. when running without onboarding), but
+        empty enrichment degrades DESIGN quality silently.  Log warnings so
+        the gap is visible in workflow output.
+        """
+        _logger = logging.getLogger("startd8.context_schema")
+        task_count = len(self.tasks)
+        if task_count and not self.architectural_context:
+            _logger.warning(
+                "PlanPhaseOutput: architectural_context is empty — "
+                "DESIGN will lack objectives/constraints/shared-module context"
+            )
+        if task_count and not self.design_calibration:
+            _logger.warning(
+                "PlanPhaseOutput: design_calibration is empty — "
+                "all %d tasks will use default output size limits",
+                task_count,
+            )
+        return self
+
 
 class ScaffoldPhaseOutput(BaseModel):
     """Output of the SCAFFOLD phase."""
@@ -154,6 +191,17 @@ class DesignPhaseOutput(BaseModel):
     def design_results_not_empty(cls, v: Dict[str, Any]) -> Dict[str, Any]:
         if not v:
             raise ValueError("design_results must not be empty")
+        # Structural check: each entry should have at least a status key
+        for task_id, entry in v.items():
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"design_results[{task_id!r}] should be a dict, "
+                    f"got {type(entry).__name__}"
+                )
+            if "status" not in entry:
+                raise ValueError(
+                    f"design_results[{task_id!r}] missing required 'status' key"
+                )
         return v
 
 
