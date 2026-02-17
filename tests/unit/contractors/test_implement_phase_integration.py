@@ -12,6 +12,8 @@ Tests cover:
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Dict
 from unittest.mock import patch
@@ -29,6 +31,7 @@ from startd8.contractors.context_seed_handlers import (
     ImplementPhaseHandler,
     SeedTask,
     WorkflowPhase,
+    _CACHE_SCHEMA_VERSION,
 )
 from startd8.contractors.protocols import GenerationResult
 
@@ -103,6 +106,21 @@ def _make_gen_result(
         iterations=2,
         model="anthropic:claude-sonnet-4-5-20250927",
     )
+
+
+def _make_v2_cache(
+    task_data: dict[str, dict[str, Any]],
+    source_checksum: str | None = None,
+) -> dict[str, Any]:
+    """Build a v2 cache envelope for testing."""
+    return {
+        "_cache_meta": {
+            "schema_version": _CACHE_SCHEMA_VERSION,
+            "created_at": "2026-02-16T00:00:00+00:00",
+            "source_checksum": source_checksum,
+        },
+        "tasks": task_data,
+    }
 
 
 # ============================================================================
@@ -1460,3 +1478,671 @@ class TestGate3DownstreamClassification:
         assert findings[0]["stubbed_files"] == ["src/pkg/module.py"]
         assert findings[0]["downstream_stubbed"] == []
         assert findings[0]["has_real_issues"] is True
+
+
+# ============================================================================
+# Tests: Resume cache partial coverage fix
+# ============================================================================
+
+
+class TestResumeCachePartialCoverage:
+    """Verify that IMPLEMENT phase only resumes when ALL current tasks
+    are covered by the cached generation_results.json.
+
+    Regression test for the bug where a cache containing only task A
+    caused tasks B, C, D to silently skip implementation.
+    """
+
+    def test_partial_cache_triggers_fresh_run(self, tmp_path):
+        """When cache covers only some current tasks, all tasks run fresh."""
+        # Set up a v2 cache with only T1 — T2 is missing
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+        cache_data = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [str(tmp_path / "src/feature.py")],
+                "error": None,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "cost_usd": 0.50,
+                "iterations": 1,
+                "model": "anthropic:claude-sonnet-4-5-20250929",
+            },
+        })
+        (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
+
+        handler = ImplementPhaseHandler()
+        tasks = [
+            _make_seed_task(task_id="T1"),
+            _make_seed_task(task_id="T2"),
+        ]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        # Mock _run_development_phase to avoid real LLM calls
+        gen_result_t1 = _make_gen_result(success=True, cost=0.50)
+        gen_result_t2 = _make_gen_result(success=True, cost=0.60)
+
+        chunk_t1 = DevelopmentChunk(
+            chunk_id="T1", description="test", dependencies=[],
+            file_targets=["src/feature.py"], implementation_prompt="test",
+            test_commands=[], metadata={
+                "feature_id": "F1", "title": "T1", "domain": "backend",
+                "estimated_loc": 100, "prompt_constraints": [],
+                "post_generation_validators": [],
+                "_generation_result": gen_result_t1,
+            },
+        )
+        chunk_t2 = DevelopmentChunk(
+            chunk_id="T2", description="test", dependencies=[],
+            file_targets=["src/feature.py"], implementation_prompt="test",
+            test_commands=[], metadata={
+                "feature_id": "F1", "title": "T2", "domain": "backend",
+                "estimated_loc": 100, "prompt_constraints": [],
+                "post_generation_validators": [],
+                "_generation_result": gen_result_t2,
+            },
+        )
+
+        state_t1 = ChunkState(chunk_id="T1", status=ChunkStatus.PASSED, attempts=1)
+        state_t2 = ChunkState(chunk_id="T2", status=ChunkStatus.PASSED, attempts=1)
+        dev_result = DevelopmentResult(
+            plan_id="test", success=True,
+            chunk_states={"T1": state_t1, "T2": state_t2},
+            execution_order=[["T1", "T2"]],
+            total_duration_seconds=2.0, summary="2 passed",
+        )
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk_t1, chunk_t2], []),
+        ), patch.object(
+            ImplementPhaseHandler, "_run_development_phase",
+            return_value=dev_result,
+        ) as mock_run:
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        # Key assertion: DevelopmentPhase WAS called (cache was invalidated)
+        mock_run.assert_called_once()
+        # Both tasks should be in generation_results
+        assert "T1" in context["generation_results"]
+        assert "T2" in context["generation_results"]
+
+    def test_full_cache_allows_resume(self, tmp_path):
+        """When cache covers ALL current tasks, resume is used (no fresh run)."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+
+        # Write a target file so path validation + file existence passes
+        (tmp_path / "src").mkdir(parents=True)
+        (tmp_path / "src" / "feature.py").write_text("# generated")
+
+        cache_data = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [str(tmp_path / "src/feature.py")],
+                "error": None,
+                "input_tokens": 1000,
+                "output_tokens": 500,
+                "cost_usd": 0.50,
+                "iterations": 1,
+                "model": "anthropic:claude-sonnet-4-5-20250929",
+            },
+        })
+        (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(
+            ImplementPhaseHandler, "_run_development_phase",
+        ) as mock_run:
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        # Key assertion: DevelopmentPhase was NOT called (resume used cache)
+        mock_run.assert_not_called()
+        # Resumed cost should reflect only T1's cached cost
+        assert result["cost"] == pytest.approx(0.50)
+
+    def test_resumed_cost_scoped_to_current_tasks(self, tmp_path):
+        """Resumed cost sums only current tasks, not all cached tasks."""
+        state_dir = tmp_path / ".startd8" / "state"
+        state_dir.mkdir(parents=True)
+
+        (tmp_path / "src").mkdir(parents=True)
+        (tmp_path / "src" / "feature.py").write_text("# generated")
+
+        # Cache has T1 ($0.50) and T-old ($0.80) from a previous run
+        cache_data = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [str(tmp_path / "src/feature.py")],
+                "error": None,
+                "cost_usd": 0.50,
+                "iterations": 1,
+                "model": "test",
+            },
+            "T-old": {
+                "success": True,
+                "generated_files": [str(tmp_path / "src/old.py")],
+                "error": None,
+                "cost_usd": 0.80,
+                "iterations": 1,
+                "model": "test",
+            },
+        })
+        (state_dir / "generation_results.json").write_text(json.dumps(cache_data))
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(ImplementPhaseHandler, "_run_development_phase"):
+            result = handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        # Cost should be $0.50 (T1 only), NOT $1.30 (T1 + T-old)
+        assert result["cost"] == pytest.approx(0.50)
+
+
+# ============================================================================
+# Tests: Domain-aware output format constraints
+# ============================================================================
+
+
+class TestDomainAwareOutputConstraints:
+    """Verify that config-yaml, JSON, and Markdown tasks get domain-specific
+    constraints preventing test code generation."""
+
+    def test_yaml_config_gets_format_constraint(self):
+        """config-yaml domain with .yaml target gets YAML format constraint."""
+        tasks = [_make_seed_task(
+            task_id="T1",
+            target_files=["alertmanager/notification.yaml"],
+            domain="config-yaml",
+        )]
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(tasks)
+
+        constraints = chunks[0].metadata["prompt_constraints"]
+        yaml_constraints = [c for c in constraints if "TARGET FILE FORMAT" in c]
+        assert len(yaml_constraints) == 1
+        assert "valid YAML" in yaml_constraints[0]
+        assert "Do NOT generate Python test code" in yaml_constraints[0]
+
+    def test_json_target_gets_format_constraint(self):
+        """Task with .json target gets JSON format constraint."""
+        tasks = [_make_seed_task(
+            task_id="T1",
+            target_files=["grafana/dashboards/dashboard.json"],
+            domain="unknown",
+        )]
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(tasks)
+
+        constraints = chunks[0].metadata["prompt_constraints"]
+        json_constraints = [c for c in constraints if "TARGET FILE FORMAT" in c]
+        assert len(json_constraints) == 1
+        assert "valid JSON" in json_constraints[0]
+
+    def test_markdown_target_gets_format_constraint(self):
+        """Task with .md target gets Markdown format constraint."""
+        tasks = [_make_seed_task(
+            task_id="T1",
+            target_files=["runbooks/runbook.md"],
+            domain="unknown",
+        )]
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(tasks)
+
+        constraints = chunks[0].metadata["prompt_constraints"]
+        md_constraints = [c for c in constraints if "TARGET FILE FORMAT" in c]
+        assert len(md_constraints) == 1
+        assert "Markdown document" in md_constraints[0]
+
+    def test_python_target_no_format_constraint(self):
+        """Python (.py) targets do NOT get a format constraint."""
+        tasks = [_make_seed_task(
+            task_id="T1",
+            target_files=["src/feature.py"],
+            domain="backend",
+        )]
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(tasks)
+
+        constraints = chunks[0].metadata["prompt_constraints"]
+        format_constraints = [c for c in constraints if "TARGET FILE FORMAT" in c]
+        assert len(format_constraints) == 0
+
+    def test_unknown_domain_with_yaml_ext_gets_constraint(self):
+        """'unknown' domain with .yaml extension still gets the constraint."""
+        tasks = [_make_seed_task(
+            task_id="T1",
+            target_files=["slo/slo-definition.yaml"],
+            domain="unknown",
+        )]
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(tasks)
+
+        constraints = chunks[0].metadata["prompt_constraints"]
+        yaml_constraints = [c for c in constraints if "TARGET FILE FORMAT" in c]
+        assert len(yaml_constraints) == 1
+
+
+# ============================================================================
+# Tests: Defense-in-depth resume cache validation (v2 format)
+# ============================================================================
+
+
+class TestResumeCacheDefenseInDepth:
+    """Tests for _validate_resume_cache() — 7-layer validation.
+
+    Each test targets a specific validation layer, verifying that
+    the correct failure mode returns None (reject) and valid caches
+    return a dict of GenerationResult objects.
+    """
+
+    def _make_task_and_file(
+        self,
+        tmp_path: Path,
+        task_id: str = "T1",
+        file_rel: str = "src/feature.py",
+        file_content: str = "# generated\n",
+    ) -> tuple[SeedTask, str]:
+        """Create a task and matching file on disk, return (task, abs_path)."""
+        fp = tmp_path / file_rel
+        fp.parent.mkdir(parents=True, exist_ok=True)
+        fp.write_text(file_content)
+        return _make_seed_task(task_id=task_id, target_files=[file_rel]), str(fp)
+
+    def test_v1_cache_rejected(self, tmp_path):
+        """Layer 0: Flat v1 dict (no _cache_meta) is rejected."""
+        handler = ImplementPhaseHandler()
+        task, fpath = self._make_task_and_file(tmp_path)
+        v1_cache = {
+            "T1": {
+                "success": True,
+                "generated_files": [fpath],
+            },
+        }
+        result = handler._validate_resume_cache(
+            v1_cache, [task], tmp_path, source_checksum=None,
+        )
+        assert result is None
+
+    def test_wrong_schema_version_rejected(self, tmp_path):
+        """Layer 0: Wrong schema_version is rejected."""
+        handler = ImplementPhaseHandler()
+        task, fpath = self._make_task_and_file(tmp_path)
+        cache = {
+            "_cache_meta": {
+                "schema_version": 99,
+                "created_at": "2026-01-01T00:00:00+00:00",
+                "source_checksum": None,
+            },
+            "tasks": {
+                "T1": {
+                    "success": True,
+                    "generated_files": [fpath],
+                },
+            },
+        }
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum=None,
+        )
+        assert result is None
+
+    def test_valid_v2_cache_accepted(self, tmp_path):
+        """Layers 0-6: A fully valid v2 cache passes all layers."""
+        handler = ImplementPhaseHandler()
+        task, fpath = self._make_task_and_file(tmp_path)
+        file_hash = hashlib.sha256(Path(fpath).read_bytes()).hexdigest()
+        cache = _make_v2_cache(
+            {
+                "T1": {
+                    "success": True,
+                    "generated_files": [fpath],
+                    "content_hashes": {fpath: file_hash},
+                    "error": None,
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cost_usd": 0.10,
+                    "iterations": 1,
+                    "model": "test:model",
+                },
+            },
+            source_checksum="abc123",
+        )
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum="abc123",
+        )
+        assert result is not None
+        assert "T1" in result
+        assert result["T1"].success is True
+        assert result["T1"].cost_usd == 0.10
+
+    def test_failed_task_causes_coverage_miss(self, tmp_path):
+        """Layers 1+2: Failed task filtered out → coverage miss → rejected."""
+        handler = ImplementPhaseHandler()
+        task1, fpath1 = self._make_task_and_file(tmp_path, "T1", "src/a.py")
+        task2 = _make_seed_task(task_id="T2", target_files=["src/b.py"])
+        cache = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [fpath1],
+            },
+            "T2": {
+                "success": False,
+                "generated_files": [],
+                "error": "LLM error",
+            },
+        })
+        result = handler._validate_resume_cache(
+            cache, [task1, task2], tmp_path, source_checksum=None,
+        )
+        assert result is None
+
+    def test_failed_task_not_in_current_ignored(self, tmp_path):
+        """Layers 1+2: Failed task for a non-current ID is harmless."""
+        handler = ImplementPhaseHandler()
+        task, fpath = self._make_task_and_file(tmp_path)
+        cache = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [fpath],
+            },
+            "T-old": {
+                "success": False,
+                "generated_files": [],
+                "error": "old failure",
+            },
+        })
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum=None,
+        )
+        assert result is not None
+        assert "T1" in result
+
+    def test_source_checksum_mismatch_rejected(self, tmp_path):
+        """Layer 3: Mismatched source checksums → rejected."""
+        handler = ImplementPhaseHandler()
+        task, fpath = self._make_task_and_file(tmp_path)
+        cache = _make_v2_cache(
+            {
+                "T1": {
+                    "success": True,
+                    "generated_files": [fpath],
+                },
+            },
+            source_checksum="old_checksum",
+        )
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum="new_checksum",
+        )
+        assert result is None
+
+    def test_source_checksum_absent_accepted(self, tmp_path):
+        """Layer 3: When either checksum is None, skip check → accepted."""
+        handler = ImplementPhaseHandler()
+        task, fpath = self._make_task_and_file(tmp_path)
+        # Cached has checksum, current is None → skip
+        cache = _make_v2_cache(
+            {
+                "T1": {
+                    "success": True,
+                    "generated_files": [fpath],
+                },
+            },
+            source_checksum="some_hash",
+        )
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum=None,
+        )
+        assert result is not None
+
+    def test_path_mismatch_rejected(self, tmp_path):
+        """Layer 4: Cached files don't match task target_files → rejected."""
+        handler = ImplementPhaseHandler()
+        task = _make_seed_task(task_id="T1", target_files=["src/feature.py"])
+        # Create a different file that's in the cache
+        wrong_file = tmp_path / "src" / "other.py"
+        wrong_file.parent.mkdir(parents=True, exist_ok=True)
+        wrong_file.write_text("# wrong")
+        cache = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [str(wrong_file)],
+            },
+        })
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum=None,
+        )
+        assert result is None
+
+    def test_file_missing_from_disk_rejected(self, tmp_path):
+        """Layer 5: Cached file doesn't exist on disk → rejected."""
+        handler = ImplementPhaseHandler()
+        task = _make_seed_task(task_id="T1", target_files=["src/feature.py"])
+        ghost_path = str(tmp_path / "src" / "feature.py")
+        # Do NOT create the file on disk
+        cache = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [ghost_path],
+            },
+        })
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum=None,
+        )
+        assert result is None
+
+    def test_content_hash_mismatch_rejected(self, tmp_path):
+        """Layer 6: File modified after cache write → hash mismatch → rejected."""
+        handler = ImplementPhaseHandler()
+        task, fpath = self._make_task_and_file(
+            tmp_path, file_content="original content\n",
+        )
+        # Hash from the original content
+        original_hash = hashlib.sha256(b"original content\n").hexdigest()
+        cache = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [fpath],
+                "content_hashes": {fpath: original_hash},
+            },
+        })
+        # Now modify the file to break the hash
+        Path(fpath).write_text("modified content\n")
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum=None,
+        )
+        assert result is None
+
+    def test_content_hashes_absent_accepted(self, tmp_path):
+        """Layer 6: Missing content_hashes key → no hash check → accepted."""
+        handler = ImplementPhaseHandler()
+        task, fpath = self._make_task_and_file(tmp_path)
+        cache = _make_v2_cache({
+            "T1": {
+                "success": True,
+                "generated_files": [fpath],
+                # No content_hashes key
+            },
+        })
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum=None,
+        )
+        assert result is not None
+
+    def test_all_layers_pass_returns_generation_results(self, tmp_path):
+        """Layers 0-6: Full valid setup returns correct GenerationResult fields."""
+        handler = ImplementPhaseHandler()
+        content = "def hello(): return 'world'\n"
+        task, fpath = self._make_task_and_file(
+            tmp_path, file_content=content,
+        )
+        file_hash = hashlib.sha256(content.encode()).hexdigest()
+        cache = _make_v2_cache(
+            {
+                "T1": {
+                    "success": True,
+                    "generated_files": [fpath],
+                    "content_hashes": {fpath: file_hash},
+                    "error": None,
+                    "input_tokens": 500,
+                    "output_tokens": 250,
+                    "cost_usd": 0.25,
+                    "iterations": 2,
+                    "model": "anthropic:claude-sonnet-4-5-20250929",
+                },
+            },
+            source_checksum="plan_hash_abc",
+        )
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum="plan_hash_abc",
+        )
+        assert result is not None
+        gr = result["T1"]
+        assert gr.success is True
+        assert gr.input_tokens == 500
+        assert gr.output_tokens == 250
+        assert gr.cost_usd == 0.25
+        assert gr.iterations == 2
+        assert gr.model == "anthropic:claude-sonnet-4-5-20250929"
+        assert len(gr.generated_files) == 1
+        assert str(gr.generated_files[0]) == fpath
+
+
+# ============================================================================
+# Tests: Resume cache v2 write path
+# ============================================================================
+
+
+class TestResumeCacheWriteV2:
+    """Tests for the v2 cache envelope written by execute().
+
+    These run through the full execute() path (with _run_development_phase
+    mocked) and verify the cache file written to disk.
+    """
+
+    def _run_execute_and_get_cache(
+        self, tmp_path: Path, source_checksum: str | None = None,
+    ) -> dict[str, Any]:
+        """Run execute() in real mode, return the written cache dict."""
+        handler = ImplementPhaseHandler()
+        task = _make_seed_task(task_id="T1")
+
+        gen_result = _make_gen_result(success=True, cost=0.10)
+        chunk = DevelopmentChunk(
+            chunk_id="T1",
+            description="test",
+            dependencies=[],
+            file_targets=["src/feature.py"],
+            implementation_prompt="test",
+            test_commands=[],
+            metadata={
+                "feature_id": "F1",
+                "title": "Implement feature",
+                "domain": "backend",
+                "estimated_loc": 100,
+                "prompt_constraints": ["Use type hints"],
+                "post_generation_validators": ["ruff", "mypy"],
+                "_generation_result": gen_result,
+            },
+        )
+        state = ChunkState(
+            chunk_id="T1", status=ChunkStatus.PASSED, attempts=1,
+        )
+        dev_result = DevelopmentResult(
+            plan_id="test",
+            success=True,
+            chunk_states={"T1": state},
+            execution_order=[["T1"]],
+            total_duration_seconds=1.0,
+            summary="1 passed",
+        )
+
+        context: dict[str, Any] = {
+            "tasks": [task],
+            "project_root": str(tmp_path),
+        }
+        if source_checksum is not None:
+            context["source_checksum"] = source_checksum
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk], []),
+        ), patch.object(
+            ImplementPhaseHandler, "_run_development_phase",
+            return_value=dev_result,
+        ):
+            handler.execute(WorkflowPhase.IMPLEMENT, context, dry_run=False)
+
+        cache_path = tmp_path / ".startd8" / "state" / "generation_results.json"
+        assert cache_path.exists()
+        return json.loads(cache_path.read_text())
+
+    def test_write_produces_v2_envelope(self, tmp_path):
+        """Written cache has _cache_meta with schema_version=2 and tasks key."""
+        cache = self._run_execute_and_get_cache(tmp_path)
+        assert "_cache_meta" in cache
+        assert cache["_cache_meta"]["schema_version"] == _CACHE_SCHEMA_VERSION
+        assert "created_at" in cache["_cache_meta"]
+        assert "tasks" in cache
+        assert "T1" in cache["tasks"]
+
+    def test_write_includes_content_hashes(self, tmp_path):
+        """Written cache has per-task content_hashes matching file SHA-256."""
+        cache = self._run_execute_and_get_cache(tmp_path)
+        task_data = cache["tasks"]["T1"]
+        assert "content_hashes" in task_data
+        # The generated file from _make_gen_result is Path("generated/feature.py")
+        # which may or may not exist; content_hashes only includes existing files
+        for fpath, cached_hash in task_data["content_hashes"].items():
+            fp = Path(fpath)
+            if fp.exists():
+                actual_hash = hashlib.sha256(fp.read_bytes()).hexdigest()
+                assert cached_hash == actual_hash
+
+    def test_write_includes_source_checksum(self, tmp_path):
+        """Written cache propagates context['source_checksum'] to _cache_meta."""
+        cache = self._run_execute_and_get_cache(
+            tmp_path, source_checksum="plan_abc_123",
+        )
+        assert cache["_cache_meta"]["source_checksum"] == "plan_abc_123"
+
+    def test_roundtrip_write_then_validate(self, tmp_path):
+        """Write cache → read it back → _validate_resume_cache accepts it."""
+        # First, create the generated file on disk so Layer 5 passes
+        gen_dir = tmp_path / "generated"
+        gen_dir.mkdir(parents=True, exist_ok=True)
+        gen_file = gen_dir / "feature.py"
+        gen_file.write_text("# feature code\n")
+
+        cache = self._run_execute_and_get_cache(
+            tmp_path, source_checksum="roundtrip_test",
+        )
+
+        # Update the cache to point to the file that exists on disk
+        # (since _make_gen_result uses relative Path("generated/feature.py"))
+        task_data = cache["tasks"]["T1"]
+        abs_path = str(gen_file)
+        file_hash = hashlib.sha256(gen_file.read_bytes()).hexdigest()
+        task_data["generated_files"] = [abs_path]
+        task_data["content_hashes"] = {abs_path: file_hash}
+
+        handler = ImplementPhaseHandler()
+        task = _make_seed_task(
+            task_id="T1",
+            target_files=["generated/feature.py"],
+        )
+        result = handler._validate_resume_cache(
+            cache, [task], tmp_path, source_checksum="roundtrip_test",
+        )
+        assert result is not None
+        assert "T1" in result
+        assert result["T1"].success is True

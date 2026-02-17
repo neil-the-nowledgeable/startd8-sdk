@@ -46,6 +46,7 @@ Usage::
 from __future__ import annotations
 
 import asyncio
+import datetime
 import hashlib
 import json
 import shlex
@@ -92,6 +93,8 @@ from startd8.utils.artifact_inventory import (
 )
 
 logger = get_logger(__name__)
+
+_CACHE_SCHEMA_VERSION = 2
 
 from startd8.contractors.gate_contracts import GateEmitter
 
@@ -2163,6 +2166,40 @@ class Test{class_name}:
 
             # Multi-file format constraint: ensure LLM produces distinct blocks per file
             prompt_constraints = list(task.prompt_constraints)
+
+            # Domain-aware output format constraint: prevent test code generation
+            # for non-code artifacts (config YAML, JSON dashboards, runbooks, etc.).
+            # The design doc may contain test examples that confuse the LLM into
+            # generating test code instead of the target artifact.
+            _target_ext = (
+                Path(task.target_files[0]).suffix.lower()
+                if task.target_files else ""
+            )
+            if _target_ext in (".yaml", ".yml") and task.domain in (
+                "config-yaml", "unknown",
+            ):
+                prompt_constraints.append(
+                    f"TARGET FILE FORMAT — you MUST generate ONLY a valid YAML "
+                    f"configuration file for: {task.target_files[0]}. "
+                    f"The output MUST be parseable by yaml.safe_load(). "
+                    f"Do NOT generate Python test code, validation scripts, or "
+                    f"documentation — even if the design document contains test "
+                    f"examples. Those are for reference only, not implementation."
+                )
+            elif _target_ext == ".json":
+                prompt_constraints.append(
+                    f"TARGET FILE FORMAT — you MUST generate ONLY valid JSON "
+                    f"for: {task.target_files[0]}. "
+                    f"The output MUST be parseable by json.loads(). "
+                    f"Do NOT generate Python test code or scripts."
+                )
+            elif _target_ext == ".md":
+                prompt_constraints.append(
+                    f"TARGET FILE FORMAT — you MUST generate a Markdown document "
+                    f"for: {task.target_files[0]}. "
+                    f"Do NOT generate Python code or test scripts."
+                )
+
             if len(task.target_files) > 1:
                 file_list = ", ".join(task.target_files)
                 prompt_constraints.append(
@@ -2434,6 +2471,160 @@ class Test{class_name}:
         return result_box["result"]
 
     # ------------------------------------------------------------------
+    # Resume cache validation (v2 format)
+    # ------------------------------------------------------------------
+
+    def _validate_resume_cache(
+        self,
+        saved: dict[str, Any],
+        tasks: list[SeedTask],
+        project_root: Path,
+        source_checksum: str | None,
+    ) -> dict[str, GenerationResult] | None:
+        """Validate a saved generation_results cache through 7 ordered layers.
+
+        Returns a dict of task_id → GenerationResult if all layers pass,
+        or None if the cache should be rejected (caller falls through to
+        fresh IMPLEMENT).
+
+        Layers (cheapest → most expensive):
+            0: Schema version — _cache_meta exists, schema_version == _CACHE_SCHEMA_VERSION
+            1: Filter success:false entries (info log)
+            2: Coverage — all current task IDs present in successful entries
+            3: Source checksum — _cache_meta.source_checksum matches context
+            4: Path validation — cached generated_files match task.target_files
+            5: File existence — every cached file exists on disk
+            6: Content hash — sha256(file_bytes) matches cached content_hashes
+        """
+        # Layer 0: Schema version
+        cache_meta = saved.get("_cache_meta")
+        if not isinstance(cache_meta, dict):
+            logger.warning(
+                "IMPLEMENT --resume: cache missing _cache_meta (v1 or corrupt) — re-running"
+            )
+            return None
+        schema_version = cache_meta.get("schema_version")
+        if schema_version != _CACHE_SCHEMA_VERSION:
+            logger.warning(
+                "IMPLEMENT --resume: cache schema_version=%s (expected %d) — re-running",
+                schema_version, _CACHE_SCHEMA_VERSION,
+            )
+            return None
+
+        tasks_data = saved.get("tasks", {})
+
+        # Layer 1: Filter out failed entries
+        successful: dict[str, dict[str, Any]] = {}
+        filtered_count = 0
+        for tid, data in tasks_data.items():
+            if data.get("success"):
+                successful[tid] = data
+            else:
+                filtered_count += 1
+        if filtered_count:
+            logger.info(
+                "IMPLEMENT --resume: filtered %d failed entries from cache",
+                filtered_count,
+            )
+
+        # Layer 2: Coverage — all current task IDs in successful cache entries
+        current_ids = {t.task_id for t in tasks}
+        missing = current_ids - set(successful)
+        if missing:
+            logger.warning(
+                "IMPLEMENT --resume: cache missing tasks %s — re-running",
+                sorted(missing),
+            )
+            return None
+
+        # Layer 3: Source checksum
+        cached_checksum = cache_meta.get("source_checksum")
+        if (
+            cached_checksum is not None
+            and source_checksum is not None
+            and cached_checksum != source_checksum
+        ):
+            logger.warning(
+                "IMPLEMENT --resume: source_checksum mismatch "
+                "(cached=%s, current=%s) — re-running",
+                cached_checksum, source_checksum,
+            )
+            return None
+
+        # Parse GenerationResult objects from successful entries
+        generation_results: dict[str, GenerationResult] = {}
+        task_map = {t.task_id: t for t in tasks}
+        for tid in current_ids:
+            data = successful[tid]
+            generation_results[tid] = GenerationResult(
+                success=data["success"],
+                generated_files=[Path(p) for p in data.get("generated_files", [])],
+                error=data.get("error"),
+                input_tokens=data.get("input_tokens", 0),
+                output_tokens=data.get("output_tokens", 0),
+                cost_usd=data.get("cost_usd", 0.0),
+                iterations=data.get("iterations", 0),
+                model=data.get("model", "unknown"),
+            )
+
+        # Layer 4: Path validation — cached generated_files match task.target_files
+        for tid, gr in generation_results.items():
+            task = task_map.get(tid)
+            if task is None or not gr.generated_files:
+                continue
+            expected = {
+                str((project_root / tf).resolve())
+                for tf in task.target_files
+            }
+            actual = {str(Path(p).resolve()) for p in gr.generated_files}
+            if actual != expected:
+                logger.warning(
+                    "IMPLEMENT --resume: path mismatch for %s "
+                    "(expected %s, got %s) — re-running",
+                    tid, sorted(expected), sorted(actual),
+                )
+                return None
+
+        # Layer 5: File existence — every cached file exists on disk
+        for tid, gr in generation_results.items():
+            for p in gr.generated_files:
+                if not Path(p).exists():
+                    logger.warning(
+                        "IMPLEMENT --resume: cached file missing from disk: %s "
+                        "(task %s) — re-running",
+                        p, tid,
+                    )
+                    return None
+
+        # Layer 6: Content hash — sha256(file_bytes) matches cached content_hashes
+        for tid in current_ids:
+            data = successful[tid]
+            content_hashes = data.get("content_hashes", {})
+            for fpath, expected_hash in content_hashes.items():
+                fp = Path(fpath)
+                if not fp.exists():
+                    # Already caught by Layer 5, but guard anyway
+                    logger.warning(
+                        "IMPLEMENT --resume: hash check file missing: %s — re-running",
+                        fpath,
+                    )
+                    return None
+                actual_hash = hashlib.sha256(fp.read_bytes()).hexdigest()
+                if actual_hash != expected_hash:
+                    logger.warning(
+                        "IMPLEMENT --resume: content hash mismatch for %s "
+                        "(task %s, expected %s, got %s) — re-running",
+                        fpath, tid, expected_hash[:12], actual_hash[:12],
+                    )
+                    return None
+
+        logger.info(
+            "IMPLEMENT --resume: all %d layers passed for %d tasks",
+            7, len(generation_results),
+        )
+        return generation_results
+
+    # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
 
@@ -2527,100 +2718,67 @@ class Test{class_name}:
             try:
                 with open(results_path) as f:
                     saved = json.load(f)
-                generation_results: dict[str, GenerationResult] = {}
-                for tid, data in saved.items():
-                    generation_results[tid] = GenerationResult(
-                        success=data["success"],
-                        generated_files=[Path(p) for p in data["generated_files"]],
-                        error=data.get("error"),
-                        input_tokens=data.get("input_tokens", 0),
-                        output_tokens=data.get("output_tokens", 0),
-                        cost_usd=data.get("cost_usd", 0.0),
-                        iterations=data.get("iterations", 0),
-                        model=data.get("model", "unknown"),
-                    )
+                validated = self._validate_resume_cache(
+                    saved, tasks, project_root,
+                    source_checksum=context.get("source_checksum"),
+                )
+                if validated is not None:
+                    generation_results = validated
+                    current_task_ids = {t.task_id for t in tasks}
 
-                # Defense Layer 2: validate cached paths match task.target_files.
-                # Reject resume if any task has wrong paths (e.g. project_root/__init__.py
-                # instead of project_root/src/pkg/__init__.py).
-                task_map = {t.task_id: t for t in tasks}
-                invalid_tasks: list[str] = []
-                for tid, gr in generation_results.items():
-                    task = task_map.get(tid)
-                    if task is None or not gr.generated_files:
-                        continue
-                    expected = {
-                        str((project_root / tf).resolve())
-                        for tf in task.target_files
-                    }
-                    actual = {str(Path(p).resolve()) for p in gr.generated_files}
-                    if actual != expected:
-                        invalid_tasks.append(
-                            f"{tid} (expected {sorted(expected)}, got {sorted(actual)})"
-                        )
-                if invalid_tasks:
-                    logger.warning(
-                        "IMPLEMENT --resume: path mismatch for %s — invalidating cache, re-running",
-                        invalid_tasks,
+                    # Reconstruct output dict from resumed results
+                    total_cost = sum(
+                        r.cost_usd for tid, r in generation_results.items()
+                        if tid in current_task_ids
                     )
-                    generation_results = {}
-                    # Do not resume — fall through to fresh IMPLEMENT
-                else:
-                    logger.info(
-                        "IMPLEMENT --resume: loaded %d generation results from %s",
-                        len(generation_results), results_path,
-                    )
+                    domain_tasks: dict[str, list[str]] = defaultdict(list)
+                    for task in tasks:
+                        domain_tasks[task.domain].append(task.task_id)
 
-                # Reconstruct output dict from resumed results (only if we kept cache)
-                total_cost = sum(r.cost_usd for r in generation_results.values())
-                domain_tasks: dict[str, list[str]] = defaultdict(list)
-                for task in tasks:
-                    domain_tasks[task.domain].append(task.task_id)
-
-                task_reports: list[dict[str, Any]] = []
-                for task in tasks:
-                    gr = generation_results.get(task.task_id)
-                    report: dict[str, Any] = {
-                        "task_id": task.task_id,
-                        "feature_id": task.feature_id,
-                        "title": task.title,
-                        "domain": task.domain,
-                        "target_files": task.target_files,
-                        "estimated_loc": task.estimated_loc,
-                        "depends_on": task.depends_on,
-                        "prompt_constraints_count": len(task.prompt_constraints),
-                        "validators": task.post_generation_validators,
-                    }
-                    if gr is not None:
-                        report["status"] = "generated" if gr.success else "generation_failed"
-                        report["cost"] = gr.cost_usd
-                        report["tokens"] = {
-                            "input": gr.input_tokens,
-                            "output": gr.output_tokens,
+                    task_reports: list[dict[str, Any]] = []
+                    for task in tasks:
+                        gr = generation_results.get(task.task_id)
+                        report: dict[str, Any] = {
+                            "task_id": task.task_id,
+                            "feature_id": task.feature_id,
+                            "title": task.title,
+                            "domain": task.domain,
+                            "target_files": task.target_files,
+                            "estimated_loc": task.estimated_loc,
+                            "depends_on": task.depends_on,
+                            "prompt_constraints_count": len(task.prompt_constraints),
+                            "validators": task.post_generation_validators,
                         }
-                        report["iterations"] = gr.iterations
-                        if gr.error:
-                            report["error"] = gr.error
-                    else:
-                        report["status"] = "not_in_saved_results"
-                    task_reports.append(report)
+                        if gr is not None:
+                            report["status"] = "generated" if gr.success else "generation_failed"
+                            report["cost"] = gr.cost_usd
+                            report["tokens"] = {
+                                "input": gr.input_tokens,
+                                "output": gr.output_tokens,
+                            }
+                            report["iterations"] = gr.iterations
+                            if gr.error:
+                                report["error"] = gr.error
+                        else:
+                            report["status"] = "not_in_saved_results"
+                        task_reports.append(report)
 
-                output: dict[str, Any] = {
-                    "task_reports": task_reports,
-                    "tasks_processed": len(task_reports),
-                    "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
-                    "total_estimated_loc": sum(t.estimated_loc for t in tasks),
-                    "total_cost": total_cost,
-                    "generation_results": {
-                        tid: {"success": r.success, "error": r.error, "cost": r.cost_usd}
-                        for tid, r in generation_results.items()
-                    },
-                }
-                # Only resume when we have valid cached results (path validation passed)
-                resumed = len(generation_results) > 0
+                    output: dict[str, Any] = {
+                        "task_reports": task_reports,
+                        "tasks_processed": len(task_reports),
+                        "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
+                        "total_estimated_loc": sum(t.estimated_loc for t in tasks),
+                        "total_cost": total_cost,
+                        "generation_results": {
+                            tid: {"success": r.success, "error": r.error, "cost": r.cost_usd}
+                            for tid, r in generation_results.items()
+                            if tid in current_task_ids
+                        },
+                    }
+                    resumed = True
             except (json.JSONDecodeError, KeyError, TypeError) as exc:
                 logger.warning(
-                    "IMPLEMENT --resume: could not load saved generation results: %s — re-running",
+                    "IMPLEMENT --resume: could not load cache: %s — re-running",
                     exc,
                 )
 
@@ -2780,14 +2938,22 @@ class Test{class_name}:
             if gate3:
                 output["_gate3_validation"] = gate3
 
-            # Persist generation_results to disk for crash recovery
+            # Persist generation_results to disk for crash recovery (v2 envelope)
             # Always write to the canonical .startd8/state/ location
             save_path = project_root / ".startd8" / "state" / "generation_results.json"
-            serializable = {}
+            serializable_tasks = {}
             for tid, gr in generation_results.items():
-                serializable[tid] = {
+                content_hashes: dict[str, str] = {}
+                for p in gr.generated_files:
+                    fp = Path(p)
+                    if fp.exists():
+                        content_hashes[str(p)] = hashlib.sha256(
+                            fp.read_bytes()
+                        ).hexdigest()
+                serializable_tasks[tid] = {
                     "success": gr.success,
                     "generated_files": [str(p) for p in gr.generated_files],
+                    "content_hashes": content_hashes,
                     "error": gr.error,
                     "input_tokens": gr.input_tokens,
                     "output_tokens": gr.output_tokens,
@@ -2795,10 +2961,20 @@ class Test{class_name}:
                     "iterations": gr.iterations,
                     "model": gr.model,
                 }
+            cache_envelope: dict[str, Any] = {
+                "_cache_meta": {
+                    "schema_version": _CACHE_SCHEMA_VERSION,
+                    "created_at": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat(),
+                    "source_checksum": context.get("source_checksum"),
+                },
+                "tasks": serializable_tasks,
+            }
             save_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(save_path, serializable, indent=2)
+            atomic_write_json(save_path, cache_envelope, indent=2)
             logger.info(
-                "IMPLEMENT: saved %d generation results to %s",
+                "IMPLEMENT: saved %d generation results (v2) to %s",
                 len(generation_results), save_path,
             )
 
