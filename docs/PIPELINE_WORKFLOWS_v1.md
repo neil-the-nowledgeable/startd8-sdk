@@ -510,6 +510,8 @@ result = pipeline.run("REST API documentation for user service")
 
 The Artisan Contractor is a 7-phase orchestrated workflow for batch code generation with explicit design review. Unlike the simpler Pipeline workflows above, it operates on an **enriched context seed** (from PlanIngestion + DomainPreflight) and separates design from implementation.
 
+> **Enriched seed naming:** DomainPreflightWorkflow derives the enriched filename from the input seed. The artisan route produces `artisan-context-seed-enriched.json`; the prime route produces `prime-context-seed-enriched.json`.
+
 ### Phases
 
 ```

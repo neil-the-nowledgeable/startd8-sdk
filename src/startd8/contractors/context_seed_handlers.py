@@ -35,7 +35,9 @@ Usage::
     workflow = ArtisanContractorWorkflow(config=config)
 
     handlers = ContextSeedHandlers.create_all(
-        enriched_seed_path="out/artisan-context-seed-enriched.json",
+        enriched_seed_path="out/<route>-context-seed-enriched.json",
+        # e.g. "out/prime-context-seed-enriched.json" or
+        #      "out/artisan-context-seed-enriched.json"
     )
     for phase, handler in handlers.items():
         workflow.register_handler(phase, handler)
@@ -5247,7 +5249,7 @@ class ContextSeedHandlers:
     Example::
 
         handlers = ContextSeedHandlers.create_all(
-            enriched_seed_path="out/artisan-context-seed-enriched.json",
+            enriched_seed_path="out/<route>-context-seed-enriched.json",
             output_dir="out/artifacts",
         )
     """

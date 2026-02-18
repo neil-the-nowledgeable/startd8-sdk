@@ -1280,6 +1280,59 @@ class TestEndToEndDomainPreflight:
         assert "classify_check_enrich" in step_names
         assert "enrich" in step_names
 
+    def test_enriched_seed_name_derived_from_input(self, tmp_path):
+        """Enriched seed filename is derived from the input seed name, not hardcoded.
+
+        - prime-context-seed.json   → prime-context-seed-enriched.json
+        - artisan-context-seed.json → artisan-context-seed-enriched.json
+        """
+        for route in ("prime", "artisan"):
+            project_dir = tmp_path / route
+            project_dir.mkdir()
+
+            # Minimal project
+            (project_dir / "pyproject.toml").write_text(
+                "[project]\ndependencies = []\n"
+            )
+            src_dir = project_dir / "src"
+            src_dir.mkdir()
+
+            # Minimal seed
+            seed = {
+                "version": "1.0.0",
+                "tasks": [
+                    {
+                        "task_id": "PI-001",
+                        "title": "Create module",
+                        "config": {
+                            "task_description": "Create a module",
+                            "context": {
+                                "target_files": ["src/foo.py"],
+                                "estimated_loc": 10,
+                            },
+                        },
+                    },
+                ],
+            }
+            seed_name = f"{route}-context-seed.json"
+            seed_path = project_dir / seed_name
+            seed_path.write_text(json.dumps(seed, indent=2))
+
+            wf = DomainPreflightWorkflow()
+            result = wf.run({
+                "context_seed_path": str(seed_path),
+                "project_root": str(project_dir),
+            })
+
+            assert result.success, f"{route}: workflow failed: {result.error}"
+
+            enriched_path = Path(result.output["enriched_seed_path"])
+            expected_name = f"{route}-context-seed-enriched.json"
+            assert enriched_path.name == expected_name, (
+                f"{route}: expected {expected_name}, got {enriched_path.name}"
+            )
+            assert enriched_path.exists()
+
 
 # ===================================================================
 # Multi-file risk checks (Layer A defense-in-depth)

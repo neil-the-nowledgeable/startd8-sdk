@@ -699,7 +699,9 @@ class DomainPreflightWorkflow(WorkflowBase):
             }
 
             # Write enriched seed alongside original
-            enriched_path = seed_path.parent / "artisan-context-seed-enriched.json"
+            base_stem = seed_path.stem.removesuffix("-enriched")
+            enriched_name = f"{base_stem}-enriched{''.join(seed_path.suffixes)}"
+            enriched_path = seed_path.parent / enriched_name
             atomic_write_json(enriched_path, enriched_seed, indent=2)
 
             enrich_step = StepResult(
