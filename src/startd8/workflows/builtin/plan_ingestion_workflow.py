@@ -1493,8 +1493,28 @@ class PlanIngestionWorkflow(WorkflowBase):
         if not requirement_ids:
             requirements_corpus = "\n\n".join(requirements_docs.values())
             requirement_ids = _extract_requirement_ids(requirements_corpus)
-        req_to_feature: Dict[str, List[str]] = {}
+
+        # ── Classify pipeline-innate vs project-specific requirements ──
+        pipeline_innate_ids: List[str] = []
+        project_specific_ids: List[str] = []
         for rid in requirement_ids:
+            hint = requirement_hints.get(rid, {})
+            labels = hint.get("labels", [])
+            if isinstance(labels, list) and "pipeline-innate" in labels:
+                pipeline_innate_ids.append(rid)
+            else:
+                project_specific_ids.append(rid)
+
+        req_to_feature: Dict[str, List[str]] = {}
+
+        # Auto-satisfy pipeline-innate requirements with synthetic mapping
+        for rid in pipeline_innate_ids:
+            hint = requirement_hints.get(rid, {})
+            artifact_type = hint.get("satisfied_by_artifact", "artifact")
+            req_to_feature[rid] = [f"__pipeline_artifact:{artifact_type}"]
+
+        # Match project-specific requirements against plan text
+        for rid in project_specific_ids:
             rid_lower = rid.lower()
             matched_features = [
                 f.feature_id for f in parsed_plan.features
@@ -1520,11 +1540,14 @@ class PlanIngestionWorkflow(WorkflowBase):
             else:
                 req_sources[rid] = list(req_acceptance[rid])
 
-        mapped_requirements = sum(1 for fids in req_to_feature.values() if fids)
-        total_requirements = len(requirement_ids)
+        # Coverage computed from project-specific requirements only
+        mapped_project_specific = sum(
+            1 for rid in project_specific_ids if req_to_feature.get(rid)
+        )
+        total_project_specific = len(project_specific_ids)
         requirements_coverage = (
-            (mapped_requirements / total_requirements) * 100.0
-            if total_requirements
+            (mapped_project_specific / total_project_specific) * 100.0
+            if total_project_specific
             else 100.0
         )
 
@@ -1554,13 +1577,19 @@ class PlanIngestionWorkflow(WorkflowBase):
             else 100.0
         )
 
-        unmet_requirements = [rid for rid, fids in req_to_feature.items() if not fids]
+        # Only project-specific requirements count toward unmet/conflict
+        unmet_requirements = [
+            rid for rid in project_specific_ids
+            if not req_to_feature.get(rid)
+        ]
         unmet_artifacts = [aid for aid, fids in artifact_to_feature.items() if not fids]
         conflict_count = len(unmet_requirements) + len(unmet_artifacts)
 
         return {
-            "requirements_total": total_requirements,
-            "requirements_mapped": mapped_requirements,
+            "requirements_total": len(requirement_ids),
+            "requirements_mapped": mapped_project_specific + len(pipeline_innate_ids),
+            "requirements_project_specific_total": total_project_specific,
+            "requirements_pipeline_innate_total": len(pipeline_innate_ids),
             "requirements_coverage_percent": round(requirements_coverage, 2),
             "artifact_total": total_artifacts,
             "artifact_mapped": mapped_artifacts,
@@ -1593,28 +1622,52 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         req_mappings: List[Dict[str, Any]] = []
         for rid, fids in quality.get("requirement_to_feature", {}).items():
-            task_ids: List[str] = []
-            for fid in fids:
-                task_ids.extend(feature_to_task.get(fid, []))
-            req_mappings.append(
-                {
-                    "requirement_id": rid,
-                    "feature_ids": fids,
-                    "task_ids": sorted(set(tid for tid in task_ids if tid)),
-                    "status": "mapped" if fids else "unresolved",
-                    "acceptance_obligations": quality.get(
-                        "requirement_acceptance_anchors", {}
-                    ).get(rid, []),
-                    "source_references": quality.get(
-                        "requirement_source_references", {}
-                    ).get(rid, []),
-                    "mapping_rationale": (
-                        ["matched by requirement hint id against parsed feature text"]
-                        if fids
-                        else ["no parsed feature contained requirement identifier"]
-                    ),
-                }
+            # Detect pipeline-innate entries by __pipeline_artifact: prefix
+            is_auto = any(
+                isinstance(f, str) and f.startswith("__pipeline_artifact:")
+                for f in fids
             )
+            if is_auto:
+                req_mappings.append(
+                    {
+                        "requirement_id": rid,
+                        "feature_ids": fids,
+                        "task_ids": [],
+                        "status": "auto-satisfied",
+                        "acceptance_obligations": quality.get(
+                            "requirement_acceptance_anchors", {}
+                        ).get(rid, []),
+                        "source_references": quality.get(
+                            "requirement_source_references", {}
+                        ).get(rid, []),
+                        "mapping_rationale": [
+                            "pipeline-innate: satisfied by artifact generation"
+                        ],
+                    }
+                )
+            else:
+                task_ids: List[str] = []
+                for fid in fids:
+                    task_ids.extend(feature_to_task.get(fid, []))
+                req_mappings.append(
+                    {
+                        "requirement_id": rid,
+                        "feature_ids": fids,
+                        "task_ids": sorted(set(tid for tid in task_ids if tid)),
+                        "status": "mapped" if fids else "unresolved",
+                        "acceptance_obligations": quality.get(
+                            "requirement_acceptance_anchors", {}
+                        ).get(rid, []),
+                        "source_references": quality.get(
+                            "requirement_source_references", {}
+                        ).get(rid, []),
+                        "mapping_rationale": (
+                            ["matched by requirement hint id against parsed feature text"]
+                            if fids
+                            else ["no parsed feature contained requirement identifier"]
+                        ),
+                    }
+                )
 
         artifact_mappings: List[Dict[str, Any]] = []
         for aid, fids in quality.get("artifact_to_feature", {}).items():
