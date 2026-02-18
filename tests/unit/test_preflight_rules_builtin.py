@@ -216,7 +216,7 @@ class TestInitPyExistsRule:
         result = rule.evaluate(_ctx(
             tmp_path, "src/pkg/module.py", TaskDomain.PYTHON_PACKAGE_MODULE,
         ))
-        assert result.checks[0].status == CheckStatus.FAIL
+        assert result.checks[0].status == CheckStatus.WARN
 
 
 class TestParentPackageImportableRule:

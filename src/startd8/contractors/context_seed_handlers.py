@@ -72,6 +72,7 @@ from startd8.contractors.protocols import (
     REVIEW_MODEL_CLAUDE_OPUS,
 )
 from startd8.utils.file_operations import atomic_write_json
+from startd8.utils.retry import RetryConfig, _is_retryable_exception, _calculate_delay
 from startd8.utils.token_usage import (
     token_usage_cost,
     token_usage_input,
@@ -202,12 +203,18 @@ class HandlerConfig:
         design_max_tokens: Override max_output_tokens for design phase LLM calls.
             When set, overrides per-task design_calibration max_output_tokens.
             Use to avoid truncation for complex design docs (e.g., 8192).
+        design_task_retries: Number of retries per task on transient API errors
+            during the DESIGN phase. 0 = no retry; total attempts = 1 + retries.
+            Uses exponential backoff (5s base, 60s max). Default: 2.
         fail_on_truncation: Fail workflow on detected truncation.
         check_truncation: Enable heuristic truncation detection.
         strict_truncation: Use strict detection threshold.
         test_timeout_seconds: Timeout for each validator subprocess.
         review_temperature: Temperature for LLM review calls.
         review_max_code_chars: Max characters of generated code to include in review prompt.
+        review_task_retries: Number of retries per task on transient API errors
+            during the REVIEW phase. 0 = no retry; total attempts = 1 + retries.
+            Uses exponential backoff (5s base, 60s max). Default: 2.
         development_timeout_seconds: Timeout for the DevelopmentPhase thread (None = no limit).
         scaffold_test_first: For artifact generator tasks, ensure test scaffolding exists
             before implementation (Item 12). Default True.
@@ -221,12 +228,14 @@ class HandlerConfig:
     pass_threshold: int = 80
     max_tokens: Optional[int] = None
     design_max_tokens: Optional[int] = None
+    design_task_retries: int = 2
     fail_on_truncation: bool = True
     check_truncation: bool = True
     strict_truncation: bool = False
     test_timeout_seconds: int = 300  # Aligned with FinalTestingPhase.pytest_timeout
     review_temperature: float = 0.0
     review_max_code_chars: int = 8000
+    review_task_retries: int = 2
     development_timeout_seconds: Optional[float] = None
     auto_commit: bool = True
     scaffold_test_first: bool = True
@@ -1534,6 +1543,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 if c.get("status") == "fail"
             ]
             if env_fails:
+                logger.warning(
+                    "DESIGN: skipping task %s — env_blocked (%d failing check(s): %s)",
+                    task.task_id,
+                    len(env_fails),
+                    ", ".join(c.get("check_name", "?") for c in env_fails),
+                )
                 design_results[task.task_id] = {
                     "status": "env_blocked",
                     "environment_issues": env_fails,
@@ -1624,55 +1639,86 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             backend = self._get_llm_backend()
             cost_before = backend.total_cost_usd
 
-            try:
-                design_phase = self._get_design_phase()
-                result = self._run_design_async(
-                    design_phase, feature_context,
-                    timeout=self.config.development_timeout_seconds,
-                )
-                task_cost = backend.total_cost_usd - cost_before
-                total_cost += task_cost
+            # Retry loop for transient API errors (e.g. APIConnectionError, 529)
+            _design_retry_config = RetryConfig(
+                max_attempts=1,  # not used directly — we loop manually
+                base_delay=5.0,
+                max_delay=60.0,
+                retryable_exceptions=(ConnectionError, TimeoutError, OSError),
+                retryable_status_codes=(429, 500, 502, 503, 504, 529),
+            )
+            _max_attempts = 1 + self.config.design_task_retries
 
-                serialized = self._serialize_result(result)
-                serialized["status"] = "refined" if prior_design_text else "designed"
-                serialized["cost"] = task_cost
-                design_results[task.task_id] = serialized
-
-                if prior_design_text:
-                    tasks_refined += 1
-                else:
-                    tasks_designed += 1
-                if result.agreed:
-                    tasks_agreed += 1
-
-                # Accumulate cross-task summary for progressive context
-                doc_text = result.design_document.raw_text
-                first_line = doc_text[:300].split("\n")[0]
-                summary = f"{task.task_id} ({task.title}): {first_line}"
-                prior_summaries.append(summary)
-
-                # Write design doc to output_dir if configured
-                if self.output_dir:
-                    out_path = Path(self.output_dir) / f"{task.task_id}-design.md"
-                    out_path.parent.mkdir(parents=True, exist_ok=True)
-                    out_path.write_text(
-                        result.design_document.raw_text, encoding="utf-8"
+            for _attempt in range(_max_attempts):
+                try:
+                    design_phase = self._get_design_phase()
+                    result = self._run_design_async(
+                        design_phase, feature_context,
+                        timeout=self.config.development_timeout_seconds,
                     )
-                    design_results[task.task_id]["output_file"] = str(out_path)
-                    logger.info("Wrote design doc: %s", out_path)
+                    task_cost = backend.total_cost_usd - cost_before
+                    total_cost += task_cost
 
-            except Exception as exc:
-                task_cost = backend.total_cost_usd - cost_before
-                total_cost += task_cost
-                tasks_failed += 1
-                logger.warning(
-                    "DESIGN: failed for task %s: %s", task.task_id, exc
-                )
-                design_results[task.task_id] = {
-                    "status": "design_failed",
-                    "error": str(exc),
-                    "cost": task_cost,
-                }
+                    serialized = self._serialize_result(result)
+                    serialized["status"] = "refined" if prior_design_text else "designed"
+                    serialized["cost"] = task_cost
+                    design_results[task.task_id] = serialized
+
+                    if prior_design_text:
+                        tasks_refined += 1
+                    else:
+                        tasks_designed += 1
+                    if result.agreed:
+                        tasks_agreed += 1
+
+                    # Accumulate cross-task summary for progressive context
+                    doc_text = result.design_document.raw_text
+                    first_line = doc_text[:300].split("\n")[0]
+                    summary = f"{task.task_id} ({task.title}): {first_line}"
+                    prior_summaries.append(summary)
+
+                    # Write design doc to output_dir if configured
+                    if self.output_dir:
+                        out_path = Path(self.output_dir) / f"{task.task_id}-design.md"
+                        out_path.parent.mkdir(parents=True, exist_ok=True)
+                        out_path.write_text(
+                            result.design_document.raw_text, encoding="utf-8"
+                        )
+                        design_results[task.task_id]["output_file"] = str(out_path)
+                        logger.info("Wrote design doc: %s", out_path)
+
+                    break  # success — exit retry loop
+
+                except Exception as exc:
+                    if (
+                        _attempt < _max_attempts - 1
+                        and _is_retryable_exception(exc, _design_retry_config)
+                    ):
+                        _delay = _calculate_delay(_attempt, _design_retry_config)
+                        logger.warning(
+                            "DESIGN: task %s failed (attempt %d/%d), retrying in %.1fs: %s",
+                            task.task_id,
+                            _attempt + 1,
+                            _max_attempts,
+                            _delay,
+                            exc,
+                        )
+                        time.sleep(_delay)
+                        continue
+
+                    # Final attempt or non-retryable — fail as before
+                    task_cost = backend.total_cost_usd - cost_before
+                    total_cost += task_cost
+                    tasks_failed += 1
+                    logger.warning(
+                        "DESIGN: failed for task %s: %s", task.task_id, exc
+                    )
+                    design_results[task.task_id] = {
+                        "status": "design_failed",
+                        "error": str(exc),
+                        "cost": task_cost,
+                    }
+                    break  # non-retryable or final attempt — exit retry loop
 
         context["design_results"] = design_results
 
@@ -2195,6 +2241,12 @@ class Test{class_name}:
             ]
             if env_fails:
                 env_blocked_ids.add(task.task_id)
+                logger.warning(
+                    "IMPLEMENT: skipping task %s (%s) — env_blocked (%d failing check(s))",
+                    task.task_id,
+                    task.title,
+                    len(env_fails),
+                )
                 skipped.append({
                     "task_id": task.task_id,
                     "title": task.title,
@@ -2211,6 +2263,12 @@ class Test{class_name}:
 
             blocked_deps = [d for d in task.depends_on if d in env_blocked_ids]
             if blocked_deps:
+                logger.warning(
+                    "IMPLEMENT: skipping task %s (%s) — dep_blocked_env (blocked by: %s)",
+                    task.task_id,
+                    task.title,
+                    ", ".join(blocked_deps),
+                )
                 skipped.append({
                     "task_id": task.task_id,
                     "title": task.title,
@@ -3816,6 +3874,10 @@ class TestPhaseHandler(AbstractPhaseHandler):
 
                 # Skip tasks that were not generated
                 if gen_result is None or not gen_result.success:
+                    logger.warning(
+                        "TEST: skipping task %s (%s) — no successful generation result",
+                        task.task_id, task.title,
+                    )
                     test_plan.append({
                         "task_id": task.task_id,
                         "title": task.title,
@@ -4249,38 +4311,71 @@ PASS if score >= {pass_threshold} and no blocking issues.
         Returns:
             Review result dict with score, verdict, cost.
         """
-        try:
-            agent = self._resolve_review_agent()
-            prompt = self._build_review_prompt(
-                task, generated_code, test_results,
-                design_document=design_document,
-                parameter_sources=parameter_sources,
-                semantic_conventions=semantic_conventions,
-            )
-            response_text, _time_ms, token_usage = agent.generate(
-                prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
-            )
-            review = self._parse_review_response(response_text)
-            review["task_id"] = task.task_id
-            review["cost"] = token_usage_cost(token_usage)
-            review["tokens"] = {
-                "input": token_usage_input(token_usage),
-                "output": token_usage_output(token_usage),
-            }
-            review["status"] = "reviewed"
-            return review
-        except Exception as exc:
-            logger.warning("REVIEW: agent error for %s: %s", task.task_id, exc)
-            return {
-                "task_id": task.task_id,
-                "score": 0,
-                "verdict": "ERROR",
-                "passed": False,
-                "cost": 0.0,
-                "tokens": {"input": 0, "output": 0},
-                "error": str(exc),
-                "status": "review_error",
-            }
+        _review_retry_config = RetryConfig(
+            max_attempts=1,  # not used directly — we loop manually
+            base_delay=5.0,
+            max_delay=60.0,
+            retryable_exceptions=(ConnectionError, TimeoutError, OSError),
+            retryable_status_codes=(429, 500, 502, 503, 504, 529),
+        )
+        _max_attempts = 1 + self.config.review_task_retries
+
+        for _attempt in range(_max_attempts):
+            try:
+                agent = self._resolve_review_agent()
+                prompt = self._build_review_prompt(
+                    task, generated_code, test_results,
+                    design_document=design_document,
+                    parameter_sources=parameter_sources,
+                    semantic_conventions=semantic_conventions,
+                )
+                response_text, _time_ms, token_usage = agent.generate(
+                    prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
+                )
+                review = self._parse_review_response(response_text)
+                review["task_id"] = task.task_id
+                review["cost"] = token_usage_cost(token_usage)
+                review["tokens"] = {
+                    "input": token_usage_input(token_usage),
+                    "output": token_usage_output(token_usage),
+                }
+                review["status"] = "reviewed"
+                return review
+            except Exception as exc:
+                if (
+                    _attempt < _max_attempts - 1
+                    and _is_retryable_exception(exc, _review_retry_config)
+                ):
+                    _delay = _calculate_delay(_attempt, _review_retry_config)
+                    logger.warning(
+                        "REVIEW: task %s failed (attempt %d/%d), retrying in %.1fs: %s",
+                        task.task_id,
+                        _attempt + 1,
+                        _max_attempts,
+                        _delay,
+                        exc,
+                    )
+                    time.sleep(_delay)
+                    continue
+
+                # Final attempt or non-retryable — return error
+                logger.warning("REVIEW: agent error for %s: %s", task.task_id, exc)
+                return {
+                    "task_id": task.task_id,
+                    "score": 0,
+                    "verdict": "ERROR",
+                    "passed": False,
+                    "cost": 0.0,
+                    "tokens": {"input": 0, "output": 0},
+                    "error": str(exc),
+                    "status": "review_error",
+                }
+        # Unreachable — loop always returns — but satisfies type checker
+        return {
+            "task_id": task.task_id, "score": 0, "verdict": "ERROR",
+            "passed": False, "cost": 0.0, "tokens": {"input": 0, "output": 0},
+            "error": "retry loop exhausted", "status": "review_error",
+        }
 
     # ------------------------------------------------------------------
     # Review helpers
@@ -4512,6 +4607,10 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
                 # Skip tasks that were not generated successfully
                 if gen_result is None or not gen_result.success:
+                    logger.warning(
+                        "REVIEW: skipping task %s (%s) — no successful generation result",
+                        task.task_id, task.title,
+                    )
                     review_items.append({
                         "task_id": task.task_id,
                         "title": task.title,
@@ -4558,6 +4657,10 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     )
                 generated_code = "\n\n".join(code_parts)
                 if not generated_code.strip():
+                    logger.warning(
+                        "REVIEW: skipping task %s (%s) — generated code is empty",
+                        task.task_id, task.title,
+                    )
                     review_items.append({
                         "task_id": task.task_id,
                         "title": task.title,
@@ -5269,12 +5372,14 @@ class ContextSeedHandlers:
         pass_threshold: Optional[int] = None,
         max_tokens: Optional[int] = None,
         design_max_tokens: Optional[int] = None,
+        design_task_retries: Optional[int] = None,
         fail_on_truncation: Optional[bool] = None,
         check_truncation: Optional[bool] = None,
         strict_truncation: Optional[bool] = None,
         test_timeout_seconds: Optional[int] = None,
         review_temperature: Optional[float] = None,
         review_max_code_chars: Optional[int] = None,
+        review_task_retries: Optional[int] = None,
         development_timeout_seconds: Optional[float] = None,
         auto_commit: Optional[bool] = None,
         scaffold_test_first: Optional[bool] = None,
@@ -5328,12 +5433,14 @@ class ContextSeedHandlers:
             ("pass_threshold", pass_threshold),
             ("max_tokens", max_tokens),
             ("design_max_tokens", design_max_tokens),
+            ("design_task_retries", design_task_retries),
             ("fail_on_truncation", fail_on_truncation),
             ("check_truncation", check_truncation),
             ("strict_truncation", strict_truncation),
             ("test_timeout_seconds", test_timeout_seconds),
             ("review_temperature", review_temperature),
             ("review_max_code_chars", review_max_code_chars),
+            ("review_task_retries", review_task_retries),
             ("development_timeout_seconds", development_timeout_seconds),
             ("auto_commit", auto_commit),
             ("scaffold_test_first", scaffold_test_first),

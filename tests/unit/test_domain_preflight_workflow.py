@@ -691,7 +691,7 @@ class TestRunEnvironmentChecks:
             tmp_path, self._make_deps(),
         )
         init_check = next(c for c in checks if c.check_name == "init_py_exists")
-        assert init_check.status == CheckStatus.FAIL
+        assert init_check.status == CheckStatus.WARN
 
     def test_python_test_source_exists(self, tmp_path):
         # Create source module

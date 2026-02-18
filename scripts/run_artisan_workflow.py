@@ -271,11 +271,34 @@ def main() -> int:
         help="Abort PLAN phase if preflight checks report any failures",
     )
     parser.add_argument(
+        "--retry-incomplete", action="store_true",
+        help=(
+            "Auto-discover incomplete tasks by scanning workflow-result files in "
+            "output-dir. A task is incomplete if its result file is missing or its "
+            "IMPLEMENT phase had zero cost with >1s duration (failed attempt). "
+            "Runs only incomplete tasks; exits 0 if all tasks are already complete."
+        ),
+    )
+    parser.add_argument(
         "--design-max-tokens", type=int, default=None,
         help=(
             "Override max_output_tokens for design phase LLM calls. "
             "Use 16384 or 32768 for complex plans to avoid truncation (stop_reason=max_tokens). "
             "When unset, uses per-task calibration from plan-ingestion seed."
+        ),
+    )
+    parser.add_argument(
+        "--design-task-retries", type=int, default=None,
+        help=(
+            "Number of retries per task on transient API errors during DESIGN phase. "
+            "0 = no retry; total attempts = 1 + retries. Default: 2."
+        ),
+    )
+    parser.add_argument(
+        "--review-task-retries", type=int, default=None,
+        help=(
+            "Number of retries per task on transient API errors during REVIEW phase. "
+            "0 = no retry; total attempts = 1 + retries. Default: 2."
         ),
     )
     parser.add_argument(
@@ -427,6 +450,80 @@ def main() -> int:
                 dr_handoff.parent,
             )
 
+    # ------------------------------------------------------------------
+    # Auto-discover incomplete tasks (--retry-incomplete)
+    # ------------------------------------------------------------------
+    if args.retry_incomplete:
+        if args.task_filter:
+            parser.error("--retry-incomplete and --task-filter are mutually exclusive")
+        try:
+            seed_tasks = json.loads(seed_path.read_text(encoding="utf-8")).get("tasks", [])
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.error("Cannot read seed for --retry-incomplete: %s", exc)
+            return 1
+
+        incomplete: list[str] = []
+        complete: list[str] = []
+
+        # Build index of combined result files (workflow-result-T1-T2-....json)
+        # so we can detect tasks that ran in a batch without per-task files.
+        _out = Path(output_dir)
+        _combined_results: dict[str, Path] = {}  # tid -> combined result path
+        for rf in _out.glob("workflow-result-*.json"):
+            stem = rf.stem.removeprefix("workflow-result-")
+            parts = stem.split("-")
+            # Combined files have multiple task-ID segments (e.g. PI-001d-PI-001e)
+            # Single-task files have one segment (e.g. PI-001d).  Detect by
+            # checking if there are more than the typical 2 hyphen-parts of one ID.
+            task_ids_in_name: list[str] = []
+            i = 0
+            while i < len(parts) - 1:
+                candidate = f"{parts[i]}-{parts[i+1]}"
+                task_ids_in_name.append(candidate)
+                i += 2
+            if len(task_ids_in_name) > 1:
+                for cid in task_ids_in_name:
+                    _combined_results[cid] = rf
+
+        for t in seed_tasks:
+            tid = t["task_id"]
+            # Check per-task file first, then combined result file
+            rp = _out / f"workflow-result-{tid}.json"
+            if not rp.exists():
+                rp_combined = _combined_results.get(tid)
+                if rp_combined is None:
+                    incomplete.append(tid)
+                    continue
+                rp = rp_combined
+            try:
+                r = json.loads(rp.read_text(encoding="utf-8"))
+                impl = next(
+                    (p for p in r.get("phase_results", []) if p.get("phase") == "implement"),
+                    {},
+                )
+                # Zero cost + duration > 1s = attempted but failed (e.g. API overload)
+                if impl.get("cost", 0) == 0 and impl.get("duration_seconds", 0) > 1.0:
+                    incomplete.append(tid)
+                else:
+                    complete.append(tid)
+            except (json.JSONDecodeError, OSError):
+                incomplete.append(tid)
+
+        if not incomplete:
+            logger.info(
+                "All %d tasks have successful results — nothing to retry",
+                len(seed_tasks),
+            )
+            print(f"\nAll {len(seed_tasks)} tasks complete!")
+            return 0
+
+        logger.info(
+            "Auto-discovered %d incomplete task(s) out of %d: %s",
+            len(incomplete), len(seed_tasks), incomplete,
+        )
+        logger.info("Complete tasks (%d): %s", len(complete), complete)
+        args.task_filter = ",".join(incomplete)
+
     # Parse task filter (comma-separated task IDs)
     task_filter: list[str] | None = None
     if args.task_filter:
@@ -559,6 +656,10 @@ def main() -> int:
         handler_kwargs["max_tokens"] = args.max_tokens
     if args.design_max_tokens is not None:
         handler_kwargs["design_max_tokens"] = args.design_max_tokens
+    if args.design_task_retries is not None:
+        handler_kwargs["design_task_retries"] = args.design_task_retries
+    if args.review_task_retries is not None:
+        handler_kwargs["review_task_retries"] = args.review_task_retries
     if args.implement_timeout is not None:
         handler_kwargs["development_timeout_seconds"] = args.implement_timeout
     if args.test_timeout is not None:

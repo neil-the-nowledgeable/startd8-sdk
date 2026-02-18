@@ -25,12 +25,14 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
 from startd8.contractors.protocols import VALIDATE_MODEL_CLAUDE_SONNET
+from startd8.utils.retry import RetryConfig, _is_retryable_exception, _calculate_delay
 from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
 
 __all__ = [
@@ -1487,6 +1489,31 @@ class DesignDocumentationPhase:
                 logger.error("Design documentation phase failed: %s", exc)
                 raise
             except Exception as exc:
+                # Retry transient API errors (connection, overload) before
+                # wrapping in DesignDocumentationError.  Defense-in-depth:
+                # the outer handler in context_seed_handlers also retries,
+                # but this inner retry prevents wasting a full handler-level
+                # attempt on a transient blip mid-iteration.
+                _transient_retry_config = RetryConfig(
+                    max_attempts=1,
+                    base_delay=5.0,
+                    max_delay=60.0,
+                    retryable_exceptions=(ConnectionError, TimeoutError, OSError),
+                    retryable_status_codes=(429, 500, 502, 503, 504, 529),
+                )
+                if _is_retryable_exception(exc, _transient_retry_config):
+                    _delay = _calculate_delay(iteration - 1, _transient_retry_config)
+                    logger.warning(
+                        "Design iteration %d for '%s' hit transient error, "
+                        "retrying in %.1fs: %s",
+                        iteration,
+                        context.feature_name,
+                        _delay,
+                        exc,
+                    )
+                    time.sleep(_delay)
+                    continue  # re-enter the iteration loop
+
                 logger.error(
                     "Error in design documentation iteration %d for '%s': %s",
                     iteration,

@@ -37,7 +37,7 @@ class InitPyExistsRule(PreflightRule):
         else:
             check = EnvironmentCheck(
                 check_name="init_py_exists",
-                status=CheckStatus.FAIL,
+                status=CheckStatus.WARN,
                 message="Missing __init__.py in target directory",
                 detail=f"Expected at: {init_path}",
             )
