@@ -198,6 +198,54 @@ class FeatureQueue:
 
         return added
 
+    def add_features_from_seed(self, seed_path: "Path | str") -> List[FeatureSpec]:
+        """
+        Add features from a context-seed JSON file (plan-ingestion output).
+
+        Bridges the seed task schema to flat FeatureSpec fields:
+          seed task_id          → FeatureSpec.id
+          seed title            → FeatureSpec.name
+          seed config.task_description → FeatureSpec.description
+          seed config.context.target_files → FeatureSpec.target_files
+          seed depends_on       → FeatureSpec.dependencies
+
+        Uses add_feature() internally so resume state is preserved
+        (won't overwrite completed features on re-invocation).
+
+        Args:
+            seed_path: Path to the context-seed JSON file.
+
+        Returns:
+            List of added/updated FeatureSpec objects.
+        """
+        import json as _json
+        from pathlib import Path as _Path
+
+        path = _Path(seed_path)
+        data = _json.loads(path.read_text(encoding="utf-8"))
+        tasks = data.get("tasks", [])
+
+        added = []
+        for task in tasks:
+            task_id = task.get("task_id", task.get("id", ""))
+            title = task.get("title", "(untitled)")
+            config = task.get("config", {})
+            description = config.get("task_description", "")
+            context = config.get("context", {})
+            target_files = context.get("target_files", [])
+            dependencies = task.get("depends_on", [])
+
+            spec = self.add_feature(
+                feature_id=task_id,
+                name=title,
+                description=description,
+                dependencies=dependencies,
+                target_files=target_files,
+            )
+            added.append(spec)
+
+        return added
+
     def get_next_feature(self) -> Optional[FeatureSpec]:
         """
         Get the next feature to process.

@@ -100,7 +100,9 @@ src/startd8/              # Main package
 │   ├── artisan_contractor.py     # ArtisanContractorWorkflow (7-phase orchestrator)
 │   ├── artisan_models.py         # Artisan phase data models
 │   ├── artisan_prompts.py        # Artisan phase prompt templates
-│   ├── context_seed_handlers.py  # Phase handlers (Design/Implement/Review/Finalize)
+│   ├── context_seed_handlers.py  # Phase handlers (Design/Implement/Review/Finalize/Test)
+│   ├── context_schema.py         # Pydantic output models (DesignPhaseOutput, ImplementPhaseOutput, ValidationPhaseOutput)
+│   ├── gate_contracts.py         # Phase boundary validation (QualitySpec, EvaluationSpec)
 │   ├── handoff.py                # Design↔Implementation handoff (two-half split)
 │   ├── checkpoint.py             # Checkpoint/crash recovery
 │   ├── prime_contractor.py       # PrimeContractorWorkflow
@@ -110,6 +112,8 @@ src/startd8/              # Main package
 │   ├── cli_helpers.py            # CLI helper functions
 │   ├── generators/               # Code generators (LeadContractor)
 │   ├── adapters/                 # Instrumentation adapters (ContextCore, Standalone)
+│   ├── contracts/                # Pipeline contract YAML specs
+│   │   └── artisan-pipeline.contract.yaml  # Phase entry/exit requirements + quality gates
 │   └── artisan_phases/           # 12 individual phase implementations
 │       ├── context.py            # Shared phase context
 │       ├── plan_deconstruction.py  # PLAN phase
@@ -141,9 +145,13 @@ src/startd8/              # Main package
 │       ├── plan_ingestion_workflow.py
 │       ├── domain_preflight_workflow.py
 │       ├── critical_review_workflow.py
+│       ├── convergent_review_workflow.py  # Multi-round convergent review
 │       ├── design_polish_workflow.py
 │       ├── architectural_review_log_workflow.py
+│       ├── doc_review_log_workflow.py
 │       ├── iterative_dev_workflow.py
+│       ├── task_tracking_emitter.py       # ContextCore SpanState v2 task emission
+│       ├── schema_versions.py             # Schema version constants
 │       └── preflight_rules/  # Domain-specific preflight rule system
 │
 ├── diagnostics/          # Diagnostic/validation system with auto-fix
@@ -161,23 +169,26 @@ src/startd8/              # Main package
 ├── testing/              # Test assertion utilities
 └── help_content/         # TUI help YAML files (topics, contextual, workflow, advanced)
 
-scripts/                  # Runner and utility scripts (~30 files)
+scripts/                  # Runner and utility scripts (~25 files)
 ├── run_artisan_workflow.py       # Full 7-phase artisan workflow
 ├── run_artisan_design_only.py    # Design half (PLAN→SCAFFOLD→DESIGN)
 ├── run_artisan_implement_only.py # Impl half (IMPLEMENT→TEST→REVIEW→FINALIZE)
 ├── run_artisan_contractor.py     # Main artisan contractor runner
+├── run_prime_workflow.py         # PrimeContractor batch workflow runner
 ├── run_contextcore_workflow.py   # ContextCore integration workflow
 ├── run_iterative_plan_ingestion.py  # Plan ingestion pipeline
+├── emit_task_tracking.py         # ContextCore task tracking emission
 ├── enrich_prime_tasks.py         # Prime task enrichment
 ├── generate_observability_manifest.py  # OTel manifest generation
 └── ...                           # OTel, evaluation, decompose scripts
 
-tests/                    # Test suite (~80 files)
-├── unit/                 # Unit tests (~50 files)
+tests/                    # Test suite (~133 files)
+├── unit/                 # Unit tests
 ├── unit/contractors/     # Contractor-specific unit tests
-├── contractors/          # Contractor integration tests (~23 files)
+├── contractors/          # Contractor integration tests
 ├── integration/          # Integration tests
 ├── e2e/                  # End-to-end tests
+├── plan_validation/      # Plan ingestion validation tests
 └── costs/                # Cost tracking tests
 
 docs/                     # Documentation (~40 files)
@@ -214,9 +225,12 @@ The primary code generation pipeline, split into a design half and implementatio
 
 Key patterns:
 - **Handoff**: Design half (PLAN→SCAFFOLD→DESIGN) produces a handoff file consumed by implementation half (IMPLEMENT→TEST→REVIEW→FINALIZE)
-- **Context Seed Handlers**: `DesignPhaseHandler`, `ImplementPhaseHandler`, `ReviewPhaseHandler`, `FinalizePhaseHandler` in `context_seed_handlers.py`
+- **Context Seed Handlers**: `DesignPhaseHandler`, `ImplementPhaseHandler`, `TestPhaseHandler`, `ReviewPhaseHandler`, `FinalizePhaseHandler` in `context_seed_handlers.py`
 - **HandlerConfig.from_config()**: Loads handler configuration from artisan YAML config
 - **Checkpoint/Recovery**: Per-phase crash recovery via `checkpoint.py`; generation results saved for resume
+- **Resume Caching**: IMPLEMENT, TEST, and REVIEW phases persist results to `.startd8/state/` with 3-layer validation (schema version → source checksum → per-task file hash)
+- **Contract Validation**: `artisan-pipeline.contract.yaml` defines entry/exit requirements per phase with QualitySpec and EvaluationSpec; validated by `gate_contracts.py`
+- **Per-task Error Guards**: Each phase wraps per-task work in try/except to prevent single-task failures from aborting the entire phase
 - **Per-phase timeouts**: Configurable via CLI args
 
 ### Key Classes
@@ -262,10 +276,11 @@ The SDK uses `pyproject.toml` entry points for plugin discovery:
 [project.entry-points."startd8.providers"]
 anthropic, openai, ollama, gemini, mistral, mock
 
-# Workflows (11 registered)
+# Workflows (13 registered)
 [project.entry-points."startd8.workflows"]
 pipeline, doc-enhancement, iterative-dev, design-polish,
-critical-review, lead-contractor, lead-contractor-contextcore,
+critical-review, convergent-review, lead-contractor,
+lead-contractor-contextcore, architectural-review-log,
 policy-analysis, plain-language, plan-ingestion, domain-preflight
 
 # Contractor plugins
@@ -367,8 +382,10 @@ Key docs in `docs/`:
 - `FEATURE_WORKFLOW_GUIDE.md` - Feature workflow guide
 - `LOKI_SETUP_GUIDE.md` - Observability/Loki setup
 - `PATTERN-truncation-detection.md` - Code-aware truncation detection pattern
+- `PATTERN-silent-telemetry-loss.md` - OTel log bridge init gap pattern
+- `ARTISAN_WORKFLOW_ISSUES_CATALOG.md` - Known artisan pipeline issues and fixes
 - `docs/design/` - Design documents for major features
-- `docs/capability-index/` - Capability tracking across versions
+- `docs/capability-index/` - Capability tracking across versions (benefits, capabilities, functional requirements, agent card, MCP tools)
 
 ## Lessons Learned
 

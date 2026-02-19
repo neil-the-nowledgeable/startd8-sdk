@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import sys
+from pathlib import Path
 from typing import Optional
 
 from ..domain_preflight_models import TaskDomain
@@ -50,6 +52,15 @@ def _validate_no_relative_imports(code: str, enrichment) -> list:
     return issues
 
 
+_DEPS_SOURCE_CONFIDENCE = {
+    "pyproject": 1.0,
+    "requirements_txt": 0.85,
+    "setup_cfg": 0.85,
+    "venv_only": 0.5,
+    "stdlib_only": 0.2,
+}
+
+
 def _validate_deps_available(code: str, enrichment) -> list:
     """Check that imported top-level packages are in available deps."""
     issues = []
@@ -73,6 +84,10 @@ def _validate_deps_available(code: str, enrichment) -> list:
     if hasattr(sys, "stdlib_module_names"):
         importable |= sys.stdlib_module_names
 
+    # Determine confidence from deps_source
+    deps_source = getattr(enrichment, "deps_source", None)
+    confidence = _DEPS_SOURCE_CONFIDENCE.get(deps_source, 1.0) if deps_source else 1.0
+
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
@@ -82,6 +97,7 @@ def _validate_deps_available(code: str, enrichment) -> list:
                         "validator": "deps_available",
                         "message": f"Import '{alias.name}' \u2014 top-level '{top}' not in available deps",
                         "line": node.lineno,
+                        "confidence": confidence,
                     })
         elif isinstance(node, ast.ImportFrom) and node.module and (not node.level or node.level == 0):
             top = node.module.split(".")[0]
@@ -90,6 +106,7 @@ def _validate_deps_available(code: str, enrichment) -> list:
                     "validator": "deps_available",
                     "message": f"Import from '{node.module}' \u2014 top-level '{top}' not in available deps",
                     "line": node.lineno,
+                    "confidence": confidence,
                 })
     return issues
 
@@ -479,9 +496,23 @@ class _StubEnrichment:
     validators that depend on enrichment data (like ``deps_available``
     needing the "Only import from:" constraint) will gracefully return
     empty issues.
+
+    When *cwd* is provided, attempts file-system heuristic to determine
+    ``deps_source`` for confidence propagation.
     """
 
-    prompt_constraints: tuple = ()
+    def __init__(self, cwd: str | None = None):
+        self.prompt_constraints: tuple = ()
+        self.deps_source: str | None = None
+
+        if cwd:
+            cwd_path = Path(cwd)
+            if (cwd_path / "pyproject.toml").exists():
+                self.deps_source = "pyproject"
+            elif (cwd_path / "requirements.txt").exists():
+                self.deps_source = "requirements_txt"
+            elif (cwd_path / "setup.cfg").exists():
+                self.deps_source = "setup_cfg"
 
 
 def run_validator(name: str, file_paths: list) -> None:
@@ -499,7 +530,7 @@ def run_validator(name: str, file_paths: list) -> None:
         raise ValueError(msg)
 
     validator_fn = _VALIDATORS[name]
-    stub = _StubEnrichment()
+    stub = _StubEnrichment(cwd=os.getcwd())
     all_issues = []
 
     for fpath in file_paths:

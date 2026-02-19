@@ -7,9 +7,11 @@ The original module re-exports these for backward compatibility.
 
 from __future__ import annotations
 
+import ast
+import configparser
 import re
 from pathlib import Path
-from typing import List, Set
+from typing import Dict, List, Set
 
 
 # ---------------------------------------------------------------------------
@@ -136,3 +138,216 @@ def normalize_dep_name(name: str) -> str:
     name = re.split(r"\[", name, maxsplit=1)[0]
     name = re.split(r"[><=!~;]", name, maxsplit=1)[0]
     return name.strip().lower().replace("-", "_")
+
+
+# ---------------------------------------------------------------------------
+# Fallback dependency file parsers (Step 2)
+# ---------------------------------------------------------------------------
+
+def parse_requirements_txt(file_path: Path) -> List[str]:
+    """Parse dependency names from a requirements.txt file.
+
+    Skips comments, blank lines, flags (-r, -e, --index-url), and
+    strips inline comments and environment markers.
+    Returns normalized dependency names.
+    """
+    if not file_path.exists():
+        return []
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except Exception:
+        return []
+
+    deps: List[str] = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Skip pip flags
+        if line.startswith(("-r", "-e", "-c", "--")):
+            continue
+        # Strip inline comments
+        if " #" in line:
+            line = line[:line.index(" #")].strip()
+        # Strip environment markers (e.g. ; python_version >= "3.8")
+        if ";" in line:
+            line = line[:line.index(";")].strip()
+        if not line:
+            continue
+        normalized = normalize_dep_name(line)
+        if normalized:
+            deps.append(normalized)
+    return deps
+
+
+def parse_setup_cfg_deps(file_path: Path) -> List[str]:
+    """Parse dependency names from setup.cfg [options] install_requires.
+
+    Uses stdlib configparser. Handles multi-line values.
+    Returns normalized dependency names.
+    """
+    if not file_path.exists():
+        return []
+    try:
+        cfg = configparser.ConfigParser()
+        cfg.read(str(file_path), encoding="utf-8")
+    except Exception:
+        return []
+
+    deps: List[str] = []
+    raw = cfg.get("options", "install_requires", fallback="")
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        normalized = normalize_dep_name(line)
+        if normalized:
+            deps.append(normalized)
+    return deps
+
+
+# ---------------------------------------------------------------------------
+# Existing-file import extraction (Step 3)
+# ---------------------------------------------------------------------------
+
+def extract_top_level_imports(file_path: Path) -> Set[str]:
+    """Extract top-level package names from import statements in a Python file.
+
+    Uses ast.parse to find Import and ImportFrom nodes.
+    Returns the first component of each dotted import path.
+    Skips relative imports. Returns empty set on missing file or syntax error.
+    """
+    if not file_path.exists():
+        return set()
+    try:
+        text = file_path.read_text(encoding="utf-8")
+    except Exception:
+        return set()
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return set()
+
+    packages: Set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                packages.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            # Skip relative imports
+            if node.level and node.level > 0:
+                continue
+            if node.module:
+                packages.add(node.module.split(".")[0])
+    return packages
+
+
+# ---------------------------------------------------------------------------
+# Task description package scanning (Step 4)
+# ---------------------------------------------------------------------------
+
+# Curated mapping of common PyPI/colloquial names to their import names.
+# Covers data science, web frameworks, HTTP, CLI, testing, AWS, observability.
+_COMMON_PACKAGES: Dict[str, str] = {
+    # Data science / ML
+    "scikit-learn": "sklearn",
+    "scikit_learn": "sklearn",
+    "sklearn": "sklearn",
+    "numpy": "numpy",
+    "pandas": "pandas",
+    "scipy": "scipy",
+    "matplotlib": "matplotlib",
+    "seaborn": "seaborn",
+    "tensorflow": "tensorflow",
+    "pytorch": "torch",
+    "torch": "torch",
+    "keras": "keras",
+    "xgboost": "xgboost",
+    "lightgbm": "lightgbm",
+    "pillow": "PIL",
+    "opencv": "cv2",
+    "opencv-python": "cv2",
+    # Web frameworks
+    "flask": "flask",
+    "django": "django",
+    "fastapi": "fastapi",
+    "starlette": "starlette",
+    "sanic": "sanic",
+    "bottle": "bottle",
+    "tornado": "tornado",
+    # HTTP / networking
+    "requests": "requests",
+    "httpx": "httpx",
+    "aiohttp": "aiohttp",
+    "urllib3": "urllib3",
+    "websockets": "websockets",
+    "grpcio": "grpc",
+    # Data / serialization
+    "pyyaml": "yaml",
+    "ruamel.yaml": "ruamel",
+    "toml": "toml",
+    "tomli": "tomli",
+    "msgpack": "msgpack",
+    "protobuf": "google",
+    "orjson": "orjson",
+    # CLI / terminal
+    "typer": "typer",
+    "click": "click",
+    "rich": "rich",
+    "colorama": "colorama",
+    "tqdm": "tqdm",
+    # Testing
+    "pytest": "pytest",
+    "mock": "mock",
+    "hypothesis": "hypothesis",
+    "factory-boy": "factory",
+    # Database
+    "sqlalchemy": "sqlalchemy",
+    "psycopg2": "psycopg2",
+    "pymongo": "pymongo",
+    "redis": "redis",
+    "celery": "celery",
+    # AWS / Cloud
+    "boto3": "boto3",
+    "botocore": "botocore",
+    # Observability
+    "opentelemetry": "opentelemetry",
+    "prometheus-client": "prometheus_client",
+    "sentry-sdk": "sentry_sdk",
+    # Pydantic / validation
+    "pydantic": "pydantic",
+    "marshmallow": "marshmallow",
+    "attrs": "attr",
+    # Async
+    "trio": "trio",
+    "anyio": "anyio",
+    "uvicorn": "uvicorn",
+    # Misc
+    "jinja2": "jinja2",
+    "beautifulsoup4": "bs4",
+    "lxml": "lxml",
+    "cryptography": "cryptography",
+    "paramiko": "paramiko",
+    "arrow": "arrow",
+    "pendulum": "pendulum",
+    "dateutil": "dateutil",
+    "python-dateutil": "dateutil",
+}
+
+
+def scan_task_description_packages(description: str) -> Set[str]:
+    """Scan a task description for mentions of common Python packages.
+
+    Uses word-boundary regex matching (case-insensitive) against
+    ``_COMMON_PACKAGES`` keys. Returns the corresponding import names
+    (not PyPI names).
+    """
+    if not description:
+        return set()
+    result: Set[str] = set()
+    desc_lower = description.lower()
+    for pkg_name, import_name in _COMMON_PACKAGES.items():
+        # Word-boundary match to avoid substring false positives
+        if re.search(r"\b" + re.escape(pkg_name) + r"\b", desc_lower):
+            result.add(import_name)
+    return result

@@ -54,6 +54,10 @@ from .preflight_rules._helpers import (
     scan_optional_dep_guards as _scan_optional_dep_guards_impl,
     scan_patch_paths as _scan_patch_paths_impl,
     normalize_dep_name as _normalize_dep_name_impl,
+    parse_requirements_txt as _parse_requirements_txt,
+    parse_setup_cfg_deps as _parse_setup_cfg_deps,
+    extract_top_level_imports as _extract_top_level_imports,
+    scan_task_description_packages as _scan_task_description_packages,
 )
 
 logger = logging.getLogger(__name__)
@@ -184,8 +188,9 @@ class DomainPreflightWorkflow(WorkflowBase):
 
     @staticmethod
     def _scan_available_deps(project_root: Path) -> AvailableDeps:
-        """Scan pyproject.toml + stdlib + project packages."""
+        """Scan pyproject.toml + fallbacks + stdlib + project packages."""
         deps = AvailableDeps()
+        source = "stdlib_only"
 
         # Stdlib
         if hasattr(sys, "stdlib_module_names"):
@@ -193,7 +198,7 @@ class DomainPreflightWorkflow(WorkflowBase):
         else:
             deps.stdlib = set(_STDLIB_FALLBACK)
 
-        # pyproject.toml
+        # pyproject.toml (highest confidence)
         pyproject_path = project_root / "pyproject.toml"
         if pyproject_path.exists():
             try:
@@ -225,8 +230,25 @@ class DomainPreflightWorkflow(WorkflowBase):
                             normalized.add(_normalize_dep_name(dep))
                         deps.optional[group] = normalized
 
+                    source = "pyproject"
                 except Exception as exc:
                     logger.warning("Failed to parse pyproject.toml: %s", exc)
+
+        # Fallback: requirements.txt
+        if source != "pyproject":
+            req_path = project_root / "requirements.txt"
+            parsed = _parse_requirements_txt(req_path)
+            if parsed:
+                deps.runtime.update(parsed)
+                source = "requirements_txt"
+
+        # Fallback: setup.cfg
+        if source not in ("pyproject", "requirements_txt"):
+            cfg_path = project_root / "setup.cfg"
+            parsed = _parse_setup_cfg_deps(cfg_path)
+            if parsed:
+                deps.runtime.update(parsed)
+                source = "setup_cfg"
 
         # Project packages: walk src/ for top-level __init__.py dirs
         src_dir = project_root / "src"
@@ -256,6 +278,11 @@ class DomainPreflightWorkflow(WorkflowBase):
                             deps.installed.add(item.stem)
                     break  # Only scan the first matching site-packages
 
+        # Promote to venv_only if no manifest found but venv packages exist
+        if source == "stdlib_only" and deps.installed:
+            source = "venv_only"
+
+        deps.source = source
         return deps
 
     # ------------------------------------------------------------------
@@ -445,6 +472,37 @@ class DomainPreflightWorkflow(WorkflowBase):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _augment_deps_for_task(
+        deps: AvailableDeps,
+        target_file: str,
+        project_root: Path,
+        task_description: str = "",
+    ) -> AvailableDeps:
+        """Create a per-task copy of deps augmented with blessed imports and hints.
+
+        Shallow-copies *deps* to avoid cross-task mutation, then:
+        1. Extracts top-level imports from the existing target file (blessed).
+        2. Scans the task description for mentions of common packages (hinted).
+        """
+        import copy
+        task_deps = copy.copy(deps)
+        # Ensure mutable sets (copy.copy shares the same set objects)
+        task_deps.blessed_imports = set(deps.blessed_imports)
+        task_deps.hinted_packages = set(deps.hinted_packages)
+
+        # Blessed imports from existing target file
+        target_path = project_root / target_file
+        task_deps.blessed_imports |= _extract_top_level_imports(target_path)
+
+        # Hinted packages from task description
+        if task_description:
+            task_deps.hinted_packages |= _scan_task_description_packages(
+                task_description
+            )
+
+        return task_deps
+
+    @staticmethod
     def _build_enrichment(
         task_id: str,
         domain: TaskDomain,
@@ -453,8 +511,14 @@ class DomainPreflightWorkflow(WorkflowBase):
         project_root: Path,
         available_deps: AvailableDeps,
         checks: List[EnvironmentCheck],
+        task_description: str = "",
     ) -> TaskEnrichment:
         """Build prompt constraints and validator specs for a task."""
+        # Per-task augmentation of deps with blessed imports + description hints
+        task_deps = DomainPreflightWorkflow._augment_deps_for_task(
+            available_deps, target_file, project_root, task_description,
+        )
+
         target_path = project_root / target_file
         ctx = RuleContext(
             target_file=target_file,
@@ -462,7 +526,7 @@ class DomainPreflightWorkflow(WorkflowBase):
             target_dir=target_path.parent,
             project_root=project_root,
             domain=domain,
-            available_deps=available_deps,
+            available_deps=task_deps,
         )
         contribution = PreflightRuleRegistry.evaluate_all(ctx)
 
@@ -473,6 +537,7 @@ class DomainPreflightWorkflow(WorkflowBase):
             environment_checks=checks,
             prompt_constraints=list(contribution.constraints),
             post_generation_validators=list(contribution.validators),
+            deps_source=task_deps.source,
         )
 
         # For package-module domain, populate available_siblings from
@@ -646,9 +711,11 @@ class DomainPreflightWorkflow(WorkflowBase):
                     )
 
                 # Enrich
+                task_description = task_config.get("task_description", "")
                 enrichment = self._build_enrichment(
                     task_id, domain, classification.reasoning,
                     target_file, project_root, available_deps, checks,
+                    task_description=task_description,
                 )
                 enrichments.append(enrichment)
                 state.enriched_count += 1
@@ -693,6 +760,8 @@ class DomainPreflightWorkflow(WorkflowBase):
             enriched_seed["_preflight"] = {
                 "workflow_version": self.metadata.version,
                 "available_deps_count": len(available_deps.all_importable),
+                "deps_source": available_deps.source,
+                "deps_confidence": available_deps.confidence,
                 "check_summary": check_summary,
                 "domain_summary": domain_summary,
                 "generated_at": datetime.now(timezone.utc).isoformat(),

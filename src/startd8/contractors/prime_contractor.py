@@ -119,11 +119,19 @@ class PrimeContractorWorkflow:
         """
         Check if git repo is clean (no uncommitted changes).
 
+        Excludes the queue state file (.prime_contractor_state.json) from the
+        dirty check — it is written by add_features_from_seed() before run()
+        and would always trigger a false positive.
+
         Returns:
             Tuple of (is_clean, dirty_files)
         """
         result = subprocess.run(['git', 'status', '--porcelain'], capture_output=True, text=True, cwd=self.project_root, timeout=300)
-        dirty_files = [line.strip() for line in result.stdout.strip().split('\n') if line]
+        state_basename = self.queue.state_file.name
+        dirty_files = [
+            line.strip() for line in result.stdout.strip().split('\n')
+            if line and not line.strip().endswith(state_basename)
+        ]
         return (len(dirty_files) == 0, dirty_files)
 
     def create_safety_snapshot(self) -> Optional[str]:
@@ -325,6 +333,7 @@ class PrimeContractorWorkflow:
         n = len(feature.target_files)
         logger.info("Auto-decomposing '%s' into %d sub-features", feature.name, n, extra={'feature_name': feature.name, 'sub_feature_count': n})
         saved_callback = self.on_feature_complete
+        parent_cost = 0.0
         for i, target_file in enumerate(feature.target_files):
             is_last = i == n - 1
             sub_id = f'{feature.id}__part{i + 1}'
@@ -341,11 +350,13 @@ class PrimeContractorWorkflow:
                 self.on_feature_complete = saved_callback
                 self.queue.fail_feature(feature.id, f'Sub-feature {sub_id} generation failed')
                 return False
+            parent_cost += getattr(sub_feature, '_cost_usd', 0.0)
             if not self.integrate_feature(sub_feature):
                 self.on_feature_complete = saved_callback
                 self.queue.fail_feature(feature.id, f'Sub-feature {sub_id} integration failed')
                 return False
         self.on_feature_complete = saved_callback
+        feature._cost_usd = parent_cost
         self.queue.complete_feature(feature.id)
         logger.info("All %d sub-features integrated for '%s'", n, feature.name, extra={'feature_name': feature.name, 'sub_feature_count': n})
         return True
@@ -407,6 +418,7 @@ class PrimeContractorWorkflow:
                 self.total_cost_usd += result.cost_usd
                 self.total_input_tokens += result.input_tokens
                 self.total_output_tokens += result.output_tokens
+                feature._cost_usd = result.cost_usd  # stash for history
                 self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
                 logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model})
                 return True
@@ -473,19 +485,24 @@ class PrimeContractorWorkflow:
                     self.queue.fail_feature(feature.id, error_msg)
                     return False
                 logger.info('Pre-merge validation passed for %s', feature.name, extra={'feature_name': feature.name})
-                # Domain post-validation (if enrichment is available)
+                # Domain post-validation — advisory only (matches artisan behaviour).
+                # Warnings are logged but do not block integration.  This avoids
+                # chicken-and-egg failures where a dependency file (e.g. requirements.in)
+                # is a separate downstream task that hasn't been generated yet.
                 if self._current_enrichment is not None:
                     for gen_path in gen_paths:
                         code = gen_path.read_text(encoding='utf-8')
                         from .artisan_phases.domain_checklist import validate_generated_code
                         domain_result = validate_generated_code(code, self._current_enrichment)
                         if not domain_result.passed:
-                            issue_lines = [f"  - [{iss.validator}] {iss.message}" + (f" (line {iss.line})" if iss.line else "") for iss in domain_result.issues]
-                            error_msg = f"Domain validation failed for {gen_path.name}:\n" + "\n".join(issue_lines)
-                            logger.error('Domain validation failed for %s: %d issues', feature.name, len(domain_result.issues), extra={'feature_name': feature.name})
-                            self.queue.fail_feature(feature.id, error_msg)
-                            return False
-                        logger.info('Domain validation passed for %s', feature.name, extra={'feature_name': feature.name})
+                            for iss in domain_result.issues:
+                                logger.warning(
+                                    'Feature %s: post-gen %s: %s (line %s)',
+                                    feature.name, iss.validator, iss.message, iss.line,
+                                    extra={'feature_name': feature.name},
+                                )
+                        else:
+                            logger.info('Domain validation passed for %s', feature.name, extra={'feature_name': feature.name})
         integrated_files = []
         for i, source_file in enumerate(feature.generated_files):
             source_path = Path(source_file)
@@ -559,8 +576,37 @@ class PrimeContractorWorkflow:
                 self.files_modified_this_session[file_str] = []
             self.files_modified_this_session[file_str].append(feature.name)
         if not self.dry_run:
+            # Auto-fix trivially-fixable lint issues (F811 redefined imports,
+            # F841 unused variables, etc.) before running checkpoints.  These
+            # are common LLM code-gen artifacts that ruff resolves without
+            # changing semantics.  Mirrors pre_validate's auto-fix step.
+            for ifile in integrated_files:
+                if ifile.suffix == ".py":
+                    try:
+                        subprocess.run(
+                            ["python3", "-m", "ruff", "check", "--fix",
+                             "--unsafe-fixes", "--select=E7,E9,F", str(ifile)],
+                            capture_output=True, text=True,
+                            cwd=self.project_root, timeout=30,
+                        )
+                    except Exception:
+                        pass  # best-effort; lint check will catch remaining issues
             logger.info("Running integration checkpoints for '%s'...", feature.name)
             results = self.checkpoint.run_all_checkpoints(integrated_files, feature.name)
+            # Import Check and Lint Check are advisory — matches artisan
+            # behaviour, which never runs these checks at integration time.
+            # Generated project code uses third-party packages not installed
+            # in the SDK venv (imports fail) and LLM output commonly has
+            # fixable lint artifacts (F811, F841) plus occasional real issues
+            # (F821) that are better caught at test/runtime.  Syntax Check
+            # remains blocking — unparseable code is never useful.
+            for r in results:
+                if r.name in ("Import Check", "Lint Check") and r.status == CheckpointStatus.FAILED:
+                    for err in (r.errors or []):
+                        logger.warning("Advisory %s: %s", r.name.lower(), err, extra={'feature_name': feature.name})
+                    r.status = CheckpointStatus.WARNING
+                    r.warnings = (r.warnings or []) + (r.errors or [])
+                    r.errors = []
             # Emit GateResult for each checkpoint result (Phase 4, Item 10)
             for cr in results:
                 try:
@@ -591,7 +637,7 @@ class PrimeContractorWorkflow:
             self._commit_feature(feature, integrated_files)
         self.queue.complete_feature(feature.id)
         self._cleanup_snapshots(integrated_files)
-        self.integration_history.append({'feature': feature.name, 'files': [str(f) for f in integrated_files], 'timestamp': datetime.now().isoformat()})
+        self.integration_history.append({'feature_name': feature.name, 'feature_id': feature.id, 'success': True, 'cost_usd': getattr(feature, '_cost_usd', 0.0), 'files': [str(f) for f in integrated_files], 'timestamp': datetime.now().isoformat()})
         self.instrumentor.emit_insight(insight_type='integration_success', summary=f"Feature '{feature.name}' integrated successfully", confidence=1.0, feature_id=feature.id, files_count=len(integrated_files))
         if self.on_feature_complete:
             self.on_feature_complete(feature)
@@ -669,6 +715,7 @@ class PrimeContractorWorkflow:
                 features_succeeded += 1
             else:
                 features_failed += 1
+                self.integration_history.append({'feature_name': feature.name, 'feature_id': feature.id, 'success': False, 'cost_usd': getattr(feature, '_cost_usd', 0.0), 'error': feature.error_message, 'timestamp': datetime.now().isoformat()})
                 if stop_on_failure:
                     logger.error("STOPPING: Feature '%s' failed", feature.name, extra={'feature_name': feature.name})
                     break

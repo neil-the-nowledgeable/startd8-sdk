@@ -44,6 +44,7 @@ from ..models import (
 from ...agents import BaseAgent
 from ...model_catalog import Models
 from ...utils.agent_resolution import resolve_agent_spec
+from ...utils.retry import RetryConfig
 from ...utils.code_extraction import extract_code_from_response
 from ...logging_config import get_logger
 from ...costs.pricing import PricingService
@@ -534,9 +535,21 @@ class LeadContractorWorkflow(WorkflowBase):
         # Extract ContextCore project context
         project_context = self._extract_project_context(config)
 
-        # Resolve agents (forward max_tokens if configured)
+        # Resolve agents (forward max_tokens and retry config)
         agent_max_tokens = config.get("max_tokens")
-        resolve_kwargs = {"max_tokens": agent_max_tokens} if agent_max_tokens else {}
+        resolve_kwargs: Dict[str, Any] = {}
+        if agent_max_tokens:
+            resolve_kwargs["max_tokens"] = agent_max_tokens
+        # Enable retry by default for transient API errors (429, 529, 5xx)
+        resolve_kwargs["retry_config"] = config.get(
+            "retry_config",
+            RetryConfig(
+                max_attempts=3,
+                base_delay=1.0,
+                max_delay=60.0,
+                retryable_status_codes=(429, 500, 502, 503, 504, 529),
+            ),
+        )
         try:
             lead_agent = resolve_agent_spec(lead_spec, **resolve_kwargs)
             drafter_agent = resolve_agent_spec(drafter_spec, **resolve_kwargs)
@@ -1122,9 +1135,21 @@ class LeadContractorWorkflow(WorkflowBase):
 
         project_context = self._extract_project_context(config)
 
-        # Resolve agents (forward max_tokens if configured)
+        # Resolve agents (forward max_tokens and retry config)
         agent_max_tokens = config.get("max_tokens")
-        resolve_kwargs = {"max_tokens": agent_max_tokens} if agent_max_tokens else {}
+        resolve_kwargs: Dict[str, Any] = {}
+        if agent_max_tokens:
+            resolve_kwargs["max_tokens"] = agent_max_tokens
+        # Enable retry by default for transient API errors (429, 529, 5xx)
+        resolve_kwargs["retry_config"] = config.get(
+            "retry_config",
+            RetryConfig(
+                max_attempts=3,
+                base_delay=1.0,
+                max_delay=60.0,
+                retryable_status_codes=(429, 500, 502, 503, 504, 529),
+            ),
+        )
         try:
             lead_agent = resolve_agent_spec(lead_spec, **resolve_kwargs)
             drafter_agent = resolve_agent_spec(drafter_spec, **resolve_kwargs)

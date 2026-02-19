@@ -331,6 +331,9 @@ class SeedTask:
     # Maps target_file → "primary" | "shared" | "stub".
     # When present, artisan uses this instead of re-deriving from design docs.
     file_scope: dict[str, str]
+    # Dependency allowlist source and confidence (Gate 5)
+    deps_source: Optional[str] = None
+    deps_confidence: float = 1.0
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> SeedTask:
@@ -366,6 +369,17 @@ class SeedTask:
                 entry.get("task_id", "?"),
             )
 
+        # Compute deps_confidence from deps_source
+        deps_source = enrichment.get("deps_source")
+        _source_confidence = {
+            "pyproject": 1.0,
+            "requirements_txt": 0.85,
+            "setup_cfg": 0.85,
+            "venv_only": 0.5,
+            "stdlib_only": 0.2,
+        }
+        deps_confidence = _source_confidence.get(deps_source, 1.0) if deps_source else 1.0
+
         task = cls(
             task_id=entry.get("task_id", ""),
             title=entry.get("title", ""),
@@ -390,6 +404,8 @@ class SeedTask:
             design_doc_sections=context.get("design_doc_sections", []),
             artifact_types_addressed=context.get("artifact_types_addressed", []),
             file_scope=context.get("_file_scope", {}),
+            deps_source=deps_source,
+            deps_confidence=deps_confidence,
         )
         if not task.task_id:
             raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
@@ -4476,6 +4492,45 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "review prompt — appending truncation warning at end"
                 )
                 prompt += "\n" + truncation_section
+
+        # ── Gate 5: Allowlist confidence advisory ──────────────────────
+        deps_confidence = getattr(task, "deps_confidence", 1.0)
+        deps_source = getattr(task, "deps_source", None)
+        if deps_confidence < 0.8 and test_results:
+            # Check if any deps_available failures exist
+            has_deps_issues = any(
+                r.get("validator") == "deps_available" and not r.get("passed", True)
+                for r in test_results.get("results", [])
+            )
+            if has_deps_issues:
+                parts = [
+                    "\n## DEPENDENCY ALLOWLIST ADVISORY (Gate 5)\n",
+                    f"The dependency allowlist was built from source={deps_source!r} "
+                    f"(confidence={deps_confidence:.2f}).",
+                ]
+                if deps_confidence <= 0.2:
+                    parts.append(
+                        "Only stdlib modules are known — third-party import "
+                        "violations are **likely false positives**."
+                    )
+                elif deps_confidence <= 0.5:
+                    parts.append(
+                        "Allowlist was built from venv scan only — some "
+                        "dependencies may be missing from the known set."
+                    )
+                parts.append(
+                    "**Do NOT penalize the score for import violations when "
+                    "allowlist confidence is low.** Focus review on code "
+                    "quality, correctness, and design compliance instead.\n"
+                )
+                advisory_section = "\n".join(parts)
+                if "## Review Instructions" in prompt:
+                    prompt = prompt.replace(
+                        "## Review Instructions",
+                        advisory_section + "\n## Review Instructions",
+                    )
+                else:
+                    prompt += "\n" + advisory_section
 
         return prompt
 

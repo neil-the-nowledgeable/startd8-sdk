@@ -2771,6 +2771,100 @@ class PlanIngestionWorkflow(WorkflowBase):
                 source_checksum_val=source_checksum_val,
             )
 
+        # Prime route: emit prime-context-seed.json (symmetric with artisan)
+        if route == ContractorRoute.PRIME and parsed_plan is not None:
+            costs = step_costs or {}
+            total_cost = sum(costs.values())
+
+            onboarding_prime = self._load_onboarding_metadata(
+                context_files, output_dir
+            ) if context_files else None
+            _file_ownership = (
+                onboarding_prime.get("file_ownership") if onboarding_prime else None
+            )
+
+            tasks = self._derive_tasks_from_features(
+                parsed_plan.features,
+                parsed_plan.dependency_graph,
+                file_ownership=_file_ownership,
+                requirement_to_feature=(translation_quality or {}).get(
+                    "requirement_to_feature", {}
+                ),
+                artifact_to_feature=(translation_quality or {}).get(
+                    "artifact_to_feature", {}
+                ),
+                requirement_hints=requirement_hints or {},
+                output_path_conventions=(
+                    onboarding_prime.get("output_path_conventions")
+                    if isinstance(onboarding_prime, dict)
+                    else None
+                ),
+            )
+
+            # Build artifacts dict (no architectural_context or design_calibration)
+            artifacts_prime: Dict[str, Any] = {
+                "plan_document_path": str(doc_path),
+                "review_config_path": str(config_path),
+            }
+
+            onboarding_var_prime: Optional[Dict[str, Any]] = None
+            source_checksum_prime: Optional[str] = None
+            if onboarding_prime:
+                onboarding_var_prime = onboarding_prime
+                artifacts_prime["onboarding"] = onboarding_prime
+                amp = onboarding_prime.get("artifact_manifest_path")
+                pcp = onboarding_prime.get("project_context_path")
+                if amp:
+                    artifacts_prime["artifact_manifest_path"] = str(amp)
+                if pcp:
+                    artifacts_prime["project_context_path"] = str(pcp)
+                sc = onboarding_prime.get("source_checksum") or onboarding_prime.get(
+                    "export_provenance_checksum"
+                )
+                if sc and isinstance(sc, str):
+                    artifacts_prime["source_checksum"] = sc
+                    source_checksum_prime = sc
+
+            context_files_list_prime = _context_files_with_checksums(
+                context_files, base_dir=output_dir
+            ) if context_files else None
+
+            seed_prime = ArtisanContextSeed(
+                generated_at=datetime.now(timezone.utc).isoformat(),
+                source_checksum=source_checksum_prime,
+                plan=parsed_plan.to_seed_dict(),
+                complexity=complexity.to_seed_dict(),
+                tasks=tasks,
+                artifacts=artifacts_prime,
+                ingestion_metrics={
+                    **{f"{k}_cost": v for k, v in costs.items()},
+                    "total_cost": total_cost,
+                },
+                architectural_context=None,
+                design_calibration=None,
+                onboarding=onboarding_var_prime,
+                context_files=context_files_list_prime,
+            )
+
+            seed_prime_dict = seed_prime.to_dict()
+            _validate_context_seed(seed_prime_dict)
+            prime_seed_path = output_dir / "prime-context-seed.json"
+            atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
+
+            # Mottainai: extend artifact inventory
+            self._extend_inventory_with_ingestion(
+                output_dir=output_dir,
+                doc_path=doc_path,
+                context_seed_path=prime_seed_path,
+                design_calibration=None,
+                context_files=context_files,
+                source_checksum_val=source_checksum_prime,
+            )
+
+            # Track as context_seed_path for return value
+            if context_seed_path is None:
+                context_seed_path = prime_seed_path
+
         # Task tracking artifact generation (opt-in)
         tracking_result = None
         if tracking_config is not None and parsed_plan is not None:
