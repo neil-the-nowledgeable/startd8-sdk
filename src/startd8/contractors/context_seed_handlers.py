@@ -3676,7 +3676,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
             return [py, "-m", "pylint", *file_args]
         if validator_name == "syntax_check":
             return [py, "-m", "py_compile", *file_args]
-        if validator_name == "import_check":
+        if validator_name in ("import_check", "imports_resolve"):
             module_name = self._file_to_module(target_files[0], project_root) if target_files else ""
             if module_name:
                 return [py, "-c", f"import {module_name}"]

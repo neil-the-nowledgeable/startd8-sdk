@@ -346,6 +346,12 @@ class TestSV008ValidatorNameAlignment:
             "WCP-008 not implemented."
         )
 
+        # Verify the subprocess entry point is actually importable (P3 fix)
+        from startd8.workflows.builtin.preflight_rules.rules_validators import (
+            run_validator,
+        )
+        assert callable(run_validator)
+
 
 # ---------------------------------------------------------------------------
 # SV-003-propagated: Span event emitted on successful propagation
