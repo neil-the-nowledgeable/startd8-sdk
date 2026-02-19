@@ -2031,8 +2031,15 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         2. ``compile()`` syntax validation for Python files.
         3. Line-count ratio against ``task.estimated_loc`` (flag if < 30%).
 
-        Returns a dict keyed by task_id.  Only tasks with at least one
-        positive signal are included; clean tasks are omitted.
+        Returns:
+            Dict mapping task_id to a flag dict with keys:
+            ``detected`` (bool), ``max_confidence`` (float),
+            ``source`` (str: syntax|heuristic_high|ratio|heuristic),
+            ``indicators`` (list[str]), ``file_results`` (list[dict]),
+            ``syntax_errors`` (list[str]), ``total_lines`` (int),
+            ``estimated_loc`` (int|None), and optionally ``ratio`` (float).
+            Only tasks with at least one positive signal are included;
+            clean tasks are omitted (empty dict for a fully clean run).
         """
         from startd8.truncation_detection import (
             CONFIDENCE_HIGH,
@@ -2040,7 +2047,9 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             log_truncation_result,
         )
 
-        # OTel span for event emission
+        # OTel span for event emission.  When OTel is installed but no
+        # tracer is configured, get_current_span() returns a
+        # NonRecordingSpan whose add_event() is a safe no-op.
         _span = None
         try:
             from opentelemetry import trace as _trace
@@ -2061,21 +2070,23 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             any_detected = False
             total_lines = 0
 
-            for fpath in gr.generated_files:
+            for fpath in (gr.generated_files or []):
                 fp = Path(fpath)
                 if not fp.exists():
                     continue
                 # Respect existing 50 MB ceiling
                 try:
                     fsize = fp.stat().st_size
-                except OSError:
+                except OSError as exc:
+                    logger.debug("Gate 4: skipping %s — stat failed: %s", fp, exc)
                     continue
                 if fsize > _MAX_GEN_FILE_HASH_BYTES:
                     continue
 
                 try:
                     content = fp.read_text(encoding="utf-8")
-                except (OSError, UnicodeDecodeError):
+                except (OSError, UnicodeDecodeError) as exc:
+                    logger.debug("Gate 4: skipping unreadable file %s: %s", fp, exc)
                     continue
 
                 line_count = len(content.splitlines())
@@ -2105,9 +2116,13 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     try:
                         compile(content, str(fp), "exec")
                         fr["syntax_valid"] = True
-                    except SyntaxError as se:
+                    except (SyntaxError, ValueError) as se:
                         fr["syntax_valid"] = False
-                        fr["syntax_error"] = f"{se.msg} (line {se.lineno})"
+                        msg = getattr(se, "msg", str(se))
+                        lineno = getattr(se, "lineno", None)
+                        fr["syntax_error"] = (
+                            f"{msg} (line {lineno})" if lineno else msg
+                        )
                         syntax_errors.append(str(fp))
                         any_detected = True
                         if _span:
@@ -2156,7 +2171,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             if ratio_flag:
                 task_flag["ratio"] = (
                     total_lines / task.estimated_loc
-                    if task.estimated_loc else None
+                    if task.estimated_loc and task.estimated_loc > 0
+                    else None
                 )
             # Aggregate unique indicators
             for fr in file_results:
@@ -3439,6 +3455,11 @@ class Test{class_name}:
                     "Gate 4: %d task(s) flagged for truncation: %s",
                     len(flagged_ids), flagged_ids,
                 )
+            else:
+                logger.info(
+                    "Gate 4: no truncation detected across %d task(s)",
+                    len(generation_results),
+                )
 
             # Persist generation_results to disk for crash recovery (v2 envelope)
             # Always write to the canonical .startd8/state/ location.
@@ -4152,6 +4173,9 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 }
 
         # ── Gate 4 propagation: annotate per-task with truncation warnings ──
+        # Propagate the minimum fields needed for downstream dashboards
+        # and the REVIEW prompt injection.  Full details stay in
+        # context["truncation_flags"] for FINALIZE summary.
         if truncation_flags:
             for task_id, tf in truncation_flags.items():
                 if task_id in per_task:
@@ -4441,10 +4465,17 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 "Score lower if the implementation appears incomplete or has syntax errors.\n"
             )
             truncation_section = "\n".join(parts)
-            prompt = prompt.replace(
-                "## Review Instructions",
-                truncation_section + "\n## Review Instructions",
-            )
+            if "## Review Instructions" in prompt:
+                prompt = prompt.replace(
+                    "## Review Instructions",
+                    truncation_section + "\n## Review Instructions",
+                )
+            else:
+                logger.warning(
+                    "Gate 4: '## Review Instructions' heading not found in "
+                    "review prompt — appending truncation warning at end"
+                )
+                prompt += "\n" + truncation_section
 
         return prompt
 
