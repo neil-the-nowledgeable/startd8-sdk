@@ -485,6 +485,27 @@ def main() -> int:
                 for cid in task_ids_in_name:
                     _combined_results[cid] = rf
 
+        # Mottainai: also check for a batch workflow-result.json (artisan
+        # produces a single batch result, not per-task files) and use the
+        # per-task review verdicts as the completion signal.
+        _batch_review: dict[str, dict] = {}
+        _batch_result = _out / "workflow-result.json"
+        if _batch_result.exists() and not _combined_results:
+            try:
+                br = json.loads(_batch_result.read_text(encoding="utf-8"))
+                if br.get("status") == "completed":
+                    # Batch completed — load per-task review verdicts
+                    _review_state = Path(args.project_root) / ".startd8" / "state" / "review_results.json"
+                    if _review_state.exists():
+                        rv = json.loads(_review_state.read_text(encoding="utf-8"))
+                        _batch_review = rv.get("tasks", {})
+                        logger.info(
+                            "Batch workflow-result.json found with %d review verdicts",
+                            len(_batch_review),
+                        )
+            except (json.JSONDecodeError, OSError, KeyError) as exc:
+                logger.warning("Could not load batch review results: %s", exc)
+
         for t in seed_tasks:
             tid = t["task_id"]
             # Check per-task file first, then combined result file
@@ -492,7 +513,12 @@ def main() -> int:
             if not rp.exists():
                 rp_combined = _combined_results.get(tid)
                 if rp_combined is None:
-                    incomplete.append(tid)
+                    # Fallback: batch result with per-task review verdicts
+                    task_review = _batch_review.get(tid, {})
+                    if task_review.get("verdict") == "PASS":
+                        complete.append(tid)
+                    else:
+                        incomplete.append(tid)
                     continue
                 rp = rp_combined
             try:

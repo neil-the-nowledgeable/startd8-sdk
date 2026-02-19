@@ -1578,7 +1578,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             prior_design_text: str | None = None
 
             if (
-                prior.get("status") == "designed"
+                prior.get("status") in ("designed", "adopted")
                 and prior.get("design_document")
             ):
                 if self.config.refine_design:
