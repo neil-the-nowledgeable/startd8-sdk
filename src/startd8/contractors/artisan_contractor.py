@@ -129,6 +129,8 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "source_checksum", "parameter_sources", "semantic_conventions",
     "output_conventions", "scaffold", "example_artifacts",
     "workflow_id",
+    # Gate 4: per-task truncation detection results (implement → finalize)
+    "truncation_flags",
 })
 
 

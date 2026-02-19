@@ -334,6 +334,13 @@ class LeadContractorCodeGenerator:
                     "cost_efficiency_ratio", 0.0
                 ),
             }
+            # Upstream truncation signal (secondary — Gate 4 works independently)
+            upstream_summary = (result.output or {}).get("summary") or {}
+            if isinstance(upstream_summary, dict) and upstream_summary.get("was_truncated"):
+                gen_metadata["_upstream_truncation"] = {
+                    "was_truncated": True,
+                    "truncation_source": upstream_summary.get("truncation_source"),
+                }
             # Record multi-file split outcome for observability (Layer 8)
             if len(target_files) > 1:
                 from startd8.utils.code_extraction import STUB_SENTINEL

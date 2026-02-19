@@ -223,6 +223,7 @@ class ImplementPhaseOutput(BaseModel):
 
     implementation: Dict[str, Any]
     generation_results: Dict[str, Any]
+    truncation_flags: Dict[str, Any] = {}
 
 
 class ValidationPhaseOutput(BaseModel):
@@ -325,7 +326,7 @@ _PHASE_EXIT_KEYS: Dict[str, List[str]] = {
     ],
     "scaffold": ["scaffold"],
     "design": ["design_results"],
-    "implement": ["implementation", "generation_results"],
+    "implement": ["implementation", "generation_results", "truncation_flags"],
     "test": ["test_results"],
     "review": ["review_results"],
     "finalize": ["workflow_summary"],

@@ -97,7 +97,7 @@ from startd8.utils.artifact_inventory import (
 
 logger = get_logger(__name__)
 
-_CACHE_SCHEMA_VERSION = 2
+_CACHE_SCHEMA_VERSION = 3
 
 # Maximum file size for hash computation (50 MB).  Files larger than this
 # are skipped to prevent memory spikes during cache validation.
@@ -2017,6 +2017,170 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         return findings
 
     @staticmethod
+    def _validate_truncation(
+        tasks: list[SeedTask],
+        generation_results: dict[str, "GenerationResult"],
+        project_root: Path,
+    ) -> dict[str, dict[str, Any]]:
+        """Gate 4: post-IMPLEMENT truncation detection on generated files.
+
+        For each successfully generated task, reads every generated file from
+        disk and runs three checks:
+
+        1. ``detect_truncation()`` with ``code_mode=None`` (auto-detect).
+        2. ``compile()`` syntax validation for Python files.
+        3. Line-count ratio against ``task.estimated_loc`` (flag if < 30%).
+
+        Returns a dict keyed by task_id.  Only tasks with at least one
+        positive signal are included; clean tasks are omitted.
+        """
+        from startd8.truncation_detection import (
+            CONFIDENCE_HIGH,
+            detect_truncation,
+            log_truncation_result,
+        )
+
+        # OTel span for event emission
+        _span = None
+        try:
+            from opentelemetry import trace as _trace
+            _span = _trace.get_current_span()
+        except ImportError:
+            pass
+
+        flags: dict[str, dict[str, Any]] = {}
+
+        for task in tasks:
+            gr = generation_results.get(task.task_id)
+            if gr is None or not gr.success:
+                continue  # skip failed / unprocessed tasks
+
+            file_results: list[dict[str, Any]] = []
+            syntax_errors: list[str] = []
+            max_confidence = 0.0
+            any_detected = False
+            total_lines = 0
+
+            for fpath in gr.generated_files:
+                fp = Path(fpath)
+                if not fp.exists():
+                    continue
+                # Respect existing 50 MB ceiling
+                try:
+                    fsize = fp.stat().st_size
+                except OSError:
+                    continue
+                if fsize > _MAX_GEN_FILE_HASH_BYTES:
+                    continue
+
+                try:
+                    content = fp.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+
+                line_count = len(content.splitlines())
+                total_lines += line_count
+
+                # --- Check 1: heuristic truncation detection ---
+                tr = detect_truncation(content, code_mode=None)
+                fr: dict[str, Any] = {
+                    "file": str(fp),
+                    "lines": line_count,
+                    "truncation_detected": tr.is_truncated,
+                    "truncation_confidence": tr.confidence,
+                    "truncation_indicators": tr.indicators,
+                }
+                if tr.is_truncated:
+                    any_detected = True
+                    max_confidence = max(max_confidence, tr.confidence)
+                    log_truncation_result(
+                        tr,
+                        source_file=str(fp),
+                        feature_name=task.task_id,
+                        step_name="IMPLEMENT.gate4",
+                    )
+
+                # --- Check 2: syntax validation (Python only) ---
+                if fp.suffix == ".py":
+                    try:
+                        compile(content, str(fp), "exec")
+                        fr["syntax_valid"] = True
+                    except SyntaxError as se:
+                        fr["syntax_valid"] = False
+                        fr["syntax_error"] = f"{se.msg} (line {se.lineno})"
+                        syntax_errors.append(str(fp))
+                        any_detected = True
+                        if _span:
+                            _span.add_event(
+                                "syntax.validation_failed",
+                                attributes={
+                                    "task_id": task.task_id,
+                                    "file": str(fp),
+                                    "error": fr["syntax_error"],
+                                },
+                            )
+
+                file_results.append(fr)
+
+            # --- Check 3: line-count ratio ---
+            ratio_flag = False
+            if task.estimated_loc and task.estimated_loc > 0 and total_lines > 0:
+                ratio = total_lines / task.estimated_loc
+                if ratio < 0.3:
+                    ratio_flag = True
+                    any_detected = True
+
+            if not any_detected:
+                continue
+
+            # Determine primary source for the flag
+            if syntax_errors:
+                source = "syntax"
+            elif max_confidence >= CONFIDENCE_HIGH:
+                source = "heuristic_high"
+            elif ratio_flag:
+                source = "ratio"
+            else:
+                source = "heuristic"
+
+            task_flag: dict[str, Any] = {
+                "detected": True,
+                "max_confidence": max_confidence,
+                "source": source,
+                "indicators": [],
+                "file_results": file_results,
+                "syntax_errors": syntax_errors,
+                "total_lines": total_lines,
+                "estimated_loc": task.estimated_loc,
+            }
+            if ratio_flag:
+                task_flag["ratio"] = (
+                    total_lines / task.estimated_loc
+                    if task.estimated_loc else None
+                )
+            # Aggregate unique indicators
+            for fr in file_results:
+                task_flag["indicators"].extend(fr.get("truncation_indicators", []))
+            task_flag["indicators"] = sorted(set(task_flag["indicators"]))
+
+            flags[task.task_id] = task_flag
+
+            if _span:
+                _span.add_event(
+                    "truncation.detected",
+                    attributes={
+                        "task_id": task.task_id,
+                        "source": source,
+                        "max_confidence": max_confidence,
+                        "syntax_errors": len(syntax_errors),
+                        "total_lines": total_lines,
+                        "estimated_loc": task.estimated_loc or 0,
+                    },
+                )
+
+        return flags
+
+    @staticmethod
     def _ensure_test_scaffolding_for_artifact_tasks(
         tasks: list[SeedTask],
         project_root: Path,
@@ -2981,11 +3145,13 @@ class Test{class_name}:
             }
             context["implementation"] = output
             context["generation_results"] = {}
+            context["truncation_flags"] = {}
 
             # Context contract: validate IMPLEMENT output model (dry-run path)
             ImplementPhaseOutput(
                 implementation=context["implementation"],
                 generation_results=context["generation_results"],
+                truncation_flags=context["truncation_flags"],
             )
 
             duration = time.monotonic() - start
@@ -3015,6 +3181,7 @@ class Test{class_name}:
                 results_path = _legacy
         resumed = False
         downstream_map: dict[str, list[str]] = {}
+        truncation_flags: dict[str, dict[str, Any]] = {}
         if not _has_explicit_project_root:
             logger.info("IMPLEMENT: no explicit project_root — skipping cache load")
         if (
@@ -3036,6 +3203,9 @@ class Test{class_name}:
 
                     # Fix 1: Restore downstream_map from cache
                     downstream_map = saved.get("downstream_map", {})
+
+                    # Restore truncation_flags from cache (v3+; graceful for v2)
+                    truncation_flags = saved.get("truncation_flags", {})
 
                     # Fix 2: Report zero cost for resumed phase (no LLM
                     # calls were made).  Track historical cost separately.
@@ -3140,11 +3310,13 @@ class Test{class_name}:
                 }
                 context["implementation"] = output
                 context["generation_results"] = {}
+                context["truncation_flags"] = {}
 
                 # Context contract: validate IMPLEMENT output model (no-chunks path)
                 ImplementPhaseOutput(
                     implementation=context["implementation"],
                     generation_results=context["generation_results"],
+                    truncation_flags=context["truncation_flags"],
                 )
 
                 duration = time.monotonic() - start
@@ -3253,6 +3425,21 @@ class Test{class_name}:
             if gate3:
                 output["_gate3_validation"] = gate3
 
+            # ── Gate 4: post-IMPLEMENT truncation detection ─────────
+            # Per Context Correctness by Construction: detect truncated
+            # or syntactically broken generated files BEFORE they
+            # propagate to TEST/REVIEW/FINALIZE.
+            truncation_flags = self._validate_truncation(
+                tasks, generation_results, project_root,
+            )
+            if truncation_flags:
+                output["_gate4_truncation"] = truncation_flags
+                flagged_ids = sorted(truncation_flags.keys())
+                logger.warning(
+                    "Gate 4: %d task(s) flagged for truncation: %s",
+                    len(flagged_ids), flagged_ids,
+                )
+
             # Persist generation_results to disk for crash recovery (v2 envelope)
             # Always write to the canonical .startd8/state/ location.
             # Skip when no explicit project_root (matches REVIEW's pattern).
@@ -3291,6 +3478,7 @@ class Test{class_name}:
                             "source_checksum": context.get("source_checksum"),
                         },
                         "downstream_map": downstream_map,
+                        "truncation_flags": truncation_flags,
                         "tasks": serializable_tasks,
                     }
                     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -3312,6 +3500,7 @@ class Test{class_name}:
 
         context["implementation"] = output
         context["generation_results"] = generation_results
+        context["truncation_flags"] = truncation_flags
         # Propagate downstream_map to REVIEW phase so it can distinguish
         # expected downstream stubs from generation failures.
         if downstream_map:
@@ -3321,6 +3510,7 @@ class Test{class_name}:
         ImplementPhaseOutput(
             implementation=context["implementation"],
             generation_results=context["generation_results"],
+            truncation_flags=context["truncation_flags"],
         )
 
         duration = time.monotonic() - start
@@ -3793,6 +3983,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         tasks: list[SeedTask] = _ensure_context_loaded(context)
         project_root = Path(context.get("project_root", "."))
         generation_results: dict[str, GenerationResult] = context.get("generation_results", {})
+        truncation_flags: dict[str, Any] = context.get("truncation_flags", {})
 
         logger.info("TEST phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
@@ -3960,6 +4151,14 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "validators_run": entry.get("validators_run", 0),
                 }
 
+        # ── Gate 4 propagation: annotate per-task with truncation warnings ──
+        if truncation_flags:
+            for task_id, tf in truncation_flags.items():
+                if task_id in per_task:
+                    per_task[task_id]["truncation_warning"] = True
+                    per_task[task_id]["truncation_confidence"] = tf.get("max_confidence", 0.0)
+                    per_task[task_id]["truncation_source"] = tf.get("source", "unknown")
+
         output = {
             "test_plan": test_plan,
             "total_validators": sum(len(t.post_generation_validators) for t in tasks),
@@ -4121,6 +4320,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         design_document: str | None = None,
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
+        truncation_info: dict[str, Any] | None = None,
     ) -> str:
         """Build the review prompt for a single task.
 
@@ -4134,6 +4334,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 the reviewer to verify correct parameter usage.
             semantic_conventions: Optional semantic convention mappings
                 for the reviewer to verify naming compliance.
+            truncation_info: Optional Gate 4 truncation detection result.
+                When present, a warning is injected so the reviewer
+                scrutinizes completeness.
 
         Returns:
             Formatted review prompt string.
@@ -4212,6 +4415,35 @@ PASS if score >= {pass_threshold} and no blocking issues.
             prompt = prompt.replace(
                 "## Review Instructions",
                 extra + "\n## Review Instructions",
+            )
+
+        # ── Gate 4: Inject truncation warning into review ────────────
+        if truncation_info:
+            source = truncation_info.get("source", "unknown")
+            confidence = truncation_info.get("max_confidence", 0.0)
+            syntax_errs = truncation_info.get("syntax_errors", [])
+            total_lines = truncation_info.get("total_lines", 0)
+            estimated = truncation_info.get("estimated_loc", 0)
+            parts = [
+                "\n## TRUNCATION WARNING (Gate 4)\n",
+                f"Automated analysis flagged this task's output as potentially truncated "
+                f"(source={source}, confidence={confidence:.2f}).",
+            ]
+            if syntax_errs:
+                parts.append(f"Syntax errors in: {', '.join(syntax_errs)}.")
+            if estimated and total_lines:
+                parts.append(
+                    f"Generated {total_lines} lines vs {estimated} estimated "
+                    f"({total_lines / estimated:.0%} ratio)."
+                )
+            parts.append(
+                "**Pay special attention to completeness.** "
+                "Score lower if the implementation appears incomplete or has syntax errors.\n"
+            )
+            truncation_section = "\n".join(parts)
+            prompt = prompt.replace(
+                "## Review Instructions",
+                truncation_section + "\n## Review Instructions",
             )
 
         return prompt
@@ -4296,6 +4528,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         design_document: str | None = None,
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
+        truncation_info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Conduct LLM review for a single task.
 
@@ -4307,6 +4540,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 for compliance checking.
             parameter_sources: Optional parameter source mappings.
             semantic_conventions: Optional semantic convention mappings.
+            truncation_info: Optional Gate 4 truncation detection result for
+                this task.  When present, a warning section is injected into
+                the review prompt so the LLM reviewer can assess completeness.
 
         Returns:
             Review result dict with score, verdict, cost.
@@ -4328,6 +4564,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     design_document=design_document,
                     parameter_sources=parameter_sources,
                     semantic_conventions=semantic_conventions,
+                    truncation_info=truncation_info,
                 )
                 response_text, _time_ms, token_usage = agent.generate(
                     prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
@@ -4525,6 +4762,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         # Gate 2c downstream map — used to exclude downstream stubs from
         # review scoring so they don't unfairly penalize the task.
         downstream_map: dict[str, list[str]] = context.get("_downstream_map", {})
+        truncation_flags: dict[str, Any] = context.get("truncation_flags", {})
 
         logger.info("REVIEW phase: reviewing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
@@ -4701,11 +4939,15 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     if task_design.get("status") in ("designed", "adopted", "refined")
                     else None
                 )
+                # Gate 4: truncation info for this task (if flagged)
+                task_truncation = truncation_flags.get(task.task_id)
+
                 review = self._review_task(
                     task, generated_code, task_test,
                     design_document=task_design_doc,
                     parameter_sources=context.get("parameter_sources"),
                     semantic_conventions=context.get("semantic_conventions"),
+                    truncation_info=task_truncation,
                 )
                 review["title"] = task.title
                 review["domain"] = task.domain
@@ -4713,6 +4955,10 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 review["env_failures"] = len(env_fails)
                 review["env_warnings"] = len(env_warns)
                 review["review_status"] = review.get("status", "reviewed")
+                if task_truncation:
+                    review["truncation_warning"] = True
+                    review["truncation_confidence"] = task_truncation.get("max_confidence", 0.0)
+                    review["truncation_source"] = task_truncation.get("source", "unknown")
 
                 total_cost += review.get("cost", 0.0)
                 if review.get("passed", False):
@@ -5236,6 +5482,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         implementation = context.get("implementation", {})
         test_results = context.get("test_results", {})
         review_results = context.get("review_results", {})
+        truncation_flags: dict[str, Any] = context.get("truncation_flags", {})
 
         # Collect artifacts and costs
         artifacts = self._collect_generated_artifacts(context)
@@ -5300,6 +5547,19 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                 "total_failed": review_results.get("total_failed", 0),
                 "total_cost": review_results.get("total_cost", 0.0),
             },
+            "truncation_summary": {
+                "tasks_flagged": len(truncation_flags),
+                "tasks_with_syntax_errors": sum(
+                    1 for tf in truncation_flags.values()
+                    if tf.get("syntax_errors")
+                ),
+                "max_confidence": max(
+                    (tf.get("max_confidence", 0.0) for tf in truncation_flags.values()),
+                    default=0.0,
+                ),
+                "flagged_task_ids": sorted(truncation_flags.keys()),
+                "details": truncation_flags,
+            } if truncation_flags else {"tasks_flagged": 0},
             "cost_summary": cost_summary,
             "generated_artifacts": artifacts,
             "artifact_count": len(artifacts),

@@ -8,7 +8,7 @@
 # Version convention follows Weaver (start at 0.1.0 to signal instability).
 # =============================================================================
 
-schema_version: "0.1.0"
+schema_version: "0.2.0"
 pipeline_id: artisan
 description: >
   Context propagation contract for the 7-phase Artisan contractor workflow.
@@ -161,6 +161,10 @@ phases:
             threshold: 10
             on_below: warning
             description: "Generation results should have meaningful content"
+        - name: truncation_flags
+          type: dict
+          severity: warning
+          description: "Per-task truncation detection results from Gate 4 (empty if no issues)"
 
   test:
     description: "Final testing and validation"
@@ -184,6 +188,12 @@ phases:
           default: []
           source_phase: plan
           description: "Validators routed from plan phase for test execution"
+        - name: truncation_flags
+          type: dict
+          severity: warning
+          default: {}
+          source_phase: implement
+          description: "Per-task truncation detection results for test annotation"
     exit:
       required:
         - name: test_results
@@ -207,6 +217,13 @@ phases:
             threshold: 10
             on_below: warning
             description: "Generation results entering REVIEW should have substance"
+      enrichment:
+        - name: truncation_flags
+          type: dict
+          severity: warning
+          default: {}
+          source_phase: implement
+          description: "Per-task truncation detection results for review annotation"
     exit:
       required:
         - name: review_results
@@ -233,6 +250,13 @@ phases:
         - name: generation_results
           type: dict
           severity: blocking
+      enrichment:
+        - name: truncation_flags
+          type: dict
+          severity: warning
+          default: {}
+          source_phase: implement
+          description: "Per-task truncation detection results for summary inclusion"
     exit:
       required:
         - name: workflow_summary
@@ -287,3 +311,20 @@ propagation_chains:
       phase: implement
       field: design_calibration
     severity: advisory
+
+  - chain_id: truncation_to_finalize
+    description: >
+      Per-task truncation detection results flow from implement through
+      test and review to finalize, where they appear in the workflow summary.
+    source:
+      phase: implement
+      field: truncation_flags
+    waypoints:
+      - phase: test
+        field: truncation_flags
+      - phase: review
+        field: truncation_flags
+    destination:
+      phase: finalize
+      field: truncation_flags
+    severity: warning
