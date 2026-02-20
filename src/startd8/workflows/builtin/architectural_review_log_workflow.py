@@ -950,9 +950,14 @@ def _validate_apply_output(
         )
 
     # Heading preservation — all ##/### headings from original must be present
+    # Normalize for comparison: strip trailing whitespace and casefold so LLMs
+    # that change "## Architecture Overview" to "## Architecture overview" pass.
     original_headings = re.findall(r"^(#{2,3}\s+.+)$", original_body, re.MULTILINE)
+    output_headings_normalized = {
+        h.strip().casefold() for h in re.findall(r"^(#{2,3}\s+.+)$", output, re.MULTILINE)
+    }
     missing_headings = [
-        h for h in original_headings if h not in output
+        h for h in original_headings if h.strip().casefold() not in output_headings_normalized
     ]
     if missing_headings:
         return (
@@ -990,8 +995,6 @@ def _apply_suggestions_to_doc(
     Returns ``(updated_doc, ok, message, warning_ids, time_ms,
     input_tokens, output_tokens, cost)``.
     """
-    from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
-
     original_body = _strip_appendix_for_prompt(doc_text)
     appendix_idx = doc_text.find(APPENDIX_HEADING)
     appendix_portion = doc_text[appendix_idx:] if appendix_idx != -1 else ""
@@ -1529,7 +1532,10 @@ def _make_error_step(
 
 @dataclass
 class _MetricsAccumulator:
-    """Running totals for token usage, cost, and wall-clock time across rounds."""
+    """Running totals for token usage, cost, and wall-clock time across rounds.
+
+    Used sequentially under ``FileLock`` — not thread-safe.
+    """
 
     input_tokens: int = 0
     output_tokens: int = 0
@@ -2458,7 +2464,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
                 # Extract accepted suggestions enriched with Appendix C data
                 plan_accepted = _extract_accepted_suggestions_for_apply(
-                    [d for d in triage_decisions if "F" not in d["id"]] if triage_decisions else [],
+                    [d for d in triage_decisions if "-S" in d.get("id", "")] if triage_decisions else [],
                     untriaged,
                 )
 
@@ -2481,44 +2487,34 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             apply_info["applied_ids"] = [s["id"] for s in plan_accepted]
                             apply_info["warning_ids"] = apply_warnings
                         else:
-                            # Retry once with targeted re-prompt
+                            # Retry once — call _apply_suggestions_to_doc() again
+                            # so the retry gets the full suggestion table and context
                             _logger.warning("Apply validation failed: %s; retrying", apply_msg)
-                            retry_prompt = (
-                                f"Your previous response failed validation: {apply_msg}\n\n"
-                                f"Please output the COMPLETE updated document body. "
-                                f"Maintain ALL existing headings. Do NOT include appendix sections.\n"
-                            )
-                            retry_gen_kwargs: Dict[str, Any] = {}
-                            if shared_system_prompt is not None:
-                                retry_gen_kwargs["system_prompt"] = shared_system_prompt
                             try:
-                                retry_text, retry_time, retry_tu = apply_agent.generate(retry_prompt, **retry_gen_kwargs)
-                                r_in = token_usage_input(retry_tu) if retry_tu else 0
-                                r_out = token_usage_output(retry_tu) if retry_tu else 0
-                                r_cost = token_usage_cost(retry_tu) if retry_tu else 0.0
-                                totals.add(r_in, r_out, r_cost, retry_time)
-                                apply_time_ms += retry_time
+                                (
+                                    updated_doc, apply_ok, apply_msg, apply_warnings,
+                                    r_time, r_in, r_out, r_cost,
+                                ) = _apply_suggestions_to_doc(
+                                    doc_text, plan_accepted, apply_agent,
+                                    persona=persona,
+                                    system_prompt=shared_system_prompt,
+                                )
+                                totals.add(r_in, r_out, r_cost, r_time)
+                                apply_time_ms += r_time
                                 apply_input += r_in
                                 apply_output += r_out
                                 apply_cost += r_cost
 
-                                retry_text = _strip_code_fences(retry_text)
-                                original_body = _strip_appendix_for_prompt(doc_text)
-                                ok2, msg2, warns2 = _validate_apply_output(retry_text, original_body, plan_accepted)
-                                if ok2:
-                                    appendix_idx = doc_text.find(APPENDIX_HEADING)
-                                    appendix_portion = doc_text[appendix_idx:] if appendix_idx != -1 else ""
-                                    doc_text = retry_text.rstrip() + "\n\n" + appendix_portion
+                                if apply_ok:
+                                    doc_text = updated_doc
                                     atomic_write(doc_path, doc_text, mode="w", backup=True)
                                     apply_info["applied_count"] = len(plan_accepted)
                                     apply_info["applied_ids"] = [s["id"] for s in plan_accepted]
-                                    apply_info["warning_ids"] = warns2
-                                    apply_ok = True
-                                    apply_msg = msg2
+                                    apply_info["warning_ids"] = apply_warnings
                                 else:
-                                    apply_info["error"] = f"Retry also failed: {msg2}"
+                                    apply_info["error"] = f"Retry also failed: {apply_msg}"
                             except Exception as retry_err:
-                                _logger.warning("Apply retry failed: %s", retry_err)
+                                _logger.warning("Apply retry failed: %s", retry_err, exc_info=True)
                                 apply_info["error"] = f"Apply retry failed: {retry_err}"
 
                         step_results.append(StepResult(
@@ -2538,7 +2534,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         ))
 
                     except GeminiSafetyFilterError:
-                        _logger.warning("Apply step blocked by Gemini SAFETY filter; skipping")
+                        _logger.warning("Apply step blocked by Gemini SAFETY filter; retrying with relaxed settings")
                         original_safety = getattr(apply_agent, "safety_settings", None)
                         try:
                             if _is_gemini_agent(apply_agent):
@@ -2559,15 +2555,34 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 apply_info["applied_ids"] = [s["id"] for s in plan_accepted]
                                 apply_info["warning_ids"] = apply_warnings
                         except Exception as e2:
-                            _logger.warning("Apply SAFETY retry failed: %s", e2)
+                            _logger.warning("Apply SAFETY retry failed: %s", e2, exc_info=True)
                             apply_info["error"] = f"Apply SAFETY retry failed: {e2}"
                         finally:
                             if _is_gemini_agent(apply_agent):
                                 apply_agent.safety_settings = original_safety
-                        step_results.append(_make_error_step(
-                            "apply_suggestions", apply_agent,
-                            apply_info.get("error") or "Gemini SAFETY filter",
-                        ))
+                        # Record success or error step based on outcome
+                        if apply_info.get("error"):
+                            step_results.append(_make_error_step(
+                                "apply_suggestions", apply_agent,
+                                apply_info["error"],
+                            ))
+                        else:
+                            step_results.append(StepResult(
+                                step_name="apply_suggestions",
+                                agent_name=_agent_label(apply_agent),
+                                output=f"Applied: {apply_info['applied_count']} (SAFETY retry), Warnings: {len(apply_info['warning_ids'])}",
+                                time_ms=apply_time_ms,
+                                input_tokens=apply_input,
+                                output_tokens=apply_output,
+                                cost=apply_cost,
+                                error=None,
+                                metadata={
+                                    "applied_count": apply_info["applied_count"],
+                                    "applied_ids": apply_info["applied_ids"],
+                                    "warning_ids": apply_info["warning_ids"],
+                                    "safety_retry": True,
+                                },
+                            ))
                     except Exception as apply_err:
                         _logger.warning("Apply step failed: %s", apply_err, exc_info=True)
                         apply_info["error"] = str(apply_err)
@@ -2578,7 +2593,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 # Apply to feature doc (dual-document mode)
                 if feature_doc_path and triage_info.get("feature_accepted", 0) > 0:
                     feature_accepted = _extract_accepted_suggestions_for_apply(
-                        [d for d in triage_decisions if "F" in d["id"]] if triage_decisions else [],
+                        [d for d in triage_decisions if "-F" in d.get("id", "")] if triage_decisions else [],
                         untriaged,
                     )
                     if feature_accepted:
@@ -2597,7 +2612,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 atomic_write(feature_doc_path, updated_fd, mode="w", backup=True)
                                 apply_info["feature_applied_count"] = len(feature_accepted)
                         except Exception as e:
-                            _logger.warning("Failed to apply suggestions to feature doc: %s", e)
+                            _logger.warning("Failed to apply suggestions to feature doc: %s", e, exc_info=True)
 
             # Update state file with triage + apply info
             try:

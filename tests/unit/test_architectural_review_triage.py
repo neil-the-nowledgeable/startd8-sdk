@@ -1934,6 +1934,14 @@ class TestValidateApplyOutput:
         assert ok is True
         assert warns == []
 
+    def test_heading_case_insensitive(self):
+        """Heading comparison should be case-insensitive (P1 fix)."""
+        body = "# Test Plan\n\n## Architecture Overview\n\nContent.\n\n## Security\n\nMore.\n"
+        # LLM lowercased the heading
+        output = "# Test Plan\n\n## architecture overview\n\nContent.\n\n## Security\n\nMore.\n"
+        ok, msg, warns = _validate_apply_output(output, body, [])
+        assert ok is True, f"Expected valid but got: {msg}"
+
 
 # ---------------------------------------------------------------------------
 # Apply integration tests
@@ -2096,7 +2104,7 @@ class TestApplyIntegration:
         assert "## Security" in final_doc
 
     def test_apply_retry_on_validation_failure(self, tmp_path):
-        """First apply attempt fails validation, retry succeeds."""
+        """First apply attempt fails validation, retry succeeds with full context."""
         doc_path = tmp_path / "test_doc.md"
         doc_path.write_text("# Test Plan\n\n## Architecture\n\nSome content.\n\n## Security\n\nMore.\n")
 
@@ -2113,8 +2121,8 @@ class TestApplyIntegration:
         agent.generate.side_effect = [
             (snippet, 500, token_usage),
             (triage_response, 300, triage_token_usage),
-            (bad_apply, 100, apply_tu),     # first apply (fails)
-            (good_apply, 200, apply_tu),    # retry (succeeds)
+            (bad_apply, 100, apply_tu),     # first apply (fails validation)
+            (good_apply, 200, apply_tu),    # retry via _apply_suggestions_to_doc (succeeds)
         ]
 
         workflow = ArchitecturalReviewLogWorkflow()
@@ -2130,6 +2138,12 @@ class TestApplyIntegration:
 
         final_doc = doc_path.read_text()
         assert "Circuit breakers added" in final_doc
+
+        # R1 fix: verify the retry prompt includes the full suggestion table
+        # (the retry now calls _apply_suggestions_to_doc which builds a complete prompt)
+        retry_call = agent.generate.call_args_list[3]  # 4th call = retry
+        retry_prompt = retry_call.args[0]
+        assert "circuit breakers" in retry_prompt.lower() or "R1-S1" in retry_prompt
 
     def test_no_accepted_suggestions_skips_apply(self, tmp_path):
         """All REJECT → apply step is skipped."""
