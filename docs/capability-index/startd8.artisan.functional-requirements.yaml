@@ -527,6 +527,117 @@ phase_behavior_requirements:
       - tests/unit/contractors/test_context_seed_review_finalize.py
 
   # ---------------------------------------------------------------------------
+  # TEST Phase Semantic Validators (AR-143 – AR-147) — IMPLEMENTED
+  # Commits: bed77d5 (initial), dc3c241 (refactor hardening)
+  # Tests: test_self_consistency_validators.py, test_gate3b_content_validation.py
+  # ---------------------------------------------------------------------------
+
+  - id: AR-143
+    description: "TEST phase validates import dependencies against requirements.txt"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "ast.parse() extracts all import statements from generated code"
+      - "Cross-references imports against requirements.txt and _IMPORT_TO_PACKAGE mapping"
+      - "Stdlib modules (sys.stdlib_module_names) always allowed"
+      - "Reports undeclared third-party imports as issues with line number and confidence"
+      - "Handles multi-import statements (import os, requests) correctly"
+
+    depends_on: [AR-140]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_phases/self_consistency.py
+      function: validate_import_dependency
+
+    verified_by:
+      - tests/unit/contractors/test_self_consistency_validators.py
+      - tests/unit/contractors/test_gate3b_content_validation.py
+
+  - id: AR-144
+    description: "TEST phase validates protocol fidelity against service metadata"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Detects gRPC and HTTP indicators in generated code via compiled regex patterns"
+      - "Cross-references against service_metadata.transport_protocol"
+      - "Reports protocol mismatch (e.g., HTTP client in gRPC-declared service) as issue"
+      - "No findings when service_metadata is absent (graceful degradation)"
+
+    depends_on: [AR-140]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_phases/self_consistency.py
+      function: validate_protocol_fidelity
+
+    verified_by:
+      - tests/unit/contractors/test_self_consistency_validators.py
+      - tests/unit/contractors/test_gate3b_content_validation.py
+
+  - id: AR-145
+    description: "TEST phase validates proto field references against .proto files"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Collects field names from all .proto files in project_root via rglob"
+      - "Scans generated code for attribute access patterns that may be singular/plural mismatches"
+      - "Reports proto field naming mismatches (e.g., product_id vs product_ids) as issues"
+      - "No findings when no .proto files exist"
+
+    depends_on: [AR-140]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_phases/self_consistency.py
+      function: validate_proto_field_references
+
+    verified_by:
+      - tests/unit/contractors/test_self_consistency_validators.py
+
+  - id: AR-146
+    description: "TEST phase detects placeholder patterns in generated code"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Scans code for TODO, FIXME, REPLACE_WITH_*, YOUR_*_HERE, CHANGE_ME, PLACEHOLDER patterns"
+      - "Detects NotImplementedError raises"
+      - "Reports each placeholder with line number and confidence score"
+      - "Compiled regex patterns for performance"
+
+    depends_on: [AR-140]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_phases/self_consistency.py
+      function: validate_placeholder_detection
+
+    verified_by:
+      - tests/unit/contractors/test_self_consistency_validators.py
+      - tests/unit/contractors/test_gate3b_content_validation.py
+
+  - id: AR-147
+    description: "TEST phase validates Dockerfile coherence against service metadata"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Parses Dockerfile for FROM base image and HEALTHCHECK instructions"
+      - "Cross-references against service_metadata.transport_protocol"
+      - "Reports base image / healthcheck mismatch (e.g., gRPC probe in Flask service)"
+      - "Only applies to Dockerfile* target files"
+      - "No findings when service_metadata is absent"
+
+    depends_on: [AR-140]
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_phases/self_consistency.py
+      function: validate_dockerfile_coherence
+
+    verified_by:
+      - tests/unit/contractors/test_self_consistency_validators.py
+
+  # ---------------------------------------------------------------------------
   # REVIEW Phase (AR-150 – AR-153)
   # ---------------------------------------------------------------------------
 
@@ -2104,11 +2215,44 @@ safety_resilience_requirements:
     implementation_hints:
       file: src/startd8/contractors/context_seed_handlers.py
 
+  - id: AR-810
+    description: "Service metadata preflight rule warns when service-related files lack onboarding metadata"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "Preflight rule checks service-related target files (Dockerfile*, *_server*, *_pb2*, *_service*, grpc*)"
+      - "When service_metadata is absent from onboarding-metadata.json, emits WARN"
+      - "Non-blocking (warning only, does not fail preflight)"
+      - "No warning when service_metadata is present or file is not service-related"
+
+    depends_on: [AR-800]
+
+    implementation_hints:
+      file: src/startd8/workflows/builtin/preflight_rules/rules_common.py
+      class: ServiceMetadataPreflightRule
+
+    verified_by:
+      - tests/unit/test_service_metadata_preflight.py
+
 # ==============================================================================
 # IMPLEMENTATION ORDER
 # ==============================================================================
 
 implementation_order:
+
+  phase_1b:
+    name: "Semantic Validators (DONE — commits bed77d5, dc3c241)"
+    requirements:
+      - AR-143  # import dependency validation
+      - AR-144  # protocol fidelity validation
+      - AR-145  # proto field reference validation
+      - AR-146  # placeholder detection
+      - AR-147  # Dockerfile coherence validation
+      - AR-810  # service metadata preflight rule
+    benefits_delivered:
+      - semantic_defect_detection
+      - service_metadata_awareness
 
   phase_1:
     name: "ContextCore Data Flow Fixes (High Priority)"
@@ -2182,8 +2326,8 @@ implementation_order:
 
 traceability:
   phase_behavior:
-    requirements: [AR-100, AR-101, AR-102, AR-110, AR-111, AR-120, AR-121, AR-122, AR-123, AR-124, AR-125, AR-126, AR-130, AR-131, AR-132, AR-133, AR-134, AR-135, AR-136, AR-137, AR-140, AR-141, AR-142, AR-150, AR-151, AR-152, AR-160, AR-161, AR-162, AR-163, AR-164, AR-165]
-    count: 32
+    requirements: [AR-100, AR-101, AR-102, AR-110, AR-111, AR-120, AR-121, AR-122, AR-123, AR-124, AR-125, AR-126, AR-130, AR-131, AR-132, AR-133, AR-134, AR-135, AR-136, AR-137, AR-140, AR-141, AR-142, AR-143, AR-144, AR-145, AR-146, AR-147, AR-150, AR-151, AR-152, AR-160, AR-161, AR-162, AR-163, AR-164, AR-165]
+    count: 37
   orchestration:
     requirements: [AR-200, AR-201, AR-202, AR-203, AR-204, AR-205, AR-206, AR-207, AR-208, AR-209, AR-210, AR-211]
     count: 12
@@ -2203,29 +2347,30 @@ traceability:
     requirements: [AR-700, AR-701, AR-702, AR-703, AR-704, AR-705, AR-706, AR-707]
     count: 8
   safety_resilience:
-    requirements: [AR-800, AR-801, AR-802, AR-803, AR-804, AR-805, AR-806, AR-807, AR-808, AR-809]
-    count: 10
+    requirements: [AR-800, AR-801, AR-802, AR-803, AR-804, AR-805, AR-806, AR-807, AR-808, AR-809, AR-810]
+    count: 11
 
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
 
 summary:
-  total_requirements: 102
+  total_requirements: 108
   by_layer:
-    phase_behavior: 32    # AR-1xx
+    phase_behavior: 37    # AR-1xx (includes AR-143..AR-147)
     orchestration: 12     # AR-2xx
     contextcore_data_flow: 12  # AR-3xx
     cost_model: 8         # AR-4xx
     handoff_recovery: 12  # AR-5xx
     observability: 8      # AR-6xx
     configuration: 8      # AR-7xx
-    safety_resilience: 10 # AR-8xx
+    safety_resilience: 11 # AR-8xx (includes AR-810)
   by_status:
-    implemented: 68
+    implemented: 74
     partial: 1
     planned: 33
   by_implementation_phase:
+    phase_1b_semantic_validators: 6  # AR-143..AR-147, AR-810 (DONE)
     phase_1_contextcore: 5
     phase_2_onboarding: 10
     phase_3_recovery: 4

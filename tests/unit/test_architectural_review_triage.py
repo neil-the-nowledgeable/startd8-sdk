@@ -1470,6 +1470,21 @@ class TestDualDocumentMode:
         assert "R1-S1" in ids
         assert "R1-F1" in ids
 
+    def test_validate_snippet_accepts_bold_headers(self):
+        """Validator accepts **bold** column headers (common LLM formatting)."""
+        snippet = (
+            "#### Review Round R1\n\n"
+            "- **Reviewer**: test-agent (test-model)\n"
+            "- **Date**: 2026-02-11 00:00:00 UTC\n"
+            "- **Scope**: Test review\n\n"
+            "| **ID** | **Area** | **Severity** | **Suggestion** | **Rationale** | **Proposed Placement** | **Validation Approach** |\n"
+            "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            "| R1-S1 | Architecture | high | Use event sourcing | Better audit trail | Section 3 | Integration test |\n"
+        )
+        ok, msg, ids = _validate_snippet(snippet, round_number=1, max_suggestions=5)
+        assert ok is True, f"Expected valid snippet but got: {msg}"
+        assert "R1-S1" in ids
+
     def test_endorsement_matches_f_prefix(self):
         """Endorsement regex matches F-prefix IDs."""
         doc_with_f_endorsement = SAMPLE_DOC_WITH_SUGGESTIONS.replace(

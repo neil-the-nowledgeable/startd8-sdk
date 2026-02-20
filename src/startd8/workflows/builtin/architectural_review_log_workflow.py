@@ -169,6 +169,11 @@ def _split_cells(row: str) -> List[str]:
     return [c.strip() for c in row.strip().strip("|").split("|")]
 
 
+def _normalize_header(cell: str) -> str:
+    """Strip markdown bold/italic markers for header comparison."""
+    return cell.strip().strip("*").strip("_").strip("*").strip()
+
+
 def _ensure_appendix_exists(doc: str) -> str:
     if APPENDIX_HEADING in doc:
         return doc
@@ -1024,9 +1029,10 @@ Required output format (append-only snippet):
   - **Reviewer**: {reviewer_label}
   - **Date**: {_now_utc()}
   - **Scope**: {scope}
-- Then output a markdown table EXACTLY with these columns:
+- Then output a markdown table with these EXACT column headers (plain text, no bold/italic formatting in headers):
   | {cols} |
   | {sep} |
+  Copy the header row above verbatim. Do NOT wrap column names in ** or _.
   Rows must use IDs R{round_number}-S1..R{round_number}-S{max_suggestions} (you may output fewer rows).
   Area must be one of: {', '.join(sorted(areas))}.
   Severity must be one of: critical, high, medium, low.
@@ -1086,27 +1092,29 @@ def _validate_snippet(
             
             # Found table
             tables_found += 1
-            header = _split_cells(ln)
+            raw_header = _split_cells(ln)
+            # Normalize header cells: strip markdown bold/italic so **Area** matches Area
+            header = [_normalize_header(h) for h in raw_header]
             # Leniency: Accept header if it has the required columns, even if extra or slightly different order
             missing_cols = [col for col in REQUIRED_COLUMNS if col not in header]
             if missing_cols:
                 return False, f"Table header mismatch. Missing columns: {missing_cols}", []
-            
+
             i += 2 # Skip header and sep
-            
+
             # Parse rows
             while i < len(lines):
                 row = lines[i]
                 if not row.strip().startswith("|"):
                     break # End of table
-                
+
                 cells = _split_cells(row)
                 # Leniency: Allow extra cells, just truncate to match header length
                 if len(cells) < len(REQUIRED_COLUMNS):
                     _logger.warning("Skipping row with insufficient columns: %s", row)
                     i += 1
                     continue
-                
+
                 # Extract values by mapping column names to indices
                 try:
                     sid = cells[header.index("ID")]
@@ -1776,7 +1784,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         f"Please regenerate the review snippet for Round R{round_number}. "
                         f"Requirements:\n"
                         f"- Start with: #### Review Round R{round_number}\n"
-                        f"- Table columns EXACTLY: {' | '.join(REQUIRED_COLUMNS)}\n"
+                        f"- Table header row EXACTLY (plain text, no bold): | {' | '.join(REQUIRED_COLUMNS)} |\n"
                         f"- IDs: R{round_number}-S1, R{round_number}-S2, etc.\n"
                         f"- Area must be one of: {', '.join(sorted(ALLOWED_AREAS))}\n"
                         f"- Severity must be one of: {', '.join(sorted(ALLOWED_SEVERITIES))}\n"

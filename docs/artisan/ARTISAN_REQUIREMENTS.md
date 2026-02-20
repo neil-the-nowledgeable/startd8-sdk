@@ -8,21 +8,21 @@
 
 ## Overview
 
-This document provides narrative context, dependency diagrams, and a traceability matrix for the 102 formal functional requirements defined in the canonical YAML. The artisan contractor is a 7-phase workflow orchestrator for structured multi-task code generation with design review, cost budget enforcement, and checkpoint-based recovery.
+This document provides narrative context, dependency diagrams, and a traceability matrix for the 108 formal functional requirements defined in the canonical YAML. The artisan contractor is a 7-phase workflow orchestrator for structured multi-task code generation with design review, cost budget enforcement, and checkpoint-based recovery.
 
 ### Status Dashboard
 
 | Layer | ID Range | Total | Implemented | Partial | Planned |
 |-------|----------|-------|-------------|---------|---------|
-| Phase Behavior | AR-1xx | 32 | 25 | 0 | 7 |
+| Phase Behavior | AR-1xx | 37 | 30 | 0 | 7 |
 | Orchestration | AR-2xx | 12 | 9 | 0 | 3 |
 | ContextCore Data Flow | AR-3xx | 12 | 2 | 0 | 10 |
 | Cost Model | AR-4xx | 8 | 6 | 1 | 1 |
 | Handoff and Recovery | AR-5xx | 12 | 8 | 0 | 4 |
 | Observability | AR-6xx | 8 | 6 | 0 | 2 |
 | Configuration | AR-7xx | 8 | 8 | 0 | 0 |
-| Safety and Resilience | AR-8xx | 10 | 5 | 0 | 5 |
-| **Total** | | **102** | **69** | **1** | **32** |
+| Safety and Resilience | AR-8xx | 11 | 6 | 0 | 5 |
+| **Total** | | **108** | **75** | **1** | **32** |
 
 ---
 
@@ -70,6 +70,11 @@ flowchart LR
         AR140[AR-140 Validators]
         AR141[AR-141 Results]
         AR142[AR-142 Command Mapping]
+        AR143[AR-143 Import Dependency]
+        AR144[AR-144 Protocol Fidelity]
+        AR145[AR-145 Proto Field Refs]
+        AR146[AR-146 Placeholder Detection]
+        AR147[AR-147 Dockerfile Coherence]
     end
 
     subgraph review [REVIEW]
@@ -98,7 +103,7 @@ flowchart LR
 | SCAFFOLD | `scaffold` (directories_needed, directories_exist, directories_created, existing_target_files, skipped_targets, project_root) | AR-110 |
 | DESIGN | `design_results` (per-task: design_document, status, agreed, iterations, cost) | AR-120 |
 | IMPLEMENT | `implementation`, `generation_results`, `_downstream_map` | AR-130 |
-| TEST | `test_results` (test_plan, total_passed, total_failed, per_task) | AR-140 |
+| TEST | `test_results` (test_plan, total_passed, total_failed, per_task) | AR-140..AR-147 |
 | REVIEW | `review_results` (review_items, total_cost, total_passed, total_failed, per_task) | AR-150 |
 | FINALIZE | `workflow_summary` | AR-160 |
 
@@ -285,6 +290,8 @@ Defense-in-depth measures for the generation pipeline.
 | Truncation detection | IMPLEMENT | Incomplete LLM output | AR-802 |
 | LOC mismatch | IMPLEMENT | Design implies more code than estimated | AR-803 |
 | Multi-file completeness | After IMPLEMENT | Missing files in multi-file tasks | AR-804 |
+| Semantic validators | TEST | Placeholder, import, proto, protocol, Dockerfile defects | AR-143..AR-147 |
+| Service metadata preflight | Before PLAN | Missing service metadata for service-related tasks | AR-810 |
 
 ### Planned Safety Features
 
@@ -309,6 +316,7 @@ Defense-in-depth measures for the generation pipeline.
 | AR-120..AR-126 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | `artisan_phases/design_documentation.py` |
 | AR-130..AR-137 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `artisan_phases/development.py` |
 | AR-140..AR-142 | `src/startd8/contractors/context_seed_handlers.py` (TestPhaseHandler) | |
+| AR-143..AR-147 | `src/startd8/contractors/artisan_phases/self_consistency.py` | `context_seed_handlers.py` (Gate 3b), `rules_validators.py` |
 | AR-150..AR-152 | `src/startd8/contractors/context_seed_handlers.py` (ReviewPhaseHandler) | |
 | AR-160..AR-165 | `src/startd8/contractors/context_seed_handlers.py` (FinalizePhaseHandler) | |
 | AR-200..AR-211 | `src/startd8/contractors/artisan_contractor.py` | `scripts/run_artisan_workflow.py` |
@@ -317,7 +325,7 @@ Defense-in-depth measures for the generation pipeline.
 | AR-500..AR-511 | `src/startd8/contractors/handoff.py` | `artisan_contractor.py` |
 | AR-600..AR-607 | `src/startd8/contractors/artisan_contractor.py` | `context_seed_handlers.py` |
 | AR-700..AR-707 | `src/startd8/contractors/context_seed_handlers.py` | `scripts/run_artisan_workflow.py` |
-| AR-800..AR-809 | `src/startd8/contractors/artisan_phases/preflight.py` | `context_seed_handlers.py`, `artisan_contractor.py` |
+| AR-800..AR-810 | `src/startd8/contractors/artisan_phases/preflight.py` | `context_seed_handlers.py`, `artisan_contractor.py`, `rules_common.py` |
 
 ### Requirement to Test File
 
@@ -328,6 +336,7 @@ Defense-in-depth measures for the generation pipeline.
 | AR-120..AR-124 | `tests/unit/contractors/test_design_phase_handler.py`, `test_design_quality_context.py`, `test_artisan_design_documentation.py` |
 | AR-130..AR-136 | `tests/unit/contractors/test_implement_phase_integration.py`, `test_implement_auto_commit.py` |
 | AR-140..AR-142 | `tests/unit/contractors/test_context_seed_review_finalize.py`, `test_artisan_test_construction.py` |
+| AR-143..AR-147 | `tests/unit/contractors/test_self_consistency_validators.py`, `test_gate3b_content_validation.py` |
 | AR-150..AR-152 | `tests/unit/contractors/test_review_phase_handler.py`, `test_context_seed_review_finalize.py` |
 | AR-160..AR-163 | `tests/unit/contractors/test_context_seed_review_finalize.py` |
 | AR-200..AR-208 | `tests/unit/contractors/test_7phase_integration.py`, `tests/e2e/contractors/test_artisan_e2e.py` |
@@ -342,6 +351,7 @@ Defense-in-depth measures for the generation pipeline.
 | AR-700..AR-703 | `tests/unit/test_artisan_config.py` |
 | AR-800 | `tests/unit/contractors/test_artisan_preflight.py`, `tests/e2e/contractors/test_artisan_preflight_failure.py` |
 | AR-806 | `tests/e2e/contractors/test_artisan_escalation.py` |
+| AR-810 | `tests/unit/test_service_metadata_preflight.py` |
 
 ### Test Coverage Gaps
 
@@ -365,6 +375,7 @@ Requirements with no `verified_by` test file (need new tests):
 
 | Phase | Requirements | Priority | Impact |
 |-------|-------------|----------|--------|
+| ~~1b. Semantic Validators~~ | ~~AR-143..AR-147, AR-810~~ | ~~**High**~~ | ~~DONE — Commits `bed77d5`, `dc3c241`~~ |
 | 1. ContextCore Data Flow Fixes | AR-300..AR-302, AR-164, AR-165 | **High** | Closes provenance chain, enables Gate 3 |
 | 2. Onboarding Metadata Consumption | AR-303..AR-308, AR-111, AR-125..AR-126, AR-137 | **Medium** | Enriches code generation with export data |
 | 3. Recovery Hardening | AR-508..AR-511 | **Medium** | Robust resume across config changes |
