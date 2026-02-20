@@ -282,6 +282,10 @@ _COMMON_PACKAGES: Dict[str, str] = {
     "urllib3": "urllib3",
     "websockets": "websockets",
     "grpcio": "grpc",
+    "grpc": "grpc",
+    "grpcio-tools": "grpc_tools",
+    "grpcio-health-checking": "grpc_health",
+    "grpcio-reflection": "grpc_reflection",
     # Data / serialization
     "pyyaml": "yaml",
     "ruamel.yaml": "ruamel",
@@ -296,11 +300,13 @@ _COMMON_PACKAGES: Dict[str, str] = {
     "rich": "rich",
     "colorama": "colorama",
     "tqdm": "tqdm",
-    # Testing
+    # Testing / load testing
     "pytest": "pytest",
     "mock": "mock",
     "hypothesis": "hypothesis",
     "factory-boy": "factory",
+    "locust": "locust",
+    "faker": "faker",
     # Database
     "sqlalchemy": "sqlalchemy",
     "psycopg2": "psycopg2",

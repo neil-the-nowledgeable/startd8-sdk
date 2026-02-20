@@ -81,17 +81,31 @@ class SingleModuleConstraintsRule(PreflightRule):
 
     def evaluate(self, ctx: RuleContext) -> Optional[RuleContribution]:
         all_importable = ctx.available_deps.all_importable
-        # For the LLM prompt hint, show only public module names (skip _-prefixed
-        # internal modules) to keep the constraint readable while covering the
-        # names the generated code is likely to use.
-        public = sorted(n for n in all_importable if not n.startswith("_"))
+        confidence = ctx.available_deps.confidence
+
+        constraints = [
+            "Output a single Python module -- not a package",
+            "Do not use relative imports (from .module import ...)",
+        ]
+
+        if confidence >= 0.8:
+            # High-confidence allowlist — binding constraint.
+            public = sorted(n for n in all_importable if not n.startswith("_"))
+            constraints.append(f"Only import from: {', '.join(public)}")
+        else:
+            # Low-confidence allowlist (no pyproject.toml / requirements.txt).
+            # A binding constraint here causes false positives (P1) and
+            # misleads the code generator into using wrong libraries (DEV-001).
+            constraints.append(
+                "Import any packages required for the task. "
+                "The project has no dependency manifest, so third-party "
+                "packages are acceptable. Prefer stdlib when sufficient."
+            )
+
+        constraints.append("Define utility functions before classes that reference them")
+
         return RuleContribution(
-            constraints=[
-                "Output a single Python module -- not a package",
-                "Do not use relative imports (from .module import ...)",
-                f"Only import from: {', '.join(public)}",
-                "Define utility functions before classes that reference them",
-            ],
+            constraints=constraints,
             validators=[
                 "no_relative_imports",
                 "deps_available",
