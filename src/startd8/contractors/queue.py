@@ -51,6 +51,7 @@ class FeatureSpec:
     error_message: Optional[str] = None
     integration_attempts: int = 0
     generated_files: List[str] = field(default_factory=list)
+    metadata: Dict = field(default_factory=dict)
 
     def to_dict(self) -> Dict:
         """Convert to dictionary for JSON serialization."""
@@ -63,6 +64,8 @@ class FeatureSpec:
         """Create from dictionary."""
         d = d.copy()
         d["status"] = FeatureStatus(d.get("status", "pending"))
+        # Tolerate older state files that lack 'metadata'
+        d.setdefault("metadata", {})
         return cls(**d)
 
 
@@ -242,6 +245,29 @@ class FeatureQueue:
                 dependencies=dependencies,
                 target_files=target_files,
             )
+            # Mottainai Gap 9: preserve seed enrichment through the queue
+            # boundary so prime gen_context can access it downstream.
+            enrichment = task.get("_enrichment", {})
+            artifact_types = task.get("config", {}).get(
+                "context", {}
+            ).get("artifact_types_addressed", [])
+            design_sections = task.get("config", {}).get(
+                "context", {}
+            ).get("design_doc_sections", [])
+            estimated_loc = task.get("config", {}).get(
+                "context", {}
+            ).get("estimated_loc")
+            meta: Dict = {}
+            if enrichment:
+                meta["_enrichment"] = enrichment
+            if artifact_types:
+                meta["artifact_types_addressed"] = artifact_types
+            if design_sections:
+                meta["design_doc_sections"] = design_sections
+            if estimated_loc is not None:
+                meta["estimated_loc"] = estimated_loc
+            if meta:
+                spec.metadata.update(meta)
             added.append(spec)
 
         return added

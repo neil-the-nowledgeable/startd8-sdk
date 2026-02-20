@@ -598,6 +598,39 @@ def _artifact_target_from_id(artifact_id: str, artifact_type: str) -> Optional[s
     return None
 
 
+def _infer_artifact_types_from_files(files: List[str]) -> List[str]:
+    """Infer artifact types from target file names (Mottainai Phase 2.2).
+
+    Returns a deduplicated list of artifact type strings.  Only applies
+    deterministic, zero-cost heuristics — no LLM involved.
+    """
+    types: list[str] = []
+    seen: set[str] = set()
+    for f in files:
+        lower = f.lower()
+        name = lower.rsplit("/", 1)[-1] if "/" in lower else lower
+        inferred: Optional[str] = None
+        if name.startswith("dockerfile") or name.endswith(".dockerfile"):
+            inferred = "dockerfile"
+        elif name in (
+            "requirements.txt", "requirements.in", "go.mod", "go.sum",
+            "package.json", "package-lock.json", "pyproject.toml",
+            "setup.py", "setup.cfg", "Pipfile", "Pipfile.lock",
+            "yarn.lock", "pnpm-lock.yaml", "Cargo.toml", "Cargo.lock",
+        ):
+            inferred = "dependency_manifest"
+        elif name.endswith(".proto"):
+            inferred = "proto_contract"
+        elif any(name.endswith(ext) for ext in (
+            ".py", ".go", ".js", ".ts", ".rs", ".java", ".rb", ".cs",
+        )):
+            inferred = "source_module"
+        if inferred and inferred not in seen:
+            types.append(inferred)
+            seen.add(inferred)
+    return types
+
+
 def _derive_target_files_from_artifact_ids(
     artifact_ids: List[str],
     output_path_conventions: Dict[str, Any],
@@ -1961,6 +1994,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                 ctx["design_doc_sections"] = list(feat.design_doc_sections)
             if feat.artifact_types_addressed:
                 ctx["artifact_types_addressed"] = list(feat.artifact_types_addressed)
+            elif ordered_files:
+                # Mottainai Phase 2.2: infer artifact types from target file
+                # patterns so downstream injections keyed on artifact_types
+                # have something to match against.
+                inferred = _infer_artifact_types_from_files(ordered_files)
+                if inferred:
+                    ctx["artifact_types_addressed"] = inferred
 
             mapped_requirements = feature_to_requirements.get(feat.feature_id, [])
             if mapped_requirements:
@@ -2630,6 +2670,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         manifest_context: Optional[Dict[str, Any]] = None,
         translation_quality: Optional[Dict[str, Any]] = None,
         requirement_hints: Optional[Dict[str, Dict[str, Any]]] = None,
+        onboarding_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]]]:
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
@@ -2665,11 +2706,13 @@ class PlanIngestionWorkflow(WorkflowBase):
             costs = step_costs or {}
             total_cost = sum(costs.values())
 
-            # Load onboarding metadata early so file_ownership is available
-            # for _derive_tasks_from_features (defense-in-depth Principle 1).
-            onboarding_early = self._load_onboarding_metadata(
-                context_files, output_dir
-            ) if context_files else None
+            # Mottainai: prefer onboarding already loaded by PREFLIGHT
+            # (avoids re-reading from disk and ensures data never silently
+            # disappears when context_files omits onboarding-metadata.json).
+            onboarding_early = onboarding_metadata or (
+                self._load_onboarding_metadata(context_files, output_dir)
+                if context_files else None
+            )
             _file_ownership = (
                 onboarding_early.get("file_ownership") if onboarding_early else None
             )
@@ -2776,9 +2819,11 @@ class PlanIngestionWorkflow(WorkflowBase):
             costs = step_costs or {}
             total_cost = sum(costs.values())
 
-            onboarding_prime = self._load_onboarding_metadata(
-                context_files, output_dir
-            ) if context_files else None
+            # Mottainai: prefer onboarding already loaded by PREFLIGHT
+            onboarding_prime = onboarding_metadata or (
+                self._load_onboarding_metadata(context_files, output_dir)
+                if context_files else None
+            )
             _file_ownership = (
                 onboarding_prime.get("file_ownership") if onboarding_prime else None
             )
@@ -2801,7 +2846,14 @@ class PlanIngestionWorkflow(WorkflowBase):
                 ),
             )
 
-            # Build artifacts dict (no architectural_context or design_calibration)
+            # Mottainai: derive architectural_context + design_calibration
+            # for prime route too (closes Gaps 11-12).
+            m_ctx_prime = manifest_context or {}
+            architectural_context_prime = self._derive_architectural_context(
+                parsed_plan, m_ctx_prime,
+            )
+            design_calibration_prime = self._derive_design_calibration(tasks)
+
             artifacts_prime: Dict[str, Any] = {
                 "plan_document_path": str(doc_path),
                 "review_config_path": str(config_path),
@@ -2840,8 +2892,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                     **{f"{k}_cost": v for k, v in costs.items()},
                     "total_cost": total_cost,
                 },
-                architectural_context=None,
-                design_calibration=None,
+                architectural_context=architectural_context_prime,
+                design_calibration=design_calibration_prime,
                 onboarding=onboarding_var_prime,
                 context_files=context_files_list_prime,
             )
@@ -2856,7 +2908,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 output_dir=output_dir,
                 doc_path=doc_path,
                 context_seed_path=prime_seed_path,
-                design_calibration=None,
+                design_calibration=design_calibration_prime,
                 context_files=context_files,
                 source_checksum_val=source_checksum_prime,
             )
@@ -3249,6 +3301,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 manifest_context=manifest_context,
                 translation_quality=translation_quality,
                 requirement_hints=requirements_hints_index,
+                onboarding_metadata=onboarding_metadata,
             )
 
             # Emit deterministic traceability report for downstream auditing.

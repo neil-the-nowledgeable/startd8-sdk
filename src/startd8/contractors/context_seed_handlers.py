@@ -1163,16 +1163,32 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             if risk_section:
                 additional_context["plan_risks"] = risk_section
 
-        # Mottainai: calibration hints override depth_guidance when not already set
-        if inv_calibration_hints and not depth_guidance and task.artifact_types_addressed:
-            for atype in task.artifact_types_addressed:
-                hint = inv_calibration_hints.get(atype)
-                if hint and hint.get("expected_depth"):
-                    depth_guidance = hint["expected_depth"]
+        # Mottainai: calibration hints override depth_guidance when not already set.
+        # When artifact_types_addressed is empty (Gap 6 / Phase 2.1), fall back
+        # to the most common depth hint across all artifact types so project-wide
+        # calibration data still reaches the DESIGN prompt.
+        if inv_calibration_hints and not depth_guidance:
+            if task.artifact_types_addressed:
+                for atype in task.artifact_types_addressed:
+                    hint = inv_calibration_hints.get(atype)
+                    if hint and hint.get("expected_depth"):
+                        depth_guidance = hint["expected_depth"]
+                        additional_context["calibration_override_source"] = (
+                            "export.calibration_hints"
+                        )
+                        break  # Use first matching type's calibration
+            else:
+                # Project-level fallback: use most common depth across all types
+                depth_counts: dict[str, int] = {}
+                for hint in inv_calibration_hints.values():
+                    if isinstance(hint, dict) and hint.get("expected_depth"):
+                        d = hint["expected_depth"]
+                        depth_counts[d] = depth_counts.get(d, 0) + 1
+                if depth_counts:
+                    depth_guidance = max(depth_counts, key=depth_counts.get)  # type: ignore[arg-type]
                     additional_context["calibration_override_source"] = (
-                        "export.calibration_hints"
+                        "export.calibration_hints (project-level fallback)"
                     )
-                    break  # Use first matching type's calibration
 
         # Mottainai: surface open questions from ContextCore guidance so DESIGN
         # decisions are made with awareness of flagged uncertainties (Gap 7).
