@@ -1,12 +1,15 @@
 """
-Tests for automated triage step in ArchitecturalReviewLogWorkflow.
+Tests for automated triage step and apply-suggestions step in ArchitecturalReviewLogWorkflow.
 
 Covers:
 - Helper functions: _strip_json_fences, _extract_untriaged_suggestions,
   _validate_triage_output, _apply_triage_decisions, _compute_substantially_addressed,
   _insert_substantially_addressed_section
+- Apply helpers: _extract_accepted_suggestions_for_apply, _build_apply_prompt,
+  _validate_apply_output, _build_shared_system_prompt
 - Integration: triage runs after reviewers, enable_triage config, cost tracking,
   StepResult, partial triage, no-untriaged skip
+- Integration: apply-suggestions step, prompt caching via system_prompt
 """
 
 import json
@@ -17,6 +20,7 @@ import pytest
 from startd8.exceptions import GeminiSafetyFilterError
 from startd8.models import TokenUsage
 from startd8.workflows.builtin.architectural_review_log_workflow import (
+    APPENDIX_HEADING,
     APPENDIX_TEMPLATE,
     ALLOWED_AREAS,
     _strip_json_fences,
@@ -30,12 +34,17 @@ from startd8.workflows.builtin.architectural_review_log_workflow import (
     _insert_areas_needing_review_section,
     _build_triage_prompt,
     _build_prompt,
+    _build_shared_system_prompt,
+    _build_apply_prompt,
     _build_untriaged_block,
+    _extract_accepted_suggestions_for_apply,
     _extract_reviewer_sources,
     _extract_feature_snippet,
+    _fix_snippet_ids,
     _get_feature_doc_path,
     _ensure_appendix_exists,
     _compute_substantially_addressed_from_doc,
+    _validate_apply_output,
     ArchitecturalReviewLogWorkflow,
 )
 
@@ -251,6 +260,15 @@ class TestValidateTriageOutput:
         assert "Partial" in msg
         assert len(decisions) == 1
         assert decisions[0]["id"] == "R1-S1"
+
+    def test_non_string_decision_handled(self):
+        """Non-string decision (e.g. boolean) should not crash with AttributeError."""
+        data = [
+            {"id": "R1-S1", "decision": True, "summary": "Test", "rationale": "Ok", "area": "architecture"},
+        ]
+        ok, msg, decisions, missing = _validate_triage_output(json.dumps(data), ["R1-S1"])
+        assert ok is False
+        assert "must be a string" in msg
 
 
 # ---------------------------------------------------------------------------
@@ -736,7 +754,7 @@ class TestTriageIntegration:
 
         workflow = ArchitecturalReviewLogWorkflow()
         result = workflow._execute(
-            config={"document_path": str(doc_path)},
+            config={"document_path": str(doc_path), "enable_apply": False},
             agents=[agent],
             on_progress=None,
         )
@@ -1485,6 +1503,44 @@ class TestDualDocumentMode:
         assert ok is True, f"Expected valid snippet but got: {msg}"
         assert "R1-S1" in ids
 
+    def test_fix_snippet_ids_renumbers_wrong_prefix(self):
+        """_fix_snippet_ids rewrites R3-S* to R1-S* when round_number=1."""
+        snippet = (
+            "#### Review Round R1\n\n"
+            "| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            "| R3-S1 | Architecture | high | Fix it | Because | Section 1 | Test |\n"
+            "| R3-F1 | Security | medium | Clarify | Ambiguous | Section 2 | Review |\n"
+        )
+        fixed = _fix_snippet_ids(snippet, round_number=1)
+        assert "R1-S1" in fixed
+        assert "R1-F1" in fixed
+        assert "R3-S1" not in fixed
+        assert "R3-F1" not in fixed
+        # Heading is unchanged (not an ID pattern)
+        assert "#### Review Round R1" in fixed
+
+    def test_fix_snippet_ids_noop_when_correct(self):
+        """_fix_snippet_ids is a no-op when IDs already match."""
+        snippet = "| R2-S1 | Architecture | high | Fix | Why | Where | How |\n"
+        assert _fix_snippet_ids(snippet, round_number=2) == snippet
+
+    def test_fix_snippet_ids_preserves_endorsement_references(self):
+        """Endorsement references to prior rounds should NOT be rewritten."""
+        snippet = (
+            "#### Review Round R1\n\n"
+            "| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            "| R3-S1 | architecture | high | Fix X | Because | Section 2 | Review |\n\n"
+            "**Endorsements** (prior untriaged suggestions this reviewer agrees with):\n"
+            "- R2-S3: Good point about retry logic\n"
+        )
+        fixed = _fix_snippet_ids(snippet, round_number=1)
+        # Table IDs should be rewritten to R1
+        assert "| R1-S1 |" in fixed
+        # Endorsement reference to R2-S3 should be preserved (not rewritten to R1-S3)
+        assert "R2-S3" in fixed
+
     def test_endorsement_matches_f_prefix(self):
         """Endorsement regex matches F-prefix IDs."""
         doc_with_f_endorsement = SAMPLE_DOC_WITH_SUGGESTIONS.replace(
@@ -1592,3 +1648,746 @@ class TestBuildTriagePromptFeatureAwareness:
             has_feature_suggestions=False,
         )
         assert "R*-S* IDs are plan suggestions" not in prompt
+
+
+# ---------------------------------------------------------------------------
+# _build_shared_system_prompt tests
+# ---------------------------------------------------------------------------
+
+class TestBuildSharedSystemPrompt:
+
+    def test_includes_document(self):
+        sp = _build_shared_system_prompt("# My Plan\n\nSome content.")
+        assert "# My Plan" in sp
+        assert "Some content." in sp
+        assert "Document under review" in sp
+
+    def test_includes_requirements(self):
+        sp = _build_shared_system_prompt("doc", requirements_content="## Req\n\nNeed OAuth2.")
+        assert "Feature Requirements" in sp
+        assert "Need OAuth2" in sp
+
+    def test_includes_context(self):
+        sp = _build_shared_system_prompt("doc", context_content="## Lesson\n\nDon't use X.")
+        assert "Reference material" in sp
+        assert "Don't use X" in sp
+
+    def test_empty_requirements_excluded(self):
+        sp = _build_shared_system_prompt("doc", requirements_content="")
+        assert "Feature Requirements" not in sp
+
+    def test_empty_context_excluded(self):
+        sp = _build_shared_system_prompt("doc", context_content="   ")
+        assert "Reference material" not in sp
+
+    def test_order_is_doc_then_req_then_context(self):
+        sp = _build_shared_system_prompt(
+            "doc body",
+            requirements_content="requirements here",
+            context_content="context here",
+        )
+        assert sp.index("doc body") < sp.index("requirements here") < sp.index("context here")
+
+
+# ---------------------------------------------------------------------------
+# _build_prompt use_system_prompt tests
+# ---------------------------------------------------------------------------
+
+class TestBuildPromptSystemPromptSplit:
+
+    def test_use_system_prompt_omits_document(self):
+        prompt = _build_prompt(
+            document_without_appendix="# Big Plan\n\nLots of content.",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (model)",
+            scope="Test",
+            use_system_prompt=True,
+        )
+        assert "# Big Plan" not in prompt
+        assert "Lots of content" not in prompt
+        # Instructions should still be present
+        assert "Review Round R1" in prompt
+
+    def test_use_system_prompt_omits_context(self):
+        prompt = _build_prompt(
+            document_without_appendix="doc",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (model)",
+            scope="Test",
+            context_content="## Secret Lesson\n\nImportant context.",
+            use_system_prompt=True,
+        )
+        assert "Secret Lesson" not in prompt
+        assert "Reference material" not in prompt
+
+    def test_use_system_prompt_omits_requirements(self):
+        prompt = _build_prompt(
+            document_without_appendix="doc",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (model)",
+            scope="Test",
+            requirements_content="## Feature\n\nMust do X.",
+            use_system_prompt=True,
+        )
+        assert "Must do X" not in prompt
+        assert "Feature Requirements" not in prompt
+
+    def test_default_includes_document(self):
+        """Default (use_system_prompt=False) includes document body."""
+        prompt = _build_prompt(
+            document_without_appendix="# Full Plan",
+            applied_ids=[], rejected_ids=[],
+            round_number=1, max_suggestions=5,
+            reviewer_label="test (model)",
+            scope="Test",
+        )
+        assert "# Full Plan" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _build_triage_prompt use_system_prompt tests
+# ---------------------------------------------------------------------------
+
+class TestBuildTriagePromptSystemPromptSplit:
+
+    def test_use_system_prompt_omits_document(self):
+        prompt = _build_triage_prompt(
+            document_without_appendix="# My Plan\n\nContent here.",
+            applied_ids=[], rejected_ids=[],
+            untriaged_block="| R1-S1 | arch | high | test | ok | s1 | v1 |",
+            endorsement_counts={},
+            use_system_prompt=True,
+        )
+        assert "# My Plan" not in prompt
+        assert "Content here" not in prompt
+        # Triage instructions should remain
+        assert "ACCEPT" in prompt
+        assert "REJECT" in prompt
+        assert "R1-S1" in prompt
+
+    def test_default_includes_document(self):
+        prompt = _build_triage_prompt(
+            document_without_appendix="# My Plan",
+            applied_ids=[], rejected_ids=[],
+            untriaged_block="block",
+            endorsement_counts={},
+        )
+        assert "# My Plan" in prompt
+        assert "Document being reviewed" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _extract_accepted_suggestions_for_apply tests
+# ---------------------------------------------------------------------------
+
+class TestExtractAcceptedSuggestionsForApply:
+
+    def test_filters_only_accept(self):
+        decisions = [
+            {"id": "R1-S1", "decision": "ACCEPT", "rationale": "Good"},
+            {"id": "R1-S2", "decision": "REJECT", "rationale": "Bad"},
+            {"id": "R1-S3", "decision": "ACCEPT", "rationale": "Great"},
+        ]
+        untriaged = [
+            {"id": "R1-S1", "suggestion": "Add X", "placement": "S1", "validation": "V1"},
+            {"id": "R1-S2", "suggestion": "Add Y", "placement": "S2", "validation": "V2"},
+            {"id": "R1-S3", "suggestion": "Add Z", "placement": "S3", "validation": "V3"},
+        ]
+        result = _extract_accepted_suggestions_for_apply(decisions, untriaged)
+        assert len(result) == 2
+        ids = [r["id"] for r in result]
+        assert "R1-S1" in ids
+        assert "R1-S3" in ids
+        assert "R1-S2" not in ids
+
+    def test_merges_triage_rationale(self):
+        decisions = [{"id": "R1-S1", "decision": "ACCEPT", "rationale": "Critical fix"}]
+        untriaged = [{"id": "R1-S1", "suggestion": "Add X", "placement": "S1"}]
+        result = _extract_accepted_suggestions_for_apply(decisions, untriaged)
+        assert result[0]["triage_rationale"] == "Critical fix"
+        assert result[0]["suggestion"] == "Add X"
+
+    def test_handles_missing_ids(self):
+        """If a triage decision references an ID not in untriaged, use minimal dict."""
+        decisions = [{"id": "R99-S1", "decision": "ACCEPT", "rationale": "Good"}]
+        result = _extract_accepted_suggestions_for_apply(decisions, [])
+        assert len(result) == 1
+        assert result[0]["id"] == "R99-S1"
+        assert result[0]["triage_rationale"] == "Good"
+
+    def test_empty_decisions(self):
+        result = _extract_accepted_suggestions_for_apply([], [])
+        assert result == []
+
+    def test_all_reject(self):
+        decisions = [
+            {"id": "R1-S1", "decision": "REJECT", "rationale": "Nope"},
+        ]
+        result = _extract_accepted_suggestions_for_apply(decisions, [])
+        assert result == []
+
+
+# ---------------------------------------------------------------------------
+# _build_apply_prompt tests
+# ---------------------------------------------------------------------------
+
+class TestBuildApplyPrompt:
+
+    def test_includes_suggestion_table(self):
+        suggestions = [
+            {"id": "R1-S1", "suggestion": "Add circuit breakers", "placement": "Section 3",
+             "triage_rationale": "Critical"},
+        ]
+        prompt = _build_apply_prompt(suggestions)
+        assert "R1-S1" in prompt
+        assert "Add circuit breakers" in prompt
+        assert "Section 3" in prompt
+        assert "Critical" in prompt
+
+    def test_includes_doc_when_no_system_prompt(self):
+        suggestions = [{"id": "R1-S1", "suggestion": "X", "placement": "S1", "triage_rationale": "Y"}]
+        prompt = _build_apply_prompt(suggestions, document_without_appendix="# My Plan")
+        assert "# My Plan" in prompt
+
+    def test_excludes_doc_when_use_system_prompt(self):
+        suggestions = [{"id": "R1-S1", "suggestion": "X", "placement": "S1", "triage_rationale": "Y"}]
+        prompt = _build_apply_prompt(suggestions, use_system_prompt=True, document_without_appendix="# My Plan")
+        assert "# My Plan" not in prompt
+
+    def test_respects_persona(self):
+        suggestions = [{"id": "R1-S1", "suggestion": "X", "placement": "S1", "triage_rationale": "Y"}]
+        prompt = _build_apply_prompt(suggestions, persona="expert security auditor")
+        assert "expert security auditor" in prompt
+
+    def test_default_persona(self):
+        suggestions = [{"id": "R1-S1", "suggestion": "X", "placement": "S1", "triage_rationale": "Y"}]
+        prompt = _build_apply_prompt(suggestions)
+        assert "expert enterprise architect" in prompt
+
+    def test_no_appendix_instruction(self):
+        suggestions = [{"id": "R1-S1", "suggestion": "X", "placement": "S1", "triage_rationale": "Y"}]
+        prompt = _build_apply_prompt(suggestions)
+        assert "Do NOT include any appendix" in prompt
+
+
+# ---------------------------------------------------------------------------
+# _validate_apply_output tests
+# ---------------------------------------------------------------------------
+
+class TestValidateApplyOutput:
+
+    def _make_body(self):
+        return "# Test Plan\n\n## Architecture\n\nContent here.\n\n## Security\n\nMore content.\n"
+
+    def test_valid_output(self):
+        body = self._make_body()
+        output = body + "\nNew circuit breakers section added.\n"
+        ok, msg, warns = _validate_apply_output(output, body, [])
+        assert ok is True
+        assert msg == "ok"
+
+    def test_empty_output_rejected(self):
+        ok, msg, warns = _validate_apply_output("", self._make_body(), [])
+        assert ok is False
+        assert "Empty" in msg
+
+    def test_short_output_rejected(self):
+        body = self._make_body()
+        ok, msg, warns = _validate_apply_output("short", body, [])
+        assert ok is False
+        assert "too short" in msg
+
+    def test_missing_headings_rejected(self):
+        body = self._make_body()
+        # Output missing "## Security" heading
+        output = "# Test Plan\n\n## Architecture\n\nUpdated content.\n"
+        ok, msg, warns = _validate_apply_output(output, body, [])
+        assert ok is False
+        assert "Missing" in msg
+
+    def test_appendix_leakage_rejected(self):
+        body = self._make_body()
+        output = body + "\n### Appendix A: Applied Suggestions\n"
+        ok, msg, warns = _validate_apply_output(output, body, [])
+        assert ok is False
+        assert "appendix leakage" in msg.lower()
+
+    def test_integration_warnings(self):
+        body = self._make_body()
+        suggestions = [
+            {"id": "R1-S1", "suggestion": "Add circuit breakers for resilience"},
+        ]
+        # Output that doesn't contain key terms from suggestion
+        ok, msg, warns = _validate_apply_output(body, body, suggestions)
+        assert ok is True
+        assert "R1-S1" in warns
+
+    def test_no_warnings_when_terms_present(self):
+        body = self._make_body()
+        suggestions = [
+            {"id": "R1-S1", "suggestion": "Add Architecture improvements"},
+        ]
+        ok, msg, warns = _validate_apply_output(body, body, suggestions)
+        assert ok is True
+        assert warns == []
+
+
+# ---------------------------------------------------------------------------
+# Apply integration tests
+# ---------------------------------------------------------------------------
+
+class TestApplyIntegration:
+
+    def _make_valid_snippet(self, round_number):
+        return (
+            f"#### Review Round R{round_number}\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-09 00:00:00 UTC\n"
+            f"- **Scope**: Architecture-focused review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R{round_number}-S1 | Architecture | high | Add circuit breakers | Critical for resilience | Section 3 | Load testing |\n"
+            f"| R{round_number}-S2 | Security | medium | Add rate limiting | Prevent abuse | Section 5 | Pen testing |\n"
+        )
+
+    def _make_mock_agent(self, name="test-agent", model="test-model"):
+        agent = MagicMock()
+        agent.name = name
+        agent.model = model
+        agent.safety_settings = None
+        agent.__class__.__module__ = "startd8.agents.claude"
+        return agent
+
+    def _make_triage_response(self, suggestion_ids, decisions=None):
+        if decisions is None:
+            decisions = ["ACCEPT"] * len(suggestion_ids)
+        data = []
+        for sid, dec in zip(suggestion_ids, decisions):
+            data.append({
+                "id": sid, "decision": dec,
+                "summary": f"Summary for {sid}",
+                "rationale": f"Rationale for {sid}",
+                "area": "architecture",
+            })
+        return json.dumps(data)
+
+    def _make_apply_response(self, doc_text):
+        """Build a valid apply response (doc body without appendix)."""
+        idx = doc_text.find(APPENDIX_HEADING)
+        if idx != -1:
+            return doc_text[:idx].rstrip() + "\n\nCircuit breakers were integrated into Section 3.\n"
+        return doc_text + "\nCircuit breakers were integrated into Section 3.\n"
+
+    def test_full_pipeline_review_triage_apply(self, tmp_path):
+        """Full pipeline: review -> triage -> apply integrates suggestions."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\n## Architecture\n\nSome content here.\n\n## Security\n\nMore content.\n")
+
+        snippet = self._make_valid_snippet(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = self._make_triage_response(["R1-S1", "R1-S2"])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        # Read the doc after appendix is added (simulating what happens in _execute)
+        initial_doc = doc_path.read_text()
+
+        # Build a valid apply output
+        apply_output = "# Test Plan\n\n## Architecture\n\nSome content here.\n\nCircuit breakers were added.\n\n## Security\n\nMore content with rate limiting.\n"
+        apply_token_usage = TokenUsage(input=300, output=200, total=500, model_name="test")
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),           # review
+            (triage_response, 300, triage_token_usage),  # triage
+            (apply_output, 400, apply_token_usage),      # apply
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path), "enable_prompt_caching": False},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        assert result.output["apply"]["applied_count"] == 2
+        assert result.output["apply"]["applied_ids"] == ["R1-S1", "R1-S2"]
+        assert result.output["apply"]["error"] is None
+
+        # Verify document body was updated
+        final_doc = doc_path.read_text()
+        assert "Circuit breakers were added" in final_doc
+        # Appendix should still be present
+        assert "### Appendix A" in final_doc
+        assert "### Appendix C" in final_doc
+
+        # Agent called 3 times: review, triage, apply
+        assert agent.generate.call_count == 3
+
+    def test_enable_apply_false_skips(self, tmp_path):
+        """enable_apply: False skips the apply step."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content here.\n")
+
+        snippet = self._make_valid_snippet(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = self._make_triage_response(["R1-S1", "R1-S2"])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path), "enable_apply": False},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        assert result.output["apply"]["enabled"] is False
+        assert result.output["apply"]["applied_count"] == 0
+        # Only 2 calls: review + triage (no apply)
+        assert agent.generate.call_count == 2
+
+    def test_apply_validation_failure_preserves_original(self, tmp_path):
+        """Bad LLM output from apply doesn't corrupt the document."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\n## Architecture\n\nSome content here.\n\n## Security\n\nMore.\n")
+
+        snippet = self._make_valid_snippet(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = self._make_triage_response(["R1-S1", "R1-S2"])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        # Bad apply output: way too short
+        bad_apply = "short"
+        apply_token_usage = TokenUsage(input=300, output=10, total=310, model_name="test")
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+            (bad_apply, 100, apply_token_usage),    # initial apply (fails validation)
+            (bad_apply, 100, apply_token_usage),    # retry (also fails)
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path), "enable_prompt_caching": False},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        # Workflow still succeeds (apply failure is non-fatal)
+        assert result.success is True
+        assert result.output["apply"]["applied_count"] == 0
+        assert result.output["apply"]["error"] is not None
+
+        # Document should still have original content (not corrupted)
+        final_doc = doc_path.read_text()
+        assert "## Architecture" in final_doc
+        assert "## Security" in final_doc
+
+    def test_apply_retry_on_validation_failure(self, tmp_path):
+        """First apply attempt fails validation, retry succeeds."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\n## Architecture\n\nSome content.\n\n## Security\n\nMore.\n")
+
+        snippet = self._make_valid_snippet(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = self._make_triage_response(["R1-S1", "R1-S2"])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        bad_apply = "too short"
+        good_apply = "# Test Plan\n\n## Architecture\n\nSome content.\n\nCircuit breakers added.\n\n## Security\n\nMore with rate limiting.\n"
+        apply_tu = TokenUsage(input=300, output=200, total=500, model_name="test")
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+            (bad_apply, 100, apply_tu),     # first apply (fails)
+            (good_apply, 200, apply_tu),    # retry (succeeds)
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path), "enable_prompt_caching": False},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        assert result.output["apply"]["applied_count"] == 2
+        assert result.output["apply"]["error"] is None
+
+        final_doc = doc_path.read_text()
+        assert "Circuit breakers added" in final_doc
+
+    def test_no_accepted_suggestions_skips_apply(self, tmp_path):
+        """All REJECT → apply step is skipped."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content.\n")
+
+        snippet = self._make_valid_snippet(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = self._make_triage_response(["R1-S1", "R1-S2"], ["REJECT", "REJECT"])
+        triage_token_usage = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, token_usage),
+            (triage_response, 300, triage_token_usage),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path)},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        assert result.output["apply"]["applied_count"] == 0
+        # Only 2 calls (review + triage), no apply since all rejected
+        assert agent.generate.call_count == 2
+
+    def test_apply_costs_tracked(self, tmp_path):
+        """Apply step tokens and cost are included in totals."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\n## Architecture\n\nContent.\n\n## Security\n\nMore.\n")
+
+        snippet = self._make_valid_snippet(1)
+        review_tu = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = self._make_triage_response(["R1-S1", "R1-S2"])
+        triage_tu = TokenUsage(input=200, output=100, total=300, model_name="test")
+
+        apply_output = "# Test Plan\n\n## Architecture\n\nContent.\n\nUpdated.\n\n## Security\n\nMore.\n"
+        apply_tu = TokenUsage(input=500, output=300, total=800, model_name="test")
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, review_tu),
+            (triage_response, 300, triage_tu),
+            (apply_output, 400, apply_tu),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path), "enable_prompt_caching": False},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        # Total should include review + triage + apply tokens
+        assert result.metrics.input_tokens == 800   # 100 + 200 + 500
+        assert result.metrics.output_tokens == 450   # 50 + 100 + 300
+
+    def test_apply_step_result_created(self, tmp_path):
+        """A StepResult should be created for the apply step."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\n## Architecture\n\nContent.\n\n## Security\n\nMore.\n")
+
+        snippet = self._make_valid_snippet(1)
+        tu = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = self._make_triage_response(["R1-S1", "R1-S2"])
+        apply_output = "# Test Plan\n\n## Architecture\n\nContent.\n\nUpdated.\n\n## Security\n\nMore.\n"
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, tu),
+            (triage_response, 300, tu),
+            (apply_output, 400, tu),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path), "enable_prompt_caching": False},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        apply_steps = [s for s in result.steps if s.step_name == "apply_suggestions"]
+        assert len(apply_steps) == 1
+        assert apply_steps[0].error is None
+        assert apply_steps[0].metadata["applied_count"] == 2
+
+    def test_state_file_includes_apply(self, tmp_path):
+        """State file should contain apply info."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\n## Architecture\n\nContent.\n\n## Security\n\nMore.\n")
+
+        snippet = self._make_valid_snippet(1)
+        tu = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = self._make_triage_response(["R1-S1", "R1-S2"])
+        apply_output = "# Test Plan\n\n## Architecture\n\nContent.\n\nUpdated.\n\n## Security\n\nMore.\n"
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, tu),
+            (triage_response, 300, tu),
+            (apply_output, 400, tu),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path), "enable_prompt_caching": False},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        state_path = tmp_path / ".startd8" / "architectural_review_state.json"
+        assert state_path.exists()
+        state = json.loads(state_path.read_text())
+        assert "apply" in state
+        assert state["apply"]["applied_count"] == 2
+        assert state["apply"]["applied_ids"] == ["R1-S1", "R1-S2"]
+
+
+# ---------------------------------------------------------------------------
+# Prompt caching integration tests
+# ---------------------------------------------------------------------------
+
+class TestPromptCachingIntegration:
+
+    def _make_mock_agent(self, name="test-agent", model="test-model", is_anthropic=True):
+        agent = MagicMock()
+        agent.name = name
+        agent.model = model
+        agent.safety_settings = None
+        agent.enable_prompt_caching = False
+        if is_anthropic:
+            agent.__class__.__module__ = "startd8.agents.claude"
+        else:
+            agent.__class__.__module__ = "startd8.agents.gemini"
+        return agent
+
+    def _make_valid_snippet(self, round_number):
+        return (
+            f"#### Review Round R{round_number}\n\n"
+            f"- **Reviewer**: test-agent (test-model)\n"
+            f"- **Date**: 2026-02-09 00:00:00 UTC\n"
+            f"- **Scope**: Architecture-focused review\n\n"
+            f"| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |\n"
+            f"| ---- | ---- | ---- | ---- | ---- | ---- | ---- |\n"
+            f"| R{round_number}-S1 | Architecture | high | Test suggestion | Test rationale | Section 1 | Manual review |\n"
+        )
+
+    def test_system_prompt_passed_to_generate(self, tmp_path):
+        """When prompt caching is enabled, system_prompt kwarg is passed to generate()."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nContent.\n")
+
+        snippet = self._make_valid_snippet(1)
+        tu = TokenUsage(input=100, output=50, total=150, model_name="test")
+        triage_response = json.dumps([
+            {"id": "R1-S1", "decision": "REJECT", "summary": "Test", "rationale": "No", "area": "architecture"},
+        ])
+
+        agent = self._make_mock_agent()
+        agent.generate.side_effect = [
+            (snippet, 500, tu),
+            (triage_response, 300, tu),
+        ]
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "enable_prompt_caching": True,
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        # Both generate calls should have system_prompt kwarg
+        for call in agent.generate.call_args_list:
+            assert "system_prompt" in call.kwargs
+            assert "Document under review" in call.kwargs["system_prompt"]
+
+    def test_prompt_caching_sets_enable_on_anthropic_agent(self, tmp_path):
+        """Anthropic agents get enable_prompt_caching=True when config enabled."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nContent.\n")
+
+        snippet = self._make_valid_snippet(1)
+        tu = TokenUsage(input=100, output=50, total=150, model_name="test")
+
+        agent = self._make_mock_agent(is_anthropic=True)
+        agent.generate.return_value = (snippet, 500, tu)
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "enable_triage": False,
+                "enable_apply": False,
+                "enable_prompt_caching": True,
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert agent.enable_prompt_caching is True
+
+    def test_prompt_caching_disabled_no_system_prompt(self, tmp_path):
+        """When caching is disabled, no system_prompt kwarg."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nContent.\n")
+
+        snippet = self._make_valid_snippet(1)
+        tu = TokenUsage(input=100, output=50, total=150, model_name="test")
+
+        agent = self._make_mock_agent()
+        agent.generate.return_value = (snippet, 500, tu)
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "enable_triage": False,
+                "enable_apply": False,
+                "enable_prompt_caching": False,
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        # generate should NOT have system_prompt kwarg
+        for call in agent.generate.call_args_list:
+            assert "system_prompt" not in call.kwargs
+
+    def test_gemini_agent_not_set_enable_prompt_caching(self, tmp_path):
+        """Gemini agents don't get enable_prompt_caching set."""
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nContent.\n")
+
+        snippet = self._make_valid_snippet(1)
+        tu = TokenUsage(input=100, output=50, total=150, model_name="test")
+
+        agent = self._make_mock_agent(is_anthropic=False)
+        agent.generate.return_value = (snippet, 500, tu)
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={
+                "document_path": str(doc_path),
+                "enable_triage": False,
+                "enable_apply": False,
+                "enable_prompt_caching": True,
+            },
+            agents=[agent],
+            on_progress=None,
+        )
+
+        # Gemini agent should NOT have enable_prompt_caching set to True
+        assert agent.enable_prompt_caching is False

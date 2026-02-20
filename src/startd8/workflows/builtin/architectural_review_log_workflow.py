@@ -12,12 +12,11 @@ This workflow is a strategic variation of doc-review-log:
 from __future__ import annotations
 
 import json
-import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from ..base import WorkflowBase, ProgressCallback
 from ..models import (
@@ -31,12 +30,13 @@ from ..models import (
 )
 from ...agents import BaseAgent
 from ...exceptions import GeminiSafetyFilterError
+from ...logging_config import get_logger
 from ...model_catalog import Models, list_models_by_tier
 from ...utils.agent_resolution import resolve_agents
 from ...utils.file_operations import FileLock, atomic_write, atomic_write_json
 from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 # Relaxed safety settings for technical document review.
 # Architectural plans mention "risks", "vulnerabilities", "attack surfaces", etc.
@@ -136,6 +136,11 @@ def _is_gemini_agent(agent: BaseAgent) -> bool:
     return ".agents.gemini" in mod or mod.endswith("agents.gemini")
 
 
+def _is_anthropic_agent(agent: BaseAgent) -> bool:
+    mod = getattr(agent.__class__, "__module__", "") or ""
+    return ".agents.claude" in mod or mod.endswith("agents.claude")
+
+
 def _looks_like_model_not_found_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return ("model" in msg and ("not found" in msg or "not available" in msg or "does not exist" in msg))
@@ -170,8 +175,8 @@ def _split_cells(row: str) -> List[str]:
 
 
 def _normalize_header(cell: str) -> str:
-    """Strip markdown bold/italic markers for header comparison."""
-    return cell.strip().strip("*").strip("_").strip("*").strip()
+    """Strip markdown bold/italic markers (e.g. **Area**, _Area_) for header comparison."""
+    return re.sub(r'^[*_]+|[*_]+$', '', cell.strip()).strip()
 
 
 def _ensure_appendix_exists(doc: str) -> str:
@@ -266,7 +271,7 @@ def _extract_untriaged_suggestions(
         in_table = False
         for line in lines:
             stripped = line.strip()
-            if not in_table and stripped.startswith("|") and "ID" in stripped:
+            if not in_table and stripped.startswith("| ID"):
                 in_table = True
                 continue
             
@@ -317,8 +322,13 @@ def _build_triage_prompt(
     allowed_areas: Optional[Set[str]] = None,
     persona: Optional[str] = None,
     has_feature_suggestions: bool = False,
+    use_system_prompt: bool = False,
 ) -> str:
-    """Build the triage prompt asking agent to classify each untriaged suggestion."""
+    """Build the triage prompt asking agent to classify each untriaged suggestion.
+
+    When *use_system_prompt* is True the document body is omitted (it is
+    expected to be in the system prompt via ``_build_shared_system_prompt``).
+    """
     applied_list = ", ".join(applied_ids[:50]) if applied_ids else "(none)"
     rejected_list = ", ".join(rejected_ids[:50]) if rejected_ids else "(none)"
     areas = allowed_areas or ALLOWED_AREAS
@@ -336,6 +346,15 @@ def _build_triage_prompt(
             "You must triage both types.\n"
         )
 
+    doc_section = ""
+    if not use_system_prompt:
+        doc_section = (
+            f"Document being reviewed (for context):\n"
+            f"---\n"
+            f"{document_without_appendix}\n"
+            f"---\n\n"
+        )
+
     return f"""You are an {role} performing triage on architectural review suggestions.
 
 Your task: Evaluate every untriaged suggestion below and decide whether to ACCEPT or REJECT it.
@@ -347,12 +366,7 @@ Context:
 {endorsement_info}Untriaged suggestions to evaluate:
 {untriaged_block}
 
-Document being reviewed (for context):
----
-{document_without_appendix}
----
-
-{id_instruction}
+{doc_section}{id_instruction}
 You MUST output a JSON array. Each element must have these fields:
 - "id": the suggestion ID (e.g. "R1-S1")
 - "decision": exactly "ACCEPT" or "REJECT"
@@ -366,6 +380,44 @@ Output ONLY the JSON array, no other text. Example:
   {{"id": "R1-S2", "decision": "REJECT", "summary": "Use GraphQL", "rationale": "Not aligned with REST strategy", "area": "interfaces"}}
 ]
 """
+
+
+def _build_shared_system_prompt(
+    document_without_appendix: str,
+    context_content: str = "",
+    requirements_content: str = "",
+) -> str:
+    """Build a shared system prompt containing the document and reference material.
+
+    Used with Anthropic prompt caching: the system prompt is cached across
+    sequential LLM calls (review rounds, triage, apply) for ~90% input cost
+    reduction on the document body.
+    """
+    parts = [
+        "Document under review (excluding the review appendix):",
+        "---",
+        document_without_appendix,
+        "---",
+    ]
+
+    if requirements_content and requirements_content.strip():
+        parts.append("")
+        parts.append("Feature Requirements (must be covered):")
+        parts.append("---")
+        parts.append(requirements_content)
+        parts.append("---")
+
+    if context_content and context_content.strip():
+        parts.append("")
+        parts.append(
+            "Reference material (institutional knowledge, lessons learned, prior decisions "
+            "— use these to ground your review in project-specific patterns and known issues):"
+        )
+        parts.append("---")
+        parts.append(context_content)
+        parts.append("---")
+
+    return "\n".join(parts)
 
 
 def _validate_triage_output(
@@ -409,7 +461,11 @@ def _validate_triage_output(
                 break
         else:
             sid = entry["id"]
-            decision = entry["decision"].upper() # Leniency: case-insensitive decision
+            raw_decision = entry["decision"]
+            if not isinstance(raw_decision, str):
+                errors.append(f"Entry {i}: 'decision' must be a string, got {type(raw_decision).__name__}")
+                continue
+            decision = raw_decision.upper()  # Leniency: case-insensitive decision
             area = entry["area"].strip().lower()
 
             if sid not in untriaged_set:
@@ -790,6 +846,187 @@ def _extract_reviewer_sources(doc: str) -> Dict[str, str]:
     return sources
 
 
+# ---------------------------------------------------------------------------
+# Apply-suggestions helpers
+# ---------------------------------------------------------------------------
+
+def _extract_accepted_suggestions_for_apply(
+    triage_decisions: List[Dict[str, Any]],
+    untriaged_suggestions: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Merge ACCEPT triage decisions with full suggestion data from Appendix C.
+
+    Returns enriched dicts containing all Appendix C fields (placement,
+    validation, etc.) plus the triage ``rationale``.
+    """
+    accepted_ids = {
+        d["id"] for d in triage_decisions if d.get("decision") == "ACCEPT"
+    }
+    if not accepted_ids:
+        return []
+
+    suggestion_map = {s["id"]: s for s in untriaged_suggestions}
+    result: List[Dict[str, Any]] = []
+    for decision in triage_decisions:
+        sid = decision["id"]
+        if sid not in accepted_ids:
+            continue
+        base = dict(suggestion_map.get(sid, {"id": sid}))
+        base["triage_rationale"] = decision.get("rationale", "")
+        result.append(base)
+    return result
+
+
+def _build_apply_prompt(
+    accepted_suggestions: List[Dict[str, Any]],
+    persona: Optional[str] = None,
+    use_system_prompt: bool = False,
+    document_without_appendix: str = "",
+) -> str:
+    """Build the prompt for the apply-suggestions LLM call.
+
+    When *use_system_prompt* is True the document body is omitted from
+    the prompt (it is already in the system prompt).
+    """
+    role = persona or "expert enterprise architect"
+
+    # Build suggestion table
+    rows = [
+        "| ID | Suggestion | Proposed Placement | Rationale |",
+        "| ---- | ---- | ---- | ---- |",
+    ]
+    for s in accepted_suggestions:
+        rows.append(
+            f"| {s.get('id', '?')} | {s.get('suggestion', '')} "
+            f"| {s.get('placement', '')} | {s.get('triage_rationale', s.get('rationale', ''))} |"
+        )
+    suggestion_table = "\n".join(rows)
+
+    doc_section = ""
+    if not use_system_prompt:
+        doc_section = (
+            f"Document body:\n"
+            f"---\n"
+            f"{document_without_appendix}\n"
+            f"---\n\n"
+        )
+
+    return f"""You are an {role}. Your task is to integrate the following accepted review suggestions into the document body.
+
+{doc_section}Accepted suggestions to integrate:
+{suggestion_table}
+
+Instructions:
+1. Produce the COMPLETE updated document body with the suggestions integrated at or near their Proposed Placement locations.
+2. Maintain all existing headings, numbering, and structure.
+3. Do NOT include any appendix sections (Appendix A, B, or C). Output only the document body.
+4. Do NOT add commentary or meta-text — output only the updated document.
+5. Integrate each suggestion naturally into the relevant section rather than appending it.
+6. If a suggestion's Proposed Placement is ambiguous, use your best judgment for the most logical location.
+
+Output the complete updated document body now:
+"""
+
+
+def _validate_apply_output(
+    output: str,
+    original_body: str,
+    accepted_suggestions: List[Dict[str, Any]],
+) -> Tuple[bool, str, List[str]]:
+    """Validate the LLM's apply output.
+
+    Returns ``(ok, message, warning_ids)`` where *warning_ids* lists suggestion
+    IDs whose key terms could not be found in the output (non-blocking).
+    """
+    if not output or not output.strip():
+        return False, "Empty output", []
+
+    # Length check — reject if < 50% of original (accidental truncation)
+    if len(output.strip()) < len(original_body.strip()) * 0.5:
+        return (
+            False,
+            f"Output too short ({len(output.strip())} chars vs original {len(original_body.strip())} chars)",
+            [],
+        )
+
+    # Heading preservation — all ##/### headings from original must be present
+    original_headings = re.findall(r"^(#{2,3}\s+.+)$", original_body, re.MULTILINE)
+    missing_headings = [
+        h for h in original_headings if h not in output
+    ]
+    if missing_headings:
+        return (
+            False,
+            f"Missing {len(missing_headings)} heading(s): {missing_headings[:3]}",
+            [],
+        )
+
+    # No appendix leakage
+    for appendix_heading in ("### Appendix A", "### Appendix B", "### Appendix C"):
+        if appendix_heading in output:
+            return False, f"Output contains {appendix_heading} (appendix leakage)", []
+
+    # Integration warnings (non-blocking) — check if key terms appear
+    warning_ids: List[str] = []
+    for s in accepted_suggestions:
+        suggestion_text = s.get("suggestion", "")
+        # Extract first significant word (>4 chars) as a key term
+        words = [w for w in suggestion_text.split() if len(w) > 4]
+        if words and not any(w.lower() in output.lower() for w in words[:3]):
+            warning_ids.append(s.get("id", "?"))
+
+    return True, "ok", warning_ids
+
+
+def _apply_suggestions_to_doc(
+    doc_text: str,
+    accepted_suggestions: List[Dict[str, Any]],
+    agent: BaseAgent,
+    persona: Optional[str] = None,
+    system_prompt: Optional[str] = None,
+) -> Tuple[str, bool, str, List[str], int, int, int, float]:
+    """Orchestrate the apply-suggestions step.
+
+    Returns ``(updated_doc, ok, message, warning_ids, time_ms,
+    input_tokens, output_tokens, cost)``.
+    """
+    from ...utils.token_usage import token_usage_input, token_usage_output, token_usage_cost
+
+    original_body = _strip_appendix_for_prompt(doc_text)
+    appendix_idx = doc_text.find(APPENDIX_HEADING)
+    appendix_portion = doc_text[appendix_idx:] if appendix_idx != -1 else ""
+
+    use_sp = system_prompt is not None
+    prompt = _build_apply_prompt(
+        accepted_suggestions=accepted_suggestions,
+        persona=persona,
+        use_system_prompt=use_sp,
+        document_without_appendix=original_body,
+    )
+
+    generate_kwargs: Dict[str, Any] = {}
+    if system_prompt is not None:
+        generate_kwargs["system_prompt"] = system_prompt
+
+    response_text, time_ms, token_usage = agent.generate(prompt, **generate_kwargs)
+    input_tokens = token_usage_input(token_usage) if token_usage else 0
+    output_tokens = token_usage_output(token_usage) if token_usage else 0
+    cost = token_usage_cost(token_usage) if token_usage else 0.0
+
+    # Strip code fences
+    response_text = _strip_code_fences(response_text)
+
+    ok, message, warning_ids = _validate_apply_output(
+        response_text, original_body, accepted_suggestions,
+    )
+
+    if ok:
+        updated_doc = response_text.rstrip() + "\n\n" + appendix_portion
+        return updated_doc, True, message, warning_ids, time_ms, input_tokens, output_tokens, cost
+    else:
+        return doc_text, False, message, warning_ids, time_ms, input_tokens, output_tokens, cost
+
+
 def _select_default_agents(
     quality_tier: str,
     reviewer_count: int,
@@ -806,6 +1043,14 @@ def _select_default_agents(
     # OpenAI o3 removed from defaults due to org TPM limits vs large prompts.
     # Users can add other models (e.g. mistral:mistral-large-latest) via
     # the "agents" config or the "providers" allowlist.
+    _KNOWN_TIERS = {"flagship", "balanced", "fast", "mini"}
+    if tier not in _KNOWN_TIERS:
+        _logger.warning(
+            "Unknown quality_tier '%s' (expected one of %s); "
+            "falling back to tier-registry lookup",
+            tier, sorted(_KNOWN_TIERS),
+        )
+
     preferred: List[str] = []
     if tier == "flagship":
         preferred = [
@@ -850,11 +1095,19 @@ def _build_prompt(
     focus_guidance: Optional[str] = None,
     requirements_content: Optional[str] = None,
     has_feature_requirements: bool = False,
+    use_system_prompt: bool = False,
 ) -> str:
     """
     Build the reviewer prompt. Supports override template that must include:
     - {round_number}, {max_suggestions}, {applied_ids}, {rejected_ids}, {document}, {reviewer_label}, {scope}
     - Optional: {context} (reference material block, empty string when no context provided)
+
+    When *use_system_prompt* is True the document body, context, and
+    requirements blocks are omitted (expected in the system prompt via
+    ``_build_shared_system_prompt``).
+
+    Note: template_override uses Python ``str.format()``; literal braces in the
+    template must be doubled (``{{`` / ``}}``) to avoid ``KeyError``.
     """
     applied_list = ", ".join(applied_ids[:50]) if applied_ids else "(none)"
     rejected_list = ", ".join(rejected_ids[:50]) if rejected_ids else "(none)"
@@ -864,7 +1117,7 @@ def _build_prompt(
     focus = focus_guidance or default_focus
 
     context_block = ""
-    if context_content.strip():
+    if not use_system_prompt and context_content.strip():
         context_block = (
             "Reference material (institutional knowledge, lessons learned, prior decisions "
             "— use these to ground your review in project-specific patterns and known issues):\n"
@@ -874,7 +1127,7 @@ def _build_prompt(
         )
 
     req_block = ""
-    if requirements_content and requirements_content.strip():
+    if not use_system_prompt and requirements_content and requirements_content.strip():
         req_block = (
             "Feature Requirements (must be covered):\n"
             "---\n"
@@ -1040,11 +1293,11 @@ Required output format (append-only snippet):
   **Endorsements** (prior untriaged suggestions this reviewer agrees with):
   - <ID>: <one-sentence reason you agree>
   This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage. Only endorse suggestions you genuinely believe should be implemented. Do NOT endorse your own suggestions.
-
+{"" if use_system_prompt else f"""
 Document (excluding the review appendix):
 ---
 {document_without_appendix}
----
+---"""}
 """
 
 
@@ -1111,7 +1364,7 @@ def _validate_snippet(
                 cells = _split_cells(row)
                 # Leniency: Allow extra cells, just truncate to match header length
                 if len(cells) < len(REQUIRED_COLUMNS):
-                    _logger.warning("Skipping row with insufficient columns: %s", row)
+                    _logger.debug("Skipping row with insufficient columns: %s", row)
                     i += 1
                     continue
 
@@ -1128,14 +1381,23 @@ def _validate_snippet(
                 
                 # Validate ID: R{round}-[SF]{num}
                 if not re.fullmatch(rf"R{round_number}-[SF]\d+", sid):
-                     _logger.warning(f"Invalid suggestion ID '{sid}' - expected format R{round_number}-S... or R{round_number}-F... but proceeding anyway.")
-                     # Don't fail the whole block for one bad ID, just log it
+                    _logger.debug(
+                        "Suggestion ID '%s' will be renumbered to R%d prefix.",
+                        sid, round_number,
+                    )
+                    # IDs are auto-corrected by _fix_snippet_ids() before appending
 
-                # Leniency: Check area/severity but don't fail, just warn
+                # Leniency: Check area/severity but don't fail, just log
                 if area not in areas:
-                    _logger.warning(f"Invalid Area '{area}' (allowed: {sorted(areas)}); proceeding with warning.")
+                    _logger.debug(
+                        "Non-standard Area '%s' (expected: %s); accepted.",
+                        area, sorted(areas),
+                    )
                 if severity not in ALLOWED_SEVERITIES:
-                    _logger.warning(f"Invalid Severity '{severity}' (allowed: {sorted(ALLOWED_SEVERITIES)}); proceeding with warning.")
+                    _logger.warning(
+                        "Invalid Severity '%s' (allowed: %s); proceeding with warning.",
+                        severity, sorted(ALLOWED_SEVERITIES),
+                    )
                 
                 i += 1
             continue
@@ -1162,6 +1424,26 @@ def _validate_snippet(
          return False, f"Too many plan suggestions: {len(s_ids)} > {max_suggestions}", unique_ids
 
     return True, "ok", unique_ids
+
+
+def _fix_snippet_ids(snippet: str, round_number: int) -> str:
+    """Rewrite mis-numbered R{X}-S/F IDs to use the correct round_number.
+
+    LLMs sometimes use a different round prefix (e.g. R3-S1 when asked for
+    R1-S1) because they see prior rounds in the document. Only rewrites IDs
+    in table rows (lines starting with ``|``) to avoid corrupting endorsement
+    references like "I agree with R2-S3".
+    """
+    def _replace(m: re.Match) -> str:
+        return f"R{round_number}-{m.group(1)}{m.group(2)}"
+
+    out_lines: list[str] = []
+    for line in snippet.splitlines(keepends=True):
+        if line.lstrip().startswith("|"):
+            out_lines.append(re.sub(r"R\d+-([SF])(\d+)", _replace, line))
+        else:
+            out_lines.append(line)
+    return "".join(out_lines)
 
 
 def _get_feature_doc_path(feature_requirements: Optional[List[str]]) -> Optional[Path]:
@@ -1216,8 +1498,55 @@ def _extract_feature_snippet(
 """
 
 
+def _agent_label(agent: BaseAgent) -> str:
+    """Format a consistent agent name label for StepResult and logging."""
+    return f"{agent.name}:{getattr(agent, 'model', '')}"
+
+
+def _make_error_step(
+    step_name: str,
+    agent: BaseAgent,
+    error: str,
+    *,
+    output: str = "",
+    time_ms: int = 0,
+    input_tokens: int = 0,
+    output_tokens: int = 0,
+    cost: float = 0.0,
+) -> StepResult:
+    """Create a StepResult representing a failed step."""
+    return StepResult(
+        step_name=step_name,
+        agent_name=_agent_label(agent),
+        output=output,
+        time_ms=time_ms,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cost=cost,
+        error=error,
+    )
+
+
+@dataclass
+class _MetricsAccumulator:
+    """Running totals for token usage, cost, and wall-clock time across rounds."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float = 0.0
+    time_ms: int = 0
+
+    def add(self, input_tokens: int, output_tokens: int, cost: float, time_ms: int) -> None:
+        self.input_tokens += input_tokens
+        self.output_tokens += output_tokens
+        self.cost += cost
+        self.time_ms += time_ms
+
+
 @dataclass
 class _RoundRecord:
+    """Record of a single completed review round for state persistence."""
+
     round_number: int
     agent: str
     model: str
@@ -1373,6 +1702,26 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     description="Enable automated triage step after all reviewers to classify suggestions as ACCEPT/REJECT",
                 ),
                 WorkflowInput(
+                    name="enable_apply",
+                    type="boolean",
+                    required=False,
+                    default=True,
+                    description=(
+                        "Enable apply-suggestions step after triage to integrate accepted suggestions "
+                        "into the document body. Requires enable_triage=True."
+                    ),
+                ),
+                WorkflowInput(
+                    name="enable_prompt_caching",
+                    type="boolean",
+                    required=False,
+                    default=True,
+                    description=(
+                        "Enable prompt caching for Anthropic agents. Moves the document body "
+                        "into a system prompt for ~90%% input cost reduction on cache hits."
+                    ),
+                ),
+                WorkflowInput(
                     name="substantially_addressed_threshold",
                     type="number",
                     required=False,
@@ -1429,6 +1778,16 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
         agents: Optional[List[BaseAgent]],
         on_progress: Optional[ProgressCallback],
     ) -> WorkflowResult:
+        """Run the architectural review workflow.
+
+        Sequentially executes review rounds (one per agent), validates and
+        appends each reviewer's suggestions to the document's Appendix C,
+        then optionally runs automated triage to classify suggestions into
+        Appendix A (applied) or Appendix B (rejected).
+
+        All document mutations are protected by a file lock to prevent
+        concurrent writes.
+        """
         started_at = datetime.now(timezone.utc)
 
         doc_path = Path(str(config["document_path"])).expanduser().resolve()
@@ -1489,13 +1848,16 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 if _is_gemini_agent(ag) and hasattr(ag, "safety_settings"):
                     ag.safety_settings = gemini_safety
 
+        # Enable Anthropic prompt caching for input cost reduction
+        enable_caching = bool(config.get("enable_prompt_caching", True))
+        if enable_caching:
+            for ag in resolved_agents:
+                if _is_anthropic_agent(ag) and hasattr(ag, "enable_prompt_caching"):
+                    ag.enable_prompt_caching = True
+
         step_results: List[StepResult] = []
         round_records: List[_RoundRecord] = []
-
-        total_input_tokens = 0
-        total_output_tokens = 0
-        total_cost = 0.0
-        total_time_ms = 0
+        totals = _MetricsAccumulator()
 
         with FileLock(lock_path):
             # Load Feature Requirements (Dual-Document Mode)
@@ -1506,7 +1868,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 try:
                     requirements_content = feature_doc_path.read_text(encoding="utf-8")
                 except Exception as e:
-                    _logger.warning("Failed to read feature requirements doc: %s", e)
+                    _logger.warning("Failed to read feature requirements doc: %s", e, exc_info=True)
 
             doc_text = doc_path.read_text(encoding="utf-8")
             if init_if_missing:
@@ -1541,8 +1903,8 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     if p.is_file():
                         try:
                             parts.append(f"### {p.name}\n\n{p.read_text(encoding='utf-8')}")
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            _logger.debug("Failed to read context file %s: %s", p, e)
                     elif p.is_dir():
                         for md_file in sorted(p.glob("**/*.md")):
                             try:
@@ -1550,8 +1912,8 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                     f"### {md_file.relative_to(p)}\n\n"
                                     f"{md_file.read_text(encoding='utf-8')}"
                                 )
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                _logger.debug("Failed to read context file %s: %s", md_file, e)
                 context_content = "\n\n".join(parts)
                 if len(context_content) > max_context_chars:
                     context_content = context_content[:max_context_chars] + "\n\n[... truncated ...]"
@@ -1560,6 +1922,16 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
             sa_threshold = int(config.get("substantially_addressed_threshold", 3))
             substantially_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold)
             coverage = _compute_area_coverage(doc_text, sa_threshold, allowed_areas=allowed_areas)
+
+            # Build shared system prompt for prompt caching (document + context + requirements)
+            shared_system_prompt: Optional[str] = None
+            use_sp = enable_caching and not template_override  # skip caching with custom templates
+            if use_sp:
+                shared_system_prompt = _build_shared_system_prompt(
+                    document_without_appendix=_strip_appendix_for_prompt(doc_text),
+                    context_content=context_content,
+                    requirements_content=requirements_content or "",
+                )
 
             for i, agent in enumerate(resolved_agents):
                 round_number = next_round + i
@@ -1585,12 +1957,18 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     focus_guidance=focus,
                     requirements_content=requirements_content,
                     has_feature_requirements=bool(feature_doc_path),
+                    use_system_prompt=use_sp,
                 )
+
+                # Build generate kwargs (system_prompt for caching)
+                gen_kwargs: Dict[str, Any] = {}
+                if shared_system_prompt is not None:
+                    gen_kwargs["system_prompt"] = shared_system_prompt
 
                 # Execute generation with graceful error handling, Gemini SAFETY
                 # retry, and OpenAI model fallback.
                 try:
-                    response_text, time_ms, token_usage = agent.generate(prompt)
+                    response_text, time_ms, token_usage = agent.generate(prompt, **gen_kwargs)
 
                 except GeminiSafetyFilterError as safety_err:
                     # ── Gemini SAFETY retry (Fix 3) ──────────────────────────
@@ -1652,18 +2030,10 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 on_progress, i, total_rounds,
                                 f"R{round_number}: skipping {reviewer_label} after repeated SAFETY blocks",
                             )
-                            step_results.append(
-                                StepResult(
-                                    step_name=step_name,
-                                    agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
-                                    output="",
-                                    time_ms=0,
-                                    input_tokens=0,
-                                    output_tokens=0,
-                                    cost=0.0,
-                                    error=f"Gemini SAFETY filter (skipped): {e3}",
-                                )
-                            )
+                            step_results.append(_make_error_step(
+                                step_name, agent,
+                                f"Gemini SAFETY filter (skipped): {e3}",
+                            ))
                             continue  # ← skip, don't break — let remaining reviewers run
                         finally:
                             # Restore original settings so they don't leak to later operations
@@ -1686,67 +2056,37 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         )
                         try:
                             fallback_agent = resolve_agents([fallback_openai_model])[0]
-                            response_text, time_ms, token_usage = fallback_agent.generate(prompt)
+                            response_text, time_ms, token_usage = fallback_agent.generate(prompt, **gen_kwargs)
                             agent = fallback_agent  # record agent/model that actually ran
                         except Exception as e2:
-                            step_results.append(
-                                StepResult(
-                                    step_name=step_name,
-                                    agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
-                                    output="",
-                                    time_ms=0,
-                                    input_tokens=0,
-                                    output_tokens=0,
-                                    cost=0.0,
-                                    error=str(e2),
-                                )
-                            )
+                            step_results.append(_make_error_step(step_name, agent, str(e2)))
                             break
                     else:
-                        step_results.append(
-                            StepResult(
-                                step_name=step_name,
-                                agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
-                                output="",
-                                time_ms=0,
-                                input_tokens=0,
-                                output_tokens=0,
-                                cost=0.0,
-                                error=str(e),
-                            )
-                        )
+                        step_results.append(_make_error_step(step_name, agent, str(e)))
                         break
 
                 input_tokens = token_usage_input(token_usage) if token_usage else 0
                 output_tokens = token_usage_output(token_usage) if token_usage else 0
                 cost = token_usage_cost(token_usage) if token_usage else 0.0
+                totals.add(input_tokens, output_tokens, cost, time_ms)
 
-                total_input_tokens += input_tokens
-                total_output_tokens += output_tokens
-                total_cost += cost
-                total_time_ms += time_ms
-
-                if warn_cost_usd is not None and total_cost >= float(warn_cost_usd):
+                if warn_cost_usd is not None and totals.cost >= float(warn_cost_usd):
                     self._emit_progress(
                         on_progress,
                         i,
                         total_rounds,
-                        f"Cost warning: cumulative ${total_cost:.2f} >= warn_cost_usd=${float(warn_cost_usd):.2f}",
+                        f"Cost warning: cumulative ${totals.cost:.2f} >= warn_cost_usd=${float(warn_cost_usd):.2f}",
                     )
 
-                if max_cost_usd is not None and total_cost >= float(max_cost_usd):
-                    step_results.append(
-                        StepResult(
-                            step_name=step_name,
-                            agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
-                            output="",
-                            time_ms=time_ms,
-                            input_tokens=input_tokens,
-                            output_tokens=output_tokens,
-                            cost=cost,
-                            error=f"Max cost exceeded: ${total_cost:.2f} >= max_cost_usd=${float(max_cost_usd):.2f}",
-                        )
-                    )
+                if max_cost_usd is not None and totals.cost >= float(max_cost_usd):
+                    step_results.append(_make_error_step(
+                        step_name, agent,
+                        f"Max cost exceeded: ${totals.cost:.2f} >= max_cost_usd=${float(max_cost_usd):.2f}",
+                        time_ms=time_ms,
+                        input_tokens=input_tokens,
+                        output_tokens=output_tokens,
+                        cost=cost,
+                    ))
                     break
 
                 # Strip code-block fences (Gemini sometimes wraps output)
@@ -1767,7 +2107,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             updated_feat = curr_feat.rstrip() + "\n\n" + feature_snippet + "\n"
                             atomic_write(feature_doc_path, updated_feat, mode="w", backup=True)
                         except Exception as e:
-                            _logger.warning("Failed to append feature suggestions: %s", e)
+                            _logger.warning("Failed to append feature suggestions: %s", e, exc_info=True)
 
                 ok, message, ids = _validate_snippet(response_text, round_number, max_suggestions, allowed_areas=allowed_areas)
                 if not ok:
@@ -1796,15 +2136,12 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         f"R{round_number}: validation failed ({message}); retrying",
                     )
                     try:
-                        retry_text, retry_time_ms, retry_token_usage = agent.generate(retry_prompt)
+                        retry_text, retry_time_ms, retry_token_usage = agent.generate(retry_prompt, **gen_kwargs)
                         retry_text = _strip_code_fences(retry_text)
                         retry_input = token_usage_input(retry_token_usage) if retry_token_usage else 0
                         retry_output = token_usage_output(retry_token_usage) if retry_token_usage else 0
                         retry_cost = token_usage_cost(retry_token_usage) if retry_token_usage else 0.0
-                        total_input_tokens += retry_input
-                        total_output_tokens += retry_output
-                        total_cost += retry_cost
-                        total_time_ms += retry_time_ms
+                        totals.add(retry_input, retry_output, retry_cost, retry_time_ms)
 
                         ok2, message2, ids = _validate_snippet(retry_text, round_number, max_suggestions, allowed_areas=allowed_areas)
                         if ok2:
@@ -1825,18 +2162,15 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 reviewer_label,
                                 message2,
                             )
-                            step_results.append(
-                                StepResult(
-                                    step_name=step_name,
-                                    agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
-                                    output=retry_text[:500] + "..." if len(retry_text) > 500 else retry_text,
-                                    time_ms=time_ms + retry_time_ms,
-                                    input_tokens=input_tokens + retry_input,
-                                    output_tokens=output_tokens + retry_output,
-                                    cost=cost + retry_cost,
-                                    error=f"Invalid snippet after retry: {message2}",
-                                )
-                            )
+                            step_results.append(_make_error_step(
+                                step_name, agent,
+                                f"Invalid snippet after retry: {message2}",
+                                output=retry_text[:500] + "..." if len(retry_text) > 500 else retry_text,
+                                time_ms=time_ms + retry_time_ms,
+                                input_tokens=input_tokens + retry_input,
+                                output_tokens=output_tokens + retry_output,
+                                cost=cost + retry_cost,
+                            ))
                             continue  # skip reviewer, let remaining reviewers run
                     except Exception as retry_err:
                         _logger.warning(
@@ -1845,19 +2179,20 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             reviewer_label,
                             retry_err,
                         )
-                        step_results.append(
-                            StepResult(
-                                step_name=step_name,
-                                agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
-                                output=response_text[:500] + "..." if len(response_text) > 500 else response_text,
-                                time_ms=time_ms,
-                                input_tokens=input_tokens,
-                                output_tokens=output_tokens,
-                                cost=cost,
-                                error=f"Validation retry failed: {retry_err}",
-                            )
-                        )
+                        step_results.append(_make_error_step(
+                            step_name, agent,
+                            f"Validation retry failed: {retry_err}",
+                            output=response_text[:500] + "..." if len(response_text) > 500 else response_text,
+                            time_ms=time_ms,
+                            input_tokens=input_tokens,
+                            output_tokens=output_tokens,
+                            cost=cost,
+                        ))
                         continue  # skip reviewer, let remaining reviewers run
+
+                # Fix mis-numbered IDs before appending (LLMs sometimes use wrong round prefix)
+                response_text = _fix_snippet_ids(response_text, round_number)
+                ids = [re.sub(r"R\d+-([SF]\d+)", rf"R{round_number}-\1", sid) for sid in ids]
 
                 # Append snippet and persist
                 doc_text = doc_text.rstrip() + "\n\n" + response_text.strip() + "\n"
@@ -1877,18 +2212,16 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 )
                 round_records.append(record)
 
-                step_results.append(
-                    StepResult(
-                        step_name=step_name,
-                        agent_name=f"{agent.name}:{getattr(agent, 'model', '')}",
-                        output=response_text[:500] + "..." if len(response_text) > 500 else response_text,
-                        time_ms=time_ms,
-                        input_tokens=input_tokens,
-                        output_tokens=output_tokens,
-                        cost=cost,
-                        error=None,
-                    )
-                )
+                step_results.append(StepResult(
+                    step_name=step_name,
+                    agent_name=_agent_label(agent),
+                    output=response_text[:500] + "..." if len(response_text) > 500 else response_text,
+                    time_ms=time_ms,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost=cost,
+                    error=None,
+                ))
 
                 # State file (best-effort)
                 try:
@@ -1908,16 +2241,18 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             }
                             for r in round_records
                         ],
-                        "cumulative_cost_usd": total_cost,
+                        "cumulative_cost_usd": totals.cost,
                     }
                     atomic_write_json(state_path, state, indent=2, sort_keys=False)
-                except Exception:
-                    pass
+                except Exception as e:
+                    _logger.warning("Failed to write state file %s: %s", state_path, e)
 
                 self._emit_progress(on_progress, i + 1, total_rounds, f"Appended Round R{round_number}")
 
             # ── Automated Triage Step ──────────────────────────────────────
             enable_triage = bool(config.get("enable_triage", True))
+            triage_decisions: List[Dict[str, Any]] = []
+            untriaged: List[Dict[str, Any]] = []
             triage_info: Dict[str, Any] = {
                 "enabled": enable_triage,
                 "accepted": 0,
@@ -1953,7 +2288,13 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         allowed_areas=allowed_areas,
                         persona=persona,
                         has_feature_suggestions=bool(feature_doc_path),
+                        use_system_prompt=use_sp,
                     )
+
+                    # Build triage generate kwargs (same system_prompt for caching)
+                    triage_gen_kwargs: Dict[str, Any] = {}
+                    if shared_system_prompt is not None:
+                        triage_gen_kwargs["system_prompt"] = shared_system_prompt
 
                     # Execute triage with same error handling pattern
                     triage_ok = False
@@ -1961,25 +2302,18 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     triage_missing: List[str] = []
 
                     try:
-                        triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt)
+                        triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt, **triage_gen_kwargs)
                     except GeminiSafetyFilterError:
                         _logger.warning("Triage blocked by Gemini SAFETY filter; retrying with relaxed settings")
                         original_safety = getattr(triage_agent, "safety_settings", None)
                         try:
                             if _is_gemini_agent(triage_agent):
                                 triage_agent.safety_settings = RELAXED_SAFETY_SETTINGS
-                            triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt)
+                            triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt, **triage_gen_kwargs)
                         except Exception as triage_err:
                             _logger.warning("Triage failed after retry: %s", triage_err)
-                            step_results.append(StepResult(
-                                step_name="triage",
-                                agent_name=f"{triage_agent.name}:{getattr(triage_agent, 'model', '')}",
-                                output="",
-                                time_ms=0,
-                                input_tokens=0,
-                                output_tokens=0,
-                                cost=0.0,
-                                error=f"Triage failed: {triage_err}",
+                            step_results.append(_make_error_step(
+                                "triage", triage_agent, f"Triage failed: {triage_err}",
                             ))
                             triage_text = None
                             triage_time_ms = 0
@@ -1989,15 +2323,8 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 triage_agent.safety_settings = original_safety
                     except Exception as triage_err:
                         _logger.warning("Triage failed: %s", triage_err)
-                        step_results.append(StepResult(
-                            step_name="triage",
-                            agent_name=f"{triage_agent.name}:{getattr(triage_agent, 'model', '')}",
-                            output="",
-                            time_ms=0,
-                            input_tokens=0,
-                            output_tokens=0,
-                            cost=0.0,
-                            error=f"Triage failed: {triage_err}",
+                        step_results.append(_make_error_step(
+                            "triage", triage_agent, f"Triage failed: {triage_err}",
                         ))
                         triage_text = None
                         triage_time_ms = 0
@@ -2007,11 +2334,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         triage_input_tokens = token_usage_input(triage_token_usage) if triage_token_usage else 0
                         triage_output_tokens = token_usage_output(triage_token_usage) if triage_token_usage else 0
                         triage_cost = token_usage_cost(triage_token_usage) if triage_token_usage else 0.0
-
-                        total_input_tokens += triage_input_tokens
-                        total_output_tokens += triage_output_tokens
-                        total_cost += triage_cost
-                        total_time_ms += triage_time_ms
+                        totals.add(triage_input_tokens, triage_output_tokens, triage_cost, triage_time_ms)
 
                         triage_ok, triage_msg, triage_decisions, triage_missing = _validate_triage_output(
                             triage_text, untriaged_ids, allowed_areas=allowed_areas
@@ -2028,14 +2351,11 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 f"Suggestions to triage:\n{untriaged_block}"
                             )
                             try:
-                                retry_text, retry_time_ms, retry_token_usage = triage_agent.generate(retry_prompt)
+                                retry_text, retry_time_ms, retry_token_usage = triage_agent.generate(retry_prompt, **triage_gen_kwargs)
                                 retry_input = token_usage_input(retry_token_usage) if retry_token_usage else 0
                                 retry_output = token_usage_output(retry_token_usage) if retry_token_usage else 0
                                 retry_cost = token_usage_cost(retry_token_usage) if retry_token_usage else 0.0
-                                total_input_tokens += retry_input
-                                total_output_tokens += retry_output
-                                total_cost += retry_cost
-                                total_time_ms += retry_time_ms
+                                totals.add(retry_input, retry_output, retry_cost, retry_time_ms)
                                 triage_input_tokens += retry_input
                                 triage_output_tokens += retry_output
                                 triage_cost += retry_cost
@@ -2107,7 +2427,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
                         step_results.append(StepResult(
                             step_name="triage",
-                            agent_name=f"{triage_agent.name}:{getattr(triage_agent, 'model', '')}",
+                            agent_name=_agent_label(triage_agent),
                             output=f"Accepted: {triage_info['accepted']}, Rejected: {triage_info['rejected']}, Remaining: {len(triage_missing)}",
                             time_ms=triage_time_ms,
                             input_tokens=triage_input_tokens,
@@ -2121,41 +2441,203 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             },
                         ))
 
-                    # Update state file with triage info
+            # ── Apply Suggestions Step ────────────────────────────────────
+            enable_apply = bool(config.get("enable_apply", True))
+            apply_info: Dict[str, Any] = {
+                "enabled": enable_apply and enable_triage,
+                "applied_count": 0,
+                "applied_ids": [],
+                "warning_ids": [],
+                "feature_applied_count": 0,
+                "error": None,
+            }
+
+            if enable_apply and enable_triage and triage_info["accepted"] > 0 and resolved_agents:
+                apply_agent = resolved_agents[0]
+                self._emit_progress(on_progress, total_rounds, total_rounds, "Applying accepted suggestions to document")
+
+                # Extract accepted suggestions enriched with Appendix C data
+                plan_accepted = _extract_accepted_suggestions_for_apply(
+                    [d for d in triage_decisions if "F" not in d["id"]] if triage_decisions else [],
+                    untriaged,
+                )
+
+                if plan_accepted:
                     try:
-                        applied_ids = _extract_table_ids(doc_text, "### Appendix A: Applied Suggestions")
-                        rejected_ids = _extract_table_ids(doc_text, "### Appendix B: Rejected Suggestions (with Rationale)")
-                        state = {
-                            "document_path": str(doc_path),
-                            "updated_at_utc": _now_utc(),
-                            "applied_ids": applied_ids,
-                            "rejected_ids": rejected_ids,
-                            "rounds": [
-                                {
-                                    "round": r.round_number,
-                                    "agent": r.agent,
-                                    "model": r.model,
-                                    "ids": r.ids,
-                                    "appended_at_utc": r.appended_at_utc,
-                                    "cost": r.cost,
-                                }
-                                for r in round_records
-                            ],
-                            "cumulative_cost_usd": total_cost,
-                            "triage": triage_info,
+                        (
+                            updated_doc, apply_ok, apply_msg, apply_warnings,
+                            apply_time_ms, apply_input, apply_output, apply_cost,
+                        ) = _apply_suggestions_to_doc(
+                            doc_text, plan_accepted, apply_agent,
+                            persona=persona,
+                            system_prompt=shared_system_prompt,
+                        )
+                        totals.add(apply_input, apply_output, apply_cost, apply_time_ms)
+
+                        if apply_ok:
+                            doc_text = updated_doc
+                            atomic_write(doc_path, doc_text, mode="w", backup=True)
+                            apply_info["applied_count"] = len(plan_accepted)
+                            apply_info["applied_ids"] = [s["id"] for s in plan_accepted]
+                            apply_info["warning_ids"] = apply_warnings
+                        else:
+                            # Retry once with targeted re-prompt
+                            _logger.warning("Apply validation failed: %s; retrying", apply_msg)
+                            retry_prompt = (
+                                f"Your previous response failed validation: {apply_msg}\n\n"
+                                f"Please output the COMPLETE updated document body. "
+                                f"Maintain ALL existing headings. Do NOT include appendix sections.\n"
+                            )
+                            retry_gen_kwargs: Dict[str, Any] = {}
+                            if shared_system_prompt is not None:
+                                retry_gen_kwargs["system_prompt"] = shared_system_prompt
+                            try:
+                                retry_text, retry_time, retry_tu = apply_agent.generate(retry_prompt, **retry_gen_kwargs)
+                                r_in = token_usage_input(retry_tu) if retry_tu else 0
+                                r_out = token_usage_output(retry_tu) if retry_tu else 0
+                                r_cost = token_usage_cost(retry_tu) if retry_tu else 0.0
+                                totals.add(r_in, r_out, r_cost, retry_time)
+                                apply_time_ms += retry_time
+                                apply_input += r_in
+                                apply_output += r_out
+                                apply_cost += r_cost
+
+                                retry_text = _strip_code_fences(retry_text)
+                                original_body = _strip_appendix_for_prompt(doc_text)
+                                ok2, msg2, warns2 = _validate_apply_output(retry_text, original_body, plan_accepted)
+                                if ok2:
+                                    appendix_idx = doc_text.find(APPENDIX_HEADING)
+                                    appendix_portion = doc_text[appendix_idx:] if appendix_idx != -1 else ""
+                                    doc_text = retry_text.rstrip() + "\n\n" + appendix_portion
+                                    atomic_write(doc_path, doc_text, mode="w", backup=True)
+                                    apply_info["applied_count"] = len(plan_accepted)
+                                    apply_info["applied_ids"] = [s["id"] for s in plan_accepted]
+                                    apply_info["warning_ids"] = warns2
+                                    apply_ok = True
+                                    apply_msg = msg2
+                                else:
+                                    apply_info["error"] = f"Retry also failed: {msg2}"
+                            except Exception as retry_err:
+                                _logger.warning("Apply retry failed: %s", retry_err)
+                                apply_info["error"] = f"Apply retry failed: {retry_err}"
+
+                        step_results.append(StepResult(
+                            step_name="apply_suggestions",
+                            agent_name=_agent_label(apply_agent),
+                            output=f"Applied: {apply_info['applied_count']}, Warnings: {len(apply_info['warning_ids'])}",
+                            time_ms=apply_time_ms,
+                            input_tokens=apply_input,
+                            output_tokens=apply_output,
+                            cost=apply_cost,
+                            error=apply_info["error"],
+                            metadata={
+                                "applied_count": apply_info["applied_count"],
+                                "applied_ids": apply_info["applied_ids"],
+                                "warning_ids": apply_info["warning_ids"],
+                            },
+                        ))
+
+                    except GeminiSafetyFilterError:
+                        _logger.warning("Apply step blocked by Gemini SAFETY filter; skipping")
+                        original_safety = getattr(apply_agent, "safety_settings", None)
+                        try:
+                            if _is_gemini_agent(apply_agent):
+                                apply_agent.safety_settings = RELAXED_SAFETY_SETTINGS
+                            (
+                                updated_doc, apply_ok, apply_msg, apply_warnings,
+                                apply_time_ms, apply_input, apply_output, apply_cost,
+                            ) = _apply_suggestions_to_doc(
+                                doc_text, plan_accepted, apply_agent,
+                                persona=persona,
+                                system_prompt=shared_system_prompt,
+                            )
+                            totals.add(apply_input, apply_output, apply_cost, apply_time_ms)
+                            if apply_ok:
+                                doc_text = updated_doc
+                                atomic_write(doc_path, doc_text, mode="w", backup=True)
+                                apply_info["applied_count"] = len(plan_accepted)
+                                apply_info["applied_ids"] = [s["id"] for s in plan_accepted]
+                                apply_info["warning_ids"] = apply_warnings
+                        except Exception as e2:
+                            _logger.warning("Apply SAFETY retry failed: %s", e2)
+                            apply_info["error"] = f"Apply SAFETY retry failed: {e2}"
+                        finally:
+                            if _is_gemini_agent(apply_agent):
+                                apply_agent.safety_settings = original_safety
+                        step_results.append(_make_error_step(
+                            "apply_suggestions", apply_agent,
+                            apply_info.get("error") or "Gemini SAFETY filter",
+                        ))
+                    except Exception as apply_err:
+                        _logger.warning("Apply step failed: %s", apply_err, exc_info=True)
+                        apply_info["error"] = str(apply_err)
+                        step_results.append(_make_error_step(
+                            "apply_suggestions", apply_agent, str(apply_err),
+                        ))
+
+                # Apply to feature doc (dual-document mode)
+                if feature_doc_path and triage_info.get("feature_accepted", 0) > 0:
+                    feature_accepted = _extract_accepted_suggestions_for_apply(
+                        [d for d in triage_decisions if "F" in d["id"]] if triage_decisions else [],
+                        untriaged,
+                    )
+                    if feature_accepted:
+                        try:
+                            fd_text = feature_doc_path.read_text(encoding="utf-8")
+                            (
+                                updated_fd, fd_ok, fd_msg, fd_warns,
+                                fd_time, fd_in, fd_out, fd_cost,
+                            ) = _apply_suggestions_to_doc(
+                                fd_text, feature_accepted, apply_agent,
+                                persona=persona,
+                                system_prompt=None,  # feature doc has different content
+                            )
+                            totals.add(fd_in, fd_out, fd_cost, fd_time)
+                            if fd_ok:
+                                atomic_write(feature_doc_path, updated_fd, mode="w", backup=True)
+                                apply_info["feature_applied_count"] = len(feature_accepted)
+                        except Exception as e:
+                            _logger.warning("Failed to apply suggestions to feature doc: %s", e)
+
+            # Update state file with triage + apply info
+            try:
+                applied_ids = _extract_table_ids(doc_text, "### Appendix A: Applied Suggestions")
+                rejected_ids = _extract_table_ids(doc_text, "### Appendix B: Rejected Suggestions (with Rationale)")
+                state = {
+                    "document_path": str(doc_path),
+                    "updated_at_utc": _now_utc(),
+                    "applied_ids": applied_ids,
+                    "rejected_ids": rejected_ids,
+                    "rounds": [
+                        {
+                            "round": r.round_number,
+                            "agent": r.agent,
+                            "model": r.model,
+                            "ids": r.ids,
+                            "appended_at_utc": r.appended_at_utc,
+                            "cost": r.cost,
                         }
-                        atomic_write_json(state_path, state, indent=2, sort_keys=False)
-                    except Exception:
-                        pass
+                        for r in round_records
+                    ],
+                    "cumulative_cost_usd": totals.cost,
+                    "triage": triage_info,
+                    "apply": apply_info,
+                }
+                atomic_write_json(state_path, state, indent=2, sort_keys=False)
+            except Exception as e:
+                _logger.warning("Failed to write state file %s: %s", state_path, e)
 
         completed_at = datetime.now(timezone.utc)
-        success = bool(round_records) and all(s.error is None for s in step_results if s.step_name != "triage")
+        success = bool(round_records) and all(
+            s.error is None for s in step_results
+            if s.step_name not in ("triage", "apply_suggestions")
+        )
 
         metrics = WorkflowMetrics(
-            total_time_ms=total_time_ms,
-            input_tokens=total_input_tokens,
-            output_tokens=total_output_tokens,
-            total_cost=total_cost,
+            total_time_ms=totals.time_ms,
+            input_tokens=totals.input_tokens,
+            output_tokens=totals.output_tokens,
+            total_cost=totals.cost,
             step_count=len(step_results),
         )
 
@@ -2168,8 +2650,9 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 "rounds_appended": len(round_records),
                 "round_numbers": [r.round_number for r in round_records],
                 "state_path": str(state_path),
-                "cumulative_cost_usd": total_cost,
+                "cumulative_cost_usd": totals.cost,
                 "triage": triage_info,
+                "apply": apply_info,
             },
             metrics=metrics,
             steps=step_results,

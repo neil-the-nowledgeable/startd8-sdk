@@ -141,7 +141,7 @@ class ConvergentReviewWorkflow(WorkflowBase):
         }
         
         # Pass through other optional configs if needed (e.g. costs, safety settings)
-        for key in ["warn_cost_usd", "max_cost_usd", "quality_tier", "providers"]:
+        for key in ["warn_cost_usd", "max_cost_usd", "quality_tier", "providers", "enable_apply", "enable_prompt_caching"]:
             if key in config:
                 req_config[key] = config[key]
 
@@ -188,7 +188,7 @@ class ConvergentReviewWorkflow(WorkflowBase):
         }
         
         # Pass through optional configs
-        for key in ["warn_cost_usd", "max_cost_usd", "quality_tier", "providers"]:
+        for key in ["warn_cost_usd", "max_cost_usd", "quality_tier", "providers", "enable_apply", "enable_prompt_caching"]:
             if key in config:
                 plan_config[key] = config[key]
 
