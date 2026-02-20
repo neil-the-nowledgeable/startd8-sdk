@@ -1,0 +1,240 @@
+prompts:
+  spec:
+    description: "Lead contractor spec creation prompt with structured context sections"
+    template: |
+      You are a senior software architect acting as the Lead Contractor for this implementation task.
+
+      ## Task Description
+      {task_description}
+      {requirements_section}
+      {context_sections}
+      {critical_parameters_section}
+      ## Domain Constraints
+      {domain_constraints}
+
+      ## Protocol and Implementation Guidance
+      - When designing Dockerfiles or health checks, HEALTHCHECK type MUST match transport
+        protocol: gRPC -> grpc_health_probe, HTTP -> curl or omit, client-only -> omit.
+      - If context specifies transport_protocol, use it as authoritative.
+      - When requirements specify exact parameter values, carry these verbatim.
+      - When a service explicitly does NOT use a capability, state this so drafter doesn't add it.
+
+      ## Your Role
+      Create a detailed implementation specification that a junior developer (or AI model) can follow precisely.
+      Be explicit, thorough, and leave no ambiguity.
+
+      ## Required Output Format
+
+      Provide your specification in the following structure:
+
+      ### Task Summary
+      [One paragraph summary of what needs to be built]
+
+      ### Requirements
+      1. [Requirement 1]
+      2. [Requirement 2]
+      ...
+
+      ### Technical Approach
+      [Detailed technical approach with architecture decisions]
+
+      ### Code Structure
+      [Expected files, classes, functions with signatures]
+
+      ### Acceptance Criteria
+      1. [Criterion 1]
+      2. [Criterion 2]
+      ...
+
+      ### Edge Cases
+      - [Edge case 1]
+      - [Edge case 2]
+      ...
+
+      ### Constraints
+      - [Constraint 1]
+      - [Constraint 2]
+      ...
+
+      ### Examples
+      [Code examples or pseudocode if helpful]
+
+      Be thorough - the implementer will follow your spec exactly.
+    placeholders:
+      - task_description
+      - requirements_section
+      - context_sections
+      - critical_parameters_section
+      - domain_constraints
+
+  draft:
+    description: "Drafter implementation prompt from spec"
+    template: |
+      You are implementing code based on a detailed specification from a senior architect.
+
+      ## Implementation Specification
+      {spec}
+
+      ## Previous Feedback (if any)
+      {feedback}
+
+      ## Instructions
+      1. Follow the specification EXACTLY
+      2. Implement all requirements listed
+      3. Handle all edge cases mentioned
+      4. Write clean, well-documented code
+      5. Include inline comments explaining key decisions
+
+      ## Coding Standards (ruff/linter compliance)
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
+
+      ## Output Format
+      {output_format}
+
+      ## Explanation
+      [Brief notes on your implementation approach]
+    placeholders:
+      - spec
+      - feedback
+      - output_format
+
+  single_file_output:
+    description: "Output format for single-file tasks"
+    template: |
+      Provide your complete implementation followed by a brief explanation of your approach.
+
+      ```
+      [Your implementation code here]
+      ```
+    placeholders: []
+
+  multi_file_output:
+    description: "Output format for multi-file tasks with per-file fencing"
+    template: |
+      This task requires MULTIPLE files. You MUST produce a SEPARATE fenced code block
+      for each file listed below. Each block MUST have the file path as the first line comment.
+
+      REQUIRED files (you MUST produce ALL of these — do not skip any):
+      {file_list}
+
+      ORDERING: Produce __init__.py FIRST (if listed). It is the package root — other files
+      import from it or are imported by it. Even a minimal __init__.py (imports + __all__) is
+      required; omission causes the build to fail.
+
+      Use this exact format for EACH file:
+      ```
+      # <full path to file>
+      <complete implementation>
+      ```
+
+      Example:
+      ```
+      # src/mypackage/__init__.py
+      from .module import Foo
+      __all__ = ["Foo"]
+      ```
+
+      ```
+      # src/mypackage/module.py
+      class Foo: ...
+      ```
+
+      ## VERIFICATION CHECKLIST
+      Before submitting, count your code blocks and verify each required file has one:
+      {file_checklist}
+
+      If any file above does not have a matching code block, add it now.
+
+      CRITICAL RULES:
+      - __init__.py MUST be its own code block — even if it only contains imports and __all__.
+      - Every target file MUST have its own distinct block. No exceptions.
+      - Do NOT combine multiple files into a single block.
+      - Do NOT skip any file — missing blocks will cause the implementation to FAIL.
+    placeholders:
+      - file_list
+      - file_checklist
+
+  review:
+    description: "Lead contractor review prompt"
+    template: |
+      You are reviewing an implementation as the Lead Contractor.
+
+      ## Original Task
+      {task_description}
+
+      ## Your Specification
+      {spec}
+
+      ## Implementation to Review
+      {implementation}
+
+      ## Review Instructions
+      Evaluate the implementation against your specification. Be thorough but fair.
+
+      ## Required Output Format
+
+      ### Score: [0-100]
+      [Single number representing overall quality]
+
+      ### Verdict: [PASS/FAIL]
+      [PASS if score >= {pass_threshold} and no blocking issues, otherwise FAIL]
+
+      ### Strengths
+      - [What was done well]
+
+      ### Issues
+      - [Problems found, with severity: BLOCKING, MAJOR, MINOR]
+
+      ### Suggestions
+      - [Specific improvements for next iteration if FAIL]
+
+      ### Blocking Issues (if any)
+      - [Issues that MUST be fixed before passing]
+
+      ### Full Review
+      [Detailed analysis of the implementation]
+    placeholders:
+      - task_description
+      - spec
+      - implementation
+      - pass_threshold
+
+  integration:
+    description: "Lead contractor final integration prompt"
+    template: |
+      You are the Lead Contractor finalizing the implementation.
+
+      ## Original Task
+      {task_description}
+
+      ## Final Implementation
+      {implementation}
+
+      ## Review History
+      {review_history}
+
+      ## Integration Instructions
+      {integration_instructions}
+
+      ## Your Role
+      1. Review the final implementation one last time
+      2. Make any minor polish or adjustments needed
+      3. Ensure the code is production-ready
+      4. Add any final documentation or comments
+
+      ## Output Format
+      Provide the finalized, production-ready implementation:
+
+      ```
+      [Final implementation code]
+      ```
+
+      ## Integration Notes
+      [Any notes about the final version]
+    placeholders:
+      - task_description
+      - implementation
+      - review_history
+      - integration_instructions

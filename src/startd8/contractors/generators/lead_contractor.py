@@ -238,45 +238,26 @@ class LeadContractorCodeGenerator:
                         # Layer 5 (defense-in-depth): per-file role hints
                         # so the retry feedback tells the model *what* each
                         # missing file should contain, not just that it's missing.
+                        from startd8.workflows.builtin.prompts import (
+                            format_prompt as _fmt_prime,
+                            get_template as _get_prime_template,
+                        )
                         role_hints = []
                         for missing in unmatched:
-                            if missing.endswith("__init__.py"):
-                                role_hints.append(
-                                    f"  - `{missing}` — package root: must contain "
-                                    f"imports from sibling modules, __all__ list, "
-                                    f"and any package-level docstring."
-                                )
-                            else:
-                                role_hints.append(
-                                    f"  - `{missing}` — implementation module: "
-                                    f"must contain the main logic as described "
-                                    f"in the spec."
-                                )
+                            hint_name = "role_hints_init" if missing.endswith("__init__.py") else "role_hints_module"
+                            role_hints.append(
+                                _fmt_prime("prime_context", hint_name, filepath=missing)
+                            )
                         role_hint_text = "\n".join(role_hints)
 
                         retry_context["_multi_file_retry_initial_feedback"] = (
-                            f"CRITICAL: Your previous attempt was missing code blocks for:\n"
-                            f"{unmatched_list}\n\n"
-                            f"Expected role of each missing file:\n"
-                            f"{role_hint_text}\n\n"
-                            f"You MUST produce a SEPARATE fenced code block for EVERY target file.\n"
-                            f"Format: the first line inside each code block MUST be a comment "
-                            f"with the full file path. Example:\n\n"
-                            f"    ```python\n"
-                            f"    # src/package/__init__.py\n"
-                            f"    from .module import Foo\n"
-                            f"    __all__ = ['Foo']\n"
-                            f"    ```\n\n"
-                            f"    ```python\n"
-                            f"    # src/package/module.py\n"
-                            f"    class Foo: ...\n"
-                            f"    ```\n\n"
-                            f"If a missing file is a shared module or interface stub, produce "
-                            f"a minimal placeholder with imports, docstring, and empty "
-                            f"registrations or pass-through functions. An empty or stub file "
-                            f"is acceptable — omitting it entirely is NOT.\n\n"
-                            f"ALL target files: {target_files}\n"
-                            f"MISSING files that MUST be included: {unmatched}"
+                            _fmt_prime(
+                                "prime_context", "multi_file_retry",
+                                unmatched_list=unmatched_list,
+                                role_hint_text=role_hint_text,
+                                target_files=target_files,
+                                unmatched=unmatched,
+                            )
                         )
                         return self.generate(
                             task=task,

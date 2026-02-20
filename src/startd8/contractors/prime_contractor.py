@@ -373,16 +373,17 @@ class PrimeContractorWorkflow:
     def _check_file_provenance(
         self,
         file_paths: List[str],
-        source_checksum: Optional[str] = None,
     ) -> Dict[str, str]:
         """Check provenance/staleness of existing generated files.
 
         Classifies each file as:
-        - "current": file exists and matches expected state
+        - "current": file exists and is newer than generation results state
         - "stale": file exists but is older than generation results state
         - "missing": file does not exist or is empty
 
-        Used by Mottainai reuse logic to avoid reusing stale generated files.
+        Uses mtime of ``.startd8/state/generation_results.json`` as the
+        staleness reference.  Used by Mottainai reuse logic to avoid reusing
+        stale generated files.
         """
         classifications: Dict[str, str] = {}
         seed_mtime: Optional[float] = None
@@ -390,11 +391,10 @@ class PrimeContractorWorkflow:
         # Try generation results state file for mtime comparison
         state_dir = self.project_root / ".startd8" / "state"
         gen_results_path = state_dir / "generation_results.json"
-        if gen_results_path.exists():
-            try:
-                seed_mtime = gen_results_path.stat().st_mtime
-            except OSError:
-                pass
+        try:
+            seed_mtime = gen_results_path.stat().st_mtime
+        except OSError:
+            pass
 
         for fpath_str in file_paths:
             fpath = Path(fpath_str)
@@ -492,7 +492,8 @@ class PrimeContractorWorkflow:
                     gen_context['domain_constraints'] = enrichment.prompt_constraints
                     logger.info("Domain constraints applied for '%s': %d constraints (domain=%s)", feature.name, len(enrichment.prompt_constraints), enrichment.domain.value, extra={'feature_name': feature.name, 'domain': enrichment.domain.value})
                 else:
-                    gen_context['output_constraint'] = 'IMPORTANT: Output a single Python module, NOT a package with multiple files. All classes, enums, and functions must be defined in one file. Do NOT use relative imports (from .module import ...) — everything lives in this file.'
+                    from startd8.workflows.builtin.prompts import get_template as _get_ctx_template
+                    gen_context['output_constraint'] = _get_ctx_template("prime_context", "output_constraint").strip()
 
             # Mottainai Gaps 9-13: inject seed-level context into gen_context.
             # Keys injected: project_objectives, semantic_conventions,
@@ -514,6 +515,9 @@ class PrimeContractorWorkflow:
             # Gap 13: plan document context
             if self.plan_document_text:
                 gen_context['plan_context'] = self.plan_document_text
+            # IMP-P2: requirements text passthrough
+            if feature.metadata.get("requirements_text"):
+                gen_context["requirements_text"] = feature.metadata["requirements_text"]
             # REQ-PC-014: inject service metadata for protocol/dep validation
             if self.seed_service_metadata:
                 gen_context['service_metadata'] = self.seed_service_metadata
@@ -532,9 +536,28 @@ class PrimeContractorWorkflow:
                         gen_context['domain_constraints'].extend(
                             meta_enrichment.get('prompt_constraints', [])
                         )
+                    # IMP-P3: Critical parameter elevation
+                    resolved_params = meta_enrichment.get('resolved_parameters', [])
+                    param_sources = meta_enrichment.get('parameter_sources', [])
+                    if resolved_params or param_sources:
+                        cp_lines = []
+                        for rp in resolved_params:
+                            kv = rp.get('key_value', '')
+                            if kv:
+                                cp_lines.append(kv)
+                        for ps in param_sources:
+                            kv = ps.get('key_value', '')
+                            if kv and kv not in cp_lines:
+                                cp_lines.append(kv)
+                        if cp_lines:
+                            gen_context['critical_parameters'] = cp_lines
+                            gen_context['resolved_parameters'] = resolved_params
 
             if prior_error:
-                gen_context['prior_error_feedback'] = f'CRITICAL: A previous attempt to generate this code FAILED integration checks. You MUST fix the following issues in your output:\n\n{prior_error}\n\nDo NOT repeat these mistakes. Address each error explicitly.'
+                from startd8.workflows.builtin.prompts import format_prompt as _fmt_ctx
+                gen_context['prior_error_feedback'] = _fmt_ctx(
+                    "prime_context", "prior_error_feedback", prior_error=prior_error,
+                ).strip()
             result: GenerationResult = self.code_generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]

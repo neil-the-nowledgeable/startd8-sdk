@@ -70,136 +70,17 @@ logger = get_logger(__name__)
 
 
 # ============================================================================
-# Prompt Templates
+# Prompt Templates — loaded from YAML (REQ-PPE-001 / REQ-PPE-004)
 # ============================================================================
 
-SPEC_PROMPT_TEMPLATE = """You are a senior software architect acting as the Lead Contractor for this implementation task.
+from .prompts import get_template as _get_prime_template
 
-## Task Description
-{task_description}
-
-## Context
-{context}
-
-## Domain Constraints
-{domain_constraints}
-
-## Your Role
-Create a detailed implementation specification that a junior developer (or AI model) can follow precisely.
-Be explicit, thorough, and leave no ambiguity.
-
-## Required Output Format
-
-Provide your specification in the following structure:
-
-### Task Summary
-[One paragraph summary of what needs to be built]
-
-### Requirements
-1. [Requirement 1]
-2. [Requirement 2]
-...
-
-### Technical Approach
-[Detailed technical approach with architecture decisions]
-
-### Code Structure
-[Expected files, classes, functions with signatures]
-
-### Acceptance Criteria
-1. [Criterion 1]
-2. [Criterion 2]
-...
-
-### Edge Cases
-- [Edge case 1]
-- [Edge case 2]
-...
-
-### Constraints
-- [Constraint 1]
-- [Constraint 2]
-...
-
-### Examples
-[Code examples or pseudocode if helpful]
-
-Be thorough - the implementer will follow your spec exactly.
-"""
-
-DRAFT_PROMPT_TEMPLATE = """You are implementing code based on a detailed specification from a senior architect.
-
-## Implementation Specification
-{spec}
-
-## Previous Feedback (if any)
-{feedback}
-
-## Instructions
-1. Follow the specification EXACTLY
-2. Implement all requirements listed
-3. Handle all edge cases mentioned
-4. Write clean, well-documented code
-5. Include inline comments explaining key decisions
-
-## Coding Standards (ruff/linter compliance)
-- NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
-- Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
-- Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
-
-## Output Format
-{output_format}
-
-## Explanation
-[Brief notes on your implementation approach]
-"""
-
-
-SINGLE_FILE_OUTPUT_FORMAT = """Provide your complete implementation followed by a brief explanation of your approach.
-
-```
-[Your implementation code here]
-```"""
-
-MULTI_FILE_OUTPUT_FORMAT = """This task requires MULTIPLE files. You MUST produce a SEPARATE fenced code block
-for each file listed below. Each block MUST have the file path as the first line comment.
-
-REQUIRED files (you MUST produce ALL of these — do not skip any):
-{file_list}
-
-ORDERING: Produce __init__.py FIRST (if listed). It is the package root — other files
-import from it or are imported by it. Even a minimal __init__.py (imports + __all__) is
-required; omission causes the build to fail.
-
-Use this exact format for EACH file:
-```
-# <full path to file>
-<complete implementation>
-```
-
-Example:
-```
-# src/mypackage/__init__.py
-from .module import Foo
-__all__ = ["Foo"]
-```
-
-```
-# src/mypackage/module.py
-class Foo: ...
-```
-
-## VERIFICATION CHECKLIST
-Before submitting, count your code blocks and verify each required file has one:
-{file_checklist}
-
-If any file above does not have a matching code block, add it now.
-
-CRITICAL RULES:
-- __init__.py MUST be its own code block — even if it only contains imports and __all__.
-- Every target file MUST have its own distinct block. No exceptions.
-- Do NOT combine multiple files into a single block.
-- Do NOT skip any file — missing blocks will cause the implementation to FAIL."""
+SPEC_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "spec")
+DRAFT_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "draft")
+SINGLE_FILE_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "single_file_output")
+MULTI_FILE_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "multi_file_output")
+REVIEW_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "review")
+INTEGRATION_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "integration")
 
 
 def _build_output_format(target_files: Optional[List[str]] = None) -> str:
@@ -223,76 +104,6 @@ def _build_output_format(target_files: Optional[List[str]] = None) -> str:
         file_list=file_list,
         file_checklist=file_checklist,
     )
-
-
-REVIEW_PROMPT_TEMPLATE = """You are reviewing an implementation as the Lead Contractor.
-
-## Original Task
-{task_description}
-
-## Your Specification
-{spec}
-
-## Implementation to Review
-{implementation}
-
-## Review Instructions
-Evaluate the implementation against your specification. Be thorough but fair.
-
-## Required Output Format
-
-### Score: [0-100]
-[Single number representing overall quality]
-
-### Verdict: [PASS/FAIL]
-[PASS if score >= {pass_threshold} and no blocking issues, otherwise FAIL]
-
-### Strengths
-- [What was done well]
-
-### Issues
-- [Problems found, with severity: BLOCKING, MAJOR, MINOR]
-
-### Suggestions
-- [Specific improvements for next iteration if FAIL]
-
-### Blocking Issues (if any)
-- [Issues that MUST be fixed before passing]
-
-### Full Review
-[Detailed analysis of the implementation]
-"""
-
-INTEGRATION_PROMPT_TEMPLATE = """You are the Lead Contractor finalizing the implementation.
-
-## Original Task
-{task_description}
-
-## Final Implementation
-{implementation}
-
-## Review History
-{review_history}
-
-## Integration Instructions
-{integration_instructions}
-
-## Your Role
-1. Review the final implementation one last time
-2. Make any minor polish or adjustments needed
-3. Ensure the code is production-ready
-4. Add any final documentation or comments
-
-## Output Format
-Provide the finalized, production-ready implementation:
-
-```
-[Final implementation code]
-```
-
-## Integration Notes
-[Any notes about the final version]
-"""
 
 
 class LeadContractorWorkflow(WorkflowBase):
@@ -603,10 +414,37 @@ class LeadContractorWorkflow(WorkflowBase):
             result.lead_cost += spec.cost
 
             # =================================================================
+            # IMP-P6: Spec-to-draft validation — check for missing parameters
+            # =================================================================
+            spec_validation_warning = ""
+            resolved_params = context.get("resolved_parameters", [])
+            if resolved_params:
+                from ...contractors.prompt_utils import find_missing_parameters
+                missing = find_missing_parameters(spec.raw_spec, resolved_params)
+                if missing:
+                    missing_lines = "\n".join(
+                        f"- {p.get('key_value', '')} (from requirements)"
+                        for p in missing
+                    )
+                    spec_validation_warning = (
+                        f"\n## Spec Completeness Warning\n"
+                        f"The following parameters from requirements are NOT mentioned in the spec.\n"
+                        f"Ensure these are included in your implementation:\n"
+                        f"{missing_lines}\n"
+                    )
+                    logger.warning(
+                        "IMP-P6: %d resolved parameter(s) missing from spec: %s",
+                        len(missing),
+                        [p.get("key_value") for p in missing],
+                    )
+
+            # =================================================================
             # Phase 2-4: Draft/Review Loop
             # =================================================================
             current_implementation = ""
             review_feedback = context.get("_multi_file_retry_initial_feedback", "")
+            if spec_validation_warning and not review_feedback:
+                review_feedback = spec_validation_warning
 
             for iteration in range(1, max_iterations + 1):
                 # Draft phase
@@ -838,42 +676,105 @@ class LeadContractorWorkflow(WorkflowBase):
         output_format: Optional[str],
     ) -> ImplementationSpec:
         """Phase 1: Lead creates implementation specification."""
+        from ...contractors.prompt_utils import format_constraints
+        from .prompts import get_template as _get_ctx_template
+
         spec_id = f"spec-{uuid.uuid4().hex[:8]}"
 
-        # Extract domain constraints before serialising the rest of context
+        # --- IMP-P5: Constraint categorization ---
         raw_constraints = context.pop("domain_constraints", None)
         if raw_constraints and isinstance(raw_constraints, list):
-            domain_constraints_str = "\n".join(f"- {c}" for c in raw_constraints)
+            domain_constraints_str = format_constraints(raw_constraints)
         elif raw_constraints and isinstance(raw_constraints, str):
             domain_constraints_str = raw_constraints
         else:
             domain_constraints_str = "(No domain-specific constraints)"
 
-        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
-        if output_format:
-            context_str += f"\n\nExpected Output Format:\n{output_format}"
+        # --- IMP-P2: Requirements text passthrough ---
+        requirements_text = context.pop("requirements_text", "")
+        requirements_section = ""
+        if requirements_text:
+            requirements_section = (
+                "\n## Requirements (verbatim — authoritative for parameter details)\n"
+                f"{requirements_text}\n"
+            )
+
+        # --- IMP-P3: Critical parameter elevation ---
+        critical_parameters = context.pop("critical_parameters", None)
+        critical_parameters_section = ""
+        if critical_parameters:
+            if isinstance(critical_parameters, list):
+                cp_str = "\n".join(f"- {p}" for p in critical_parameters)
+            elif isinstance(critical_parameters, str):
+                cp_str = critical_parameters
+            else:
+                cp_str = json.dumps(critical_parameters, indent=2)
+            critical_parameters_section = (
+                "\n## Critical Parameters (from requirements — include verbatim in spec)\n"
+                f"{cp_str}\n"
+            )
+
+        # --- IMP-P1: Structured context sections ---
+        arch_ctx = context.pop("architectural_context", None)
+        plan_ctx = context.pop("plan_context", None)
+        project_obj = context.pop("project_objectives", None)
+        sem_conv = context.pop("semantic_conventions", None)
+
+        # Build context sections with dedicated headers
+        sections: List[str] = []
 
         # Layer 1 (defense-in-depth): inject per-file manifest into the spec
-        # so the lead explicitly describes what each file should contain.
-        # This makes the drafter's job unambiguous — each file has a role.
         target_files = context.get("target_files")
         if target_files and len(target_files) > 1:
             file_manifest = "\n".join(f"  - `{f}`" for f in target_files)
-            context_str = (
-                f"## Required Output Files\n"
-                f"This task produces MULTIPLE files. Your spec MUST describe "
-                f"the role and expected contents of EACH file:\n"
-                f"{file_manifest}\n\n"
-                f"In your Code Structure section, list each file separately "
-                f"with its classes/functions. The implementer will produce a "
-                f"separate code block per file — if the spec is unclear about "
-                f"what goes in a file, the implementer may omit it.\n\n"
-                + context_str
-            )
+            manifest_template = _get_ctx_template("prime_context", "file_manifest")
+            sections.append(manifest_template.format(file_manifest=file_manifest))
+
+        # General context (remaining keys)
+        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
+        if output_format:
+            context_str += f"\n\nExpected Output Format:\n{output_format}"
+        sections.append(f"## Context\n{context_str}")
+
+        # Project objectives as bullet list
+        if project_obj:
+            if isinstance(project_obj, list):
+                obj_str = "\n".join(f"- {o}" for o in project_obj)
+            elif isinstance(project_obj, dict):
+                obj_str = "\n".join(f"- **{k}**: {v}" for k, v in project_obj.items())
+            else:
+                obj_str = str(project_obj)
+            sections.append(f"## Project Objectives\n{obj_str}")
+
+        # Semantic conventions as bullet list
+        if sem_conv:
+            if isinstance(sem_conv, list):
+                conv_str = "\n".join(f"- {c}" for c in sem_conv)
+            elif isinstance(sem_conv, dict):
+                conv_str = "\n".join(f"- **{k}**: {v}" for k, v in sem_conv.items())
+            else:
+                conv_str = str(sem_conv)
+            sections.append(f"## Semantic Conventions\n{conv_str}")
+
+        # Architecture
+        if arch_ctx:
+            if isinstance(arch_ctx, dict):
+                arch_str = json.dumps(arch_ctx, indent=2)
+            else:
+                arch_str = str(arch_ctx)
+            sections.append(f"## Project Architecture\n{arch_str}")
+
+        # Plan context
+        if plan_ctx:
+            sections.append(f"## Plan Context\n{plan_ctx}")
+
+        context_sections = "\n\n".join(sections)
 
         prompt = SPEC_PROMPT_TEMPLATE.format(
             task_description=task_description,
-            context=context_str,
+            requirements_section=requirements_section,
+            context_sections=context_sections,
+            critical_parameters_section=critical_parameters_section,
             domain_constraints=domain_constraints_str,
         )
 
@@ -1422,24 +1323,98 @@ class LeadContractorWorkflow(WorkflowBase):
         output_format: Optional[str],
     ) -> ImplementationSpec:
         """Phase 1 (async): Lead creates implementation specification."""
+        from ...contractors.prompt_utils import format_constraints
+        from .prompts import get_template as _get_ctx_template
+
         spec_id = f"spec-{uuid.uuid4().hex[:8]}"
 
-        # Extract domain constraints before serialising the rest of context
+        # --- IMP-P5: Constraint categorization ---
         raw_constraints = context.pop("domain_constraints", None)
         if raw_constraints and isinstance(raw_constraints, list):
-            domain_constraints_str = "\n".join(f"- {c}" for c in raw_constraints)
+            domain_constraints_str = format_constraints(raw_constraints)
         elif raw_constraints and isinstance(raw_constraints, str):
             domain_constraints_str = raw_constraints
         else:
             domain_constraints_str = "(No domain-specific constraints)"
 
+        # --- IMP-P2: Requirements text passthrough ---
+        requirements_text = context.pop("requirements_text", "")
+        requirements_section = ""
+        if requirements_text:
+            requirements_section = (
+                "\n## Requirements (verbatim — authoritative for parameter details)\n"
+                f"{requirements_text}\n"
+            )
+
+        # --- IMP-P3: Critical parameter elevation ---
+        critical_parameters = context.pop("critical_parameters", None)
+        critical_parameters_section = ""
+        if critical_parameters:
+            if isinstance(critical_parameters, list):
+                cp_str = "\n".join(f"- {p}" for p in critical_parameters)
+            elif isinstance(critical_parameters, str):
+                cp_str = critical_parameters
+            else:
+                cp_str = json.dumps(critical_parameters, indent=2)
+            critical_parameters_section = (
+                "\n## Critical Parameters (from requirements — include verbatim in spec)\n"
+                f"{cp_str}\n"
+            )
+
+        # --- IMP-P1: Structured context sections ---
+        arch_ctx = context.pop("architectural_context", None)
+        plan_ctx = context.pop("plan_context", None)
+        project_obj = context.pop("project_objectives", None)
+        sem_conv = context.pop("semantic_conventions", None)
+
+        sections: List[str] = []
+
+        target_files = context.get("target_files")
+        if target_files and len(target_files) > 1:
+            file_manifest = "\n".join(f"  - `{f}`" for f in target_files)
+            manifest_template = _get_ctx_template("prime_context", "file_manifest")
+            sections.append(manifest_template.format(file_manifest=file_manifest))
+
         context_str = json.dumps(context, indent=2) if context else "No additional context provided."
         if output_format:
             context_str += f"\n\nExpected Output Format:\n{output_format}"
+        sections.append(f"## Context\n{context_str}")
+
+        if project_obj:
+            if isinstance(project_obj, list):
+                obj_str = "\n".join(f"- {o}" for o in project_obj)
+            elif isinstance(project_obj, dict):
+                obj_str = "\n".join(f"- **{k}**: {v}" for k, v in project_obj.items())
+            else:
+                obj_str = str(project_obj)
+            sections.append(f"## Project Objectives\n{obj_str}")
+
+        if sem_conv:
+            if isinstance(sem_conv, list):
+                conv_str = "\n".join(f"- {c}" for c in sem_conv)
+            elif isinstance(sem_conv, dict):
+                conv_str = "\n".join(f"- **{k}**: {v}" for k, v in sem_conv.items())
+            else:
+                conv_str = str(sem_conv)
+            sections.append(f"## Semantic Conventions\n{conv_str}")
+
+        if arch_ctx:
+            if isinstance(arch_ctx, dict):
+                arch_str = json.dumps(arch_ctx, indent=2)
+            else:
+                arch_str = str(arch_ctx)
+            sections.append(f"## Project Architecture\n{arch_str}")
+
+        if plan_ctx:
+            sections.append(f"## Plan Context\n{plan_ctx}")
+
+        context_sections = "\n\n".join(sections)
 
         prompt = SPEC_PROMPT_TEMPLATE.format(
             task_description=task_description,
-            context=context_str,
+            requirements_section=requirements_section,
+            context_sections=context_sections,
+            critical_parameters_section=critical_parameters_section,
             domain_constraints=domain_constraints_str,
         )
 

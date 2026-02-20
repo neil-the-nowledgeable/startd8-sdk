@@ -201,7 +201,9 @@ class TestConstraintFormatting:
 
         result = SPEC_PROMPT_TEMPLATE.format(
             task_description="Build a thing",
-            context="{}",
+            requirements_section="",
+            context_sections="## Context\n{}",
+            critical_parameters_section="",
             domain_constraints=domain_constraints_str,
         )
 
@@ -217,7 +219,9 @@ class TestConstraintFormatting:
 
         result = SPEC_PROMPT_TEMPLATE.format(
             task_description="Build a thing",
-            context="{}",
+            requirements_section="",
+            context_sections="## Context\n{}",
+            critical_parameters_section="",
             domain_constraints="(No domain-specific constraints)",
         )
 

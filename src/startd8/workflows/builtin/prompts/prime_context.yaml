@@ -1,0 +1,73 @@
+prompts:
+  output_constraint:
+    description: "Single-module output constraint when no domain enrichment is available"
+    template: |
+      IMPORTANT: Output a single Python module, NOT a package with multiple files. All classes, enums, and functions must be defined in one file. Do NOT use relative imports (from .module import ...) — everything lives in this file.
+    placeholders: []
+
+  prior_error_feedback:
+    description: "Error-informed retry guidance injected when a previous generation failed"
+    template: |
+      CRITICAL: A previous attempt to generate this code FAILED integration checks. You MUST fix the following issues in your output:
+
+      {prior_error}
+
+      Do NOT repeat these mistakes. Address each error explicitly.
+    placeholders:
+      - prior_error
+
+  file_manifest:
+    description: "Multi-file manifest injected into spec context for defense-in-depth"
+    template: |
+      ## Required Output Files
+      This task produces MULTIPLE files. Your spec MUST describe the role and expected contents of EACH file:
+      {file_manifest}
+
+      In your Code Structure section, list each file separately with its classes/functions. The implementer will produce a separate code block per file — if the spec is unclear about what goes in a file, the implementer may omit it.
+    placeholders:
+      - file_manifest
+
+  multi_file_retry:
+    description: "Retry feedback when multi-file code split is missing files"
+    template: |
+      CRITICAL: Your previous attempt was missing code blocks for:
+      {unmatched_list}
+
+      Expected role of each missing file:
+      {role_hint_text}
+
+      You MUST produce a SEPARATE fenced code block for EVERY target file.
+      Format: the first line inside each code block MUST be a comment with the full file path. Example:
+
+          ```python
+          # src/package/__init__.py
+          from .module import Foo
+          __all__ = ['Foo']
+          ```
+
+          ```python
+          # src/package/module.py
+          class Foo: ...
+          ```
+
+      If a missing file is a shared module or interface stub, produce a minimal placeholder with imports, docstring, and empty registrations or pass-through functions. An empty or stub file is acceptable — omitting it entirely is NOT.
+
+      ALL target files: {target_files}
+      MISSING files that MUST be included: {unmatched}
+    placeholders:
+      - unmatched_list
+      - role_hint_text
+      - target_files
+      - unmatched
+
+  role_hints_init:
+    description: "Role hint for __init__.py files in multi-file retry feedback"
+    template: "  - `{filepath}` — package root: must contain imports from sibling modules, __all__ list, and any package-level docstring."
+    placeholders:
+      - filepath
+
+  role_hints_module:
+    description: "Role hint for implementation module files in multi-file retry feedback"
+    template: "  - `{filepath}` — implementation module: must contain the main logic as described in the spec."
+    placeholders:
+      - filepath

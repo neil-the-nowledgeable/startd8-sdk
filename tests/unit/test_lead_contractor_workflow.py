@@ -402,7 +402,9 @@ class TestPromptTemplates:
         """Test spec prompt template can be formatted."""
         prompt = SPEC_PROMPT_TEMPLATE.format(
             task_description="Implement feature X",
-            context="Context info",
+            requirements_section="",
+            context_sections="## Context\nContext info",
+            critical_parameters_section="",
             domain_constraints="(No domain-specific constraints)",
         )
         assert "Implement feature X" in prompt

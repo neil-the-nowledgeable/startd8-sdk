@@ -255,7 +255,11 @@ class FeatureQueue:
             artifact_types = context.get("artifact_types_addressed", [])
             design_sections = context.get("design_doc_sections", [])
             estimated_loc = context.get("estimated_loc")
+            # IMP-P2: bridge requirements_text from seed through metadata
+            requirements_text = config.get("requirements_text", "")
             meta: Dict[str, Any] = {}
+            if requirements_text:
+                meta["requirements_text"] = requirements_text
             if enrichment:
                 meta["_enrichment"] = enrichment
             if artifact_types:
