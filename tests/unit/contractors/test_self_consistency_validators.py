@@ -191,6 +191,25 @@ class TestImportDependency:
         issues = validate_import_dependency(code, Stub())
         assert issues == []
 
+    def test_multi_import_checks_all_aliases(self, tmp_path: Path):
+        """R1 bug fix: `import os, requests` must check both names."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_import_dependency,
+        )
+        (tmp_path / "requirements.txt").write_text("flask\n", encoding="utf-8")
+
+        # `import os, requests` — os is stdlib (allowed), requests is not declared
+        code = "import os, requests\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+            prompt_constraints = ()
+            deps_source = None
+
+        issues = validate_import_dependency(code, Stub())
+        assert len(issues) == 1
+        assert "requests" in issues[0]["message"]
+
     def test_requirements_txt_fallback(self, tmp_path: Path):
         """Subprocess uses cwd to find requirements.txt."""
         from startd8.workflows.builtin.preflight_rules.rules_validators import (

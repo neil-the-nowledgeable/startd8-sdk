@@ -17,10 +17,13 @@ Two follow an in-process signature for cross-file checks::
 from __future__ import annotations
 
 import ast
+import logging
 import re
 import sys
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -59,12 +62,6 @@ _IMPORT_TO_PACKAGE: dict[str, str] = {
     "serial": "pyserial",
 }
 
-_BINARY_EXTENSIONS: frozenset[str] = frozenset({
-    ".pyc", ".pyo", ".so", ".dll", ".dylib", ".exe",
-    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico",
-    ".whl", ".egg", ".zip", ".tar", ".gz",
-})
-
 _GRPC_INDICATORS: list[re.Pattern[str]] = [
     re.compile(r"\bgrpc\b"),
     re.compile(r"\b\w+_pb2\b"),
@@ -101,11 +98,6 @@ _PROTO_FIELD_RE = re.compile(
 def _line_number(code: str, pos: int) -> int:
     """Return the 1-based line number for a character offset in *code*."""
     return code[:pos].count("\n") + 1
-
-
-def _is_binary_extension(path_str: str) -> bool:
-    """Return True if *path_str* has a binary extension we should skip."""
-    return Path(path_str).suffix.lower() in _BINARY_EXTENSIONS
 
 
 def _read_requirements_from_cwd(cwd: str | None) -> set[str] | None:
@@ -151,16 +143,17 @@ def _collect_proto_fields(project_root: Path | None) -> set[str]:
                     fields.add(m.group(1))
             except OSError:
                 continue
-    except OSError:
-        pass
+    except OSError as exc:
+        logger.debug("Failed to scan proto files under %s: %s", project_root, exc)
     return fields
 
 
 def _looks_like_proto_access(name: str) -> bool:
     """Return True if *name* looks like a protobuf field accessor.
 
-    Heuristic: names ending in common protobuf suffixes or using
-    snake_case that matches typical proto field patterns.
+    Heuristic: any lowercase snake_case identifier (contains ``_`` and
+    has no uppercase letters).  This is intentionally broad — the caller
+    narrows results by checking against the actual proto field set.
     """
     return bool(name and "_" in name and name == name.lower())
 
@@ -224,36 +217,15 @@ def validate_import_dependency(code: str, enrichment: Any) -> list[dict[str, Any
             importable_from_constraint = {n.strip() for n in names_str.split(",") if n.strip()}
             break
 
-    for node in ast.walk(tree):
-        top_level: str | None = None
-        lineno: int = 0
-
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                top_level = alias.name.split(".")[0]
-                lineno = node.lineno
-        elif isinstance(node, ast.ImportFrom):
-            if node.module and (not node.level or node.level == 0):
-                top_level = node.module.split(".")[0]
-                lineno = node.lineno
-
-        if top_level is None:
-            continue
-
-        # Skip stdlib
+    def _check_import(top_level: str, lineno: int) -> None:
+        """Check a single top-level import name against declared packages."""
         if top_level in stdlib:
-            continue
-
-        # Check if package is declared (with import-to-package mapping)
+            return
         pkg_name = _IMPORT_TO_PACKAGE.get(top_level, top_level)
         normalized = pkg_name.lower().replace("-", "_")
-
         is_declared = normalized in declared_packages
-
-        # Also check if importable from constraint allows it
         if not is_declared and importable_from_constraint is not None:
             is_declared = top_level in importable_from_constraint
-
         if not is_declared:
             issues.append({
                 "validator": "import_dependency",
@@ -264,6 +236,15 @@ def validate_import_dependency(code: str, enrichment: Any) -> list[dict[str, Any
                 "line": lineno,
                 "confidence": 0.85,
             })
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            # Each alias in `import a, b, c` must be checked individually.
+            for alias in node.names:
+                _check_import(alias.name.split(".")[0], node.lineno)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and (not node.level or node.level == 0):
+                _check_import(node.module.split(".")[0], node.lineno)
 
     return issues
 
@@ -349,7 +330,8 @@ def validate_protocol_fidelity(
     if transport == "grpc" and has_http and not has_grpc:
         # HTTP patterns in a gRPC-declared service (DEV-001 pattern)
         for pattern in _HTTP_INDICATORS:
-            for match in pattern.finditer(code):
+            match = next(pattern.finditer(code), None)
+            if match:
                 issues.append({
                     "validator": "protocol_fidelity",
                     "message": (
@@ -360,11 +342,11 @@ def validate_protocol_fidelity(
                     "file": file_path,
                     "confidence": 0.9,
                 })
-                break  # One issue per pattern is enough
     elif transport == "http" and has_grpc and not has_http:
         # gRPC patterns in an HTTP-declared service
         for pattern in _GRPC_INDICATORS:
-            for match in pattern.finditer(code):
+            match = next(pattern.finditer(code), None)
+            if match:
                 issues.append({
                     "validator": "protocol_fidelity",
                     "message": (
@@ -375,7 +357,6 @@ def validate_protocol_fidelity(
                     "file": file_path,
                     "confidence": 0.9,
                 })
-                break
 
     return issues
 

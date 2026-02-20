@@ -2079,15 +2079,11 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             validate_protocol_fidelity,
             validate_dockerfile_coherence,
         )
+        from startd8.workflows.builtin.preflight_rules.rules_validators import (
+            _StubEnrichment,
+        )
 
-        # Minimal enrichment stub for subprocess-signature validators.
-        class _Gate3Enrichment:
-            def __init__(self, cwd: str | None):
-                self.cwd = cwd
-                self.prompt_constraints: tuple = ()
-                self.deps_source: str | None = None
-
-        enrichment = _Gate3Enrichment(cwd=str(project_root))
+        enrichment = _StubEnrichment(cwd=str(project_root))
         all_findings: dict[str, list[dict[str, Any]]] = {}
 
         for task in tasks:
@@ -2102,7 +2098,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     continue
                 try:
                     code = full_path.read_text(encoding="utf-8")
-                except OSError:
+                except (OSError, UnicodeDecodeError):
                     continue
 
                 # AR-146: Placeholder detection (all files)
@@ -3982,10 +3978,12 @@ class TestPhaseHandler(AbstractPhaseHandler):
         for rel_path in task.target_files:
             full_path = project_root / rel_path
             if not full_path.exists():
+                logger.debug("In-process validators: skipping %s (not found)", rel_path)
                 continue
             try:
                 code = full_path.read_text(encoding="utf-8")
-            except OSError:
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.debug("In-process validators: skipping %s: %s", rel_path, exc)
                 continue
 
             for validator_fn, validator_name in [
@@ -4249,6 +4247,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         total_passed = 0
         total_failed = 0
         previous_task_started_mono: Optional[float] = None
+        _service_metadata = context.get("service_metadata")
 
         for idx, task in enumerate(tasks, start=1):
             previous_task_started_mono = _log_task_timing(
@@ -4297,7 +4296,6 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     continue
 
                 # Run validators
-                _service_metadata = context.get("service_metadata")
                 task_test_result = self._run_validators_for_task(
                     task, project_root, gen_result,
                     service_metadata=_service_metadata,
