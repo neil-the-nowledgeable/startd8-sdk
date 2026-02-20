@@ -4,6 +4,8 @@ Common preflight rules applicable across multiple domains.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Optional
 
 from ..domain_preflight_models import CheckStatus, EnvironmentCheck
@@ -66,3 +68,53 @@ class LoggerReservedFieldsRule(PreflightRule):
             f"{sample_fields}, ..."
         )
         return RuleContribution(checks=[check], constraints=[constraint])
+
+
+# Service-related filename patterns for AR-810.
+_SERVICE_FILE_PATTERNS = (
+    "Dockerfile", "dockerfile",
+    "_server", "_service", "_pb2", "grpc",
+)
+
+
+@preflight_rule(domains=ALL_DOMAINS, priority=50)
+class ServiceMetadataPreflightRule(PreflightRule):
+    """AR-810: Warn when service-related files lack service metadata.
+
+    Checks ``onboarding-metadata.json`` at the project root for a
+    ``service_metadata`` section.  If absent and the target file looks
+    service-related (Dockerfile, *_server*, *_pb2*, *_service*, grpc*),
+    emits a WARN so protocol fidelity validators can be effective.
+    """
+
+    rule_id = "service_metadata_preflight"
+
+    def evaluate(self, ctx: RuleContext) -> Optional[RuleContribution]:
+        fname = ctx.target_path.name
+        is_service_file = any(pat in fname for pat in _SERVICE_FILE_PATTERNS)
+        if not is_service_file:
+            return None
+
+        metadata_path = ctx.project_root / "onboarding-metadata.json"
+        if metadata_path.exists():
+            try:
+                data = json.loads(metadata_path.read_text(encoding="utf-8"))
+                if data.get("service_metadata"):
+                    return None  # metadata present — no warning needed
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        check = EnvironmentCheck(
+            check_name="service_metadata_preflight",
+            status=CheckStatus.WARN,
+            message=(
+                f"Service-related file '{fname}' but no service_metadata "
+                f"in onboarding-metadata.json — protocol fidelity "
+                f"validators will be skipped"
+            ),
+            detail=(
+                "Add a service_metadata section with transport_protocol "
+                "to onboarding-metadata.json for full validation coverage"
+            ),
+        )
+        return RuleContribution(checks=[check])

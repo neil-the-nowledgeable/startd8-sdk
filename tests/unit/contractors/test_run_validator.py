@@ -240,6 +240,9 @@ class TestValidatorCoverage:
             "test_naming",
             "no_hardcoded_secrets",
             "no_substring_tag_matching",
+            "placeholder_detection",
+            "import_dependency",
+            "proto_field_references",
         }
 
         missing = enrichment_validators - set(_VALIDATORS)

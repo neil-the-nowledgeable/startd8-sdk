@@ -20,6 +20,12 @@ from ..domain_preflight_models import TaskDomain
 from ._base import PYTHON_DOMAINS, PreflightRule, RuleContext, RuleContribution
 from ._registry import preflight_rule
 
+from startd8.contractors.artisan_phases.self_consistency import (
+    validate_placeholder_detection,
+    validate_import_dependency,
+    validate_proto_field_references,
+)
+
 
 # ---------------------------------------------------------------------------
 # Validator function implementations
@@ -486,6 +492,9 @@ _VALIDATORS = {
     "test_naming": _validate_test_naming,
     "no_hardcoded_secrets": _validate_no_hardcoded_secrets,
     "no_substring_tag_matching": _validate_no_substring_tag_matching,
+    "placeholder_detection": validate_placeholder_detection,
+    "import_dependency": validate_import_dependency,
+    "proto_field_references": validate_proto_field_references,
 }
 
 
@@ -504,6 +513,7 @@ class _StubEnrichment:
     def __init__(self, cwd: str | None = None):
         self.prompt_constraints: tuple = ()
         self.deps_source: str | None = None
+        self.cwd: str | None = cwd
 
         if cwd:
             cwd_path = Path(cwd)

@@ -94,6 +94,10 @@ from startd8.utils.artifact_inventory import (
     load_inventory,
     lookup_artifact,
 )
+from startd8.contractors.artisan_phases.self_consistency import (
+    validate_protocol_fidelity,
+    validate_dockerfile_coherence,
+)
 
 logger = get_logger(__name__)
 
@@ -718,16 +722,19 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         context["onboarding_dependency_graph"] = _onboarding.get(
             "artifact_dependency_graph"
         )
+        # AR-144/AR-147: service metadata for protocol fidelity validators
+        context["service_metadata"] = _onboarding.get("service_metadata")
         _fwd_count = sum(
             1 for k in [
                 "onboarding_derivation_rules", "onboarding_resolved_parameters",
                 "onboarding_output_contracts", "onboarding_calibration_hints",
                 "onboarding_open_questions", "onboarding_dependency_graph",
+                "service_metadata",
             ] if context.get(k)
         )
         if _fwd_count:
             logger.info(
-                "PLAN phase: forwarded %d/6 onboarding inventory fields into context",
+                "PLAN phase: forwarded %d/7 onboarding inventory fields into context",
                 _fwd_count,
             )
 
@@ -2047,6 +2054,79 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 )
 
         return findings
+
+    @staticmethod
+    def _validate_generation_content(
+        tasks: list[SeedTask],
+        generation_results: dict[str, "GenerationResult"],
+        project_root: Path,
+        service_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Gate 3b: post-IMPLEMENT semantic content validation.
+
+        Runs all 5 self-consistency validators (AR-143 through AR-147)
+        against generated files to catch production-blocking defects
+        before TEST/REVIEW/FINALIZE.
+
+        Returns:
+            Dict mapping task_id to a list of issue dicts.
+            Empty dict means all tasks are clean.
+        """
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_placeholder_detection,
+            validate_import_dependency,
+            validate_proto_field_references,
+            validate_protocol_fidelity,
+            validate_dockerfile_coherence,
+        )
+
+        # Minimal enrichment stub for subprocess-signature validators.
+        class _Gate3Enrichment:
+            def __init__(self, cwd: str | None):
+                self.cwd = cwd
+                self.prompt_constraints: tuple = ()
+                self.deps_source: str | None = None
+
+        enrichment = _Gate3Enrichment(cwd=str(project_root))
+        all_findings: dict[str, list[dict[str, Any]]] = {}
+
+        for task in tasks:
+            gr = generation_results.get(task.task_id)
+            if gr is None or not gr.success:
+                continue
+
+            task_issues: list[dict[str, Any]] = []
+            for rel_path in task.target_files:
+                full_path = project_root / rel_path
+                if not full_path.exists():
+                    continue
+                try:
+                    code = full_path.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+
+                # AR-146: Placeholder detection (all files)
+                task_issues.extend(validate_placeholder_detection(code, enrichment))
+
+                # AR-143, AR-145: Python-specific validators
+                if rel_path.endswith(".py"):
+                    task_issues.extend(validate_import_dependency(code, enrichment))
+                    task_issues.extend(validate_proto_field_references(code, enrichment))
+
+                # AR-144: Protocol fidelity (with service_metadata)
+                task_issues.extend(
+                    validate_protocol_fidelity(code, rel_path, service_metadata)
+                )
+
+                # AR-147: Dockerfile coherence
+                task_issues.extend(
+                    validate_dockerfile_coherence(code, rel_path, service_metadata)
+                )
+
+            if task_issues:
+                all_findings[task.task_id] = task_issues
+
+        return all_findings
 
     @staticmethod
     def _validate_truncation(
@@ -3473,6 +3553,30 @@ class Test{class_name}:
             if gate3:
                 output["_gate3_validation"] = gate3
 
+            # ── Gate 3b: post-IMPLEMENT semantic content validation ──
+            # Runs 5 self-consistency validators (AR-143–AR-147) to
+            # catch placeholder literals, undeclared imports, proto
+            # field mismatches, protocol fidelity issues, and
+            # Dockerfile coherence problems.  Advisory in v1.
+            _svc_meta = context.get("service_metadata")
+            gate3b = self._validate_generation_content(
+                tasks, generation_results, project_root,
+                service_metadata=_svc_meta,
+            )
+            if gate3b:
+                output["_gate3b_content_validation"] = gate3b
+                flagged_ids = sorted(gate3b.keys())
+                total_issues = sum(len(v) for v in gate3b.values())
+                logger.warning(
+                    "Gate 3b: %d task(s) with %d content issue(s): %s",
+                    len(flagged_ids), total_issues, flagged_ids,
+                )
+            else:
+                logger.info(
+                    "Gate 3b: no content issues across %d task(s)",
+                    len(generation_results),
+                )
+
             # ── Gate 4: post-IMPLEMENT truncation detection ─────────
             # Per Context Correctness by Construction: detect truncated
             # or syntactically broken generated files BEFORE they
@@ -3728,6 +3832,9 @@ class TestPhaseHandler(AbstractPhaseHandler):
             "test_naming",
             "no_hardcoded_secrets",
             "no_substring_tag_matching",
+            "placeholder_detection",
+            "import_dependency",
+            "proto_field_references",
         }
         if validator_name in enrichment_validators:
             # Run the validator via the preflight rules_validators module
@@ -3852,11 +3959,57 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 "timed_out": False,
             }
 
+    def _run_in_process_validators(
+        self,
+        task: SeedTask,
+        project_root: Path,
+        generation_result: GenerationResult | None,
+        service_metadata: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Run in-process validators (protocol fidelity, Dockerfile coherence).
+
+        These validators need cross-file context (service_metadata) that
+        cannot be passed through the subprocess boundary.
+
+        Returns a list of result dicts matching the subprocess shape::
+
+            {"validator": str, "passed": bool, "issues": list, "file": str, "command": "(in-process)"}
+        """
+        results: list[dict[str, Any]] = []
+        if generation_result is None or not generation_result.success:
+            return results
+
+        for rel_path in task.target_files:
+            full_path = project_root / rel_path
+            if not full_path.exists():
+                continue
+            try:
+                code = full_path.read_text(encoding="utf-8")
+            except OSError:
+                continue
+
+            for validator_fn, validator_name in [
+                (validate_protocol_fidelity, "protocol_fidelity"),
+                (validate_dockerfile_coherence, "dockerfile_coherence"),
+            ]:
+                issues = validator_fn(code, rel_path, service_metadata)
+                passed = len(issues) == 0
+                results.append({
+                    "validator": validator_name,
+                    "passed": passed,
+                    "issues": issues,
+                    "file": rel_path,
+                    "command": "(in-process)",
+                })
+
+        return results
+
     def _run_validators_for_task(
         self,
         task: SeedTask,
         project_root: Path,
         generation_result: Optional[GenerationResult],
+        service_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Run all validators for a single task.
 
@@ -3869,6 +4022,8 @@ class TestPhaseHandler(AbstractPhaseHandler):
             project_root: Project root directory.
             generation_result: The generation result from IMPLEMENT phase
                 (if any).
+            service_metadata: Service metadata from onboarding for
+                protocol fidelity and Dockerfile coherence validators.
 
         Returns:
             Dict with per-validator results and overall pass/fail.
@@ -3908,6 +4063,15 @@ class TestPhaseHandler(AbstractPhaseHandler):
             validator_results.append(result)
 
             if not result.get("passed", False):
+                all_passed = False
+
+        # In-process validators (AR-144 protocol fidelity, AR-147 Dockerfile coherence)
+        in_process_results = self._run_in_process_validators(
+            task, project_root, generation_result, service_metadata,
+        )
+        for ip_result in in_process_results:
+            validator_results.append(ip_result)
+            if not ip_result.get("passed", True):
                 all_passed = False
 
         return {
@@ -4133,8 +4297,10 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     continue
 
                 # Run validators
+                _service_metadata = context.get("service_metadata")
                 task_test_result = self._run_validators_for_task(
                     task, project_root, gen_result,
+                    service_metadata=_service_metadata,
                 )
                 task_test_result["status"] = (
                     "passed" if task_test_result["all_passed"] else "failed"

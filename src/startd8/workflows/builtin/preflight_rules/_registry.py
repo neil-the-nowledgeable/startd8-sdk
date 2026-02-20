@@ -86,7 +86,10 @@ class PreflightRuleRegistry:
         module cache means re-importing won't re-fire decorators, so we
         explicitly create instances here (mirroring ProviderRegistry).
         """
-        from .rules_common import ParentDirExistsRule, LoggerReservedFieldsRule
+        from .rules_common import (
+            ParentDirExistsRule, LoggerReservedFieldsRule,
+            ServiceMetadataPreflightRule,
+        )
         from .rules_python_single import (
             NotInPackageRule, OptionalDepGuardsSingleRule,
             SingleModuleConstraintsRule,
@@ -109,7 +112,7 @@ class PreflightRuleRegistry:
         )
 
         builtin_classes = [
-            ParentDirExistsRule, LoggerReservedFieldsRule,
+            ParentDirExistsRule, LoggerReservedFieldsRule, ServiceMetadataPreflightRule,
             NotInPackageRule, OptionalDepGuardsSingleRule,
             SingleModuleConstraintsRule,
             InitPyExistsRule, ParentPackageImportableRule, CircularImportsRule,

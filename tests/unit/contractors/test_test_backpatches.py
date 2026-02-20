@@ -345,7 +345,7 @@ class TestTP6PerTaskExceptionHandler:
         call_count = {"n": 0}
         original_run = handler._run_validators_for_task
 
-        def mock_run(task, project_root, gen_result):
+        def mock_run(task, project_root, gen_result, service_metadata=None):
             call_count["n"] += 1
             if task.task_id == "T-bad":
                 raise RuntimeError("corrupt shlex input")
