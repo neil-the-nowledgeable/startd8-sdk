@@ -50,6 +50,13 @@ from ...logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# File-extension → language mapping for service metadata inference
+_EXT_TO_LANGUAGE: Dict[str, str] = {
+    "py": "python", "go": "go", "js": "javascript",
+    "ts": "typescript", "rs": "rust", "java": "java",
+    "rb": "ruby", "cs": "csharp",
+}
+
 # JSON Schema for ArtisanContextSeed (Item 6 — validation before write)
 _ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
     "$schema": "http://json-schema.org/draft-07/schema#",
@@ -167,6 +174,38 @@ def _validate_seed_field_coverage(seed_dict: Dict[str, Any]) -> List[str]:
         warnings.append("no context_files — provenance tracking limited")
 
     return warnings
+
+
+def _log_seed_coverage(seed_dict: Dict[str, Any], label: str = "") -> None:
+    """Run advisory field-coverage check and log any warnings."""
+    warnings = _validate_seed_field_coverage(seed_dict)
+    if warnings:
+        tag = f" [{label}]" if label else ""
+        logger.warning(
+            "Seed field-coverage advisory%s (%d warning(s)): %s",
+            tag, len(warnings), "; ".join(warnings),
+        )
+
+
+def _ensure_onboarding_in_context_files(
+    context_files_list: Optional[List[Dict[str, Any]]],
+    onboarding: Optional[Dict[str, Any]],
+    output_dir: Path,
+) -> None:
+    """REQ-PI-014: Append onboarding-metadata.json to context_files if missing."""
+    if not context_files_list or not onboarding:
+        return
+    existing_names = {
+        entry.get("path", "").rsplit("/", 1)[-1] for entry in context_files_list
+    }
+    if "onboarding-metadata.json" not in existing_names:
+        ob_path = output_dir / "onboarding-metadata.json"
+        if ob_path.exists():
+            context_files_list.append({
+                "path": str(ob_path),
+                "checksum": _sha256_file_hex(ob_path),
+            })
+            logger.info("REQ-PI-014: added onboarding-metadata.json to context_files")
 
 
 # ---------------------------------------------------------------------------
@@ -715,14 +754,11 @@ def _infer_service_metadata(
         all_negative_scope.extend(f.negative_scope)
         # Infer language from target files
         for tf in f.target_files:
+            # Extract extension after last dot, or empty string if no dot
             ext = tf.rsplit(".", 1)[-1].lower() if "." in tf else ""
-            lang_map = {
-                "py": "python", "go": "go", "js": "javascript",
-                "ts": "typescript", "rs": "rust", "java": "java",
-                "rb": "ruby", "cs": "csharp",
-            }
-            if ext in lang_map and lang_map[ext] not in languages:
-                languages.append(lang_map[ext])
+            lang = _EXT_TO_LANGUAGE.get(ext)
+            if lang and lang not in languages:
+                languages.append(lang)
 
     # Determine dominant protocol
     transport = ""
@@ -2905,17 +2941,9 @@ class PlanIngestionWorkflow(WorkflowBase):
                 context_files, base_dir=output_dir
             ) if context_files else None
 
-            # REQ-PI-014: Ensure onboarding-metadata.json is in context_files
-            if context_files_list and onboarding_early:
-                ob_names = {entry.get("path", "").rsplit("/", 1)[-1] for entry in context_files_list}
-                if "onboarding-metadata.json" not in ob_names:
-                    ob_path = output_dir / "onboarding-metadata.json"
-                    if ob_path.exists():
-                        context_files_list.append({
-                            "path": str(ob_path),
-                            "checksum": _sha256_file_hex(ob_path),
-                        })
-                        logger.info("REQ-PI-014: added onboarding-metadata.json to context_files")
+            _ensure_onboarding_in_context_files(
+                context_files_list, onboarding_early, output_dir,
+            )
 
             service_metadata = _infer_service_metadata(
                 parsed_plan.features, onboarding_early,
@@ -2941,13 +2969,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             seed_dict = seed.to_dict()
             _validate_context_seed(seed_dict)
-            seed_coverage_warnings = _validate_seed_field_coverage(seed_dict)
-            if seed_coverage_warnings:
-                logger.warning(
-                    "Seed field-coverage advisory (%d warning(s)): %s",
-                    len(seed_coverage_warnings),
-                    "; ".join(seed_coverage_warnings),
-                )
+            _log_seed_coverage(seed_dict)
             context_seed_path = output_dir / "artisan-context-seed.json"
             atomic_write_json(context_seed_path, seed_dict, indent=2)
 
@@ -3031,17 +3053,9 @@ class PlanIngestionWorkflow(WorkflowBase):
                 context_files, base_dir=output_dir
             ) if context_files else None
 
-            # REQ-PI-014: Ensure onboarding-metadata.json is in context_files (prime)
-            if context_files_list_prime and onboarding_prime:
-                ob_names_prime = {entry.get("path", "").rsplit("/", 1)[-1] for entry in context_files_list_prime}
-                if "onboarding-metadata.json" not in ob_names_prime:
-                    ob_path_prime = output_dir / "onboarding-metadata.json"
-                    if ob_path_prime.exists():
-                        context_files_list_prime.append({
-                            "path": str(ob_path_prime),
-                            "checksum": _sha256_file_hex(ob_path_prime),
-                        })
-                        logger.info("REQ-PI-014: added onboarding-metadata.json to context_files (prime)")
+            _ensure_onboarding_in_context_files(
+                context_files_list_prime, onboarding_prime, output_dir,
+            )
 
             service_metadata_prime = _infer_service_metadata(
                 parsed_plan.features, onboarding_prime,
@@ -3067,13 +3081,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             seed_prime_dict = seed_prime.to_dict()
             _validate_context_seed(seed_prime_dict)
-            seed_coverage_warnings_prime = _validate_seed_field_coverage(seed_prime_dict)
-            if seed_coverage_warnings_prime:
-                logger.warning(
-                    "Seed field-coverage advisory [prime] (%d warning(s)): %s",
-                    len(seed_coverage_warnings_prime),
-                    "; ".join(seed_coverage_warnings_prime),
-                )
+            _log_seed_coverage(seed_prime_dict, label="prime")
             prime_seed_path = output_dir / "prime-context-seed.json"
             atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
 

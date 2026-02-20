@@ -307,7 +307,9 @@ def extract_critical_parameters(design_text: str) -> list[dict[str, Any]]:
         "THE", "AND", "FOR", "NOT", "ARE", "BUT", "THIS", "THAT",
         "WITH", "FROM", "HAVE", "WILL", "TODO", "FIXME", "NOTE",
         "HTTP", "HTTPS", "JSON", "YAML", "TRUE", "FALSE", "NONE",
-        "NULL", "TYPE", "MUST", "SHALL",
+        "NULL", "TYPE", "MUST", "SHALL", "API", "URL", "SDK",
+        "CSS", "HTML", "XML", "SQL", "CLI", "TLS", "SSL",
+        "REST", "GRPC", "CRUD", "ACID", "BASE",
     }
     seen_names: set[str] = set()
 

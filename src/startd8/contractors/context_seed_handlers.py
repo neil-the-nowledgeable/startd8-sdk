@@ -899,8 +899,8 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
             if seed_path:
                 try:
                     seed_mtime = Path(str(seed_path)).stat().st_mtime
-                except OSError:
-                    pass
+                except OSError as exc:
+                    logger.debug("SCAFFOLD: could not stat seed path %s: %s", seed_path, exc)
 
             for target in files_existing:
                 target_path = project_root / target
@@ -6000,7 +6000,6 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         # Task 11b: Strict validation blocking check
         strict_mode = context.get("strict_validation", False)
         if strict_mode and gate3b_data:
-            severity_counts = summary.get("gate3b_validation", {}).get("by_severity", {})
             high_count = severity_counts.get("high", 0)
             if high_count > 0:
                 error_msg = (

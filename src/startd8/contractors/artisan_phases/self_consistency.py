@@ -457,6 +457,7 @@ _EXEMPTED_FUNC_NAMES = {
     "__iter__", "__next__", "__call__", "__del__",
     "__new__", "__post_init__",
 }
+_NAME_REF_RE = re.compile(r"['\"](\w+)['\"]")
 
 
 def validate_function_call_completeness(
@@ -477,6 +478,7 @@ def validate_function_call_completeness(
     try:
         tree = ast.parse(code)
     except SyntaxError:
+        logger.debug("AR-148: skipping %s — SyntaxError during parse", file_path)
         return issues
 
     # Collect function definitions (excluding exemptions)
@@ -507,8 +509,7 @@ def validate_function_call_completeness(
                 called_names.add(node.func.attr)
 
     # Also check string references to reduce false positives from dynamic dispatch
-    _name_ref_re = re.compile(r"['\"](\w+)['\"]")
-    for m in _name_ref_re.finditer(code):
+    for m in _NAME_REF_RE.finditer(code):
         called_names.add(m.group(1))
 
     # Report uncalled functions
@@ -541,6 +542,23 @@ _RUNTIME_INSTALL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 ]
 
 
+def _extract_installed_packages(dockerfile_text: str) -> set[str]:
+    """Extract normalized package names from install commands in Dockerfile text."""
+    packages: set[str] = set()
+    for _mgr, pattern in _RUNTIME_INSTALL_PATTERNS:
+        for m in pattern.finditer(dockerfile_text):
+            for raw_pkg in m.group(1).split():
+                clean_pkg = raw_pkg.strip().rstrip("\\")
+                if not clean_pkg or clean_pkg.startswith("-") or clean_pkg.startswith("$"):
+                    continue
+                for sep in (">=", "<=", "==", "!=", "~=", ">", "<", "["):
+                    if sep in clean_pkg:
+                        clean_pkg = clean_pkg[:clean_pkg.index(sep)]
+                        break
+                packages.add(clean_pkg.lower().replace("-", "_"))
+    return packages
+
+
 def validate_dockerfile_runtime_deps(
     code: str,
     file_path: str,
@@ -568,20 +586,8 @@ def validate_dockerfile_runtime_deps(
         return issues
 
     # Collect all installed packages from Dockerfile
-    installed_packages: set[str] = set()
+    installed_packages = _extract_installed_packages(code)
     code_lower = code.lower()
-
-    for _mgr, pattern in _RUNTIME_INSTALL_PATTERNS:
-        for m in pattern.finditer(code):
-            packages_str = m.group(1)
-            for pkg in packages_str.split():
-                pkg = pkg.strip().rstrip("\\")
-                if pkg and not pkg.startswith("-") and not pkg.startswith("$"):
-                    for sep in (">=", "<=", "==", "!=", "~=", ">", "<", "["):
-                        if sep in pkg:
-                            pkg = pkg[:pkg.index(sep)]
-                            break
-                    installed_packages.add(pkg.lower().replace("-", "_"))
 
     # Check each expected dependency
     for dep in expected_deps:
@@ -599,32 +605,27 @@ def validate_dockerfile_runtime_deps(
                 "confidence": 0.7,
             })
 
-    # Check for multi-stage build dep loss
-    if code_lower.count("from ") > 1:
-        stages = code.split("FROM ")
-        if len(stages) > 2:
-            last_stage = stages[-1]
-            last_stage_installs: set[str] = set()
-            for _mgr, pattern in _RUNTIME_INSTALL_PATTERNS:
-                for m in pattern.finditer(last_stage):
-                    for pkg in m.group(1).split():
-                        pkg = pkg.strip().rstrip("\\")
-                        if pkg and not pkg.startswith("-"):
-                            last_stage_installs.add(pkg.lower().replace("-", "_"))
+    # Check for multi-stage build dep loss using line-anchored FROM directives
+    from_directive_re = re.compile(r"^\s*FROM\s+", re.MULTILINE | re.IGNORECASE)
+    from_positions = [m.start() for m in from_directive_re.finditer(code)]
+    if len(from_positions) > 1:
+        # Extract last stage text (after the final FROM directive)
+        last_stage = code[from_positions[-1]:]
+        last_stage_installs = _extract_installed_packages(last_stage)
 
-            for dep in expected_deps:
-                dep_normalized = dep.lower().replace("-", "_")
-                if (dep_normalized in installed_packages
-                        and dep_normalized not in last_stage_installs):
-                    if dep.lower() not in last_stage.lower():
-                        issues.append({
-                            "validator": "dockerfile_runtime_deps",
-                            "message": (
-                                f"Runtime dependency '{dep}' installed in builder stage "
-                                f"but may not be available in final runtime stage"
-                            ),
-                            "file": file_path,
-                            "confidence": 0.6,
-                        })
+        for dep in expected_deps:
+            dep_normalized = dep.lower().replace("-", "_")
+            if (dep_normalized in installed_packages
+                    and dep_normalized not in last_stage_installs):
+                if dep.lower() not in last_stage.lower():
+                    issues.append({
+                        "validator": "dockerfile_runtime_deps",
+                        "message": (
+                            f"Runtime dependency '{dep}' installed in builder stage "
+                            f"but may not be available in final runtime stage"
+                        ),
+                        "file": file_path,
+                        "confidence": 0.6,
+                    })
 
     return issues
