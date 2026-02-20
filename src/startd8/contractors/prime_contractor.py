@@ -113,7 +113,9 @@ class PrimeContractorWorkflow:
         self.seed_onboarding: Dict[str, Any] = {}
         self.seed_architectural_context: Dict[str, Any] = {}
         self.seed_design_calibration: Dict[str, Any] = {}
+        self.seed_service_metadata: Dict[str, Any] = {}
         self.plan_document_text: Optional[str] = None
+        self.force_regenerate: bool = False
 
     def _rel_display(self, path: Path) -> str:
         """Safe relative path for display, falling back to the full path."""
@@ -368,6 +370,51 @@ class PrimeContractorWorkflow:
         logger.info("All %d sub-features integrated for '%s'", n, feature.name, extra={'feature_name': feature.name, 'sub_feature_count': n})
         return True
 
+    def _check_file_provenance(
+        self,
+        file_paths: List[str],
+        source_checksum: Optional[str] = None,
+    ) -> Dict[str, str]:
+        """Check provenance/staleness of existing generated files.
+
+        Classifies each file as:
+        - "current": file exists and matches expected state
+        - "stale": file exists but is older than generation results state
+        - "missing": file does not exist or is empty
+
+        Used by Mottainai reuse logic to avoid reusing stale generated files.
+        """
+        classifications: Dict[str, str] = {}
+        seed_mtime: Optional[float] = None
+
+        # Try generation results state file for mtime comparison
+        state_dir = self.project_root / ".startd8" / "state"
+        gen_results_path = state_dir / "generation_results.json"
+        if gen_results_path.exists():
+            try:
+                seed_mtime = gen_results_path.stat().st_mtime
+            except OSError:
+                pass
+
+        for fpath_str in file_paths:
+            fpath = Path(fpath_str)
+            try:
+                file_stat = fpath.stat()
+            except OSError:
+                classifications[fpath_str] = "missing"
+                continue
+
+            if file_stat.st_size <= 0:
+                classifications[fpath_str] = "missing"
+                continue
+
+            if seed_mtime is not None and file_stat.st_mtime < seed_mtime:
+                classifications[fpath_str] = "stale"
+            else:
+                classifications[fpath_str] = "current"
+
+        return classifications
+
     def develop_feature(self, feature: FeatureSpec, prior_error: Optional[str]=None) -> bool:
         """
         Develop a feature using the configured CodeGenerator.
@@ -404,18 +451,14 @@ class PrimeContractorWorkflow:
         logger.info("Running code generation for '%s'...", feature.name)
         try:
             # Mottainai Gap 14: skip generation if files already exist on disk.
-            # Uses try/except to avoid TOCTOU race between exists() and stat().
-            if feature.generated_files:
-                all_present = True
-                for fpath in feature.generated_files:
-                    try:
-                        if Path(fpath).stat().st_size <= 0:
-                            all_present = False
-                            break
-                    except OSError:
-                        all_present = False
-                        break
-                if all_present:
+            # Now with provenance/staleness awareness (Task 6).
+            if feature.generated_files and not self.force_regenerate:
+                provenance = self._check_file_provenance(feature.generated_files)
+                all_current = all(v == "current" for v in provenance.values())
+                has_stale = any(v == "stale" for v in provenance.values())
+                has_missing = any(v == "missing" for v in provenance.values())
+
+                if all_current:
                     preview = feature.generated_files[:3]
                     suffix = f" ... (+{len(feature.generated_files) - 3})" if len(feature.generated_files) > 3 else ""
                     logger.info(
@@ -425,6 +468,18 @@ class PrimeContractorWorkflow:
                     feature.status = FeatureStatus.GENERATED
                     self.queue.save_state()
                     return True
+                elif has_stale and not has_missing:
+                    stale_files = [f for f, v in provenance.items() if v == "stale"]
+                    logger.warning(
+                        "Mottainai: %d stale file(s) for '%s' — regenerating: %s",
+                        len(stale_files), feature.name, stale_files[:3],
+                    )
+                elif has_missing:
+                    missing = [f for f, v in provenance.items() if v == "missing"]
+                    logger.info(
+                        "Mottainai: %d missing file(s) for '%s' — generating: %s",
+                        len(missing), feature.name, missing[:3],
+                    )
 
             gen_context: dict = {'feature_name': feature.name}
             self._current_enrichment = None
@@ -459,6 +514,15 @@ class PrimeContractorWorkflow:
             # Gap 13: plan document context
             if self.plan_document_text:
                 gen_context['plan_context'] = self.plan_document_text
+            # REQ-PC-014: inject service metadata for protocol/dep validation
+            if self.seed_service_metadata:
+                gen_context['service_metadata'] = self.seed_service_metadata
+                logger.info(
+                    "Context injection: service_metadata for '%s' (transport=%s, deps=%d)",
+                    feature.name,
+                    self.seed_service_metadata.get('transport_protocol', 'unset'),
+                    len(self.seed_service_metadata.get('runtime_dependencies', [])),
+                )
             # Gap 9: per-task metadata from seed enrichment
             if feature.metadata:
                 meta_enrichment = feature.metadata.get('_enrichment', {})

@@ -69,6 +69,8 @@ class TestGate3bContentValidation:
 
                 def get_path():
                     return os.getcwd()
+
+                result = get_path()
             """),
             encoding="utf-8",
         )

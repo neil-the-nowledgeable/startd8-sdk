@@ -81,6 +81,7 @@ _ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
         "architectural_context": {"type": ["object", "null"]},
         "design_calibration": {"type": ["object", "null"]},
         "context_files": {"type": ["array", "null"]},
+        "service_metadata": {"type": ["object", "null"]},
     },
     "additionalProperties": True,
 }
@@ -113,6 +114,59 @@ def _validate_context_seed(data: Dict[str, Any]) -> None:
             str(e),
         )
         # Log but do not raise — validation is advisory; seed may have extra keys
+
+
+def _validate_seed_field_coverage(seed_dict: Dict[str, Any]) -> List[str]:
+    """Advisory validation: check field coverage for seed quality (Task 12).
+
+    Distinct from _validate_context_seed() which validates JSON schema.
+    This checks whether important optional fields are populated to ensure
+    downstream phases have sufficient context.
+
+    Returns:
+        List of advisory warning strings (empty = all fields well-populated).
+    """
+    warnings: List[str] = []
+
+    # Check tasks have sufficient detail
+    tasks = seed_dict.get("tasks", [])
+    if not tasks:
+        warnings.append("seed has no tasks")
+        return warnings
+
+    tasks_missing_targets = sum(
+        1 for t in tasks if not t.get("config", {}).get("target_files")
+    )
+    if tasks_missing_targets > 0:
+        warnings.append(
+            f"{tasks_missing_targets}/{len(tasks)} task(s) missing target_files"
+        )
+
+    tasks_missing_description = sum(
+        1 for t in tasks if not t.get("config", {}).get("description")
+    )
+    if tasks_missing_description > 0:
+        warnings.append(
+            f"{tasks_missing_description}/{len(tasks)} task(s) missing description"
+        )
+
+    # Check optional enrichment fields
+    if not seed_dict.get("architectural_context"):
+        warnings.append("no architectural_context — design phase may lack shared context")
+
+    if not seed_dict.get("design_calibration"):
+        warnings.append("no design_calibration — design depth tiers unavailable")
+
+    if not seed_dict.get("service_metadata"):
+        warnings.append("no service_metadata — protocol fidelity validators will be skipped")
+
+    if not seed_dict.get("onboarding"):
+        warnings.append("no onboarding metadata — parameter sources unavailable")
+
+    if not seed_dict.get("context_files"):
+        warnings.append("no context_files — provenance tracking limited")
+
+    return warnings
 
 
 # ---------------------------------------------------------------------------
@@ -617,7 +671,10 @@ def _infer_artifact_types_from_files(files: List[str]) -> List[str]:
             "package.json", "package-lock.json", "pyproject.toml",
             "setup.py", "setup.cfg", "Pipfile", "Pipfile.lock",
             "yarn.lock", "pnpm-lock.yaml", "Cargo.toml", "Cargo.lock",
+            "pom.xml",
         ):
+            inferred = "dependency_manifest"
+        elif name.endswith(".csproj"):
             inferred = "dependency_manifest"
         elif name.endswith(".proto"):
             inferred = "proto_contract"
@@ -629,6 +686,69 @@ def _infer_artifact_types_from_files(files: List[str]) -> List[str]:
             types.append(inferred)
             seen.add(inferred)
     return types
+
+
+def _infer_service_metadata(
+    features: List[ParsedFeature],
+    onboarding: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Infer service-level metadata from features and onboarding data.
+
+    Extracts transport protocol, runtime dependencies, and API surface
+    from ParsedFeature fields. Falls back to onboarding metadata if present.
+
+    Returns:
+        Dict with keys: transport_protocol, runtime_dependencies,
+        primary_language, api_signatures, negative_scope.
+    """
+    protocols: list[str] = []
+    all_runtime_deps: list[str] = []
+    all_api_sigs: list[str] = []
+    all_negative_scope: list[str] = []
+    languages: list[str] = []
+
+    for f in features:
+        if f.protocol:
+            protocols.append(f.protocol)
+        all_runtime_deps.extend(f.runtime_dependencies)
+        all_api_sigs.extend(f.api_signatures)
+        all_negative_scope.extend(f.negative_scope)
+        # Infer language from target files
+        for tf in f.target_files:
+            ext = tf.rsplit(".", 1)[-1].lower() if "." in tf else ""
+            lang_map = {
+                "py": "python", "go": "go", "js": "javascript",
+                "ts": "typescript", "rs": "rust", "java": "java",
+                "rb": "ruby", "cs": "csharp",
+            }
+            if ext in lang_map and lang_map[ext] not in languages:
+                languages.append(lang_map[ext])
+
+    # Determine dominant protocol
+    transport = ""
+    if protocols:
+        transport = Counter(protocols).most_common(1)[0][0]
+    elif onboarding:
+        transport = onboarding.get("transport_protocol", "") or ""
+
+    # Deduplicate
+    runtime_deps = sorted(set(all_runtime_deps))
+    api_sigs = list(dict.fromkeys(all_api_sigs))  # preserve order, dedup
+    negative_scope = list(dict.fromkeys(all_negative_scope))
+
+    metadata: Dict[str, Any] = {}
+    if transport:
+        metadata["transport_protocol"] = transport
+    if runtime_deps:
+        metadata["runtime_dependencies"] = runtime_deps
+    if languages:
+        metadata["primary_language"] = languages[0] if len(languages) == 1 else languages
+    if api_sigs:
+        metadata["api_signatures"] = api_sigs
+    if negative_scope:
+        metadata["negative_scope"] = negative_scope
+
+    return metadata
 
 
 def _derive_target_files_from_artifact_ids(
@@ -2785,6 +2905,22 @@ class PlanIngestionWorkflow(WorkflowBase):
                 context_files, base_dir=output_dir
             ) if context_files else None
 
+            # REQ-PI-014: Ensure onboarding-metadata.json is in context_files
+            if context_files_list and onboarding_early:
+                ob_names = {entry.get("path", "").rsplit("/", 1)[-1] for entry in context_files_list}
+                if "onboarding-metadata.json" not in ob_names:
+                    ob_path = output_dir / "onboarding-metadata.json"
+                    if ob_path.exists():
+                        context_files_list.append({
+                            "path": str(ob_path),
+                            "checksum": _sha256_file_hex(ob_path),
+                        })
+                        logger.info("REQ-PI-014: added onboarding-metadata.json to context_files")
+
+            service_metadata = _infer_service_metadata(
+                parsed_plan.features, onboarding_early,
+            )
+
             seed = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
                 source_checksum=source_checksum_val,
@@ -2800,10 +2936,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                 design_calibration=design_calibration,
                 onboarding=onboarding_var,
                 context_files=context_files_list,
+                service_metadata=service_metadata or None,
             )
 
             seed_dict = seed.to_dict()
             _validate_context_seed(seed_dict)
+            seed_coverage_warnings = _validate_seed_field_coverage(seed_dict)
+            if seed_coverage_warnings:
+                logger.warning(
+                    "Seed field-coverage advisory (%d warning(s)): %s",
+                    len(seed_coverage_warnings),
+                    "; ".join(seed_coverage_warnings),
+                )
             context_seed_path = output_dir / "artisan-context-seed.json"
             atomic_write_json(context_seed_path, seed_dict, indent=2)
 
@@ -2887,6 +3031,22 @@ class PlanIngestionWorkflow(WorkflowBase):
                 context_files, base_dir=output_dir
             ) if context_files else None
 
+            # REQ-PI-014: Ensure onboarding-metadata.json is in context_files (prime)
+            if context_files_list_prime and onboarding_prime:
+                ob_names_prime = {entry.get("path", "").rsplit("/", 1)[-1] for entry in context_files_list_prime}
+                if "onboarding-metadata.json" not in ob_names_prime:
+                    ob_path_prime = output_dir / "onboarding-metadata.json"
+                    if ob_path_prime.exists():
+                        context_files_list_prime.append({
+                            "path": str(ob_path_prime),
+                            "checksum": _sha256_file_hex(ob_path_prime),
+                        })
+                        logger.info("REQ-PI-014: added onboarding-metadata.json to context_files (prime)")
+
+            service_metadata_prime = _infer_service_metadata(
+                parsed_plan.features, onboarding_prime,
+            )
+
             seed_prime = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
                 source_checksum=source_checksum_prime,
@@ -2902,10 +3062,18 @@ class PlanIngestionWorkflow(WorkflowBase):
                 design_calibration=design_calibration_prime,
                 onboarding=onboarding_var_prime,
                 context_files=context_files_list_prime,
+                service_metadata=service_metadata_prime or None,
             )
 
             seed_prime_dict = seed_prime.to_dict()
             _validate_context_seed(seed_prime_dict)
+            seed_coverage_warnings_prime = _validate_seed_field_coverage(seed_prime_dict)
+            if seed_coverage_warnings_prime:
+                logger.warning(
+                    "Seed field-coverage advisory [prime] (%d warning(s)): %s",
+                    len(seed_coverage_warnings_prime),
+                    "; ".join(seed_coverage_warnings_prime),
+                )
             prime_seed_path = output_dir / "prime-context-seed.json"
             atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
 

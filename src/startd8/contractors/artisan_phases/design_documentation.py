@@ -59,6 +59,8 @@ __all__ = [
     "AutoResolutionCallback",
     "DesignDocumentationPhase",
     # Utility functions
+    "extract_critical_parameters",
+    "check_design_parameter_fidelity",
     "parse_design_document",
     "parse_review_verdict",
     "build_design_system_prompt",
@@ -149,6 +151,8 @@ class FeatureContext:
     max_output_tokens: int | None = None
     depth_guidance: str | None = None
     prior_design: str | None = None
+    # IMP-1: Verbatim requirements text from plan
+    requirements_text: str = ""
 
 
 @dataclass
@@ -276,6 +280,137 @@ class DesignDocumentResult:
 
 
 # ============================================================================
+# PARAMETER EXTRACTION UTILITIES
+# ============================================================================
+
+
+def extract_critical_parameters(design_text: str) -> list[dict[str, Any]]:
+    """Extract critical implementation parameters from a design document.
+
+    Scans the design document for parameter-like declarations that downstream
+    IMPLEMENT phase must preserve (e.g., port numbers, buffer sizes, timeout values,
+    function signatures, environment variable names).
+
+    Returns:
+        List of dicts with keys: name, value, section, confidence.
+    """
+    parameters: list[dict[str, Any]] = []
+
+    # Pattern: Port numbers
+    port_re = re.compile(r"\bport\s*[:=]\s*(\d{2,5})\b", re.IGNORECASE)
+    # Pattern: Environment variable references
+    env_re = re.compile(r"\b([A-Z][A-Z0-9_]{2,})\b")
+    # Pattern: Function/method signatures
+    sig_re = re.compile(r"(?:def|func|function)\s+(\w+)\s*\([^)]*\)")
+
+    _common_words = {
+        "THE", "AND", "FOR", "NOT", "ARE", "BUT", "THIS", "THAT",
+        "WITH", "FROM", "HAVE", "WILL", "TODO", "FIXME", "NOTE",
+        "HTTP", "HTTPS", "JSON", "YAML", "TRUE", "FALSE", "NONE",
+        "NULL", "TYPE", "MUST", "SHALL",
+    }
+    seen_names: set[str] = set()
+
+    # Extract ports
+    for m in port_re.finditer(design_text):
+        name = f"port:{m.group(1)}"
+        if name not in seen_names:
+            seen_names.add(name)
+            parameters.append({
+                "name": name,
+                "value": m.group(1),
+                "section": "configuration",
+                "confidence": 0.9,
+            })
+
+    # Extract environment variables (underscored UPPER_CASE names)
+    for m in env_re.finditer(design_text):
+        name = m.group(1)
+        if name not in seen_names and name not in _common_words and len(name) >= 4:
+            if "_" in name:
+                seen_names.add(name)
+                parameters.append({
+                    "name": name,
+                    "value": name,
+                    "section": "environment",
+                    "confidence": 0.7,
+                })
+
+    # Extract function signatures
+    for m in sig_re.finditer(design_text):
+        name = f"fn:{m.group(1)}"
+        if name not in seen_names:
+            seen_names.add(name)
+            parameters.append({
+                "name": name,
+                "value": m.group(0),
+                "section": "api",
+                "confidence": 0.85,
+            })
+
+    return parameters
+
+
+def check_design_parameter_fidelity(
+    design_parameters: list[dict[str, Any]],
+    generated_code: str,
+) -> list[dict[str, Any]]:
+    """Check whether critical parameters from design doc survive in generated code.
+
+    Compares parameters extracted by extract_critical_parameters() against
+    the generated implementation to detect parameter drift.
+
+    Returns:
+        List of fidelity issue dicts with keys: parameter, status, confidence.
+        status is one of: "present", "missing", "modified".
+    """
+    issues: list[dict[str, Any]] = []
+    code_lower = generated_code.lower()
+
+    for param in design_parameters:
+        name = param.get("name", "")
+        value = param.get("value", "")
+        section = param.get("section", "")
+        confidence = param.get("confidence", 0.5)
+
+        if name.startswith("port:"):
+            port_val = value
+            status = "present" if port_val in generated_code else "missing"
+            if status == "missing":
+                confidence = min(confidence, 0.8)
+        elif name.startswith("fn:"):
+            fn_name = name[3:]
+            status = "present" if fn_name in generated_code else "missing"
+        elif section == "environment":
+            if name in generated_code:
+                status = "present"
+            elif name.lower() in code_lower:
+                status = "modified"
+                confidence = min(confidence, 0.6)
+            else:
+                status = "missing"
+        else:
+            if value and value in generated_code:
+                status = "present"
+            elif name in generated_code:
+                status = "present"
+            else:
+                status = "missing"
+                confidence = min(confidence, 0.6)
+
+        if status != "present":
+            issues.append({
+                "parameter": name,
+                "expected_value": value,
+                "status": status,
+                "section": section,
+                "confidence": confidence,
+            })
+
+    return issues
+
+
+# ============================================================================
 # PROTOCOLS
 # ============================================================================
 
@@ -340,7 +475,12 @@ def build_design_system_prompt(
     sections: list[str] | None = None,
     depth_guidance: str | None = None,
 ) -> str:
-    """Build a dynamic system prompt with calibrated section list."""
+    """Build a dynamic system prompt with calibrated section list.
+
+    Loads the template from design.yaml and injects sections_list and depth_line.
+    """
+    from startd8.contractors.artisan_phases.prompts import get_template
+
     if sections is None:
         sections = _DEFAULT_SECTIONS
     section_list = "\n".join(f"- ## {s}" for s in sections)
@@ -349,22 +489,8 @@ def build_design_system_prompt(
     if depth_guidance:
         depth_line = f"\n\n**Scope guidance:** {depth_guidance}"
 
-    return (
-        "You are a senior software architect creating focused, "
-        "right-sized design documents.\n\n"
-        "Your output must contain exactly these sections with markdown headers "
-        "(## Section Name):\n"
-        f"{section_list}\n\n"
-        "Rules:\n"
-        "- Be specific and actionable. Include code snippets where appropriate.\n"
-        "- Scale depth to the feature's complexity.\n"
-        "- Put the most important information first within each section "
-        "(progressive disclosure).\n"
-        "- When Additional Context mentions project goals, constraints, or "
-        "shared modules, address them directly — don't invent requirements "
-        "outside the stated scope."
-        f"{depth_line}"
-    )
+    template = get_template("design", "design_system")
+    return template.format(sections_list=section_list, depth_line=depth_line)
 
 
 # Backward-compatible constant for code that references it directly
@@ -405,7 +531,12 @@ def build_refine_system_prompt(
     sections: list[str] | None = None,
     depth_guidance: str | None = None,
 ) -> str:
-    """Build a system prompt for refining an existing design document."""
+    """Build a system prompt for refining an existing design document.
+
+    Loads the template from design.yaml and injects sections_list and depth_line.
+    """
+    from startd8.contractors.artisan_phases.prompts import get_template
+
     if sections is None:
         sections = _DEFAULT_SECTIONS
     section_list = "\n".join(f"- ## {s}" for s in sections)
@@ -414,26 +545,8 @@ def build_refine_system_prompt(
     if depth_guidance:
         depth_line = f"\n\n**Scope guidance:** {depth_guidance}"
 
-    return (
-        "You are a senior software architect refining an existing design "
-        "document.\n\n"
-        "You have been given a prior design document that may be partially "
-        "correct, outdated, or incomplete. Your job is to preserve sound "
-        "decisions and strengthen weak areas.\n\n"
-        "Your output must contain exactly these sections with markdown headers "
-        "(## Section Name):\n"
-        f"{section_list}\n\n"
-        "Rules:\n"
-        "- Preserve sections and decisions that are still valid and well-reasoned.\n"
-        "- Improve specificity, correctness, and completeness where needed.\n"
-        "- Scale depth to the feature's complexity.\n"
-        "- Put the most important information first within each section "
-        "(progressive disclosure).\n"
-        "- When Additional Context mentions project goals, constraints, or "
-        "shared modules, address them directly — don't invent requirements "
-        "outside the stated scope."
-        f"{depth_line}"
-    )
+    template = get_template("design", "refine_system")
+    return template.format(sections_list=section_list, depth_line=depth_line)
 
 
 _REVIEW_JSON_SCHEMA = (
@@ -1005,8 +1118,9 @@ class DesignDocumentationPhase:
         else:
             additional_context_str = "None"
 
+        from startd8.contractors.artisan_phases.prompts import format_constraints
         constraints_str = (
-            ", ".join(context.constraints)
+            format_constraints(context.constraints)
             if context.constraints
             else "None"
         )

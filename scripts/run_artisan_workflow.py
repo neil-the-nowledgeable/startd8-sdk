@@ -326,6 +326,20 @@ def main() -> int:
         "--force-review", action="store_true",
         help="Ignore cached review_results; always run fresh REVIEW with LLM calls",
     )
+    parser.add_argument(
+        "--force-regenerate", action="store_true",
+        help=(
+            "Force regeneration of all implementation code, ignoring cached/existing "
+            "generated files and Mottainai reuse. Sets force_implement implicitly."
+        ),
+    )
+    parser.add_argument(
+        "--strict-validation", action="store_true",
+        help=(
+            "Treat Gate 3b content validation issues as blocking errors. "
+            "When set, FINALIZE will fail if any high-severity issues exist."
+        ),
+    )
 
     # --dress-rehearsal and --adopt-prior are mutually exclusive:
     # dress-rehearsal generates *new* design artifacts into a staging dir,
@@ -389,6 +403,10 @@ def main() -> int:
             args.test_timeout,
         )
         args.test_timeout = 60
+
+    # --force-regenerate implies --force-implement
+    if args.force_regenerate:
+        args.force_implement = True
 
     # Validate seed path
     seed_path = Path(args.seed)
@@ -724,6 +742,10 @@ def main() -> int:
         initial_context["abort_on_preflight_fail"] = True
     if adopted_design_results:
         initial_context["design_results"] = adopted_design_results
+    if args.force_regenerate:
+        initial_context["force_regenerate"] = True
+    if args.strict_validation:
+        initial_context["strict_validation"] = True
 
     try:
         result = workflow.execute(

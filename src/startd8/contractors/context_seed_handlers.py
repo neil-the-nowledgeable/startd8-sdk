@@ -57,7 +57,7 @@ import sys
 import threading
 import time
 from collections import defaultdict
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Optional
 
@@ -338,6 +338,13 @@ class SeedTask:
     # Dependency allowlist source and confidence (Gate 5)
     deps_source: Optional[str] = None
     deps_confidence: float = 1.0
+    # IMP-1: Verbatim requirements text from plan
+    requirements_text: str = ""
+    # IMP-4: Extended schema fields from ParsedFeature
+    api_signatures: list[str] = field(default_factory=list)
+    protocol: str = ""
+    runtime_dependencies: list[str] = field(default_factory=list)
+    negative_scope: list[str] = field(default_factory=list)
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> SeedTask:
@@ -410,6 +417,11 @@ class SeedTask:
             file_scope=context.get("_file_scope", {}),
             deps_source=deps_source,
             deps_confidence=deps_confidence,
+            requirements_text=config.get("requirements_text", ""),
+            api_signatures=context.get("api_signatures", []),
+            protocol=context.get("protocol", ""),
+            runtime_dependencies=context.get("runtime_dependencies", []),
+            negative_scope=context.get("negative_scope", []),
         )
         if not task.task_id:
             raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
@@ -878,6 +890,41 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
                 if target_path.exists():
                     files_existing.append(target)
 
+        # Task 8: Staleness classification for existing target files
+        staleness: dict[str, str] = {}  # path -> "current" | "stale" | "unknown"
+        if files_existing:
+            # Use seed mtime as staleness reference
+            seed_path = context.get("enriched_seed_path")
+            seed_mtime: float | None = None
+            if seed_path:
+                try:
+                    seed_mtime = Path(str(seed_path)).stat().st_mtime
+                except OSError:
+                    pass
+
+            for target in files_existing:
+                target_path = project_root / target
+                try:
+                    file_mtime = target_path.stat().st_mtime
+                except OSError:
+                    staleness[target] = "unknown"
+                    continue
+
+                if seed_mtime is not None:
+                    if file_mtime >= seed_mtime:
+                        staleness[target] = "current"
+                    else:
+                        staleness[target] = "stale"
+                else:
+                    staleness[target] = "unknown"
+
+            stale_count = sum(1 for v in staleness.values() if v == "stale")
+            if stale_count > 0:
+                logger.warning(
+                    "SCAFFOLD: %d/%d existing target file(s) are stale (older than seed)",
+                    stale_count, len(files_existing),
+                )
+
         dirs_missing = dirs_needed - dirs_exist - dirs_created
 
         # Fix 5b: soft-validate target file extensions against output_conventions
@@ -903,6 +950,7 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
             "directories_created": sorted(dirs_created),
             "directories_missing": sorted(dirs_missing) if dry_run else [],
             "existing_target_files": files_existing,
+            "staleness_classification": staleness,
             "skipped_targets": skipped_targets,
             "project_root": str(project_root),
             "extension_warnings": extension_warnings,
@@ -1209,6 +1257,27 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "The following questions are flagged as unresolved:\n" + formatted
                 )
 
+        # Task 9b: Inject critical parameters checklist guidance
+        # Tell the design phase to explicitly enumerate critical parameters
+        additional_context["critical_parameters_checklist"] = (
+            "IMPORTANT: Your design document MUST include a 'Critical Parameters' "
+            "section listing all configuration values, port numbers, environment "
+            "variable names, timeout values, buffer sizes, and function signatures "
+            "that the IMPLEMENT phase must preserve exactly. Format each as:\n"
+            "- `PARAM_NAME`: value (rationale)\n"
+            "This enables automated fidelity checking between design and implementation."
+        )
+
+        # Task 9d: Scope boundary instruction
+        if task.negative_scope:
+            additional_context["scope_boundary"] = (
+                "SCOPE BOUNDARY: The following items are explicitly OUT OF SCOPE "
+                "for this feature. Do NOT design or implement them:\n"
+                + "\n".join(f"- {ns}" for ns in task.negative_scope)
+                + "\nIf any of these are prerequisites, note them as external "
+                "dependencies but do not include implementation details."
+            )
+
         # Mottainai B4: inject artifact dependency info so DESIGN decisions
         # account for deterministic inter-artifact dependencies from export
         # rather than re-inferring them via LLM (Gap 4).
@@ -1237,13 +1306,14 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         return FeatureContext(
             feature_name=task.title,
             description=task.description,
-            target_file=task.target_files[0] if task.target_files else "",
+            target_file=", ".join(task.target_files) if task.target_files else "",
             constraints=list(task.prompt_constraints),
             additional_context=additional_context,
             sections=sections,
             max_output_tokens=max_output_tokens,
             depth_guidance=depth_guidance,
             prior_design=prior_design_text,
+            requirements_text=task.requirements_text,
         )
 
     @staticmethod
@@ -2078,6 +2148,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             validate_proto_field_references,
             validate_protocol_fidelity,
             validate_dockerfile_coherence,
+            validate_function_call_completeness,
+            validate_dockerfile_runtime_deps,
         )
         from startd8.workflows.builtin.preflight_rules.rules_validators import (
             _StubEnrichment,
@@ -2117,6 +2189,16 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 # AR-147: Dockerfile coherence
                 task_issues.extend(
                     validate_dockerfile_coherence(code, rel_path, service_metadata)
+                )
+
+                # AR-148: Function call completeness
+                task_issues.extend(
+                    validate_function_call_completeness(code, rel_path, service_metadata)
+                )
+
+                # AR-149: Dockerfile runtime dependencies
+                task_issues.extend(
+                    validate_dockerfile_runtime_deps(code, rel_path, service_metadata)
                 )
 
             if task_issues:
@@ -2837,6 +2919,42 @@ class Test{class_name}:
             # references to non-existent chunks.
             in_scope_deps = [d for d in task.depends_on if d in active_task_ids]
 
+            # ── IMP-7: DESIGN→IMPLEMENT parameter completeness validation ──
+            # Check that resolved_parameters from the seed are present in the
+            # design document. Missing parameters indicate information loss at
+            # the DESIGN bottleneck.
+            design_completeness_warning = ""
+            if design_doc_text:
+                _task_seed = design_results.get(task.task_id, {})
+                _seed_config = _task_seed.get("_seed_config", {})
+                _resolved = _seed_config.get("resolved_parameters", {})
+                if not _resolved:
+                    # Also check additional_context from the task
+                    _resolved = {}
+                    for atype in task.artifact_types_addressed:
+                        for k, v in (parameter_sources or {}).get(atype, {}).items():
+                            if isinstance(v, str):
+                                _resolved[k] = v
+                missing_params: list[str] = []
+                for param_key, param_val in _resolved.items():
+                    val_str = str(param_val)
+                    if val_str and val_str not in design_doc_text:
+                        missing_params.append(f"{param_key}={val_str}")
+                if missing_params:
+                    design_completeness_warning = (
+                        f"WARNING: {len(missing_params)} resolved parameter(s) "
+                        f"not found in design document: {', '.join(missing_params[:5])}. "
+                        f"These may have been lost at the DESIGN bottleneck. "
+                        f"Include them verbatim in your implementation."
+                    )
+                    logger.warning(
+                        "IMP-7 DESIGN→IMPLEMENT gate: task %s missing %d parameter(s) "
+                        "in design doc: %s",
+                        task.task_id,
+                        len(missing_params),
+                        ", ".join(missing_params[:5]),
+                    )
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
@@ -2869,6 +2987,8 @@ class Test{class_name}:
                     ),
                     # Fix 3c: semantic_conventions for code generation
                     "semantic_conventions": semantic_conventions or {},
+                    # IMP-7: DESIGN→IMPLEMENT parameter completeness warning
+                    "design_completeness_warning": design_completeness_warning,
                 },
             ))
 
@@ -5728,6 +5848,33 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         return manifest_path
 
     # ------------------------------------------------------------------
+    # Gate 3b severity rollup
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _count_gate3b_by_severity(
+        gate3b: dict[str, list[dict[str, Any]]],
+    ) -> dict[str, int]:
+        """Count Gate 3b validation issues grouped by severity.
+
+        Severity is inferred from confidence:
+          >= 0.8 -> high
+          >= 0.6 -> medium
+          < 0.6 -> low
+        """
+        counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
+        for task_issues in gate3b.values():
+            for issue in task_issues:
+                confidence = issue.get("confidence", 0.5)
+                if confidence >= 0.8:
+                    counts["high"] += 1
+                elif confidence >= 0.6:
+                    counts["medium"] += 1
+                else:
+                    counts["low"] += 1
+        return counts
+
+    # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
 
@@ -5826,11 +5973,44 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                 "flagged_task_ids": sorted(truncation_flags.keys()),
                 "details": truncation_flags,
             } if truncation_flags else {"tasks_flagged": 0},
+            "gate3b_validation": {},
             "cost_summary": cost_summary,
             "generated_artifacts": artifacts,
             "artifact_count": len(artifacts),
             "dry_run": dry_run,
         }
+
+        # Task 11a: Gate 3b content validation summary
+        gate3b_data: dict[str, Any] = implementation.get("_gate3b_content_validation", {})
+        if gate3b_data:
+            severity_counts = self._count_gate3b_by_severity(gate3b_data)
+            total_issues = sum(len(v) for v in gate3b_data.values())
+            summary["gate3b_validation"] = {
+                "tasks_with_issues": len(gate3b_data),
+                "total_issues": total_issues,
+                "by_severity": severity_counts,
+                "flagged_task_ids": sorted(gate3b_data.keys()),
+            }
+            logger.info(
+                "FINALIZE: Gate 3b summary — %d task(s), %d issue(s) (high=%d, medium=%d, low=%d)",
+                len(gate3b_data), total_issues,
+                severity_counts["high"], severity_counts["medium"], severity_counts["low"],
+            )
+
+        # Task 11b: Strict validation blocking check
+        strict_mode = context.get("strict_validation", False)
+        if strict_mode and gate3b_data:
+            severity_counts = summary.get("gate3b_validation", {}).get("by_severity", {})
+            high_count = severity_counts.get("high", 0)
+            if high_count > 0:
+                error_msg = (
+                    f"--strict-validation: {high_count} high-severity Gate 3b issue(s) "
+                    f"detected — failing FINALIZE. Review _gate3b_content_validation in "
+                    f"implementation output for details."
+                )
+                logger.error(error_msg)
+                summary["status"] = "failed"
+                summary["strict_validation_error"] = error_msg
 
         # Write report and manifest
         if self.output_dir and not dry_run:

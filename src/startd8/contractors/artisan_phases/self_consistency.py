@@ -443,3 +443,188 @@ def validate_dockerfile_coherence(
             })
 
     return issues
+
+
+# ---------------------------------------------------------------------------
+# AR-148: Function Call Completeness Validation (in-process signature)
+# ---------------------------------------------------------------------------
+
+_EXEMPTED_FUNC_PREFIXES = ("test_", "setup", "teardown", "_")
+_EXEMPTED_FUNC_NAMES = {
+    "main", "__init__", "__enter__", "__exit__",
+    "__str__", "__repr__", "__eq__", "__hash__",
+    "__len__", "__getitem__", "__setitem__",
+    "__iter__", "__next__", "__call__", "__del__",
+    "__new__", "__post_init__",
+}
+
+
+def validate_function_call_completeness(
+    code: str,
+    file_path: str,
+    service_metadata: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Validate that function definitions have corresponding call sites.
+
+    Detects dead code: functions defined but never called within the module.
+    Excludes common exemptions (main, __init__, test_*, setup, teardown,
+    dunder methods, and decorated functions likely called externally).
+
+    This is advisory — external callers can't be detected within a single file.
+    """
+    issues: list[dict[str, Any]] = []
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return issues
+
+    # Collect function definitions (excluding exemptions)
+    defined_functions: dict[str, int] = {}  # name -> lineno
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            name = node.name
+            if name in _EXEMPTED_FUNC_NAMES:
+                continue
+            if any(name.startswith(p) for p in _EXEMPTED_FUNC_PREFIXES):
+                continue
+            # Skip decorated functions (likely registered as handlers/endpoints)
+            if node.decorator_list:
+                continue
+            defined_functions[name] = node.lineno
+
+    if not defined_functions:
+        return issues
+
+    # Collect function call names
+    called_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                called_names.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                called_names.add(node.func.attr)
+
+    # Also check string references to reduce false positives from dynamic dispatch
+    _name_ref_re = re.compile(r"['\"](\w+)['\"]")
+    for m in _name_ref_re.finditer(code):
+        called_names.add(m.group(1))
+
+    # Report uncalled functions
+    for fname, lineno in defined_functions.items():
+        if fname not in called_names:
+            issues.append({
+                "validator": "function_call_completeness",
+                "message": (
+                    f"Function '{fname}' defined but never called within module "
+                    f"(may be dead code or called externally)"
+                ),
+                "line": lineno,
+                "file": file_path,
+                "confidence": 0.5,  # Low confidence — external callers possible
+            })
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
+# AR-149: Dockerfile Runtime Dependencies Validation (in-process signature)
+# ---------------------------------------------------------------------------
+
+_RUNTIME_INSTALL_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("pip", re.compile(r"pip3?\s+install\s+(.+)", re.IGNORECASE)),
+    ("apt", re.compile(r"apt-get\s+install\s+(?:-[yq]\s+)*(.+)", re.IGNORECASE)),
+    ("apk", re.compile(r"apk\s+add\s+(?:--no-cache\s+)?(.+)", re.IGNORECASE)),
+    ("npm", re.compile(r"npm\s+install\s+(.+)", re.IGNORECASE)),
+    ("go", re.compile(r"go\s+install\s+(.+)", re.IGNORECASE)),
+]
+
+
+def validate_dockerfile_runtime_deps(
+    code: str,
+    file_path: str,
+    service_metadata: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Validate Dockerfile runtime dependencies against service metadata.
+
+    Checks that declared runtime_dependencies from the plan are actually
+    installed in the Dockerfile (via pip install, apt-get install, etc.).
+    Also detects multi-stage build issues where deps installed in builder
+    stage may not carry over to runtime stage.
+    """
+    issues: list[dict[str, Any]] = []
+
+    # Only run on Dockerfile-like files
+    fname = Path(file_path).name
+    if not (fname.startswith("Dockerfile") or fname == "dockerfile"):
+        return issues
+
+    if not service_metadata:
+        return issues
+
+    expected_deps = service_metadata.get("runtime_dependencies", [])
+    if not expected_deps or not isinstance(expected_deps, list):
+        return issues
+
+    # Collect all installed packages from Dockerfile
+    installed_packages: set[str] = set()
+    code_lower = code.lower()
+
+    for _mgr, pattern in _RUNTIME_INSTALL_PATTERNS:
+        for m in pattern.finditer(code):
+            packages_str = m.group(1)
+            for pkg in packages_str.split():
+                pkg = pkg.strip().rstrip("\\")
+                if pkg and not pkg.startswith("-") and not pkg.startswith("$"):
+                    for sep in (">=", "<=", "==", "!=", "~=", ">", "<", "["):
+                        if sep in pkg:
+                            pkg = pkg[:pkg.index(sep)]
+                            break
+                    installed_packages.add(pkg.lower().replace("-", "_"))
+
+    # Check each expected dependency
+    for dep in expected_deps:
+        dep_normalized = dep.lower().replace("-", "_")
+        if dep_normalized not in installed_packages:
+            if dep.lower() in code_lower:
+                continue  # Likely installed via different mechanism
+            issues.append({
+                "validator": "dockerfile_runtime_deps",
+                "message": (
+                    f"Runtime dependency '{dep}' from plan not found in "
+                    f"Dockerfile install commands"
+                ),
+                "file": file_path,
+                "confidence": 0.7,
+            })
+
+    # Check for multi-stage build dep loss
+    if code_lower.count("from ") > 1:
+        stages = code.split("FROM ")
+        if len(stages) > 2:
+            last_stage = stages[-1]
+            last_stage_installs: set[str] = set()
+            for _mgr, pattern in _RUNTIME_INSTALL_PATTERNS:
+                for m in pattern.finditer(last_stage):
+                    for pkg in m.group(1).split():
+                        pkg = pkg.strip().rstrip("\\")
+                        if pkg and not pkg.startswith("-"):
+                            last_stage_installs.add(pkg.lower().replace("-", "_"))
+
+            for dep in expected_deps:
+                dep_normalized = dep.lower().replace("-", "_")
+                if (dep_normalized in installed_packages
+                        and dep_normalized not in last_stage_installs):
+                    if dep.lower() not in last_stage.lower():
+                        issues.append({
+                            "validator": "dockerfile_runtime_deps",
+                            "message": (
+                                f"Runtime dependency '{dep}' installed in builder stage "
+                                f"but may not be available in final runtime stage"
+                            ),
+                            "file": file_path,
+                            "confidence": 0.6,
+                        })
+
+    return issues

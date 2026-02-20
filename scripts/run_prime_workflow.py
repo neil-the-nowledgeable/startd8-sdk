@@ -145,6 +145,13 @@ def main() -> int:
         help="Auto-stash uncommitted changes before proceeding",
     )
     parser.add_argument(
+        "--force-regenerate", action="store_true",
+        help=(
+            "Force regeneration of all features, ignoring cached/existing generated files. "
+            "Overrides Mottainai reuse logic."
+        ),
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable debug logging",
     )
@@ -340,6 +347,8 @@ def main() -> int:
     workflow.seed_onboarding = seed_data.get("onboarding") or {}
     workflow.seed_architectural_context = seed_data.get("architectural_context") or {}
     workflow.seed_design_calibration = seed_data.get("design_calibration") or {}
+    workflow.seed_service_metadata = seed_data.get("service_metadata") or {}
+    workflow.force_regenerate = args.force_regenerate
     # Load plan document text for REFINE suggestion injection (Gap 13)
     plan_doc_path = (seed_data.get("artifacts") or {}).get("plan_document_path")
     workflow.plan_document_text = None

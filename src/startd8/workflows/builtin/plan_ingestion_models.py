@@ -56,6 +56,14 @@ class ParsedFeature:
     design_doc_sections: List[str] = field(default_factory=list)
     # Artifact types this task generates (e.g. "dashboard", "prometheus_rule", "servicemonitor")
     artifact_types_addressed: List[str] = field(default_factory=list)
+    # IMP-4: Key function/method signatures (e.g. "def serve(port: int) -> None")
+    api_signatures: List[str] = field(default_factory=list)
+    # IMP-4: Transport protocol (grpc, http, cli, library, none)
+    protocol: str = ""
+    # IMP-4: Runtime packages (e.g. grpcio, flask, redis)
+    runtime_dependencies: List[str] = field(default_factory=list)
+    # IMP-4: Things this feature explicitly does NOT do
+    negative_scope: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -89,6 +97,10 @@ class ParsedPlan:
                     "labels": list(f.labels),
                     "design_doc_sections": list(f.design_doc_sections),
                     "artifact_types_addressed": list(f.artifact_types_addressed),
+                    "api_signatures": list(f.api_signatures),
+                    "protocol": f.protocol,
+                    "runtime_dependencies": list(f.runtime_dependencies),
+                    "negative_scope": list(f.negative_scope),
                 }
                 for f in self.features
             ],
@@ -159,6 +171,8 @@ class ArtisanContextSeed:
     design_calibration: Optional[Dict[str, Dict[str, Any]]] = None
     # Context files used for plan ingestion (path + optional checksum)
     context_files: Optional[List[Dict[str, Any]]] = None
+    # Inferred service metadata (transport protocol, runtime deps, etc.)
+    service_metadata: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -181,6 +195,8 @@ class ArtisanContextSeed:
             d["onboarding"] = self.onboarding
         if self.context_files is not None:
             d["context_files"] = self.context_files
+        if self.service_metadata is not None:
+            d["service_metadata"] = self.service_metadata
         return d
 
 
