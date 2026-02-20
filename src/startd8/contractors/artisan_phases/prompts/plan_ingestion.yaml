@@ -1,0 +1,207 @@
+prompts:
+  parse:
+    description: "Prompt for parsing an implementation plan into structured features"
+    template: |
+      You are an expert software architect. Analyze the following implementation plan and extract structured information.
+
+      <plan>
+      {plan_text}
+      </plan>
+
+      Return a JSON object (no markdown fences) with exactly these keys:
+      {{
+        "title": "string — plan title",
+        "goals": ["string — each high-level goal"],
+        "features": [
+          {{
+            "feature_id": "F-001",
+            "name": "short name",
+            "description": "what this feature does",
+            "target_files": ["path/to/file.py"],
+            "dependencies": ["F-002"],
+            "estimated_loc": 100,
+            "labels": ["label"],
+            "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
+            "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"],
+            "api_signatures": ["optional: key function/method signatures e.g. def serve(port: int) -> None"],
+            "protocol": "optional: transport protocol — grpc | http | cli | library | none",
+            "runtime_dependencies": ["optional: runtime packages e.g. grpcio, flask, redis"],
+            "negative_scope": ["optional: things this feature explicitly does NOT do e.g. no OpenTelemetry, no database"]
+          }}
+        ],
+        "mentioned_files": ["every file path mentioned in the plan"],
+        "dependency_graph": {{"F-001": ["F-002"]}}
+      }}
+
+      ## target_files guidance
+
+      Each feature becomes ONE implementation task sent to a code-generation LLM.
+      Multi-file tasks are significantly harder for the generator — it must produce a
+      separate code block per file, and commonly drops files (especially __init__.py).
+
+      Rules for target_files:
+      1. PREFER one primary file per feature. Split into separate features if files
+         can be implemented independently.
+      2. Group files into ONE feature ONLY when they MUST be implemented atomically
+         (e.g. a module + its __init__.py that re-exports from it).
+      3. NEVER exceed 3 target_files per feature. If a feature needs 4+ files,
+         decompose it into smaller features with dependencies between them.
+      4. When __init__.py is among target_files, list it FIRST — it is the package
+         root that other files import from.
+
+      design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
+      artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
+      api_signatures: optional list of key function/method signatures this feature defines. Helps the DESIGN phase produce accurate API Contracts sections. Omit or empty if not applicable.
+      protocol: optional transport protocol for this service/feature (grpc, http, cli, library, none). Helps DESIGN choose correct health check and deployment patterns. Omit or empty if not applicable.
+      runtime_dependencies: optional list of runtime packages this feature requires (e.g. grpcio, flask). Helps DESIGN and IMPLEMENT phases produce correct import statements. Omit or empty if not applicable.
+      negative_scope: optional list of things this feature explicitly does NOT do. Prevents the DESIGN phase from adding unwanted capabilities. Omit or empty if not applicable.
+
+      Be thorough. Extract every feature, file reference, and dependency.
+    placeholders: [plan_text]
+
+  assess:
+    description: "Prompt for assessing plan complexity and routing"
+    template: |
+      You are a complexity assessor for software plans.
+
+      <plan_summary>
+      Title: {title}
+      Goals: {goals}
+      Feature count: {feature_count}
+      Features: {feature_summary}
+      Files mentioned: {file_count}
+      </plan_summary>
+
+      Score the plan on these 7 dimensions (each 0–100):
+      1. feature_count — number and granularity of features
+      2. cross_file_deps — how many features touch multiple files
+      3. api_surface — breadth of public API changes
+      4. test_complexity — difficulty of testing
+      5. integration_depth — how deeply it integrates with existing code
+      6. domain_novelty — how novel the domain concepts are
+      7. ambiguity — how ambiguous or under-specified the plan is
+
+      Then compute a composite score (weighted average, 0–100).
+
+      Routing rule: composite ≤ {threshold} → "prime", else → "artisan".
+
+      Return JSON (no markdown fences):
+      {{
+        "feature_count": 0,
+        "cross_file_deps": 0,
+        "api_surface": 0,
+        "test_complexity": 0,
+        "integration_depth": 0,
+        "domain_novelty": 0,
+        "ambiguity": 0,
+        "composite": 0,
+        "reasoning": "one paragraph explaining the score and routing decision",
+        "route": "prime or artisan"
+      }}
+    placeholders: [title, goals, feature_count, feature_summary, file_count, threshold]
+
+  transform_prime:
+    description: "Prompt for transforming parsed plan into prime-route task YAML"
+    template: |
+      You are a task YAML generator for the PrimeContractor workflow.
+
+      Convert the following parsed plan into a task YAML file matching this schema:
+
+      ```yaml
+      project:
+        id: <project-id>
+        name: <project-name>
+        sprint_id: <sprint-id>
+
+      tasks:
+        - task_id: <ID>
+          title: "short title"
+          task_type: task
+          story_points: <1-8>
+          priority: <high|medium|low>
+          labels: [label1, label2]
+          depends_on: [<other-task-id>]
+          config:
+            task_description: |
+              Detailed implementation instructions...
+            context:
+              existing_code: ""
+      ```
+
+      <plan>
+      Title: {title}
+      Goals: {goals}
+      Features:
+      {features}
+      Dependency graph: {dependency_graph}
+      </plan>
+
+      Generate valid YAML. Use task IDs like PI-001, PI-002, etc.
+      Include dependency edges from the dependency graph.
+      Each task should have a thorough task_description.
+    placeholders: [title, goals, features, dependency_graph]
+
+  transform_artisan:
+    description: "Prompt for transforming parsed plan into artisan-route markdown document"
+    template: |
+      You are a plan document generator for the ArtisanContractor workflow.
+
+      Convert the following parsed plan into a structured markdown plan document.
+
+      The document must have these sections:
+      1. **Overview** — title, goals, scope
+      2. **Data Models** — key data structures
+      3. **Architecture** — component diagram, file layout
+      4. **Phase Breakdown** — implementation phases with deliverables
+      5. **Cost Model** — estimated token usage per phase
+      6. **Risk Register** — risks and mitigations
+      7. **Verification** — test strategy, acceptance criteria
+      8. **Dependencies** — external deps, inter-feature deps
+
+      <plan>
+      Title: {title}
+      Goals: {goals}
+      Features:
+      {features}
+      Mentioned files: {mentioned_files}
+      Dependency graph: {dependency_graph}
+      </plan>
+
+      Generate a complete, well-structured markdown document.
+      Use ## for top-level sections, ### for subsections.
+    placeholders: [title, goals, features, mentioned_files, dependency_graph]
+
+depth_tiers:
+  brief:
+    sections:
+      - Overview
+      - Architecture
+      - Testing Strategy
+    max_tokens: 4096
+    guidance: >-
+      Concise design sketch. Focus on the interface contract and
+      key test cases. This is a small feature — avoid over-engineering.
+  standard:
+    sections:
+      - Overview
+      - Architecture
+      - Data Model
+      - Error Handling
+      - Testing Strategy
+    max_tokens: 8192
+    guidance: >-
+      Standard design doc. Include data model and error handling
+      but keep depth proportional to the feature's scope.
+  comprehensive:
+    sections:
+      - Overview
+      - Architecture
+      - Data Model
+      - API Contracts
+      - Error Handling
+      - Security Considerations
+      - Testing Strategy
+    max_tokens: 16384
+    guidance: >-
+      Comprehensive design. All sections are warranted for this
+      complex feature — address security and API contracts thoroughly.

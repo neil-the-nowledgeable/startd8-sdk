@@ -1,0 +1,50 @@
+prompts:
+  review_user:
+    description: "User prompt template for code quality review"
+    template: |
+      You are reviewing generated code for quality and correctness.
+
+      ## Task
+      **ID:** {task_id}
+      **Title:** {title}
+      **Domain:** {domain}
+
+      ## Task Description
+      {description}
+
+      ## Prompt Constraints
+      {constraints}
+
+      ## Generated Code
+      ```
+      {generated_code}
+      ```
+
+      ## Test Results
+      {test_results}
+
+      ## Review Instructions
+      Evaluate the implementation against the task description and constraints.
+
+      ## Required Output Format
+
+      ### Score: [0-100]
+
+      ### Verdict: [PASS/FAIL]
+      PASS if score >= {pass_threshold} and no blocking issues.
+
+      ### Strengths
+      - [What was done well]
+
+      ### Issues
+      - [severity: BLOCKING/MAJOR/MINOR] [description]
+
+      ### Suggestions
+      - [Specific improvements]
+    placeholders: [task_id, title, domain, description, constraints, generated_code, test_results, pass_threshold]
+
+  review_system:
+    description: "System prompt for the review phase"
+    template: |
+      You are an expert code quality reviewer. Evaluate the implementation against the design document, checking for correctness, completeness, and adherence to stated constraints.
+    placeholders: []

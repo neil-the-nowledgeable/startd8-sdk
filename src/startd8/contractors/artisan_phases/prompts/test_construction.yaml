@@ -1,0 +1,113 @@
+prompts:
+  test_system:
+    description: "System prompt for LLM-based test generation"
+    template: |
+      You are an expert Python test engineer. You write thorough, production-quality
+      pytest test suites.
+
+      Rules:
+      - Output ONLY valid Python source code inside a single markdown ```python
+        code fence.
+      - Use pytest idioms: fixtures, parametrize, marks, clear AAA structure.
+      - Every assertion must test a concrete, meaningful property — never use
+        ``assert result is not None`` as the sole assertion.
+      - Include ``import pytest`` and any necessary standard-library imports at the
+        top.
+      - Import the module under test with ``from <module_path> import *`` where
+        <module_path> is provided in the spec.
+      - Group tests for the same class inside ``class Test<ClassName>:``.
+      - Mark async tests with ``@pytest.mark.asyncio``.
+      - Provide realistic @pytest.fixture definitions for non-trivial setup.
+      - Cover happy-path, error-path (pytest.raises), and edge-case scenarios.
+      - Do NOT include implementation stubs — only test code.
+      - Do NOT include explanatory prose outside the code fence.
+    placeholders: []
+
+  test_from_design:
+    description: "User prompt for generating tests from a design document"
+    template: |
+      Generate a comprehensive pytest test suite for the following feature.
+
+      ## Feature: {feature_name}
+
+      {feature_description}
+
+      ## Design Document
+
+      {design_content}
+
+      ## Module Paths
+
+      {module_paths}
+
+      ## Requirements
+
+      1. Write tests for every class, method, and function described in the design.
+      2. Include meaningful fixtures that construct objects with realistic data.
+      3. Discover and test edge cases implied by the design (boundary values,
+         empty inputs, concurrent access, type errors, etc.).
+      4. Each test must have at least one concrete assertion beyond ``is not None``.
+      5. Group tests by class using ``class Test<ClassName>:`` blocks.
+      6. Standalone function tests are top-level ``def test_…()`` functions.
+    placeholders: [feature_name, feature_description, design_content, module_paths]
+
+  test_from_impl:
+    description: "User prompt for generating tests from design + implementation code"
+    template: |
+      Generate a comprehensive pytest test suite that verifies the following
+      implementation meets its design specification.
+
+      ## Feature: {feature_name}
+
+      {feature_description}
+
+      ## Design Document
+
+      {design_content}
+
+      ## Implementation Code
+
+      ```python
+      {implementation_code}
+      ```
+
+      ## Module Paths
+
+      {module_paths}
+
+      ## Requirements
+
+      1. Write tests that verify the implementation against the design contract.
+      2. Test actual return values, side effects, and state changes — not just
+         ``is not None``.
+      3. Include fixtures that construct objects matching the implementation's
+         constructor signatures.
+      4. Test error paths: feed invalid inputs and assert specific exceptions.
+      5. Cover edge cases visible in the implementation (empty collections,
+         boundary values, None parameters, concurrent calls for async code).
+      6. Group tests by class using ``class Test<ClassName>:`` blocks.
+    placeholders: [feature_name, feature_description, design_content, implementation_code, module_paths]
+
+  test_retry:
+    description: "User prompt for retrying failed test generation"
+    template: |
+      The previously generated test code failed pytest collection with the
+      following errors.  Please fix the issues and regenerate the complete test
+      file.
+
+      ## Previous Test Code
+
+      ```python
+      {previous_code}
+      ```
+
+      ## Collection Errors
+
+      {collection_errors}
+
+      ## Instructions
+
+      - Fix all import errors, syntax errors, and name resolution issues.
+      - Preserve the test intent — do not remove tests, only fix problems.
+      - Output the complete, corrected test file inside a single ```python fence.
+    placeholders: [previous_code, collection_errors]
