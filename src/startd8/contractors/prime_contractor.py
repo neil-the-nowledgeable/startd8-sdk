@@ -107,6 +107,13 @@ class PrimeContractorWorkflow:
         self._pre_integration_snapshots: Dict[str, Optional[Path]] = {}
         self._domain_checklist = None  # lazy-init DomainChecklist
         self._current_enrichment = None  # per-feature enrichment cache
+        # Seed-level context — set by run_prime_workflow.py after loading
+        # the context seed.  Declared here so _generate_code can access
+        # them directly without getattr guards.
+        self.seed_onboarding: Dict[str, Any] = {}
+        self.seed_architectural_context: Dict[str, Any] = {}
+        self.seed_design_calibration: Dict[str, Any] = {}
+        self.plan_document_text: Optional[str] = None
 
     def _rel_display(self, path: Path) -> str:
         """Safe relative path for display, falling back to the full path."""
@@ -396,18 +403,28 @@ class PrimeContractorWorkflow:
             return False
         logger.info("Running code generation for '%s'...", feature.name)
         try:
-            # Mottainai Gap 14: skip generation if files already exist on disk
-            if feature.generated_files and all(
-                Path(f).exists() and Path(f).stat().st_size > 0
-                for f in feature.generated_files
-            ):
-                logger.info(
-                    "Mottainai: reusing %d existing generated file(s) for '%s'",
-                    len(feature.generated_files), feature.name,
-                )
-                feature.status = FeatureStatus.GENERATED
-                self.queue.save_state()
-                return True
+            # Mottainai Gap 14: skip generation if files already exist on disk.
+            # Uses try/except to avoid TOCTOU race between exists() and stat().
+            if feature.generated_files:
+                all_present = True
+                for fpath in feature.generated_files:
+                    try:
+                        if Path(fpath).stat().st_size <= 0:
+                            all_present = False
+                            break
+                    except OSError:
+                        all_present = False
+                        break
+                if all_present:
+                    preview = feature.generated_files[:3]
+                    suffix = f" ... (+{len(feature.generated_files) - 3})" if len(feature.generated_files) > 3 else ""
+                    logger.info(
+                        "Mottainai: reusing %d existing generated file(s) for '%s': %s%s",
+                        len(feature.generated_files), feature.name, preview, suffix,
+                    )
+                    feature.status = FeatureStatus.GENERATED
+                    self.queue.save_state()
+                    return True
 
             gen_context: dict = {'feature_name': feature.name}
             self._current_enrichment = None
@@ -422,31 +439,30 @@ class PrimeContractorWorkflow:
                 else:
                     gen_context['output_constraint'] = 'IMPORTANT: Output a single Python module, NOT a package with multiple files. All classes, enums, and functions must be defined in one file. Do NOT use relative imports (from .module import ...) — everything lives in this file.'
 
-            # Mottainai Gap 10-12: inject seed-level onboarding context
-            seed_onboarding = getattr(self, 'seed_onboarding', None) or {}
-            if seed_onboarding:
-                objectives = seed_onboarding.get('project_objectives')
-                if objectives:
+            # Mottainai Gaps 9-13: inject seed-level context into gen_context.
+            # Keys injected: project_objectives, semantic_conventions,
+            # architectural_context, implement_max_output_tokens,
+            # plan_context, domain_constraints (from per-task metadata).
+            if self.seed_onboarding:
+                objectives = self.seed_onboarding.get('project_objectives')
+                if isinstance(objectives, (str, list, dict)):
                     gen_context['project_objectives'] = objectives
-                sem_conv = seed_onboarding.get('semantic_conventions')
-                if sem_conv:
+                sem_conv = self.seed_onboarding.get('semantic_conventions')
+                if isinstance(sem_conv, (dict, list)):
                     gen_context['semantic_conventions'] = sem_conv
-            seed_arch = getattr(self, 'seed_architectural_context', None) or {}
-            if seed_arch:
-                gen_context['architectural_context'] = seed_arch
+            if self.seed_architectural_context:
+                gen_context['architectural_context'] = self.seed_architectural_context
             # Per-task calibration: implement_max_output_tokens
-            seed_cal = getattr(self, 'seed_design_calibration', None) or {}
-            task_cal = seed_cal.get(feature.id, {})
-            if task_cal.get('implement_max_output_tokens'):
+            task_cal = self.seed_design_calibration.get(feature.id, {})
+            if isinstance(task_cal, dict) and task_cal.get('implement_max_output_tokens'):
                 gen_context['implement_max_output_tokens'] = task_cal['implement_max_output_tokens']
-            # Mottainai Gap 13: inject plan document context
-            plan_text = getattr(self, 'plan_document_text', None)
-            if plan_text:
-                gen_context['plan_context'] = plan_text
-            # Per-task metadata from seed (Gap 9)
+            # Gap 13: plan document context
+            if self.plan_document_text:
+                gen_context['plan_context'] = self.plan_document_text
+            # Gap 9: per-task metadata from seed enrichment
             if feature.metadata:
                 meta_enrichment = feature.metadata.get('_enrichment', {})
-                if meta_enrichment:
+                if isinstance(meta_enrichment, dict) and meta_enrichment:
                     gen_context.setdefault('domain_constraints', [])
                     if isinstance(gen_context['domain_constraints'], list):
                         gen_context['domain_constraints'].extend(

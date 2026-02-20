@@ -334,6 +334,8 @@ def main() -> int:
 
     # Mottainai Gap 10-13: stash seed-level context on the workflow so
     # _generate_code can inject it into gen_context.
+    # Re-read required: seed_path may have changed to an enriched version
+    # after the auto-enrichment block above.
     seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
     workflow.seed_onboarding = seed_data.get("onboarding") or {}
     workflow.seed_architectural_context = seed_data.get("architectural_context") or {}

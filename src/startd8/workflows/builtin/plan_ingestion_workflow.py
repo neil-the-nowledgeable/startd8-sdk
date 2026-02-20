@@ -607,8 +607,8 @@ def _infer_artifact_types_from_files(files: List[str]) -> List[str]:
     types: list[str] = []
     seen: set[str] = set()
     for f in files:
-        lower = f.lower()
-        name = lower.rsplit("/", 1)[-1] if "/" in lower else lower
+        path_lower = f.lower()
+        name = path_lower.rsplit("/", 1)[-1] if "/" in path_lower else path_lower
         inferred: Optional[str] = None
         if name.startswith("dockerfile") or name.endswith(".dockerfile"):
             inferred = "dockerfile"
@@ -2709,10 +2709,13 @@ class PlanIngestionWorkflow(WorkflowBase):
             # Mottainai: prefer onboarding already loaded by PREFLIGHT
             # (avoids re-reading from disk and ensures data never silently
             # disappears when context_files omits onboarding-metadata.json).
-            onboarding_early = onboarding_metadata or (
-                self._load_onboarding_metadata(context_files, output_dir)
-                if context_files else None
-            )
+            if onboarding_metadata:
+                onboarding_early = onboarding_metadata
+            elif context_files:
+                logger.debug("Onboarding not passed from PREFLIGHT — falling back to disk load")
+                onboarding_early = self._load_onboarding_metadata(context_files, output_dir)
+            else:
+                onboarding_early = None
             _file_ownership = (
                 onboarding_early.get("file_ownership") if onboarding_early else None
             )
@@ -2820,10 +2823,13 @@ class PlanIngestionWorkflow(WorkflowBase):
             total_cost = sum(costs.values())
 
             # Mottainai: prefer onboarding already loaded by PREFLIGHT
-            onboarding_prime = onboarding_metadata or (
-                self._load_onboarding_metadata(context_files, output_dir)
-                if context_files else None
-            )
+            if onboarding_metadata:
+                onboarding_prime = onboarding_metadata
+            elif context_files:
+                logger.debug("Onboarding not passed from PREFLIGHT (prime) — falling back to disk load")
+                onboarding_prime = self._load_onboarding_metadata(context_files, output_dir)
+            else:
+                onboarding_prime = None
             _file_ownership = (
                 onboarding_prime.get("file_ownership") if onboarding_prime else None
             )
