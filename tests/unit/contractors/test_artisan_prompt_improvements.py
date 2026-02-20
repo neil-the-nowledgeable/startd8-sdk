@@ -125,27 +125,15 @@ class TestIMP3AllTargetFiles:
         from startd8.contractors.context_seed_handlers import (
             DesignPhaseHandler,
         )
+        from tests.unit.contractors.conftest import FakeSeedTask
 
-        # Create a minimal mock task with multiple target files
-        class MockTask:
-            title = "Test Feature"
-            description = "A test"
-            target_files = ["src/a.py", "src/b.py", "src/c.py"]
-            prompt_constraints = []
-            domain = "backend"
-            domain_reasoning = ""
-            available_siblings = []
-            feature_id = "F-1"
-            design_doc_sections = []
-            artifact_types_addressed = []
-            file_scope = {}
-            requirements_text = ""
-            api_signatures = []
-            protocol = ""
-            runtime_dependencies = []
-            negative_scope = []
+        task = FakeSeedTask(
+            title="Test Feature",
+            description="A test",
+            target_files=["src/a.py", "src/b.py", "src/c.py"],
+        )
 
-        ctx = DesignPhaseHandler._task_to_feature_context(MockTask())
+        ctx = DesignPhaseHandler._task_to_feature_context(task)
         assert "src/a.py" in ctx.target_file
         assert "src/b.py" in ctx.target_file
         assert "src/c.py" in ctx.target_file

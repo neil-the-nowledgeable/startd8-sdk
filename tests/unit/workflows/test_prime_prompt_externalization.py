@@ -13,7 +13,6 @@ Validates:
 """
 
 import json
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -167,48 +166,28 @@ class TestBackwardCompatibility:
 class TestStructuredContext:
     """Verify _create_spec builds structured context sections."""
 
-    def _make_workflow(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
-            LeadContractorWorkflow,
-        )
-        return LeadContractorWorkflow()
-
-    def _mock_agent(self, response="## Task Summary\nTest spec"):
-        agent = MagicMock()
-        token_usage = MagicMock()
-        token_usage.input = 100
-        token_usage.output = 200
-        agent.generate.return_value = (response, 500, token_usage)
-        agent.model = "test-model"
-        agent.name = "test-agent"
-        return agent
-
-    def test_spec_with_structured_context_has_sections(self):
+    def test_spec_with_structured_context_has_sections(self, lead_workflow, mock_agent):
         """Test 9: Spec prompt with structured context has dedicated sections."""
-        wf = self._make_workflow()
-        agent = self._mock_agent()
         context = {
             "architectural_context": {"layers": ["api", "data"]},
             "plan_context": "Build the auth module",
             "project_objectives": ["Secure auth", "JWT tokens"],
             "semantic_conventions": ["Use snake_case"],
         }
-        wf._create_spec(agent, "Implement auth", context, None)
+        lead_workflow._create_spec(mock_agent, "Implement auth", context, None)
 
-        prompt = agent.generate.call_args[0][0]
+        prompt = mock_agent.generate.call_args[0][0]
         assert "## Project Architecture" in prompt
         assert "## Plan Context" in prompt
         assert "## Project Objectives" in prompt
         assert "## Semantic Conventions" in prompt
 
-    def test_spec_with_empty_arch_context_omits_section(self):
+    def test_spec_with_empty_arch_context_omits_section(self, lead_workflow, mock_agent):
         """Test 10: Spec prompt with empty architectural_context omits section."""
-        wf = self._make_workflow()
-        agent = self._mock_agent()
         context = {"feature_name": "test"}
-        wf._create_spec(agent, "Simple task", context, None)
+        lead_workflow._create_spec(mock_agent, "Simple task", context, None)
 
-        prompt = agent.generate.call_args[0][0]
+        prompt = mock_agent.generate.call_args[0][0]
         assert "## Project Architecture" not in prompt
 
 
@@ -220,43 +199,23 @@ class TestStructuredContext:
 class TestRequirementsText:
     """Verify requirements_text flows through to spec prompt."""
 
-    def _make_workflow(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
-            LeadContractorWorkflow,
-        )
-        return LeadContractorWorkflow()
-
-    def _mock_agent(self, response="## Task Summary\nTest spec"):
-        agent = MagicMock()
-        token_usage = MagicMock()
-        token_usage.input = 100
-        token_usage.output = 200
-        agent.generate.return_value = (response, 500, token_usage)
-        agent.model = "test-model"
-        agent.name = "test-agent"
-        return agent
-
-    def test_spec_with_requirements_text_shows_section(self):
+    def test_spec_with_requirements_text_shows_section(self, lead_workflow, mock_agent):
         """Test 11: Spec prompt with requirements_text shows Requirements section."""
-        wf = self._make_workflow()
-        agent = self._mock_agent()
         context = {
             "requirements_text": "The service MUST use port 8080 and PostgreSQL user='postgres'.",
         }
-        wf._create_spec(agent, "Implement service", context, None)
+        lead_workflow._create_spec(mock_agent, "Implement service", context, None)
 
-        prompt = agent.generate.call_args[0][0]
+        prompt = mock_agent.generate.call_args[0][0]
         assert "## Requirements (verbatim" in prompt
         assert "port 8080" in prompt
 
-    def test_spec_without_requirements_text_omits_section(self):
+    def test_spec_without_requirements_text_omits_section(self, lead_workflow, mock_agent):
         """Test 12: Spec prompt without requirements_text omits Requirements section."""
-        wf = self._make_workflow()
-        agent = self._mock_agent()
         context = {"feature_name": "test"}
-        wf._create_spec(agent, "Simple task", context, None)
+        lead_workflow._create_spec(mock_agent, "Simple task", context, None)
 
-        prompt = agent.generate.call_args[0][0]
+        prompt = mock_agent.generate.call_args[0][0]
         assert "## Requirements (verbatim" not in prompt
 
     def test_queue_bridges_requirements_text(self):
@@ -294,47 +253,27 @@ class TestRequirementsText:
 class TestCriticalParameters:
     """Verify critical parameters appear as dedicated section."""
 
-    def _make_workflow(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
-            LeadContractorWorkflow,
-        )
-        return LeadContractorWorkflow()
-
-    def _mock_agent(self, response="## Task Summary\nTest spec"):
-        agent = MagicMock()
-        token_usage = MagicMock()
-        token_usage.input = 100
-        token_usage.output = 200
-        agent.generate.return_value = (response, 500, token_usage)
-        agent.model = "test-model"
-        agent.name = "test-agent"
-        return agent
-
-    def test_critical_parameters_appear_as_section(self):
+    def test_critical_parameters_appear_as_section(self, lead_workflow, mock_agent):
         """Test 13: Critical parameters extracted from enrichment appear as dedicated section."""
-        wf = self._make_workflow()
-        agent = self._mock_agent()
         context = {
             "critical_parameters": [
                 "user='postgres'",
                 "embedding_service=GoogleGenerativeAIEmbeddings",
             ],
         }
-        wf._create_spec(agent, "Implement storage", context, None)
+        lead_workflow._create_spec(mock_agent, "Implement storage", context, None)
 
-        prompt = agent.generate.call_args[0][0]
+        prompt = mock_agent.generate.call_args[0][0]
         assert "## Critical Parameters" in prompt
         assert "user='postgres'" in prompt
         assert "GoogleGenerativeAIEmbeddings" in prompt
 
-    def test_no_critical_parameters_no_section(self):
+    def test_no_critical_parameters_no_section(self, lead_workflow, mock_agent):
         """Test 14: No critical parameters → no Critical Parameters section."""
-        wf = self._make_workflow()
-        agent = self._mock_agent()
         context = {"feature_name": "test"}
-        wf._create_spec(agent, "Simple task", context, None)
+        lead_workflow._create_spec(mock_agent, "Simple task", context, None)
 
-        prompt = agent.generate.call_args[0][0]
+        prompt = mock_agent.generate.call_args[0][0]
         assert "## Critical Parameters" not in prompt
 
 
@@ -366,26 +305,8 @@ class TestProtocolGuidance:
 class TestConstraintCategorization:
     """Verify constraints are grouped by [BINDING]/[STRUCTURAL]/[ADVISORY]."""
 
-    def _make_workflow(self):
-        from startd8.workflows.builtin.lead_contractor_workflow import (
-            LeadContractorWorkflow,
-        )
-        return LeadContractorWorkflow()
-
-    def _mock_agent(self, response="## Task Summary\nTest spec"):
-        agent = MagicMock()
-        token_usage = MagicMock()
-        token_usage.input = 100
-        token_usage.output = 200
-        agent.generate.return_value = (response, 500, token_usage)
-        agent.model = "test-model"
-        agent.name = "test-agent"
-        return agent
-
-    def test_constraints_grouped_by_category(self):
+    def test_constraints_grouped_by_category(self, lead_workflow, mock_agent):
         """Test 16: Constraints grouped by [BINDING]/[STRUCTURAL]/[ADVISORY]."""
-        wf = self._make_workflow()
-        agent = self._mock_agent()
         context = {
             "domain_constraints": [
                 "[BINDING] Only import from: os, sys",
@@ -393,26 +314,24 @@ class TestConstraintCategorization:
                 "[ADVISORY] Prefer stdlib when sufficient",
             ],
         }
-        wf._create_spec(agent, "Test task", context, None)
+        lead_workflow._create_spec(mock_agent, "Test task", context, None)
 
-        prompt = agent.generate.call_args[0][0]
+        prompt = mock_agent.generate.call_args[0][0]
         assert "### Binding (must not violate)" in prompt
         assert "### Structural (code organization)" in prompt
         assert "### Advisory (prefer but not blocking)" in prompt
 
-    def test_untagged_constraints_rendered_flat(self):
+    def test_untagged_constraints_rendered_flat(self, lead_workflow, mock_agent):
         """Test 17: Untagged constraints rendered as flat list."""
-        wf = self._make_workflow()
-        agent = self._mock_agent()
         context = {
             "domain_constraints": [
                 "Use Python 3.9+",
                 "Follow PEP 8",
             ],
         }
-        wf._create_spec(agent, "Test task", context, None)
+        lead_workflow._create_spec(mock_agent, "Test task", context, None)
 
-        prompt = agent.generate.call_args[0][0]
+        prompt = mock_agent.generate.call_args[0][0]
         assert "- Use Python 3.9+" in prompt
         assert "- Follow PEP 8" in prompt
 

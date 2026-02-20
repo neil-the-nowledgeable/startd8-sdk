@@ -668,18 +668,30 @@ class LeadContractorWorkflow(WorkflowBase):
     # Private Methods - Phase Implementations
     # =========================================================================
 
-    def _create_spec(
-        self,
-        lead_agent: BaseAgent,
+    @staticmethod
+    def _format_context_value(value: Any) -> str:
+        """Format a context value as a bullet list or JSON string."""
+        if isinstance(value, list):
+            return "\n".join(f"- {item}" for item in value)
+        if isinstance(value, dict):
+            return "\n".join(f"- **{k}**: {v}" for k, v in value.items())
+        return str(value)
+
+    @staticmethod
+    def _build_spec_prompt(
         task_description: str,
         context: Dict[str, Any],
         output_format: Optional[str],
-    ) -> ImplementationSpec:
-        """Phase 1: Lead creates implementation specification."""
+    ) -> str:
+        """Build the spec prompt from context, consuming structured keys.
+
+        Pops structured keys (domain_constraints, requirements_text, etc.)
+        from *context* so the remainder can be JSON-serialized as general
+        context.  Callers should pass a **copy** of the original context
+        to avoid mutating upstream data.
+        """
         from ...contractors.prompt_utils import format_constraints
         from .prompts import get_template as _get_ctx_template
-
-        spec_id = f"spec-{uuid.uuid4().hex[:8]}"
 
         # --- IMP-P5: Constraint categorization ---
         raw_constraints = context.pop("domain_constraints", None)
@@ -720,7 +732,6 @@ class LeadContractorWorkflow(WorkflowBase):
         project_obj = context.pop("project_objectives", None)
         sem_conv = context.pop("semantic_conventions", None)
 
-        # Build context sections with dedicated headers
         sections: List[str] = []
 
         # Layer 1 (defense-in-depth): inject per-file manifest into the spec
@@ -736,47 +747,43 @@ class LeadContractorWorkflow(WorkflowBase):
             context_str += f"\n\nExpected Output Format:\n{output_format}"
         sections.append(f"## Context\n{context_str}")
 
-        # Project objectives as bullet list
+        _fmt = LeadContractorWorkflow._format_context_value
         if project_obj:
-            if isinstance(project_obj, list):
-                obj_str = "\n".join(f"- {o}" for o in project_obj)
-            elif isinstance(project_obj, dict):
-                obj_str = "\n".join(f"- **{k}**: {v}" for k, v in project_obj.items())
-            else:
-                obj_str = str(project_obj)
-            sections.append(f"## Project Objectives\n{obj_str}")
-
-        # Semantic conventions as bullet list
+            sections.append(f"## Project Objectives\n{_fmt(project_obj)}")
         if sem_conv:
-            if isinstance(sem_conv, list):
-                conv_str = "\n".join(f"- {c}" for c in sem_conv)
-            elif isinstance(sem_conv, dict):
-                conv_str = "\n".join(f"- **{k}**: {v}" for k, v in sem_conv.items())
-            else:
-                conv_str = str(sem_conv)
-            sections.append(f"## Semantic Conventions\n{conv_str}")
-
-        # Architecture
+            sections.append(f"## Semantic Conventions\n{_fmt(sem_conv)}")
         if arch_ctx:
             if isinstance(arch_ctx, dict):
-                arch_str = json.dumps(arch_ctx, indent=2)
+                sections.append(f"## Project Architecture\n{json.dumps(arch_ctx, indent=2)}")
             else:
-                arch_str = str(arch_ctx)
-            sections.append(f"## Project Architecture\n{arch_str}")
-
-        # Plan context
+                sections.append(f"## Project Architecture\n{arch_ctx}")
         if plan_ctx:
             sections.append(f"## Plan Context\n{plan_ctx}")
 
         context_sections = "\n\n".join(sections)
 
-        prompt = SPEC_PROMPT_TEMPLATE.format(
+        return SPEC_PROMPT_TEMPLATE.format(
             task_description=task_description,
             requirements_section=requirements_section,
             context_sections=context_sections,
             critical_parameters_section=critical_parameters_section,
             domain_constraints=domain_constraints_str,
         )
+
+    def _create_spec(
+        self,
+        lead_agent: BaseAgent,
+        task_description: str,
+        context: Dict[str, Any],
+        output_format: Optional[str],
+    ) -> ImplementationSpec:
+        """Phase 1: Lead creates implementation specification."""
+        spec_id = f"spec-{uuid.uuid4().hex[:8]}"
+
+        # Avoid mutating the caller's dict (R1)
+        context = dict(context)
+
+        prompt = self._build_spec_prompt(task_description, context, output_format)
 
         response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
 
@@ -1323,100 +1330,12 @@ class LeadContractorWorkflow(WorkflowBase):
         output_format: Optional[str],
     ) -> ImplementationSpec:
         """Phase 1 (async): Lead creates implementation specification."""
-        from ...contractors.prompt_utils import format_constraints
-        from .prompts import get_template as _get_ctx_template
-
         spec_id = f"spec-{uuid.uuid4().hex[:8]}"
 
-        # --- IMP-P5: Constraint categorization ---
-        raw_constraints = context.pop("domain_constraints", None)
-        if raw_constraints and isinstance(raw_constraints, list):
-            domain_constraints_str = format_constraints(raw_constraints)
-        elif raw_constraints and isinstance(raw_constraints, str):
-            domain_constraints_str = raw_constraints
-        else:
-            domain_constraints_str = "(No domain-specific constraints)"
+        # Avoid mutating the caller's dict (R1)
+        context = dict(context)
 
-        # --- IMP-P2: Requirements text passthrough ---
-        requirements_text = context.pop("requirements_text", "")
-        requirements_section = ""
-        if requirements_text:
-            requirements_section = (
-                "\n## Requirements (verbatim — authoritative for parameter details)\n"
-                f"{requirements_text}\n"
-            )
-
-        # --- IMP-P3: Critical parameter elevation ---
-        critical_parameters = context.pop("critical_parameters", None)
-        critical_parameters_section = ""
-        if critical_parameters:
-            if isinstance(critical_parameters, list):
-                cp_str = "\n".join(f"- {p}" for p in critical_parameters)
-            elif isinstance(critical_parameters, str):
-                cp_str = critical_parameters
-            else:
-                cp_str = json.dumps(critical_parameters, indent=2)
-            critical_parameters_section = (
-                "\n## Critical Parameters (from requirements — include verbatim in spec)\n"
-                f"{cp_str}\n"
-            )
-
-        # --- IMP-P1: Structured context sections ---
-        arch_ctx = context.pop("architectural_context", None)
-        plan_ctx = context.pop("plan_context", None)
-        project_obj = context.pop("project_objectives", None)
-        sem_conv = context.pop("semantic_conventions", None)
-
-        sections: List[str] = []
-
-        target_files = context.get("target_files")
-        if target_files and len(target_files) > 1:
-            file_manifest = "\n".join(f"  - `{f}`" for f in target_files)
-            manifest_template = _get_ctx_template("prime_context", "file_manifest")
-            sections.append(manifest_template.format(file_manifest=file_manifest))
-
-        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
-        if output_format:
-            context_str += f"\n\nExpected Output Format:\n{output_format}"
-        sections.append(f"## Context\n{context_str}")
-
-        if project_obj:
-            if isinstance(project_obj, list):
-                obj_str = "\n".join(f"- {o}" for o in project_obj)
-            elif isinstance(project_obj, dict):
-                obj_str = "\n".join(f"- **{k}**: {v}" for k, v in project_obj.items())
-            else:
-                obj_str = str(project_obj)
-            sections.append(f"## Project Objectives\n{obj_str}")
-
-        if sem_conv:
-            if isinstance(sem_conv, list):
-                conv_str = "\n".join(f"- {c}" for c in sem_conv)
-            elif isinstance(sem_conv, dict):
-                conv_str = "\n".join(f"- **{k}**: {v}" for k, v in sem_conv.items())
-            else:
-                conv_str = str(sem_conv)
-            sections.append(f"## Semantic Conventions\n{conv_str}")
-
-        if arch_ctx:
-            if isinstance(arch_ctx, dict):
-                arch_str = json.dumps(arch_ctx, indent=2)
-            else:
-                arch_str = str(arch_ctx)
-            sections.append(f"## Project Architecture\n{arch_str}")
-
-        if plan_ctx:
-            sections.append(f"## Plan Context\n{plan_ctx}")
-
-        context_sections = "\n\n".join(sections)
-
-        prompt = SPEC_PROMPT_TEMPLATE.format(
-            task_description=task_description,
-            requirements_section=requirements_section,
-            context_sections=context_sections,
-            critical_parameters_section=critical_parameters_section,
-            domain_constraints=domain_constraints_str,
-        )
+        prompt = self._build_spec_prompt(task_description, context, output_format)
 
         response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
 

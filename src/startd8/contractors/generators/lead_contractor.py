@@ -297,7 +297,7 @@ class LeadContractorCodeGenerator:
                 content = per_file_code.get(target_file, final_implementation)
                 output_path.write_text(content, encoding="utf-8")
                 generated_files.append(output_path)
-                logger.info(f"Generated: {output_path}")
+                logger.info("Generated: %s", output_path)
 
             # If no target files specified, use a default
             if not generated_files:
@@ -365,7 +365,7 @@ class LeadContractorCodeGenerator:
                 error=f"LeadContractorWorkflow not available: {e}",
             )
         except Exception as e:
-            logger.error(f"Code generation failed: {e}", exc_info=True)
+            logger.error("Code generation failed: %s", e, exc_info=True)
             return GenerationResult(
                 success=False,
                 error=str(e),
