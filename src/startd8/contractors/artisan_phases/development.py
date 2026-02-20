@@ -1031,12 +1031,18 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
         parts.append(chunk.description)
 
-        # Append prompt constraints from enrichment
+        # IMP-7: Inject design completeness warning if parameters were lost
+        completeness_warning = chunk.metadata.get("design_completeness_warning", "")
+        if completeness_warning:
+            parts.append("\n## Design Completeness Warning")
+            parts.append(completeness_warning)
+
+        # Append prompt constraints from enrichment (IMP-5: grouped by priority)
         constraints = chunk.metadata.get("prompt_constraints", [])
         if constraints:
+            from startd8.contractors.artisan_phases.prompts import format_constraints
             parts.append("\n## Constraints")
-            for c in constraints:
-                parts.append(f"- {c}")
+            parts.append(format_constraints(constraints))
 
         # Append retry feedback
         last_error = context.get("last_error")

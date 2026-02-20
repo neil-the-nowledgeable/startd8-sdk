@@ -123,6 +123,8 @@ startd8 = [
     "prompt_builder/templates/*.yaml",
     "help_content/*.yaml",
     "evaluation/corpus/*.yaml",
+    "contractors/artisan_phases/prompts/*.yaml",
+    "workflows/builtin/prompts/*.yaml",
 ]
 
 

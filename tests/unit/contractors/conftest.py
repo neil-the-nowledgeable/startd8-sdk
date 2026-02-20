@@ -37,3 +37,10 @@ class FakeSeedTask:
     design_doc_sections: list[str] = field(default_factory=list)
     artifact_types_addressed: list[str] = field(default_factory=list)
     file_scope: dict[str, str] = field(default_factory=dict)
+    # IMP-1: Verbatim requirements text from plan
+    requirements_text: str = ""
+    # IMP-4: Extended schema fields
+    api_signatures: list[str] = field(default_factory=list)
+    protocol: str = ""
+    runtime_dependencies: list[str] = field(default_factory=list)
+    negative_scope: list[str] = field(default_factory=list)

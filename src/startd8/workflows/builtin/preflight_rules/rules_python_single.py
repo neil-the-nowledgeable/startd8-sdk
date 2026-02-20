@@ -66,7 +66,7 @@ class OptionalDepGuardsSingleRule(PreflightRule):
         # Constraint: preserve existing guards
         if guards:
             contrib.constraints.append(
-                f"Existing optional dependency guards (try/except ImportError): "
+                f"[BINDING] Existing optional dependency guards (try/except ImportError): "
                 f"{', '.join(guards)} \u2014 preserve these patterns"
             )
 
@@ -84,25 +84,25 @@ class SingleModuleConstraintsRule(PreflightRule):
         confidence = ctx.available_deps.confidence
 
         constraints = [
-            "Output a single Python module -- not a package",
-            "Do not use relative imports (from .module import ...)",
+            "[STRUCTURAL] Output a single Python module -- not a package",
+            "[BINDING] Do not use relative imports (from .module import ...)",
         ]
 
         if confidence >= 0.8:
             # High-confidence allowlist — binding constraint.
             public = sorted(n for n in all_importable if not n.startswith("_"))
-            constraints.append(f"Only import from: {', '.join(public)}")
+            constraints.append(f"[BINDING] Only import from: {', '.join(public)}")
         else:
             # Low-confidence allowlist (no pyproject.toml / requirements.txt).
             # A binding constraint here causes false positives (P1) and
             # misleads the code generator into using wrong libraries (DEV-001).
             constraints.append(
-                "Import any packages required for the task. "
+                "[ADVISORY] Import any packages required for the task. "
                 "The project has no dependency manifest, so third-party "
                 "packages are acceptable. Prefer stdlib when sufficient."
             )
 
-        constraints.append("Define utility functions before classes that reference them")
+        constraints.append("[STRUCTURAL] Define utility functions before classes that reference them")
 
         return RuleContribution(
             constraints=constraints,
