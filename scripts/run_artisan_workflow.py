@@ -341,6 +341,20 @@ def main() -> int:
         ),
     )
 
+    parser.add_argument(
+        "--lane-parallel", action="store_true",
+        help=(
+            "Lane-parallel execution: group tasks by file-scope overlap into "
+            "lanes, run lanes concurrently (feature-serial within each lane). "
+            "Prevents cross-file import conflicts that arise in phase-serial mode. "
+            "Auto-commit is disabled (concurrent git operations would race)."
+        ),
+    )
+    parser.add_argument(
+        "--max-lanes", type=int, default=4,
+        help="Maximum number of concurrent lanes in lane-parallel mode (default: 4)",
+    )
+
     # --dress-rehearsal and --adopt-prior are mutually exclusive:
     # dress-rehearsal generates *new* design artifacts into a staging dir,
     # adopt-prior *consumes* existing artifacts from a prior run.
@@ -660,6 +674,8 @@ def main() -> int:
         phase_timeout_seconds=args.phase_timeout,
         checkpoint_dir=args.checkpoint_dir,
         project_root=str(Path(args.project_root).resolve()),
+        lane_parallel=args.lane_parallel,
+        max_parallel_lanes=args.max_lanes,
         metadata={
             "seed_path": str(seed_path),
             "runner": "run_artisan_workflow.py",
@@ -675,6 +691,11 @@ def main() -> int:
         logger.info("Task filter: %s (%d task(s))", task_filter, len(task_filter))
     if config.cost_budget is not None:
         logger.info("Cost budget: $%.2f", config.cost_budget)
+    if config.lane_parallel:
+        logger.info(
+            "Execution mode: lane-parallel (max %d concurrent lanes)",
+            config.max_parallel_lanes,
+        )
 
     # Determine phase sublist when --stop-after is set
     phases = None

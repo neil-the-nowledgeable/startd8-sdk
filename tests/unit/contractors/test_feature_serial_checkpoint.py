@@ -153,7 +153,7 @@ class TestWorkflowCheckpointV2Schema:
             status="in_progress",
         )
         assert checkpoint.schema_version == CHECKPOINT_SCHEMA_VERSION
-        assert checkpoint.schema_version == 2
+        assert checkpoint.schema_version == 3
 
     def test_checkpoint_has_feature_serial_fields(self):
         """Verify checkpoints have feature-serial execution fields."""
@@ -261,7 +261,7 @@ class TestJsonFileCheckpointStoreBackwardCompat:
         path = tmp_checkpoint_dir / "save-test.checkpoint.json"
         raw_data = json.loads(path.read_text())
 
-        assert raw_data["schema_version"] == 2
+        assert raw_data["schema_version"] == 3
         assert raw_data["completed_features"] == ["f1"]
         assert raw_data["current_feature"] == "f2"
         assert raw_data["current_feature_phase"] == "design"

@@ -29,11 +29,13 @@ Usage:
 
 from __future__ import annotations
 
+import copy
 import enum
 import json
 import logging
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -78,6 +80,7 @@ __all__ = [
     "JsonFileCheckpointStore",
     "InMemoryCheckpointStore",
     "ArtisanContractorWorkflow",
+    "compute_lanes",
 ]
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
@@ -315,6 +318,8 @@ class WorkflowConfig:
     reviewer_model: str = REVIEW_MODEL_CLAUDE_OPUS.model_id
     project_root: Optional[str] = None
     feature_serial: bool = False
+    lane_parallel: bool = False
+    max_parallel_lanes: int = 4
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -326,6 +331,10 @@ class WorkflowConfig:
             raise ValueError("cost_budget must be non-negative")
         if self.max_retries_per_phase < 0:
             raise ValueError("max_retries_per_phase must be non-negative")
+        if self.lane_parallel and self.feature_serial:
+            raise ValueError("lane_parallel and feature_serial are mutually exclusive")
+        if self.max_parallel_lanes < 1:
+            raise ValueError("max_parallel_lanes must be at least 1")
 
 
 @dataclass
@@ -402,7 +411,7 @@ class FeaturePartialResult:
 
 
 # Schema version for checkpoint format changes (bump on breaking changes)
-CHECKPOINT_SCHEMA_VERSION = 2
+CHECKPOINT_SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -415,6 +424,8 @@ class WorkflowCheckpoint:
         v1: Original format (phase-serial execution)
         v2: Feature-serial execution with completed_features, current_feature,
             current_feature_phase, and feature_partial_results fields.
+        v3: Lane-parallel execution with lane_assignments, completed_lanes,
+            and lane_results fields.
     """
 
     workflow_id: str
@@ -432,6 +443,11 @@ class WorkflowCheckpoint:
     current_feature: Optional[str] = None
     current_feature_phase: Optional[str] = None  # DESIGN/IMPLEMENT/TEST/REVIEW
     feature_partial_results: dict[str, dict[str, Any]] = field(default_factory=dict)
+
+    # Lane-parallel execution fields (v3+)
+    lane_assignments: dict[str, int] = field(default_factory=dict)  # task_id → lane_index
+    completed_lanes: list[int] = field(default_factory=list)
+    lane_results: dict[str, dict[str, Any]] = field(default_factory=dict)  # str(lane_idx) → results
 
 
 @dataclass
@@ -622,6 +638,155 @@ class InMemoryCheckpointStore(CheckpointStore):
 
     def delete(self, workflow_id: str) -> None:
         self._store.pop(workflow_id, None)
+
+
+# ============================================================================
+# LANE-PARALLEL HELPERS
+# ============================================================================
+
+
+def compute_lanes(tasks: list) -> list[list]:
+    """Group tasks into lanes using Union-Find on shared target_files and depends_on.
+
+    Tasks that share any ``target_file`` or have a ``depends_on`` relationship
+    are placed in the same lane. Within each lane, the original topological
+    order (input order) is preserved.
+
+    Args:
+        tasks: Ordered list of SeedTask objects (topologically sorted by PLAN).
+
+    Returns:
+        List of lanes, where each lane is a list of SeedTask objects.
+        Lanes are ordered by the index of their first task in the input.
+    """
+    if not tasks:
+        return []
+
+    n = len(tasks)
+    parent = list(range(n))
+    rank = [0] * n
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path compression
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra == rb:
+            return
+        if rank[ra] < rank[rb]:
+            ra, rb = rb, ra
+        parent[rb] = ra
+        if rank[ra] == rank[rb]:
+            rank[ra] += 1
+
+    # Build indexes for merging
+    task_id_to_idx: dict[str, int] = {}
+    file_to_idx: dict[str, int] = {}  # first task index that touches a file
+
+    for i, task in enumerate(tasks):
+        task_id_to_idx[task.task_id] = i
+
+        # Merge by shared target_files
+        for tf in task.target_files:
+            if tf in file_to_idx:
+                union(i, file_to_idx[tf])
+            else:
+                file_to_idx[tf] = i
+
+    # Merge by depends_on (both sides must be in same lane)
+    for i, task in enumerate(tasks):
+        for dep_id in task.depends_on:
+            dep_idx = task_id_to_idx.get(dep_id)
+            if dep_idx is not None:
+                union(i, dep_idx)
+
+    # Collect lanes preserving input order
+    lane_map: dict[int, list] = {}   # root → [tasks]
+    first_idx: dict[int, int] = {}   # root → earliest task index
+    for i, task in enumerate(tasks):
+        root = find(i)
+        if root not in lane_map:
+            lane_map[root] = []
+            first_idx[root] = i
+        lane_map[root].append(task)
+
+    # Return lanes ordered by earliest task appearance
+    return [lane_map[r] for r in sorted(lane_map, key=lambda r: first_idx[r])]
+
+
+def _isolate_context_for_lane(
+    base_context: dict[str, Any],
+    lane_tasks: list,
+) -> dict[str, Any]:
+    """Create an isolated deep copy of context narrowed to lane tasks.
+
+    The context is deep-copied so that concurrent lane execution cannot
+    mutate shared state. Then dicts keyed by task_id (design_results,
+    generation_results, etc.) are narrowed to only the lane's task IDs.
+
+    Args:
+        base_context: The shared context dict (after PLAN+SCAFFOLD).
+        lane_tasks: Tasks in this lane.
+
+    Returns:
+        Deep-copied context narrowed to this lane's tasks.
+    """
+    ctx = copy.deepcopy(base_context)
+    lane_task_ids = {t.task_id for t in lane_tasks}
+
+    # Replace "tasks" with only this lane's tasks
+    ctx["tasks"] = lane_tasks
+
+    # Narrow task-keyed dicts to this lane
+    _TASK_KEYED_FIELDS = (
+        "design_results",
+        "generation_results",
+        "test_results",
+        "review_results",
+        "truncation_flags",
+    )
+    for field_name in _TASK_KEYED_FIELDS:
+        if field_name in ctx and isinstance(ctx[field_name], dict):
+            ctx[field_name] = {
+                k: v for k, v in ctx[field_name].items()
+                if k in lane_task_ids
+            }
+
+    return ctx
+
+
+def _merge_lane_results(
+    base_context: dict[str, Any],
+    lane_contexts: list[dict[str, Any]],
+) -> None:
+    """Merge results from completed lane contexts back into the base context.
+
+    Updates task-keyed dicts (design_results, generation_results, etc.) and
+    reassembles the full task list.
+
+    Args:
+        base_context: The original context to merge into.
+        lane_contexts: List of lane-isolated contexts after execution.
+    """
+    _TASK_KEYED_FIELDS = (
+        "design_results",
+        "generation_results",
+        "test_results",
+        "review_results",
+        "truncation_flags",
+    )
+    for field_name in _TASK_KEYED_FIELDS:
+        merged: dict[str, Any] = base_context.get(field_name, {})
+        if not isinstance(merged, dict):
+            merged = {}
+        for lane_ctx in lane_contexts:
+            lane_data = lane_ctx.get(field_name)
+            if isinstance(lane_data, dict):
+                merged.update(lane_data)
+        base_context[field_name] = merged
 
 
 # ============================================================================
@@ -976,7 +1141,17 @@ class ArtisanContractorWorkflow:
 
         with root_span_context as root_span:
             try:
-                if config.feature_serial:
+                if config.lane_parallel:
+                    # Lane-parallel execution mode
+                    final_status = self._execute_lane_parallel_mode(
+                        context=context,
+                        phase_results=phase_results,
+                        cost_tracker=cost_tracker,
+                        workflow_start=workflow_start,
+                        start_index=start_index,
+                        loaded_checkpoint=loaded_checkpoint,
+                    )
+                elif config.feature_serial:
                     # Feature-serial execution mode
                     final_status = self._execute_feature_serial_mode(
                         context=context,
@@ -1136,6 +1311,15 @@ class ArtisanContractorWorkflow:
     ) -> None:
         """Commit changes to git after a successful phase."""
         if self.config.dry_run:
+            return
+
+        # Lane-parallel mode: concurrent git operations would race.
+        # Auto-commit is disabled; user commits after workflow completes.
+        if self.config.lane_parallel:
+            self._logger.debug(
+                "Skipping auto-commit in lane-parallel mode (phase %s)",
+                phase.value,
+            )
             return
 
         project_root = Path(self.config.project_root or ".")
@@ -1497,6 +1681,9 @@ class ArtisanContractorWorkflow:
         current_feature: Optional[str] = None,
         current_feature_phase: Optional[str] = None,
         feature_partial_results: Optional[dict[str, dict[str, Any]]] = None,
+        lane_assignments: Optional[dict[str, int]] = None,
+        completed_lanes: Optional[list[int]] = None,
+        lane_results: Optional[dict[str, dict[str, Any]]] = None,
     ) -> WorkflowCheckpoint:
         """Build and save a checkpoint, returning it for attachment to errors.
 
@@ -1510,6 +1697,9 @@ class ArtisanContractorWorkflow:
             current_feature: Feature ID currently being processed (if any).
             current_feature_phase: Inner phase for current feature (DESIGN/IMPLEMENT/TEST/REVIEW).
             feature_partial_results: Partial results for features that failed mid-execution.
+            lane_assignments: task_id → lane_index mapping (lane-parallel mode).
+            completed_lanes: List of lane indices that completed successfully.
+            lane_results: Per-lane results (lane-parallel mode).
 
         Returns:
             The persisted WorkflowCheckpoint.
@@ -1558,6 +1748,10 @@ class ArtisanContractorWorkflow:
             current_feature=current_feature,
             current_feature_phase=current_feature_phase,
             feature_partial_results=feature_partial_results or {},
+            # Lane-parallel fields (v3+)
+            lane_assignments=lane_assignments or {},
+            completed_lanes=completed_lanes or [],
+            lane_results=lane_results or {},
         )
         try:
             self.checkpoint_store.save(checkpoint)
@@ -2018,6 +2212,349 @@ class ArtisanContractorWorkflow:
                     current_feature=None,
                     current_feature_phase=None,
                     feature_partial_results=feature_partial_results,
+                )
+                raise WorkflowTimeoutError(
+                    f"Global phase {phase.value} timed out",
+                    checkpoint=checkpoint,
+                )
+
+        return WorkflowStatus.COMPLETED
+
+    # ------------------------------------------------------------------
+    # Lane-parallel execution
+    # ------------------------------------------------------------------
+
+    def _execute_lane_parallel_mode(
+        self,
+        context: dict[str, Any],
+        phase_results: list[PhaseResult],
+        cost_tracker: "_CostTracker",
+        workflow_start: float,
+        start_index: int,
+        loaded_checkpoint: Optional[WorkflowCheckpoint],
+    ) -> WorkflowStatus:
+        """Execute phases in lane-parallel order.
+
+        Tasks are grouped into lanes by file-scope overlap (Union-Find on
+        shared target_files and depends_on edges). PLAN and SCAFFOLD run
+        globally first, then lanes execute concurrently via ThreadPoolExecutor
+        (each lane runs its tasks feature-serially), and FINALIZE runs
+        globally at the end.
+
+        Args:
+            context: Shared mutable context dict.
+            phase_results: List to append phase results to.
+            cost_tracker: Cost accumulator for budget enforcement.
+            workflow_start: Monotonic time when workflow started (for timeout).
+            start_index: Phase index to start from (for resume).
+            loaded_checkpoint: Optional checkpoint with lane-parallel state.
+
+        Returns:
+            Final WorkflowStatus.
+
+        Raises:
+            WorkflowTimeoutError: If timeout exceeded.
+            CostBudgetExceededError: If budget exceeded.
+            PhaseExecutionError: If a phase fails.
+        """
+        config = self.config
+        self._validate_feature_serial_handlers()
+
+        GLOBAL_START_PHASES = (WorkflowPhase.PLAN, WorkflowPhase.SCAFFOLD)
+        GLOBAL_END_PHASES = (WorkflowPhase.FINALIZE,)
+
+        # Determine which global phases to skip based on checkpoint
+        last_global_phase_idx = -1
+        if loaded_checkpoint and loaded_checkpoint.last_completed_phase:
+            for idx, phase in enumerate(self.phases):
+                if phase.value == loaded_checkpoint.last_completed_phase:
+                    last_global_phase_idx = idx
+                    break
+
+        # --- Execute global start phases (PLAN, SCAFFOLD) ---
+        for phase in GLOBAL_START_PHASES:
+            if phase not in self.phases:
+                continue
+            phase_idx = self.phases.index(phase)
+            if phase_idx <= last_global_phase_idx:
+                self._logger.debug(
+                    "Lane-parallel: skipping already-completed global phase %s",
+                    phase.value,
+                )
+                continue
+
+            elapsed = time.monotonic() - workflow_start
+            if config.total_timeout_seconds is not None:
+                remaining = config.total_timeout_seconds - elapsed
+                if remaining <= 0:
+                    checkpoint = self._persist_checkpoint(
+                        self.phases[phase_idx - 1] if phase_idx > 0 else None,
+                        phase_results, cost_tracker.cumulative_cost,
+                        WorkflowStatus.TIMED_OUT, context=context,
+                    )
+                    raise WorkflowTimeoutError(
+                        f"Timeout before global phase {phase.value}",
+                        checkpoint=checkpoint,
+                    )
+            else:
+                remaining = None
+
+            self._logger.info("Lane-parallel: executing global phase %s", phase.value)
+            phase_result = self._execute_phase(phase, context, remaining)
+            phase_results.append(phase_result)
+            cost_tracker.add(phase_result.cost)
+
+            self._persist_checkpoint(
+                phase, phase_results, cost_tracker.cumulative_cost,
+                WorkflowStatus.IN_PROGRESS, context=context,
+            )
+
+            if phase_result.status == PhaseStatus.FAILED:
+                checkpoint = self._persist_checkpoint(
+                    phase, phase_results, cost_tracker.cumulative_cost,
+                    WorkflowStatus.FAILED, context=context,
+                )
+                raise PhaseExecutionError(
+                    f"Global phase {phase.value} failed: {phase_result.error_message}",
+                    phase=phase, checkpoint=checkpoint,
+                )
+            if phase_result.status == PhaseStatus.TIMED_OUT:
+                checkpoint = self._persist_checkpoint(
+                    phase, phase_results, cost_tracker.cumulative_cost,
+                    WorkflowStatus.TIMED_OUT, context=context,
+                )
+                raise WorkflowTimeoutError(
+                    f"Global phase {phase.value} timed out",
+                    checkpoint=checkpoint,
+                )
+
+        # --- Compute lanes ---
+        tasks = context.get("tasks", [])
+        if not tasks:
+            self._logger.warning("Lane-parallel: no tasks in context")
+        lanes = compute_lanes(tasks) if tasks else []
+
+        # Build lane_assignments for checkpoint
+        lane_assignments: dict[str, int] = {}
+        for lane_idx, lane_tasks in enumerate(lanes):
+            for t in lane_tasks:
+                lane_assignments[t.task_id] = lane_idx
+
+        self._logger.info(
+            "Lane-parallel: %d tasks grouped into %d lanes "
+            "(max %d concurrent)",
+            len(tasks), len(lanes), config.max_parallel_lanes,
+        )
+        for lane_idx, lane_tasks in enumerate(lanes):
+            self._logger.info(
+                "  Lane %d: %s",
+                lane_idx,
+                [t.task_id for t in lane_tasks],
+            )
+
+        # Restore completed lanes from checkpoint
+        completed_lanes: list[int] = []
+        lane_results_map: dict[str, dict[str, Any]] = {}
+        if loaded_checkpoint:
+            completed_lanes = list(loaded_checkpoint.completed_lanes)
+            lane_results_map = dict(loaded_checkpoint.lane_results)
+
+        completed_lanes_set = set(completed_lanes)
+
+        # Thread-safe accumulators
+        cost_lock = threading.Lock()
+        checkpoint_lock = threading.Lock()
+        cancel_event = threading.Event()
+
+        # Per-lane cost trackers (aggregated under lock)
+        lane_errors: dict[int, str] = {}
+        lane_contexts: list[Optional[dict[str, Any]]] = [None] * len(lanes)
+
+        def _run_lane(lane_idx: int) -> bool:
+            """Execute a single lane's tasks feature-serially. Returns success."""
+            if cancel_event.is_set():
+                return False
+
+            lane_tasks = lanes[lane_idx]
+            lane_ctx = _isolate_context_for_lane(context, lane_tasks)
+            lane_cost_tracker = _CostTracker(budget=config.cost_budget)
+
+            # Restore cumulative cost so budget checks are global
+            with cost_lock:
+                lane_cost_tracker.set_cumulative(cost_tracker.cumulative_cost)
+
+            self._logger.info(
+                "Lane %d: starting (%d tasks: %s)",
+                lane_idx, len(lane_tasks),
+                [t.task_id for t in lane_tasks],
+            )
+
+            (
+                lane_status,
+                completed_features,
+                feature_partial_results,
+                _current_feature,
+                _current_feature_phase,
+            ) = self._execute_feature_serial_loop(
+                context=lane_ctx,
+                phase_results=[],  # Lane has its own phase results
+                cost_tracker=lane_cost_tracker,
+                workflow_start=workflow_start,
+                loaded_checkpoint=None,  # Each lane starts fresh
+            )
+
+            # Accumulate cost back to global tracker under lock
+            lane_cost = lane_cost_tracker.cumulative_cost - cost_tracker.cumulative_cost
+            if lane_cost < 0:
+                lane_cost = lane_cost_tracker.cumulative_cost
+            with cost_lock:
+                cost_tracker.add(max(0.0, lane_cost))
+
+            lane_contexts[lane_idx] = lane_ctx
+
+            if lane_status == WorkflowStatus.COMPLETED:
+                self._logger.info(
+                    "Lane %d: completed (%d features)",
+                    lane_idx, len(completed_features),
+                )
+                with checkpoint_lock:
+                    completed_lanes.append(lane_idx)
+                    completed_lanes_set.add(lane_idx)
+                    lane_results_map[str(lane_idx)] = {
+                        "status": "completed",
+                        "completed_features": completed_features,
+                    }
+                    self._persist_checkpoint(
+                        WorkflowPhase.SCAFFOLD, phase_results,
+                        cost_tracker.cumulative_cost,
+                        WorkflowStatus.IN_PROGRESS, context=context,
+                        lane_assignments=lane_assignments,
+                        completed_lanes=completed_lanes,
+                        lane_results=lane_results_map,
+                    )
+
+                # Check global budget after lane completes
+                if not cost_tracker.check_budget():
+                    cancel_event.set()
+                    lane_errors[lane_idx] = "Budget exceeded after lane completion"
+                    return False
+
+                return True
+            else:
+                lane_errors[lane_idx] = (
+                    f"Lane {lane_idx} failed with status {lane_status.value}"
+                )
+                cancel_event.set()
+                return False
+
+        # --- Dispatch lanes concurrently ---
+        lanes_to_run = [
+            i for i in range(len(lanes))
+            if i not in completed_lanes_set
+        ]
+
+        if not lanes_to_run:
+            self._logger.info("Lane-parallel: all lanes already completed")
+        else:
+            max_workers = min(config.max_parallel_lanes, len(lanes_to_run))
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {
+                    executor.submit(_run_lane, lane_idx): lane_idx
+                    for lane_idx in lanes_to_run
+                }
+
+                for future in futures:
+                    try:
+                        future.result()  # Block until done
+                    except Exception as exc:
+                        lane_idx = futures[future]
+                        lane_errors[lane_idx] = str(exc)
+                        cancel_event.set()
+                        self._logger.error(
+                            "Lane %d raised exception: %s", lane_idx, exc,
+                        )
+
+        # --- Check for lane failures ---
+        if lane_errors:
+            error_summary = "; ".join(
+                f"lane {k}: {v}" for k, v in sorted(lane_errors.items())
+            )
+            checkpoint = self._persist_checkpoint(
+                WorkflowPhase.SCAFFOLD, phase_results,
+                cost_tracker.cumulative_cost,
+                WorkflowStatus.FAILED, context=context,
+                lane_assignments=lane_assignments,
+                completed_lanes=completed_lanes,
+                lane_results=lane_results_map,
+            )
+            raise PhaseExecutionError(
+                f"Lane-parallel execution failed: {error_summary}",
+                phase=WorkflowPhase.IMPLEMENT,
+                checkpoint=checkpoint,
+            )
+
+        # --- Merge lane results back into base context ---
+        completed_lane_contexts = [
+            lc for lc in lane_contexts if lc is not None
+        ]
+        _merge_lane_results(context, completed_lane_contexts)
+
+        # --- Execute global end phases (FINALIZE) ---
+        for phase in GLOBAL_END_PHASES:
+            if phase not in self.phases:
+                continue
+
+            elapsed = time.monotonic() - workflow_start
+            if config.total_timeout_seconds is not None:
+                remaining = config.total_timeout_seconds - elapsed
+                if remaining <= 0:
+                    checkpoint = self._persist_checkpoint(
+                        WorkflowPhase.REVIEW, phase_results,
+                        cost_tracker.cumulative_cost,
+                        WorkflowStatus.TIMED_OUT, context=context,
+                        lane_assignments=lane_assignments,
+                        completed_lanes=completed_lanes,
+                        lane_results=lane_results_map,
+                    )
+                    raise WorkflowTimeoutError(
+                        f"Timeout before global phase {phase.value}",
+                        checkpoint=checkpoint,
+                    )
+            else:
+                remaining = None
+
+            self._logger.info("Lane-parallel: executing global phase %s", phase.value)
+            phase_result = self._execute_phase(phase, context, remaining)
+            phase_results.append(phase_result)
+            cost_tracker.add(phase_result.cost)
+
+            self._persist_checkpoint(
+                phase, phase_results, cost_tracker.cumulative_cost,
+                WorkflowStatus.IN_PROGRESS, context=context,
+                lane_assignments=lane_assignments,
+                completed_lanes=completed_lanes,
+                lane_results=lane_results_map,
+            )
+
+            if phase_result.status == PhaseStatus.FAILED:
+                checkpoint = self._persist_checkpoint(
+                    phase, phase_results, cost_tracker.cumulative_cost,
+                    WorkflowStatus.FAILED, context=context,
+                    lane_assignments=lane_assignments,
+                    completed_lanes=completed_lanes,
+                    lane_results=lane_results_map,
+                )
+                raise PhaseExecutionError(
+                    f"Global phase {phase.value} failed: {phase_result.error_message}",
+                    phase=phase, checkpoint=checkpoint,
+                )
+            if phase_result.status == PhaseStatus.TIMED_OUT:
+                checkpoint = self._persist_checkpoint(
+                    phase, phase_results, cost_tracker.cumulative_cost,
+                    WorkflowStatus.TIMED_OUT, context=context,
+                    lane_assignments=lane_assignments,
+                    completed_lanes=completed_lanes,
+                    lane_results=lane_results_map,
                 )
                 raise WorkflowTimeoutError(
                     f"Global phase {phase.value} timed out",
