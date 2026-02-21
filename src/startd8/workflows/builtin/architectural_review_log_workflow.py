@@ -191,8 +191,10 @@ OPTIONAL_COLUMNS = [
 ]
 
 # Full column list — used for prompt generation and display formatting.
-# Validation only enforces CORE_COLUMNS; OPTIONAL_COLUMNS default to "N/A" when missing.
+# Validation only enforces CORE_COLUMNS; OPTIONAL_COLUMNS default to
+# _OPTIONAL_COLUMN_DEFAULT when missing from LLM output.
 REQUIRED_COLUMNS = CORE_COLUMNS + OPTIONAL_COLUMNS
+_OPTIONAL_COLUMN_DEFAULT = "N/A"
 
 def _is_openai_agent(agent: BaseAgent) -> bool:
     mod = getattr(agent.__class__, "__module__", "") or ""
@@ -316,6 +318,8 @@ def _extract_untriaged_suggestions(
     Returns:
         (suggestions, endorsement_counts) where suggestions is a list of dicts
         with keys: id, area, severity, suggestion, rationale, placement, validation, round.
+        ``placement`` and ``validation`` default to :data:`_OPTIONAL_COLUMN_DEFAULT`
+        when the corresponding optional columns are absent from the source table.
         endorsement_counts maps suggestion ID -> number of endorsements.
     """
     triaged = set(applied_ids) | set(rejected_ids)
@@ -342,15 +346,19 @@ def _extract_untriaged_suggestions(
             continue
         round_num = int(round_match.group(1))
 
-        # Extract table rows
+        # Extract table rows using header-aware column index map so
+        # reordered columns are handled correctly (mirrors _validate_snippet).
         lines = block.splitlines()
         in_table = False
+        col_idx: Dict[str, int] = {}
         for line in lines:
             stripped = line.strip()
             if not in_table and stripped.startswith("| ID"):
+                header_cells = [_normalize_header(h).casefold() for h in _split_cells(stripped)]
+                col_idx = {name: idx for idx, name in enumerate(header_cells)}
                 in_table = True
                 continue
-            
+
             if in_table:
                 if _is_separator_row(stripped):
                     continue
@@ -358,17 +366,30 @@ def _extract_untriaged_suggestions(
                 if stripped.startswith("|"):
                     cells = _split_cells(stripped)
                     if len(cells) >= len(CORE_COLUMNS):
-                        sid = cells[0]
+                        try:
+                            sid = cells[col_idx["id"]]
+                        except (KeyError, IndexError):
+                            continue
                         if sid in triaged or sid.startswith("("):
                             continue
                         suggestions.append({
                             "id": sid,
-                            "area": _normalize_area(cells[1]),
-                            "severity": cells[2],
-                            "suggestion": cells[3],
-                            "rationale": cells[4],
-                            "placement": cells[5] if len(cells) > 5 else "N/A",
-                            "validation": cells[6] if len(cells) > 6 else "N/A",
+                            "area": _normalize_area(cells[col_idx.get("area", 1)]),
+                            "severity": cells[col_idx.get("severity", 2)],
+                            "suggestion": cells[col_idx.get("suggestion", 3)],
+                            "rationale": cells[col_idx.get("rationale", 4)],
+                            "placement": (
+                                cells[col_idx["proposed placement"]]
+                                if "proposed placement" in col_idx
+                                   and col_idx["proposed placement"] < len(cells)
+                                else _OPTIONAL_COLUMN_DEFAULT
+                            ),
+                            "validation": (
+                                cells[col_idx["validation approach"]]
+                                if "validation approach" in col_idx
+                                   and col_idx["validation approach"] < len(cells)
+                                else _OPTIONAL_COLUMN_DEFAULT
+                            ),
                             "round": round_num,
                         })
                 else:
@@ -1439,8 +1460,9 @@ def _validate_snippet(
             missing_optional = [col for col in OPTIONAL_COLUMNS if col.casefold() not in header_cf_set]
             if missing_optional:
                 _logger.info(
-                    "Table missing optional columns %s — will default to 'N/A'",
+                    "Table missing optional columns %s — will default to '%s'",
                     missing_optional,
+                    _OPTIONAL_COLUMN_DEFAULT,
                 )
 
             # Build case-insensitive column index map for row extraction

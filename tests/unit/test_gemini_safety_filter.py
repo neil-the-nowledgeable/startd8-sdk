@@ -683,6 +683,19 @@ class TestValidationFailureHandling:
 | R{round_number}-S1 | Architecture | high | Test suggestion | Test rationale | Section 1 | Manual review |
 """
 
+    def _make_valid_snippet_core_only(self, round_number):
+        """Snippet with only core columns (no optional Proposed Placement / Validation Approach)."""
+        return f"""#### Review Round R{round_number}
+
+- **Reviewer**: test-agent (test-model)
+- **Date**: 2026-02-09 00:00:00 UTC
+- **Scope**: Architecture-focused review
+
+| ID | Area | Severity | Suggestion | Rationale |
+| ---- | ---- | ---- | ---- | ---- |
+| R{round_number}-S1 | Architecture | high | Test suggestion | Test rationale |
+"""
+
     def _make_invalid_snippet(self, round_number):
         """Snippet missing a core column (Rationale) to trigger validation failure."""
         return f"""#### Review Round R{round_number}
@@ -906,3 +919,30 @@ class TestValidationFailureHandling:
         # Gemini skipped (retry errored), Claude succeeded
         assert result.output["rounds_appended"] == 1
         assert any("Validation retry failed" in (s.error or "") for s in result.steps)
+
+    def test_core_only_columns_pass_validation(self, tmp_path):
+        """Snippet with only core columns (no optional) should pass validation."""
+        from startd8.workflows.builtin.architectural_review_log_workflow import (
+            ArchitecturalReviewLogWorkflow,
+        )
+
+        doc_path = tmp_path / "test_doc.md"
+        doc_path.write_text("# Test Plan\n\nSome content here.\n")
+
+        core_only_snippet = self._make_valid_snippet_core_only(1)
+        token_usage = TokenUsage(input=100, output=50, total=150, model_name="gemini-2.5-pro")
+
+        agent = self._make_mock_agent()
+        agent.generate.return_value = (core_only_snippet, 500, token_usage)
+
+        workflow = ArchitecturalReviewLogWorkflow()
+        result = workflow._execute(
+            config={"document_path": str(doc_path), "enable_triage": False},
+            agents=[agent],
+            on_progress=None,
+        )
+
+        assert result.success is True
+        assert result.output["rounds_appended"] == 1
+        # Should only need one call — no retry needed
+        assert agent.generate.call_count == 1
