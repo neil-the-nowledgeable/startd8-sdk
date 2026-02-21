@@ -1,0 +1,93 @@
+# Externalized prompt templates for the Architectural Review Log workflow.
+#
+# Loaded by ``startd8.workflows.builtin.prompts.get_template()`` /
+# ``format_prompt()``.  Placeholders use ``str.format()`` syntax.
+# Literal braces in the template must be doubled ({{ / }}).
+
+prompts:
+  review:
+    description: >
+      Main reviewer prompt for each sequential review round.
+      Assembled by _build_prompt() after computing dynamic context blocks.
+    template: |
+      You are an {role} performing Review Round R{round_number} of an iterative architectural review.
+
+      This document undergoes multiple review passes. Each pass should be sharper than the last.
+
+      {iteration_context}
+
+      {req_block}{context_block}Your task:
+      - Propose up to {max_suggestions} high-leverage improvements not yet captured.
+      {req_instruction}{focus_line}
+      {context_instruction}- Do NOT rewrite the document. Do NOT modify Appendix A or Appendix B.
+      - You MUST output ONLY an appendable markdown snippet for Appendix C.
+      {dual_doc_instruction}
+      Required output format (append-only snippet):
+      - Start with:
+        #### Review Round R{round_number}
+      - Then include:
+        - **Reviewer**: {reviewer_label}
+        - **Date**: {now_utc}
+        - **Scope**: {scope}
+      - Then output a markdown table with these EXACT column headers (plain text, no bold/italic formatting in headers):
+        | {cols} |
+        | {sep} |
+        Copy the header row above verbatim. Do NOT wrap column names in ** or _.
+        Rows must use IDs R{round_number}-S1..R{round_number}-S{max_suggestions} (you may output fewer rows).
+        Area must be one of: {areas_list}.
+        Severity must be one of: critical, high, medium, low.
+      - After the table, if you agree with any untriaged suggestions from prior rounds (in Appendix C but NOT in Appendix A or B), add:
+        **Endorsements** (prior untriaged suggestions this reviewer agrees with):
+        - <ID>: <one-sentence reason you agree>
+        This builds consensus signal — suggestions endorsed by multiple reviewers should be prioritized during triage. Only endorse suggestions you genuinely believe should be implemented. Do NOT endorse your own suggestions.
+      {document_section}
+
+  triage:
+    description: >
+      Triage prompt asking the agent to classify each untriaged suggestion
+      as ACCEPT or REJECT.
+    template: |
+      You are an {role} performing triage on architectural review suggestions.
+
+      Your task: Evaluate every untriaged suggestion below and decide whether to ACCEPT or REJECT it.
+
+      Context:
+      - Previously applied suggestions: {applied_list}
+      - Previously rejected suggestions: {rejected_list}
+
+      {endorsement_info}Untriaged suggestions to evaluate:
+      {untriaged_block}
+
+      {doc_section}{id_instruction}
+      You MUST output a JSON array. Each element must have these fields:
+      - "id": the suggestion ID (e.g. "R1-S1")
+      - "decision": exactly "ACCEPT" or "REJECT"
+      - "summary": a one-sentence summary of the suggestion
+      - "rationale": why you are accepting or rejecting it
+      - "area": one of: {areas_list}
+
+      Output ONLY the JSON array, no other text. Example:
+      [
+        {{"id": "R1-S1", "decision": "ACCEPT", "summary": "Add circuit breakers", "rationale": "Critical for resilience", "area": "architecture"}},
+        {{"id": "R1-S2", "decision": "REJECT", "summary": "Use GraphQL", "rationale": "Not aligned with REST strategy", "area": "interfaces"}}
+      ]
+
+  apply:
+    description: >
+      Apply-suggestions prompt asking the agent to integrate accepted
+      suggestions into the document body.
+    template: |
+      You are an {role}. Your task is to integrate the following accepted review suggestions into the document body.
+
+      {doc_section}Accepted suggestions to integrate:
+      {suggestion_table}
+
+      Instructions:
+      1. Produce the COMPLETE updated document body with the suggestions integrated at or near their Proposed Placement locations.
+      2. Maintain all existing headings, numbering, and structure.
+      3. Do NOT include any appendix sections (Appendix A, B, or C). Output only the document body.
+      4. Do NOT add commentary or meta-text — output only the updated document.
+      5. Integrate each suggestion naturally into the relevant section rather than appending it.
+      6. If a suggestion's Proposed Placement is ambiguous, use your best judgment for the most logical location.
+
+      Output the complete updated document body now:
