@@ -670,6 +670,23 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     if _restored:
         logger.info("Restored %d/7 onboarding fields from seed on resume", _restored)
 
+    # IMP-8b: extract structured refine suggestions from onboarding
+    if "onboarding_refine_suggestions" not in context:
+        _refine_sug = _onboarding.get("refine_suggestions")
+        if _refine_sug and isinstance(_refine_sug, list):
+            context["onboarding_refine_suggestions"] = _refine_sug
+            logger.info(
+                "Restored onboarding_refine_suggestions from seed (%d entries)",
+                len(_refine_sug),
+            )
+
+    # IMP-9c: extract refine provenance from seed artifacts
+    if "refine_provenance" not in context:
+        _refine_prov = _artifacts.get("refine_provenance")
+        if _refine_prov and isinstance(_refine_prov, dict):
+            context["refine_provenance"] = _refine_prov
+            logger.info("Restored refine_provenance from seed artifacts")
+
     # PCA-201: re-load plan_document_text from seed artifacts
     if "plan_document_text" not in context:
         plan_doc_path_str = _artifacts.get("plan_document_path")
@@ -690,6 +707,41 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
 # ============================================================================
 # Phase Handlers
 # ============================================================================
+
+# PCA-104: project-level context fields for completeness logging.
+_PCA_CONTEXT_FIELDS = (
+    "project_root", "service_metadata", "plan_document_text",
+    "architectural_context", "onboarding_derivation_rules",
+    "onboarding_resolved_parameters", "onboarding_output_contracts",
+    "onboarding_calibration_hints", "onboarding_open_questions",
+    "onboarding_dependency_graph",
+)
+
+
+def _log_context_completeness(phase_name: str, context: dict[str, Any]) -> None:
+    """PCA-104: Log which project-level context fields are present at phase entry."""
+    present = [f for f in _PCA_CONTEXT_FIELDS if context.get(f) is not None]
+    count = len(present)
+    total = len(_PCA_CONTEXT_FIELDS)
+    logger.info(
+        "%s: project context %d/%d fields present", phase_name, count, total,
+    )
+    if count < 3:
+        logger.warning(
+            "%s: degraded project context — only %d/%d fields available, "
+            "code quality may be reduced",
+            phase_name, count, total,
+        )
+
+
+def _track_onboarding_consumption(
+    context: dict[str, Any], field_name: str, phase_name: str,
+) -> None:
+    """PCA-402: Record that a phase consumed an onboarding field."""
+    audit = context.setdefault("_onboarding_consumption", {})
+    audit.setdefault(field_name, [])
+    if phase_name not in audit[field_name]:
+        audit[field_name].append(phase_name)
 
 
 class PlanPhaseHandler(AbstractPhaseHandler):
@@ -1218,7 +1270,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         inv_derivation_rules: dict[str, Any] | None = None,
         inv_resolved_parameters: dict[str, Any] | None = None,
         inv_output_contracts: dict[str, Any] | None = None,
-        inv_refine_suggestions: str | None = None,
+        inv_refine_suggestions: str | list[dict[str, Any]] | None = None,
         inv_plan_document: str | None = None,
         inv_calibration_hints: dict[str, Any] | None = None,
         inv_open_questions: list[dict[str, Any]] | None = None,
@@ -1364,13 +1416,24 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 additional_context["output_contracts"] = task_contracts
 
         # Mottainai: inject refine suggestions relevant to this task
+        # IMP-8a: handle both structured List[Dict] (from REFINE forwarding)
+        # and text str (from inventory/plan document fallback)
         if inv_refine_suggestions:
-            task_suggestions = DesignPhaseHandler._extract_task_suggestions(
-                inv_refine_suggestions, task.task_id,
-                getattr(task, "feature_id", None),
-            )
-            if task_suggestions:
-                additional_context["refine_suggestions"] = task_suggestions
+            if isinstance(inv_refine_suggestions, list):
+                # Structured suggestions from REFINE triage forwarding
+                formatted = DesignPhaseHandler._format_structured_suggestions(
+                    inv_refine_suggestions,
+                )
+                if formatted:
+                    additional_context["refine_suggestions"] = formatted
+            else:
+                # Legacy text path: S-/F- prefix line extraction
+                task_suggestions = DesignPhaseHandler._extract_task_suggestions(
+                    inv_refine_suggestions, task.task_id,
+                    getattr(task, "feature_id", None),
+                )
+                if task_suggestions:
+                    additional_context["refine_suggestions"] = task_suggestions
 
         # Mottainai: inject plan architecture and risks sections
         if inv_plan_document:
@@ -1511,6 +1574,55 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         return "\n".join(relevant) if relevant else ""
 
     @staticmethod
+    def _format_structured_suggestions(
+        suggestions: list[dict[str, Any]],
+    ) -> str:
+        """Format structured REFINE triage suggestions as markdown for prompt injection.
+
+        Handles two formats:
+        - Individual ACCEPT decisions with id/area/severity/rationale
+        - Aggregate triage summary (fallback when per-decision data unavailable)
+        """
+        if not suggestions:
+            return ""
+
+        parts: list[str] = []
+        parts.append("REFINE Phase Accepted Suggestions:")
+
+        for sug in suggestions:
+            if sug.get("source") == "triage_summary":
+                # Aggregate summary format
+                accepted = sug.get("triage_accepted_count", 0)
+                areas = sug.get("substantially_addressed_areas", [])
+                needs_review = sug.get("areas_needing_review", [])
+                parts.append(f"- {accepted} suggestion(s) accepted by triage")
+                if areas:
+                    parts.append(
+                        f"  Addressed areas: {', '.join(str(a) for a in areas)}"
+                    )
+                if needs_review:
+                    parts.append(
+                        f"  Areas needing review: {', '.join(str(a) for a in needs_review)}"
+                    )
+            else:
+                # Individual decision format
+                sid = sug.get("id", "?")
+                area = sug.get("area", "")
+                severity = sug.get("severity", "")
+                rationale = sug.get("rationale", "")
+                line = f"- [{sid}]"
+                if area:
+                    line += f" ({area}"
+                    if severity:
+                        line += f", {severity}"
+                    line += ")"
+                if rationale:
+                    line += f": {rationale}"
+                parts.append(line)
+
+        return "\n".join(parts)
+
+    @staticmethod
     def _extract_plan_section(plan_text: str, section_name: str) -> str:
         """Extract a named markdown section from plan text.
 
@@ -1620,6 +1732,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
+        _log_context_completeness("DESIGN", context)
         tasks: list[SeedTask] = _ensure_context_loaded(context)
 
         logger.info("DESIGN phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
@@ -1696,7 +1809,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         inv_derivation_rules: dict[str, Any] | None = None
         inv_resolved_parameters: dict[str, Any] | None = None
         inv_output_contracts: dict[str, Any] | None = None
-        inv_refine_suggestions: str | None = None
+        inv_refine_suggestions: str | list[dict[str, Any]] | None = None
         inv_plan_document: str | None = None
         inv_calibration_hints: dict[str, Any] | None = None
 
@@ -1786,6 +1899,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 "DESIGN: %d inventory field(s) loaded from onboarding fallback",
                 _fb_count,
             )
+
+        # IMP-8a: structured onboarding fallback — prefer structured triage
+        # decisions from REFINE forwarding (REQ-RF-003) over text extraction
+        if inv_refine_suggestions is None:
+            structured = context.get("onboarding_refine_suggestions")
+            if structured and isinstance(structured, list):
+                inv_refine_suggestions = structured
+                logger.info(
+                    "DESIGN: refine_suggestions loaded from onboarding (%d entries)",
+                    len(structured),
+                )
 
         # Mottainai B2+B3 fallback: when inventory didn't find plan_document
         # or refine_suggestions, use the plan document text loaded by PLAN phase
@@ -2746,6 +2870,9 @@ class Test{class_name}:
         plan_goals: list[str] | None = None,
         plan_context: str | None = None,
         service_metadata: dict[str, Any] | None = None,
+        # PCA-401/403/404: additional IMPLEMENT enrichment
+        calibration_hints: dict[str, Any] | None = None,
+        prior_impl_summaries: list[dict[str, Any]] | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -3167,6 +3294,12 @@ class Test{class_name}:
                     "plan_context": (plan_context or "")[:4000] or None,
                     # PCA-301/400: service metadata for protocol compliance
                     "service_metadata": service_metadata if service_metadata else None,
+                    # PCA-401: per-task calibration hints
+                    "calibration_hints": (calibration_hints or {}).get(task.task_id) if calibration_hints else None,
+                    # PCA-403: cross-feature context accumulation
+                    "prior_implementations": (prior_impl_summaries or [])[-3:] if prior_impl_summaries else None,
+                    # PCA-404: requirements text for IMPLEMENT prompt
+                    "requirements_text": task.requirements_text[:3000] if task.requirements_text else None,
                 },
             ))
 
@@ -3522,6 +3655,7 @@ class Test{class_name}:
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
+        _log_context_completeness("IMPLEMENT", context)
         tasks: list[SeedTask] = _ensure_context_loaded(context)
         _project_root_str = context.get("project_root")
         project_root = Path(_project_root_str) if _project_root_str and _project_root_str.strip() else Path(".")
@@ -3706,9 +3840,22 @@ class Test{class_name}:
             # Gate 2c: Reconcile design doc downstream designations.
             # Pre-stubs downstream files on disk and returns a mapping so
             # _tasks_to_chunks can exclude them from drafter targets.
-            downstream_map = self._reconcile_design_downstream(
-                tasks, design_results, project_root,
-            )
+            #
+            # In wave mode, pre-stubbing runs on the main thread BEFORE
+            # lane dispatch (R8-S6) to prevent filesystem write races.
+            # The pre-computed result is stored in context["_downstream_map"].
+            # If present, reuse it; otherwise compute here (non-wave modes).
+            pre_computed_dm = context.get("_downstream_map")
+            if pre_computed_dm is not None:
+                downstream_map = pre_computed_dm
+                logger.debug(
+                    "IMPLEMENT: using pre-computed _downstream_map (%d entries)",
+                    len(downstream_map),
+                )
+            else:
+                downstream_map = self._reconcile_design_downstream(
+                    tasks, design_results, project_root,
+                )
 
             chunks, skipped_reports = self._tasks_to_chunks(
                 tasks,
@@ -3723,7 +3870,18 @@ class Test{class_name}:
                 plan_goals=context.get("plan_goals"),
                 plan_context=(context.get("plan_document_text") or "")[:4000] or None,
                 service_metadata=context.get("service_metadata"),
+                # PCA-401/403/404
+                calibration_hints=context.get("onboarding_calibration_hints"),
+                prior_impl_summaries=context.get("_prior_impl_summaries"),
             )
+
+            # PCA-402: track onboarding field consumption
+            if context.get("service_metadata") is not None:
+                _track_onboarding_consumption(context, "service_metadata", "IMPLEMENT")
+            if context.get("onboarding_calibration_hints") is not None:
+                _track_onboarding_consumption(context, "onboarding_calibration_hints", "IMPLEMENT")
+            if context.get("architectural_context"):
+                _track_onboarding_consumption(context, "architectural_context", "IMPLEMENT")
 
             if not chunks:
                 logger.warning("IMPLEMENT: no eligible tasks after env pre-filter")
@@ -3961,6 +4119,14 @@ class Test{class_name}:
         context["implementation"] = output
         context["generation_results"] = generation_results
         context["truncation_flags"] = truncation_flags
+
+        # PCA-403: accumulate prior implementation summaries for cross-feature context
+        prior_summaries = context.get("_prior_impl_summaries", [])
+        for task_id, gen_result in generation_results.items():
+            if hasattr(gen_result, "success") and gen_result.success:
+                files = list((gen_result.files or {}).keys())[:5] if hasattr(gen_result, "files") and gen_result.files else []
+                prior_summaries.append({"task_id": task_id, "files": files})
+        context["_prior_impl_summaries"] = prior_summaries[-3:]
         # Propagate downstream_map to REVIEW phase so it can distinguish
         # expected downstream stubs from generation failures.
         if downstream_map:
@@ -4172,6 +4338,7 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
         from startd8.contractors.registry import get_registry
 
         start = time.monotonic()
+        _log_context_completeness("INTEGRATE", context)
         project_root = Path(context.get("project_root", ".")).resolve()
         staging_dir = Path(
             context.get("_staging_dir", str(project_root / ".startd8/staging"))
@@ -4690,6 +4857,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
+        _log_context_completeness("TEST", context)
         tasks: list[SeedTask] = _ensure_context_loaded(context)
         project_root = Path(context.get("project_root", "."))
         generation_results: dict[str, GenerationResult] = context.get("generation_results", {})
@@ -5037,6 +5205,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
         semantic_conventions: dict[str, Any] | None = None,
         truncation_info: dict[str, Any] | None = None,
         project_context: dict[str, Any] | None = None,
+        service_metadata: dict[str, Any] | None = None,
+        refine_provenance: dict[str, Any] | None = None,
     ) -> str:
         """Build the review prompt for a single task.
 
@@ -5160,6 +5330,57 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 "## Review Instructions",
                 extra + "\n## Review Instructions",
             )
+
+        # PCA-303: service metadata compliance check
+        if service_metadata:
+            _smc_parts = ["## Service Metadata Compliance"]
+            _tp = service_metadata.get("transport_protocol")
+            if _tp:
+                _smc_parts.append(f"- Expected transport protocol: **{_tp}**")
+            _rd = service_metadata.get("runtime_dependencies")
+            if _rd and isinstance(_rd, list):
+                _smc_parts.append(
+                    f"- Expected runtime dependencies: {', '.join(str(d) for d in _rd)}"
+                )
+            _smc_parts.append(
+                "Check that HEALTHCHECK mechanism matches transport_protocol. "
+                "Flag any capabilities added that the service metadata declares as absent."
+            )
+            _smc_text = "\n".join(_smc_parts)
+            prompt = prompt.replace(
+                "## Review Instructions",
+                _smc_text + "\n\n## Review Instructions",
+            )
+
+        # ── IMP-9b: Inject REFINE compliance section ──────────────────
+        if refine_provenance:
+            applied_ids = refine_provenance.get("applied_ids", [])
+            if applied_ids:
+                _rc_parts = [
+                    "\n## REFINE Compliance\n",
+                    "The following REFINE phase suggestions were integrated into "
+                    "the plan document before code generation. **Verify that the "
+                    "implementation reflects these applied changes:**",
+                ]
+                for aid in applied_ids[:20]:
+                    _rc_parts.append(f"- {aid}")
+                warning_ids = refine_provenance.get("warning_ids", [])
+                if warning_ids:
+                    _rc_parts.append(
+                        "\nThe following suggestions had apply warnings "
+                        "(may not be fully integrated):"
+                    )
+                    for wid in warning_ids[:10]:
+                        _rc_parts.append(f"- {wid} (verify manually)")
+                _rc_parts.append(
+                    "\nScore lower if the implementation ignores changes "
+                    "that were explicitly applied to the plan.\n"
+                )
+                _rc_text = "\n".join(_rc_parts)
+                prompt = prompt.replace(
+                    "## Review Instructions",
+                    _rc_text + "\n## Review Instructions",
+                )
 
         # ── Gate 4: Inject truncation warning into review ────────────
         if truncation_info:
@@ -5320,6 +5541,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
         semantic_conventions: dict[str, Any] | None = None,
         truncation_info: dict[str, Any] | None = None,
         project_context: dict[str, Any] | None = None,
+        service_metadata: dict[str, Any] | None = None,
+        refine_provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Conduct LLM review for a single task.
 
@@ -5334,6 +5557,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
             truncation_info: Optional Gate 4 truncation detection result for
                 this task.  When present, a warning section is injected into
                 the review prompt so the LLM reviewer can assess completeness.
+            refine_provenance: Optional REFINE apply provenance for
+                compliance checking against applied suggestions.
 
         Returns:
             Review result dict with score, verdict, cost.
@@ -5357,6 +5582,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     semantic_conventions=semantic_conventions,
                     truncation_info=truncation_info,
                     project_context=project_context,
+                    service_metadata=service_metadata,
+                    refine_provenance=refine_provenance,
                 )
                 response_text, _time_ms, token_usage = agent.generate(
                     prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
@@ -5544,6 +5771,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
+        _log_context_completeness("REVIEW", context)
         tasks: list[SeedTask] = _ensure_context_loaded(context)
         preflight_summary = context.get("preflight_summary", {})
         generation_results: dict[str, GenerationResult] = context.get("generation_results", {})
@@ -5741,6 +5969,12 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "architectural_context": context.get("architectural_context", {}),
                 }
 
+                # PCA-402: track onboarding field consumption in REVIEW
+                if context.get("service_metadata") is not None:
+                    _track_onboarding_consumption(context, "service_metadata", "REVIEW")
+                if context.get("architectural_context"):
+                    _track_onboarding_consumption(context, "architectural_context", "REVIEW")
+
                 review = self._review_task(
                     task, generated_code, task_test,
                     design_document=task_design_doc,
@@ -5748,6 +5982,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     semantic_conventions=context.get("semantic_conventions"),
                     truncation_info=task_truncation,
                     project_context=_project_context,
+                    service_metadata=context.get("service_metadata"),
+                    refine_provenance=context.get("refine_provenance"),
                 )
                 review["title"] = task.title
                 review["domain"] = task.domain
@@ -6299,6 +6535,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
+        _log_context_completeness("FINALIZE", context)
         logger.info("FINALIZE phase: generating summary (dry_run=%s)", dry_run)
 
         plan_title = context.get("plan_title", "Untitled")
@@ -6393,6 +6630,11 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             "artifact_count": len(artifacts),
             "dry_run": dry_run,
         }
+
+        # PCA-402: attach onboarding consumption audit trail to provenance
+        _onb_consumption = context.get("_onboarding_consumption")
+        if _onb_consumption:
+            summary.setdefault("provenance", {})["onboarding_fields_consumed"] = _onb_consumption
 
         # Task 11a: Gate 3b content validation summary
         gate3b_data: dict[str, Any] = implementation.get("_gate3b_content_validation", {})

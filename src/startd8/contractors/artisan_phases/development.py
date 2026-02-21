@@ -1094,6 +1094,27 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "Do NOT add capabilities the service does not use."
             )
 
+        # PCA-401: plan context section
+        plan_context = chunk.metadata.get("plan_context")
+        if plan_context and isinstance(plan_context, str):
+            parts.append("\n## Plan Context")
+            parts.append(plan_context[:4000])
+
+        # PCA-404: requirements text section
+        req_text = chunk.metadata.get("requirements_text")
+        if req_text and isinstance(req_text, str):
+            parts.append("\n## Requirements")
+            parts.append(req_text)
+
+        # PCA-403: prior implementations section
+        prior_impls = chunk.metadata.get("prior_implementations")
+        if prior_impls and isinstance(prior_impls, list):
+            parts.append("\n## Prior Implementations")
+            for pi in prior_impls[:3]:
+                _tid = pi.get("task_id", "unknown")
+                _files = ", ".join(pi.get("files", [])[:3])
+                parts.append(f"- {_tid}: {_files}")
+
         # Append prompt constraints from enrichment (IMP-5: grouped by priority)
         constraints = chunk.metadata.get("prompt_constraints", [])
         if constraints:

@@ -131,6 +131,10 @@ logger = get_logger(__name__)
 # For example, 0.5 means "warn when 50% of the budget has been consumed".
 _BUDGET_WARNING_THRESHOLD_FRACTION = 0.5
 
+# PCA-202: Checkpoint size guard for plan_document_text.
+_PLAN_DOC_CHECKPOINT_MAX_CHARS = 1000
+_PLAN_DOC_TRUNCATION_MARKER = "\n... [truncated, full text in seed]"
+
 # Context keys worth persisting in checkpoints for resume.
 # Excludes "tasks", "task_index", "generation_results" because they contain
 # non-serializable objects (SeedTask, Path, GenerationResult) that are reloaded
@@ -155,6 +159,8 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "onboarding_output_contracts", "onboarding_calibration_hints",
     "onboarding_open_questions", "onboarding_dependency_graph",
     "service_metadata", "plan_document_text",
+    # IMP-8b / IMP-9c: REFINE forwarding fields for resume survival
+    "onboarding_refine_suggestions", "refine_provenance",
 })
 
 
@@ -256,6 +262,7 @@ class WorkflowStatus(enum.Enum):
     BUDGET_EXCEEDED = "budget_exceeded"
     PARTIALLY_COMPLETED = "partially_completed"
     FAILED_CHECKPOINT = "failed_checkpoint"
+    FAILED_UNRECOVERABLE = "failed_unrecoverable"
 
 
 # ============================================================================
@@ -2144,6 +2151,15 @@ class ArtisanContractorWorkflow:
                 except (TypeError, ValueError, OverflowError):
                     pass  # skip non-serializable values
 
+            # PCA-202: truncate plan_document_text to prevent checkpoint bloat.
+            pdt = snapshot.get("plan_document_text")
+            if isinstance(pdt, str) and len(pdt) > _PLAN_DOC_CHECKPOINT_MAX_CHARS:
+                snapshot["plan_document_text"] = (
+                    pdt[:_PLAN_DOC_CHECKPOINT_MAX_CHARS]
+                    + _PLAN_DOC_TRUNCATION_MARKER
+                )
+                snapshot["_plan_doc_truncated"] = True
+
         checkpoint = WorkflowCheckpoint(
             workflow_id=self.config.workflow_id,
             last_completed_phase=(
@@ -3184,7 +3200,7 @@ class ArtisanContractorWorkflow:
                 remaining_time = config.total_timeout_seconds - elapsed
                 if remaining_time <= 0:
                     checkpoint = self._persist_checkpoint(
-                        WorkflowPhase.SCAFFOLD, phase_results,
+                        WorkflowPhase.IMPLEMENT, phase_results,
                         cost_tracker.cumulative_cost,
                         WorkflowStatus.TIMED_OUT, context=context,
                         wave_assignments=wave_assignments,
@@ -3210,19 +3226,19 @@ class ArtisanContractorWorkflow:
                     config.max_wave_resume_attempts,
                 )
                 self._persist_checkpoint(
-                    WorkflowPhase.SCAFFOLD, phase_results,
+                    WorkflowPhase.IMPLEMENT, phase_results,
                     cost_tracker.cumulative_cost,
-                    WorkflowStatus.FAILED, context=context,
+                    WorkflowStatus.FAILED_UNRECOVERABLE, context=context,
                     wave_assignments=wave_assignments,
                     completed_waves=list(completed_waves_set),
                     current_wave=wave_idx,
                     wave_resume_count=cp_wave_resume_count,
                 )
-                return WorkflowStatus.FAILED
+                return WorkflowStatus.FAILED_UNRECOVERABLE
 
             # Mark current wave in checkpoint
             self._persist_checkpoint(
-                WorkflowPhase.SCAFFOLD, phase_results,
+                WorkflowPhase.IMPLEMENT, phase_results,
                 cost_tracker.cumulative_cost,
                 WorkflowStatus.IN_PROGRESS, context=context,
                 wave_assignments=wave_assignments,
@@ -3244,6 +3260,32 @@ class ArtisanContractorWorkflow:
                 wave_idx, len(wave_tasks), len(lanes),
             )
 
+            # C.1a Gate 2c pre-stubbing: run BEFORE lane dispatch on the
+            # main thread (single-threaded) to prevent filesystem write
+            # races from concurrent lanes writing the same pre-stubbed
+            # files.  See plan R8-S6.
+            design_results = context.get("design_results", {})
+            project_root_str = context.get("project_root", "")
+            if design_results and project_root_str:
+                from startd8.contractors.context_seed_handlers import (
+                    ImplementPhaseHandler,
+                )
+
+                wave_downstream = (
+                    ImplementPhaseHandler._reconcile_design_downstream(
+                        wave_tasks, design_results, Path(project_root_str),
+                    )
+                )
+                if wave_downstream:
+                    existing_dm = context.get("_downstream_map", {})
+                    existing_dm.update(wave_downstream)
+                    context["_downstream_map"] = existing_dm
+                    self._logger.debug(
+                        "Wave %d: pre-stubbed %d tasks on main thread "
+                        "before lane dispatch",
+                        wave_idx, len(wave_downstream),
+                    )
+
             # Restore completed lanes for this wave from checkpoint
             # (only if we're resuming within this specific wave)
             wave_completed_lanes: list[int] = []
@@ -3261,6 +3303,7 @@ class ArtisanContractorWorkflow:
             cancel_event = threading.Event()
             lane_errors: dict[int, str] = {}
             lane_contexts: list[Optional[dict[str, Any]]] = [None] * len(lanes)
+            wave_lane_costs: list[float] = []  # Per-lane cost deltas for consistency check
 
             # Track cost before wave for per-wave delta
             cumulative_before_wave = cost_tracker.cumulative_cost
@@ -3329,6 +3372,7 @@ class ArtisanContractorWorkflow:
                 )
                 with cost_lock:
                     cost_tracker.add(max(0.0, lane_cost))
+                    wave_lane_costs.append(max(0.0, lane_cost))
 
                 lane_contexts[lane_idx] = lane_ctx
 
@@ -3345,7 +3389,7 @@ class ArtisanContractorWorkflow:
                             "completed_features": completed_features,
                         }
                         self._persist_checkpoint(
-                            WorkflowPhase.SCAFFOLD, phase_results,
+                            WorkflowPhase.IMPLEMENT, phase_results,
                             cost_tracker.cumulative_cost,
                             WorkflowStatus.IN_PROGRESS, context=context,
                             lane_assignments=lane_assignments,
@@ -3421,7 +3465,7 @@ class ArtisanContractorWorkflow:
                     for k, v in sorted(lane_errors.items())
                 )
                 checkpoint = self._persist_checkpoint(
-                    WorkflowPhase.SCAFFOLD, phase_results,
+                    WorkflowPhase.IMPLEMENT, phase_results,
                     cost_tracker.cumulative_cost,
                     WorkflowStatus.FAILED, context=context,
                     lane_assignments=lane_assignments,
@@ -3489,6 +3533,17 @@ class ArtisanContractorWorkflow:
                 wave_idx, cumulative_after_wave, wave_cost,
             )
 
+            # Cost accumulation consistency assertion (R4-S2): cross-check
+            # tracker delta against sum of per-lane reported costs.
+            lane_reported_total = sum(wave_lane_costs)
+            if abs(wave_cost - lane_reported_total) > 0.001:
+                self._logger.error(
+                    "Cost accumulation inconsistency at wave %d barrier: "
+                    "tracker delta=$%.4f, lane sum=$%.4f — using tracker "
+                    "value",
+                    wave_idx, wave_cost, lane_reported_total,
+                )
+
             if config.cost_budget is not None and cumulative_after_wave > config.cost_budget:
                 self._logger.warning(
                     "Cost budget exceeded at wave %d barrier: $%.4f > $%.4f "
@@ -3497,7 +3552,7 @@ class ArtisanContractorWorkflow:
                     wave_cost,
                 )
                 self._persist_checkpoint(
-                    WorkflowPhase.SCAFFOLD, phase_results,
+                    WorkflowPhase.IMPLEMENT, phase_results,
                     cost_tracker.cumulative_cost,
                     WorkflowStatus.BUDGET_EXCEEDED, context=context,
                     wave_assignments=wave_assignments,
@@ -3512,7 +3567,7 @@ class ArtisanContractorWorkflow:
                 completed_waves_set.add(wave_idx)
                 cp_wave_resume_count.pop(wave_key, None)
                 self._persist_checkpoint(
-                    WorkflowPhase.SCAFFOLD, phase_results,
+                    WorkflowPhase.IMPLEMENT, phase_results,
                     cost_tracker.cumulative_cost,
                     WorkflowStatus.IN_PROGRESS, context=context,
                     wave_assignments=wave_assignments,

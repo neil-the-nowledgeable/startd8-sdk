@@ -1,9 +1,9 @@
 # Project-Centric Artisan (PCA) Requirements
 
-> **Version:** 1.0.0
+> **Version:** 1.1.0
 > **Status:** Draft
 > **Date:** 2026-02-21
-> **Scope:** Artisan 7-phase pipeline context propagation, checkpoint persistence, and prompt enrichment
+> **Scope:** Artisan 8-phase pipeline context propagation, checkpoint persistence, and prompt enrichment
 
 ---
 
@@ -30,7 +30,7 @@
 
 **The Artisan pipeline should assume a project-centric default.**
 
-The cap-dev-pipe embeds into the target project (`.cap-dev-pipe/` symlinks + `pipeline.env`) and invokes the SDK from within the project it is updating. The pipeline IS the project. Every phase — PLAN through FINALIZE — should have access to the same project-level context that the Prime Contractor injects into every feature's code generation prompt.
+The cap-dev-pipe embeds into the target project (`.cap-dev-pipe/` symlinks + `pipeline.env`) and invokes the SDK from within the project it is updating. The pipeline IS the project. Every phase — PLAN through FINALIZE (including the INTEGRATE phase between IMPLEMENT and TEST) — should have access to the same project-level context that the Prime Contractor injects into every feature's code generation prompt.
 
 The Prime Contractor attaches seed-level context (`onboarding`, `architectural_context`, `design_calibration`, `service_metadata`, `plan_document_text`) directly to its workflow instance and injects all of it into every `gen_context` dict (lines 585–662 of `prime_contractor.py`). The Artisan pipeline distributes the same data across a multi-phase boundary where it **attenuates** — onboarding fields are lost on checkpoint resume, `service_metadata` never reaches IMPLEMENT or REVIEW prompts, and project-level framing is absent from code generation and review prompts.
 
@@ -106,7 +106,7 @@ Artisan's `_build_prompt()` assembles from:
 4. `chunk.file_targets` (list)
 5. `context["last_error"]` / `context["test_output"]` (retry only)
 
-**Impact:** The LLM generating code in IMPLEMENT phase has no awareness of project objectives, architecture, service metadata, or the original plan — producing code that is technically correct but architecturally misaligned.
+**Impact:** The LLM generating code in IMPLEMENT phase has no awareness of project objectives, architecture, service metadata, or the original plan — producing code that is technically correct but architecturally misaligned. (Note: IMPLEMENT now writes to a staging directory; the INTEGRATE phase merges staged files into `project_root`. The prompt enrichment gap still applies to IMPLEMENT's LLM prompts.)
 
 ---
 
@@ -248,8 +248,9 @@ Each phase handler should log a structured summary of which project-level contex
 
 **Acceptance Criteria:**
 
-1. At the start of `execute()` in DESIGN, IMPLEMENT, TEST, REVIEW, and FINALIZE handlers, log an INFO message listing: `project_root` (present/absent), `service_metadata` (present/absent), `plan_document_text` (present/absent), `architectural_context` (present/absent), `onboarding_*` field count (N/6).
+1. At the start of `execute()` in DESIGN, IMPLEMENT, INTEGRATE, TEST, REVIEW, and FINALIZE handlers, log an INFO message listing: `project_root` (present/absent), `service_metadata` (present/absent), `plan_document_text` (present/absent), `architectural_context` (present/absent), `onboarding_*` field count (N/6).
 2. If fewer than 3 of the 10 project-level context fields are present, log a WARNING: `"Degraded project context: only N/10 fields available — code quality may be reduced."`
+3. For INTEGRATE, the logging is advisory — the phase has no LLM prompts and consumes no tokens, but completeness logging provides a consistent diagnostic signal across all 8 phases.
 
 **Source files:** `src/startd8/contractors/context_seed_handlers.py` (all handlers)
 
@@ -628,6 +629,20 @@ IMPLEMENT phase (DevelopmentChunk):
   # service_metadata                            ← ABSENT (Gap 5)
   # plan_document_text                          ← ABSENT
   # architectural_context                       ← ABSENT in prompt
+  Writes to staging_dir (.startd8/staging/)     ← no direct project_root writes
+  │
+  ▼
+INTEGRATE phase (IntegrationEngine):
+  Reads generation_results from context
+  Merges staged files into project_root
+  Runs post-merge checkpoints (ruff, import checks)
+  No LLM prompts — purely mechanical
+  Reads: project_root, _staging_dir, generation_results
+  Writes: integration_results to context
+  # No project-level context consumed for prompts (no LLM calls)
+  │
+  ▼
+TEST phase:
   │
   ▼
 REVIEW phase:
@@ -669,6 +684,7 @@ _ensure_context_loaded() (expanded via PCA-201):
   │
   ▼
 IMPLEMENT phase (DevelopmentChunk):
+  Writes to staging_dir (.startd8/staging/)       ← no direct project_root writes
   metadata gains:
     service_metadata                              ← PCA-400
     plan_context (truncated summary)              ← PCA-401
@@ -682,6 +698,17 @@ IMPLEMENT phase (DevelopmentChunk):
     "## Requirements" section                     ← PCA-404
     "## Plan Context" section                     ← PCA-401
     "## Prior Implementations" section            ← PCA-403
+  │
+  ▼
+INTEGRATE phase (IntegrationEngine):
+  Merges staged files → project_root              ← extracted from PrimeContractor
+  Per-task: snapshot → validate → merge → checkpoint → commit/rollback
+  No LLM prompts — no PCA prompt enrichment needed
+  Reads: project_root, _staging_dir, generation_results
+  Writes: integration_results to context
+  │
+  ▼
+TEST phase:
   │
   ▼
 REVIEW phase:
@@ -796,13 +823,16 @@ Phase 2 (P0 — Prompt Enrichment):
   PCA-302              (REVIEW prompt: project context)
   ──────────────────────────────────────────────────────────
   At this point: IMPLEMENT and REVIEW prompts match Prime quality
+  Note: INTEGRATE phase has no LLM prompts — no PCA prompt
+  enrichment needed.  It reads project_root and
+  generation_results mechanically.
 
 Phase 3 (P1 — Completeness):
   PCA-303              (REVIEW service metadata compliance)
   PCA-401              (plan context + calibration in IMPLEMENT)
   PCA-403              (cross-feature accumulation)
   PCA-404              (requirements text in IMPLEMENT)
-  PCA-104              (context completeness logging)
+  PCA-104              (context completeness logging — all 8 phases)
   PCA-402              (onboarding consumption audit)
   ──────────────────────────────────────────────────────────
   At this point: full parity with Prime Contractor
@@ -898,16 +928,35 @@ review:
         description: "Architectural context for project-aware review"
 ```
 
-### 7.4 New Propagation Chain
+### 7.4 `integrate` Phase (Already Implemented)
 
-Add a fourth end-to-end propagation chain:
+The INTEGRATE phase contract is already declared in `artisan-pipeline.contract.yaml` (added as part of the INTEGRATE phase implementation). It has no PCA-specific amendments because INTEGRATE makes no LLM calls and does not consume project-level context for prompt construction. Its entry/exit contract is:
+
+```yaml
+integrate:
+  description: "Merge staged generated code into project root with validation and rollback"
+  entry:
+    required:
+      - name: generation_results    # from IMPLEMENT
+    enrichment:
+      - name: _staging_dir          # from IMPLEMENT, falls back to .startd8/staging/
+  exit:
+    required:
+      - name: integration_results   # per-task merge outcomes
+```
+
+No PCA enrichment fields (`service_metadata`, `architectural_context`, `plan_document_text`) need to be added to INTEGRATE's entry because the phase does not construct LLM prompts.
+
+### 7.5 New Propagation Chain
+
+Add a new end-to-end propagation chain:
 
 ```yaml
 propagation_chains:
   # ... existing chains ...
   onboarding_context:
     description: "Project-level onboarding context flows from seed through all phases"
-    path: "seed → PLAN context → checkpoint → DESIGN/IMPLEMENT/REVIEW/FINALIZE"
+    path: "seed → PLAN context → checkpoint → DESIGN/IMPLEMENT/INTEGRATE/TEST/REVIEW/FINALIZE"
     fields:
       - service_metadata
       - plan_document_text
@@ -915,6 +964,7 @@ propagation_chains:
       - onboarding_dependency_graph
       - architectural_context
     persistence: "_CHECKPOINT_CONTEXT_KEYS + _ensure_context_loaded() re-extraction"
+    note: "INTEGRATE is on the path but does not consume these fields — it passes them through unchanged."
 ```
 
 ---
@@ -947,6 +997,8 @@ IMP-1 through IMP-7 define the DESIGN→IMPLEMENT boundary validation. PCA requi
 - **PCA-300** ensures `architectural_context` (which IMP-7 references) appears in the IMPLEMENT prompt
 - **PCA-400/401** ensure `service_metadata` and `plan_context` survive the boundary
 
+Note: The INTEGRATE phase sits between IMPLEMENT and TEST. It does not alter the DESIGN→IMPLEMENT boundary (IMP-1..7) or the context keys that PCA requirements propagate. INTEGRATE reads `generation_results` (IMPLEMENT's output) and writes `integration_results`; it does not consume or transform any PCA context fields.
+
 ---
 
 ## 9. Status Dashboard
@@ -961,6 +1013,8 @@ IMP-1 through IMP-7 define the DESIGN→IMPLEMENT boundary validation. PCA requi
 
 LOE estimate (new work only): ~180–220 lines of production code + ~300 lines of tests.
 
+**Note on INTEGRATE phase:** The INTEGRATE phase (added between IMPLEMENT and TEST) is a purely mechanical phase — it merges staged files into `project_root` via `IntegrationEngine` with snapshot/validate/merge/checkpoint/rollback. It makes no LLM calls and consumes no tokens. Therefore, no PCA prompt enrichment requirements (Layer 3) apply to it. PCA-104 (context completeness logging) includes INTEGRATE for diagnostic consistency, but the logging is advisory since no LLM prompt benefits from the context in this phase.
+
 ---
 
 ## 10. Related Documents
@@ -969,8 +1023,9 @@ LOE estimate (new work only): ~180–220 lines of production code + ~300 lines o
 |---|---|
 | `docs/design/artisan/ARTISAN_REQUIREMENTS.md` | Parent requirements document (AR-xxx) |
 | `docs/design/artisan/ARTISAN_PROMPT_EXTERNALIZATION_REQUIREMENTS.md` | Companion: prompt externalization plan |
-| `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml` | Context propagation contract (to be amended per Section 7) |
+| `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml` | Context propagation contract (amended per Section 7; includes INTEGRATE phase) |
 | `src/startd8/contractors/prime_contractor.py` | Reference implementation of project-centric context injection |
+| `src/startd8/contractors/integration_engine.py` | Standalone integration pipeline extracted from PrimeContractor (used by INTEGRATE phase) |
 | `src/startd8/workflows/builtin/prompts/lead_contractor.yaml` | Reference spec prompt showing full context assembly |
 | `docs/ARTISAN_WORKFLOW_GUIDE.md` | User-facing workflow guide (update after implementation) |
 | `docs/ARTISAN_WORKFLOW_ISSUES_CATALOG.md` | Known issues catalog (add PCA gaps as resolved) |
