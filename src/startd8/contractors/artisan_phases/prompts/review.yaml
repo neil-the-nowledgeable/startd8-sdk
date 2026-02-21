@@ -42,6 +42,14 @@ prompts:
       ### Suggestions
       - [Specific improvements]
     placeholders: [task_id, title, domain, description, constraints, generated_code, test_results, pass_threshold]
+    # Dynamic sections injected before "## Review Instructions" by _build_review_prompt():
+    #   - ## Project Context (PCA-302): plan title, goals, architectural objectives
+    #   - ## Design Document (Layer 4): design doc for compliance checking
+    #   - ## Parameter Sources / ## Semantic Conventions: naming compliance
+    #   - ## Service Metadata Compliance (PCA-303): transport protocol checks
+    #   - ## REFINE Compliance (IMP-9b): applied_ids from REFINE provenance
+    #   - ## TRUNCATION WARNING (Gate 4): completeness check
+    #   - ## DEPENDENCY ALLOWLIST ADVISORY (Gate 5): false positive guidance
 
   review_system:
     description: "System prompt for the review phase"
