@@ -1,6 +1,6 @@
 # Artisan Contractor Workflow — Functional Requirements
 
-**Version:** 1.4.0
+**Version:** 1.5.0
 **Created:** 2026-02-14
 **Canonical Source:** [`docs/capability-index/startd8.artisan.functional-requirements.yaml`](capability-index/startd8.artisan.functional-requirements.yaml)
 
@@ -23,7 +23,8 @@ This document provides narrative context, dependency diagrams, and a traceabilit
 | Configuration | AR-7xx | 10 | 8 | 0 | 2 |
 | Safety and Resilience | AR-8xx | 13 | 6 | 0 | 7 |
 | Mottainai Compliance | AR-9xx | 9 | 0 | 0 | 9 |
-| **Total** | | **127** | **75** | **1** | **51** |
+| Project-Centric Context | AR-10xx | 20 | 3 | 0 | 17 |
+| **Total** | | **147** | **78** | **1** | **68** |
 
 ---
 
@@ -102,7 +103,7 @@ flowchart LR
 
 | Phase | Context Keys Set | Source |
 |-------|-----------------|--------|
-| PLAN | `tasks`, `task_index`, `plan_title`, `plan_goals`, `domain_summary`, `preflight_summary`, `total_estimated_loc`, `architectural_context`, `design_calibration`, `example_artifacts` | AR-100 |
+| PLAN | `tasks`, `task_index`, `plan_title`, `plan_goals`, `domain_summary`, `preflight_summary`, `total_estimated_loc`, `architectural_context`, `design_calibration`, `example_artifacts`, `service_metadata`, `plan_document_text`, `onboarding_*` (6 fields) | AR-100, AR-1001..AR-1003 |
 | SCAFFOLD | `scaffold` (directories_needed, directories_exist, directories_created, existing_target_files, skipped_targets, project_root) | AR-110 |
 | DESIGN | `design_results` (per-task: design_document, status, agreed, iterations, cost, design_mode, existing_file_inventory) | AR-120, AR-127 |
 | IMPLEMENT | `implementation`, `generation_results`, `_downstream_map` | AR-130 |
@@ -458,6 +459,344 @@ DESIGN phase serializes full review metadata so that downstream phases (IMPLEMEN
 
 ---
 
+## Layer 10: Project-Centric Context (AR-10xx)
+
+Ensures project-level context (architecture, service metadata, plan goals, onboarding fields) survives the multi-phase boundary and reaches LLM prompts in IMPLEMENT and REVIEW phases. Closes the gap between data injection in PLAN and prompt consumption in downstream phases — the "last mile" complement to AR-3xx (ContextCore Data Flow).
+
+**Design Principle:** The Artisan pipeline should assume a project-centric default. The Prime Contractor injects `architectural_context`, `service_metadata`, `plan_document_text`, and `project_objectives` into every feature's `gen_context` (lines 585–662 of `prime_contractor.py`). The Artisan pipeline distributes the same data across multi-phase boundaries where it **attenuates** — onboarding fields are lost on checkpoint resume, `service_metadata` never reaches IMPLEMENT or REVIEW prompts, and project-level framing is absent from code generation and review prompts.
+
+**Provenance:** Consolidated from `PROJECT_CENTRIC_ARTISAN_REQUIREMENTS.md` (PCA-1xx..PCA-4xx). ID mapping: PCA-1xx → AR-10{0x}, PCA-2xx → AR-101x, PCA-3xx → AR-102x, PCA-4xx → AR-103x.
+
+### Gap Summary
+
+| Gap | Description | Impact |
+|-----|-------------|--------|
+| Gap 1 | `project_root` not injected into `initial_context` | All downstream phases resolve paths against `"."` instead of actual project root |
+| Gap 2 | 8 onboarding fields not in `_CHECKPOINT_CONTEXT_KEYS` | All onboarding context lost on checkpoint resume |
+| Gap 3 | IMPLEMENT prompt lacks `project_objectives`, `architectural_context`, `plan_context`, `service_metadata` | Code is technically correct but architecturally misaligned |
+| Gap 4 | REVIEW prompt has no project-level framing | Reviewer cannot check project-level constraints |
+| Gap 5 | `service_metadata` not consumed after DESIGN phase | Generated code may violate transport protocol or add unused capabilities |
+| Gap 6 | No cross-feature context accumulation in IMPLEMENT | Later features repeat mistakes or violate conventions from earlier features |
+
+### Context Injection (AR-1000..AR-1005)
+
+#### AR-1000: Inject `project_root` into `initial_context`
+
+- **Priority:** P0
+- **Status:** planned
+- **Closes:** Gap 1
+- **Overlaps:** AR-100
+
+`run_artisan_workflow.py` sets `WorkflowConfig.project_root` (line 701) but does NOT inject it into `initial_context` (line 793). Downstream phases fall back to `Path(".")`.
+
+**Acceptance Criteria:**
+
+1. `initial_context["project_root"]` is set to `str(Path(args.project_root).resolve())` in `run_artisan_workflow.py`.
+2. `PlanPhaseHandler.execute()` does NOT overwrite `project_root` if already present in context.
+3. All downstream phases use `context["project_root"]` rather than `context.get("project_root", ".")`.
+4. The `artisan-pipeline.contract.yaml` plan.entry.required `project_root` passes validation.
+
+**Source files:** `scripts/run_artisan_workflow.py`, `src/startd8/contractors/context_seed_handlers.py`
+
+#### AR-1001: Forward `service_metadata` from Seed to Context
+
+- **Priority:** P0
+- **Status:** implemented (PLAN phase, line 872)
+- **Closes:** Gap 5 (partially — consumption is AR-1030/AR-1023)
+- **Overlaps:** AR-144, AR-147
+
+**Acceptance Criteria:**
+
+1. `context["service_metadata"]` is populated by `PlanPhaseHandler.execute()`. (Already true.)
+2. Value is `None` when the onboarding section does not contain `service_metadata`.
+
+#### AR-1002: Forward `plan_document_text` from Seed to Context
+
+- **Priority:** P0
+- **Status:** implemented (PLAN phase, lines 890–906)
+- **Closes:** Gap 5 (partially)
+- **Overlaps:** AR-903
+
+**Acceptance Criteria:**
+
+1. `context["plan_document_text"]` is populated when `artifacts.plan_document_path` resolves to a readable file. (Already true.)
+2. On resume, `_ensure_context_loaded()` re-extracts this field (see AR-1011).
+
+#### AR-1003: Forward All Onboarding Fields from Seed to Context
+
+- **Priority:** P1
+- **Status:** implemented (PLAN phase, lines 855–885); persistence is AR-1010/1011
+- **Closes:** Gap 2 (partially)
+- **Overlaps:** AR-303..AR-308
+
+**Acceptance Criteria:**
+
+1. All six onboarding fields are present in context after `PlanPhaseHandler.execute()`. (Already true.)
+2. All six fields survive checkpoint resume (see AR-1010, AR-1011).
+3. At least `onboarding_calibration_hints` and `onboarding_dependency_graph` are consumed by IMPLEMENT (see AR-1031).
+
+#### AR-1004: Log Context Injection Completeness at Phase Entry
+
+- **Priority:** P1
+- **Status:** planned
+
+**Acceptance Criteria:**
+
+1. At the start of `execute()` in DESIGN, IMPLEMENT, INTEGRATE, TEST, REVIEW, and FINALIZE handlers, log an INFO message listing presence of 10 project-level context fields.
+2. If fewer than 3 of 10 fields are present, log a WARNING: `"Degraded project context: only N/10 fields available — code quality may be reduced."`.
+3. For INTEGRATE, the logging is advisory — the phase has no LLM prompts.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (all handlers)
+
+#### AR-1005: `WorkflowConfig.project_root` Propagation to Context
+
+- **Priority:** P0
+- **Status:** planned
+- **Closes:** Gap 1 (defense-in-depth)
+
+**Acceptance Criteria:**
+
+1. `ArtisanContractorWorkflow.execute()` calls `context.setdefault("project_root", self.config.project_root)` before invoking the first phase handler (when not None).
+2. Existing `context["project_root"]` values are NOT overwritten.
+
+**Source files:** `src/startd8/contractors/artisan_contractor.py`
+
+### Checkpoint Persistence (AR-1010..AR-1013)
+
+#### AR-1010: Expand `_CHECKPOINT_CONTEXT_KEYS` with Onboarding and Service Fields
+
+- **Priority:** P0
+- **Status:** planned
+- **Closes:** Gap 2
+- **Overlaps:** AR-505, AR-903
+
+**Acceptance Criteria:**
+
+1. `_CHECKPOINT_CONTEXT_KEYS` includes 8 additional keys: `onboarding_derivation_rules`, `onboarding_resolved_parameters`, `onboarding_output_contracts`, `onboarding_calibration_hints`, `onboarding_open_questions`, `onboarding_dependency_graph`, `service_metadata`, `plan_document_text`.
+2. Existing checkpoint files (without these keys) load without error (backward compatibility).
+3. Round-trip test: `context -> checkpoint -> restore -> context` preserves all eight fields.
+4. `plan_document_text` is truncated to 100K characters in checkpoint to prevent oversized files.
+
+**Source files:** `src/startd8/contractors/artisan_contractor.py` (line 138)
+
+#### AR-1011: Extend `_ensure_context_loaded()` to Re-Extract Onboarding Fields
+
+- **Priority:** P0
+- **Status:** planned
+- **Closes:** Gap 2 (defense-in-depth)
+- **Overlaps:** AR-903
+
+**Acceptance Criteria:**
+
+1. `_ensure_context_loaded()` adds `context.setdefault()` calls for all eight fields, extracting from the same seed paths as `PlanPhaseHandler`.
+2. Re-extraction logged at INFO: `"Restored N/8 onboarding fields from seed on resume."`.
+3. Fields already present from checkpoint are NOT overwritten.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (line 559)
+
+#### AR-1012: Checkpoint Size Guard for `plan_document_text`
+
+- **Priority:** P1
+- **Status:** planned
+
+**Acceptance Criteria:**
+
+1. `plan_document_text` is stored as truncated summary (first 1000 chars + `"... [truncated, full text in seed]"`) in checkpoint.
+2. On restore, full text is re-loaded from seed via AR-1011.
+3. A sentinel value (`_plan_doc_truncated: true`) distinguishes truncated from absent.
+
+**Source files:** `src/startd8/contractors/artisan_contractor.py`
+
+#### AR-1013: Checkpoint Schema Version Compatibility
+
+- **Priority:** P0
+- **Status:** planned
+- **Overlaps:** AR-511
+
+**Acceptance Criteria:**
+
+1. `CHECKPOINT_SCHEMA_VERSION` remains at 4 (new keys are optional, handled via `setdefault`).
+2. Migration test: a v4 checkpoint WITHOUT the new keys loads successfully, and `_ensure_context_loaded()` fills the missing fields from the seed.
+
+**Source files:** `src/startd8/contractors/artisan_contractor.py`
+
+### Prompt Enrichment (AR-1020..AR-1024)
+
+#### AR-1020: IMPLEMENT Phase Project Architecture Injection
+
+- **Priority:** P0
+- **Status:** planned
+- **Closes:** Gap 3 (partially)
+- **Overlaps:** AR-131, AR-903
+
+**Acceptance Criteria:**
+
+1. `_tasks_to_chunks()` injects `architectural_context` (filtered to objectives, constraints, shared_modules relevant to the task's target files), `plan_goals` (first 5), and `plan_context` (truncated to 4000 chars) into `DevelopmentChunk.metadata`.
+2. `_build_prompt()` adds a `## Project Architecture` section after `## Domain Constraints` when present.
+3. Combined injection capped at 6000 characters.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (`_tasks_to_chunks`), `src/startd8/contractors/artisan_phases/development.py` (`_build_prompt`)
+
+#### AR-1021: IMPLEMENT Phase Service Metadata Injection
+
+- **Priority:** P0
+- **Status:** planned
+- **Closes:** Gap 5
+- **Overlaps:** AR-144, AR-147
+
+**Acceptance Criteria:**
+
+1. `_tasks_to_chunks()` injects `service_metadata` into `DevelopmentChunk.metadata`.
+2. `_build_prompt()` adds a `## Service Metadata` section with `transport_protocol`, `runtime_dependencies`, and the directive: *"HEALTHCHECK type MUST match transport_protocol. Do NOT add capabilities the service does not use."*
+3. No section added when `service_metadata` is None or empty.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py`, `src/startd8/contractors/artisan_phases/development.py`
+
+#### AR-1022: REVIEW Phase Project-Level System Prompt
+
+- **Priority:** P0
+- **Status:** planned
+- **Closes:** Gap 4
+- **Overlaps:** AR-150
+
+**Acceptance Criteria:**
+
+1. `_build_review_prompt()` gains a `## Project Context` section with `plan_title`, `plan_goals` (max 5), `architectural_context.objectives` (max 3), and `architectural_context.constraints` (max 5).
+2. `ReviewPhaseHandler.execute()` passes project context from the workflow context dict.
+3. Prompt budget: `## Project Context` capped at 2000 characters.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (`ReviewPhaseHandler`)
+
+#### AR-1023: REVIEW Phase Service Metadata Compliance Check
+
+- **Priority:** P1
+- **Status:** planned
+- **Closes:** Gap 5 (REVIEW)
+- **Overlaps:** AR-144, AR-907
+
+**Acceptance Criteria:**
+
+1. When `service_metadata` is present, `_build_review_prompt()` appends a `## Service Metadata Compliance` section instructing the reviewer to check transport protocol and runtime dependency compliance.
+2. When `service_metadata` is None, no additional section is added.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (`ReviewPhaseHandler._build_review_prompt`)
+
+#### AR-1024: TEST Phase Service Metadata Forwarding
+
+- **Priority:** P1
+- **Status:** implemented (validators already consume `service_metadata` from context)
+- **Closes:** Gap 5 (TEST)
+- **Overlaps:** AR-144, AR-147
+
+**Acceptance Criteria:**
+
+1. `context.get("service_metadata")` is available in TEST/FINALIZE phase handlers (depends on AR-1010/1011 for resume).
+2. When absent, validators gracefully skip transport/dependency checks (already true).
+
+### Cross-Phase Propagation (AR-1030..AR-1034)
+
+#### AR-1030: Service Metadata Propagation to IMPLEMENT Chunks
+
+- **Priority:** P0
+- **Status:** planned
+- **Closes:** Gap 5 (IMPLEMENT)
+- **Overlaps:** AR-903
+
+**Acceptance Criteria:**
+
+1. Each `DevelopmentChunk` includes `metadata["service_metadata"]` from `context.get("service_metadata")`.
+2. Full `service_metadata` dict (not a subset), consistent with Prime Contractor.
+3. When None, the metadata key is omitted.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (`_tasks_to_chunks`)
+
+#### AR-1031: Plan Document and Calibration Hints Propagation to IMPLEMENT
+
+- **Priority:** P1
+- **Status:** planned
+- **Closes:** Gap 5, Gap 6 (partial)
+- **Overlaps:** AR-903
+
+**Acceptance Criteria:**
+
+1. `_tasks_to_chunks()` injects `metadata["plan_context"]` (truncated to 4000 chars) and per-task `metadata["calibration_hints"]` when task artifact types match calibration hint keys.
+2. `_build_prompt()` formats `plan_context` as a `## Plan Context` section.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py`, `src/startd8/contractors/artisan_phases/development.py`
+
+#### AR-1032: Onboarding Field Consumption Audit Trail
+
+- **Priority:** P1
+- **Status:** planned
+- **Overlaps:** AR-905
+
+**Acceptance Criteria:**
+
+1. Each phase handler that reads an onboarding field increments `context["_onboarding_consumption"][field_name]` with the phase name.
+2. `FinalizePhaseHandler` includes the map in the execution report under `provenance.onboarding_fields_consumed`.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (all handlers), `FinalizePhaseHandler`
+
+#### AR-1033: Cross-Feature Context Accumulation for IMPLEMENT
+
+- **Priority:** P1
+- **Status:** planned
+- **Closes:** Gap 6
+- **Overlaps:** AR-124
+
+**Acceptance Criteria:**
+
+1. After each feature's code is generated, a brief summary (feature name, key files, conventions used) is appended to `context["_prior_impl_summaries"]`.
+2. `_tasks_to_chunks()` injects last 3 summaries into `metadata["prior_implementations"]`.
+3. `_build_prompt()` formats them as a `## Prior Implementations` section.
+4. Accumulation works in both phase-serial and feature-serial modes.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (`ImplementPhaseHandler`), `src/startd8/contractors/artisan_phases/development.py`
+
+#### AR-1034: Requirements Text Propagation to IMPLEMENT
+
+- **Priority:** P1
+- **Status:** planned
+- **Overlaps:** AR-903
+
+**Acceptance Criteria:**
+
+1. `_tasks_to_chunks()` injects `metadata["requirements_text"]` from `task.requirements_text` when non-empty.
+2. `_build_prompt()` formats as a `## Requirements` section placed immediately after the implementation prompt.
+3. Truncated to 3000 characters.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py`, `src/startd8/contractors/artisan_phases/development.py`
+
+### Implementation Sequencing
+
+```
+Phase 1 (P0 — Context Survival):
+  AR-1000 + AR-1005    (project_root injection)
+  AR-1010 + AR-1013    (checkpoint keys expansion + compat test)
+  AR-1011              (_ensure_context_loaded expansion)
+  ──────────────────────────────────────────────────────────
+  At this point: all project context survives resume
+
+Phase 2 (P0 — Prompt Enrichment):
+  AR-1020 + AR-1021    (IMPLEMENT prompt: architecture + service metadata)
+  AR-1030              (service_metadata data propagation)
+  AR-1022              (REVIEW prompt: project context)
+  ──────────────────────────────────────────────────────────
+  At this point: IMPLEMENT and REVIEW prompts match Prime quality
+
+Phase 3 (P1 — Completeness):
+  AR-1023              (REVIEW service metadata compliance)
+  AR-1031              (plan context + calibration in IMPLEMENT)
+  AR-1033              (cross-feature accumulation)
+  AR-1034              (requirements text in IMPLEMENT)
+  AR-1004              (context completeness logging)
+  AR-1032              (onboarding consumption audit)
+  ──────────────────────────────────────────────────────────
+  At this point: full parity with Prime Contractor
+```
+
+---
+
 ## Traceability Matrix
 
 ### Requirement to Source File
@@ -493,6 +832,16 @@ DESIGN phase serializes full review metadata so that downstream phases (IMPLEMEN
 | AR-906 | `src/startd8/contractors/context_seed_handlers.py` (FinalizePhaseHandler) | |
 | AR-907 | `src/startd8/contractors/context_seed_handlers.py` | DesignPhaseHandler, ImplementPhaseHandler, TestPhaseHandler |
 | AR-908 | `src/startd8/contractors/context_seed_handlers.py` | ImplementPhaseHandler, FinalizePhaseHandler |
+| AR-1000, AR-1005 | `scripts/run_artisan_workflow.py`, `src/startd8/contractors/artisan_contractor.py` | `context_seed_handlers.py` |
+| AR-1001..AR-1003 | `src/startd8/contractors/context_seed_handlers.py` (PlanPhaseHandler) | |
+| AR-1004 | `src/startd8/contractors/context_seed_handlers.py` (all handlers) | |
+| AR-1010, AR-1012, AR-1013 | `src/startd8/contractors/artisan_contractor.py` | |
+| AR-1011 | `src/startd8/contractors/context_seed_handlers.py` (`_ensure_context_loaded`) | |
+| AR-1020, AR-1021, AR-1030, AR-1031, AR-1034 | `src/startd8/contractors/context_seed_handlers.py` (`_tasks_to_chunks`) | `artisan_phases/development.py` (`_build_prompt`) |
+| AR-1022, AR-1023 | `src/startd8/contractors/context_seed_handlers.py` (ReviewPhaseHandler) | |
+| AR-1024 | `src/startd8/contractors/context_seed_handlers.py` (TestPhaseHandler) | `artisan_phases/self_consistency.py` |
+| AR-1032 | `src/startd8/contractors/context_seed_handlers.py` (all handlers) | FinalizePhaseHandler |
+| AR-1033 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `artisan_phases/development.py` |
 
 ### Requirement to Test File
 
@@ -519,6 +868,15 @@ DESIGN phase serializes full review metadata so that downstream phases (IMPLEMEN
 | AR-800 | `tests/unit/contractors/test_artisan_preflight.py`, `tests/e2e/contractors/test_artisan_preflight_failure.py` |
 | AR-806 | `tests/e2e/contractors/test_artisan_escalation.py` |
 | AR-810 | `tests/unit/test_service_metadata_preflight.py` |
+| AR-1000, AR-1005 | `tests/unit/contractors/test_artisan_context_injection.py` (new) |
+| AR-1010, AR-1012, AR-1013 | `tests/unit/contractors/test_checkpoint_context_keys.py` (new) |
+| AR-1011 | `tests/unit/contractors/test_ensure_context_loaded.py` (extend existing) |
+| AR-1020, AR-1021 | `tests/unit/contractors/test_implement_prompt_enrichment.py` (new) |
+| AR-1022, AR-1023 | `tests/unit/contractors/test_review_phase_handler.py` (extend existing) |
+| AR-1024 | `tests/unit/contractors/test_review_phase_handler.py` (extend existing) |
+| AR-1030, AR-1031, AR-1034 | `tests/unit/contractors/test_tasks_to_chunks.py` (new or extend) |
+| AR-1032 | `tests/unit/contractors/test_onboarding_audit_trail.py` (new) |
+| AR-1033 | `tests/unit/contractors/test_cross_feature_accumulation.py` (new) |
 
 ### Test Coverage Gaps
 
@@ -541,6 +899,11 @@ Requirements with no `verified_by` test file (need new tests):
 | AR-811 | planned | Task ID input validation: path separator rejection, shell metacharacter rejection, null byte rejection, format string pattern rejection |
 | AR-812 | planned | Global context immutability during concurrent lane execution: read-only enforcement, lane-local isolation, wave barrier merge correctness |
 | AR-900..AR-908 | planned | Mottainai compliance — full review metadata serialization (reviewer_verdict dict, parsed DesignSection persistence, plan constraint storage, serialization round-trip fidelity), metadata forwarding, deterministic pre-review validation, provenance audit trail, structured diagnostics, integrity timing |
+| AR-1000, AR-1005 | planned | `project_root` injection into `initial_context` and defense-in-depth `WorkflowConfig` propagation |
+| AR-1010..AR-1013 | planned | Checkpoint persistence expansion for onboarding fields, service_metadata, plan_document_text |
+| AR-1020..AR-1022 | planned | Prompt enrichment: project architecture, service metadata, and project context in IMPLEMENT and REVIEW |
+| AR-1023, AR-1024 | AR-1024 implemented; AR-1023 planned | REVIEW service metadata compliance, TEST service metadata forwarding |
+| AR-1030..AR-1034 | planned | Cross-phase propagation: service_metadata, plan_context, calibration_hints, requirements_text, cross-feature accumulation, audit trail |
 
 ---
 
@@ -556,6 +919,9 @@ Requirements with no `verified_by` test file (need new tests):
 | 4. Orchestration Enhancements | AR-209..AR-212, AR-405, AR-708, AR-809, AR-811, AR-812 | **Medium** | Wave-parallel execution, concurrency control, cost projection, operational safety, task ID validation, context immutability |
 | 5. Interactive and Git Safety | AR-605..AR-606, AR-805..AR-808 | **Low** | Interactive operation, event durability |
 | 6. Mottainai Compliance | AR-900..AR-908 | **Medium** | Eliminates 20 intra-pipeline waste gaps (Gaps 17–36). Note: AR-900 (P0) and AR-902 (P0) must be implemented before or alongside AR-212 wave-parallel mode, as wave context merging depends on full design metadata serialization (AR-900) and `_downstream_map` population (AR-902). |
+| 7a. Project-Centric Context Survival | AR-1000, AR-1005, AR-1010, AR-1011, AR-1013 | **High** | P0 context injection + checkpoint persistence — prerequisite for prompt enrichment. ~25 lines of production code. |
+| 7b. Project-Centric Prompt Enrichment | AR-1020..AR-1022, AR-1030 | **High** | P0 prompt enrichment — IMPLEMENT and REVIEW prompts gain project architecture, service metadata, and project context. ~70 lines across 2 files. |
+| 7c. Project-Centric Completeness | AR-1004, AR-1012, AR-1023, AR-1031..AR-1034 | **Medium** | P1 completeness — audit trail, cross-feature accumulation, requirements text. ~80 lines across 3 files. |
 
 ---
 
@@ -567,6 +933,7 @@ Requirements with no `verified_by` test file (need new tests):
 | [`PLAN-artisan-contractor.md`](PLAN-artisan-contractor.md) | Implementation plan (source for planned requirements) |
 | [`ARTISAN_WORKFLOW_GUIDE.md`](ARTISAN_WORKFLOW_GUIDE.md) | User/developer guide |
 | [`plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md`](plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md) | Code fix plan for AR-3xx |
+| [`PROJECT_CENTRIC_ARTISAN_REQUIREMENTS.md`](PROJECT_CENTRIC_ARTISAN_REQUIREMENTS.md) | Original PCA requirements (PCA-1xx..PCA-4xx → AR-10xx) — gap analysis, data flow diagrams, contract YAML amendments |
 | [`startd8.workflow.functional-requirements.yaml`](capability-index/startd8.workflow.functional-requirements.yaml) | Workflow framework requirements (FR-1xx..FR-5xx) |
 | [`PLAN_INGESTION_CONTEXTCORE_RECOMMENDATIONS.md`](PLAN_INGESTION_CONTEXTCORE_RECOMMENDATIONS.md) | Upstream ingestion design recommendations |
 
