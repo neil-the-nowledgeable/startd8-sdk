@@ -82,7 +82,7 @@ The emitted seed MUST include ALL non-null fields from the loaded onboarding met
   - `resolved_parameters` / `resolved_artifact_parameters` (G2)
   - `output_contracts` (G3)
   - `dependency_graph` (G4)
-  - `refine_suggestions` (G5)
+  - `refine_suggestions` (G5) — populated by [REQ-RF-004](REFINE_FORWARDING_REQUIREMENTS.md#req-rf-004-inject-accepted-suggestions-into-artisan-seed)
   - `calibration_hints` (G6)
   - `open_questions` (G7)
   - `service_metadata` (G16, if present)
@@ -407,3 +407,4 @@ If the plan references services, `service_metadata` MUST cover all of them.
 | [`ARTISAN_RUN2_POSTMORTEM.md`](../../../Processes/cap-dev-pipe-test/design/ARTISAN_RUN2_POSTMORTEM.md) | Source: service_metadata absence, design compression root cause |
 | [`PIPELINE_REQUIREMENTS_INDEX.md`](../../../Processes/cap-dev-pipe-prod/PIPELINE_REQUIREMENTS_INDEX.md) | Master index (this doc expands Stage 5 from 1 to 17 requirements) |
 | REQ-CDP-INT-002 | Existing Stage 5 requirement (translation quality gate) — complementary |
+| [`REFINE_FORWARDING_REQUIREMENTS.md`](REFINE_FORWARDING_REQUIREMENTS.md) | Populates `refine_suggestions` in seed (REQ-RF-004/005), closing Mottainai Gap 5 dependency for REQ-PI-001 |

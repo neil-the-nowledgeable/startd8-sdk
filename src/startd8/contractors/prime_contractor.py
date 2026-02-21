@@ -9,17 +9,103 @@ from ..logging_config import get_logger
 from ..security import sanitize_path
 from .checkpoint import CheckpointStatus, IntegrationCheckpoint
 from .gate_contracts import GateEmitter
+from .integration_engine import IntegrationEngine
 from .protocols import (
     CheckpointFailedCallback,
     CodeGenerator,
     FeatureCompleteCallback,
     GenerationResult,
+    IntegrationUnit,
     Instrumentor,
     MergeStrategy,
     SizeEstimator,
 )
 from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
+
+
+# ---------------------------------------------------------------------------
+# Adapters: bridge FeatureSpec → IntegrationUnit / IntegrationListener
+# ---------------------------------------------------------------------------
+
+class FeatureSpecUnit:
+    """Thin property wrapper: FeatureSpec → IntegrationUnit.
+
+    NOT a serialization boundary — forwards everything, Mottainai-compliant.
+    """
+
+    __slots__ = ("_feature",)
+
+    def __init__(self, feature: FeatureSpec) -> None:
+        self._feature = feature
+
+    @property
+    def id(self) -> str:
+        return self._feature.id
+
+    @property
+    def name(self) -> str:
+        return self._feature.name
+
+    @property
+    def generated_files(self) -> List[str]:
+        return self._feature.generated_files
+
+    @property
+    def target_files(self) -> List[str]:
+        return self._feature.target_files
+
+    @property
+    def context(self) -> Dict[str, Any]:
+        return self._feature.metadata
+
+
+class PrimeContractorListener:
+    """Bridge IntegrationEngine events → queue + instrumentor."""
+
+    def __init__(
+        self,
+        queue: FeatureQueue,
+        instrumentor: Any,
+        files_modified: Dict[str, List[str]],
+    ) -> None:
+        self._queue = queue
+        self._instrumentor = instrumentor
+        self._files_modified = files_modified
+
+    def on_integration_started(self, unit: IntegrationUnit) -> None:
+        self._queue.start_integration(unit.id)
+
+    def on_file_integrated(
+        self, unit: IntegrationUnit, source: Path, target: Path,
+    ) -> None:
+        key = str(target)
+        if key not in self._files_modified:
+            self._files_modified[key] = []
+        self._files_modified[key].append(unit.name)
+
+    def on_checkpoint_result(self, unit: IntegrationUnit, result: Any) -> None:
+        pass  # gate emission handled inside engine
+
+    def on_integration_failed(self, unit: IntegrationUnit, error: str) -> None:
+        self._queue.fail_feature(unit.id, error)
+        self._instrumentor.emit_insight(
+            insight_type="integration_failed",
+            summary=f"Feature '{unit.name}' failed: {error}",
+            confidence=1.0,
+            feature_id=unit.id,
+        )
+
+    def on_integration_completed(
+        self, unit: IntegrationUnit, files: List[Path],
+    ) -> None:
+        self._instrumentor.emit_insight(
+            insight_type="integration_success",
+            summary=f"Feature '{unit.name}' integrated successfully",
+            confidence=1.0,
+            feature_id=unit.id,
+            files_count=len(files),
+        )
 
 class PrimeContractorWorkflow:
     """
@@ -104,7 +190,22 @@ class PrimeContractorWorkflow:
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
-        self._pre_integration_snapshots: Dict[str, Optional[Path]] = {}
+        # IntegrationEngine — delegates snapshot/merge/checkpoint/rollback
+        self._engine = IntegrationEngine(
+            project_root=self.project_root,
+            merge_strategy=self.merge_strategy,
+            checkpoint=self.checkpoint,
+            dry_run=self.dry_run,
+            auto_commit=self.auto_commit,
+            allow_dirty=self.allow_dirty,
+            check_truncation=self.check_truncation,
+            strict_checkpoints=self.strict_checkpoints,
+        )
+        self._prime_listener = PrimeContractorListener(
+            queue=self.queue,
+            instrumentor=self.instrumentor,
+            files_modified=self.files_modified_this_session,
+        )
         self._domain_checklist = None  # lazy-init DomainChecklist
         self._current_enrichment = None  # per-feature enrichment cache
         # Seed-level context — set by run_prime_workflow.py after loading
@@ -160,26 +261,6 @@ class PrimeContractorWorkflow:
             return stash_message
         return None
 
-    def is_file_dirty(self, path: Path) -> bool:
-        """Check if a specific file has uncommitted changes."""
-        result_staged = subprocess.run(['git', 'diff', '--cached', '--name-only', str(path)], capture_output=True, text=True, cwd=self.project_root, timeout=300)
-        result_unstaged = subprocess.run(['git', 'diff', '--name-only', str(path)], capture_output=True, text=True, cwd=self.project_root, timeout=300)
-        return bool(result_staged.stdout.strip() or result_unstaged.stdout.strip())
-
-    def protect_dirty_target(self, path: Path) -> bool:
-        """
-        Check if it's safe to overwrite a target file.
-
-        Returns:
-            True if safe to overwrite, False if file has uncommitted changes
-        """
-        if not path.exists():
-            return True
-        if self.is_file_dirty(path):
-            logger.warning('Target file has uncommitted changes: %s — commit or stash first', path.name, extra={'file_path': str(path)})
-            return False
-        return True
-
     def get_recovery_status(self) -> Dict:
         """Get current recovery status information."""
         backup_files = list(self.project_root.glob('**/*.backup'))
@@ -214,66 +295,6 @@ class PrimeContractorWorkflow:
         shutil.copy2(backup_path, file_path)
         logger.info('Restored %s from %s', file_path, backup_path.name)
         return True
-
-    def _snapshot_target(self, target_path: Path) -> None:
-        """Save a copy of the target file before the first merge attempt.
-
-        If the target already has a snapshot, this is a no-op (idempotent).
-        If the target does not exist yet, ``None`` is stored so that
-        ``_restore_target`` knows to delete the file on rollback.
-        """
-        key = str(target_path)
-        if key in self._pre_integration_snapshots:
-            return
-        if target_path.is_file():
-            snapshot_path = target_path.with_suffix(target_path.suffix + '.pre_integration')
-            shutil.copy2(target_path, snapshot_path)
-            self._pre_integration_snapshots[key] = snapshot_path
-            logger.debug('Snapshot saved: %s', self._rel_display(snapshot_path))
-        else:
-            self._pre_integration_snapshots[key] = None
-            logger.debug('Snapshot recorded (file absent): %s', self._rel_display(target_path))
-
-    def _restore_target(self, target_path: Path) -> bool:
-        """Restore a target file from its pre-integration snapshot.
-
-        Returns True if the restore succeeded, False if no snapshot was found.
-        """
-        key = str(target_path)
-        snapshot = self._pre_integration_snapshots.get(key)
-        if key not in self._pre_integration_snapshots:
-            logger.warning('No pre-integration snapshot for %s', self._rel_display(target_path))
-            return False
-        if snapshot is None:
-            if target_path.is_file():
-                target_path.unlink()
-                logger.info('Deleted (no original): %s', self._rel_display(target_path))
-            return True
-        shutil.copy2(snapshot, target_path)
-        logger.info('Restored from snapshot: %s', self._rel_display(target_path))
-        return True
-
-    def _cleanup_snapshots(self, target_paths: Optional[List[Path]]=None) -> int:
-        """Remove ``.pre_integration`` snapshot files.
-
-        Args:
-            target_paths: Specific targets to clean up.  ``None`` cleans all.
-
-        Returns:
-            Number of snapshot files removed.
-        """
-        removed = 0
-        if target_paths is None:
-            keys = list(self._pre_integration_snapshots.keys())
-        else:
-            keys = [str(p) for p in target_paths]
-        for key in keys:
-            snapshot = self._pre_integration_snapshots.pop(key, None)
-            if snapshot is not None and snapshot.exists():
-                snapshot.unlink()
-                removed += 1
-                logger.debug('Cleaned snapshot: %s', self._rel_display(snapshot))
-        return removed
 
     def pre_flight_validation(self, feature: FeatureSpec) -> Tuple[bool, Optional[Dict]]:
         """
@@ -603,205 +624,69 @@ class PrimeContractorWorkflow:
         """
         Integrate a single feature immediately.
 
+        Delegates to IntegrationEngine for the full
+        snapshot → validate → merge → checkpoint → commit/rollback pipeline.
+
+        Domain post-validation (advisory) stays here because it depends on
+        ``_current_enrichment`` which is PrimeContractor-specific context.
+
         Returns:
             True if integration succeeded, False otherwise
         """
-        logger.info('INTEGRATING FEATURE: %s', feature.name, extra={'feature_name': feature.name, 'feature_id': feature.id})
-        self.queue.start_integration(feature.id)
-        if feature.integration_attempts > 1:
-            for tf in feature.target_files:
-                tp = sanitize_path(tf, base_dir=self.project_root)
-                if self._restore_target(tp):
-                    logger.info('Retry %d: restored %s from snapshot', feature.integration_attempts, self._rel_display(tp))
-        if not self.dry_run:
-            gen_paths = [Path(f) for f in feature.generated_files if Path(f).exists() and Path(f).suffix == '.py']
-            if gen_paths:
-                pre_result = self.checkpoint.pre_validate(gen_paths)
-                # Emit GateResult for pre-merge validation (Phase 4, Item 10)
-                try:
-                    gate = GateEmitter.from_checkpoint_result(
-                        pre_result, workflow_id=feature.id, trace_id=None,
-                    )
-                    GateEmitter.emit(gate)
-                except Exception as gate_exc:
-                    logger.warning("Failed to emit pre-validate gate result: %s", gate_exc)
-                if pre_result.status == CheckpointStatus.FAILED:
-                    error_msg = pre_result.message
-                    if pre_result.errors:
-                        error_msg += ': ' + '; '.join(pre_result.errors[:5])
-                    logger.error('Pre-merge validation failed for %s: %s', feature.name, error_msg, extra={'feature_name': feature.name})
-                    self.queue.fail_feature(feature.id, error_msg)
-                    return False
-                logger.info('Pre-merge validation passed for %s', feature.name, extra={'feature_name': feature.name})
-                # Domain post-validation — advisory only (matches artisan behaviour).
-                # Warnings are logged but do not block integration.  This avoids
-                # chicken-and-egg failures where a dependency file (e.g. requirements.in)
-                # is a separate downstream task that hasn't been generated yet.
-                if self._current_enrichment is not None:
-                    for gen_path in gen_paths:
-                        code = gen_path.read_text(encoding='utf-8')
-                        from .artisan_phases.domain_checklist import validate_generated_code
-                        domain_result = validate_generated_code(code, self._current_enrichment)
-                        if not domain_result.passed:
-                            for iss in domain_result.issues:
-                                logger.warning(
-                                    'Feature %s: post-gen %s: %s (line %s)',
-                                    feature.name, iss.validator, iss.message, iss.line,
-                                    extra={'feature_name': feature.name},
-                                )
-                        else:
-                            logger.info('Domain validation passed for %s', feature.name, extra={'feature_name': feature.name})
-        integrated_files = []
-        for i, source_file in enumerate(feature.generated_files):
-            source_path = Path(source_file)
-            if i < len(feature.target_files):
-                try:
-                    sanitized = sanitize_path(feature.target_files[i], base_dir=self.project_root)
-                except Exception as e:
-                    logger.error("Path validation failed for '%s': %s", feature.target_files[i], e, extra={'feature_name': feature.name})
-                    continue
-                target_path = sanitized
-            elif not source_path.exists():
-                if self.dry_run:
-                    target_path = self.project_root / 'src' / source_path.name
-                else:
-                    logger.error('Source file not found: %s', source_path, extra={'feature_name': feature.name})
-                    continue
-            else:
-                target_path = self.project_root / 'src' / source_path.name
-            if self.dry_run:
-                target_rel = self._rel_display(target_path)
-                action = 'update' if target_path.exists() else 'create'
-                logger.info('[DRY RUN] Would %s: %s', action, target_rel, extra={'dry_run': True})
-                integrated_files.append(target_path)
-                continue
-            if not source_path.exists():
-                logger.error('Source file not found: %s', source_path, extra={'feature_name': feature.name})
-                continue
-            if self.check_truncation:
-                from ..truncation_detection import CONFIDENCE_HIGH, CONFIDENCE_HIGH_PROSE, detect_truncation, get_expected_sections_for_code, log_truncation_result
-                source_content = source_path.read_text(encoding='utf-8')
-                expected = get_expected_sections_for_code(source_content)
-                trunc_result = detect_truncation(source_content, expected_sections=expected, strict_mode=False)
-                if trunc_result.is_truncated:
-                    log_truncation_result(trunc_result, source_file=str(source_path), feature_name=feature.name, step_name='pre_integration')
-                    code_mode_active = trunc_result.details.get('code_mode', False)
-                    reject_threshold = CONFIDENCE_HIGH if code_mode_active else CONFIDENCE_HIGH_PROSE
-                    if trunc_result.confidence >= reject_threshold:
-                        logger.error('REJECTED %s: appears truncated (confidence=%.0f%%, threshold=%.0f%%, code_mode=%s) — integration blocked', source_path.name, trunc_result.confidence * 100, reject_threshold * 100, code_mode_active, extra={'feature_name': feature.name, 'source_file': str(source_path)})
-                        continue
-                    else:
-                        logger.warning('Possible truncation in %s (confidence=%.0f%%, threshold=%.0f%%, code_mode=%s) — proceeding, review if build fails', source_path.name, trunc_result.confidence * 100, reject_threshold * 100, code_mode_active, extra={'feature_name': feature.name, 'source_file': str(source_path)})
-            if target_path.exists() and (not self.allow_dirty):
-                if not self.protect_dirty_target(target_path):
-                    logger.warning('Skipping %s to protect uncommitted changes', target_path.name)
-                    continue
-            if feature.integration_attempts == 1:
-                self._snapshot_target(target_path)
-            if self.merge_strategy.can_merge(source_path, target_path):
-                result = self.merge_strategy.merge(source_path, target_path)
-                if result.status.value == 'success':
-                    logger.info('Merged: %s', self._rel_display(target_path), extra={'feature_name': feature.name})
-                    integrated_files.append(target_path)
-                elif result.status.value == 'conflict':
-                    logger.warning('Merged with conflicts: %s — %s', target_path.name, '; '.join(result.conflicts[:3]), extra={'feature_name': feature.name, 'conflicts': result.conflicts[:3]})
-                    integrated_files.append(target_path)
-                else:
-                    logger.error('Merge failed for %s: %s', target_path.name, result.error, extra={'feature_name': feature.name})
-            else:
-                target_path.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source_path, target_path)
-                logger.info('Copied: %s', self._rel_display(target_path), extra={'feature_name': feature.name})
-                integrated_files.append(target_path)
-        if not integrated_files:
-            error_msg = 'No files were integrated'
-            self.queue.fail_feature(feature.id, error_msg)
-            self.instrumentor.emit_insight(insight_type='integration_failed', summary=f"Feature '{feature.name}' failed: no files integrated", confidence=1.0, feature_id=feature.id)
-            return False
-        for file_path in integrated_files:
-            file_str = str(file_path)
-            if file_str not in self.files_modified_this_session:
-                self.files_modified_this_session[file_str] = []
-            self.files_modified_this_session[file_str].append(feature.name)
-        if not self.dry_run:
-            # Auto-fix trivially-fixable lint issues (F811 redefined imports,
-            # F841 unused variables, etc.) before running checkpoints.  These
-            # are common LLM code-gen artifacts that ruff resolves without
-            # changing semantics.  Mirrors pre_validate's auto-fix step.
-            for ifile in integrated_files:
-                if ifile.suffix == ".py":
-                    try:
-                        subprocess.run(
-                            ["python3", "-m", "ruff", "check", "--fix",
-                             "--unsafe-fixes", "--select=E7,E9,F", str(ifile)],
-                            capture_output=True, text=True,
-                            cwd=self.project_root, timeout=30,
-                        )
-                    except Exception:
-                        pass  # best-effort; lint check will catch remaining issues
-            logger.info("Running integration checkpoints for '%s'...", feature.name)
-            results = self.checkpoint.run_all_checkpoints(integrated_files, feature.name)
-            # Import Check and Lint Check are advisory — matches artisan
-            # behaviour, which never runs these checks at integration time.
-            # Generated project code uses third-party packages not installed
-            # in the SDK venv (imports fail) and LLM output commonly has
-            # fixable lint artifacts (F811, F841) plus occasional real issues
-            # (F821) that are better caught at test/runtime.  Syntax Check
-            # remains blocking — unparseable code is never useful.
-            for r in results:
-                if r.name in ("Import Check", "Lint Check") and r.status == CheckpointStatus.FAILED:
-                    for err in (r.errors or []):
-                        logger.warning("Advisory %s: %s", r.name.lower(), err, extra={'feature_name': feature.name})
-                    r.status = CheckpointStatus.WARNING
-                    r.warnings = (r.warnings or []) + (r.errors or [])
-                    r.errors = []
-            # Emit GateResult for each checkpoint result (Phase 4, Item 10)
-            for cr in results:
-                try:
-                    gate = GateEmitter.from_checkpoint_result(
-                        cr, workflow_id=feature.id, trace_id=None,
-                    )
-                    GateEmitter.emit(gate)
-                except Exception as gate_exc:
-                    logger.warning("Failed to emit checkpoint gate result: %s", gate_exc)
-            all_passed = self.checkpoint.summarize_results(results)
-            if not all_passed:
-                failed_checks = [r for r in results if r.status == CheckpointStatus.FAILED]
-                error_parts = []
-                for r in failed_checks:
-                    detail = r.message
-                    if r.errors:
-                        detail += ': ' + '; '.join(r.errors[:5])
-                    error_parts.append(detail)
-                error_msg = ' | '.join(error_parts)
-                self.queue.fail_feature(feature.id, error_msg)
-                self.instrumentor.emit_insight(insight_type='integration_failed', summary=f"Feature '{feature.name}' failed checkpoints", confidence=1.0, feature_id=feature.id, failed_checks=[r.name for r in failed_checks])
-                if self.on_checkpoint_failed:
-                    self.on_checkpoint_failed(feature, results)
-                return False
-        else:
-            logger.info('[DRY RUN] Would run integration checkpoints', extra={'dry_run': True})
-        if self.auto_commit and (not self.dry_run):
-            self._commit_feature(feature, integrated_files)
-        self.queue.complete_feature(feature.id)
-        self._cleanup_snapshots(integrated_files)
-        self.integration_history.append({'feature_name': feature.name, 'feature_id': feature.id, 'success': True, 'cost_usd': getattr(feature, '_cost_usd', 0.0), 'files': [str(f) for f in integrated_files], 'timestamp': datetime.now().isoformat()})
-        self.instrumentor.emit_insight(insight_type='integration_success', summary=f"Feature '{feature.name}' integrated successfully", confidence=1.0, feature_id=feature.id, files_count=len(integrated_files))
-        if self.on_feature_complete:
-            self.on_feature_complete(feature)
-        logger.info("Feature '%s' integrated successfully", feature.name, extra={'feature_name': feature.name, 'files_count': len(integrated_files)})
-        return True
+        logger.info(
+            'INTEGRATING FEATURE: %s', feature.name,
+            extra={'feature_name': feature.name, 'feature_id': feature.id},
+        )
 
-    def _commit_feature(self, feature: FeatureSpec, files: List[Path]):
-        """Commit the integrated feature to git."""
-        for file_path in files:
-            subprocess.run(['git', 'add', str(file_path)], cwd=self.project_root, capture_output=True, timeout=300)
-        commit_msg = f'feat: Integrate {feature.name}\n\nIntegrated via Prime Contractor workflow'
-        result = subprocess.run(['git', 'commit', '-m', commit_msg], cwd=self.project_root, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0:
-            logger.info('Committed: %s', feature.name)
+        # Domain post-validation — advisory only, before engine runs
+        if not self.dry_run and self._current_enrichment is not None:
+            gen_paths = [
+                Path(f) for f in feature.generated_files
+                if Path(f).exists() and Path(f).suffix == '.py'
+            ]
+            for gen_path in gen_paths:
+                code = gen_path.read_text(encoding='utf-8')
+                from .artisan_phases.domain_checklist import validate_generated_code
+                domain_result = validate_generated_code(
+                    code, self._current_enrichment,
+                )
+                if not domain_result.passed:
+                    for iss in domain_result.issues:
+                        logger.warning(
+                            'Feature %s: post-gen %s: %s (line %s)',
+                            feature.name, iss.validator, iss.message, iss.line,
+                            extra={'feature_name': feature.name},
+                        )
+                else:
+                    logger.info(
+                        'Domain validation passed for %s', feature.name,
+                        extra={'feature_name': feature.name},
+                    )
+
+        unit = FeatureSpecUnit(feature)
+        result = self._engine.integrate(
+            unit,
+            attempt=feature.integration_attempts + 1,
+            listener=self._prime_listener,
+        )
+
+        if result.success:
+            self.queue.complete_feature(feature.id)
+            self.integration_history.append({
+                'feature_name': feature.name,
+                'feature_id': feature.id,
+                'success': True,
+                'cost_usd': getattr(feature, '_cost_usd', 0.0),
+                'files': [str(f) for f in result.integrated_files],
+                'timestamp': datetime.now().isoformat(),
+            })
+            if self.on_feature_complete:
+                self.on_feature_complete(feature)
+            return True
         else:
-            logger.warning("Commit failed for '%s': %s", feature.name, result.stderr.strip())
+            if result.checkpoint_results and self.on_checkpoint_failed:
+                self.on_checkpoint_failed(feature, result.checkpoint_results)
+            return False
 
     def run(self, max_features: Optional[int]=None, stop_on_failure: bool=True, max_cost_usd: Optional[float]=None) -> Dict:
         """
@@ -954,7 +839,7 @@ class PrimeContractorWorkflow:
             snapshot_file.unlink()
             logger.debug('Removed snapshot: %s', snapshot_file.relative_to(self.project_root))
             removed += 1
-        self._pre_integration_snapshots.clear()
+        self._engine._pre_integration_snapshots.clear()
         for pycache_dir in self.project_root.rglob('__pycache__'):
             if pycache_dir.is_dir():
                 shutil.rmtree(pycache_dir)

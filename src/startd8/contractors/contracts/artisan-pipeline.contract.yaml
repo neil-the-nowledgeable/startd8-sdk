@@ -11,7 +11,7 @@
 schema_version: "0.2.0"
 pipeline_id: artisan
 description: >
-  Context propagation contract for the 7-phase Artisan contractor workflow.
+  Context propagation contract for the 8-phase Artisan contractor workflow.
   Defines entry/exit requirements per phase and three end-to-end propagation
   chains for domain classification, validator routing, and calibration.
 
@@ -65,6 +65,26 @@ phases:
           description: "Calibration data for output size limits"
         - name: example_artifacts
           type: dict
+          severity: advisory
+        - name: wave_assignments
+          type: dict
+          severity: advisory
+          description: "task_id -> wave_index mapping from dependency-depth BFS"
+        - name: wave_metadata
+          type: dict
+          severity: advisory
+          description: "wave_count, wave_summary, critical_path_length"
+        - name: service_metadata
+          type: dict
+          severity: advisory
+        - name: plan_document_text
+          type: string
+          severity: advisory
+        - name: onboarding_calibration_hints
+          type: any
+          severity: advisory
+        - name: onboarding_dependency_graph
+          type: any
           severity: advisory
 
   scaffold:
@@ -120,7 +140,7 @@ phases:
             threshold: 2
             on_below: warning
             description: "Design output should have at least 2 sections (architecture + implementation notes)"
-      advisory:
+      optional:
         - name: design_results.*.design_mode
           type: str
           description: "Per-task design mode: 'create' (new file) or 'update' (existing file). Default 'create' for backward compatibility."
@@ -171,6 +191,18 @@ phases:
           default: {}
           source_phase: plan
           description: "Output size calibration data (max_output_tokens, etc.)"
+        - name: service_metadata
+          type: dict
+          severity: warning
+          default: null
+          source_phase: plan
+          description: "Service metadata for protocol/dep compliance in code generation"
+        - name: architectural_context
+          type: dict
+          severity: advisory
+          default: {}
+          source_phase: plan
+          description: "Project architecture for code generation context"
     exit:
       required:
         - name: implementation
@@ -188,6 +220,33 @@ phases:
           type: dict
           severity: warning
           description: "Per-task truncation detection results from Gate 4 (empty if no issues)"
+
+  integrate:
+    description: "Merge staged generated code into project root with validation and rollback"
+    entry:
+      required:
+        - name: generation_results
+          type: dict
+          severity: blocking
+          description: "Per-task generation results with staged file paths"
+      enrichment:
+        - name: _staging_dir
+          type: str
+          severity: warning
+          default: ""
+          source_phase: implement
+          description: "Path to staging directory (falls back to .startd8/staging/)"
+    exit:
+      required:
+        - name: integration_results
+          type: dict
+          severity: blocking
+          description: "Per-task integration outcomes (success, files, errors)"
+          quality:
+            metric: success_rate
+            threshold: 0.5
+            on_below: warning
+            description: "At least half of integration results should have success=true"
 
   test:
     description: "Final testing and validation"
@@ -247,6 +306,18 @@ phases:
           default: {}
           source_phase: implement
           description: "Per-task truncation detection results for review annotation"
+        - name: service_metadata
+          type: dict
+          severity: advisory
+          default: null
+          source_phase: plan
+          description: "Service metadata for protocol compliance review"
+        - name: project_context
+          type: dict
+          severity: advisory
+          default: {}
+          source_phase: plan
+          description: "Project-level context (plan_title, plan_goals, architectural_context)"
     exit:
       required:
         - name: review_results
@@ -365,3 +436,16 @@ propagation_chains:
       field: DevelopmentChunk.metadata.design_mode
     severity: warning
     verification: "dest in ('create', 'update')"
+
+  - chain_id: onboarding_context_to_implement
+    description: >
+      Project-level onboarding context flows from seed through IMPLEMENT and REVIEW
+      phases for protocol compliance and architectural alignment.
+    source:
+      phase: plan
+      field: service_metadata
+    waypoints: []
+    destination:
+      phase: implement
+      field: DevelopmentChunk.metadata.service_metadata
+    severity: warning

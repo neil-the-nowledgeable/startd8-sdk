@@ -205,6 +205,64 @@ class MergeStrategy(Protocol):
         """
         ...
 
+@runtime_checkable
+class IntegrationUnit(Protocol):
+    """Protocol for a unit of work to be integrated.
+
+    Implementations wrap whatever task representation the caller uses
+    (FeatureSpec, SeedTask, etc.) and expose a uniform surface for
+    IntegrationEngine.
+    """
+
+    @property
+    def id(self) -> str:
+        """Unique identifier for this unit."""
+        ...
+
+    @property
+    def name(self) -> str:
+        """Human-readable name for logging."""
+        ...
+
+    @property
+    def generated_files(self) -> List[str]:
+        """Paths to generated source files (may be in a staging dir)."""
+        ...
+
+    @property
+    def target_files(self) -> List[str]:
+        """Paths where files should land in project_root."""
+        ...
+
+    @property
+    def context(self) -> Dict[str, Any]:
+        """Arbitrary metadata forwarded to listeners and diagnostics."""
+        ...
+
+
+@runtime_checkable
+class IntegrationListener(Protocol):
+    """Observer protocol for IntegrationEngine lifecycle events."""
+
+    def on_integration_started(self, unit: IntegrationUnit) -> None: ...
+    def on_file_integrated(self, unit: IntegrationUnit, source: Path, target: Path) -> None: ...
+    def on_checkpoint_result(self, unit: IntegrationUnit, result: Any) -> None: ...
+    def on_integration_failed(self, unit: IntegrationUnit, error: str) -> None: ...
+    def on_integration_completed(self, unit: IntegrationUnit, files: List[Path]) -> None: ...
+
+
+@dataclass
+class IntegrationResult:
+    """Outcome of an IntegrationEngine.integrate() call."""
+
+    success: bool
+    integrated_files: List[Path] = field(default_factory=list)
+    errors: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    rollback_performed: bool = False
+    checkpoint_results: List[Any] = field(default_factory=list)
+
+
 class ModelRole(str, Enum):
     """Role a model plays in the contractor pipeline."""
     DRAFT = 'draft'
@@ -497,6 +555,7 @@ __all__ = [
     'ModelRole', 'LessonCategory', 'LessonSeverity', 'SortOrder',
     'LessonQuery', 'Lesson', 'LessonResult', 'ModelCatalogEntry',
     'LessonsProvider',
+    'IntegrationUnit', 'IntegrationListener', 'IntegrationResult',
     'DRAFT_MODEL_CLAUDE_HAIKU', 'VALIDATE_MODEL_CLAUDE_SONNET',
     'REVIEW_MODEL_CLAUDE_OPUS',
     'MODEL_CATALOG',

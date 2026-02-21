@@ -305,11 +305,11 @@ class TestLaneParallelConfig:
 
 
 class TestLaneParallelCheckpoint:
-    """Tests for WorkflowCheckpoint v3 fields."""
+    """Tests for WorkflowCheckpoint v3+ fields."""
 
-    def test_schema_version_is_3(self):
-        """Checkpoint schema version should be 3."""
-        assert CHECKPOINT_SCHEMA_VERSION == 3
+    def test_schema_version_is_4(self):
+        """Checkpoint schema version should be 4 (wave+lane)."""
+        assert CHECKPOINT_SCHEMA_VERSION == 4
 
     def test_v3_fields_default_empty(self):
         """v3 lane-parallel fields default to empty collections."""
@@ -324,7 +324,7 @@ class TestLaneParallelCheckpoint:
         assert cp.lane_assignments == {}
         assert cp.completed_lanes == []
         assert cp.lane_results == {}
-        assert cp.schema_version == 3
+        assert cp.schema_version == 4
 
     def test_v3_fields_populated(self):
         """v3 fields can be populated."""

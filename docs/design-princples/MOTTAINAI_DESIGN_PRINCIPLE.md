@@ -415,6 +415,7 @@ When designing new pipeline stages or modifying existing ones:
 | [A2A Gate Requirements](./A2A_GATE_REQUIREMENTS.md) | Gates validate artifact integrity at boundaries — mottainai adds the question "are we using what we validated?" |
 | [Export Pipeline Analysis Guide](../guides/EXPORT_PIPELINE_ANALYSIS_GUIDE.md) | The operational guide that describes the 7-step pipeline where mottainai violations occur |
 | [`startd8.artisan.functional-requirements.yaml`](../capability-index/startd8.artisan.functional-requirements.yaml) (AR-900..AR-908) | Formal requirements for Mottainai compliance within the artisan 7-phase pipeline — maps Gaps 17–36 to testable acceptance criteria |
+| [REFINE Forwarding Requirements](../REFINE_FORWARDING_REQUIREMENTS.md) (REQ-RF-001..012) | Closes Gaps 5 and 13 — forwards REFINE triage, apply, and area coverage output through the seed to downstream consumers |
 
 ---
 
@@ -428,3 +429,4 @@ When designing new pipeline stages or modifying existing ones:
 | 2026-02-19 | Added Observed Failures section: 3 violations from artisan Run 1 retry — batch result detection (fixed `21548e4`), adopted-status rejection (fixed `21548e4`), onboarding data not bridged from export to seed (Gaps 1-7 confirmed with evidence, not yet fixed) |
 | 2026-02-20 | Gap 15 partially resolved: CID-018 source types (5) registered in ArtifactType enum with full onboarding dict coverage. Gap 16 resolved: auto-derive service_metadata from manifest artifacts |
 | 2026-02-21 | Artisan Internal Audit: added Gaps 17–36 (20 intra-pipeline violations across 3 anti-patterns: serialize-and-forget, compute-but-don't-forward, inject-but-don't-validate). A-15 addressed by AR-127/AR-128 |
+| 2026-02-21 | Added [REFINE Forwarding Requirements](../REFINE_FORWARDING_REQUIREMENTS.md) (REQ-RF-001..012) to close Gaps 5 and 13 — REFINE triage/apply/config forwarding through the seed, informed by ContextCore propagation contract model |

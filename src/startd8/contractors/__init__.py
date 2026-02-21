@@ -35,12 +35,16 @@ from .checkpoint import (
     CheckpointStatus,
     IntegrationCheckpoint,
 )
+from .integration_engine import IntegrationEngine, NullListener
 from .prime_contractor import PrimeContractorWorkflow
 from .protocols import (
     CheckpointFailedCallback,
     CodeGenerator,
     FeatureCompleteCallback,
     GenerationResult,
+    IntegrationListener,
+    IntegrationResult,
+    IntegrationUnit,
     Instrumentor,
     MergeResult,
     MergeStatus,
@@ -73,6 +77,9 @@ except ImportError:
 __all__ = [
     # Main workflow
     "PrimeContractorWorkflow",
+    # Integration engine
+    "IntegrationEngine",
+    "NullListener",
     # Queue
     "FeatureQueue",
     "FeatureSpec",
@@ -86,12 +93,15 @@ __all__ = [
     "Instrumentor",
     "SizeEstimator",
     "MergeStrategy",
+    "IntegrationUnit",
+    "IntegrationListener",
     # Data classes
     "GenerationResult",
     "SizeEstimate",
     "MergeResult",
     "MergeStatus",
     "SpanContext",
+    "IntegrationResult",
     # Callbacks
     "ProgressCallback",
     "FeatureCompleteCallback",

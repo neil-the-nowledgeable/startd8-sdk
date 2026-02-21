@@ -950,6 +950,24 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             if examples_for_chunk:
                 gen_ctx["example_artifacts"] = examples_for_chunk
 
+        # PCA-300: project architecture context
+        arch_ctx = meta.get("architectural_context")
+        if arch_ctx:
+            gen_ctx["architectural_context"] = arch_ctx
+
+        plan_goals = meta.get("plan_goals")
+        if plan_goals:
+            gen_ctx["plan_goals"] = plan_goals
+
+        plan_context = meta.get("plan_context")
+        if plan_context:
+            gen_ctx["plan_context"] = plan_context
+
+        # PCA-301/400: service metadata
+        svc_meta = meta.get("service_metadata")
+        if svc_meta:
+            gen_ctx["service_metadata"] = svc_meta
+
         return gen_ctx
 
     def _build_task_description(
@@ -1036,6 +1054,45 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if completeness_warning:
             parts.append("\n## Design Completeness Warning")
             parts.append(completeness_warning)
+
+        # PCA-300: project architecture section
+        arch_ctx = chunk.metadata.get("architectural_context")
+        if arch_ctx and isinstance(arch_ctx, dict):
+            _arch_parts: List[str] = []
+            objectives = arch_ctx.get("objectives")
+            if objectives:
+                _arch_parts.append("**Objectives:**")
+                for obj in (objectives if isinstance(objectives, list) else [objectives])[:3]:
+                    _arch_parts.append(f"- {obj}")
+            arch_constraints = arch_ctx.get("constraints")
+            if arch_constraints:
+                _arch_parts.append("**Constraints:**")
+                for con in (arch_constraints if isinstance(arch_constraints, list) else [arch_constraints])[:5]:
+                    _arch_parts.append(f"- {con}")
+            if _arch_parts:
+                parts.append("\n## Project Architecture")
+                parts.extend(_arch_parts)
+
+        plan_goals = chunk.metadata.get("plan_goals")
+        if plan_goals and isinstance(plan_goals, list):
+            parts.append("\n## Project Goals")
+            for goal in plan_goals[:5]:
+                parts.append(f"- {goal}")
+
+        # PCA-301: service metadata section
+        svc_meta = chunk.metadata.get("service_metadata")
+        if svc_meta and isinstance(svc_meta, dict):
+            parts.append("\n## Service Metadata")
+            tp = svc_meta.get("transport_protocol")
+            if tp:
+                parts.append(f"- Transport protocol: {tp}")
+            rd = svc_meta.get("runtime_dependencies")
+            if rd and isinstance(rd, list):
+                parts.append(f"- Runtime dependencies: {', '.join(str(d) for d in rd)}")
+            parts.append(
+                "HEALTHCHECK type MUST match transport_protocol. "
+                "Do NOT add capabilities the service does not use."
+            )
 
         # Append prompt constraints from enrichment (IMP-5: grouped by priority)
         constraints = chunk.metadata.get("prompt_constraints", [])

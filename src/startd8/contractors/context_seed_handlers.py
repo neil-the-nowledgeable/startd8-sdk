@@ -9,7 +9,8 @@ WorkflowPhase mapping (from artisan_contractor.py docstring):
     PLAN      → Load seed + validate + build task plan
     SCAFFOLD  → Verify target directories + resolve dependencies
     DESIGN    → Generate design docs per task via DesignDocumentationPhase
-    IMPLEMENT → Generate code per task via LeadContractorCodeGenerator
+    IMPLEMENT → Generate code per task to staging dir
+    INTEGRATE → Merge staged files into project_root with validation/rollback
     TEST      → Run post-generation validators against generated code
     REVIEW    → LLM-based quality review of generated implementations
     FINALIZE  → Collect artifacts + write comprehensive execution report
@@ -20,6 +21,7 @@ Context dict contract (keys populated by each phase):
     After SCAFFOLD:  scaffold (summary dict)
     After DESIGN:    design_results (Dict[task_id, dict] with design_document, agreed, iterations, cost)
     After IMPLEMENT: implementation (output dict), generation_results (Dict[task_id, GenerationResult])
+    After INTEGRATE: integration_results (Dict[task_id, dict] with success, integrated_files)
     After TEST:      test_results (Dict with test_plan, per_task, total_cost)
     After REVIEW:    review_results (Dict with review_items, per_task, total_cost)
     After FINALIZE:  workflow_summary (final manifest dict)
@@ -64,6 +66,10 @@ from typing import Any, Optional
 from startd8.contractors.artisan_contractor import (
     AbstractPhaseHandler,
     WorkflowPhase,
+    _SAFE_TASK_ID_PATTERN,
+    compute_wave_index_map,
+    compute_wave_metadata,
+    compute_waves,
 )
 from startd8.contractors.protocols import (
     CodeGenerator,
@@ -251,6 +257,7 @@ class HandlerConfig:
     design_agent: Optional[str] = None
     review_agent: Optional[str] = None
     enable_prompt_caching: bool = False
+    staging_dir: Optional[str] = None  # None = .startd8/staging/
 
     def __post_init__(self) -> None:
         if self.force_design and self.refine_design:
@@ -345,6 +352,8 @@ class SeedTask:
     protocol: str = ""
     runtime_dependencies: list[str] = field(default_factory=list)
     negative_scope: list[str] = field(default_factory=list)
+    # Wave+Lane execution: dependency-depth wave assignment
+    wave_index: Optional[int] = None
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> SeedTask:
@@ -391,6 +400,43 @@ class SeedTask:
         }
         deps_confidence = _source_confidence.get(deps_source, 1.0) if deps_source else 1.0
 
+        # --- Task ID safety validation (defense-in-depth) ---
+        raw_task_id = entry.get("task_id", "")
+        if raw_task_id and not _SAFE_TASK_ID_PATTERN.match(raw_task_id):
+            logger.warning(
+                "Task ID %r contains unsafe characters (must match %s) — "
+                "this may cause errors in wave computation, checkpoint keys, "
+                "or file path construction",
+                raw_task_id, _SAFE_TASK_ID_PATTERN.pattern,
+            )
+
+        # Validate depends_on entries for safe characters
+        raw_depends = entry.get("depends_on") or []
+        for dep_id in raw_depends:
+            if isinstance(dep_id, str) and dep_id and not _SAFE_TASK_ID_PATTERN.match(dep_id):
+                logger.warning(
+                    "Task %s: depends_on reference %r contains unsafe characters "
+                    "(must match %s)",
+                    raw_task_id, dep_id, _SAFE_TASK_ID_PATTERN.pattern,
+                )
+
+        # --- Wave index parsing with validation ---
+        raw_wave = entry.get("wave_index")
+        if raw_wave is not None:
+            if not isinstance(raw_wave, int) or isinstance(raw_wave, bool):
+                logger.warning(
+                    "Task %s: wave_index=%r is not an integer — ignoring",
+                    entry.get("task_id"), raw_wave,
+                )
+                raw_wave = None
+            elif raw_wave < 0:
+                logger.warning(
+                    "Task %s: wave_index=%d is negative — ignoring",
+                    entry.get("task_id"), raw_wave,
+                )
+                raw_wave = None
+        wave_index = raw_wave
+
         task = cls(
             task_id=entry.get("task_id", ""),
             title=entry.get("title", ""),
@@ -422,6 +468,7 @@ class SeedTask:
             protocol=context.get("protocol", ""),
             runtime_dependencies=context.get("runtime_dependencies", []),
             negative_scope=context.get("negative_scope", []),
+            wave_index=wave_index,
         )
         if not task.task_id:
             raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
@@ -604,6 +651,39 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     context.setdefault("architectural_context", seed_data.get("architectural_context", {}))
     context.setdefault("design_calibration", seed_data.get("design_calibration", {}))
 
+    # PCA-201: re-extract onboarding fields as defense-in-depth.
+    _onboarding = seed_data.get("onboarding") or {}
+    _pca_fields = {
+        "onboarding_derivation_rules": _onboarding.get("derivation_rules"),
+        "onboarding_resolved_parameters": _onboarding.get("resolved_artifact_parameters"),
+        "onboarding_output_contracts": _onboarding.get("expected_output_contracts"),
+        "onboarding_calibration_hints": _onboarding.get("design_calibration_hints"),
+        "onboarding_open_questions": _onboarding.get("open_questions"),
+        "onboarding_dependency_graph": _onboarding.get("artifact_dependency_graph"),
+        "service_metadata": _onboarding.get("service_metadata"),
+    }
+    _restored = 0
+    for key, value in _pca_fields.items():
+        if key not in context:
+            context[key] = value
+            _restored += 1
+    if _restored:
+        logger.info("Restored %d/7 onboarding fields from seed on resume", _restored)
+
+    # PCA-201: re-load plan_document_text from seed artifacts
+    if "plan_document_text" not in context:
+        plan_doc_path_str = _artifacts.get("plan_document_path")
+        if plan_doc_path_str:
+            _pdp = Path(plan_doc_path_str)
+            if not _pdp.is_absolute():
+                _pdp = Path(seed_path).parent / _pdp
+            if _pdp.exists():
+                try:
+                    context["plan_document_text"] = _pdp.read_text(encoding="utf-8")
+                    logger.info("Restored plan_document_text from seed on resume")
+                except OSError:
+                    pass
+
     return _apply_runtime_task_selection(tasks)
 
 
@@ -658,6 +738,93 @@ class PlanPhaseHandler(AbstractPhaseHandler):
                 len(sorted_tasks), all_count,
                 [t.task_id for t in sorted_tasks],
             )
+
+        # ── Wave assignment: auto-compute or verify from seed ──
+        has_wave = [t for t in sorted_tasks if t.wave_index is not None]
+        missing_wave = [t for t in sorted_tasks if t.wave_index is None]
+
+        if not has_wave or missing_wave:
+            # Cases 1 & 2: no/partial wave_index → auto-compute all.
+            if missing_wave and has_wave:
+                logger.warning(
+                    "Partial wave_index: %d/%d tasks missing wave_index — "
+                    "overriding all with auto-computed waves",
+                    len(missing_wave), len(sorted_tasks),
+                )
+            waves = compute_waves(sorted_tasks)
+            wave_map = compute_wave_index_map(waves)
+            for t in sorted_tasks:
+                t.wave_index = wave_map.get(t.task_id, 0)
+        else:
+            # Case 3: All wave_index present → trust but verify
+            task_count = len(sorted_tasks)
+            for t in sorted_tasks:
+                if t.wave_index < 0 or t.wave_index >= task_count:
+                    logger.warning(
+                        "Task %s: wave_index=%d out of range [0, %d) — "
+                        "will be overridden by computed value",
+                        t.task_id, t.wave_index, task_count,
+                    )
+
+            expected_waves = compute_waves(sorted_tasks)
+            expected_map = compute_wave_index_map(expected_waves)
+            mismatches = [
+                (t.task_id, t.wave_index, expected_map.get(t.task_id))
+                for t in sorted_tasks
+                if t.wave_index != expected_map.get(t.task_id)
+            ]
+            if mismatches:
+                logger.warning(
+                    "wave_index mismatch vs depends_on graph for %d tasks: %s "
+                    "— overriding with computed values",
+                    len(mismatches),
+                    [(tid, f"seed={sw}, computed={cw}") for tid, sw, cw in mismatches],
+                )
+                for t in sorted_tasks:
+                    t.wave_index = expected_map.get(t.task_id, 0)
+            waves = expected_waves
+
+        # Operational circuit breakers
+        wave_meta = compute_wave_metadata(waves)
+        if wave_meta["wave_count"] > 1:
+            parallelism_ratio = len(sorted_tasks) / wave_meta["wave_count"]
+            if parallelism_ratio < 1.5:
+                logger.warning(
+                    "Low parallelism: %d waves for %d tasks (ratio %.1f). "
+                    "This plan is nearly fully serial — consider restructuring "
+                    "depends_on to increase per-wave task count.",
+                    wave_meta["wave_count"], len(sorted_tasks), parallelism_ratio,
+                )
+            if wave_meta["critical_path_length"] > 10:
+                logger.warning(
+                    "Deep dependency chain: critical_path_length=%d. "
+                    "Wave barriers will serialize execution across %d waves.",
+                    wave_meta["critical_path_length"], wave_meta["wave_count"],
+                )
+
+        # Dependency-order assertion (skip for cycle-fallback single wave)
+        if len(waves) > 1:
+            _wave_map_check = {t.task_id: t.wave_index for t in sorted_tasks}
+            violations = []
+            for t in sorted_tasks:
+                for dep_id in (t.depends_on or []):
+                    dep_wave = _wave_map_check.get(dep_id)
+                    if (dep_wave is not None
+                            and t.wave_index is not None
+                            and dep_wave >= t.wave_index):
+                        violations.append(
+                            (t.task_id, t.wave_index, dep_id, dep_wave)
+                        )
+            if violations:
+                logger.error(
+                    "Wave dependency-order violation for %d task pairs: %s "
+                    "— falling back to single-wave execution",
+                    len(violations),
+                    [(tid, f"wave={tw}, dep={did}, dep_wave={dw}")
+                     for tid, tw, did, dw in violations],
+                )
+                for t in sorted_tasks:
+                    t.wave_index = 0
 
         # Extract plan metadata
         plan_meta = seed_data.get("plan", {})
@@ -2574,6 +2741,11 @@ class Test{class_name}:
         downstream_map: dict[str, list[str]] | None = None,
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
+        # PCA-300/301/400: project-level context for IMPLEMENT prompts
+        architectural_context: dict[str, Any] | None = None,
+        plan_goals: list[str] | None = None,
+        plan_context: str | None = None,
+        service_metadata: dict[str, Any] | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -2989,6 +3161,12 @@ class Test{class_name}:
                     "semantic_conventions": semantic_conventions or {},
                     # IMP-7: DESIGN→IMPLEMENT parameter completeness warning
                     "design_completeness_warning": design_completeness_warning,
+                    # PCA-300: project architecture for code generation
+                    "architectural_context": architectural_context or {},
+                    "plan_goals": (plan_goals or [])[:5],
+                    "plan_context": (plan_context or "")[:4000] or None,
+                    # PCA-301/400: service metadata for protocol compliance
+                    "service_metadata": service_metadata if service_metadata else None,
                 },
             ))
 
@@ -3540,6 +3718,11 @@ class Test{class_name}:
                 downstream_map=downstream_map,
                 parameter_sources=context.get("parameter_sources", {}),
                 semantic_conventions=context.get("semantic_conventions", {}),
+                # PCA-300/301/400: project-level context
+                architectural_context=context.get("architectural_context"),
+                plan_goals=context.get("plan_goals"),
+                plan_context=(context.get("plan_document_text") or "")[:4000] or None,
+                service_metadata=context.get("service_metadata"),
             )
 
             if not chunks:
@@ -3567,10 +3750,15 @@ class Test{class_name}:
                 return {"output": output, "cost": 0.0, "metadata": {"duration": duration, "resumed": False}}
 
             # Build executor (inject pre-configured generator if provided)
+            # Write to staging_dir so INTEGRATE merges into project_root
+            staging_dir = project_root / (self.config.staging_dir or ".startd8/staging")
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            context["_staging_dir"] = str(staging_dir)
+
             executor = LeadContractorChunkExecutor(
                 lead_agent=self.config.lead_agent,
                 drafter_agent=self.config.drafter_agent,
-                output_dir=project_root,
+                output_dir=staging_dir,
                 max_iterations=self.config.max_iterations,
                 pass_threshold=self.config.pass_threshold,
                 max_tokens=self.config.max_tokens,
@@ -3766,10 +3954,9 @@ class Test{class_name}:
                         exc, exc_info=True,
                     )
 
-        # --- Auto-commit each feature's generated files ---
-        # Skip on resume: files were already committed in the prior run.
-        if self.config.auto_commit and generation_results and not resumed:
-            self._commit_features(generation_results, tasks, project_root)
+        # NOTE: Auto-commit moved to INTEGRATE phase.
+        # The IMPLEMENT phase now writes to staging_dir; INTEGRATE merges
+        # into project_root and commits if auto_commit is enabled.
 
         context["implementation"] = output
         context["generation_results"] = generation_results
@@ -3869,6 +4056,194 @@ class Test{class_name}:
                     task_id,
                     result.stderr.strip(),
                 )
+
+
+# ============================================================================
+# INTEGRATE phase — merge staged files into project_root
+# ============================================================================
+
+
+class SeedTaskUnit:
+    """Mottainai-compliant adapter: SeedTask + GenerationResult → IntegrationUnit.
+
+    Forwards ALL SeedTask fields via ``dataclasses.asdict()`` in ``context``,
+    plus generation metadata (_generation key).
+    """
+
+    __slots__ = ("_task", "_gen")
+
+    def __init__(self, task: SeedTask, gen_result: GenerationResult) -> None:
+        self._task = task
+        self._gen = gen_result
+
+    @property
+    def id(self) -> str:
+        return self._task.task_id
+
+    @property
+    def name(self) -> str:
+        return self._task.title
+
+    @property
+    def generated_files(self) -> list[str]:
+        return [str(f) for f in self._gen.generated_files]
+
+    @property
+    def target_files(self) -> list[str]:
+        return self._task.target_files
+
+    @property
+    def context(self) -> dict[str, Any]:
+        from dataclasses import asdict
+        ctx = asdict(self._task)
+        ctx["_generation"] = {
+            "model": self._gen.model,
+            "cost_usd": self._gen.cost_usd,
+            "iterations": self._gen.iterations,
+            "input_tokens": self._gen.input_tokens,
+            "output_tokens": self._gen.output_tokens,
+        }
+        return ctx
+
+
+class ArtisanIntegrationListener:
+    """Logs integration events at INFO/WARNING level per existing patterns."""
+
+    def __init__(self, task_id: str) -> None:
+        self._task_id = task_id
+
+    def on_integration_started(self, unit: Any) -> None:
+        logger.info(
+            "INTEGRATE: started for task %s (%s)",
+            self._task_id, unit.name,
+        )
+
+    def on_file_integrated(self, unit: Any, source: Path, target: Path) -> None:
+        logger.info(
+            "INTEGRATE: merged %s → %s",
+            source.name, target,
+            extra={"task_id": self._task_id},
+        )
+
+    def on_checkpoint_result(self, unit: Any, result: Any) -> None:
+        pass  # gate emission handled inside engine
+
+    def on_integration_failed(self, unit: Any, error: str) -> None:
+        logger.warning(
+            "INTEGRATE: task %s failed: %s",
+            self._task_id, error,
+            extra={"task_id": self._task_id},
+        )
+
+    def on_integration_completed(self, unit: Any, files: list[Path]) -> None:
+        logger.info(
+            "INTEGRATE: task %s completed (%d files)",
+            self._task_id, len(files),
+            extra={"task_id": self._task_id},
+        )
+
+
+class IntegratePhaseHandler(AbstractPhaseHandler):
+    """INTEGRATE phase: merge staged files into project_root with validation.
+
+    Reads ``generation_results`` from context (populated by IMPLEMENT),
+    runs each task through IntegrationEngine, and writes
+    ``integration_results`` back to context.
+
+    Files are merged from ``_staging_dir`` (or ``.startd8/staging/``)
+    into the project root.  Auto-commit (if enabled) happens here,
+    not in IMPLEMENT.
+    """
+
+    supports_feature_serial: bool = True
+
+    def __init__(self, config: Optional[HandlerConfig] = None) -> None:
+        self.config = config or HandlerConfig()
+
+    def execute(
+        self,
+        phase: WorkflowPhase,
+        context: dict[str, Any],
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        import shutil as _shutil
+        from startd8.contractors.checkpoint import IntegrationCheckpoint
+        from startd8.contractors.integration_engine import IntegrationEngine
+        from startd8.contractors.registry import get_registry
+
+        start = time.monotonic()
+        project_root = Path(context.get("project_root", ".")).resolve()
+        staging_dir = Path(
+            context.get("_staging_dir", str(project_root / ".startd8/staging"))
+        )
+        tasks = _ensure_context_loaded(context)
+        generation_results: dict[str, GenerationResult] = context.get(
+            "generation_results", {},
+        )
+        task_map = {t.task_id: t for t in tasks}
+
+        # Build engine
+        registry = get_registry()
+        registry.discover()
+        merge_strategy = registry.get_default_merge_strategy(for_python=True)()
+
+        engine = IntegrationEngine(
+            project_root=project_root,
+            merge_strategy=merge_strategy,
+            checkpoint=IntegrationCheckpoint(
+                project_root=project_root, run_tests=False,
+            ),
+            dry_run=dry_run,
+            auto_commit=self.config.auto_commit,
+            allow_dirty=False,
+            check_truncation=self.config.check_truncation,
+        )
+
+        # Integrate each task
+        integration_results: dict[str, dict[str, Any]] = {}
+        for task_id, gr in generation_results.items():
+            if not gr.success:
+                continue
+            task = task_map.get(task_id)
+            if not task:
+                continue
+
+            unit = SeedTaskUnit(task, gr)
+            listener = ArtisanIntegrationListener(task_id)
+            result = engine.integrate(unit, listener=listener)
+            integration_results[task_id] = {
+                "success": result.success,
+                "integrated_files": [str(f) for f in result.integrated_files],
+                "errors": result.errors,
+                "rollback_performed": result.rollback_performed,
+            }
+
+            # Update generation_results paths: staging → project_root
+            if result.success:
+                gr.generated_files = [Path(f) for f in result.integrated_files]
+
+        # Clean staging dir
+        if staging_dir.exists() and not dry_run:
+            _shutil.rmtree(staging_dir, ignore_errors=True)
+
+        # Write to context
+        context["integration_results"] = integration_results
+        # generation_results already mutated with project_root paths
+
+        duration = time.monotonic() - start
+        passed = sum(1 for r in integration_results.values() if r["success"])
+        total = len(integration_results)
+
+        logger.info(
+            "INTEGRATE phase complete: %d/%d tasks merged (%.2fs)",
+            passed, total, duration,
+        )
+
+        return {
+            "output": integration_results,
+            "cost": 0.0,  # no LLM cost — only subprocess validation
+            "metadata": {"duration": duration, "passed": passed, "total": total},
+        }
 
 
 class TestPhaseHandler(AbstractPhaseHandler):
@@ -4661,6 +5036,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
         truncation_info: dict[str, Any] | None = None,
+        project_context: dict[str, Any] | None = None,
     ) -> str:
         """Build the review prompt for a single task.
 
@@ -4707,6 +5083,34 @@ PASS if score >= {pass_threshold} and no blocking issues.
             test_results=test_for_prompt,
             pass_threshold=self.config.pass_threshold,
         )
+
+        # PCA-302: project-level context for architectural review
+        if project_context:
+            _pc_parts = ["## Project Context"]
+            _pt = project_context.get("plan_title")
+            if _pt:
+                _pc_parts.append(f"**Plan:** {_pt}")
+            _pg = project_context.get("plan_goals", [])
+            for g in _pg[:5]:
+                _pc_parts.append(f"- {g}")
+            _arch = project_context.get("architectural_context", {})
+            _objs = _arch.get("objectives", [])
+            if _objs:
+                _pc_parts.append("**Architectural Objectives:**")
+                for o in (list(_objs) if isinstance(_objs, list) else [_objs])[:3]:
+                    _pc_parts.append(f"- {o}")
+            _cons = _arch.get("constraints", [])
+            if _cons:
+                _pc_parts.append("**Constraints:**")
+                for c in (list(_cons) if isinstance(_cons, list) else [_cons])[:5]:
+                    _pc_parts.append(f"- {c}")
+            _pc_text = "\n".join(_pc_parts)
+            if len(_pc_text) > 2000:
+                _pc_text = _pc_text[:2000] + "\n... [truncated for prompt budget]"
+            prompt = prompt.replace(
+                "## Review Instructions",
+                _pc_text + "\n\n## Review Instructions",
+            )
 
         # ── Layer 4: Inject design compliance section ────────────────
         if design_document:
@@ -4915,6 +5319,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
         truncation_info: dict[str, Any] | None = None,
+        project_context: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Conduct LLM review for a single task.
 
@@ -4951,6 +5356,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     parameter_sources=parameter_sources,
                     semantic_conventions=semantic_conventions,
                     truncation_info=truncation_info,
+                    project_context=project_context,
                 )
                 response_text, _time_ms, token_usage = agent.generate(
                     prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
@@ -5328,12 +5734,20 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 # Gate 4: truncation info for this task (if flagged)
                 task_truncation = truncation_flags.get(task.task_id)
 
+                # PCA-302: assemble project context for review
+                _project_context = {
+                    "plan_title": context.get("plan_title"),
+                    "plan_goals": context.get("plan_goals", []),
+                    "architectural_context": context.get("architectural_context", {}),
+                }
+
                 review = self._review_task(
                     task, generated_code, task_test,
                     design_document=task_design_doc,
                     parameter_sources=context.get("parameter_sources"),
                     semantic_conventions=context.get("semantic_conventions"),
                     truncation_info=task_truncation,
+                    project_context=_project_context,
                 )
                 review["title"] = task.title
                 review["domain"] = task.domain
@@ -6098,7 +6512,7 @@ class ContextSeedHandlers:
         enable_prompt_caching: Optional[bool] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
-        """Create handlers for all seven workflow phases.
+        """Create handlers for all eight workflow phases.
 
         Args:
             enriched_seed_path: Path to the enriched context seed JSON.
@@ -6175,6 +6589,7 @@ class ContextSeedHandlers:
                 code_generator=code_generator,
                 enriched_seed_path=Path(enriched_seed_path),
             ),
+            WorkflowPhase.INTEGRATE: IntegratePhaseHandler(config=config),
             WorkflowPhase.TEST: TestPhaseHandler(handler_config=config),
             WorkflowPhase.REVIEW: ReviewPhaseHandler(handler_config=config),
             WorkflowPhase.FINALIZE: FinalizePhaseHandler(

@@ -178,7 +178,7 @@ class TestSevenPhaseIntegration:
 
         expected_phases = set(WorkflowPhase.ordered())
         assert set(handlers.keys()) == expected_phases
-        assert len(handlers) == 7
+        assert len(handlers) == 8
 
     # ------------------------------------------------------------------
     # test_all_phases_execute_in_order
@@ -196,7 +196,7 @@ class TestSevenPhaseIntegration:
         # -- Workflow-level assertions --
         assert result.status == WorkflowStatus.COMPLETED
         assert result.dry_run is True
-        assert len(result.phase_results) == 7
+        assert len(result.phase_results) == 8
 
         # Every phase should have DRY_RUN status
         for pr in result.phase_results:
@@ -251,6 +251,11 @@ class TestSevenPhaseIntegration:
         assert implementation["total_cost"] == 0.0
         assert "generation_results" in context
         assert context["generation_results"] == {}
+
+        # -- After INTEGRATE: integration_results dict --
+        assert "integration_results" in context
+        # In dry-run mode with empty generation_results, no tasks to integrate
+        assert isinstance(context["integration_results"], dict)
 
         # -- After TEST: test_results dict --
         assert "test_results" in context
@@ -374,6 +379,8 @@ class TestSevenPhaseIntegration:
             "design_results",
             # IMPLEMENT
             "implementation", "generation_results",
+            # INTEGRATE
+            "integration_results",
             # TEST
             "test_results",
             # REVIEW

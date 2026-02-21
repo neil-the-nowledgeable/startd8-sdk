@@ -153,7 +153,7 @@ class TestWorkflowCheckpointV2Schema:
             status="in_progress",
         )
         assert checkpoint.schema_version == CHECKPOINT_SCHEMA_VERSION
-        assert checkpoint.schema_version == 3
+        assert checkpoint.schema_version == 4
 
     def test_checkpoint_has_feature_serial_fields(self):
         """Verify checkpoints have feature-serial execution fields."""
@@ -210,11 +210,16 @@ class TestJsonFileCheckpointStoreBackwardCompat:
         checkpoint = store.load("test-workflow-v1")
 
         assert checkpoint is not None
-        assert checkpoint.schema_version == 1  # Marked as migrated v1
+        assert checkpoint.schema_version == 4  # Migrated v1 → v4
         assert checkpoint.completed_features == []
         assert checkpoint.current_feature is None
         assert checkpoint.current_feature_phase is None
         assert checkpoint.feature_partial_results == {}
+        # v4 wave fields added by migration
+        assert checkpoint.wave_assignments == {}
+        assert checkpoint.completed_waves == []
+        assert checkpoint.current_wave is None
+        assert checkpoint.wave_resume_count == {}
 
     def test_load_v2_checkpoint_preserves_fields(
         self, tmp_checkpoint_dir: Path, v2_checkpoint_data: dict
@@ -231,7 +236,7 @@ class TestJsonFileCheckpointStoreBackwardCompat:
         checkpoint = store.load("test-workflow-v2")
 
         assert checkpoint is not None
-        assert checkpoint.schema_version == 2
+        assert checkpoint.schema_version == 4  # Migrated v2 → v4
         assert checkpoint.completed_features == ["feature-1", "feature-2"]
         assert checkpoint.current_feature == "feature-3"
         assert checkpoint.current_feature_phase == "implement"
@@ -261,10 +266,15 @@ class TestJsonFileCheckpointStoreBackwardCompat:
         path = tmp_checkpoint_dir / "save-test.checkpoint.json"
         raw_data = json.loads(path.read_text())
 
-        assert raw_data["schema_version"] == 3
+        assert raw_data["schema_version"] == 4
         assert raw_data["completed_features"] == ["f1"]
         assert raw_data["current_feature"] == "f2"
         assert raw_data["current_feature_phase"] == "design"
+        # v4 wave fields present with defaults
+        assert raw_data["wave_assignments"] == {}
+        assert raw_data["completed_waves"] == []
+        assert raw_data["current_wave"] is None
+        assert raw_data["wave_resume_count"] == {}
 
 
 class TestFeaturePartialResult:

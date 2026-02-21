@@ -146,6 +146,9 @@ def print_phase_results(result: WorkflowResult) -> None:
                 if db:
                     print(f"      By domain: {db}")
 
+            elif pr.phase == WorkflowPhase.INTEGRATE:
+                print(f"      Merged: {pr.output.get('passed', '?')}/{pr.output.get('total', '?')}")
+
             elif pr.phase == WorkflowPhase.TEST:
                 print(f"      Validators: {pr.output.get('total_validators', '?')}")
                 print(f"      Tasks with tests: {pr.output.get('tasks_with_tests', '?')}")
@@ -352,7 +355,32 @@ def main() -> int:
     )
     parser.add_argument(
         "--max-lanes", type=int, default=4,
-        help="Maximum number of concurrent lanes in lane-parallel mode (default: 4)",
+        help="Maximum number of concurrent lanes in lane-parallel or wave-parallel mode (default: 4)",
+    )
+
+    parser.add_argument(
+        "--wave-parallel", action="store_true",
+        help=(
+            "Wave+Lane parallel execution: tasks execute in dependency-depth "
+            "waves, with lanes within each wave running concurrently. "
+            "Combines dependency ordering (waves) with file-scope isolation "
+            "(lanes). Mutually exclusive with --lane-parallel."
+        ),
+    )
+    parser.add_argument(
+        "--strict-wave-deps", action="store_true",
+        help=(
+            "Raise an error (instead of warning) on unresolved dependency "
+            "references during wave computation. Recommended for CI environments."
+        ),
+    )
+    parser.add_argument(
+        "--max-wave-resume-attempts", type=int, default=3,
+        help=(
+            "Maximum number of resume attempts per wave before marking as "
+            "FAILED_UNRECOVERABLE (default: 3). Prevents unbounded cost waste "
+            "on deterministically failing tasks."
+        ),
     )
 
     # --dress-rehearsal and --adopt-prior are mutually exclusive:
@@ -676,6 +704,9 @@ def main() -> int:
         project_root=str(Path(args.project_root).resolve()),
         lane_parallel=args.lane_parallel,
         max_parallel_lanes=args.max_lanes,
+        wave_parallel=args.wave_parallel,
+        strict_wave_deps=args.strict_wave_deps,
+        max_wave_resume_attempts=args.max_wave_resume_attempts,
         metadata={
             "seed_path": str(seed_path),
             "runner": "run_artisan_workflow.py",
@@ -691,7 +722,15 @@ def main() -> int:
         logger.info("Task filter: %s (%d task(s))", task_filter, len(task_filter))
     if config.cost_budget is not None:
         logger.info("Cost budget: $%.2f", config.cost_budget)
-    if config.lane_parallel:
+    if config.wave_parallel:
+        logger.info(
+            "Execution mode: wave-parallel (max %d concurrent lanes, "
+            "strict_wave_deps=%s, max_wave_resume=%d)",
+            config.max_parallel_lanes,
+            config.strict_wave_deps,
+            config.max_wave_resume_attempts,
+        )
+    elif config.lane_parallel:
         logger.info(
             "Execution mode: lane-parallel (max %d concurrent lanes)",
             config.max_parallel_lanes,
@@ -756,6 +795,7 @@ def main() -> int:
     # reload task data after a checkpoint resume (context is not persisted).
     initial_context: dict[str, Any] = {
         "enriched_seed_path": str(seed_path.resolve()),
+        "project_root": str(Path(args.project_root).resolve()),
     }
     if task_filter:
         initial_context["task_filter"] = task_filter

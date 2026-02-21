@@ -90,6 +90,9 @@ def print_phase_results(result: WorkflowResult) -> None:
                 if db:
                     print(f"      By domain: {db}")
 
+            elif pr.phase == WorkflowPhase.INTEGRATE:
+                print(f"      Merged: {pr.output.get('passed', '?')}/{pr.output.get('total', '?')}")
+
             elif pr.phase == WorkflowPhase.TEST:
                 print(f"      Validators: {pr.output.get('total_validators', '?')}")
                 print(f"      Tasks with tests: {pr.output.get('tasks_with_tests', '?')}")
@@ -308,6 +311,7 @@ def main() -> int:
     # --- Implementation phases only ---
     phases = [
         WorkflowPhase.IMPLEMENT,
+        WorkflowPhase.INTEGRATE,
         WorkflowPhase.TEST,
         WorkflowPhase.REVIEW,
         WorkflowPhase.FINALIZE,

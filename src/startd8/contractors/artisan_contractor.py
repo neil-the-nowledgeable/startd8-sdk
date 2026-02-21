@@ -31,8 +31,13 @@ from __future__ import annotations
 
 import copy
 import enum
+import hashlib
 import json
 import logging
+import os
+import pickle
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -41,11 +46,12 @@ import uuid
 
 import questionary
 from abc import ABC, abstractmethod
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Protocol, Sequence, runtime_checkable
 
 from startd8.contractors.context_schema import (
     PhaseContextError,
@@ -67,6 +73,9 @@ __all__ = [
     "WorkflowTimeoutError",
     "CostBudgetExceededError",
     "PhaseExecutionError",
+    "InvalidTaskIdError",
+    "UnresolvedDependencyError",
+    "WaveMergeCollisionError",
     "WorkflowConfig",
     "PhaseResult",
     "InnerPhaseResult",
@@ -80,7 +89,11 @@ __all__ = [
     "JsonFileCheckpointStore",
     "InMemoryCheckpointStore",
     "ArtisanContractorWorkflow",
+    "WaveComputeTask",
     "compute_lanes",
+    "compute_waves",
+    "compute_wave_metadata",
+    "compute_wave_index_map",
 ]
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
@@ -127,6 +140,7 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "preflight_summary", "total_estimated_loc", "architectural_context",
     "design_calibration", "task_filter", "project_root",
     "design_results", "test_results", "review_results",
+    "integration_results",
     "abort_on_preflight_fail",
     # Phase 2 data flow keys — lost on resume without these:
     "source_checksum", "parameter_sources", "semantic_conventions",
@@ -134,6 +148,13 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "workflow_id",
     # Gate 4: per-task truncation detection results (implement → finalize)
     "truncation_flags",
+    # INTEGRATE phase: staging dir location
+    "_staging_dir",
+    # PCA-200: project-level context fields for resume survival
+    "onboarding_derivation_rules", "onboarding_resolved_parameters",
+    "onboarding_output_contracts", "onboarding_calibration_hints",
+    "onboarding_open_questions", "onboarding_dependency_graph",
+    "service_metadata", "plan_document_text",
 })
 
 
@@ -145,7 +166,7 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
 class WorkflowPhase(enum.Enum):
     """Ordered workflow phases (generic orchestration layer).
 
-    These seven phases are an *abstract* orchestration grouping, not
+    These eight phases are an *abstract* orchestration grouping, not
     a 1-to-1 mapping to the 9-phase artisan pipeline defined in
     ``artisan_phases/``.  Concrete handler registrations should map
     them as follows:
@@ -154,6 +175,7 @@ class WorkflowPhase(enum.Enum):
         SCAFFOLD  → Phase 2 (Lessons Discovery)
         DESIGN    → Phase 3 (Design Documentation)
         IMPLEMENT → Phase 4 (Test Construction) + Phase 5 (Development)
+        INTEGRATE → Merge staged files into project_root with validation
         TEST      → Phase 7 (Final Testing)
         REVIEW    → Phase 6 (Final Assembly & Validation)
         FINALIZE  → Phase 8 (Retrospective & Lessons)
@@ -163,6 +185,7 @@ class WorkflowPhase(enum.Enum):
     SCAFFOLD = "scaffold"
     DESIGN = "design"
     IMPLEMENT = "implement"
+    INTEGRATE = "integrate"
     TEST = "test"
     REVIEW = "review"
     FINALIZE = "finalize"
@@ -175,6 +198,7 @@ class WorkflowPhase(enum.Enum):
             cls.SCAFFOLD,
             cls.DESIGN,
             cls.IMPLEMENT,
+            cls.INTEGRATE,
             cls.TEST,
             cls.REVIEW,
             cls.FINALIZE,
@@ -231,6 +255,7 @@ class WorkflowStatus(enum.Enum):
     TIMED_OUT = "timed_out"
     BUDGET_EXCEEDED = "budget_exceeded"
     PARTIALLY_COMPLETED = "partially_completed"
+    FAILED_CHECKPOINT = "failed_checkpoint"
 
 
 # ============================================================================
@@ -256,6 +281,23 @@ class WorkflowTimeoutError(WorkflowError):
 
 class CostBudgetExceededError(WorkflowError):
     """Raised when cumulative cost exceeds the configured budget."""
+
+
+class InvalidTaskIdError(ValueError):
+    """Raised when a task_id contains unsafe characters."""
+
+
+class UnresolvedDependencyError(ValueError):
+    """Raised when depends_on references a task_id not in the task set (strict mode)."""
+
+
+class WaveMergeCollisionError(RuntimeError):
+    """Raised when a task ID appears in multiple waves during merge.
+
+    This indicates a fundamental invariant violation in compute_waves() —
+    the task set was not properly partitioned. Continuing would cause
+    non-deterministic data corruption via silent dict.update() overwrite.
+    """
 
 
 class PhaseExecutionError(WorkflowError):
@@ -319,7 +361,10 @@ class WorkflowConfig:
     project_root: Optional[str] = None
     feature_serial: bool = False
     lane_parallel: bool = False
+    wave_parallel: bool = False
     max_parallel_lanes: int = 4
+    max_wave_resume_attempts: int = 3
+    strict_wave_deps: bool = False
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -333,6 +378,10 @@ class WorkflowConfig:
             raise ValueError("max_retries_per_phase must be non-negative")
         if self.lane_parallel and self.feature_serial:
             raise ValueError("lane_parallel and feature_serial are mutually exclusive")
+        if self.wave_parallel and self.lane_parallel:
+            raise ValueError("wave_parallel and lane_parallel are mutually exclusive")
+        if self.wave_parallel and self.feature_serial:
+            raise ValueError("wave_parallel and feature_serial are mutually exclusive")
         if self.max_parallel_lanes < 1:
             raise ValueError("max_parallel_lanes must be at least 1")
 
@@ -411,7 +460,7 @@ class FeaturePartialResult:
 
 
 # Schema version for checkpoint format changes (bump on breaking changes)
-CHECKPOINT_SCHEMA_VERSION = 3
+CHECKPOINT_SCHEMA_VERSION = 4
 
 
 @dataclass
@@ -426,6 +475,8 @@ class WorkflowCheckpoint:
             current_feature_phase, and feature_partial_results fields.
         v3: Lane-parallel execution with lane_assignments, completed_lanes,
             and lane_results fields.
+        v4: Wave+Lane execution with wave_assignments, completed_waves,
+            current_wave, and wave_resume_count fields.
     """
 
     workflow_id: str
@@ -448,6 +499,12 @@ class WorkflowCheckpoint:
     lane_assignments: dict[str, int] = field(default_factory=dict)  # task_id → lane_index
     completed_lanes: list[int] = field(default_factory=list)
     lane_results: dict[str, dict[str, Any]] = field(default_factory=dict)  # str(lane_idx) → results
+
+    # Wave+Lane execution fields (v4+)
+    wave_assignments: dict[str, int] = field(default_factory=dict)    # task_id → wave_index
+    completed_waves: list[int] = field(default_factory=list)
+    current_wave: Optional[int] = None
+    wave_resume_count: dict[str, int] = field(default_factory=dict)   # wave_content_hash → resume attempts
 
 
 @dataclass
@@ -590,10 +647,15 @@ class JsonFileCheckpointStore(CheckpointStore):
 
     def save(self, checkpoint: WorkflowCheckpoint) -> None:
         if not self._writable:
-            return  # silently skip — warning already logged at init
+            logger.debug("Checkpoint save skipped — directory not writable")
+            return
         path = self._path(checkpoint.workflow_id)
         data = json.dumps(asdict(checkpoint), indent=2, default=str)
-        # Atomic-ish write: write to temp then rename
+        # Atomic write: write to temp then replace().
+        # os.replace() is atomic on POSIX; on Windows it is atomic
+        # only when src and dst are on the same volume (which they
+        # are here — same directory).  This guarantees the checkpoint
+        # is either fully persisted or not persisted at all.
         tmp_path = path.with_suffix(".tmp")
         tmp_path.write_text(data, encoding="utf-8")
         tmp_path.replace(path)
@@ -615,6 +677,72 @@ class JsonFileCheckpointStore(CheckpointStore):
                 "Loaded v1 checkpoint for workflow %s — migrated to v2 schema",
                 workflow_id,
             )
+
+        # Migration chain: v1→v2 (feature-serial fields) → v2→v3 (lane fields,
+        # via dataclass defaults) → v3→v4 (wave fields, below)
+        if data.get("schema_version", 1) < 4:
+            # Create .bak of pre-migration checkpoint for rollback safety
+            bak_path = path.with_suffix(".json.bak")
+            try:
+                shutil.copy2(path, bak_path)
+                logger.info(
+                    "Created pre-migration backup: %s (schema v%d → v4)",
+                    bak_path, data.get("schema_version", 1),
+                )
+            except OSError as e:
+                logger.warning(
+                    "Failed to create pre-migration backup %s: %s — "
+                    "proceeding with migration",
+                    bak_path, e,
+                )
+
+            data.setdefault("wave_assignments", {})
+            data.setdefault("completed_waves", [])
+            data.setdefault("current_wave", None)
+            data.setdefault("wave_resume_count", {})
+            data["schema_version"] = CHECKPOINT_SCHEMA_VERSION
+
+        # Wave field type validation — wave mode writes N checkpoints per
+        # IMPLEMENT phase (one per wave barrier plus per-lane within each wave),
+        # multiplying corruption opportunities.
+        if not isinstance(data.get("completed_waves", []), list) or \
+           not all(isinstance(w, int) for w in data.get("completed_waves", [])):
+            logger.error(
+                "Checkpoint corruption: completed_waves=%r is not list[int] "
+                "— treating as empty (wave will re-run from start)",
+                data.get("completed_waves"),
+            )
+            data["completed_waves"] = []
+
+        if data.get("current_wave") is not None and \
+           not isinstance(data.get("current_wave"), int):
+            logger.error(
+                "Checkpoint corruption: current_wave=%r is not Optional[int] "
+                "— treating as None (wave will re-run)",
+                data.get("current_wave"),
+            )
+            data["current_wave"] = None
+
+        if not isinstance(data.get("wave_assignments", {}), dict) or \
+           not all(isinstance(k, str) and isinstance(v, int)
+                   for k, v in data.get("wave_assignments", {}).items()):
+            logger.error(
+                "Checkpoint corruption: wave_assignments has invalid types "
+                "— treating as empty (waves will be recomputed)",
+            )
+            data["wave_assignments"] = {}
+
+        # Task ID content validation for checkpoint-loaded wave_assignments
+        if data.get("wave_assignments"):
+            for key in list(data["wave_assignments"].keys()):
+                if not _SAFE_TASK_ID_PATTERN.match(key):
+                    logger.error(
+                        "Checkpoint corruption: wave_assignments key %r contains "
+                        "unsafe characters — clearing wave_assignments",
+                        key,
+                    )
+                    data["wave_assignments"] = {}
+                    break
 
         return WorkflowCheckpoint(**data)
 
@@ -638,6 +766,242 @@ class InMemoryCheckpointStore(CheckpointStore):
 
     def delete(self, workflow_id: str) -> None:
         self._store.pop(workflow_id, None)
+
+
+# ============================================================================
+# TASK ID SAFETY PATTERN
+# ============================================================================
+
+# Safe task ID pattern: alphanumerics, dots, underscores, hyphens.
+# Rejects path separators, shell metacharacters, null bytes, format strings.
+# Canonical definition — imported by context_seed_handlers.py and
+# plan_ingestion_workflow.py via artisan_contractor._SAFE_TASK_ID_PATTERN.
+_SAFE_TASK_ID_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
+
+
+# ============================================================================
+# WAVE COMPUTATION PROTOCOL AND ALGORITHM
+# ============================================================================
+
+
+@runtime_checkable
+class WaveComputeTask(Protocol):
+    """Minimal interface for tasks consumed by compute_waves()."""
+
+    @property
+    def task_id(self) -> str: ...
+
+    @property
+    def depends_on(self) -> Optional[list[str]]:
+        """May be None for tasks with no dependencies.
+
+        compute_waves() normalizes None to [] internally.
+        """
+        ...
+
+
+def compute_waves(
+    tasks: Sequence[WaveComputeTask],
+    *,
+    strict: bool = False,
+) -> list[list[WaveComputeTask]]:
+    """Group tasks into dependency-depth waves using BFS level assignment.
+
+    Wave 0 = tasks with no dependencies. Wave N = tasks whose deps all
+    resolve to waves < N.  Cycle detection falls back to a single wave
+    (matching _topological_sort cycle behavior).
+
+    Args:
+        tasks: Sequence of objects satisfying WaveComputeTask protocol.
+        strict: If True, raises UnresolvedDependencyError on unknown deps.
+                If False (default), logs WARNING and treats as no-dep.
+
+    Returns:
+        List of waves, where each wave is a list of tasks. Within each
+        wave, input (topological) order is preserved.
+
+    Raises:
+        InvalidTaskIdError: If any task_id or dependency reference contains
+            unsafe characters.
+        UnresolvedDependencyError: If strict=True and a depends_on reference
+            is not found in the task set.
+    """
+    if not tasks:
+        return []
+
+    # Step 0: Task ID validation
+    for task in tasks:
+        if not _SAFE_TASK_ID_PATTERN.match(task.task_id):
+            raise InvalidTaskIdError(
+                f"Task ID {task.task_id!r} contains unsafe characters. "
+                f"Task IDs must match {_SAFE_TASK_ID_PATTERN.pattern}"
+            )
+        for dep_id in (task.depends_on or []):
+            if not _SAFE_TASK_ID_PATTERN.match(dep_id):
+                raise InvalidTaskIdError(
+                    f"Dependency reference {dep_id!r} in task {task.task_id!r} "
+                    f"contains unsafe characters. "
+                    f"Task IDs must match {_SAFE_TASK_ID_PATTERN.pattern}"
+                )
+
+    # Step 1: Build data structures
+    id_to_task: dict[str, WaveComputeTask] = {}
+    in_degree: dict[str, int] = {}
+    dependents: dict[str, list[str]] = {}  # task_id → list of tasks that depend on it
+    task_ids = set()
+
+    for task in tasks:
+        tid = task.task_id
+        task_ids.add(tid)
+        id_to_task[tid] = task
+        in_degree[tid] = 0
+        dependents.setdefault(tid, [])
+
+    # Count in-degrees and build dependents map
+    for task in tasks:
+        deps = task.depends_on or []
+        for dep_id in deps:
+            if dep_id not in task_ids:
+                if strict:
+                    raise UnresolvedDependencyError(
+                        f"Task {task.task_id!r} depends on {dep_id!r} "
+                        f"which is not in the task set"
+                    )
+                logger.warning(
+                    "Task %s: depends_on reference %r not found in task set "
+                    "— treating as resolved",
+                    task.task_id, dep_id,
+                )
+                continue
+            in_degree[task.task_id] = in_degree.get(task.task_id, 0) + 1
+            dependents[dep_id].append(task.task_id)
+
+    # Step 2: Seed BFS queue with zero in-degree tasks (Wave 0)
+    # Use a deque for BFS; preserve input order within each wave
+    input_order = {task.task_id: i for i, task in enumerate(tasks)}
+    queue: deque[str] = deque()
+    wave_of: dict[str, int] = {}
+
+    for task in tasks:
+        if in_degree[task.task_id] == 0:
+            queue.append(task.task_id)
+            wave_of[task.task_id] = 0
+
+    # Step 3: BFS — process level by level
+    while queue:
+        # Process all tasks at the current wave level
+        level_size = len(queue)
+        for _ in range(level_size):
+            tid = queue.popleft()
+            current_wave = wave_of[tid]
+            for dep_tid in dependents[tid]:
+                in_degree[dep_tid] -= 1
+                if in_degree[dep_tid] == 0:
+                    wave_of[dep_tid] = current_wave + 1
+                    queue.append(dep_tid)
+
+    # Step 4: Check for unassigned tasks (cycle detection)
+    unassigned = [t.task_id for t in tasks if t.task_id not in wave_of]
+    if unassigned:
+        logger.warning(
+            "Dependency cycle detected involving %d tasks: %s "
+            "— falling back to single-wave execution",
+            len(unassigned), unassigned,
+        )
+        return [list(tasks)]
+
+    # Step 5: Build wave groups preserving input order within each wave
+    max_wave = max(wave_of.values()) if wave_of else 0
+    waves: list[list[WaveComputeTask]] = [[] for _ in range(max_wave + 1)]
+    for task in tasks:
+        waves[wave_of[task.task_id]].append(task)
+
+    # Filter out empty waves (shouldn't happen, but defensive)
+    return [w for w in waves if w]
+
+
+def compute_wave_metadata(
+    waves: list[list[WaveComputeTask]],
+) -> dict[str, Any]:
+    """Compute summary metadata about the wave structure.
+
+    Returns:
+        Dict with wave_count, wave_summary (list of task counts per wave),
+        and critical_path_length (number of waves).
+    """
+    return {
+        "wave_count": len(waves),
+        "wave_summary": [len(w) for w in waves],
+        "critical_path_length": len(waves),
+    }
+
+
+def compute_wave_index_map(
+    waves: list[list[WaveComputeTask]],
+) -> dict[str, int]:
+    """Build authoritative task_id → wave_index mapping from wave list.
+
+    This is the single canonical source for wave index lookups. All call
+    sites (plan ingestion, PLAN phase auto-compute, execution engine)
+    MUST use this helper rather than ad-hoc enumerate() loops to prevent
+    mapping logic divergence.
+    """
+    return {
+        t.task_id: wave_idx
+        for wave_idx, wave in enumerate(waves)
+        for t in wave
+    }
+
+
+def _wave_content_hash(task_ids: list[str]) -> str:
+    """Compute a stable content-based hash for a wave's task set.
+
+    Keys wave_resume_count by task content rather than wave index,
+    so the retry count is stable across wave recomputation.
+    """
+    # MD5 used for fingerprinting only — not for security.
+    return hashlib.md5(  # noqa: S324
+        ','.join(sorted(task_ids)).encode()
+    ).hexdigest()[:12]
+
+
+# ============================================================================
+# MODULE-LEVEL CONSTANTS FOR CONTEXT FIELD MANAGEMENT
+# ============================================================================
+
+# Task-keyed fields: dicts where keys are task_ids.
+# Used by _isolate_context_for_lane() and _merge_lane_results().
+_TASK_KEYED_FIELDS = (
+    "design_results",
+    "generation_results",
+    "integration_results",
+    "test_results",
+    "review_results",
+    "truncation_flags",
+    "implementation",
+)
+
+# File-keyed fields: dicts where keys are file paths, not task IDs.
+# Merged with last-write-wins semantics (no collision assertion).
+_FILE_KEYED_FIELDS = (
+    "_downstream_map",
+)
+
+# Read-only global fields: set once during PLAN/SCAFFOLD, should not
+# be modified by lane threads during IMPLEMENT waves.
+_READ_ONLY_GLOBAL_FIELDS = frozenset([
+    "scaffold",
+    "domain_summary",
+    "preflight_summary",
+    "plan_title",
+    "plan_goals",
+    "total_estimated_loc",
+    "architectural_context",
+    "design_calibration",
+    "example_artifacts",
+    "tasks",
+    "task_index",
+])
 
 
 # ============================================================================
@@ -740,14 +1104,7 @@ def _isolate_context_for_lane(
     # Replace "tasks" with only this lane's tasks
     ctx["tasks"] = lane_tasks
 
-    # Narrow task-keyed dicts to this lane
-    _TASK_KEYED_FIELDS = (
-        "design_results",
-        "generation_results",
-        "test_results",
-        "review_results",
-        "truncation_flags",
-    )
+    # Narrow task-keyed dicts to this lane (uses module-level constant)
     for field_name in _TASK_KEYED_FIELDS:
         if field_name in ctx and isinstance(ctx[field_name], dict):
             ctx[field_name] = {
@@ -761,23 +1118,27 @@ def _isolate_context_for_lane(
 def _merge_lane_results(
     base_context: dict[str, Any],
     lane_contexts: list[dict[str, Any]],
+    *,
+    resuming: bool = False,
+    checkpoint_restored_task_ids: Optional[set[str]] = None,
 ) -> None:
     """Merge results from completed lane contexts back into the base context.
 
     Updates task-keyed dicts (design_results, generation_results, etc.) and
-    reassembles the full task list.
+    reassembles the full task list. For wave mode, applies deep-copy at the
+    merge boundary and validates task-ID uniqueness.
 
     Args:
         base_context: The original context to merge into.
         lane_contexts: List of lane-isolated contexts after execution.
+        resuming: If True, suppress collision assertions for task IDs that
+            are already in the checkpoint-restored base context.
+        checkpoint_restored_task_ids: Set of task IDs restored from checkpoint
+            (used to filter expected collisions during resume).
     """
-    _TASK_KEYED_FIELDS = (
-        "design_results",
-        "generation_results",
-        "test_results",
-        "review_results",
-        "truncation_flags",
-    )
+    _restored = checkpoint_restored_task_ids or set()
+
+    # Merge task-keyed fields with deep-copy and collision detection
     for field_name in _TASK_KEYED_FIELDS:
         merged: dict[str, Any] = base_context.get(field_name, {})
         if not isinstance(merged, dict):
@@ -785,8 +1146,56 @@ def _merge_lane_results(
         for lane_ctx in lane_contexts:
             lane_data = lane_ctx.get(field_name)
             if isinstance(lane_data, dict):
-                merged.update(lane_data)
+                # Deep-copy to prevent cross-wave aliasing
+                try:
+                    lane_data_copy = copy.deepcopy(lane_data)
+                except (TypeError, pickle.PicklingError) as e:
+                    logger.warning(
+                        "Deep copy failed for field %s: %s — falling back to "
+                        "shallow copy (cross-wave aliasing risk accepted)",
+                        field_name, e,
+                    )
+                    lane_data_copy = dict(lane_data)
+
+                # Collision check — suppress for checkpoint-restored entries
+                if resuming:
+                    check_data = {
+                        k: v for k, v in lane_data_copy.items()
+                        if k not in _restored
+                    }
+                else:
+                    check_data = lane_data_copy
+                collisions = set(check_data.keys()) & set(merged.keys())
+                if collisions:
+                    raise WaveMergeCollisionError(
+                        f"Task-ID key collision during wave merge for field "
+                        f"{field_name}: {collisions} — this indicates a task "
+                        f"was assigned to multiple waves. Halting to prevent "
+                        f"data corruption."
+                    )
+
+                merged.update(lane_data_copy)
         base_context[field_name] = merged
+
+    # Merge file-keyed fields with last-write-wins (no collision assertion)
+    for field_name in _FILE_KEYED_FIELDS:
+        merged_f: dict[str, Any] = base_context.get(field_name, {})
+        if not isinstance(merged_f, dict):
+            merged_f = {}
+        for lane_ctx in lane_contexts:
+            lane_data = lane_ctx.get(field_name)
+            if isinstance(lane_data, dict):
+                try:
+                    lane_data_copy = copy.deepcopy(lane_data)
+                except (TypeError, pickle.PicklingError) as e:
+                    logger.warning(
+                        "Deep copy failed for field %s: %s — falling back to "
+                        "shallow copy",
+                        field_name, e,
+                    )
+                    lane_data_copy = dict(lane_data)
+                merged_f.update(lane_data_copy)
+        base_context[field_name] = merged_f
 
 
 # ============================================================================
@@ -1141,7 +1550,17 @@ class ArtisanContractorWorkflow:
 
         with root_span_context as root_span:
             try:
-                if config.lane_parallel:
+                if config.wave_parallel:
+                    # Wave+Lane parallel execution mode
+                    final_status = self._execute_wave_lane_mode(
+                        context=context,
+                        phase_results=phase_results,
+                        cost_tracker=cost_tracker,
+                        workflow_start=workflow_start,
+                        start_index=start_index,
+                        loaded_checkpoint=loaded_checkpoint,
+                    )
+                elif config.lane_parallel:
                     # Lane-parallel execution mode
                     final_status = self._execute_lane_parallel_mode(
                         context=context,
@@ -1684,6 +2103,10 @@ class ArtisanContractorWorkflow:
         lane_assignments: Optional[dict[str, int]] = None,
         completed_lanes: Optional[list[int]] = None,
         lane_results: Optional[dict[str, dict[str, Any]]] = None,
+        wave_assignments: Optional[dict[str, int]] = None,
+        completed_waves: Optional[list[int]] = None,
+        current_wave: Optional[int] = None,
+        wave_resume_count: Optional[dict[str, int]] = None,
     ) -> WorkflowCheckpoint:
         """Build and save a checkpoint, returning it for attachment to errors.
 
@@ -1700,6 +2123,10 @@ class ArtisanContractorWorkflow:
             lane_assignments: task_id → lane_index mapping (lane-parallel mode).
             completed_lanes: List of lane indices that completed successfully.
             lane_results: Per-lane results (lane-parallel mode).
+            wave_assignments: task_id → wave_index mapping (wave-parallel mode).
+            completed_waves: List of wave indices that completed successfully.
+            current_wave: Wave index currently being executed (if any).
+            wave_resume_count: wave_content_hash → resume attempt count.
 
         Returns:
             The persisted WorkflowCheckpoint.
@@ -1752,11 +2179,16 @@ class ArtisanContractorWorkflow:
             lane_assignments=lane_assignments or {},
             completed_lanes=completed_lanes or [],
             lane_results=lane_results or {},
+            # Wave+Lane fields (v4+)
+            wave_assignments=wave_assignments or {},
+            completed_waves=completed_waves or [],
+            current_wave=current_wave,
+            wave_resume_count=wave_resume_count or {},
         )
         try:
             self.checkpoint_store.save(checkpoint)
         except (OSError, TypeError, ValueError):
-            self._logger.warning(
+            self._logger.error(
                 "Failed to persist checkpoint for workflow %s",
                 self.config.workflow_id,
                 exc_info=True,
@@ -2568,6 +3000,599 @@ class ArtisanContractorWorkflow:
                     lane_assignments=lane_assignments,
                     completed_lanes=completed_lanes,
                     lane_results=lane_results_map,
+                )
+                raise WorkflowTimeoutError(
+                    f"Global phase {phase.value} timed out",
+                    checkpoint=checkpoint,
+                )
+
+        return WorkflowStatus.COMPLETED
+
+    # ------------------------------------------------------------------
+    # Wave+Lane parallel execution
+    # ------------------------------------------------------------------
+
+    def _execute_wave_lane_mode(
+        self,
+        context: dict[str, Any],
+        phase_results: list[PhaseResult],
+        cost_tracker: "_CostTracker",
+        workflow_start: float,
+        start_index: int,
+        loaded_checkpoint: Optional[WorkflowCheckpoint],
+    ) -> WorkflowStatus:
+        """Execute phases in wave+lane parallel order.
+
+        Tasks are grouped into dependency-depth waves using ``compute_waves()``.
+        Within each wave, tasks are grouped into lanes by file-scope overlap
+        using ``compute_lanes()``, and lanes run concurrently via
+        ``ThreadPoolExecutor``.  A barrier after each wave merges results into
+        the base context before the next wave starts.
+
+        Flow:
+            A. Global start phases (PLAN, SCAFFOLD)
+            B. Compute waves from context tasks
+            C. For each wave:
+                0. Check resume retry limit
+                1. Compute lanes within this wave's tasks
+                2. Run lanes concurrently (feature-serial per lane)
+                3. Barrier: wait for all lanes, check for failures
+                4. Merge wave results back to base context
+                5. Cost budget check
+                6. Checkpoint: mark wave as completed
+            D. Global end phase (FINALIZE)
+        """
+        config = self.config
+        self._validate_feature_serial_handlers()
+
+        GLOBAL_START_PHASES = (WorkflowPhase.PLAN, WorkflowPhase.SCAFFOLD)
+        GLOBAL_END_PHASES = (WorkflowPhase.FINALIZE,)
+
+        # --- Determine resume point from checkpoint ---
+        last_global_phase_idx = -1
+        if loaded_checkpoint and loaded_checkpoint.last_completed_phase:
+            for idx, phase in enumerate(self.phases):
+                if phase.value == loaded_checkpoint.last_completed_phase:
+                    last_global_phase_idx = idx
+                    break
+
+        # Restore wave state from checkpoint
+        cp_completed_waves: list[int] = []
+        cp_wave_assignments: dict[str, int] = {}
+        cp_wave_resume_count: dict[str, int] = {}
+        cp_current_wave: Optional[int] = None
+        cp_completed_lanes: list[int] = []
+        cp_lane_results: dict[str, dict[str, Any]] = {}
+        if loaded_checkpoint:
+            cp_completed_waves = list(loaded_checkpoint.completed_waves)
+            cp_wave_assignments = dict(loaded_checkpoint.wave_assignments)
+            cp_wave_resume_count = dict(loaded_checkpoint.wave_resume_count)
+            cp_current_wave = loaded_checkpoint.current_wave
+            cp_completed_lanes = list(loaded_checkpoint.completed_lanes)
+            cp_lane_results = dict(loaded_checkpoint.lane_results)
+
+        # --- A. Execute global start phases (PLAN, SCAFFOLD) ---
+        for phase in GLOBAL_START_PHASES:
+            if phase not in self.phases:
+                continue
+            phase_idx = self.phases.index(phase)
+            if phase_idx <= last_global_phase_idx:
+                self._logger.debug(
+                    "Wave-parallel: skipping already-completed global phase %s",
+                    phase.value,
+                )
+                continue
+
+            elapsed = time.monotonic() - workflow_start
+            if config.total_timeout_seconds is not None:
+                remaining = config.total_timeout_seconds - elapsed
+                if remaining <= 0:
+                    checkpoint = self._persist_checkpoint(
+                        self.phases[phase_idx - 1] if phase_idx > 0 else None,
+                        phase_results, cost_tracker.cumulative_cost,
+                        WorkflowStatus.TIMED_OUT, context=context,
+                    )
+                    raise WorkflowTimeoutError(
+                        f"Timeout before global phase {phase.value}",
+                        checkpoint=checkpoint,
+                    )
+            else:
+                remaining = None
+
+            self._logger.info(
+                "Wave-parallel: executing global phase %s", phase.value,
+            )
+            phase_result = self._execute_phase(phase, context, remaining)
+            phase_results.append(phase_result)
+            cost_tracker.add(phase_result.cost)
+
+            self._persist_checkpoint(
+                phase, phase_results, cost_tracker.cumulative_cost,
+                WorkflowStatus.IN_PROGRESS, context=context,
+            )
+
+            if phase_result.status == PhaseStatus.FAILED:
+                checkpoint = self._persist_checkpoint(
+                    phase, phase_results, cost_tracker.cumulative_cost,
+                    WorkflowStatus.FAILED, context=context,
+                )
+                raise PhaseExecutionError(
+                    f"Global phase {phase.value} failed: "
+                    f"{phase_result.error_message}",
+                    phase=phase, checkpoint=checkpoint,
+                )
+            if phase_result.status == PhaseStatus.TIMED_OUT:
+                checkpoint = self._persist_checkpoint(
+                    phase, phase_results, cost_tracker.cumulative_cost,
+                    WorkflowStatus.TIMED_OUT, context=context,
+                )
+                raise WorkflowTimeoutError(
+                    f"Global phase {phase.value} timed out",
+                    checkpoint=checkpoint,
+                )
+
+        # --- B. Compute waves from context tasks ---
+        tasks = context.get("tasks", [])
+        if not tasks:
+            self._logger.warning("Wave-parallel: no tasks in context")
+
+        waves = compute_waves(
+            tasks, strict=config.strict_wave_deps,
+        ) if tasks else []
+        wave_index_map = compute_wave_index_map(waves)
+
+        # Build wave_assignments for checkpoint
+        wave_assignments: dict[str, int] = dict(wave_index_map)
+
+        self._logger.info(
+            "Wave-parallel: %d tasks grouped into %d waves",
+            len(tasks), len(waves),
+        )
+        for wave_idx, wave_tasks in enumerate(waves):
+            self._logger.info(
+                "  Wave %d: %d tasks (%s)",
+                wave_idx, len(wave_tasks),
+                [t.task_id for t in wave_tasks],
+            )
+
+        # Determine completed wave set for resume
+        completed_waves_set = set(cp_completed_waves)
+
+        # Snapshot global context fields for post-barrier verification
+        pre_wave_global_snapshot: dict[str, Any] = {}
+        for gf in _READ_ONLY_GLOBAL_FIELDS:
+            if gf in context:
+                try:
+                    pre_wave_global_snapshot[gf] = copy.deepcopy(context[gf])
+                except (TypeError, pickle.PicklingError) as e:
+                    self._logger.debug(
+                        "Could not snapshot global field %s: %s", gf, e,
+                    )
+
+        # --- C. For each wave ---
+        for wave_idx, wave_tasks in enumerate(waves):
+            # Skip completed waves
+            if wave_idx in completed_waves_set:
+                self._logger.debug(
+                    "Wave-parallel: skipping completed wave %d", wave_idx,
+                )
+                continue
+
+            # Timeout check
+            elapsed = time.monotonic() - workflow_start
+            if config.total_timeout_seconds is not None:
+                remaining_time = config.total_timeout_seconds - elapsed
+                if remaining_time <= 0:
+                    checkpoint = self._persist_checkpoint(
+                        WorkflowPhase.SCAFFOLD, phase_results,
+                        cost_tracker.cumulative_cost,
+                        WorkflowStatus.TIMED_OUT, context=context,
+                        wave_assignments=wave_assignments,
+                        completed_waves=list(completed_waves_set),
+                        current_wave=wave_idx,
+                        wave_resume_count=cp_wave_resume_count,
+                    )
+                    raise WorkflowTimeoutError(
+                        f"Timeout before wave {wave_idx}",
+                        checkpoint=checkpoint,
+                    )
+
+            # C.0 Check resume retry limit (content-hash-based)
+            wave_task_ids = [t.task_id for t in wave_tasks]
+            wave_key = _wave_content_hash(wave_task_ids)
+            resume_count = cp_wave_resume_count.get(wave_key, 0)
+            if resume_count >= config.max_wave_resume_attempts:
+                self._logger.error(
+                    "Wave %d (hash=%s) has failed %d consecutive resume "
+                    "attempts (max_wave_resume_attempts=%d) — marking as "
+                    "FAILED_UNRECOVERABLE",
+                    wave_idx, wave_key, resume_count,
+                    config.max_wave_resume_attempts,
+                )
+                self._persist_checkpoint(
+                    WorkflowPhase.SCAFFOLD, phase_results,
+                    cost_tracker.cumulative_cost,
+                    WorkflowStatus.FAILED, context=context,
+                    wave_assignments=wave_assignments,
+                    completed_waves=list(completed_waves_set),
+                    current_wave=wave_idx,
+                    wave_resume_count=cp_wave_resume_count,
+                )
+                return WorkflowStatus.FAILED
+
+            # Mark current wave in checkpoint
+            self._persist_checkpoint(
+                WorkflowPhase.SCAFFOLD, phase_results,
+                cost_tracker.cumulative_cost,
+                WorkflowStatus.IN_PROGRESS, context=context,
+                wave_assignments=wave_assignments,
+                completed_waves=list(completed_waves_set),
+                current_wave=wave_idx,
+                wave_resume_count=cp_wave_resume_count,
+            )
+
+            # C.1 Compute lanes within this wave's tasks
+            lanes = compute_lanes(wave_tasks) if wave_tasks else []
+
+            lane_assignments: dict[str, int] = {}
+            for lane_idx, lane_tasks in enumerate(lanes):
+                for t in lane_tasks:
+                    lane_assignments[t.task_id] = lane_idx
+
+            self._logger.info(
+                "Wave %d: %d tasks in %d lanes",
+                wave_idx, len(wave_tasks), len(lanes),
+            )
+
+            # Restore completed lanes for this wave from checkpoint
+            # (only if we're resuming within this specific wave)
+            wave_completed_lanes: list[int] = []
+            wave_lane_results: dict[str, dict[str, Any]] = {}
+            if cp_current_wave == wave_idx and wave_idx not in completed_waves_set:
+                wave_completed_lanes = list(cp_completed_lanes)
+                wave_lane_results = dict(cp_lane_results)
+            # Built on the main thread before any lane threads start;
+            # updated later only under checkpoint_lock in _run_wave_lane.
+            wave_completed_set = set(wave_completed_lanes)
+
+            # C.2 Run lanes concurrently
+            cost_lock = threading.Lock()
+            checkpoint_lock = threading.Lock()
+            cancel_event = threading.Event()
+            lane_errors: dict[int, str] = {}
+            lane_contexts: list[Optional[dict[str, Any]]] = [None] * len(lanes)
+
+            # Track cost before wave for per-wave delta
+            cumulative_before_wave = cost_tracker.cumulative_cost
+
+            def _run_wave_lane(
+                lane_idx: int,
+                _wave_idx: int = wave_idx,
+            ) -> bool:
+                """Execute a single lane within a wave.
+
+                Runs on a ThreadPoolExecutor worker thread. Mutates shared
+                state only under ``checkpoint_lock`` (wave_completed_lanes,
+                wave_lane_results) or ``cost_lock`` (cost_tracker).
+                ``lane_ctx`` is a deep-copied isolated context — safe for
+                unsynchronised reads/writes within this lane.
+
+                Returns True on success, False on failure.
+                """
+                if cancel_event.is_set():
+                    return False
+
+                l_tasks = lanes[lane_idx]
+                lane_ctx = _isolate_context_for_lane(context, l_tasks)
+                lane_cost_tracker = _CostTracker(budget=config.cost_budget)
+
+                with cost_lock:
+                    initial_cumulative = cost_tracker.cumulative_cost
+                    lane_cost_tracker.set_cumulative(initial_cumulative)
+
+                self._logger.info(
+                    "Wave %d Lane %d: starting (%d tasks: %s)",
+                    _wave_idx, lane_idx, len(l_tasks),
+                    [t.task_id for t in l_tasks],
+                )
+
+                (
+                    lane_status,
+                    completed_features,
+                    _feature_partial,
+                    _current_feature,
+                    _current_phase,
+                ) = self._execute_feature_serial_loop(
+                    context=lane_ctx,
+                    phase_results=phase_results,
+                    cost_tracker=lane_cost_tracker,
+                    workflow_start=workflow_start,
+                    loaded_checkpoint=None,
+                    lane_checkpoint_extras={
+                        "lane_assignments": lane_assignments,
+                        "completed_lanes": wave_completed_lanes,
+                        "lane_results": wave_lane_results,
+                        "wave_assignments": wave_assignments,
+                        "completed_waves": list(completed_waves_set),
+                        "current_wave": _wave_idx,
+                        "wave_resume_count": cp_wave_resume_count,
+                    },
+                    checkpoint_lock=checkpoint_lock,
+                )
+
+                # Accumulate cost back to global tracker.
+                # Use initial_cumulative (captured under lock) — NOT the live
+                # cost_tracker.cumulative_cost which may have been updated by
+                # sibling lanes since this lane started.
+                lane_cost = (
+                    lane_cost_tracker.cumulative_cost - initial_cumulative
+                )
+                with cost_lock:
+                    cost_tracker.add(max(0.0, lane_cost))
+
+                lane_contexts[lane_idx] = lane_ctx
+
+                if lane_status == WorkflowStatus.COMPLETED:
+                    self._logger.info(
+                        "Wave %d Lane %d: completed (%d features)",
+                        _wave_idx, lane_idx, len(completed_features),
+                    )
+                    with checkpoint_lock:
+                        wave_completed_lanes.append(lane_idx)
+                        wave_completed_set.add(lane_idx)
+                        wave_lane_results[str(lane_idx)] = {
+                            "status": "completed",
+                            "completed_features": completed_features,
+                        }
+                        self._persist_checkpoint(
+                            WorkflowPhase.SCAFFOLD, phase_results,
+                            cost_tracker.cumulative_cost,
+                            WorkflowStatus.IN_PROGRESS, context=context,
+                            lane_assignments=lane_assignments,
+                            completed_lanes=wave_completed_lanes,
+                            lane_results=wave_lane_results,
+                            wave_assignments=wave_assignments,
+                            completed_waves=list(completed_waves_set),
+                            current_wave=_wave_idx,
+                            wave_resume_count=cp_wave_resume_count,
+                        )
+
+                    # Layer 1: eager per-lane budget check
+                    if not cost_tracker.check_budget():
+                        cancel_event.set()
+                        lane_errors[lane_idx] = (
+                            "Budget exceeded after lane completion"
+                        )
+                        return False
+
+                    return True
+                else:
+                    lane_errors[lane_idx] = (
+                        f"Wave {_wave_idx} Lane {lane_idx} failed "
+                        f"with status {lane_status.value}"
+                    )
+                    cancel_event.set()
+                    return False
+
+            # Dispatch lanes concurrently (skip already-completed)
+            lanes_to_run = [
+                i for i in range(len(lanes))
+                if i not in wave_completed_set
+            ]
+
+            if not lanes_to_run:
+                self._logger.info(
+                    "Wave %d: all lanes already completed", wave_idx,
+                )
+            else:
+                max_workers = min(
+                    len(lanes_to_run),
+                    config.max_parallel_lanes,
+                )
+                with ThreadPoolExecutor(
+                    max_workers=max_workers,
+                ) as executor:
+                    futures = {
+                        executor.submit(_run_wave_lane, li): li
+                        for li in lanes_to_run
+                    }
+                    # Drain all futures explicitly via as_completed to
+                    # ensure every exception is captured before merge.
+                    # ThreadPoolExecutor wraps worker exceptions —
+                    # BaseException from the main thread is not caught here.
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            future.result()
+                        except Exception as exc:
+                            li = futures[future]
+                            lane_errors[li] = str(exc)
+                            cancel_event.set()
+                            self._logger.error(
+                                "Wave %d Lane %d raised exception: %s",
+                                wave_idx, li, exc,
+                            )
+
+            # C.3 Barrier: check for lane failures
+            if lane_errors:
+                # Wave failed — increment resume count, checkpoint, halt
+                cp_wave_resume_count[wave_key] = resume_count + 1
+                error_summary = "; ".join(
+                    f"lane {k}: {v}"
+                    for k, v in sorted(lane_errors.items())
+                )
+                checkpoint = self._persist_checkpoint(
+                    WorkflowPhase.SCAFFOLD, phase_results,
+                    cost_tracker.cumulative_cost,
+                    WorkflowStatus.FAILED, context=context,
+                    lane_assignments=lane_assignments,
+                    completed_lanes=wave_completed_lanes,
+                    lane_results=wave_lane_results,
+                    wave_assignments=wave_assignments,
+                    completed_waves=list(completed_waves_set),
+                    current_wave=wave_idx,
+                    wave_resume_count=cp_wave_resume_count,
+                )
+                raise PhaseExecutionError(
+                    f"Wave {wave_idx} failed: {error_summary}",
+                    phase=WorkflowPhase.IMPLEMENT,
+                    checkpoint=checkpoint,
+                )
+
+            # C.4 Merge wave results into base context
+            # Determine which task IDs are already in base from checkpoint
+            # restore (for resume collision suppression)
+            is_resuming = bool(
+                loaded_checkpoint
+                and cp_current_wave == wave_idx
+            )
+            restored_ids: set[str] = set()
+            if is_resuming:
+                for field_name in _TASK_KEYED_FIELDS:
+                    base_data = context.get(field_name)
+                    if isinstance(base_data, dict):
+                        restored_ids.update(base_data.keys())
+
+            # Only merge newly completed lanes (completed lanes from
+            # checkpoint are already in base context)
+            newly_completed = [
+                lc for idx, lc in enumerate(lane_contexts)
+                if lc is not None and idx not in wave_completed_set
+            ]
+            # If not resuming, all completed lane contexts should merge
+            if not is_resuming:
+                newly_completed = [
+                    lc for lc in lane_contexts if lc is not None
+                ]
+
+            _merge_lane_results(
+                context, newly_completed,
+                resuming=is_resuming,
+                checkpoint_restored_task_ids=restored_ids,
+            )
+
+            # Post-barrier: verify global context fields unchanged
+            for gf in _READ_ONLY_GLOBAL_FIELDS:
+                if gf in context and gf in pre_wave_global_snapshot:
+                    if context[gf] != pre_wave_global_snapshot[gf]:
+                        self._logger.error(
+                            "Global context field '%s' was modified during "
+                            "wave %d — this indicates a lane thread mutated "
+                            "shared state",
+                            gf, wave_idx,
+                        )
+
+            # C.5 Layer 2: authoritative per-wave cost budget check
+            cumulative_after_wave = cost_tracker.cumulative_cost
+            wave_cost = cumulative_after_wave - cumulative_before_wave
+            self._logger.info(
+                "Wave %d completed: cost=$%.4f (wave delta=$%.4f)",
+                wave_idx, cumulative_after_wave, wave_cost,
+            )
+
+            if config.cost_budget is not None and cumulative_after_wave > config.cost_budget:
+                self._logger.warning(
+                    "Cost budget exceeded at wave %d barrier: $%.4f > $%.4f "
+                    "(wave cost: $%.4f)",
+                    wave_idx, cumulative_after_wave, config.cost_budget,
+                    wave_cost,
+                )
+                self._persist_checkpoint(
+                    WorkflowPhase.SCAFFOLD, phase_results,
+                    cost_tracker.cumulative_cost,
+                    WorkflowStatus.BUDGET_EXCEEDED, context=context,
+                    wave_assignments=wave_assignments,
+                    completed_waves=list(completed_waves_set),
+                    current_wave=wave_idx,
+                    wave_resume_count=cp_wave_resume_count,
+                )
+                return WorkflowStatus.BUDGET_EXCEEDED
+
+            # C.6 Checkpoint: mark wave as completed
+            try:
+                completed_waves_set.add(wave_idx)
+                cp_wave_resume_count.pop(wave_key, None)
+                self._persist_checkpoint(
+                    WorkflowPhase.SCAFFOLD, phase_results,
+                    cost_tracker.cumulative_cost,
+                    WorkflowStatus.IN_PROGRESS, context=context,
+                    wave_assignments=wave_assignments,
+                    completed_waves=list(completed_waves_set),
+                    current_wave=None,
+                    wave_resume_count=cp_wave_resume_count,
+                    # Reset per-wave lane state for next wave
+                    completed_lanes=[],
+                    lane_results={},
+                    lane_assignments={},
+                )
+            except OSError as e:
+                self._logger.error(
+                    "Checkpoint persistence failed for wave %d: %s — "
+                    "the wave's tasks completed successfully but state "
+                    "was not persisted. Returning FAILED_CHECKPOINT to "
+                    "avoid consuming retry budget.",
+                    wave_idx, e,
+                )
+                return WorkflowStatus.FAILED_CHECKPOINT
+
+        # --- D. Global end phase (FINALIZE) ---
+        for phase in GLOBAL_END_PHASES:
+            if phase not in self.phases:
+                continue
+
+            elapsed = time.monotonic() - workflow_start
+            if config.total_timeout_seconds is not None:
+                remaining = config.total_timeout_seconds - elapsed
+                if remaining <= 0:
+                    checkpoint = self._persist_checkpoint(
+                        WorkflowPhase.REVIEW, phase_results,
+                        cost_tracker.cumulative_cost,
+                        WorkflowStatus.TIMED_OUT, context=context,
+                        wave_assignments=wave_assignments,
+                        completed_waves=list(completed_waves_set),
+                        wave_resume_count=cp_wave_resume_count,
+                    )
+                    raise WorkflowTimeoutError(
+                        f"Timeout before global phase {phase.value}",
+                        checkpoint=checkpoint,
+                    )
+            else:
+                remaining = None
+
+            self._logger.info(
+                "Wave-parallel: executing global phase %s", phase.value,
+            )
+            phase_result = self._execute_phase(phase, context, remaining)
+            phase_results.append(phase_result)
+            cost_tracker.add(phase_result.cost)
+
+            self._persist_checkpoint(
+                phase, phase_results, cost_tracker.cumulative_cost,
+                WorkflowStatus.IN_PROGRESS, context=context,
+                wave_assignments=wave_assignments,
+                completed_waves=list(completed_waves_set),
+                wave_resume_count=cp_wave_resume_count,
+            )
+
+            if phase_result.status == PhaseStatus.FAILED:
+                checkpoint = self._persist_checkpoint(
+                    phase, phase_results, cost_tracker.cumulative_cost,
+                    WorkflowStatus.FAILED, context=context,
+                    wave_assignments=wave_assignments,
+                    completed_waves=list(completed_waves_set),
+                    wave_resume_count=cp_wave_resume_count,
+                )
+                raise PhaseExecutionError(
+                    f"Global phase {phase.value} failed: "
+                    f"{phase_result.error_message}",
+                    phase=phase, checkpoint=checkpoint,
+                )
+            if phase_result.status == PhaseStatus.TIMED_OUT:
+                checkpoint = self._persist_checkpoint(
+                    phase, phase_results, cost_tracker.cumulative_cost,
+                    WorkflowStatus.TIMED_OUT, context=context,
+                    wave_assignments=wave_assignments,
+                    completed_waves=list(completed_waves_set),
+                    wave_resume_count=cp_wave_resume_count,
                 )
                 raise WorkflowTimeoutError(
                     f"Global phase {phase.value} timed out",

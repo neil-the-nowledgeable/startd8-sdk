@@ -120,9 +120,9 @@ class TestWorkflowPhaseDesign:
     def test_design_value(self):
         assert WorkflowPhase.DESIGN.value == "design"
 
-    def test_ordered_returns_seven_phases(self):
+    def test_ordered_returns_eight_phases(self):
         phases = WorkflowPhase.ordered()
-        assert len(phases) == 7
+        assert len(phases) == 8
 
     def test_ordered_design_after_scaffold(self):
         phases = WorkflowPhase.ordered()
@@ -363,7 +363,7 @@ class TestContextSeedHandlersFactory:
                 enriched_seed_path=str(seed),
             )
 
-        assert len(handlers) == 7
+        assert len(handlers) == 8
         assert WorkflowPhase.DESIGN in handlers
         assert isinstance(handlers[WorkflowPhase.DESIGN], DesignPhaseHandler)
 
@@ -441,7 +441,7 @@ class TestOrchestratorWithDesign:
         assert result.status == WorkflowStatus.COMPLETED
         phase_names = [pr.phase.value for pr in result.phase_results]
         assert "design" in phase_names
-        assert len(result.phase_results) == 7
+        assert len(result.phase_results) == 8
 
         # DESIGN phase result should exist
         design_pr = [pr for pr in result.phase_results if pr.phase == WorkflowPhase.DESIGN][0]

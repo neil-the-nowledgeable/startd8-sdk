@@ -46,6 +46,12 @@ from .plan_ingestion_models import (
     ParsedFeature,
     ParsedPlan,
 )
+from ...contractors.artisan_contractor import (
+    _SAFE_TASK_ID_PATTERN,
+    compute_wave_index_map,
+    compute_wave_metadata,
+    compute_waves,
+)
 from ...logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -89,6 +95,7 @@ _ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
         "design_calibration": {"type": ["object", "null"]},
         "context_files": {"type": ["array", "null"]},
         "service_metadata": {"type": ["object", "null"]},
+        "wave_metadata": {"type": ["object", "null"]},
     },
     "additionalProperties": True,
 }
@@ -121,6 +128,72 @@ def _validate_context_seed(data: Dict[str, Any]) -> None:
             str(e),
         )
         # Log but do not raise — validation is advisory; seed may have extra keys
+
+
+class _TaskDictAdapter:
+    """Adapts plan-ingestion task dicts to the ``WaveComputeTask`` protocol.
+
+    Satisfies the ``WaveComputeTask`` Protocol defined in
+    ``artisan_contractor.py`` (``task_id`` + ``depends_on`` properties).
+
+    This is the single normalization point for task dict → WaveComputeTask
+    conversion. Plan ingestion task dicts come from LLM-generated PARSE
+    output where depends_on may be null, absent, or contain non-string
+    entries.
+    """
+
+    def __init__(self, data: dict) -> None:
+        self._data = data
+
+    @property
+    def task_id(self) -> str:
+        return self._data["task_id"]
+
+    @property
+    def depends_on(self) -> list[str]:
+        raw = self._data.get("depends_on") or []
+        cleaned = []
+        for d in raw:
+            if not isinstance(d, str) or not d:
+                continue
+            if not _SAFE_TASK_ID_PATTERN.match(d):
+                logger.warning(
+                    "Task %s: depends_on reference %r contains unsafe "
+                    "characters (must match %s) — filtering out",
+                    self._data.get("task_id"), d,
+                    _SAFE_TASK_ID_PATTERN.pattern,
+                )
+                continue
+            cleaned.append(d)
+        return cleaned
+
+
+def _assign_wave_indices(
+    tasks: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Assign wave_index to each task dict based on dependency depth.
+
+    Delegates to compute_waves() via _TaskDictAdapter objects, then
+    uses compute_wave_index_map() to map wave indices back onto the
+    original task dicts.
+
+    Returns:
+        (tasks, wave_metadata) — tasks with wave_index added, and
+        wave metadata dict (wave_count, wave_summary, critical_path_length).
+    """
+    if not tasks:
+        return tasks, {"wave_count": 0, "wave_summary": [], "critical_path_length": 0}
+
+    adapters = [_TaskDictAdapter(t) for t in tasks]
+    waves = compute_waves(adapters)
+    wave_map = compute_wave_index_map(waves)
+    wave_meta = compute_wave_metadata(waves)
+
+    for task in tasks:
+        tid = task.get("task_id", "")
+        task["wave_index"] = wave_map.get(tid, 0)
+
+    return tasks, wave_meta
 
 
 def _validate_seed_field_coverage(seed_dict: Dict[str, Any]) -> List[str]:
@@ -1957,9 +2030,12 @@ class PlanIngestionWorkflow(WorkflowBase):
         feature_requirements: Optional[List[str]],
         warn_cost_usd: Optional[float],
         max_cost_usd: Optional[float],
-    ) -> Tuple[int, List[StepResult], float]:
+        enable_apply: Optional[bool] = None,
+        enable_prompt_caching: Optional[bool] = None,
+        enable_triage: Optional[bool] = None,
+    ) -> Tuple[int, List[StepResult], float, Dict[str, Any]]:
         if review_rounds <= 0:
-            return 0, [], 0.0
+            return 0, [], 0.0, {}
 
         # Local import to avoid circular dependencies
         from .architectural_review_log_workflow import ArchitecturalReviewLogWorkflow
@@ -1982,6 +2058,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             review_config["warn_cost_usd"] = warn_cost_usd
         if max_cost_usd is not None:
             review_config["max_cost_usd"] = max_cost_usd
+        if enable_apply is not None:
+            review_config["enable_apply"] = enable_apply
+        if enable_prompt_caching is not None:
+            review_config["enable_prompt_caching"] = enable_prompt_caching
+        if enable_triage is not None:
+            review_config["enable_triage"] = enable_triage
 
         result = review_wf.run(review_config)
 
@@ -2008,11 +2090,50 @@ class PlanIngestionWorkflow(WorkflowBase):
                 error=result.error,
             ))
 
-        return rounds_completed, refine_steps, review_cost
+        review_output = result.output if result.success else {}
+        return rounds_completed, refine_steps, review_cost, review_output
 
     # ------------------------------------------------------------------
     # Artisan context seed helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _extract_refine_suggestions_for_seed(
+        review_output: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Extract accepted triage suggestions for seed injection."""
+        triage = review_output.get("triage")
+        if not triage or not isinstance(triage, dict):
+            return []
+
+        decisions = triage.get("decisions", [])
+        if not decisions:
+            # Fallback: return aggregate summary when decisions not available
+            accepted = triage.get("accepted", 0)
+            if accepted == 0:
+                return []
+            return [{
+                "source": "triage_summary",
+                "triage_accepted_count": accepted,
+                "triage_rejected_count": triage.get("rejected", 0),
+                "substantially_addressed_areas": triage.get(
+                    "substantially_addressed_areas", [],
+                ),
+                "areas_needing_review": triage.get("areas_needing_review", []),
+            }]
+
+        # Return individual ACCEPT decisions with full detail
+        return [
+            {
+                "id": d.get("id", ""),
+                "decision": d.get("decision", ""),
+                "rationale": d.get("rationale", ""),
+                "area": d.get("area", ""),
+                "severity": d.get("severity", ""),
+            }
+            for d in decisions
+            if d.get("decision") == "ACCEPT"
+        ]
 
     @staticmethod
     def _estimate_story_points(estimated_loc: int) -> int:
@@ -2295,6 +2416,15 @@ class PlanIngestionWorkflow(WorkflowBase):
         # phases always receive well-sized work items.
         tasks = PlanIngestionWorkflow._split_oversized_tasks(tasks)
 
+        # ── Wave assignment: BFS dependency-depth layering ──
+        tasks, wave_metadata = _assign_wave_indices(tasks)
+        logger.info(
+            "Wave assignment: %d waves for %d tasks (critical path: %d)",
+            wave_metadata.get("wave_count", 0),
+            len(tasks),
+            wave_metadata.get("critical_path_length", 0),
+        )
+
         return tasks
 
     @staticmethod
@@ -2475,6 +2605,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         design_calibration: Optional[Dict[str, Any]],
         context_files: Optional[List[str]],
         source_checksum_val: Optional[str],
+        review_output: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Extend the artifact inventory with ingestion-stage entries.
 
@@ -2560,6 +2691,35 @@ class PlanIngestionWorkflow(WorkflowBase):
                         "Eliminates redundant architectural review in DESIGN."
                     ),
                 })
+
+        # refine_apply_provenance — structured triage/apply metadata
+        if review_output:
+            apply_data = review_output.get("apply", {})
+            if apply_data.get("applied_count", 0) > 0:
+                entries.append({
+                    "artifact_id": "ingestion.refine_apply_provenance",
+                    "role": "refine_apply_provenance",
+                    "description": "Apply-step integration metadata from REFINE architectural review",
+                    "produced_by": "startd8.workflow.plan_ingestion.refine",
+                    "stage": "ingestion",
+                    "applied_count": apply_data.get("applied_count", 0),
+                    "applied_ids": apply_data.get("applied_ids", []),
+                    "produced_at": now_iso,
+                    "freshness": freshness,
+                    "consumers": ["artisan.design", "artisan.implement"],
+                    "consumption_hint": (
+                        "Check applied_ids to avoid re-implementing suggestions "
+                        "already integrated into the document body."
+                    ),
+                })
+
+            # Enrich existing refine_suggestions entry with triage counts
+            triage_data = review_output.get("triage", {})
+            for entry in entries:
+                if entry.get("artifact_id") == "ingestion.refine_suggestions":
+                    entry["triage_accepted_count"] = triage_data.get("accepted", 0)
+                    entry["triage_rejected_count"] = triage_data.get("rejected", 0)
+                    break
 
         # design_calibration
         if design_calibration and context_seed_path.exists():
@@ -2827,6 +2987,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         translation_quality: Optional[Dict[str, Any]] = None,
         requirement_hints: Optional[Dict[str, Dict[str, Any]]] = None,
         onboarding_metadata: Optional[Dict[str, Any]] = None,
+        review_output: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]]]:
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
@@ -2937,6 +3098,34 @@ class PlanIngestionWorkflow(WorkflowBase):
                     artifacts["source_checksum"] = sc
                     source_checksum_val = sc
 
+            # Mottainai: inject REFINE triage suggestions into seed onboarding
+            refine_suggestions = (
+                self._extract_refine_suggestions_for_seed(review_output)
+                if review_output else []
+            )
+            if onboarding_var is None:
+                onboarding_var = {}
+            onboarding_var["refine_suggestions"] = refine_suggestions
+
+            # Mottainai: record REFINE apply provenance for traceability
+            if review_output:
+                apply_data = review_output.get("apply", {})
+                triage_data = review_output.get("triage", {})
+                artifacts["refine_provenance"] = {
+                    "origin_phase": "ingestion.refine",
+                    "triage_accepted": triage_data.get("accepted", 0),
+                    "triage_rejected": triage_data.get("rejected", 0),
+                    "applied_ids": apply_data.get("applied_ids", []),
+                    "warning_ids": apply_data.get("warning_ids", []),
+                    "apply_error": apply_data.get("error"),
+                    "state_path": review_output.get("state_path"),
+                }
+            else:
+                artifacts["refine_provenance"] = {
+                    "origin_phase": "ingestion.refine",
+                    "apply_enabled": False,
+                }
+
             context_files_list = _context_files_with_checksums(
                 context_files, base_dir=output_dir
             ) if context_files else None
@@ -2948,6 +3137,21 @@ class PlanIngestionWorkflow(WorkflowBase):
             service_metadata = _infer_service_metadata(
                 parsed_plan.features, onboarding_early,
             )
+
+            # Compute wave metadata from per-task wave_index assignments
+            _wave_indices = [t.get("wave_index", 0) for t in tasks]
+            if _wave_indices:
+                _wave_count = max(_wave_indices) + 1
+                _wave_summary = [0] * _wave_count
+                for wi in _wave_indices:
+                    _wave_summary[wi] += 1
+                _wave_meta: Optional[Dict[str, Any]] = {
+                    "wave_count": _wave_count,
+                    "wave_summary": _wave_summary,
+                    "critical_path_length": _wave_count,
+                }
+            else:
+                _wave_meta = None
 
             seed = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
@@ -2965,6 +3169,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 onboarding=onboarding_var,
                 context_files=context_files_list,
                 service_metadata=service_metadata or None,
+                wave_metadata=_wave_meta,
             )
 
             seed_dict = seed.to_dict()
@@ -2972,6 +3177,22 @@ class PlanIngestionWorkflow(WorkflowBase):
             _log_seed_coverage(seed_dict)
             context_seed_path = output_dir / "artisan-context-seed.json"
             atomic_write_json(context_seed_path, seed_dict, indent=2)
+
+            # Mottainai Rule 6: log propagation chain status
+            if review_output and review_output.get("triage", {}).get("accepted", 0) > 0:
+                if refine_suggestions:
+                    logger.info(
+                        "REFINE→seed chain INTACT: %d accepted suggestions forwarded",
+                        len(refine_suggestions),
+                    )
+                else:
+                    logger.warning(
+                        "REFINE→seed chain DEGRADED: %d accepted suggestions "
+                        "available but not forwarded",
+                        review_output["triage"]["accepted"],
+                    )
+            else:
+                logger.debug("REFINE→seed chain N/A: no accepted suggestions to forward")
 
             # Mottainai: extend artifact inventory with ingestion-stage entries
             self._extend_inventory_with_ingestion(
@@ -2981,6 +3202,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 design_calibration=design_calibration,
                 context_files=context_files,
                 source_checksum_val=source_checksum_val,
+                review_output=review_output,
             )
 
         # Prime route: emit prime-context-seed.json (symmetric with artisan)
@@ -3049,6 +3271,34 @@ class PlanIngestionWorkflow(WorkflowBase):
                     artifacts_prime["source_checksum"] = sc
                     source_checksum_prime = sc
 
+            # Mottainai: inject REFINE triage suggestions into prime seed onboarding
+            refine_suggestions_prime = (
+                self._extract_refine_suggestions_for_seed(review_output)
+                if review_output else []
+            )
+            if onboarding_var_prime is None:
+                onboarding_var_prime = {}
+            onboarding_var_prime["refine_suggestions"] = refine_suggestions_prime
+
+            # Mottainai: record REFINE apply provenance for traceability
+            if review_output:
+                apply_data = review_output.get("apply", {})
+                triage_data = review_output.get("triage", {})
+                artifacts_prime["refine_provenance"] = {
+                    "origin_phase": "ingestion.refine",
+                    "triage_accepted": triage_data.get("accepted", 0),
+                    "triage_rejected": triage_data.get("rejected", 0),
+                    "applied_ids": apply_data.get("applied_ids", []),
+                    "warning_ids": apply_data.get("warning_ids", []),
+                    "apply_error": apply_data.get("error"),
+                    "state_path": review_output.get("state_path"),
+                }
+            else:
+                artifacts_prime["refine_provenance"] = {
+                    "origin_phase": "ingestion.refine",
+                    "apply_enabled": False,
+                }
+
             context_files_list_prime = _context_files_with_checksums(
                 context_files, base_dir=output_dir
             ) if context_files else None
@@ -3085,6 +3335,22 @@ class PlanIngestionWorkflow(WorkflowBase):
             prime_seed_path = output_dir / "prime-context-seed.json"
             atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
 
+            # Mottainai Rule 6: log propagation chain status (prime)
+            if review_output and review_output.get("triage", {}).get("accepted", 0) > 0:
+                if refine_suggestions_prime:
+                    logger.info(
+                        "REFINE→prime seed chain INTACT: %d accepted suggestions forwarded",
+                        len(refine_suggestions_prime),
+                    )
+                else:
+                    logger.warning(
+                        "REFINE→prime seed chain DEGRADED: %d accepted suggestions "
+                        "available but not forwarded",
+                        review_output["triage"]["accepted"],
+                    )
+            else:
+                logger.debug("REFINE→prime seed chain N/A: no accepted suggestions to forward")
+
             # Mottainai: extend artifact inventory
             self._extend_inventory_with_ingestion(
                 output_dir=output_dir,
@@ -3093,6 +3359,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 design_calibration=design_calibration_prime,
                 context_files=context_files,
                 source_checksum_val=source_checksum_prime,
+                review_output=review_output,
             )
 
             # Track as context_seed_path for return value
@@ -3451,7 +3718,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Refine")
             state.current_phase = IngestionPhase.REFINE
 
-            rounds_completed, refine_steps, refine_cost = self._phase_refine(
+            rounds_completed, refine_steps, refine_cost, review_output = self._phase_refine(
                 doc_path,
                 review_rounds,
                 review_quality_tier,
@@ -3460,6 +3727,9 @@ class PlanIngestionWorkflow(WorkflowBase):
                 list(requirements_docs.keys()) if requirements_docs else None,
                 warn_cost_usd,
                 max_cost_usd,
+                enable_apply=config.get("enable_apply"),
+                enable_prompt_caching=config.get("enable_prompt_caching"),
+                enable_triage=config.get("enable_triage"),
             )
             steps.extend(refine_steps)
             state.total_cost += refine_cost
@@ -3484,6 +3754,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 translation_quality=translation_quality,
                 requirement_hints=requirements_hints_index,
                 onboarding_metadata=onboarding_metadata,
+                review_output=review_output,
             )
 
             # Emit deterministic traceability report for downstream auditing.

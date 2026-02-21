@@ -540,7 +540,7 @@ class TestRefinePhase:
         self.wf = PlanIngestionWorkflow()
 
     def test_skip_when_zero_rounds(self, tmp_path):
-        rounds, steps, cost = self.wf._phase_refine(
+        rounds, steps, cost, review_output = self.wf._phase_refine(
             tmp_path / "plan.md",
             review_rounds=0,
             review_quality_tier="flagship",
@@ -553,6 +553,7 @@ class TestRefinePhase:
         assert rounds == 0
         assert steps == []
         assert cost == 0.0
+        assert review_output == {}
 
     @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
     def test_delegates_to_review_workflow(self, MockReviewWf, tmp_path):
@@ -576,12 +577,13 @@ class TestRefinePhase:
             ),
         ]
         mock_result.error = None
+        mock_result.output = {"triage": {"accepted": 1, "rejected": 0}, "apply": {}}
 
         mock_instance = MagicMock()
         mock_instance.run.return_value = mock_result
         MockReviewWf.return_value = mock_instance
 
-        rounds, steps, cost = self.wf._phase_refine(
+        rounds, steps, cost, review_output = self.wf._phase_refine(
             plan_file,
             review_rounds=2,
             review_quality_tier="flagship",
@@ -596,6 +598,7 @@ class TestRefinePhase:
         assert len(steps) == 1
         assert steps[0].step_name == "refine:review-r1"
         assert cost == 0.15
+        assert review_output == mock_result.output
 
         # Verify the config passed to the review workflow
         call_config = mock_instance.run.call_args[0][0]
@@ -605,6 +608,73 @@ class TestRefinePhase:
         assert call_config["scope"] == "Review scope"
         assert call_config["context_files"] == ["src/a.py"]
         assert call_config["feature_requirements"] == ["reqs/feature.md"]
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    def test_config_passthrough_enable_flags(self, MockReviewWf, tmp_path):
+        """enable_apply, enable_prompt_caching, enable_triage forwarded to review config."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+
+        mock_result = MagicMock()
+        mock_result.success = True
+        mock_result.metrics = MagicMock(total_cost=0.0)
+        mock_result.steps = []
+        mock_result.error = None
+        mock_result.output = {}
+
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = mock_result
+        MockReviewWf.return_value = mock_instance
+
+        self.wf._phase_refine(
+            plan_file,
+            review_rounds=1,
+            review_quality_tier="flagship",
+            scope=None,
+            context_files=None,
+            feature_requirements=None,
+            warn_cost_usd=None,
+            max_cost_usd=None,
+            enable_apply=True,
+            enable_prompt_caching=False,
+            enable_triage=True,
+        )
+
+        call_config = mock_instance.run.call_args[0][0]
+        assert call_config["enable_apply"] is True
+        assert call_config["enable_prompt_caching"] is False
+        assert call_config["enable_triage"] is True
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    def test_failure_returns_empty_review_output(self, MockReviewWf, tmp_path):
+        """When review workflow fails, review_output is empty dict."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text("# Plan")
+
+        mock_result = MagicMock()
+        mock_result.success = False
+        mock_result.metrics = MagicMock(total_cost=0.0)
+        mock_result.steps = []
+        mock_result.error = "Review failed"
+        mock_result.output = {"triage": {"accepted": 2}}
+
+        mock_instance = MagicMock()
+        mock_instance.run.return_value = mock_result
+        MockReviewWf.return_value = mock_instance
+
+        rounds, steps, cost, review_output = self.wf._phase_refine(
+            plan_file,
+            review_rounds=1,
+            review_quality_tier="flagship",
+            scope=None,
+            context_files=None,
+            feature_requirements=None,
+            warn_cost_usd=None,
+            max_cost_usd=None,
+        )
+
+        assert rounds == 0
+        assert review_output == {}
 
 
 # ---------------------------------------------------------------------------
@@ -728,6 +798,7 @@ class TestEndToEnd:
         mock_review_result.metrics = MagicMock(total_cost=0.05)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -766,6 +837,7 @@ class TestEndToEnd:
         mock_review_result.metrics = MagicMock(total_cost=0.05)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -800,6 +872,7 @@ class TestEndToEnd:
         mock_review_result.metrics = MagicMock(total_cost=0.40)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -878,6 +951,7 @@ class TestEndToEnd:
         mock_review_result.metrics = MagicMock(total_cost=0.0)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -912,6 +986,7 @@ class TestEndToEnd:
         mock_review_result.metrics = MagicMock(total_cost=0.0)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -970,6 +1045,7 @@ class TestEndToEnd:
         mock_review_result.metrics = MagicMock(total_cost=0.0)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -1005,6 +1081,7 @@ class TestEndToEnd:
         mock_review_result.metrics = MagicMock(total_cost=0.05)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -1085,6 +1162,7 @@ class TestEndToEnd:
         mock_review_result.metrics = MagicMock(total_cost=0.0)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -2112,6 +2190,7 @@ class TestEndToEndArtisanContextSeed:
         mock_review_result.metrics = MagicMock(total_cost=0.05)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance
@@ -2162,6 +2241,7 @@ class TestEndToEndArtisanContextSeed:
         mock_review_result.metrics = MagicMock(total_cost=0.05)
         mock_review_result.steps = []
         mock_review_result.error = None
+        mock_review_result.output = {}
         mock_review_instance = MagicMock()
         mock_review_instance.run.return_value = mock_review_result
         MockReviewWf.return_value = mock_review_instance

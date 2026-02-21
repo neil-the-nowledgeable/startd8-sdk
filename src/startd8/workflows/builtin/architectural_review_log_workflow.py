@@ -935,6 +935,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             triage_info["accepted"] = accepted_count
                             triage_info["rejected"] = rejected_count
                             triage_info["untriaged_remaining"] = triage_missing
+                            triage_info["decisions"] = triage_decisions
 
                         step_results.append(StepResult(
                             step_name="triage",

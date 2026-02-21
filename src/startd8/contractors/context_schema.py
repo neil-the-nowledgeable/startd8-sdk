@@ -260,6 +260,12 @@ class ReviewPhaseOutput(BaseModel):
         return v
 
 
+class IntegratePhaseOutput(BaseModel):
+    """Output model for the INTEGRATE phase."""
+
+    integration_results: Dict[str, Any]  # task_id -> {success, integrated_files, errors, ...}
+
+
 class FinalizePhaseOutput(BaseModel):
     """Output of the FINALIZE phase."""
 
@@ -294,6 +300,7 @@ def _get_phase_exit_models() -> Dict[str, type]:
             "scaffold": ScaffoldPhaseOutput,
             "design": DesignPhaseOutput,
             "implement": ImplementPhaseOutput,
+            "integrate": IntegratePhaseOutput,
             "test": ValidationPhaseOutput,
             "review": ReviewPhaseOutput,
             "finalize": FinalizePhaseOutput,
@@ -308,6 +315,7 @@ PHASE_ENTRY_REQUIREMENTS: Dict[str, List[str]] = {
     "scaffold": ["tasks", "task_index", "project_root"],
     "design": ["tasks", "task_index"],
     "implement": ["tasks", "design_results"],
+    "integrate": ["generation_results"],
     "test": ["tasks", "generation_results"],
     "review": ["generation_results"],
     "finalize": ["tasks", "generation_results"],
@@ -327,6 +335,7 @@ _PHASE_EXIT_KEYS: Dict[str, List[str]] = {
     "scaffold": ["scaffold"],
     "design": ["design_results"],
     "implement": ["implementation", "generation_results", "truncation_flags"],
+    "integrate": ["integration_results"],
     "test": ["test_results"],
     "review": ["review_results"],
     "finalize": ["workflow_summary"],

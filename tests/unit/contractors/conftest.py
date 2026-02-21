@@ -44,3 +44,5 @@ class FakeSeedTask:
     protocol: str = ""
     runtime_dependencies: list[str] = field(default_factory=list)
     negative_scope: list[str] = field(default_factory=list)
+    # Wave+Lane execution: dependency-depth wave assignment
+    wave_index: Optional[int] = None

@@ -148,7 +148,7 @@ class TestDryRunWithValidation:
         result = workflow.execute(context=context)
 
         assert result.status == WorkflowStatus.COMPLETED
-        assert len(result.phase_results) == 7
+        assert len(result.phase_results) == 8
 
         # Verify every phase completed (dry-run status)
         for pr in result.phase_results:
@@ -161,6 +161,7 @@ class TestDryRunWithValidation:
             "tasks", "task_index", "plan_title", "preflight_summary",
             "domain_summary", "enriched_seed_path", "scaffold",
             "design_results", "implementation", "generation_results",
+            "integration_results",
             "test_results", "review_results", "workflow_summary",
         ]
         for key in expected_keys:
