@@ -175,6 +175,8 @@ class ArtisanContextSeed:
     service_metadata: Optional[Dict[str, Any]] = None
     # Wave computation metadata (wave_count, wave_summary, critical_path_length)
     wave_metadata: Optional[Dict[str, Any]] = None
+    # Operational project metadata (criticality, risks, SLOs, observability)
+    project_metadata: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -201,6 +203,8 @@ class ArtisanContextSeed:
             d["service_metadata"] = self.service_metadata
         if self.wave_metadata is not None:
             d["wave_metadata"] = self.wave_metadata
+        if self.project_metadata is not None:
+            d["project_metadata"] = self.project_metadata
         return d
 
 

@@ -141,7 +141,7 @@ _PLAN_DOC_TRUNCATION_MARKER = "\n... [truncated, full text in seed]"
 # from seed/disk via _ensure_context_loaded().
 _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "enriched_seed_path", "plan_title", "plan_goals", "domain_summary",
-    "preflight_summary", "total_estimated_loc", "architectural_context",
+    "preflight_summary", "total_estimated_loc", "architectural_context", "project_metadata",
     "design_calibration", "task_filter", "project_root",
     "design_results", "test_results", "review_results",
     "integration_results",
@@ -2234,7 +2234,7 @@ class ArtisanContractorWorkflow:
     def _validate_feature_serial_handlers(self) -> None:
         """Fail fast when inner-loop handlers are incompatible.
 
-        Feature-serial mode requires DESIGN/IMPLEMENT/TEST/REVIEW handlers to
+        Feature-serial mode requires DESIGN/IMPLEMENT/INTEGRATE/TEST/REVIEW handlers to
         explicitly support single-feature execution semantics.
         """
         unsupported: list[str] = []
@@ -3660,11 +3660,12 @@ class ArtisanContractorWorkflow:
     # Feature-serial execution helpers
     # ------------------------------------------------------------------
 
-    # Inner phases executed per-feature in feature-serial mode.
+    # Inner phases executed per-feature in feature-serial and wave modes.
     # PLAN and SCAFFOLD run once globally; FINALIZE runs once at the end.
     INNER_PHASES: tuple[WorkflowPhase, ...] = (
         WorkflowPhase.DESIGN,
         WorkflowPhase.IMPLEMENT,
+        WorkflowPhase.INTEGRATE,
         WorkflowPhase.TEST,
         WorkflowPhase.REVIEW,
     )
@@ -3679,7 +3680,7 @@ class ArtisanContractorWorkflow:
         """Execute all inner phases for a single feature.
 
         This is the core of feature-serial execution: each feature goes through
-        DESIGN → IMPLEMENT → TEST → REVIEW before the next feature begins.
+        DESIGN → IMPLEMENT → INTEGRATE → TEST → REVIEW before the next feature begins.
 
         Args:
             feature_id: The task/feature ID to execute.

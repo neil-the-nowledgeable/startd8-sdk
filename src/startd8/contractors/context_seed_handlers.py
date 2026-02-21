@@ -650,6 +650,7 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     context.setdefault("output_conventions", _artifacts.get("output_conventions", {}))
     context.setdefault("architectural_context", seed_data.get("architectural_context", {}))
     context.setdefault("design_calibration", seed_data.get("design_calibration", {}))
+    context.setdefault("project_metadata", seed_data.get("project_metadata", {}))
 
     # PCA-201: re-extract onboarding fields as defense-in-depth.
     _onboarding = seed_data.get("onboarding") or {}
@@ -711,7 +712,8 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
 # PCA-104: project-level context fields for completeness logging.
 _PCA_CONTEXT_FIELDS = (
     "project_root", "service_metadata", "plan_document_text",
-    "architectural_context", "onboarding_derivation_rules",
+    "architectural_context", "project_metadata",
+    "onboarding_derivation_rules",
     "onboarding_resolved_parameters", "onboarding_output_contracts",
     "onboarding_calibration_hints", "onboarding_open_questions",
     "onboarding_dependency_graph",
@@ -905,6 +907,8 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         context["total_estimated_loc"] = sum(t.estimated_loc for t in sorted_tasks)
         context["architectural_context"] = seed_data.get("architectural_context", {})
         context["design_calibration"] = seed_data.get("design_calibration", {})
+        # Operational project metadata (criticality, risks, SLOs) from ContextCore manifest
+        context["project_metadata"] = seed_data.get("project_metadata", {})
         # Item 9: example artifacts per type for implement phase
         context["example_artifacts"] = (seed_data.get("artifacts") or {}).get(
             "example_artifacts", {}
@@ -4392,6 +4396,12 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
         # Clean staging dir
         if staging_dir.exists() and not dry_run:
             _shutil.rmtree(staging_dir, ignore_errors=True)
+
+        # Validate output structure before writing to context
+        from startd8.contractors.context_schema import IntegratePhaseOutput
+        IntegratePhaseOutput.model_validate(
+            {"integration_results": integration_results}
+        )
 
         # Write to context
         context["integration_results"] = integration_results

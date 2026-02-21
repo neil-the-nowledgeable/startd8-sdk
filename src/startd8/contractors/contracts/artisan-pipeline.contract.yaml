@@ -8,7 +8,7 @@
 # Version convention follows Weaver (start at 0.1.0 to signal instability).
 # =============================================================================
 
-schema_version: "0.2.0"
+schema_version: "0.3.0"
 pipeline_id: artisan
 description: >
   Context propagation contract for the 8-phase Artisan contractor workflow.
@@ -86,6 +86,10 @@ phases:
         - name: onboarding_dependency_graph
           type: any
           severity: advisory
+        - name: project_metadata
+          type: dict
+          severity: advisory
+          description: "Operational project metadata (criticality, risks, SLOs) from .contextcore.yaml"
 
   scaffold:
     description: "Lessons discovery and project scaffolding"
@@ -158,8 +162,8 @@ phases:
           quality:
             metric: line_count
             threshold: 50
-            on_below: blocking
-            description: "Design doc must have substance (>= 50 lines) before IMPLEMENT consumes it"
+            on_below: warning
+            description: "Design doc should have substance (>= 50 lines); warning only since quality extractors measure str(dict)"
       enrichment:
         - name: design_results.*.design_mode
           type: str
@@ -188,7 +192,6 @@ phases:
         - name: design_calibration
           type: dict
           severity: advisory
-          default: {}
           source_phase: plan
           description: "Output size calibration data (max_output_tokens, etc.)"
         - name: service_metadata
@@ -200,7 +203,6 @@ phases:
         - name: architectural_context
           type: dict
           severity: advisory
-          default: {}
           source_phase: plan
           description: "Project architecture for code generation context"
     exit:
@@ -449,3 +451,16 @@ propagation_chains:
       phase: implement
       field: DevelopmentChunk.metadata.service_metadata
     severity: warning
+
+  - chain_id: project_metadata_to_review
+    description: >
+      Project operational metadata (criticality, risks, SLOs) flows from plan
+      through all downstream phases for quality-tier-aware generation and review.
+    source:
+      phase: plan
+      field: project_metadata
+    waypoints: []
+    destination:
+      phase: review
+      field: project_metadata
+    severity: advisory

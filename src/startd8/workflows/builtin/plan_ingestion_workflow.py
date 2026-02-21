@@ -96,6 +96,7 @@ _ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
         "context_files": {"type": ["array", "null"]},
         "service_metadata": {"type": ["object", "null"]},
         "wave_metadata": {"type": ["object", "null"]},
+        "project_metadata": {"type": ["object", "null"]},
     },
     "additionalProperties": True,
 }
@@ -245,6 +246,11 @@ def _validate_seed_field_coverage(seed_dict: Dict[str, Any]) -> List[str]:
 
     if not seed_dict.get("context_files"):
         warnings.append("no context_files — provenance tracking limited")
+
+    if not seed_dict.get("project_metadata"):
+        warnings.append(
+            "no project_metadata — criticality/SLO-aware generation unavailable"
+        )
 
     return warnings
 
@@ -2598,6 +2604,102 @@ class PlanIngestionWorkflow(WorkflowBase):
         return ctx
 
     @staticmethod
+    def _extract_project_metadata(manifest: Any) -> Dict[str, Any]:
+        """Extract operational project metadata from a ContextCore manifest.
+
+        Pulls business criticality, SLO requirements, risk inventory, and
+        observability config from ``manifest.spec``.  These are *operational*
+        concerns (distinct from the *strategic* data in
+        ``_extract_manifest_context``).
+        """
+        meta: Dict[str, Any] = {}
+        spec = getattr(manifest, "spec", None)
+        if spec is None:
+            return meta
+
+        # --- business criticality ---
+        business = getattr(spec, "business", None)
+        if business:
+            criticality = getattr(business, "criticality", None)
+            if criticality is not None:
+                meta["criticality"] = (
+                    criticality.value
+                    if hasattr(criticality, "value")
+                    else str(criticality)
+                )
+            owner = getattr(business, "business_owner", None) or getattr(
+                business, "owner", None
+            )
+            if owner:
+                meta["business_owner"] = str(owner)
+            value = getattr(business, "business_value", None) or getattr(
+                business, "value", None
+            )
+            if value:
+                meta["business_value"] = str(value)
+
+        # --- SLO / requirements ---
+        requirements = getattr(spec, "requirements", None)
+        if requirements:
+            reqs: Dict[str, Any] = {}
+            for attr in (
+                "availability",
+                "latency_p99",
+                "throughput",
+                "error_budget",
+            ):
+                val = getattr(requirements, attr, None)
+                if val is not None:
+                    reqs[attr] = (
+                        val.value if hasattr(val, "value") else val
+                    )
+            if reqs:
+                meta["requirements"] = reqs
+
+        # --- risk inventory ---
+        risks_raw = getattr(spec, "risks", None)
+        if risks_raw:
+            risks_list = []
+            for risk in risks_raw:
+                entry: Dict[str, Any] = {}
+                for attr in (
+                    "type",
+                    "priority",
+                    "description",
+                    "scope",
+                    "mitigation",
+                    "component",
+                ):
+                    val = getattr(risk, attr, None)
+                    if val is not None:
+                        entry[attr] = (
+                            val.value if hasattr(val, "value") else str(val)
+                        )
+                if entry:
+                    risks_list.append(entry)
+            if risks_list:
+                meta["risks"] = risks_list
+
+        # --- observability config ---
+        observability = getattr(spec, "observability", None)
+        if observability:
+            obs: Dict[str, Any] = {}
+            for attr in (
+                "trace_sampling",
+                "metrics_interval",
+                "log_level",
+            ):
+                val = getattr(observability, attr, None)
+                if val is not None:
+                    obs[attr] = (
+                        val.value if hasattr(val, "value") else val
+                    )
+            if obs:
+                meta["observability"] = obs
+
+        return meta
+
+    @staticmethod
     def _extend_inventory_with_ingestion(
         output_dir: Path,
         doc_path: Path,
@@ -2988,6 +3090,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         requirement_hints: Optional[Dict[str, Dict[str, Any]]] = None,
         onboarding_metadata: Optional[Dict[str, Any]] = None,
         review_output: Optional[Dict[str, Any]] = None,
+        project_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]]]:
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
@@ -3170,6 +3273,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 context_files=context_files_list,
                 service_metadata=service_metadata or None,
                 wave_metadata=_wave_meta,
+                project_metadata=project_metadata or None,
             )
 
             seed_dict = seed.to_dict()
@@ -3537,6 +3641,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             # --- MANIFEST LOADING (optional) ---
             manifest_context: Dict[str, Any] = {}
+            project_metadata: Dict[str, Any] = {}
             contextcore_yaml = config.get("contextcore_yaml")
             if contextcore_yaml is None:
                 # Auto-discover: project_root (most specific), output_dir, cwd
@@ -3553,9 +3658,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                     from contextcore.models import load_manifest
                     manifest = load_manifest(str(contextcore_yaml))
                     manifest_context = self._extract_manifest_context(manifest)
+                    project_metadata = self._extract_project_metadata(manifest)
                     logger.debug(
-                        "Loaded manifest from %s: %d context keys",
-                        contextcore_yaml, len(manifest_context),
+                        "Loaded manifest from %s: %d context keys, %d metadata keys",
+                        contextcore_yaml, len(manifest_context), len(project_metadata),
                     )
                 except ImportError:
                     logger.debug("contextcore not installed — skipping manifest loading")
@@ -3755,6 +3861,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 requirement_hints=requirements_hints_index,
                 onboarding_metadata=onboarding_metadata,
                 review_output=review_output,
+                project_metadata=project_metadata,
             )
 
             # Emit deterministic traceability report for downstream auditing.
