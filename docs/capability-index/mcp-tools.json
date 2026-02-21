@@ -1,0 +1,571 @@
+{
+  "manifest_id": "startd8.agent",
+  "tools": [
+    {
+      "name": "startd8.agent.generate",
+      "description": "Send prompts to any LLM provider through a unified async interface\n\n\nAvoid:\n- Never call provider APIs directly \u2014 use resolve_agent_spec() for consistency\n- Don't assume response format differs by provider \u2014 GenerateResult normalizes all",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "properties": {
+          "prompt": {
+            "type": "string",
+            "description": "The prompt to send to the LLM"
+          },
+          "system_prompt": {
+            "type": "string",
+            "description": "Optional per-call system prompt override"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "time_ms": {
+            "type": "integer"
+          },
+          "token_usage": {
+            "type": "object",
+            "properties": {
+              "input_tokens": {
+                "type": "integer"
+              },
+              "output_tokens": {
+                "type": "integer"
+              }
+            }
+          }
+        }
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.95
+      }
+    },
+    {
+      "name": "startd8.provider.registry",
+      "description": "Dynamic provider discovery via entry points with 6 registered providers",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "integration",
+        "maturity": "stable",
+        "confidence": 0.95
+      }
+    },
+    {
+      "name": "startd8.provider.model_catalog",
+      "description": "Centralized model constants and tier-based selection across all providers",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "query",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.agent.resolution",
+      "description": "Resolve agent spec strings to configured BaseAgent instances",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.cost.tracking",
+      "description": "Track per-call LLM costs across providers with token accounting",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "model",
+          "input_tokens",
+          "output_tokens"
+        ],
+        "properties": {
+          "model": {
+            "type": "string"
+          },
+          "input_tokens": {
+            "type": "integer"
+          },
+          "output_tokens": {
+            "type": "integer"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "cost_usd": {
+            "type": "number"
+          },
+          "cumulative_cost": {
+            "type": "number"
+          }
+        }
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.cost.budget",
+      "description": "Enforce spending limits with warning and maximum thresholds",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.cost.analytics",
+      "description": "Analyze and forecast LLM spending with aggregation and trend detection",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "query",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.workflow.execute",
+      "description": "Execute multi-agent workflows by ID with config validation and error handling",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "workflow_id"
+        ],
+        "properties": {
+          "workflow_id": {
+            "type": "string",
+            "description": "Workflow identifier (e.g., \"pipeline\", \"lead-contractor\")"
+          },
+          "config": {
+            "type": "object",
+            "description": "Workflow-specific configuration"
+          }
+        }
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          },
+          "output": {
+            "type": "object"
+          },
+          "steps": {
+            "type": "array"
+          },
+          "metrics": {
+            "type": "object"
+          }
+        }
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.95
+      }
+    },
+    {
+      "name": "startd8.workflow.discover",
+      "description": "List, search, and filter available workflows with metadata",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "query",
+        "maturity": "stable",
+        "confidence": 0.95
+      }
+    },
+    {
+      "name": "startd8.workflow.pipeline",
+      "description": "Sequential multi-agent pipeline with step-by-step execution and data transformation",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.95
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.lead_contractor",
+      "description": "Cost-efficient code generation with lead/drafter agent pattern",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.artisan",
+      "description": "7-phase structured code generation with design review and quality calibration",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.architectural_review",
+      "description": "Convergent multi-agent architectural review with automated triage and coverage tracking",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.iterative_dev",
+      "description": "Dev-review-fix iteration loop with feedback convergence",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.doc_enhancement",
+      "description": "Multi-agent document refinement chain",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.policy_analysis",
+      "description": "Multi-agent parallel policy analysis with 7-criteria scoring",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.plan_ingestion",
+      "description": "Convert plans to SDK-native format with complexity-based routing",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.design_polish",
+      "description": "3-stage design document refinement workflow",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.critical_review",
+      "description": "Multi-agent document review with structured analysis reports",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.workflow.builtin.plain_language",
+      "description": "Simplify complex content into plain language",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.75
+      }
+    },
+    {
+      "name": "startd8.codegen.truncation_detection",
+      "description": "Detect truncated LLM responses with code-aware confidence scoring",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.codegen.code_extraction",
+      "description": "Extract clean code from markdown-fenced LLM responses",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "transform",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.codegen.design_handoff",
+      "description": "Cross-process design handoff for split design/implementation execution",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.codegen.domain_preflight",
+      "description": "Domain-aware constraint injection and post-validation for generated code",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.resilience.config",
+      "description": "Unified resilience with preset levels from OFF to AGGRESSIVE",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.resilience.rate_limiter",
+      "description": "Async rate limiter with dual token buckets for request and token limits",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.observability.otel_config",
+      "description": "Configure OpenTelemetry tracing, metrics, and logging for LLM operations",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "integration",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.observability.tracked_agent",
+      "description": "TrackedAgentMixin wrapping all agent calls with OTel spans and gen_ai attributes",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.9
+      }
+    },
+    {
+      "name": "startd8.observability.session_tracking",
+      "description": "Track active sessions with 7 OTel metrics for tokens, cost, and context usage",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.8
+      }
+    },
+    {
+      "name": "startd8.observability.workflow_events",
+      "description": "EventBus for workflow lifecycle events with subscriber pattern",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.integration.mcp_gateway",
+      "description": "MCP gateway exposing all workflows as AI agent tools",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "integration",
+        "maturity": "stable",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.integration.contextcore",
+      "description": "ContextCore workflow adapter with OTel span tracking and automatic task discovery",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "integration",
+        "maturity": "beta",
+        "confidence": 0.85
+      }
+    },
+    {
+      "name": "startd8.integration.skill_agents",
+      "description": "Specialized skill agents for domain-specific tasks via MCP",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "action",
+        "maturity": "beta",
+        "confidence": 0.75
+      }
+    },
+    {
+      "name": "startd8.server.api",
+      "description": "REST API server for remote workflow execution",
+      "inputSchema": {
+        "type": "object",
+        "properties": {}
+      },
+      "annotations": {
+        "manifest_id": "startd8.agent",
+        "category": "integration",
+        "maturity": "beta",
+        "confidence": 0.7
+      }
+    }
+  ],
+  "tool_count": 34
+}

@@ -126,3 +126,8 @@ scripts/README_SEMANTIC_CONVENTIONS.md
 startd8-mixin/vendor/
 startd8-mixin/generated/
 startd8-mixin/jsonnetfile.lock.json
+
+# ---------------------------------------------------------------------------
+# Pipeline artifacts (generated at runtime)
+# ---------------------------------------------------------------------------
+.cap-dev-pipe/pipeline-output/

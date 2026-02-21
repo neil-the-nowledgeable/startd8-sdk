@@ -21,9 +21,12 @@ class AnthropicProvider:
         # Claude 4.6 family (Latest - February 2026)
         "claude-opus-4-6",            # Claude Opus 4.6 - most intelligent model
         # Claude 4.5 family (November 2025)
-        "claude-opus-4-5-20251101",   # Claude Opus 4.5
-        "claude-sonnet-4-5-20250929", # Claude Sonnet 4.5 - best for complex agents/coding
-        "claude-haiku-4-5-20251008",  # Claude Haiku 4.5 - fastest with near-frontier performance
+        "claude-opus-4-5",            # Claude Opus 4.5 (alias)
+        "claude-opus-4-5-20251101",   # Claude Opus 4.5 (dated)
+        "claude-sonnet-4-5",          # Claude Sonnet 4.5 (alias)
+        "claude-sonnet-4-5-20250929", # Claude Sonnet 4.5 (dated)
+        "claude-haiku-4-5",           # Claude Haiku 4.5 (alias)
+        "claude-haiku-4-5-20251008",  # Claude Haiku 4.5 (dated)
         # Claude 4.x family
         "claude-opus-4-1-20250805",   # Claude Opus 4.1 - agentic tasks upgrade
         "claude-sonnet-4-20250514",   # Claude Sonnet 4
@@ -71,7 +74,22 @@ class AnthropicProvider:
     
     # Model metadata for cost tracking and limits
     MODEL_INFO = {
+        # Claude 4.6 family
+        "claude-opus-4-6": {
+            "name": "Claude Opus 4.6",
+            "context_window": 200000,
+            "max_output_tokens": 64000,
+            "cost_per_1m_input": 5.00,
+            "cost_per_1m_output": 25.00,
+        },
         # Claude 4.5 family
+        "claude-opus-4-5": {
+            "name": "Claude Opus 4.5",
+            "context_window": 200000,
+            "max_output_tokens": 64000,
+            "cost_per_1m_input": 5.00,
+            "cost_per_1m_output": 25.00,
+        },
         "claude-opus-4-5-20251101": {
             "name": "Claude Opus 4.5",
             "context_window": 200000,
@@ -79,12 +97,26 @@ class AnthropicProvider:
             "cost_per_1m_input": 5.00,
             "cost_per_1m_output": 25.00,
         },
+        "claude-sonnet-4-5": {
+            "name": "Claude Sonnet 4.5",
+            "context_window": 200000,
+            "max_output_tokens": 64000,
+            "cost_per_1m_input": 3.00,
+            "cost_per_1m_output": 15.00,
+        },
         "claude-sonnet-4-5-20250929": {
             "name": "Claude Sonnet 4.5",
             "context_window": 200000,  # 1M beta available
             "max_output_tokens": 64000,
             "cost_per_1m_input": 3.00,
             "cost_per_1m_output": 15.00,
+        },
+        "claude-haiku-4-5": {
+            "name": "Claude Haiku 4.5",
+            "context_window": 200000,
+            "max_output_tokens": 64000,
+            "cost_per_1m_input": 1.00,
+            "cost_per_1m_output": 5.00,
         },
         "claude-haiku-4-5-20251008": {
             "name": "Claude Haiku 4.5",

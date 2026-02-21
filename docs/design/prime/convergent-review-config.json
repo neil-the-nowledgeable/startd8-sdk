@@ -1,0 +1,11 @@
+{
+  "requirements_path": "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/prime/PRIME_EXECUTION_MODES_REQUIREMENTS.md",
+  "plan_path": "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/prime/PRIME_EXECUTION_MODES_PLAN.md",
+  "requirements_profile": "requirements",
+  "plan_profile": "design",
+  "reviewer_count": 2,
+  "quality_tier": "flagship",
+  "enable_triage": true,
+  "warn_cost_usd": 5.0,
+  "max_cost_usd": 15.0
+}

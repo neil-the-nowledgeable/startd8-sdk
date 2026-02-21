@@ -387,6 +387,22 @@ Key docs in `docs/`:
 - `docs/design/` - Design documents for major features
 - `docs/capability-index/` - Capability tracking across versions (benefits, capabilities, functional requirements, agent card, MCP tools)
 
+## Embedded Pipeline (`.cap-dev-pipe/`)
+
+This project embeds the **Capability Delivery Pipeline** via symlinks to the canonical source at `~/Documents/dev/cap-dev-pipe/`. The `.cap-dev-pipe/` directory contains:
+
+- **Symlinked scripts** — `run-cap-delivery.sh`, `run-plan-ingestion.sh`, `run-prime-contractor.sh`, `run-artisan.sh`, `resolve-provenance.py`
+- **`pipeline.env`** — project-specific config (tracked in git)
+- **`pipeline-output/`** — runtime artifacts (gitignored)
+
+Run pipeline commands from `.cap-dev-pipe/`:
+```bash
+cd .cap-dev-pipe
+./run-cap-delivery.sh --plan /path/to/plan.md --requirements /path/to/reqs.md --project startd8 --name my-run
+./run-plan-ingestion.sh --provenance pipeline-output/my-run/run-provenance.json
+./run-prime-contractor.sh --provenance pipeline-output/my-run/run-provenance.json --list
+```
+
 ## Lessons Learned
 
 See `SDK_developer_LESSONS_LEARNED.md` at `/Users/neilyashinsky/Documents/craft/Lessons_Learned/sdk/` for accumulated development wisdom.

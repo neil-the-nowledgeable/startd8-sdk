@@ -1,0 +1,103 @@
+{
+  "document_path": "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/design/mapper/03_ISSUE_TO_LOCALIZATION_MAPPER_PLAN.md",
+  "updated_at_utc": "2026-02-20 03:12:04 UTC",
+  "applied_ids": [
+    "R1-S1",
+    "R1-S2",
+    "R1-S3",
+    "R1-S4",
+    "R1-S5",
+    "R1-S7",
+    "R1-S8",
+    "R1-S9",
+    "R1-S10",
+    "R2-S1",
+    "R2-S2",
+    "R2-S3",
+    "R2-S4",
+    "R2-S5",
+    "R2-S6",
+    "R3-S1",
+    "R3-S2",
+    "R3-S3",
+    "R3-S4",
+    "R3-S5",
+    "R3-S6",
+    "R3-S7",
+    "R3-S8",
+    "R3-S9",
+    "R3-S10",
+    "R4-S5",
+    "R4-S6",
+    "R4-S9",
+    "R4-S10"
+  ],
+  "rejected_ids": [
+    "R1-S6",
+    "R4-S1",
+    "R4-S2",
+    "R4-S3",
+    "R4-S4",
+    "R4-S7",
+    "R4-S8"
+  ],
+  "rounds": [
+    {
+      "round": 3,
+      "agent": "claude-4",
+      "model": "claude-opus-4-6",
+      "ids": [
+        "R3-S1",
+        "R3-S2",
+        "R3-S3",
+        "R3-S4",
+        "R3-S5",
+        "R3-S6",
+        "R3-S7",
+        "R3-S8",
+        "R3-S9",
+        "R3-S10"
+      ],
+      "appended_at_utc": "2026-02-20 03:09:52 UTC",
+      "cost": 0.17046
+    },
+    {
+      "round": 4,
+      "agent": "gemini-3",
+      "model": "gemini-3-pro-preview",
+      "ids": [
+        "R4-S1",
+        "R4-S2",
+        "R4-S3",
+        "R4-S4",
+        "R4-S5",
+        "R4-S6",
+        "R4-S7",
+        "R4-S8",
+        "R4-S9",
+        "R4-S10"
+      ],
+      "appended_at_utc": "2026-02-20 03:11:00 UTC",
+      "cost": 0.0217825
+    }
+  ],
+  "cumulative_cost_usd": 0.32548750000000004,
+  "triage": {
+    "enabled": true,
+    "accepted": 26,
+    "rejected": 7,
+    "feature_accepted": 12,
+    "feature_rejected": 1,
+    "untriaged_remaining": [],
+    "substantially_addressed_areas": [
+      "interfaces",
+      "ops",
+      "security",
+      "risks",
+      "validation",
+      "architecture",
+      "data"
+    ],
+    "areas_needing_review": []
+  }
+}

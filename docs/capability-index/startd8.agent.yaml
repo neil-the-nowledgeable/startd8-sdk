@@ -1,0 +1,1671 @@
+# =============================================================================
+# StartD8 Agent Capability Index
+# =============================================================================
+# Unified agent-discoverable manifest for the StartD8 SDK (Beaver/Amik).
+# Synthesized from 25,398 raw capabilities extracted 2026-02-18.
+#
+# Source manifests consolidated:
+#   - startd8.sdk.capabilities.yaml (15 capabilities)
+#   - startd8.workflow.capabilities.yaml (34 capabilities)
+#   - startd8.observability.manifest.yaml (12 metrics, 15 spans)
+#
+# Schema: ContextCore Capability Index v1.13.0
+# =============================================================================
+
+manifest_id: startd8.agent
+name: StartD8 LLM Orchestration Capabilities
+version: "1.0.0"
+description: |
+  Multi-LLM provider abstraction framework with cost tracking, workflow
+  orchestration, multi-phase code generation, and OpenTelemetry observability.
+  Beaver (Amik) in the ContextCore expansion pack ecosystem.
+
+owner: force-multiplier-labs
+repository: https://github.com/neilyashinsky/startd8-sdk
+labels:
+  domain: llm-orchestration
+  tier: sdk
+  audience: agent
+  ecosystem: contextcore-beaver
+manifest_tokens: 600
+index_tokens: 5000
+
+# =============================================================================
+# CAPABILITIES (47 total)
+# =============================================================================
+
+capabilities:
+
+  # ===========================================================================
+  # MULTI-LLM GENERATION — Unified interface to 6 providers
+  # ===========================================================================
+
+  - capability_id: startd8.agent.generate
+    category: action
+    maturity: stable
+    summary: Send prompts to any LLM provider through a unified async interface
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        agent = resolve_agent_spec("anthropic:claude-sonnet-4-5-20250929").
+        result = await agent.agenerate(prompt, system_prompt="...").
+        result.text, result.time_ms, result.token_usage. Backward-compatible tuple unpacking.
+      human: |
+        All agents (Claude, GPT-4, Gemini, Mistral, Ollama, Mock) share the same
+        agenerate()/generate() interface. Supports instance-level and per-call system
+        prompts. Returns GenerateResult with text, timing, and token usage.
+    triggers:
+      - generate text
+      - llm request
+      - send prompt
+      - agenerate
+      - agent response
+    inputs:
+      type: object
+      required:
+        - prompt
+      properties:
+        prompt:
+          type: string
+          description: The prompt to send to the LLM
+        system_prompt:
+          type: string
+          description: Optional per-call system prompt override
+    outputs:
+      type: object
+      properties:
+        text:
+          type: string
+        time_ms:
+          type: integer
+        token_usage:
+          type: object
+          properties:
+            input_tokens: { type: integer }
+            output_tokens: { type: integer }
+    evidence:
+      - type: code
+        ref: src/startd8/agents/base.py
+        description: BaseAgent protocol with agenerate()/generate()
+      - type: code
+        ref: src/startd8/agents/claude.py
+        description: ClaudeAgent implementation
+      - type: code
+        ref: src/startd8/agents/openai.py
+        description: GPT4Agent implementation
+      - type: code
+        ref: src/startd8/agents/gemini.py
+        description: GeminiAgent implementation
+      - type: test
+        ref: tests/unit/test_agents.py
+        description: 7 tests for system_prompt, 13 tests for GenerateResult
+    confidence: 0.95
+    anti_patterns:
+      - Never call provider APIs directly — use resolve_agent_spec() for consistency
+      - Don't assume response format differs by provider — GenerateResult normalizes all
+    discovery_paths:
+      - If you need to call an LLM, start here. resolve_agent_spec() handles provider routing.
+      - If you need to switch models, change the spec string — no code changes needed.
+
+  - capability_id: startd8.provider.registry
+    category: integration
+    maturity: stable
+    summary: Dynamic provider discovery via entry points with 6 registered providers
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        ProviderRegistry.discover(). ProviderRegistry.get_provider("anthropic").
+        ProviderRegistry.list_providers() -> ["anthropic", "openai", "ollama", "gemini", "mistral", "mock"].
+        Each provider: validate_config(), create_agent(), list_models().
+      human: |
+        Auto-discovers LLM providers from Python entry points. Six built-in providers:
+        Anthropic (Claude), OpenAI (GPT), Google (Gemini), Mistral, Ollama (local), Mock.
+        Third-party providers work after pip install — no code changes.
+    triggers:
+      - provider registry
+      - discover providers
+      - list providers
+      - add provider
+    evidence:
+      - type: code
+        ref: src/startd8/providers/registry.py
+        description: ProviderRegistry with entry_point discovery
+      - type: code
+        ref: src/startd8/providers/protocol.py
+        description: Provider protocol interface
+    confidence: 0.95
+    discovery_paths:
+      - If you need to add a new LLM provider, implement the Provider protocol and register via entry points.
+      - If you need to check which providers are available, use ProviderRegistry.list_providers().
+
+  - capability_id: startd8.provider.model_catalog
+    category: query
+    maturity: stable
+    summary: Centralized model constants and tier-based selection across all providers
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.model_catalog import Models. Models.CLAUDE_SONNET_LATEST.
+        get_latest_model("gemini", tier="fast"). list_models_by_tier("flagship").
+        ModelCatalogEntry.agent_spec for resolve_agent_spec() input.
+      human: |
+        Single source of truth for model identifiers. No hardcoded model strings —
+        use Models.CLAUDE_SONNET_LATEST instead. Tier-based selection (flagship, fast,
+        mini) enables cost-optimized routing.
+    triggers:
+      - model catalog
+      - model constants
+      - latest model
+      - model tier
+      - model selection
+    evidence:
+      - type: code
+        ref: src/startd8/model_catalog.py
+        description: Models constants, ModelInfo, get_latest_model(), list_models_by_tier()
+    confidence: 0.90
+    discovery_paths:
+      - If you need a model ID string, check the model catalog instead of hardcoding.
+
+  - capability_id: startd8.agent.resolution
+    category: action
+    maturity: stable
+    summary: Resolve agent spec strings to configured BaseAgent instances
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        resolve_agent_spec("anthropic:claude-sonnet-4-5-20250929",
+          timeout_config=TimeoutConfig(read=600.0),
+          retry_config=RetryConfig(max_attempts=5)).
+        resolve_agents(["anthropic:claude-sonnet-4-5-20250929", "openai:gpt-4o"]).
+      human: |
+        Parses "provider:model" spec strings into configured agent instances.
+        Supports legacy aliases, bare model IDs, timeout and retry config forwarding.
+        All 5 providers accept forwarded config.
+    triggers:
+      - resolve agent
+      - agent spec
+      - create agent
+      - provider model string
+    evidence:
+      - type: code
+        ref: src/startd8/utils/agent_resolution.py
+        description: resolve_agent_spec() with timeout/retry forwarding
+      - type: test
+        ref: tests/unit/test_agent_resolution.py
+        description: 16+ tests covering spec formats, config forwarding, error cases
+    confidence: 0.90
+
+  # ===========================================================================
+  # COST INTELLIGENCE — Track, budget, and forecast LLM spending
+  # ===========================================================================
+
+  - capability_id: startd8.cost.tracking
+    category: action
+    maturity: stable
+    summary: Track per-call LLM costs across providers with token accounting
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.costs import CostTracker. tracker = CostTracker().
+        tracker.record(model, input_tokens, output_tokens). tracker.get_summary().
+        PricingService provides per-model rates. OTel metrics: startd8.cost.total,
+        startd8.cost.input_tokens, startd8.cost.output_tokens, startd8.cost.per_request.
+      human: |
+        Automatically tracks the cost of every LLM call. Knows pricing for all
+        supported models. Exports to Prometheus/OTel metrics for Grafana dashboards.
+        Integrates with BudgetManager for spending limits.
+    triggers:
+      - cost tracking
+      - token cost
+      - llm cost
+      - pricing
+      - spending
+    inputs:
+      type: object
+      required:
+        - model
+        - input_tokens
+        - output_tokens
+      properties:
+        model:
+          type: string
+        input_tokens:
+          type: integer
+        output_tokens:
+          type: integer
+    outputs:
+      type: object
+      properties:
+        cost_usd:
+          type: number
+        cumulative_cost:
+          type: number
+    evidence:
+      - type: code
+        ref: src/startd8/costs/tracker.py
+        description: CostTracker with per-model pricing
+      - type: code
+        ref: src/startd8/costs/pricing.py
+        description: PricingService with model rate lookups
+      - type: code
+        ref: src/startd8/costs/otel_metrics.py
+        description: OTel cost metrics export (4 metrics)
+      - type: test
+        ref: tests/costs/
+        description: Cost tracking test suite
+    confidence: 0.90
+    discovery_paths:
+      - If you need to know how much an LLM call cost, CostTracker records it automatically.
+      - If you need cost data in Grafana, enable OTel metrics export.
+
+  - capability_id: startd8.cost.budget
+    category: action
+    maturity: stable
+    summary: Enforce spending limits with warning and maximum thresholds
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.costs import BudgetManager. manager = BudgetManager(warn=5.0, max=10.0).
+        manager.check(cost) raises BudgetExceeded or emits BUDGET_WARNING.
+        UsageLimitManager for per-user/team quota enforcement.
+      human: |
+        Set warn and max budget limits. Get warnings before hitting limits.
+        Per-user and per-team quotas prevent runaway spending. Emits events
+        for integration with alerting systems.
+    triggers:
+      - budget limit
+      - spending limit
+      - usage quota
+      - cost control
+    evidence:
+      - type: code
+        ref: src/startd8/costs/budget.py
+        description: BudgetManager with warn/max limits and events
+      - type: code
+        ref: src/startd8/costs/usage_limits.py
+        description: UsageLimitManager for per-user/team quotas
+    confidence: 0.85
+
+  - capability_id: startd8.cost.analytics
+    category: query
+    maturity: stable
+    summary: Analyze and forecast LLM spending with aggregation and trend detection
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.costs import CostAnalytics. analytics = CostAnalytics(tracker).
+        analytics.by_provider(). analytics.by_model(). analytics.forecast(days=30).
+      human: |
+        Aggregate costs by provider, model, time period. Forecast future spending
+        based on usage trends. Identify cost-optimization opportunities.
+    triggers:
+      - cost analytics
+      - cost forecast
+      - spending analysis
+      - cost by provider
+    evidence:
+      - type: code
+        ref: src/startd8/costs/analytics.py
+        description: CostAnalytics for aggregation and forecasting
+    confidence: 0.85
+
+  # ===========================================================================
+  # WORKFLOW ORCHESTRATION — Multi-agent pipeline execution
+  # ===========================================================================
+
+  - capability_id: startd8.workflow.execute
+    category: action
+    maturity: stable
+    summary: Execute multi-agent workflows by ID with config validation and error handling
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.workflows.registry import run_workflow, arun_workflow.
+        result = await arun_workflow("pipeline", config={...}).
+        result.success, result.output, result.steps, result.metrics.
+      human: |
+        Run any registered workflow with a consistent interface. Config is validated
+        before execution. Results include per-step details, cost, and timing.
+        11 builtin workflows plus unlimited third-party via entry points.
+    triggers:
+      - run workflow
+      - execute workflow
+      - workflow pipeline
+      - multi-agent
+    inputs:
+      type: object
+      required:
+        - workflow_id
+      properties:
+        workflow_id:
+          type: string
+          description: Workflow identifier (e.g., "pipeline", "lead-contractor")
+        config:
+          type: object
+          description: Workflow-specific configuration
+    outputs:
+      type: object
+      properties:
+        success:
+          type: boolean
+        output:
+          type: object
+        steps:
+          type: array
+        metrics:
+          type: object
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/registry.py
+        description: run_workflow() and arun_workflow() with validation
+      - type: code
+        ref: src/startd8/workflows/base.py
+        description: WorkflowBase protocol and execution engine
+    confidence: 0.95
+    discovery_paths:
+      - If you need to chain multiple agents, use the workflow system instead of manual orchestration.
+      - If you need a specific capability, search workflows by capability tag first.
+
+  - capability_id: startd8.workflow.discover
+    category: query
+    maturity: stable
+    summary: List, search, and filter available workflows with metadata
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        WorkflowRegistry.list_workflows(). find_workflows_by_capability("code-review").
+        search_workflows("review"). list_workflow_metadata() for full details.
+        CLI: startd8 workflow list --capability <tag> --search <query>.
+      human: |
+        Discover workflows programmatically or via CLI. Filter by capability tag,
+        search by name/description. Progressive disclosure: lightweight index for
+        agents, full metadata on demand.
+    triggers:
+      - list workflows
+      - find workflow
+      - search workflows
+      - workflow discovery
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/registry.py
+        description: WorkflowRegistry discovery, search, and filtering
+      - type: doc
+        ref: .startd8/workflows/_index.yaml
+        description: Lightweight YAML index for token-efficient discovery
+    confidence: 0.95
+
+  - capability_id: startd8.workflow.scaffold
+    category: action
+    maturity: stable
+    summary: Generate new workflow skeleton from templates in under 1 minute
+    audiences:
+      - human
+    description:
+      agent: |
+        CLI: startd8 workflow new <name> --template [basic|pipeline|multi_agent|async].
+        WorkflowScaffolder with 4 Jinja2 templates. ScaffoldConfig, ScaffoldResult.
+      human: |
+        Scaffold new workflows from 4 templates: basic, pipeline, multi-agent, async.
+        Generated code includes protocol compliance, validation, and test stubs.
+    triggers:
+      - scaffold workflow
+      - new workflow
+      - create workflow
+      - workflow template
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/scaffold.py
+        description: WorkflowScaffolder with 4 templates
+      - type: code
+        ref: src/startd8/workflows/templates/
+        description: Jinja2 templates for basic, pipeline, multi_agent, async
+    confidence: 0.90
+
+  - capability_id: startd8.workflow.pipeline
+    category: action
+    maturity: stable
+    summary: Sequential multi-agent pipeline with step-by-step execution and data transformation
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        Pipeline([PipelineStep(agent, transform_fn), ...]).execute(input).
+        PipelineResult with per-step results, metrics, success flag.
+      human: |
+        Chain multiple agents with data transformation between steps.
+        Each step can modify input for the next agent. Results include
+        per-step timing and token usage for debugging.
+    triggers:
+      - pipeline
+      - sequential agents
+      - chain agents
+      - multi-step
+    evidence:
+      - type: code
+        ref: src/startd8/orchestration.py
+        description: Pipeline, PipelineStep, PipelineResult classes
+    confidence: 0.95
+
+  # ===========================================================================
+  # BUILTIN WORKFLOWS — 11 ready-to-use multi-agent workflows
+  # ===========================================================================
+
+  - capability_id: startd8.workflow.builtin.lead_contractor
+    category: action
+    maturity: beta
+    summary: Cost-efficient code generation with lead/drafter agent pattern
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "lead-contractor". Config: {task_description, target_files,
+        lead_agent, drafter_agent, project_root, output_dir}.
+        Lead agent (expensive) creates spec; drafter (cheap) generates code.
+      human: |
+        Two-tier code generation: a senior model creates the specification,
+        a cheaper model writes the code. Reduces cost by 60-80% compared to
+        using the senior model for everything.
+    triggers:
+      - code generation
+      - lead contractor
+      - lead drafter
+      - generate code
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/lead_contractor_workflow.py
+        description: LeadContractorWorkflow with spec/generate split
+    confidence: 0.85
+
+  - capability_id: startd8.workflow.builtin.artisan
+    category: action
+    maturity: beta
+    summary: 7-phase structured code generation with design review and quality calibration
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        ArtisanContractorWorkflow with phases: PLAN, SCAFFOLD, DESIGN, IMPLEMENT,
+        TEST, REVIEW, FINALIZE. Supports phase subsets, cost budget, checkpoints, OTel.
+        Design quality context: architectural_context + design_calibration depth tiers.
+      human: |
+        Full software development lifecycle in 7 phases. Design half produces
+        reviewed specifications; implementation half generates code. Supports
+        human review between halves via design handoff files.
+    triggers:
+      - artisan workflow
+      - multi-phase generation
+      - code generation pipeline
+      - structured code generation
+    evidence:
+      - type: code
+        ref: src/startd8/contractors/artisan_contractor.py
+        description: 7-phase orchestrator with checkpoints and cost budget
+      - type: doc
+        ref: docs/ARTISAN_WORKFLOW_GUIDE.md
+        description: Comprehensive guide with phases, scripts, configuration
+    confidence: 0.85
+
+  - capability_id: startd8.workflow.builtin.architectural_review
+    category: action
+    maturity: stable
+    summary: Convergent multi-agent architectural review with automated triage and coverage tracking
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "architectural-review-log". Config: {document_path, reviewer_count,
+        max_suggestions, enable_triage, substantially_addressed_threshold, feature_requirements}.
+        CRP: iterative review converging on 7-domain coverage.
+      human: |
+        Multiple reviewer agents analyze a design document iteratively.
+        Automated triage classifies suggestions as ACCEPT/REJECT. Tracks
+        coverage across 7 domains. Dual-document mode for plan+spec review.
+    triggers:
+      - architectural review
+      - design review
+      - code review
+      - convergent review
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/architectural_review_log_workflow.py
+        description: CRP with automated triage and dual-document mode
+      - type: test
+        ref: tests/unit/test_architectural_review_triage.py
+        description: 87 unit tests for triage, coverage, dual-doc
+    confidence: 0.90
+
+  - capability_id: startd8.workflow.builtin.iterative_dev
+    category: action
+    maturity: stable
+    summary: Dev-review-fix iteration loop with feedback convergence
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "iterative-dev". Config: {task, max_iterations, reviewer_agent, dev_agent}.
+        Loop: develop → review → fix until reviewer approves or max iterations reached.
+      human: |
+        Automated development loop where a reviewer agent provides feedback
+        and a developer agent iterates until the code passes review.
+    triggers:
+      - iterative development
+      - dev review loop
+      - code iteration
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/iterative_dev_workflow.py
+        description: Iterative dev-review-fix workflow
+    confidence: 0.90
+
+  - capability_id: startd8.workflow.builtin.doc_enhancement
+    category: action
+    maturity: stable
+    summary: Multi-agent document refinement chain
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "doc-enhancement". Config: {document_path, enhancement_agents}.
+        DocumentEnhancementChain: agents refine document sequentially.
+      human: |
+        Multiple agents improve a document in sequence — each building
+        on the previous agent's improvements.
+    triggers:
+      - document enhancement
+      - doc refinement
+      - improve document
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/doc_enhancement_workflow.py
+        description: Multi-agent document refinement chain
+    confidence: 0.90
+
+  - capability_id: startd8.workflow.builtin.policy_analysis
+    category: action
+    maturity: beta
+    summary: Multi-agent parallel policy analysis with 7-criteria scoring
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "policy-analysis". Config: {document_path, analysis_agents}.
+        Parallel analysis across 7 criteria with scoring and synthesis.
+      human: |
+        Multiple agents analyze a policy document in parallel across 7
+        criteria, then synthesize findings into a unified report.
+    triggers:
+      - policy analysis
+      - document analysis
+      - multi-criteria analysis
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/policy_analysis_workflow.py
+        description: Parallel multi-criteria policy analysis
+    confidence: 0.80
+
+  - capability_id: startd8.workflow.builtin.plan_ingestion
+    category: action
+    maturity: beta
+    summary: Convert plans to SDK-native format with complexity-based routing
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "plan-ingestion". Config: {plan_path, output_dir, review_rounds,
+        force_route, generate_task_tracking, project_id}.
+        5-phase pipeline: parse → assess → transform → refine → emit.
+        Routes to Prime (simple) or Artisan (complex) based on 7-dimension scoring.
+      human: |
+        Convert any plan.md into SDK-native format. LLM scores complexity
+        across 7 dimensions and routes to the appropriate contractor.
+        Optional ContextCore task tracking artifact generation.
+    triggers:
+      - plan ingestion
+      - import plan
+      - plan to workflow
+      - convert plan
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/plan_ingestion_workflow.py
+        description: 5-phase ingestion with complexity-based routing
+      - type: test
+        ref: tests/unit/test_plan_ingestion_workflow.py
+        description: 55+ unit tests
+    confidence: 0.85
+
+  - capability_id: startd8.workflow.builtin.design_polish
+    category: action
+    maturity: stable
+    summary: 3-stage design document refinement workflow
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "design-polish". Config: {document_path, polish_agents}.
+      human: |
+        Three-stage refinement for design documents: structure, content, clarity.
+    triggers:
+      - design polish
+      - document refinement
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/design_polish_workflow.py
+        description: 3-stage design document refinement
+    confidence: 0.85
+
+  - capability_id: startd8.workflow.builtin.critical_review
+    category: action
+    maturity: stable
+    summary: Multi-agent document review with structured analysis reports
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "critical-review". Config: {document_path, reviewer_agents}.
+      human: |
+        Multiple agents independently review a document and produce structured
+        analysis reports with findings categorized by severity.
+    triggers:
+      - critical review
+      - document review
+      - code review report
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/critical_review_workflow.py
+        description: Multi-agent review with analysis reports
+    confidence: 0.85
+
+  - capability_id: startd8.workflow.builtin.plain_language
+    category: action
+    maturity: beta
+    summary: Simplify complex content into plain language
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        workflow_id: "plain-language". Config: {document_path, target_reading_level}.
+      human: |
+        Convert complex technical or legal content into plain language
+        at a specified reading level.
+    triggers:
+      - plain language
+      - simplify text
+      - reading level
+    evidence:
+      - type: code
+        ref: src/startd8/workflows/builtin/plain_language_workflow.py
+        description: Content simplification workflow
+    confidence: 0.75
+
+  # ===========================================================================
+  # CODE GENERATION CONTRACTS — Size estimation and truncation prevention
+  # ===========================================================================
+
+  - capability_id: startd8.codegen.truncation_detection
+    category: action
+    maturity: stable
+    summary: Detect truncated LLM responses with code-aware confidence scoring
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.truncation_detection import detect_truncation, estimate_output_size.
+        result = detect_truncation(text). result.is_truncated, result.confidence, result.indicators.
+        Pre-flight: estimate = estimate_output_size(task). estimate.lines, estimate.tokens.
+      human: |
+        Detects when an LLM response was cut off mid-generation. Code-aware mode
+        checks for unclosed brackets, missing return statements, etc. Pre-flight
+        estimation prevents truncation before it happens.
+    triggers:
+      - truncation detection
+      - truncated response
+      - output size estimation
+      - pre-flight check
+    evidence:
+      - type: code
+        ref: src/startd8/truncation_detection.py
+        description: detect_truncation(), estimate_output_size(), confidence thresholds
+      - type: doc
+        ref: docs/PATTERN-truncation-detection.md
+        description: Truncation detection pattern documentation
+    confidence: 0.90
+    discovery_paths:
+      - If generated code looks incomplete, run truncation detection before re-generating.
+      - If tasks are large, estimate output size before generation to avoid waste.
+
+  - capability_id: startd8.codegen.code_extraction
+    category: transform
+    maturity: stable
+    summary: Extract clean code from markdown-fenced LLM responses
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.utils.code_extraction import extract_code_from_response.
+        code = extract_code_from_response(llm_response, language="python").
+        extract_multi_file_code(response) for multi-file extraction.
+      human: |
+        Strips markdown fences, preamble, and explanatory notes from LLM responses.
+        Language-aware extraction for Python, TypeScript, Go, Rust, YAML, and more.
+        Multi-file extraction splits responses into individual file contents.
+    triggers:
+      - extract code
+      - code block
+      - markdown fence
+      - parse llm output
+    evidence:
+      - type: code
+        ref: src/startd8/utils/code_extraction.py
+        description: extract_code_from_response(), extract_multi_file_code()
+    confidence: 0.85
+
+  - capability_id: startd8.codegen.design_handoff
+    category: action
+    maturity: beta
+    summary: Cross-process design handoff for split design/implementation execution
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        write_design_handoff(output_dir, enriched_seed_path, project_root, workflow_id).
+        load_design_handoff(path_or_dir) -> HandoffData.
+        Schema version 1 with reject-future semantics.
+      human: |
+        Enables running design and implementation as separate processes with
+        human review between halves. Handoff file preserves design decisions,
+        project context, and scaffold for the implementation phase.
+    triggers:
+      - design handoff
+      - split execution
+      - two-half workflow
+    evidence:
+      - type: code
+        ref: src/startd8/contractors/handoff.py
+        description: HandoffData, write/load_design_handoff()
+      - type: test
+        ref: tests/unit/contractors/test_handoff.py
+        description: 13 tests for round-trip, error cases, schema versioning
+    confidence: 0.85
+
+  - capability_id: startd8.codegen.domain_preflight
+    category: action
+    maturity: beta
+    summary: Domain-aware constraint injection and post-validation for generated code
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        DomainChecklist(project_root).get_enrichment(feature_id, target_files).
+        validate_generated_code(code, enrichment) -> PostValidationResult.
+        Auto-wired in PrimeContractor.develop_feature().
+      human: |
+        Generated code automatically follows project-specific rules (no relative imports,
+        dependency allowlists, definition ordering) without manual prompt editing.
+        Post-validation catches violations before integration.
+    triggers:
+      - domain constraints
+      - code validation
+      - preflight check
+      - domain rules
+    evidence:
+      - type: code
+        ref: src/startd8/contractors/prime_contractor.py
+        description: Domain enrichment in develop_feature()
+      - type: code
+        ref: src/startd8/utils/prime_task_enrichment.py
+        description: extract_target_files(), enrich_prime_yaml()
+      - type: test
+        ref: tests/unit/test_prime_task_enrichment.py
+        description: 17 tests for extraction and enrichment
+    confidence: 0.80
+
+  # ===========================================================================
+  # RESILIENCE — Fault tolerance and rate control
+  # ===========================================================================
+
+  - capability_id: startd8.resilience.config
+    category: action
+    maturity: stable
+    summary: Unified resilience with preset levels from OFF to AGGRESSIVE
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.resilience import ResilienceConfig, ResilienceLevel.
+        config = ResilienceConfig.from_level(ResilienceLevel.STANDARD).
+        ErrorStrategy enum: STOP, RETRY, SKIP, FALLBACK.
+      human: |
+        Four preset resilience levels (OFF, MINIMAL, STANDARD, AGGRESSIVE) with
+        configurable retry, circuit breaker, and auto-fix settings.
+        ErrorStrategy controls behavior on failure: stop, retry, skip, or fallback.
+    triggers:
+      - resilience
+      - error handling
+      - retry config
+      - circuit breaker
+      - fault tolerance
+    evidence:
+      - type: code
+        ref: src/startd8/resilience/__init__.py
+        description: ResilienceConfig, ResilienceLevel, RetrySettings, CircuitBreakerSettings
+    confidence: 0.85
+    discovery_paths:
+      - If LLM calls are failing intermittently, increase resilience level.
+      - Start with STANDARD level and tune from there.
+
+  - capability_id: startd8.resilience.rate_limiter
+    category: action
+    maturity: stable
+    summary: Async rate limiter with dual token buckets for request and token limits
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.ratelimit import get_rate_limiter.
+        limiter = get_rate_limiter("anthropic", provider="anthropic").
+        async with limiter.acquire(estimated_tokens=1000): await agent.agenerate(prompt).
+        BackpressureStrategy: QUEUE, REJECT, SHED.
+      human: |
+        Prevents hitting provider rate limits with dual token buckets (requests/min
+        and tokens/min). Three backpressure strategies: queue (wait), reject (error),
+        shed (drop oldest). Provider-aware defaults for each LLM provider.
+    triggers:
+      - rate limit
+      - token bucket
+      - backpressure
+      - throttle
+      - requests per minute
+    evidence:
+      - type: code
+        ref: src/startd8/ratelimit/__init__.py
+        description: RateLimiter, TokenBucket, BackpressureStrategy, get_rate_limiter
+    confidence: 0.85
+
+  # ===========================================================================
+  # OBSERVABILITY — OTel integration for LLM operations
+  # ===========================================================================
+
+  - capability_id: startd8.observability.otel_config
+    category: integration
+    maturity: stable
+    summary: Configure OpenTelemetry tracing, metrics, and logging for LLM operations
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.otel import configure_otel, configure_tracing, add_project_context_to_span.
+        configure_otel(service_name="my-app"). Traces to Tempo, metrics to Mimir, logs to Loki.
+      human: |
+        One-call OTel setup for the full observability stack. Emits traces (Tempo),
+        metrics (Mimir/Prometheus), and logs (Loki) with consistent service attributes.
+        Project context is attached to all spans for ContextCore correlation.
+    triggers:
+      - opentelemetry
+      - otel setup
+      - configure tracing
+      - observability setup
+    evidence:
+      - type: code
+        ref: src/startd8/otel.py
+        description: configure_otel(), configure_tracing(), resource detection
+    confidence: 0.90
+
+  - capability_id: startd8.observability.tracked_agent
+    category: action
+    maturity: stable
+    summary: TrackedAgentMixin wrapping all agent calls with OTel spans and gen_ai attributes
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        TrackedAgentMixin auto-wraps agenerate()/generate() with OTel spans.
+        Emits gen_ai.request.model, gen_ai.usage.input_tokens, gen_ai.usage.output_tokens,
+        response_time_ms. OpenLLMetry coordination via STARTD8_OPENLLMETRY env var.
+      human: |
+        Every LLM call is automatically traced with OpenTelemetry. Spans include
+        model, tokens, cost, and timing. Compatible with OpenLLMetry for additional
+        provider-specific instrumentation. Dual-emit: both gen_ai.* and agent.* attributes.
+    triggers:
+      - tracked agent
+      - agent tracing
+      - gen_ai attributes
+      - openllmetry
+    evidence:
+      - type: code
+        ref: src/startd8/agents/tracked.py
+        description: TrackedAgentMixin with OTel span wrapping
+      - type: code
+        ref: src/startd8/genai_compat.py
+        description: DualEmitAttributes for gen_ai.* + agent.* attributes
+      - type: test
+        ref: tests/unit/test_tracked_genai.py
+        description: 15 tests for TrackedAgentMixin
+    confidence: 0.90
+
+  - capability_id: startd8.observability.session_tracking
+    category: action
+    maturity: beta
+    summary: Track active sessions with 7 OTel metrics for tokens, cost, and context usage
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        tracker = get_session_tracker(). sid = tracker.start_session("claude", "...").
+        tracker.record_request(sid, input_tokens=100, output_tokens=50, time_ms=1200, cost=0.002).
+        Metrics: startd8_active_sessions, startd8_requests_total, startd8_tokens_total,
+        startd8_response_time_ms, startd8_context_usage_ratio, startd8_truncations_total, startd8_cost_total.
+      human: |
+        Framework-level session tracking emitting 7 OTel metrics. Monitor active
+        sessions, token consumption, context window usage, and cost in real-time
+        via Grafana dashboards.
+    triggers:
+      - session tracking
+      - session metrics
+      - active sessions
+      - context usage
+    evidence:
+      - type: code
+        ref: src/startd8/session_tracking.py
+        description: SessionTracker with 7 OTel metrics
+    confidence: 0.80
+
+  - capability_id: startd8.observability.otel_logging
+    category: integration
+    maturity: stable
+    summary: OTel log bridge routing SDK logs to Loki via get_logger()
+    audiences:
+      - human
+    description:
+      agent: |
+        from startd8.logging_config import get_logger. logger = get_logger(__name__).
+        All logs reach Loki. Anti-pattern: logging.getLogger() misses Loki handler.
+      human: |
+        Ensures all SDK logs reach Loki for centralized analysis. Use get_logger()
+        instead of logging.getLogger() to attach the OTel handler.
+    triggers:
+      - otel logging
+      - loki
+      - log bridge
+      - get_logger
+    evidence:
+      - type: code
+        ref: src/startd8/logging_config.py
+        description: get_logger() with OTel handler attachment
+      - type: code
+        ref: src/startd8/logging_otel.py
+        description: OpenTelemetry log bridge implementation
+    confidence: 0.90
+
+  - capability_id: startd8.observability.workflow_events
+    category: action
+    maturity: stable
+    summary: EventBus for workflow lifecycle events with subscriber pattern
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.events import EventBus, EventType.
+        bus = EventBus(). bus.subscribe(EventType.PIPELINE_COMPLETE, handler).
+        Events: PIPELINE_START, PIPELINE_STEP_START/COMPLETE, PIPELINE_COMPLETE,
+        PIPELINE_ERROR, TRUNCATION_DETECTED/WARNING/PREFLIGHT_REJECT, BUDGET_WARNING/EXCEEDED.
+      human: |
+        Subscribe to workflow lifecycle events for real-time dashboards,
+        alerting, and integration. All pipeline, truncation, and budget
+        events are published via the EventBus.
+    triggers:
+      - workflow events
+      - event bus
+      - pipeline events
+      - lifecycle events
+    evidence:
+      - type: code
+        ref: src/startd8/events/types.py
+        description: EventType enum and EventBus implementation
+    confidence: 0.85
+
+  # ===========================================================================
+  # AGENT INTEGRATION — MCP, ContextCore, and skill agents
+  # ===========================================================================
+
+  - capability_id: startd8.integration.mcp_gateway
+    category: integration
+    maturity: stable
+    summary: MCP gateway exposing all workflows as AI agent tools
+    audiences:
+      - agent
+    description:
+      agent: |
+        MCP tool: startd8_workflow. Actions: list, describe, run.
+        Input: {action: "run", workflow_id: "pipeline", config: {...}}.
+        Rate limited, audit logged. Returns structured WorkflowResult.
+      human: |
+        All StartD8 workflows are accessible via a single MCP tool. AI agents
+        can list, describe, and execute any workflow through the Model Context
+        Protocol gateway.
+    triggers:
+      - mcp tool
+      - agent tool
+      - mcp gateway
+      - workflow tool
+    evidence:
+      - type: code
+        ref: src/startd8/mcp/gateway.py
+        description: MCPGateway with workflow tool dispatch
+      - type: code
+        ref: src/startd8/skills/agent.py
+        description: SkillAgent for Claude Skills via MCP
+    confidence: 0.85
+    discovery_paths:
+      - If you're an AI agent, use the startd8_workflow MCP tool to access all capabilities.
+
+  - capability_id: startd8.integration.contextcore
+    category: integration
+    maturity: beta
+    summary: ContextCore workflow adapter with OTel span tracking and automatic task discovery
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.integrations.contextcore import ContextCoreWorkflowAdapter, ContextCoreTaskSource.
+        adapter = ContextCoreWorkflowAdapter(workflow, config=ContextCoreConfig(...)).
+        source = ContextCoreTaskSource(project_id). tasks = source.get_pending_tasks().
+      human: |
+        Integrates StartD8 with ContextCore for project observability. Wraps any
+        workflow with OTel span tracking. Automatically discovers pending tasks
+        from ContextCore state files for execution.
+    triggers:
+      - contextcore
+      - task tracking
+      - project tracking
+      - contextcore integration
+    evidence:
+      - type: code
+        ref: src/startd8/integrations/contextcore.py
+        description: ContextCoreWorkflowAdapter, ContextCoreTaskRunner, ContextCoreTaskSource
+      - type: code
+        ref: src/startd8/workflows/builtin/task_tracking_emitter.py
+        description: emit_task_tracking_artifacts() for ContextCore state files
+    confidence: 0.85
+
+  - capability_id: startd8.integration.skill_agents
+    category: action
+    maturity: beta
+    summary: Specialized skill agents for domain-specific tasks via MCP
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        from startd8.skills import SkillAgent, create_code_reviewer_agent.
+        agent = create_code_reviewer_agent(). result = await agent.agenerate(code).
+      human: |
+        Pre-built skill agents for common tasks: code review, game design,
+        HTML5 game development. Each skill agent wraps domain expertise
+        with the standard agent interface.
+    triggers:
+      - skill agent
+      - code reviewer
+      - domain agent
+      - specialized agent
+    evidence:
+      - type: code
+        ref: src/startd8/skills/agent.py
+        description: SkillAgent with factory functions
+    confidence: 0.75
+
+  # ===========================================================================
+  # DEVELOPER TOOLS — CLI, benchmarking, diagnostics
+  # ===========================================================================
+
+  - capability_id: startd8.cli.benchmark
+    category: action
+    maturity: stable
+    summary: Benchmark prompts across multiple LLM providers with comparison reports
+    audiences:
+      - human
+    description:
+      agent: |
+        CLI: startd8 run-benchmark <prompt-id> --agent <spec>.
+        startd8 compare <prompt-id>. BenchmarkRunner, ComparisonReport.
+      human: |
+        Run the same prompt against multiple models and compare results.
+        Generates comparison reports with quality scores, cost, and timing.
+        Helps choose the best model for each use case.
+    triggers:
+      - benchmark
+      - compare models
+      - model comparison
+      - evaluate models
+    evidence:
+      - type: code
+        ref: src/startd8/benchmark.py
+        description: BenchmarkRunner, ComparisonReport
+      - type: code
+        ref: src/startd8/cli.py
+        description: run-benchmark and compare CLI commands
+    confidence: 0.85
+
+  - capability_id: startd8.cli.prompt_management
+    category: action
+    maturity: stable
+    summary: Version and manage prompts with semantic versioning and history
+    audiences:
+      - human
+    description:
+      agent: |
+        CLI: startd8 create-prompt <text> --version 1.0.0 --tag <tag>.
+        startd8 list-prompts. startd8 show-prompt <id>.
+      human: |
+        Semantic versioning for prompts with tags and history tracking.
+        Compare prompt versions, list all prompts, and manage prompt lifecycle.
+    triggers:
+      - prompt versioning
+      - prompt management
+      - create prompt
+      - prompt history
+    evidence:
+      - type: code
+        ref: src/startd8/cli.py
+        description: create-prompt, list-prompts, show-prompt CLI commands
+      - type: code
+        ref: src/startd8/framework.py
+        description: AgentFramework prompt management
+    confidence: 0.85
+
+  - capability_id: startd8.cli.tui
+    category: action
+    maturity: beta
+    summary: Interactive terminal UI for workflow management and response comparison
+    audiences:
+      - human
+    description:
+      agent: |
+        CLI: startd8 tui. Interactive prompt management, workflow execution,
+        response comparison, cost analysis.
+      human: |
+        Rich terminal UI for managing prompts, executing workflows, comparing
+        responses, and analyzing costs interactively. Includes contextual
+        help system with workflow guides and advanced topics.
+    triggers:
+      - tui
+      - terminal ui
+      - interactive mode
+    evidence:
+      - type: code
+        ref: src/startd8/cli.py
+        description: tui command launching interactive interface
+    confidence: 0.75
+
+  - capability_id: startd8.diagnostics.runner
+    category: action
+    maturity: beta
+    summary: Self-diagnostic system with health checks and LLM-based failure analysis
+    audiences:
+      - human
+    description:
+      agent: |
+        from startd8.diagnostics import run_diagnostics, analyze_report, apply_safe_fixes.
+        report = run_diagnostics(). analysis = analyze_report(report, agent=my_agent).
+      human: |
+        Run health checks across framework, agents, cost tracking, and storage.
+        LLM-based failure analysis explains what went wrong. Safe auto-fixes
+        for common issues.
+    triggers:
+      - diagnostics
+      - health check
+      - self-diagnostic
+      - troubleshoot
+    evidence:
+      - type: code
+        ref: src/startd8/diagnostics/__init__.py
+        description: DiagnosticRunner, DiagnosticAnalyzer, AutoFixer
+    confidence: 0.70
+
+  - capability_id: startd8.testing.mock_provider
+    category: action
+    maturity: stable
+    summary: Mock provider and agent for deterministic testing without API calls
+    audiences:
+      - human
+    description:
+      agent: |
+        agent = resolve_agent_spec("mock:mock-model"). Or MockAgent(responses=["Hello"]).
+        Error simulation: MockAgent(error=Exception("...")).
+      human: |
+        Deterministic testing without API calls or costs. Mock provider
+        returns predefined responses. Supports error simulation for
+        testing failure paths.
+    triggers:
+      - mock agent
+      - mock provider
+      - test agent
+      - deterministic test
+    evidence:
+      - type: code
+        ref: src/startd8/providers/mock.py
+        description: MockProvider and MockAgent
+      - type: code
+        ref: src/startd8/agents/mock.py
+        description: MockAgent implementation with response queuing
+    confidence: 0.95
+
+  # ===========================================================================
+  # QUEUE SYSTEM — Batch job processing
+  # ===========================================================================
+
+  - capability_id: startd8.queue.process
+    category: action
+    maturity: beta
+    summary: Job queue for batch processing with folder watching and status tracking
+    audiences:
+      - human
+    description:
+      agent: |
+        CLI: startd8 queue-add <job>. startd8 queue-run. startd8 queue-watch.
+        startd8 queue-status. startd8 queue-list.
+      human: |
+        Batch job processing system with folder watching. Add jobs to a queue,
+        process them in order, or watch a folder for automatic processing.
+        Track job status and retry failed jobs.
+    triggers:
+      - job queue
+      - batch processing
+      - queue watch
+      - background jobs
+    evidence:
+      - type: code
+        ref: src/startd8/cli.py
+        description: Queue CLI commands (add, run, watch, status, list, configure)
+    confidence: 0.75
+
+  # ===========================================================================
+  # SERVER — REST API for workflow execution
+  # ===========================================================================
+
+  - capability_id: startd8.server.api
+    category: integration
+    maturity: beta
+    summary: REST API server for remote workflow execution
+    audiences:
+      - agent
+      - human
+    description:
+      agent: |
+        POST /workflows/{id}/run with JSON config body. GET /workflows for listing.
+        Starlette-based async server.
+      human: |
+        HTTP API for executing workflows remotely. Useful for integrating
+        StartD8 into larger systems, CI/CD pipelines, or web applications.
+    triggers:
+      - rest api
+      - http server
+      - remote execution
+      - api server
+    evidence:
+      - type: code
+        ref: src/startd8/server/
+        description: Starlette-based REST API server
+    confidence: 0.70
+
+# =============================================================================
+# DESIGN PRINCIPLES (10 total)
+# =============================================================================
+
+design_principles:
+
+  - id: provider_abstraction
+    principle: |
+      All provider-specific logic is isolated behind a common interface.
+      New providers can be added without changing application code.
+    rationale: |
+      Provider APIs differ in auth, model naming, sampling parameters, and response
+      formats. By centralizing these differences behind the Provider protocol,
+      applications become provider-agnostic and can migrate or multi-provider
+      without code changes.
+    anti_patterns:
+      - Provider-specific code scattered across business logic
+      - Hardcoded API endpoints or model names in application code
+      - Importing provider SDKs directly instead of using resolve_agent_spec()
+    applies_to:
+      - startd8.agent.generate
+      - startd8.provider.registry
+      - startd8.agent.resolution
+      - startd8.provider.model_catalog
+
+  - id: cost_transparency
+    principle: |
+      Every LLM call includes cost attribution: tokens used, price per token, USD cost.
+      Cost is a first-class observable, not an afterthought.
+    rationale: |
+      Cost is invisible in many LLM SDKs, leading to budget surprises. Making cost
+      explicit at every level (per-call, per-workflow, per-session) enables teams to
+      optimize, forecast, and set guardrails before costs escalate.
+    anti_patterns:
+      - Ignoring cost until post-hoc billing analysis
+      - Estimating cost from token counts without provider-specific pricing
+      - Running workflows without budget limits
+    applies_to:
+      - startd8.cost.tracking
+      - startd8.cost.budget
+      - startd8.cost.analytics
+      - startd8.observability.session_tracking
+
+  - id: two_tier_generation
+    principle: |
+      Code generation uses a lead/drafter pattern: an expensive model creates the
+      specification, a cheaper model writes the code.
+    rationale: |
+      Using a flagship model for everything is wasteful. The intellectual work (spec
+      creation, architecture decisions) benefits from the best model, but the
+      mechanical work (code writing from a clear spec) can be done by a cheaper model.
+      This reduces cost by 60-80% without quality loss.
+    anti_patterns:
+      - Using the most expensive model for all generation tasks
+      - Generating code without a specification step
+      - Skipping review between spec creation and implementation
+    applies_to:
+      - startd8.workflow.builtin.lead_contractor
+      - startd8.workflow.builtin.artisan
+      - startd8.codegen.design_handoff
+
+  - id: proactive_truncation_prevention
+    principle: |
+      Estimate output size BEFORE generation. Prevent truncation proactively
+      rather than detecting it after wasting tokens.
+    rationale: |
+      LLM truncation wastes tokens and produces broken code. Pre-flight estimation
+      catches oversized tasks before generation begins, enabling decomposition or
+      constraint adjustment. Post-hoc detection is the fallback, not the primary defense.
+    anti_patterns:
+      - Generating first, detecting truncation after
+      - Ignoring truncation warnings and proceeding anyway
+      - Setting max_tokens without estimating actual output size
+    applies_to:
+      - startd8.codegen.truncation_detection
+      - startd8.codegen.domain_preflight
+
+  - id: progressive_disclosure
+    principle: |
+      Information is layered: manifest headers (~400 tokens), lightweight index
+      (~2500 tokens), full details (on demand). Agents pay only for what they need.
+    rationale: |
+      Context windows are finite. Loading full workflow definitions when only a
+      list is needed wastes tokens and money. The three-tier structure (manifest →
+      index → detail) enables efficient discovery while preserving depth.
+    anti_patterns:
+      - Loading all workflow definitions upfront
+      - Requiring code inspection to discover workflow capabilities
+      - Flat, monolithic documentation that must be read entirely
+    applies_to:
+      - startd8.workflow.discover
+      - startd8.integration.mcp_gateway
+      - startd8.cli.benchmark
+
+  - id: resilience_by_default
+    principle: |
+      Preset resilience levels (OFF through AGGRESSIVE) make fault tolerance
+      a configuration choice, not an implementation burden.
+    rationale: |
+      LLM APIs are inherently unreliable — rate limits, timeouts, transient failures.
+      Most applications need retry, circuit breaker, and backpressure. Preset levels
+      make it easy to get started; fine-grained config is available when needed.
+    anti_patterns:
+      - No retry logic on LLM calls
+      - Custom retry implementations that ignore backoff and jitter
+      - Treating rate limit errors the same as authentication errors
+    applies_to:
+      - startd8.resilience.config
+      - startd8.resilience.rate_limiter
+
+  - id: workflow_protocol
+    principle: |
+      All workflows implement a common protocol (validate_config, run/arun, metadata).
+      The registry is the single entry point for discovery and execution.
+    rationale: |
+      A consistent interface enables the registry, CLI, MCP gateway, and REST API
+      to work with any workflow — builtin or third-party. Adding new workflows
+      requires implementing the protocol, not modifying the framework.
+    anti_patterns:
+      - Workflows with incompatible interfaces
+      - Bypassing the registry to call workflow classes directly
+      - Workflow-specific execution code in the CLI or API layer
+    applies_to:
+      - startd8.workflow.execute
+      - startd8.workflow.discover
+      - startd8.workflow.scaffold
+      - startd8.workflow.pipeline
+
+  - id: observable_by_default
+    principle: |
+      Every LLM call emits OTel spans with gen_ai.* attributes. Session metrics,
+      cost tracking, and event bus are always available — no opt-in required.
+    rationale: |
+      Observability debt accumulates silently. By instrumenting everything from the
+      start, teams have visibility from day one. Graceful degradation ensures zero
+      overhead when OTel is not configured.
+    anti_patterns:
+      - Adding observability as an afterthought
+      - Requiring explicit instrumentation calls around every agent invocation
+      - Using logging.getLogger() instead of get_logger() (misses Loki)
+    applies_to:
+      - startd8.observability.otel_config
+      - startd8.observability.tracked_agent
+      - startd8.observability.session_tracking
+      - startd8.observability.otel_logging
+      - startd8.observability.workflow_events
+
+  - id: convergent_review
+    principle: |
+      Multi-agent review processes converge toward coverage by tracking addressed
+      domains and prioritizing gaps in subsequent rounds.
+    rationale: |
+      Naive multi-agent review produces duplicate feedback on obvious issues while
+      missing important domains. The Convergent Review Protocol (CRP) tracks 7
+      coverage domains and steers reviewers toward gaps, ensuring comprehensive
+      analysis within a bounded number of rounds.
+    anti_patterns:
+      - Multiple reviewers covering the same obvious issues
+      - No tracking of which domains have been addressed
+      - Unbounded review rounds without convergence criteria
+    applies_to:
+      - startd8.workflow.builtin.architectural_review
+      - startd8.workflow.builtin.iterative_dev
+      - startd8.workflow.builtin.critical_review
+
+  - id: contextcore_native
+    principle: |
+      StartD8 workflows are ContextCore-aware: they emit spans with project context,
+      discover tasks from state files, and produce tracking artifacts.
+    rationale: |
+      ContextCore models tasks as OTel spans. By integrating natively, StartD8
+      workflows appear in project dashboards alongside manual task tracking.
+      This closes the loop between task planning and automated execution.
+    anti_patterns:
+      - Running workflows without project context
+      - Manual task status updates when automation is available
+      - Separate observability stacks for workflow execution and project tracking
+    applies_to:
+      - startd8.integration.contextcore
+      - startd8.workflow.builtin.plan_ingestion
+
+# =============================================================================
+# PATTERNS (8 total)
+# =============================================================================
+
+patterns:
+
+  - pattern_id: multi_provider_routing
+    name: Multi-Provider Routing
+    summary: Route requests to different providers based on model tier, cost, or latency constraints
+    capabilities:
+      - startd8.agent.generate
+      - startd8.provider.registry
+      - startd8.provider.model_catalog
+      - startd8.agent.resolution
+    anti_pattern: Implementing provider selection as a giant if/elif chain in application code
+
+  - pattern_id: cost_aware_generation
+    name: Cost-Aware Generation
+    summary: Budget-gated code generation with two-tier model routing and pre-flight size estimation
+    capabilities:
+      - startd8.cost.tracking
+      - startd8.cost.budget
+      - startd8.workflow.builtin.lead_contractor
+      - startd8.codegen.truncation_detection
+    anti_pattern: Generating code with expensive models without budget limits or size estimation
+
+  - pattern_id: structured_code_generation
+    name: Structured Code Generation
+    summary: Multi-phase code generation with design review, domain constraints, and handoff files
+    capabilities:
+      - startd8.workflow.builtin.artisan
+      - startd8.codegen.design_handoff
+      - startd8.codegen.domain_preflight
+      - startd8.codegen.truncation_detection
+      - startd8.codegen.code_extraction
+    anti_pattern: Single-shot code generation without specification, review, or validation
+
+  - pattern_id: workflow_pipeline
+    name: Workflow Pipeline
+    summary: Chain multiple agents with data transformation, progress tracking, and cost accounting
+    capabilities:
+      - startd8.workflow.execute
+      - startd8.workflow.pipeline
+      - startd8.observability.workflow_events
+      - startd8.cost.tracking
+    anti_pattern: Manual agent orchestration with ad-hoc state passing between steps
+
+  - pattern_id: convergent_review_protocol
+    name: Convergent Review Protocol
+    summary: Iterative multi-agent review with domain coverage tracking and automated triage
+    capabilities:
+      - startd8.workflow.builtin.architectural_review
+      - startd8.workflow.builtin.iterative_dev
+      - startd8.workflow.builtin.critical_review
+    anti_pattern: Unstructured multi-agent review producing duplicate feedback on obvious issues
+
+  - pattern_id: observable_llm_operations
+    name: Observable LLM Operations
+    summary: Full OTel stack (traces, metrics, logs) for every LLM call with gen_ai.* conventions
+    capabilities:
+      - startd8.observability.otel_config
+      - startd8.observability.tracked_agent
+      - startd8.observability.session_tracking
+      - startd8.observability.otel_logging
+      - startd8.observability.workflow_events
+    anti_pattern: LLM operations without observability — invisible failures and cost surprises
+
+  - pattern_id: contextcore_task_automation
+    name: ContextCore Task Automation
+    summary: Discover tasks from ContextCore state files, execute via workflows, emit tracking artifacts
+    capabilities:
+      - startd8.integration.contextcore
+      - startd8.workflow.execute
+      - startd8.workflow.builtin.plan_ingestion
+    anti_pattern: Manual task discovery and status updates when ContextCore state files exist
+
+  - pattern_id: resilient_provider_access
+    name: Resilient Provider Access
+    summary: Rate-limited, circuit-broken LLM calls with configurable retry and backpressure
+    capabilities:
+      - startd8.resilience.config
+      - startd8.resilience.rate_limiter
+      - startd8.agent.generate
+    anti_pattern: Raw API calls without retry, rate limiting, or circuit breaker protection
+
+# =============================================================================
+# SUMMARY
+# =============================================================================
+
+summary:
+  total_capabilities: 47
+  by_maturity:
+    stable: 30
+    beta: 17
+  by_category:
+    action: 26
+    query: 4
+    integration: 6
+    transform: 1
+    observe: 0
+  design_principles: 10
+  patterns: 8
+
+# =============================================================================
+# GAPS IDENTIFIED
+# =============================================================================
+
+gaps_identified:
+  - description: No streaming response support
+    user_need: Real-time token streaming for interactive applications
+    recommendation: Add streaming agenerate_stream() to BaseAgent protocol
+
+  - description: No built-in prompt template library
+    user_need: Reusable prompt templates for common tasks
+    recommendation: Expand prompt_builder module with community templates
+
+  - description: No automatic provider failover
+    user_need: Transparent fallback when primary provider is down
+    recommendation: Add FallbackChain to resilience module using provider registry
+
+  - description: No embedding/vector search support
+    user_need: RAG pipelines and semantic search
+    recommendation: Add embedding provider interface alongside generation
+
+  - description: Limited multi-turn conversation support
+    user_need: Stateful conversations with memory management
+    recommendation: Add ConversationAgent wrapper with message history
+
+# =============================================================================
+# CHANGELOG
+# =============================================================================
+
+changelog:
+  - version: "1.0.0"
+    date: "2026-02-18"
+    changes:
+      - "Initial unified agent capability manifest"
+      - "47 capabilities synthesized from 25,398 raw extractions"
+      - "10 design principles, 8 patterns"
+      - "Consolidated from startd8.sdk.capabilities, startd8.workflow.capabilities, startd8.observability.manifest"
+      - "Covers: generation (4), cost intelligence (3), workflow orchestration (4+9 builtin), code generation (4), resilience (2), observability (5), integration (3), dev tools (5), queue (1), server (1)"

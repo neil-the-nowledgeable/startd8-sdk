@@ -1,0 +1,668 @@
+{
+  "manifest_id": "startd8.agent",
+  "agent_card": {
+    "name": "StartD8 LLM Orchestration Capabilities",
+    "description": "Multi-LLM provider abstraction framework with cost tracking, workflow\norchestration, multi-phase code generation, and OpenTelemetry observability.\nBeaver (Amik) in the ContextCore expansion pack ecosystem.\n",
+    "url": "https://api.example.com/startd8.agent",
+    "version": "1.0.0",
+    "capabilities": {
+      "streaming": false,
+      "pushNotifications": false,
+      "stateTransitionHistory": false
+    },
+    "skills": [
+      {
+        "id": "startd8.agent.generate",
+        "name": "Generate",
+        "description": "Send prompts to any LLM provider through a unified async interface",
+        "tags": [
+          "generate text",
+          "llm request",
+          "send prompt",
+          "agenerate",
+          "agent response",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.provider.registry",
+        "name": "Registry",
+        "description": "Dynamic provider discovery via entry points with 6 registered providers",
+        "tags": [
+          "provider registry",
+          "discover providers",
+          "list providers",
+          "add provider",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.provider.model_catalog",
+        "name": "Model Catalog",
+        "description": "Centralized model constants and tier-based selection across all providers",
+        "tags": [
+          "model catalog",
+          "model constants",
+          "latest model",
+          "model tier",
+          "model selection",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.agent.resolution",
+        "name": "Resolution",
+        "description": "Resolve agent spec strings to configured BaseAgent instances",
+        "tags": [
+          "resolve agent",
+          "agent spec",
+          "create agent",
+          "provider model string",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.cost.tracking",
+        "name": "Tracking",
+        "description": "Track per-call LLM costs across providers with token accounting",
+        "tags": [
+          "cost tracking",
+          "token cost",
+          "llm cost",
+          "pricing",
+          "spending",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.cost.budget",
+        "name": "Budget",
+        "description": "Enforce spending limits with warning and maximum thresholds",
+        "tags": [
+          "budget limit",
+          "spending limit",
+          "usage quota",
+          "cost control",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.cost.analytics",
+        "name": "Analytics",
+        "description": "Analyze and forecast LLM spending with aggregation and trend detection",
+        "tags": [
+          "cost analytics",
+          "cost forecast",
+          "spending analysis",
+          "cost by provider",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.execute",
+        "name": "Execute",
+        "description": "Execute multi-agent workflows by ID with config validation and error handling",
+        "tags": [
+          "run workflow",
+          "execute workflow",
+          "workflow pipeline",
+          "multi-agent",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.discover",
+        "name": "Discover",
+        "description": "List, search, and filter available workflows with metadata",
+        "tags": [
+          "list workflows",
+          "find workflow",
+          "search workflows",
+          "workflow discovery",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.pipeline",
+        "name": "Pipeline",
+        "description": "Sequential multi-agent pipeline with step-by-step execution and data transformation",
+        "tags": [
+          "pipeline",
+          "sequential agents",
+          "chain agents",
+          "multi-step",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.lead_contractor",
+        "name": "Lead Contractor",
+        "description": "Cost-efficient code generation with lead/drafter agent pattern",
+        "tags": [
+          "code generation",
+          "lead contractor",
+          "lead drafter",
+          "generate code",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.artisan",
+        "name": "Artisan",
+        "description": "7-phase structured code generation with design review and quality calibration",
+        "tags": [
+          "artisan workflow",
+          "multi-phase generation",
+          "code generation pipeline",
+          "structured code generation",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.architectural_review",
+        "name": "Architectural Review",
+        "description": "Convergent multi-agent architectural review with automated triage and coverage tracking",
+        "tags": [
+          "architectural review",
+          "design review",
+          "code review",
+          "convergent review",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.iterative_dev",
+        "name": "Iterative Dev",
+        "description": "Dev-review-fix iteration loop with feedback convergence",
+        "tags": [
+          "iterative development",
+          "dev review loop",
+          "code iteration",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.doc_enhancement",
+        "name": "Doc Enhancement",
+        "description": "Multi-agent document refinement chain",
+        "tags": [
+          "document enhancement",
+          "doc refinement",
+          "improve document",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.policy_analysis",
+        "name": "Policy Analysis",
+        "description": "Multi-agent parallel policy analysis with 7-criteria scoring",
+        "tags": [
+          "policy analysis",
+          "document analysis",
+          "multi-criteria analysis",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.plan_ingestion",
+        "name": "Plan Ingestion",
+        "description": "Convert plans to SDK-native format with complexity-based routing",
+        "tags": [
+          "plan ingestion",
+          "import plan",
+          "plan to workflow",
+          "convert plan",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.design_polish",
+        "name": "Design Polish",
+        "description": "3-stage design document refinement workflow",
+        "tags": [
+          "design polish",
+          "document refinement",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.critical_review",
+        "name": "Critical Review",
+        "description": "Multi-agent document review with structured analysis reports",
+        "tags": [
+          "critical review",
+          "document review",
+          "code review report",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.workflow.builtin.plain_language",
+        "name": "Plain Language",
+        "description": "Simplify complex content into plain language",
+        "tags": [
+          "plain language",
+          "simplify text",
+          "reading level",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.truncation_detection",
+        "name": "Truncation Detection",
+        "description": "Detect truncated LLM responses with code-aware confidence scoring",
+        "tags": [
+          "truncation detection",
+          "truncated response",
+          "output size estimation",
+          "pre-flight check",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.code_extraction",
+        "name": "Code Extraction",
+        "description": "Extract clean code from markdown-fenced LLM responses",
+        "tags": [
+          "extract code",
+          "code block",
+          "markdown fence",
+          "parse llm output",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.design_handoff",
+        "name": "Design Handoff",
+        "description": "Cross-process design handoff for split design/implementation execution",
+        "tags": [
+          "design handoff",
+          "split execution",
+          "two-half workflow",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.codegen.domain_preflight",
+        "name": "Domain Preflight",
+        "description": "Domain-aware constraint injection and post-validation for generated code",
+        "tags": [
+          "domain constraints",
+          "code validation",
+          "preflight check",
+          "domain rules",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.resilience.config",
+        "name": "Config",
+        "description": "Unified resilience with preset levels from OFF to AGGRESSIVE",
+        "tags": [
+          "resilience",
+          "error handling",
+          "retry config",
+          "circuit breaker",
+          "fault tolerance",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.resilience.rate_limiter",
+        "name": "Rate Limiter",
+        "description": "Async rate limiter with dual token buckets for request and token limits",
+        "tags": [
+          "rate limit",
+          "token bucket",
+          "backpressure",
+          "throttle",
+          "requests per minute",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.observability.otel_config",
+        "name": "Otel Config",
+        "description": "Configure OpenTelemetry tracing, metrics, and logging for LLM operations",
+        "tags": [
+          "opentelemetry",
+          "otel setup",
+          "configure tracing",
+          "observability setup",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.observability.tracked_agent",
+        "name": "Tracked Agent",
+        "description": "TrackedAgentMixin wrapping all agent calls with OTel spans and gen_ai attributes",
+        "tags": [
+          "tracked agent",
+          "agent tracing",
+          "gen_ai attributes",
+          "openllmetry",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.observability.session_tracking",
+        "name": "Session Tracking",
+        "description": "Track active sessions with 7 OTel metrics for tokens, cost, and context usage",
+        "tags": [
+          "session tracking",
+          "session metrics",
+          "active sessions",
+          "context usage",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.observability.workflow_events",
+        "name": "Workflow Events",
+        "description": "EventBus for workflow lifecycle events with subscriber pattern",
+        "tags": [
+          "workflow events",
+          "event bus",
+          "pipeline events",
+          "lifecycle events",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.integration.mcp_gateway",
+        "name": "Mcp Gateway",
+        "description": "MCP gateway exposing all workflows as AI agent tools",
+        "tags": [
+          "mcp tool",
+          "agent tool",
+          "mcp gateway",
+          "workflow tool",
+          "maturity:stable"
+        ],
+        "maturity": "stable",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.integration.contextcore",
+        "name": "Contextcore",
+        "description": "ContextCore workflow adapter with OTel span tracking and automatic task discovery",
+        "tags": [
+          "contextcore",
+          "task tracking",
+          "project tracking",
+          "contextcore integration",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.integration.skill_agents",
+        "name": "Skill Agents",
+        "description": "Specialized skill agents for domain-specific tasks via MCP",
+        "tags": [
+          "skill agent",
+          "code reviewer",
+          "domain agent",
+          "specialized agent",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      },
+      {
+        "id": "startd8.server.api",
+        "name": "Api",
+        "description": "REST API server for remote workflow execution",
+        "tags": [
+          "rest api",
+          "http server",
+          "remote execution",
+          "api server",
+          "maturity:beta"
+        ],
+        "maturity": "beta",
+        "inputModes": [
+          "application/json"
+        ],
+        "outputModes": [
+          "application/json"
+        ]
+      }
+    ],
+    "authentication": {
+      "schemes": [
+        "bearer"
+      ]
+    },
+    "provider": {
+      "organization": "force-multiplier-labs",
+      "url": "https://github.com/neilyashinsky/startd8-sdk"
+    }
+  }
+}

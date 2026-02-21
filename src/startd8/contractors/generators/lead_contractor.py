@@ -121,6 +121,35 @@ class LeadContractorCodeGenerator:
         self.check_truncation = check_truncation
         self.strict_truncation = strict_truncation
 
+    def _persist_artifact(
+        self, feature_name: str, artifact_type: str, content: str,
+    ) -> Optional[Path]:
+        """Write a workflow artifact as Markdown alongside generated code.
+
+        Failures are logged but never propagated — artifact persistence is
+        advisory and must not abort an otherwise successful generation.
+        """
+        if not self.output_dir or not content:
+            return None
+        try:
+            # Sanitize feature_name to prevent path traversal
+            safe_name = "".join(
+                c if c.isalnum() or c in "-_" else "_"
+                for c in feature_name.replace("/", "_").replace("..", "_")
+            )
+            artifacts_dir = self.output_dir / ".artifacts"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+            out_path = artifacts_dir / f"{safe_name}-{artifact_type}.md"
+            out_path.write_text(content, encoding="utf-8")
+            logger.info("Wrote %s: %s", artifact_type, out_path)
+            return out_path
+        except OSError as exc:
+            logger.warning(
+                "Failed to persist %s artifact for %s: %s",
+                artifact_type, feature_name, exc,
+            )
+            return None
+
     def generate(
         self,
         task: str,
@@ -184,6 +213,35 @@ class LeadContractorCodeGenerator:
 
             # Get the final implementation
             final_implementation = result.output.get("final_implementation", "")
+
+            # Persist workflow artifacts as .md files
+            lc_summary = result.output.get("summary", {})
+            feature_name = context.get("feature_name", "code")
+
+            if lc_summary.get("spec_raw"):
+                self._persist_artifact(feature_name, "spec", lc_summary["spec_raw"])
+
+            for draft in lc_summary.get("drafts_raw", []):
+                iteration = draft.get("iteration", 1)
+                self._persist_artifact(
+                    feature_name, f"draft-{iteration}",
+                    draft.get("implementation", ""),
+                )
+
+            for review in lc_summary.get("reviews_raw", []):
+                iteration = review.get("iteration", 1)
+                review_content = (
+                    f"# Review (iteration {iteration})\n\n"
+                    f"**Score:** {review.get('score', '?')}/100\n"
+                    f"**Passed:** {review.get('passed', '?')}\n\n"
+                    f"{review.get('review_text', '')}"
+                )
+                self._persist_artifact(feature_name, f"review-{iteration}", review_content)
+
+            if lc_summary.get("integration_raw"):
+                self._persist_artifact(
+                    feature_name, "integration", lc_summary["integration_raw"],
+                )
 
             # Write to output files
             generated_files = []
@@ -314,6 +372,7 @@ class LeadContractorCodeGenerator:
                 "cost_efficiency_ratio": result.metadata.get(
                     "cost_efficiency_ratio", 0.0
                 ),
+                "artifact_dir": str(self.output_dir / ".artifacts"),
             }
             # Upstream truncation signal (secondary — Gate 4 works independently)
             upstream_summary = (result.output or {}).get("summary") or {}

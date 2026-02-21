@@ -10,6 +10,8 @@
 
 This plan introduces a two-mode execution model for the Prime Contractor: **standalone** (current behavior, zero-change) and **pipeline** (full context exploitation from the Capability Delivery Pipeline). The design uses a Strategy pattern for context resolution, keeping the workflow code unified while varying behavior based on mode.
 
+**Objectives:** Enable the Prime Contractor to exploit rich pipeline context (onboarding metadata, architectural context, design calibration) when available, while preserving exact standalone behavior as the zero-change default. Deliver this through a Strategy pattern that keeps a single workflow loop, mode-specific configuration, generation provenance, and post-generation validation hookpoints.
+
 ### Scope
 
 **In scope:**
@@ -37,6 +39,25 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 4. **Validation as hookpoints, not inline code.** Post-generation validation is a list of callable validators in `ValidationConfig`. Pipeline mode populates this list; standalone mode leaves it empty. The validation loop is mode-agnostic.
 
 5. **Auto-detect default, explicit override.** The system infers mode from seed content but the user can force a mode. This prevents surprise behavior changes while enabling convenience.
+
+---
+
+## Functional Requirements
+
+| ID | Requirement | Acceptance Criteria | Phase |
+|----|-------------|---------------------|-------|
+| FR-001 | ExecutionMode enum with STANDALONE/PIPELINE values | Enum defined, string-valued, importable from prime_contractor | 1 |
+| FR-002 | ModeConfig frozen dataclass with per-mode defaults | `ModeConfig.for_mode()` returns correct config; `dataclasses.replace()` works | 1 |
+| FR-003 | SeedContext typed container replaces ad-hoc attributes | Property accessors delegate to SeedContext; backward compatibility preserved | 1 |
+| FR-004 | ContextResolutionStrategy protocol with two implementations | Both strategies are protocol-compliant; standalone produces equivalent output to current code | 1–2 |
+| FR-005 | StandaloneContextStrategy extracts current context logic | `gen_context` dict structurally equivalent to current `_generate_code()` output | 2 |
+| FR-006 | PipelineContextStrategy builds structured prompt sections | IMP-P1 through IMP-P5 sections present when seed data is enriched | 2 |
+| FR-007 | Feature queue metadata preservation | `FeatureSpec.from_dict(spec.to_dict()) == spec` for all fields including metadata | 3 |
+| FR-008 | Generation manifest with provenance (pipeline mode) | `generation-manifest.json` written with effective_config, per-feature model, source_checksum | 4 |
+| FR-009 | Staleness detection via source_checksum comparison | Matching checksum reuses; mismatch regenerates; `--force-regenerate` bypasses | 4 |
+| FR-010 | Post-generation validation hookpoint | Validators called when configured; results collected in feature metadata | 4 |
+| FR-011 | CLI --mode flag with auto-detection default | `--mode standalone`, `--mode pipeline`, or auto-detect from seed signals | 5 |
+| FR-012 | Security: path traversal prevention and prompt injection mitigation | All seed file paths validated against project root; user data wrapped in safe delimiters | 2 |
 
 ---
 
@@ -152,6 +173,11 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 - Mode persists in `.prime_contractor_state.json` and is consistent after resume
 - `ValidationConfig` and `ValidationResult` are importable with expected fields
 
+**Deliverables:**
+- [ ] `src/startd8/contractors/prime_contractor.py` — ExecutionMode enum, ModeConfig dataclass, SeedContext dataclass, property accessors
+- [ ] `src/startd8/contractors/protocols.py` — ContextResolutionStrategy protocol, ValidationConfig, ValidationResult
+- [ ] `tests/unit/contractors/test_execution_modes.py` — Mode enum, ModeConfig, auto-detection tests
+
 **Commit gate:** All existing tests pass. No behavior change.
 
 ---
@@ -238,6 +264,12 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 - Both strategies are protocol-compliant (`isinstance(strategy, ContextResolutionStrategy)`)
 - Strategy method failures produce defined behavior (ValueError/RuntimeError/empty ValidationConfig)
 
+**Deliverables:**
+- [ ] `src/startd8/contractors/context_resolution.py` — StandaloneContextStrategy, PipelineContextStrategy
+- [ ] `src/startd8/contractors/context_formatters.py` — Per-section formatter functions (JSON→Markdown)
+- [ ] `src/startd8/workflows/builtin/lead_contractor_workflow.py` — REQ-PEM-008 spec-to-draft validation hookpoint
+- [ ] `tests/unit/contractors/test_context_resolution.py` — Strategy tests (standalone + pipeline), security tests
+
 **Commit gate:** All existing tests pass. Standalone behavior unchanged. Pipeline strategy has new tests.
 
 **Module import direction** (to prevent circular imports):
@@ -270,6 +302,9 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 - `FeatureSpec.from_dict(spec.to_dict()) == spec` for all fields
 - `add_feature()` creates valid FeatureSpec with empty metadata
 - Enrichment data from seed survives queue serialization
+
+**Deliverables:**
+- [ ] `src/startd8/contractors/queue.py` — Metadata preservation, add_feature() convenience method, to_dict()/from_dict() round-trip
 
 **Commit gate:** All existing tests pass. REQ-PC-005, REQ-PC-006 satisfied.
 
@@ -326,6 +361,10 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 - Empty validator list produces no validation output
 - `--strict-validation` causes non-zero exit on validation failures
 
+**Deliverables:**
+- [ ] `src/startd8/contractors/prime_contractor.py` — Generation manifest writing, staleness detection, validation result collection
+- [ ] `tests/unit/contractors/test_generation_manifest.py` — Manifest, staleness, validation hookpoint tests
+
 **Commit gate:** All existing tests pass. Pipeline-mode output enhanced.
 
 ---
@@ -376,6 +415,9 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 - `--validate` + `--no-validate` raises CLI error
 - `--strict-validation` + `--no-validate` raises CLI error
 - Forced `--mode pipeline` with minimal seed proceeds with warnings (not failure)
+
+**Deliverables:**
+- [ ] `scripts/run_prime_workflow.py` — --mode, --validate, --no-validate, --strict-validation, --force-regenerate flags
 
 **Commit gate:** All existing tests pass. Script backward-compatible.
 
@@ -464,6 +506,19 @@ Phases 1→2→4→5 are sequential. Phase 3 can run in parallel with Phase 2.
 
 ---
 
+## Validation
+
+Each phase has its own commit gate (all existing tests must pass before proceeding). Beyond per-phase checks, the following document-level validation criteria apply:
+
+1. **Standalone equivalence** — After all phases, standalone mode with identical inputs must produce structurally equivalent output to the pre-implementation baseline (dict equality on gen_context, byte-for-byte output file comparison)
+2. **Pipeline mode activation** — Pipeline mode with an enriched seed must activate IMP-P1 through IMP-P5 prompt sections; verify via test assertions on gen_context keys
+3. **Mode observability** — Logs must clearly state active mode and list present/missing context fields; verified via captured log assertions
+4. **Security hardening** — Path traversal and prompt injection tests pass (adversarial inputs in test fixtures); verified via `test_context_resolution.py` security test class
+5. **Round-trip consistency** — `FeatureSpec`, `SeedContext`, and `ModeConfig` survive serialization round-trips; verified via parametric equality assertions
+6. **End-to-end pipeline run** — A full pipeline run (stages 0–7) with the test bed produces generated code without errors; verified manually against `cap-dev-pipe-test`
+
+---
+
 ## Risk Assessment
 
 | Risk | Mitigation |
@@ -502,8 +557,6 @@ Phases 1→2→4→5 are sequential. Phase 3 can run in parallel with Phase 2.
 | [`PRIME_PROMPT_EXTERNALIZATION_REQUIREMENTS.md`](PRIME_PROMPT_EXTERNALIZATION_REQUIREMENTS.md) | Prompt improvements activated by pipeline mode |
 | [`../artisan/ARTISAN_REQUIREMENTS.md`](../artisan/ARTISAN_REQUIREMENTS.md) | Artisan route patterns to follow |
 
----
-
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
 
 This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
@@ -518,13 +571,13 @@ This appendix is intentionally **append-only**. New reviewers (human or model) s
 
 ### Areas Substantially Addressed
 
-- **architecture**: 4 suggestions applied (R5-S1, R5-S2, R3-S2, R5-S7)
-- **clarity**: 5 suggestions applied (R5-S4, R5-S7, R6-S8, R3-S8, R2-S15)
-- **completeness**: 3 suggestions applied (R2-S11, R2-S12, R2-S14)
-- **maintainability**: 3 suggestions applied (R5-S9, R3-S7, R2-S13)
+- **architecture**: 11 suggestions applied (R7-S1, R7-S5, R7-S6, R7-S9, R8-S4, R3-S2, R5-S1, R5-S2, R5-S7, R6-S1, R8-S5)
+- **clarity**: 5 suggestions applied (R3-S8, R2-S15, R5-S4, R6-S8, R8-S6)
+- **completeness**: 8 suggestions applied (R2-S10, R7-S2, R7-S7, R8-S6, R2-S11, R2-S12, R2-S14, R8-S4)
+- **maintainability**: 4 suggestions applied (R3-S7, R2-S13, R5-S9, R7-S6)
 - **scalability**: 4 suggestions applied (R3-S3, R3-S4, R3-S9, R4-S9)
-- **security**: 6 suggestions applied (R3-S1, R3-S10, R3-S5, R4-S1, R4-S2, R4-S7)
-- **testability**: 4 suggestions applied (R5-S3, R6-S3, R6-S5, R3-S6)
+- **security**: 9 suggestions applied (R7-S3, R7-S10, R8-S5, R3-S1, R3-S10, R3-S5, R4-S1, R4-S2, R4-S7)
+- **testability**: 6 suggestions applied (R7-S4, R7-S8, R3-S6, R5-S3, R6-S3, R6-S5)
 
 ### Areas Needing Further Review
 
@@ -563,6 +616,20 @@ All areas have reached the substantially addressed threshold.
 | R6-S5 | Mandate parameterized test suite for CLI flag and ModeConfig combinations | gemini-2.5 (gemini-2.5-pro) | The interaction between mode detection, explicit flags, and behavioral overrides creates many permutations that need exhaustive testing. Parameterized tests are the right approach. | 2026-02-20 20:25:40 UTC |
 | R6-S8 | Remove redundant structured_context flag from ModeConfig | gemini-2.5 (gemini-2.5-pro) | The strategy choice IS the context structure policy. Having both creates confusing dual-control. Single source of truth is better design. | 2026-02-20 20:25:40 UTC |
 | R6-S1 | Correct Untouched Files list for REQ-PEM-008 | gemini-2.5 (gemini-2.5-pro) | **TRIAGE CORRECTION:** Previously rejected as "duplicate of R4-S1" — but R4-S1 is path traversal, not this issue. `lead_contractor_workflow.py` moved out of Untouched, REQ-PEM-008 step added to plan. | 2026-02-20 |
+| R2-S10 | Resolve contradiction between implementation plan and REQ-PEM-008 regarding lead_contractor_workflow.py | gemini-2.5 (gemini-2.5-pro) | Critical gap - the plan explicitly excludes a file that REQ-PEM-008 requires modifications to. Must add implementation step for spec-to-draft validation. | 2026-02-20 21:24:18 UTC |
+| R7-S1 | Define contract between CodeGenerator.generate() and manifest's model field | claude-4 (claude-opus-4-5) | Critical dependency on generator interface change is unstated. Plan must specify this requirement to avoid implementation failure. | 2026-02-20 21:24:18 UTC |
+| R7-S2 | Add implementation step for context_formatters.py module | claude-4 (claude-opus-4-5) | Valid gap - file is in inventory but no implementation step creates it. This would cause Phase 2 to fail. | 2026-02-20 21:24:18 UTC |
+| R7-S3 | Specify VALIDATOR_REGISTRY handling for unknown validator names | claude-4 (claude-opus-4-5) | Security and debuggability concern. Unknown names must be handled explicitly to prevent injection attacks and aid debugging. | 2026-02-20 21:24:18 UTC |
+| R7-S4 | Specify observable verification criteria for staleness reuse test #16 | claude-4 (claude-opus-4-5) | The test strategy lacks actionable verification criteria. Specifying zero LLM calls, no file modifications, and specific log message makes the test implementable and deterministic. | 2026-02-20 21:24:18 UTC |
+| R7-S5 | Add module import direction rules to prevent circular imports | claude-4 (claude-opus-4-5) | Cross-module dependencies without import direction rules will cause circular import errors during implementation. | 2026-02-20 21:24:18 UTC |
+| R7-S6 | Define error handling contract for ContextResolutionStrategy methods | claude-4 (claude-opus-4-5) | Undefined error handling leads to inconsistent implementations. Specifying exception types for each method enables proper error propagation. | 2026-02-20 21:24:18 UTC |
+| R7-S7 | Add implementation detail for CLI flag conflict detection | claude-4 (claude-opus-4-5) | Phase 5 mentions conflict detection but doesn't specify mechanism. Clear implementation guidance prevents bugs. | 2026-02-20 21:24:18 UTC |
+| R7-S8 | Specify parameterized test strategy for CLI flag combinations | claude-4 (claude-opus-4-5) | Combinatorial explosion of flag × mode combinations needs systematic coverage strategy to avoid exponential test count. | 2026-02-20 21:24:18 UTC |
+| R7-S9 | Clarify SeedContext.execution_mode vs workflow.mode synchronization | claude-4 (claude-opus-4-5) | The synchronization mechanism affects state persistence and resume behavior. Must be explicit. | 2026-02-20 21:24:18 UTC |
+| R7-S10 | Specify manifest file permissions for pipeline mode | claude-4 (claude-opus-4-5) | Cost data in manifest may be sensitive. Restrictive permissions are appropriate defense-in-depth. | 2026-02-20 21:24:18 UTC |
+| R8-S4 | Enforce SeedContext immutability with runtime error after execution begins instead of undefined behavior | claude-4 (claude-opus-4-5) | Undefined behavior is a bug waiting to happen. A clear RuntimeError provides a fail-fast contract that prevents subtle state corruption. This strengthens the lifecycle constraint already specified. | 2026-02-20 21:24:18 UTC |
+| R8-S6 | Specify source_checksum computation logic within implementation plan | gemini-2.5 (gemini-2.5-pro) | Checksum must be computed from canonical JSON before parsing to ensure determinism. This detail is critical for staleness detection correctness. | 2026-02-20 21:24:18 UTC |
+| R8-S5 | Add system prompt instruction telling LLM to treat delimited content as non-instructional data | claude-4 (claude-opus-4-5) | The mitigation is incomplete without the model instruction. Simply wrapping in tags is insufficient - the model must be told to interpret the tags correctly. This is critical for effective prompt injection defense. | 2026-02-20 21:24:18 UTC |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -585,6 +652,11 @@ All areas have reached the substantially addressed threshold.
 | R6-S7 | Refactor ModeConfig to generic key-value configuration | gemini-2.5 (gemini-2.5-pro) | The strongly-typed dataclass approach is clearer and provides better IDE support and type checking. The number of behaviors is bounded and well-known. | 2026-02-20 20:25:40 UTC |
 | R6-S9 | Add ContextSanitizer stage to prevent sensitive data leakage | gemini-2.5 (gemini-2.5-pro) | R4-S9 was already accepted for security considerations. Additionally, sanitization is an implementation detail that should be handled at the logging/manifest writing layer, not as a separate pipeline stage. | 2026-02-20 20:25:40 UTC |
 | R6-S10 | Introduce context snippet builder fixtures for testing | gemini-2.5 (gemini-2.5-pro) | This is a test implementation detail that doesn't need to be in the architecture plan. Test authors can create appropriate fixtures during implementation. | 2026-02-20 20:25:40 UTC |
+| R8-S2 | Add CodeGenerator protocol changes for cost reporting | gemini-2.5 (gemini-2.5-pro) | R7-S1 was already accepted which addresses the generator interface change. Additionally, the plan already states cost is captured from generator return value. | 2026-02-20 21:24:18 UTC |
+| R8-S3 | Define validator lifecycle to avoid redundant initializations | gemini-2.5 (gemini-2.5-pro) | This is an optimization detail. The current design treating validators as per-feature is simpler and sufficient for the initial implementation. Caching can be added later if performance issues arise. | 2026-02-20 21:24:18 UTC |
+| R8-S5 | Define interaction between load_seed_context() and seedless add_feature() | claude-4 (claude-opus-4-5) | These are two independent initialization paths. The plan already specifies that seedless mode initializes SeedContext with defaults. The suggested state machine adds complexity for a minor edge case. | 2026-02-20 21:24:18 UTC |
+| R8-S7 | Re-evaluate manifest read-path security vs functionality | gemini-2.5 (gemini-2.5-pro) | The 0o600 permissions are appropriate for single-user pipeline runs. Multi-user pipeline scenarios with different privilege levels are out of scope for this design. | 2026-02-20 21:24:18 UTC |
+| R8-S8 | Clarify 'template rendering failures' in error handling contract | gemini-2.5 (gemini-2.5-pro) | The context formatters do transform data, which is analogous to template rendering. The current language is acceptable and the error type (RuntimeError) is appropriate. | 2026-02-20 21:24:18 UTC |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
@@ -890,3 +962,94 @@ All areas have reached the substantially addressed threshold.
 | REQ-PEM-015: Zero-Change Standalone | Phase 1-5 | Full | Core principle of the phased rollout and verified by commit gates. |
 | REQ-PEM-016: Script Compatibility | Phase 5 | Full | All specified CLI flags are added to the runner script. |
 | REQ-PEM-017: Property Accessor Compatibility | Phase 1 | Full | Property accessors are added to delegate to `SeedContext`. |
+
+#### Review Round R7
+
+- **Reviewer**: claude-4 (claude-opus-4-5)
+- **Date**: 2026-02-20 21:20:47 UTC
+- **Scope**: Architecture-focused review
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R7-S1 | architecture | high | Define the contract between `CodeGenerator.generate()` return value and manifest's per-feature `model` field | Phase 4 Step 1 states the manifest includes per-feature `model` captured from `CodeGenerator.generate()` return value, but the plan doesn't modify `CodeGenerator` or define what this return value looks like. The existing generator may not expose model info, creating an unstated dependency on generator interface changes. | Phase 4 Step 1, add: "Prerequisite: `CodeGenerator.generate()` MUST return or expose the model spec used (e.g., `anthropic:claude-sonnet-4-20250514`). If unavailable, use `"unknown"`." | Code review confirms generator interface change or graceful fallback |
+| R7-S2 | completeness | high | Phase 2 `context_formatters.py` referenced but not specified in implementation plan | Phase 2 mentions "Per-section formatter functions (JSON→Markdown)" and references `context_formatters.py` in the Additionally Modified Files table, but no implementation step describes creating this module, its functions, or their signatures. This is a gap between the file inventory and the implementation steps. | Phase 2 Steps, add: "Extract architectural context transformation to `context_formatters.py` with per-section formatter functions (e.g., `format_architectural_context(data: dict) -> str`) for testability and reuse." | File inventory matches implementation steps; formatters have dedicated tests |
+| R7-S3 | security | high | `VALIDATOR_REGISTRY` lookup lacks specification for handling unknown validator names | Phase 2 Step 3 defines `VALIDATOR_REGISTRY` dict mapping names to validators, but doesn't specify behavior when `feature.metadata` requests a validator name not in the registry. Silent skip? Warning? Error? This affects both security (injection of unknown names) and debuggability. | Phase 2 Step 3, add: "Unknown validator names from seed metadata MUST be logged as warnings and skipped, NOT dynamically loaded. Registry is code-defined only." | Test: seed with unknown validator name logs warning, does not crash or load external code |
+| R7-S4 | testability | high | Phase 4 staleness detection tests (#16-#17) lack determinism strategy for checksum comparison | Tests specify "matching checksum reuses" but the plan doesn't explain how to create test fixtures with known, stable checksums. JSON serialization order affects checksums, and without canonical JSON (sorted keys), tests could be flaky. | Phase 4 Tests, add: "Use deterministic test fixtures with pre-computed checksums. Checksum is SHA-256 over canonical JSON (sorted keys, no whitespace)." | Staleness tests pass consistently across multiple runs without flakiness |
+| R7-S5 | architecture | medium | Module import direction rules missing from plan despite cross-module dependencies | Phase 2 creates `context_resolution.py` importing from `protocols.py` and `queue.py`, but no rule prevents circular imports if `prime_contractor.py` imports back. The plan should specify import direction to prevent cycles during implementation. | Phase 2, add subsection "Module Import Direction": "`protocols.py` → no imports from prime_contractor; `context_resolution.py` → imports from protocols, queue; `prime_contractor.py` → imports from protocols, context_resolution" | CI lint or manual review confirms no circular imports |
+| R7-S6 | maintainability | medium | Error handling contract for `ContextResolutionStrategy` methods is undefined | The plan specifies what each strategy method returns but not what happens on errors. Does `resolve_seed_context()` raise on schema validation failure? Does `resolve_task_context()` return partial context on file read error? Undefined error handling leads to inconsistent implementations. | Phase 2, add to protocol definition: "Error handling: `resolve_seed_context()` raises `ValueError` on schema validation failure; `resolve_task_context()` raises `RuntimeError` on template failures; `resolve_validation_config()` returns empty config on any error (validators are best-effort)." | Unit tests verify each error path produces specified exception/behavior |
+| R7-S7 | completeness | medium | Phase 5 flag conflict detection missing implementation detail | REQ-PEM-016 specifies `--validate` + `--no-validate` must raise CLI error, and REQ-PEM-014 adds `--strict-validation` + `--no-validate` as conflicting. Phase 5 mentions "Conflict detection" but doesn't specify where/how this is implemented (argparse mutual exclusion? post-parse validation?). | Phase 5 Step 1, add: "Use argparse mutually exclusive groups or post-parse validation to detect conflicting flags. Conflicting combinations: [`--validate`, `--no-validate`], [`--strict-validation`, `--no-validate`]." | Test: conflicting flags produce user-friendly error message and non-zero exit |
+| R7-S8 | testability | medium | Parameterized test strategy for CLI flag × ModeConfig combinations not specified | Phase 5 tests cover individual flags but the combinatorial space (6+ flags × 2 modes × various ModeConfig states) creates explosion. Plan should specify parameterized testing strategy to ensure coverage without exponential test count. | Phase 5 Tests, add: "Use parameterized test suite (pytest.mark.parametrize) for CLI flag × ModeConfig combinations. Cover: each flag in isolation, known conflict pairs, mode override scenarios." | Test coverage report shows flag combinations without 2^n individual tests |
+| R7-S9 | architecture | medium | `SeedContext.execution_mode` vs `workflow.mode` synchronization mechanism undefined | REQ-PEM-005 states both must stay synchronized, but the plan doesn't specify how. Is `SeedContext.execution_mode` derived from `workflow.mode` on serialization? Set once at construction? Property that delegates? This affects state persistence and resume. | Phase 1 Step 3, add: "`SeedContext.execution_mode` is for serialization/round-trip; `workflow.mode` is the runtime authority. On `SeedContext` construction, set `execution_mode = workflow.mode`. On resume, `workflow.mode` is restored from persisted state." | Test: serialize/deserialize SeedContext maintains mode; resume uses persisted mode |
+| R7-S10 | security | medium | Generation manifest file permissions not specified for pipeline mode | REQ-PEM-012 requires manifest for provenance but doesn't specify file permissions. In pipeline deployments, the manifest contains cost data that may be sensitive. Default permissions could expose this data. | Phase 4 Step 1, add: "Write `generation-manifest.json` with 0o600 permissions (owner read/write only) to protect cost data in multi-user pipeline environments." | Manifest file created with expected permissions; test verifies mode bits |
+
+**Endorsements** (prior untriaged suggestions this reviewer agrees with):
+- R8-S1: The seed checksum validation on resume is a critical integrity check that complements mode persistence — without it, a modified seed could produce inconsistent state during resume.
+- R8-S4: Enforcing SeedContext immutability with a RuntimeError is stronger than "undefined behavior" and aligns with the lifecycle constraint in REQ-PEM-005.
+- R8-S5: The system prompt instruction to treat delimited content as non-instructional is essential for the prompt injection mitigation to be effective — wrapping alone is insufficient.
+- R8-S9: Recording `force_regenerate` in the manifest is important provenance information that explains why cache was bypassed.
+
+#### Feature Requirements Suggestions
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R7-F1 | completeness | high | REQ-PEM-012 manifest schema lacks per-feature `model` field data flow specification | The manifest example shows `"model": "anthropic:claude-sonnet-4-20250514"` per feature, but requirements don't specify how this data flows from the generator. Is it returned by `CodeGenerator.generate()`? Read from config? This creates implementation ambiguity. | REQ-PEM-012, add: "Per-feature `model` field MUST be populated from the `CodeGenerator.generate()` return value. Generator implementations MUST expose the model spec used." | Review confirms generator interface returns model info |
+| R7-F2 | consistency | medium | REQ-PEM-007 architectural context "formatted not raw JSON" lacks transformation specification | Requirements state architectural_context should be "formatted, not raw JSON" but don't define the transformation. Is it Markdown? Prose? The implementation plan adds detail but requirements should be self-contained. | REQ-PEM-007, add: "Raw JSON architectural_context MUST be transformed to Markdown: top-level keys → headers, arrays → bullet lists, nested objects → indented sub-sections." | Transformation is fully specified in requirements |
+| R7-F3 | testability | medium | REQ-PEM-006 "byte-identical" acceptance criterion conflicts with dict ordering variability | Requirements state "Output is byte-identical to current behavior" but Python dicts don't guarantee order. The implementation plan addresses this with "structurally equivalent" but the requirements text remains ambiguous. | REQ-PEM-006, change: "Output is byte-identical" → "Output is structurally equivalent (identical dict keys and values, order-independent comparison)" | Acceptance criterion is testable without false negatives from ordering |
+| R7-F4 | completeness | medium | REQ-PEM-018 path traversal protection lacks specification of the sanitization function | Requirements mandate path validation but don't specify the mechanism. "Uses the existing `sanitize_path()` utility" references code that may not exist or may have different semantics. | REQ-PEM-018, add: "Path sanitization MUST resolve symlinks and verify the canonical path is within project root. Paths containing `..` or symlinks escaping root MUST be rejected." | Security test suite covers path traversal edge cases |
+
+#### Requirements Coverage
+
+| Feature Doc Section | Plan Step(s) | Coverage | Gaps |
+| --- | --- | --- | --- |
+| REQ-PEM-001: ExecutionMode Enum | Phase 1 Step 1 | Full | None |
+| REQ-PEM-002: Mode Auto-Detection | Phase 1 Step 6 | Full | None |
+| REQ-PEM-003: Mode-Specific Configuration | Phase 1 Step 2 | Full | None |
+| REQ-PEM-004: ContextResolutionStrategy Protocol | Phase 1 Step 4, Phase 2 Step 1 | Partial | Protocol defined but error handling contract undefined |
+| REQ-PEM-005: SeedContext Dataclass | Phase 1 Step 3 | Partial | `execution_mode` vs `workflow.mode` sync mechanism not specified |
+| REQ-PEM-006: StandaloneContextStrategy | Phase 2 Step 2 | Full | None |
+| REQ-PEM-007: PipelineContextStrategy | Phase 2 Step 3 | Partial | `context_formatters.py` referenced but not implemented in steps |
+| REQ-PEM-008: Spec-to-Draft Validation | Phase 2 (Additionally Modified Files) | Partial | Listed in file inventory but no implementation step |
+| REQ-PEM-009: Unified Feature Loading | Phase 3 Step 1 | Full | None |
+| REQ-PEM-010: Standalone Feature Construction | Phase 3 Step 2 | Full | None |
+| REQ-PEM-011: Mode-Specific Output | Phase 4 Step 1-3 | Full | None |
+| REQ-PEM-012: Generation Manifest | Phase 4 Step 1 | Partial | Model field data source unspecified; file permissions unspecified |
+| REQ-PEM-013: Staleness Detection | Phase 4 Step 2 | Partial | Test determinism strategy for checksums not specified |
+| REQ-PEM-014: Validation Results in Output | Phase 4 Step 3 | Full | None |
+| REQ-PEM-015: Zero-Change Standalone | Phase 1 Commit gate | Full | None |
+| REQ-PEM-016: Script Compatibility | Phase 5 Steps 1-3 | Partial | Flag conflict detection mechanism not specified |
+| REQ-PEM-017: Property Accessor Compatibility | Phase 1 Step 5 | Full | None |
+| REQ-PEM-018: Secure Input Handling | Phase 2 Step 3 (partial) | Partial | VALIDATOR_REGISTRY unknown name handling not specified |
+
+#### Review Round R8
+- **Reviewer**: gemini-2.5 (gemini-2.5-pro)
+- **Date**: 2026-02-20 21:21:54 UTC
+- **Scope**: Architecture-focused review
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R8-S1 | security | critical | Implement state file locking mechanism from REQ-PEM-018. | The plan completely omits the mandatory requirement for state file locking (`fcntl.flock` or equivalent). Without this, concurrent workflow executions targeting the same output directory could lead to state file corruption, causing unpredictable resume behavior or data loss. | Add a new step in Phase 1 to wrap state file I/O with a file-locking mechanism. | A test case attempts to run two workflows concurrently against the same state file; it must demonstrate that one process blocks until the other releases the lock, preventing corruption. |
+| R8-S2 | completeness | high | Plan for changes to the `CodeGenerator` protocol to support cost reporting. | The plan states the manifest's `cost_usd` field is "captured from `CodeGenerator.generate()` return value" (Phase 4), but no steps are included to modify the `CodeGenerator` protocol or its implementations to return this cost data. This is a critical unaddressed dependency. | Add a step to Phase 4 to modify the `CodeGenerator` protocol to return a tuple of `(generated_code, metadata: dict)` where metadata includes cost and model info. Update mock generators for testing. | Unit tests for `_generate_code` verify that the cost and model information returned by a mock generator are correctly propagated to the `feature_result` and later to the manifest. |
+| R8-S3 | scalability | medium | Define the validator lifecycle to avoid redundant initializations. | The plan implies validators are resolved per-feature via `resolve_validation_config`. If a validator requires expensive setup (e.g., loading a large data model), this per-feature resolution is inefficient. The design should clarify if validators are instantiated once per workflow or on-demand. | Add a design note to Phase 4 specifying that the `ContextResolutionStrategy` should cache validator instances for the lifetime of the workflow to prevent re-initialization for each feature. | A test with a mock validator that logs its `__init__` call is run against multiple features; the test asserts that `__init__` is called only once. |
+| R8-S4 | completeness | high | Implement the `RuntimeError` check for property setters used after execution begins. | REQ-PEM-017 mandates that property setters must raise a `RuntimeError` if called after execution starts. The plan only mentions "treated as immutable" which is a convention, not an enforcement. This is a failure to meet a mandatory requirement. | Add a step to Phase 1: `PrimeContractorWorkflow` must set an internal flag (e.g., `self._execution_started = True`) at the beginning of the `run()` method. Property setters must check this flag and raise `RuntimeError` if it is set. | Add Test #34 from the requirements doc to the plan: A test calls a property setter after the workflow has started processing features and asserts that a `RuntimeError` is raised. |
+| R8-S5 | architecture | medium | Define the interaction between `load_seed_context()` and seedless `add_feature()`. | The plan introduces two initialization paths: one from a seed file, another programmatically. It's unclear what happens if a user mixes these calls (e.g., `add_feature()` then `load_seed_context()`). This ambiguity could lead to inconsistent or overwritten `SeedContext`. | Add a design note to Phase 3 clarifying the state machine: `load_seed_context()` can only be called once, before any calls to `add_feature()`. Subsequent calls should raise an `InvalidStateError`. | A test attempts to call `load_seed_context` after `add_feature` and asserts that the specified error is raised. |
+| R8-S6 | clarity | medium | Specify the `source_checksum` computation logic within the implementation plan. | The plan mentions the checksum is used but is vague on the implementation details. For this critical feature to be correct, the plan must specify *when* it's computed (e.g., inside `load_seed_context`), *from what* (the raw JSON string, not the parsed dict), and how the raw input is obtained. | Add a note to Phase 1, Step 5, clarifying that `load_seed_context` should accept the raw seed file content as an optional argument to compute the checksum before parsing, ensuring a canonical hash. | A test verifies that loading a seed from a file and from a pre-read string produces the identical `source_checksum` in `SeedContext`. |
+| R8-S7 | security | medium | Re-evaluate the read-path security model for `generation-manifest.json`. | The plan mandates 0o600 permissions to protect sensitive cost data. However, this may prevent legitimate, less-privileged downstream services from reading the manifest for staleness checks. This creates an operational conflict between security and functionality. | Add a risk assessment item in the plan: "Manifest permissions (0o600) may block downstream readers. Mitigation: Consider splitting cost data into a separate, more restricted file, leaving the main manifest readable by the pipeline group." | An integration test simulates a downstream process running as a different user (but same group) and verifies it can successfully read the manifest for staleness checks. |
+| R8-S8 | clarity | low | Clarify the meaning of "Template rendering failures" in the strategy's error handling contract. | The Phase 1 error contract for `resolve_task_context()` mentions "Template rendering failures raise `RuntimeError`". However, the plan describes this method as building a dictionary, not rendering templates. This language is confusing and likely incorrect. | Update the error contract in Phase 1 to be more precise: "Failures during context transformation (e.g., in `context_formatters.py`) raise `ValueError`." | Unit tests for `context_formatters.py` verify that malformed input data raises the specified exception. |
+
+#### Feature Requirements Suggestions
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R8-F1 | ambiguity | high | Clarify the schema for `validator_results` in the `generation-manifest.json`. | REQ-PEM-012's manifest example (`"validator_results": { "...": "pass|warn|fail" }`) is a simple summary, which conflicts with the `ValidationResult` type in REQ-PEM-004 that includes a `findings: List[str]`. Downstream consumers need to know if they will receive the full findings or just the outcome. | Update the JSON schema example in REQ-PEM-012 to reflect the full `ValidationResult` structure, or explicitly state that only the summary outcome is stored. | The acceptance criteria for REQ-PEM-012 should be updated to require a test that validates the manifest against the clarified, more detailed schema. |
+| R8-F2 | completeness | medium | The `generation-manifest.json` schema in REQ-PEM-012 should support multiple models per feature. | The schema allows a single string for the `model` field. A complex feature might use different models for different stages (e.g., planning vs. coding). The current schema cannot accurately capture this provenance. | Modify the `model` field in the REQ-PEM-012 schema to be a `Dict[str, str]` (e.g., `{"coder": "model-a", "reviewer": "model-b"}`) or a `List[str]`. | A test for a feature that uses two mock models verifies that both model identifiers are correctly recorded in the manifest. |
+| R8-F3 | testability | medium | The definition of when "execution begins" in REQ-PEM-017 is not precise enough to be testable. | The requirement to raise a `RuntimeError` for property setters used after execution begins depends on a clear, non-ambiguous definition of that event. "After execution begins" is a concept, not a specific event. | Add a sentence to REQ-PEM-017: "For the purpose of this requirement, 'execution begins' is defined as the first invocation of the internal `_generate_code()` method." | A test case can now be written to deterministically call a setter immediately before and immediately after the first call to `_generate_code` and assert the specified behavior. |
+
+#### Requirements Coverage
+
+| Feature Doc Section | Plan Step(s) | Coverage | Gaps |
+|---|---|---|---|
+| REQ-PEM-001–003 (Layer 1: Mode) | Phase 1, Phase 5 | Full | None. |
+| REQ-PEM-004–008 (Layer 2: Context) | Phase 1, Phase 2 | Full | None. |
+| REQ-PEM-009–010 (Layer 3: Loading) | Phase 3 | Full | None. |
+| REQ-PEM-011–014 (Layer 4: Output) | Phase 4 | Partial | Plan omits the necessary changes to the `CodeGenerator` protocol required to provide the cost data for the manifest (REQ-PEM-012). |
+| REQ-PEM-015–017 (Layer 5: Compat) | Phase 1, Phase 5, Commit Gates | Partial | Plan omits implementation of the `RuntimeError` check required by REQ-PEM-017 for property setters used after execution begins. |
+| REQ-PEM-018 (Layer 6: Security) | Phase 2, Phase 4 | Partial | Plan completely omits the state file locking mechanism required by REQ-PEM-018. |

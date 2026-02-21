@@ -263,7 +263,7 @@ class LeadContractorResult:
 
     def to_summary(self) -> Dict[str, Any]:
         """Return summary suitable for logging/display."""
-        return {
+        summary: Dict[str, Any] = {
             "workflow_id": self.workflow_id,
             "success": self.success,
             "total_iterations": self.total_iterations,
@@ -274,6 +274,21 @@ class LeadContractorResult:
             "cost_efficiency_ratio": f"{self.get_cost_efficiency_ratio():.2f}",
             "final_phase": self.final_phase.value,
         }
+        # Raw artifact content for downstream persistence
+        if self.spec:
+            summary["spec_raw"] = self.spec.raw_spec
+        summary["drafts_raw"] = [
+            {"iteration": d.iteration, "implementation": d.implementation}
+            for d in self.drafts
+        ]
+        summary["reviews_raw"] = [
+            {"iteration": r.iteration, "review_text": r.review_text,
+             "score": r.score, "passed": r.passed}
+            for r in self.reviews
+        ]
+        if self.integration:
+            summary["integration_raw"] = self.integration.final_implementation
+        return summary
 
 
 # ============================================================================

@@ -67,6 +67,7 @@ The Prime Contractor MUST define an `ExecutionMode` enum with two values:
 - Default mode is `STANDALONE` (backward compatible)
 - Mode is set at workflow construction time and immutable for the run
 - Mode MUST be persisted in `.prime_contractor_state.json` for resume consistency — a resumed workflow MUST use the same mode as the original run
+- On resume, the system MUST validate that the current seed's checksum matches the checksum stored in `.prime_contractor_state.json`. If mismatched, the system MUST raise an error: `"Seed checksum mismatch on resume: expected {stored}, got {current}. Use --force-regenerate to override."` This prevents inconsistent state from resuming with a modified seed.
 
 ---
 
@@ -82,7 +83,6 @@ When no explicit mode is provided, the system MUST auto-detect the mode from the
 | Seed contains `onboarding` with non-empty `project_objectives` | Present | `PIPELINE` |
 | Seed contains `architectural_context` with non-empty value | Present | `PIPELINE` |
 | Seed contains `service_metadata` with non-empty value | Present | `PIPELINE` |
-| Seed contains `ingestion_metrics.generator` = `"PlanIngestionWorkflow"` | Present | `PIPELINE` |
 | None of the above | Absent | `STANDALONE` |
 
 **Mode determination precedence** (highest to lowest):
@@ -152,6 +152,8 @@ Where:
 - `resolve_task_context()` returns the `gen_context` dict that `CodeGenerator.generate()` receives
 - `resolve_validation_config()` returns a `ValidationConfig` specifying validators to run after generation
 
+**Strategy initialization:** Strategy implementations MAY accept configuration via `__init__`. The workflow MUST pass `project_root: Path` and `output_dir: Path` to the strategy constructor. `project_root` is required for path traversal validation (REQ-PEM-018), and `output_dir` is required for manifest reading during staleness detection (REQ-PEM-013). The protocol defines only the three resolution methods; constructor signatures are implementation-specific and not constrained by the protocol.
+
 **`ValidationConfig` dataclass:**
 ```python
 @dataclass
@@ -173,6 +175,7 @@ Validators MUST come from a pre-approved, code-defined registry — never from s
 - Protocol is defined in `protocols.py` alongside existing protocols
 - Two implementations: `StandaloneContextStrategy` and `PipelineContextStrategy`
 - `PrimeContractorWorkflow` accepts an optional `context_strategy` parameter; defaults based on `ExecutionMode`
+- Both strategy implementations accept `project_root: Path` and `output_dir: Path` as constructor parameters
 
 ---
 
@@ -276,7 +279,7 @@ The pipeline strategy MUST exploit full pipeline context:
   - `scope_boundary`: "Generate only what is specified" instruction (per REQ-PC-008) — **always present**
 - **Empty field rule:** Context sections for which the source data is present but empty (e.g., `{}` or `[]`) MUST be omitted from `gen_context` — not included as empty headers. This prevents noise in LLM prompts.
 - Log injected vs. missing context fields per REQ-PC-014
-- All user-controlled data from seed MUST be wrapped in safe delimiters (e.g., XML tags like `<context>...</context>`) before injection into prompts, to mitigate prompt injection risks (see REQ-PEM-018)
+- All user-controlled data from seed MUST be wrapped in safe delimiters (e.g., XML tags like `<context>...</context>`) before injection into prompts, to mitigate prompt injection risks (see REQ-PEM-018). User-controlled content MUST have any occurrences of the closing delimiter tag escaped (e.g., replace `</context>` with `&lt;/context&gt;`) before wrapping, to prevent delimiter injection from breaking the isolation boundary.
 
 **Architectural context transformation:** Raw JSON from `seed_ctx.architectural_context` is transformed to Markdown:
 - Top-level JSON keys → `### {key}` Markdown headers
@@ -316,13 +319,22 @@ In pipeline mode, after `_create_spec()` and before `_create_draft()`, the syste
 - Missing parameters generate a `## Spec Completeness Warning` section injected into drafter feedback
 - Uses shared `find_missing_parameters()` from `prompt_utils.py`
 
-**`find_missing_parameters()` definition** (already exists in `src/startd8/contractors/prompt_utils.py`):
+**`find_missing_parameters()` definition** (located in `src/startd8/contractors/prompt_utils.py`):
 ```python
 def find_missing_parameters(
     text: str,
     resolved_parameters: Dict[str, str],
 ) -> List[str]:
-    """Scan text for resolved parameter key values; return names of missing ones."""
+    """Scan text for resolved parameter key values; return names of missing ones.
+    
+    Args:
+        text: The spec/design text to scan
+        resolved_parameters: Dict mapping parameter names to their resolved values
+        
+    Returns:
+        List of parameter names whose values are not found in the text
+        (case-insensitive substring search)
+    """
 ```
 - Input: the spec/design text and the `resolved_parameters` dict from enrichment
 - Output: list of parameter names whose values are not found in the text (case-insensitive substring search)
@@ -347,12 +359,14 @@ In standalone mode, this check MUST be skipped (no enrichment data to validate a
 `FeatureQueue.add_features_from_seed()` MUST preserve all enrichment data regardless of execution mode:
 
 - `FeatureSpec.metadata` MUST capture: `_enrichment`, `artifact_types_addressed`, `design_doc_sections`, `estimated_loc`, `requirements_text`, `api_signatures`, `protocol`, `runtime_dependencies`, `negative_scope`
+- `FeatureSpec.metadata` MUST preserve all keys present in the enriched seed, not only the nine listed fields. Unknown keys MUST be round-tripped through `to_dict()`/`from_dict()` without modification. This ensures forward compatibility as upstream pipeline stages evolve and add new enrichment fields.
 - In standalone mode, most of these will be empty — that's expected
 - In pipeline mode, these are populated from the enriched seed
 
 **Acceptance criteria:**
 - `FeatureSpec.metadata` round-trips through `to_dict()` / `from_dict()` (REQ-PC-006)
 - No data loss at the queue boundary (REQ-PC-005)
+- Unknown/additional metadata keys from the enriched seed are preserved through round-trip serialization
 
 ---
 
@@ -421,6 +435,14 @@ In pipeline mode, after all features are processed, the workflow MUST write `gen
   "source_checksum": "<from seed>",
   "workflow_id": "<unique run ID>",
   "generated_at": "<ISO-8601>",
+  "force_regenerate": false,
+  "effective_config": {
+    "execution_mode": "pipeline",
+    "run_validators": false,
+    "emit_provenance": true,
+    "detect_staleness": true,
+    "log_context_injection": true
+  },
   "features": {
     "<task_id>": {
       "status": "success|failed|skipped",
@@ -428,7 +450,10 @@ In pipeline mode, after all features are processed, the workflow MUST write `gen
       "cost_usd": 0.52,
       "model": "anthropic:claude-sonnet-4-20250514",
       "validators_run": ["import_dependency", "placeholder_detection"],
-      "validator_results": { "...": "pass|warn|fail" }
+      "validator_results": {
+        "import_dependency": "pass",
+        "placeholder_detection": "warn"
+      }
     }
   },
   "total_cost_usd": 5.23,
@@ -440,18 +465,11 @@ In pipeline mode, after all features are processed, the workflow MUST write `gen
 
 **Model field data flow:** The `model` field per feature is populated from the `CodeGenerator.generate()` return value. The generator MUST return or expose the model spec used (e.g., `anthropic:claude-sonnet-4-20250514`). If unavailable, use `"unknown"`.
 
-**Effective configuration:** The manifest MUST include an `effective_config` object capturing the final `ModeConfig` state after CLI overrides, enabling run reproducibility:
-```json
-"effective_config": {
-    "execution_mode": "pipeline",
-    "run_validators": false,
-    "emit_provenance": true,
-    "detect_staleness": true,
-    "log_context_injection": true
-}
-```
+**Force regenerate recording:** The manifest MUST include a `force_regenerate` field (boolean) indicating whether `--force-regenerate` was used for this run. This provides provenance information explaining why the cache may have been bypassed.
 
-**Schema version compatibility:** Consumers MUST handle manifests with unknown `schema_version` by logging a warning and skipping staleness checks (best-effort read, not hard failure). This enables forward compatibility when schema evolves.
+**Effective configuration:** The manifest MUST include an `effective_config` object capturing the final `ModeConfig` state after CLI overrides, enabling run reproducibility.
+
+**Schema version compatibility:** The manifest MUST include a `schema_version` field. Consumers MUST handle manifests with unknown `schema_version` by logging a warning and skipping staleness checks (best-effort read, not hard failure). This enables forward compatibility when schema evolves.
 
 **I/O error handling:** A failure to write `generation-manifest.json` due to an I/O error MUST be logged as an error but MUST NOT cause the entire workflow to fail. Generation results are preserved regardless of manifest write success.
 
@@ -464,6 +482,8 @@ In pipeline mode, after all features are processed, the workflow MUST write `gen
 - `source_checksum` matches the seed's checksum (for staleness detection)
 - Manifest is machine-readable (JSON) for downstream pipeline stages
 - `effective_config` reflects final ModeConfig including CLI overrides
+- `force_regenerate` field accurately reflects whether the flag was used
+- System MUST handle manifests with unknown schema versions by logging warning and skipping staleness check
 
 ---
 
@@ -484,6 +504,8 @@ Before reusing cached generation results, the pipeline strategy MUST compare pro
 The `workflow_id` in the manifest is for provenance tracking only — it is NOT used in the staleness comparison. Different runs with identical seeds should reuse cached results.
 
 In standalone mode, staleness detection MUST be skipped (no provenance chain).
+
+**Checksum computation for testing:** The checksum is SHA-256 computed over the canonical JSON form of the seed (sorted keys, no whitespace). Test fixtures MUST be generated using the same canonicalization algorithm: `hashlib.sha256(json.dumps(seed_data, sort_keys=True, separators=(',', ':')).encode()).hexdigest()`. This ensures deterministic checksums for test assertions.
 
 **Acceptance criteria:**
 - Implements REQ-PC-011 (staleness detection) for pipeline mode
@@ -506,13 +528,19 @@ In pipeline mode, post-generation validation results MUST appear in both the gen
 
 In standalone mode, validation fields MUST be absent from output (not empty — absent).
 
-**`--strict-validation` semantics:** When passed, any validation finding with severity `"fail"` causes the workflow to exit with non-zero status code after all features are processed. Without this flag, validation results are informational only. `--strict-validation` and `--no-validate` are mutually exclusive — passing both MUST raise a CLI parsing error.
+**Exit code semantics:**
+- Successful completion MUST exit with code 0.
+- Generation failures (e.g., LLM errors, I/O errors) MUST exit with code 1.
+- Validation failures with `--strict-validation` MUST exit with code 2. This enables pipeline orchestrators to distinguish retry-worthy failures (code 1) from failures requiring human attention (code 2).
+
+**`--strict-validation` semantics:** When passed, any validation finding with severity `"fail"` causes the workflow to exit with exit code 2 after all features are processed. Without this flag, validation results are informational only. `--strict-validation` and `--no-validate` are mutually exclusive — passing both MUST raise a CLI parsing error.
 
 **Acceptance criteria:**
 - Pipeline output includes `validators_run` and `validator_results` per feature
 - Standalone output is identical to current format (no new fields)
 - Validation severity does not affect exit code unless `--strict-validation` is passed
 - `--strict-validation` combined with `--no-validate` produces CLI error
+- Exit code 0 for success, 1 for generation failure, 2 for `--strict-validation` failure
 
 ---
 
@@ -583,11 +611,12 @@ The following instance attributes MUST remain accessible as properties on `Prime
 - `workflow.seed_service_metadata` → `workflow.seed_context.service_metadata`
 - `workflow.plan_document_text` → `workflow.seed_context.plan_document_text`
 
-**Lifecycle constraint:** Property setters are valid during the initialization phase (before `_generate_code()` is first called). Setters update the underlying `SeedContext` fields. After the execution phase begins, `SeedContext` is treated as immutable per REQ-PEM-005 — property setters SHOULD NOT be called (behavior is undefined if called mid-execution).
+**Lifecycle constraint:** Property setters are valid during the initialization phase (before `_generate_code()` is first called). For the purpose of this requirement, "execution begins" is defined as the first invocation of the internal `_generate_code()` method. Setters update the underlying `SeedContext` fields. After the execution phase begins, `SeedContext` is treated as immutable per REQ-PEM-005. Property setters invoked after execution begins MUST raise `RuntimeError("SeedContext is immutable after execution begins")` to enforce the immutability contract programmatically and prevent subtle state corruption.
 
 **Acceptance criteria:**
 - Existing code that reads `workflow.seed_onboarding` continues to work
 - Existing code that writes `workflow.seed_onboarding = {...}` continues to work during initialization (setter populates `SeedContext`)
+- Property setters raise `RuntimeError` if called after execution begins
 - Deprecation warnings are NOT emitted (these accessors are the stable API)
 
 ---
@@ -603,11 +632,15 @@ All external inputs from the seed file MUST be validated and sanitized before us
 
 **Path traversal protection:**
 - All file paths from seed (`context_files`, `plan_document_path`, `artifacts.*`) MUST be validated as within the project root directory
+- Path sanitization MUST resolve symlinks and verify the canonical path is within project root
 - Paths containing `..` or absolute paths outside the project root MUST be rejected with a logged error
-- Uses the existing `sanitize_path()` utility from the artisan route
+- Symlinks that resolve to paths escaping the project root MUST be rejected
+- Uses the existing `sanitize_path()` utility from the artisan route (or implements equivalent logic if not available)
 
 **Prompt injection mitigation:**
 - User-controlled data injected into LLM prompts (e.g., `project_objectives`, `architectural_context`, `requirements_text`) MUST be wrapped in safe delimiters (e.g., `<context type="architectural">...</context>`) to isolate from prompt instructions
+- User-controlled content MUST have any occurrences of the closing delimiter tag escaped (e.g., replace `</context>` with `&lt;/context&gt;`) before wrapping. This prevents delimiter injection attacks where user content containing the closing tag would break the isolation boundary. Alternatively, implementations MAY use content-hash-based unique delimiters (e.g., `<context-a7f3b2>...</context-a7f3b2>`) that are computationally infeasible to predict from user input.
+- The system prompt MUST explicitly instruct the LLM to treat content within safe delimiters as non-instructional context that should inform the response but never be interpreted as commands or instructions to the model
 - This is defense-in-depth — not a guarantee against all injection attacks, but standard practice
 
 **Validator registry security:**
@@ -621,6 +654,8 @@ All external inputs from the seed file MUST be validated and sanitized before us
 **Acceptance criteria:**
 - Path traversal attack on `context_files` raises error and is logged
 - Prompt content from seed is wrapped in safe delimiters in generated prompts
+- Closing delimiter tags within user content are escaped before wrapping
+- System prompt includes instruction to treat delimited content as non-instructional
 - Arbitrary validator names from seed are rejected (not dynamically loaded)
 - Concurrent state file access does not corrupt state
 
@@ -681,27 +716,35 @@ All external inputs from the seed file MUST be validated and sanitized before us
 | 9 | Pipeline strategy omits sections for empty data | REQ-PEM-007 | Pipeline |
 | 10 | Spec-to-draft validation in pipeline mode | REQ-PEM-008 | Pipeline |
 | 11 | Spec-to-draft validation skipped in standalone | REQ-PEM-008 | Standalone |
-| 12 | FeatureSpec metadata round-trips | REQ-PEM-009 | Both |
+| 12 | FeatureSpec metadata round-trips (including unknown keys) | REQ-PEM-009 | Both |
 | 13 | add_feature() works without seed | REQ-PEM-010 | Standalone |
 | 14 | Generation manifest written in pipeline mode | REQ-PEM-012 | Pipeline |
 | 15 | Generation manifest NOT written in standalone | REQ-PEM-011 | Standalone |
-| 16 | Staleness detection: matching checksum reuses | REQ-PEM-013 | Pipeline |
+| 16 | Staleness detection: matching checksum reuses (verified by: zero LLM API calls, no file modifications in output directory, log message "Staleness check: current (checksum match)") | REQ-PEM-013 | Pipeline |
 | 17 | Staleness detection: mismatch regenerates | REQ-PEM-013 | Pipeline |
 | 18 | Staleness detection: corrupt manifest handled gracefully | REQ-PEM-013 | Pipeline |
 | 19 | `--force-regenerate` bypasses staleness | REQ-PEM-013 | Both |
 | 20 | Validation results in pipeline output | REQ-PEM-014 | Pipeline |
-| 21 | `--strict-validation` causes non-zero exit on failures | REQ-PEM-014 | Pipeline |
+| 21 | `--strict-validation` causes exit code 2 on failures | REQ-PEM-014 | Pipeline |
 | 22 | Existing tests pass unchanged | REQ-PEM-015 | Both |
 | 23 | Script accepts `--mode` flag | REQ-PEM-016 | Both |
 | 24 | Invalid `--mode` value produces user-friendly error | REQ-PEM-016 | Both |
 | 25 | Conflicting flags raise CLI error | REQ-PEM-016 | Both |
 | 26 | Parameterized test: CLI flag × ModeConfig combinations | REQ-PEM-003, 016 | Both |
 | 27 | Path traversal in context_files rejected | REQ-PEM-018 | Both |
-| 28 | Prompt content wrapped in safe delimiters | REQ-PEM-018 | Pipeline |
+| 28 | Prompt content wrapped in safe delimiters with closing tags escaped | REQ-PEM-018 | Pipeline |
 | 29 | Arbitrary validator names from seed rejected | REQ-PEM-018 | Pipeline |
 | 30 | ModeConfig correctly derived from ExecutionMode | REQ-PEM-003 | Both |
 | 31 | Mode persists across workflow resume | REQ-PEM-001 | Both |
 | 32 | Forced `--mode pipeline` with minimal seed proceeds with warnings | REQ-PEM-002 | Pipeline |
+| 33 | Resume with modified seed checksum raises error | REQ-PEM-001 | Both |
+| 34 | Property setter after execution raises RuntimeError | REQ-PEM-017 | Both |
+| 35 | System prompt includes delimiter instruction | REQ-PEM-018 | Pipeline |
+| 36 | Generation manifest includes force_regenerate field | REQ-PEM-012 | Pipeline |
+| 37 | Strategy constructors receive project_root and output_dir | REQ-PEM-004 | Both |
+| 38 | Generation failure exits with code 1, validation failure with code 2 | REQ-PEM-014 | Both |
+| 39 | Unknown metadata keys preserved through FeatureSpec round-trip | REQ-PEM-009 | Both |
+| 40 | Delimiter escape prevents user content from breaking isolation | REQ-PEM-018 | Pipeline |
 
 ---
 
@@ -714,8 +757,6 @@ All external inputs from the seed file MUST be validated and sanitized before us
 | [`ARTISAN_REQUIREMENTS.md`](../artisan/ARTISAN_REQUIREMENTS.md) | Artisan route (parity target for context quality) |
 | [`PIPELINE_REQUIREMENTS_INDEX.md`](../../../Processes/cap-dev-pipe-prod/PIPELINE_REQUIREMENTS_INDEX.md) | Master index for all pipeline requirements |
 | [`PLAN_INGESTION_REQUIREMENTS.md`](../PLAN_INGESTION_REQUIREMENTS.md) | Upstream seed construction |
-
----
 
 ## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
 
@@ -812,6 +853,28 @@ All areas have reached the substantially addressed threshold.
 | R8-S5 | Add system prompt instruction telling LLM to treat delimited content as non-instructional data | gemini-2.5 (gemini-2.5-pro) | The mitigation is incomplete without the model instruction. Simply wrapping in tags is insufficient - the model must be told to interpret the tags correctly. This is critical for effective prompt injection defense. | 2026-02-20 21:17:25 UTC |
 | R8-S6 | Remove ingestion_metrics.generator as pipeline mode detection signal due to brittle coupling | gemini-2.5 (gemini-2.5-pro) | Coupling to a specific upstream workflow name is fragile. The structural signals (onboarding, service_metadata, architectural_context) are already sufficient and more robust indicators of pipeline mode. | 2026-02-20 21:17:25 UTC |
 | R8-S9 | Record force-regenerate flag usage in generation-manifest.json for audit trail | gemini-2.5 (gemini-2.5-pro) | This is important provenance information explaining why cache was bypassed. The manifest should reflect this decision for debugging and auditing purposes. | 2026-02-20 21:17:25 UTC |
+| R3-F1 | Define find_missing_parameters() function referenced in REQ-PEM-007 |  | This function is referenced but never defined, making implementation impossible. With 2 endorsements, this is a validated gap that blocks implementation. | 2026-02-20 21:24:18 UTC |
+| R2-F1 | Define the structure of context_files Dict[str, Any] entries |  | The undefined structure of context_files entries creates implementation ambiguity. Developers need to know expected keys and value types for proper implementation. | 2026-02-20 21:24:18 UTC |
+| R3-F1 | Add schema_version migration strategy for REQ-PEM-012 manifest |  | This is a different issue from the earlier R3-F1 (find_missing_parameters). Schema versioning without migration strategy will cause integration failures when schema evolves. Critical for long-term maintainability. | 2026-02-20 21:24:18 UTC |
+| R3-F3 | Add checksum computation details for staleness detection test fixtures |  | Tests #15-16 are unimplementable without knowing how to create fixtures with known checksums. This is critical for reproducible testing. | 2026-02-20 21:24:18 UTC |
+| R4-F3 | Implementation plan omits REQ-PEM-008 modifications to lead_contractor_workflow.py |  | Critical gap - duplicate of R2-S10. Plan explicitly excludes lead_contractor_workflow.py but REQ-PEM-008 requires spec-to-draft validation logic there. Must add implementation step. | 2026-02-20 21:24:18 UTC |
+| R4-F4 | Add explicit requirement for secure handling of external inputs |  | Critical security gap. Requirements lack any security provisions. Path traversal and prompt injection vulnerabilities need to be explicitly addressed in requirements. | 2026-02-20 21:24:18 UTC |
+| R5-F1 | Define ValidationConfig type in REQ-PEM-004 |  | The protocol references this type but it's never defined. Implementation cannot satisfy the protocol without knowing the structure. | 2026-02-20 21:24:18 UTC |
+| R5-F2 | Specify field optionality for resolve_task_context structured sections |  | Without clear presence/absence rules for each section, implementations will handle empty data inconsistently. | 2026-02-20 21:24:18 UTC |
+| R5-F3 | Replace unverifiable 'byte-identical' criterion with structural equivalence |  | The byte-identical criterion cannot be tested due to dict ordering variations. Structural equivalence is the correct verification approach. | 2026-02-20 21:24:18 UTC |
+| R5-F4 | Add manifest schema version migration requirements |  | Duplicate of second R3-F1 (schema migration). Valid concern for long-term maintainability when schema evolves. | 2026-02-20 21:24:18 UTC |
+| R6-F2 | Specify behavior for empty but present context fields in REQ-PEM-007 |  | Ambiguity about empty fields (include empty section vs omit) affects prompt quality. Clear requirement prevents inconsistent implementations. | 2026-02-20 21:24:18 UTC |
+| R6-F3 | Add requirements for handling I/O errors during manifest writing |  | The manifest is critical for pipeline integration. Without defined error handling, implementations may fail silently or catastrophically. Behavior must be specified. | 2026-02-20 21:24:18 UTC |
+| R7-F1 | Specify per-feature model field data flow in manifest schema |  | Requirements show the field but don't specify data flow from generator. Creates implementation ambiguity. | 2026-02-20 21:24:18 UTC |
+| R7-F2 | Add architectural context transformation specification to requirements |  | Requirements state 'formatted not raw JSON' but lack transformation details. Requirements should be self-contained. | 2026-02-20 21:24:18 UTC |
+| R7-F3 | Change 'byte-identical' to 'structurally equivalent' in REQ-PEM-006 |  | Dict ordering varies in Python. The requirement text must match the testable criterion. | 2026-02-20 21:24:18 UTC |
+| R7-F4 | Specify path sanitization mechanism in REQ-PEM-018 |  | References 'existing utility' that may not exist. Sanitization rules must be explicit for security. | 2026-02-20 21:24:18 UTC |
+| R8-F1 | Clarify validator_results schema in generation-manifest.json |  | The manifest example conflicts with ValidationResult type. Downstream consumers need to know the actual schema. | 2026-02-20 21:24:18 UTC |
+| R8-F3 | Define when 'execution begins' precisely for property setter RuntimeError |  | The requirement must be testable. Specifying the exact event (_generate_code() invocation) enables deterministic test cases. | 2026-02-20 21:24:18 UTC |
+| R1-F2 | Specify that ContextResolutionStrategy implementations may accept configuration via __init__ and the workflow must pass project_root and output_dir. |  | This is a genuine gap. The PipelineContextStrategy needs project_root for path traversal validation (REQ-PEM-018) and the staleness detection logic needs access to the output directory for manifest reading (REQ-PEM-013). The protocol as defined is purely method-based with no initialization contract. Since Python protocols allow __init__, this is a clarification that enables testable, dependency-injected strategy implementations without global state. | 2026-02-21 00:57:13 UTC |
+| R1-F3 | Define distinct exit codes for validation failures (exit 2) vs generation failures (exit 1) vs success (exit 0). |  | Pipeline orchestrators rely on exit codes for automated remediation decisions. The current requirements specify non-zero exit for --strict-validation failures but don't distinguish from other failure modes. This is a concrete, low-cost addition that significantly improves pipeline integration. The three-code scheme (0/1/2) is standard Unix convention and enables orchestrators to distinguish 'retry-worthy' from 'needs-human-attention' failures. | 2026-02-21 00:57:13 UTC |
+| R1-F4 | Require FeatureSpec.metadata to preserve all keys from the enriched seed, not only the nine explicitly listed fields. |  | REQ-PEM-009 lists nine specific enrichment fields but the queue boundary behavior for unknown keys is genuinely ambiguous. Since the pipeline is designed for iterative development (REQ-PEM-002 explicitly supports stages still being built), stripping unknown keys would break forward compatibility. Preserving all keys through to_dict()/from_dict() is the safe default and aligns with the 'no data loss at queue boundary' acceptance criterion already stated. | 2026-02-21 00:57:13 UTC |
+| R1-F5 | Require escaping of closing delimiter tags in user-controlled content before wrapping with safe delimiters for prompt injection mitigation. |  | This is a genuine security gap in the existing prompt injection mitigation. REQ-PEM-018 mandates XML-style delimiters but doesn't address the case where user content contains the closing tag, which would break delimiter isolation. This is a well-known XML/HTML injection pattern. The fix is straightforward (escape closing tags) and is necessary for the defense-in-depth claim to be credible. | 2026-02-21 00:57:13 UTC |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -866,6 +929,15 @@ All areas have reached the substantially addressed threshold.
 | R8-S7 | Apply consistent graceful degradation for all optional file paths in standalone mode | gemini-2.5 (gemini-2.5-pro) | REQ-PEM-006 already specifies graceful degradation for context_files. The plan_document_path handling follows the same pattern implicitly. Adding explicit text for every file path type adds verbosity without value. | 2026-02-20 21:17:25 UTC |
 | R8-S8 | Add toolchain versions to generation-manifest.json for reproducibility | gemini-2.5 (gemini-2.5-pro) | While useful for debugging, this adds scope beyond execution modes. The manifest already captures essential provenance (checksum, mode, validators). Toolchain versioning is a general infrastructure concern. | 2026-02-20 21:17:25 UTC |
 | R8-S10 | Add global_settings field to SeedContext for workflow-level configuration | gemini-2.5 (gemini-2.5-pro) | REQ-PEM-010 already addresses workflow-level configuration via constructor parameters for seedless mode. Adding a global_settings field to SeedContext creates parallel configuration paths and increases complexity. | 2026-02-20 21:17:25 UTC |
+| R3-F2 | Add CLI flag to ModeConfig field mapping for behavior overrides |  | R4-S7 was already accepted which addresses mode override mechanisms. Additionally, the plan already specifies --validate/--no-validate flags in Phase 5 with clear semantics. | 2026-02-20 21:24:18 UTC |
+| R3-F5 | Specify mock/fixture strategy for Test #6 determinism |  | Test #6 is about context building (pre-LLM), which is deterministic. The 'byte-identical' claim has been addressed by R5-S10 and R5-F3 which were already accepted, replacing byte-identical with structural equivalence. | 2026-02-20 21:24:18 UTC |
+| R2-F2 | Clarify the sequence of mode determination operations |  | The plan already clearly specifies auto-detection in Phase 1 Step 6 and CLI override in Phase 5. The order (explicit flag > auto-detection > default STANDALONE) is implicit but clear from the implementation steps. | 2026-02-20 21:24:18 UTC |
+| R3-F2 | Add maximum length specifications for pipeline context sections |  | This is an implementation detail that can be addressed during development. LLM context window management is a runtime concern and the requirement should remain focused on functionality, not optimization parameters. | 2026-02-20 21:24:18 UTC |
+| R4-F2 | Add generator_version to staleness detection |  | While useful for comprehensive staleness detection, this significantly expands scope beyond the current requirements. The source_checksum approach handles input staleness; code version tracking is a separate concern that should be addressed in a future iteration. | 2026-02-20 21:24:18 UTC |
+| R5-F5 | Add emit_otel_spans to ModeConfig |  | This is a duplicate of R3-F3 (3 endorsements) which was already accepted. | 2026-02-20 21:24:18 UTC |
+| R6-F4 | Define ValidationConfig type in requirements |  | R5-F1 was already accepted which addresses ValidationConfig definition in the implementation plan. The type definition belongs in the plan, not requirements. | 2026-02-20 21:24:18 UTC |
+| R8-F2 | Support multiple models per feature in manifest |  | This is a forward-looking enhancement. The current single-model design matches the typical single-stage generation. Multi-model support can be added when needed. | 2026-02-20 21:24:18 UTC |
+| R1-F1 | Clarify that SeedContext immutability applies after first _generate_code() call and that inter-feature context updates must go through resolve_task_context(). |  | This is already addressed in the requirements. REQ-PEM-017 explicitly states: 'For the purpose of this requirement, "execution begins" is defined as the first invocation of the internal _generate_code() method.' REQ-PEM-007's resolve_task_context() already receives the feature as a parameter, providing the per-feature customization mechanism. The concern about inter-feature context is addressed by design — resolve_task_context() is called per feature with the immutable SeedContext. | 2026-02-21 00:57:13 UTC |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
@@ -1098,3 +1170,46 @@ All areas have reached the substantially addressed threshold.
 | R8-S8 | traceability | high | Add a `toolchain` object to `generation-manifest.json` to record software versions. | REQ-PEM-012's manifest is missing key information for reproducibility and debugging. Without knowing the version of the generator code, libraries, and validators used, it's difficult to trace bugs or understand why a past generation produced a specific output. | REQ-PEM-012 | In a pipeline mode test, inspect the generated `generation-manifest.json` and assert the presence of a `toolchain` key containing non-empty version strings for the application and its key components. |
 | R8-S9 | traceability | medium | Record the use of `--force-regenerate` in the `generation-manifest.json`. | REQ-PEM-013 and REQ-PEM-016 define the `--force-regenerate` flag but do not specify its effect on provenance. The manifest should reflect that regeneration was forced, as this is critical context for auditing and understanding why a cache was bypassed. | REQ-PEM-012 | Run the workflow in pipeline mode with the `--force-regenerate` flag. Inspect the output `generation-manifest.json` and assert that a field like `"regeneration_forced": true` is present. |
 | R8-S10 | completeness | medium | Add a `global_settings` field to the `SeedContext` dataclass for workflow-level configuration. | REQ-PEM-005 defines `SeedContext` but omits a formal place for global settings from the seed (e.g., `model_selection`, `temperature`). This forces a split configuration model (some from seed, some from CLI/constructor), complicating pipeline orchestration which relies on the seed as the single source of truth. | REQ-PEM-005 | Add a `global_settings` field to a seed file. Initialize the workflow from this seed and verify that the settings (e.g., model selection) are correctly applied to the generation process, overriding any code defaults. |
+
+#### Review Round R7
+
+- **Reviewer**: claude-4 (claude-opus-4-5)
+- **Date**: 2026-02-20 21:21:54 UTC
+- **Scope**: Architecture-focused review (Feature Requirements)
+
+#### Feature Requirements Suggestions
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R7-F1 | completeness | high | REQ-PEM-012 manifest schema lacks per-feature `model` field data flow specification | The manifest example shows `"model": "anthropic:claude-sonnet-4-20250514"` per feature, but requirements don't specify how this data flows from the generator. Is it returned by `CodeGenerator.generate()`? Read from config? This creates implementation ambiguity. | REQ-PEM-012, add: "Per-feature `model` field MUST be populated from the `CodeGenerator.generate()` return value. Generator implementations MUST expose the model spec used." | Review confirms generator interface returns model info |
+| R7-F2 | consistency | medium | REQ-PEM-007 architectural context "formatted not raw JSON" lacks transformation specification | Requirements state architectural_context should be "formatted, not raw JSON" but don't define the transformation. Is it Markdown? Prose? The implementation plan adds detail but requirements should be self-contained. | REQ-PEM-007, add: "Raw JSON architectural_context MUST be transformed to Markdown: top-level keys → headers, arrays → bullet lists, nested objects → indented sub-sections." | Transformation is fully specified in requirements |
+| R7-F3 | testability | medium | REQ-PEM-006 "byte-identical" acceptance criterion conflicts with dict ordering variability | Requirements state "Output is byte-identical to current behavior" but Python dicts don't guarantee order. The implementation plan addresses this with "structurally equivalent" but the requirements text remains ambiguous. | REQ-PEM-006, change: "Output is byte-identical" → "Output is structurally equivalent (identical dict keys and values, order-independent comparison)" | Acceptance criterion is testable without false negatives from ordering |
+| R7-F4 | completeness | medium | REQ-PEM-018 path traversal protection lacks specification of the sanitization function | Requirements mandate path validation but don't specify the mechanism. "Uses the existing `sanitize_path()` utility" references code that may not exist or may have different semantics. | REQ-PEM-018, add: "Path sanitization MUST resolve symlinks and verify the canonical path is within project root. Paths containing `..` or symlinks escaping root MUST be rejected." | Security test suite covers path traversal edge cases |
+
+#### Review Round R8
+
+- **Reviewer**: gemini-2.5 (gemini-2.5-pro)
+- **Date**: 2026-02-20 21:22:57 UTC
+- **Scope**: Architecture-focused review (Feature Requirements)
+
+#### Feature Requirements Suggestions
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R8-F1 | ambiguity | high | Clarify the schema for `validator_results` in the `generation-manifest.json`. | REQ-PEM-012's manifest example (`"validator_results": { "...": "pass|warn|fail" }`) is a simple summary, which conflicts with the `ValidationResult` type in REQ-PEM-004 that includes a `findings: List[str]`. Downstream consumers need to know if they will receive the full findings or just the outcome. | Update the JSON schema example in REQ-PEM-012 to reflect the full `ValidationResult` structure, or explicitly state that only the summary outcome is stored. | The acceptance criteria for REQ-PEM-012 should be updated to require a test that validates the manifest against the clarified, more detailed schema. |
+| R8-F2 | completeness | medium | The `generation-manifest.json` schema in REQ-PEM-012 should support multiple models per feature. | The schema allows a single string for the `model` field. A complex feature might use different models for different stages (e.g., planning vs. coding). The current schema cannot accurately capture this provenance. | Modify the `model` field in the REQ-PEM-012 schema to be a `Dict[str, str]` (e.g., `{"coder": "model-a", "reviewer": "model-b"}`) or a `List[str]`. | A test for a feature that uses two mock models verifies that both model identifiers are correctly recorded in the manifest. |
+| R8-F3 | testability | medium | The definition of when "execution begins" in REQ-PEM-017 is not precise enough to be testable. | The requirement to raise a `RuntimeError` for property setters used after execution begins depends on a clear, non-ambiguous definition of that event. "After execution begins" is a concept, not a specific event. | Add a sentence to REQ-PEM-017: "For the purpose of this requirement, 'execution begins' is defined as the first invocation of the internal `_generate_code()` method." | A test case can now be written to deterministically call a setter immediately before and immediately after the first call to `_generate_code` and assert the specified behavior. |
+
+#### Review Round R1
+
+- **Reviewer**: claude-4 (claude-opus-4-6)
+- **Date**: 2026-02-21 00:54:46 UTC
+- **Scope**: Architecture-focused review (Feature Requirements)
+
+#### Feature Requirements Suggestions
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | interfaces | high | REQ-PEM-007's `gen_context` structure is specified but the boundary with `CodeGenerator.generate()` is not — requirements don't specify whether the generator expects named sections or a flat dict | The strategy builds structured context; the generator consumes it. Without defining this interface contract, implementations could build perfect context that the generator ignores or misinterprets. This is a critical architectural boundary that the requirements leave undefined. | Add interface contract to REQ-PEM-004 or new REQ-PEM-004a specifying gen_context schema expectations for CodeGenerator | Review CodeGenerator.generate() signature and verify gen_context keys are documented |
+| R1-F2 | completeness | high | Requirements lack partial failure recovery semantics — REQ-PEM-012 shows per-feature status but no requirement governs crash recovery, partial manifest persistence, or resumability interaction with staleness | If the workflow crashes after generating 5 of 10 features, the cost is lost and staleness detection cannot leverage partial results. This is a significant operational gap for pipeline deployments where failures are common. | REQ-PEM-012: add partial manifest write behavior; REQ-PEM-013: add partial manifest staleness semantics | Test: crash at feature N, resume, verify features 1..N-1 are reused |
+| R1-F3 | security | high | REQ-PEM-018 lacks resource exhaustion protections — no size limits on seed fields, context_files count, or JSON depth | A denial-of-service vector exists through oversized seed files. Path traversal and prompt injection are addressed but resource exhaustion is not. | REQ-PEM-018: add maximum size/count/depth constraints for all seed-sourced inputs | Test with oversized seed payloads; verify rejection with descriptive errors |
+| R1-F4 | ops | medium | REQ-PEM-012 manifest write is not specified as atomic — concurrent readers or crash mid-write produces corrupt files | The requirement specifies permissions but not write atomicity. Since REQ-PEM-013 reads this file, and pipeline stages may run concurrently, a non-atomic write creates a race condition. | REQ-PEM-012: add atomic write requirement (temp file + rename) | Concurrent read/write test; crash-during-write test |
+| R1-F5 | ambiguity | medium | REQ-PEM-014 `--strict-validation` exit behavior is underspecified — does it exit after ALL features are processed or immediately on first validation failure? | The requirement says "causes the workflow to exit with non-zero status code" but doesn't specify early-exit vs. complete-then-fail semantics. Early exit saves cost but loses information; complete-then-fail provides comprehensive validation results. | REQ-PEM-014: specify "workflow MUST process all features, then exit with non-zero status if any feature has severity 'fail'" | Test: 3 features, feature 1 fails validation, verify features 2-3 still processed before non-zero exit |
+
