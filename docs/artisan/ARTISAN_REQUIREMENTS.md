@@ -22,7 +22,8 @@ This document provides narrative context, dependency diagrams, and a traceabilit
 | Observability | AR-6xx | 8 | 6 | 0 | 2 |
 | Configuration | AR-7xx | 8 | 8 | 0 | 0 |
 | Safety and Resilience | AR-8xx | 11 | 6 | 0 | 5 |
-| **Total** | | **110** | **75** | **1** | **34** |
+| Mottainai Compliance | AR-9xx | 9 | 0 | 0 | 9 |
+| **Total** | | **119** | **75** | **1** | **43** |
 
 ---
 
@@ -307,6 +308,57 @@ Defense-in-depth measures for the generation pipeline.
 
 ---
 
+## Layer 9: Mottainai Compliance (AR-9xx)
+
+Cross-cutting requirements ensuring artifacts produced by earlier phases are forwarded, registered, and validated — not silently discarded. Consolidates 20 intra-pipeline waste gaps (Gaps 17–36) from the [Mottainai Design Principle](../design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md) into 9 formal requirements.
+
+### Three Anti-Patterns
+
+1. **Serialize-and-Forget** — A phase produces rich structured data, then serializes only a subset. Downstream phases see a degraded view. (AR-900, AR-901)
+2. **Compute-But-Don't-Forward** — Data is computed and stored in one phase's context, but the downstream phase that would benefit never reads it. (AR-902, AR-903)
+3. **Inject-But-Don't-Validate** — Deterministic data is injected into LLM prompts with no post-generation check that the LLM honored it. (AR-904, AR-905, AR-906, AR-907, AR-908)
+
+### Dependency Diagram
+
+```mermaid
+flowchart TD
+    AR900[AR-900 DESIGN Serialize Full Metadata] --> AR901[AR-901 Parameter Fidelity]
+    AR900 --> AR904[AR-904 TEST Deterministic Validation]
+    AR900 --> AR907[AR-907 Guidance Compliance]
+    AR903[AR-903 Metadata Forwarding] --> AR907
+    AR902[AR-902 Reuse downstream_map]
+    AR905[AR-905 Provenance Audit Trail]
+    AR906[AR-906 FINALIZE Diagnostics]
+    AR908[AR-908 Integrity at Output Time]
+```
+
+AR-900 is the foundation — 3 other requirements depend on it directly.
+
+### Gap-to-Requirement Mapping
+
+| Requirement | Gaps Addressed | Anti-Pattern | Summary |
+|-------------|---------------|--------------|---------|
+| AR-900 | 17, 19, 20 | Serialize-and-forget | DESIGN serializes full review metadata (verdicts, parsed sections, plan constraints) |
+| AR-901 | 18 | Serialize-and-forget | DESIGN extracts and validates critical parameters |
+| AR-902 | 26 | Compute-but-don't-forward | IMPLEMENT reuses pre-computed downstream file map |
+| AR-903 | 21, 22, 23, 24, 25 | Compute-but-don't-forward | Earlier-phase metadata forwarded to IMPLEMENT |
+| AR-904 | 27, 28 | Inject-but-don't-validate | TEST deterministic pre-review validation |
+| AR-905 | 29, 33 | Inject-but-don't-validate | Metadata provenance audit trail |
+| AR-906 | 30, 31 | Inject-but-don't-validate | FINALIZE preserves structured diagnostics |
+| AR-907 | 34, 35 | Inject-but-don't-validate | Post-generation guidance compliance validation |
+| AR-908 | 32, 36 | Inject-but-don't-validate | File integrity computed at IMPLEMENT output time |
+
+### Priority Ordering
+
+| Priority | Requirements | Rationale |
+|----------|-------------|-----------|
+| P0 | AR-900, AR-902 | Foundation (AR-900 unblocks 3 others); AR-902 is minimal code change |
+| P1 | AR-901, AR-904, AR-906 | Wire existing functions/data to downstream consumers |
+| P2 | AR-903, AR-905 | Cross-phase forwarding and audit trail |
+| P3 | AR-907, AR-908 | Measurement and manifest completeness |
+
+---
+
 ## Traceability Matrix
 
 ### Requirement to Source File
@@ -330,6 +382,15 @@ Defense-in-depth measures for the generation pipeline.
 | AR-600..AR-607 | `src/startd8/contractors/artisan_contractor.py` | `context_seed_handlers.py` |
 | AR-700..AR-707 | `src/startd8/contractors/context_seed_handlers.py` | `scripts/run_artisan_workflow.py` |
 | AR-800..AR-810 | `src/startd8/contractors/artisan_phases/preflight.py` | `context_seed_handlers.py`, `artisan_contractor.py`, `rules_common.py` |
+| AR-900 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | |
+| AR-901 | `src/startd8/contractors/artisan_phases/design_documentation.py` | `context_seed_handlers.py` |
+| AR-902 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | |
+| AR-903 | `src/startd8/contractors/context_seed_handlers.py` | ScaffoldPhaseHandler, ImplementPhaseHandler |
+| AR-904 | `src/startd8/contractors/context_seed_handlers.py` (TestPhaseHandler) | |
+| AR-905 | `src/startd8/contractors/context_seed_handlers.py` | TestPhaseHandler, DesignPhaseHandler |
+| AR-906 | `src/startd8/contractors/context_seed_handlers.py` (FinalizePhaseHandler) | |
+| AR-907 | `src/startd8/contractors/context_seed_handlers.py` | DesignPhaseHandler, ImplementPhaseHandler, TestPhaseHandler |
+| AR-908 | `src/startd8/contractors/context_seed_handlers.py` | ImplementPhaseHandler, FinalizePhaseHandler |
 
 ### Requirement to Test File
 
@@ -373,6 +434,7 @@ Requirements with no `verified_by` test file (need new tests):
 | AR-508..AR-511 | planned | Recovery hardening (chunk resume, config drift, state integrity, migration) |
 | AR-605, AR-606 | planned | Event JSONL externalization and dedup |
 | AR-805, AR-807..AR-809 | planned | Interactive mode, git tags, advisory lock, stalled retry |
+| AR-900..AR-908 | planned | Mottainai compliance — full review metadata serialization, metadata forwarding, deterministic pre-review validation, provenance audit trail, structured diagnostics, integrity timing |
 
 ---
 
@@ -387,6 +449,7 @@ Requirements with no `verified_by` test file (need new tests):
 | 3. Recovery Hardening | AR-508..AR-511 | **Medium** | Robust resume across config changes |
 | 4. Orchestration Enhancements | AR-209..AR-211, AR-405, AR-809 | **Low** | Cost projection, operational safety |
 | 5. Interactive and Git Safety | AR-605..AR-606, AR-805..AR-808 | **Low** | Interactive operation, event durability |
+| 6. Mottainai Compliance | AR-900..AR-908 | **Medium** | Eliminates 20 intra-pipeline waste gaps (Gaps 17–36) |
 
 ---
 

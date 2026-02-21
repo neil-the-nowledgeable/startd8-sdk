@@ -1941,7 +1941,7 @@ configuration_requirements:
       - "tracer_name: str (default 'startd8.artisan_contractor')"
       - "drafter_model, validator_model, reviewer_model: str (from catalog defaults)"
       - "project_root: Optional[str]"
-      - "feature_serial: bool (default False)"
+      - "feature_serial: bool (default True)"
       - "metadata: dict[str, Any] (default {})"
 
     depends_on: []
@@ -2289,6 +2289,201 @@ safety_resilience_requirements:
       - tests/unit/test_service_metadata_preflight.py
 
 # ==============================================================================
+# LAYER: MOTTAINAI COMPLIANCE (AR-9xx)
+# Cross-cutting requirements ensuring artifacts produced by earlier phases
+# are forwarded, registered, and validated — not silently discarded.
+# Consolidates Gaps 17–36 from the Mottainai Design Principle document into
+# 9 formal requirements organized by anti-pattern.
+# ==============================================================================
+
+mottainai_compliance_requirements:
+
+  # ---------------------------------------------------------------------------
+  # Anti-Pattern 1: Serialize-and-Forget (AR-900, AR-901)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-900
+    description: "DESIGN phase serializes full review metadata including verdicts, parsed sections, and plan constraints"
+    status: planned
+    type: data_flow
+
+    acceptance_criteria:
+      - "_serialize_result() persists reviewer_verdict and arbiter_verdict (approved, confidence, concerns, suggestions)"
+      - "_serialize_result() persists parsed design sections dict with completeness flags (not just raw_text blob)"
+      - "_serialize_result() persists plan-derived architectural constraints and risk sections"
+      - "IMPLEMENT can read design confidence and flagged concerns from design_results"
+      - "TEST can perform deterministic contract checks against parsed design sections"
+
+    depends_on: [AR-120]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gaps 17, 19, 20"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      method: "DesignPhaseHandler._serialize_result"
+      anti_pattern: serialize_and_forget
+
+  - id: AR-901
+    description: "DESIGN phase extracts and validates critical parameters from generated design documents"
+    status: planned
+    type: data_flow
+
+    acceptance_criteria:
+      - "extract_critical_parameters() called on each generated design document post-generation"
+      - "Extracted parameters stored in design_results per task"
+      - "check_design_parameter_fidelity() validates parameter consistency against generated code"
+      - "Parameter drift between DESIGN and IMPLEMENT detected and logged"
+
+    depends_on: [AR-900, AR-120]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gap 18"
+
+    implementation_hints:
+      file: src/startd8/contractors/artisan_phases/design_documentation.py
+      functions: ["extract_critical_parameters", "check_design_parameter_fidelity"]
+      anti_pattern: serialize_and_forget
+
+  # ---------------------------------------------------------------------------
+  # Anti-Pattern 2: Compute-But-Don't-Forward (AR-902, AR-903)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-902
+    description: "IMPLEMENT reuses pre-computed downstream file map from Gate 2c instead of re-deriving"
+    status: planned
+    type: data_flow
+
+    acceptance_criteria:
+      - "IMPLEMENT reads downstream_map from Gate 2c context (context['_downstream_map'])"
+      - "IMPLEMENT does not call _detect_downstream_files() when downstream_map is available"
+      - "Fallback to _detect_downstream_files() only when downstream_map is absent, with logged warning"
+
+    depends_on: [AR-130]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gap 26"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      anti_pattern: compute_but_dont_forward
+
+  - id: AR-903
+    description: "Earlier-phase metadata (lessons, staleness, preflight, domain enrichment, file scope) forwarded to IMPLEMENT"
+    status: planned
+    type: data_flow
+
+    acceptance_criteria:
+      - "Lessons discovery results (ranked, phase-categorized) from SCAFFOLD forwarded to IMPLEMENT context"
+      - "File staleness classification (current/stale/unknown) from SCAFFOLD forwarded to IMPLEMENT"
+      - "Preflight report (deps, endpoints, workspace) from PLAN forwarded to IMPLEMENT"
+      - "Domain enrichment from seed forwarded with audit trail on fallback-to-inline computation"
+      - "File scope classification (primary/shared/stub) per target file forwarded to IMPLEMENT"
+      - "Log provenance when metadata comes from fallback computation vs. pre-computed seed"
+
+    depends_on: [AR-110, AR-130]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gaps 21, 22, 23, 24, 25"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      classes: [ScaffoldPhaseHandler, ImplementPhaseHandler]
+      anti_pattern: compute_but_dont_forward
+
+  # ---------------------------------------------------------------------------
+  # Anti-Pattern 3: Inject-But-Don't-Validate (AR-904 – AR-908)
+  # ---------------------------------------------------------------------------
+
+  - id: AR-904
+    description: "TEST phase performs deterministic pre-review validation against design artifacts"
+    status: planned
+    type: data_flow
+
+    acceptance_criteria:
+      - "TEST validates exported classes/functions match design-specified signatures using parsed sections from AR-900"
+      - "TEST validates semantic convention compliance via regex/AST (metric names, label keys)"
+      - "Deterministic checks run before LLM review, at approximately 1/100th the cost"
+      - "Validation results included in test_results per task"
+
+    depends_on: [AR-900, AR-140]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gaps 27, 28"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: TestPhaseHandler
+      anti_pattern: inject_but_dont_validate
+
+  - id: AR-905
+    description: "Metadata provenance audit trail logs degradation when optional metadata is absent"
+    status: planned
+    type: observability
+
+    acceptance_criteria:
+      - "Log when service_metadata absent — protocol fidelity and Dockerfile validators skip"
+      - "Log per-field source for onboarding fields (export vs. computed fallback)"
+      - "Degradation warnings surfaced in workflow execution report"
+      - "No silent validator skipping — all skips logged with reason"
+
+    depends_on: [AR-600]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gaps 29, 33"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      classes: [TestPhaseHandler, DesignPhaseHandler]
+      anti_pattern: inject_but_dont_validate
+
+  - id: AR-906
+    description: "FINALIZE preserves structured diagnostics (per-validator results, review findings with severity)"
+    status: planned
+    type: data_flow
+
+    acceptance_criteria:
+      - "Workflow manifest includes per-validator test results (validator name, pass/fail, error message) per task"
+      - "Workflow manifest includes review findings with severity classification and suggestions per task"
+      - "Aggregate summaries (total_passed, total_failed) remain as derived fields, not replacements for granular data"
+
+    depends_on: [AR-160, AR-161]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gaps 30, 31"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+      anti_pattern: serialize_and_forget
+
+  - id: AR-907
+    description: "Post-generation compliance validation for deterministic guidance (open questions, parameter loss)"
+    status: planned
+    type: data_flow
+
+    acceptance_criteria:
+      - "Log open question satisfaction ratio (how many addressed in design vs. injected)"
+      - "Surface IMP-7 parameter loss findings to TEST and REVIEW phases (not just logged)"
+      - "Track and log guidance truncation (e.g., '10 of 23 open questions injected')"
+      - "Findings available in test_results and review context"
+
+    depends_on: [AR-900, AR-903]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gaps 34, 35"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      classes: [DesignPhaseHandler, ImplementPhaseHandler, TestPhaseHandler]
+      anti_pattern: inject_but_dont_validate
+
+  - id: AR-908
+    description: "File integrity metadata (checksums, truncation confidence) computed at IMPLEMENT output time"
+    status: planned
+    type: data_flow
+
+    acceptance_criteria:
+      - "File checksums computed at IMPLEMENT output time (not TEST cache time)"
+      - "Truncation confidence computed at IMPLEMENT completion (not deferred to TEST)"
+      - "Both persisted to checkpoint for reuse on resume"
+      - "Truncation confidence included in manifest per-task entry"
+      - "No redundant computation on resume — checkpoint values reused"
+
+    depends_on: [AR-130, AR-160]
+    source: "docs/design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md Gaps 32, 36"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      classes: [ImplementPhaseHandler, FinalizePhaseHandler]
+      anti_pattern: inject_but_dont_validate
+
+# ==============================================================================
 # IMPLEMENTATION ORDER
 # ==============================================================================
 
@@ -2373,6 +2568,23 @@ implementation_order:
       - git_safety
       - event_durability
 
+  phase_6:
+    name: "Mottainai Compliance (Medium Priority)"
+    requirements:
+      - AR-900  # DESIGN serialize full review metadata
+      - AR-901  # DESIGN extract/validate critical parameters
+      - AR-902  # IMPLEMENT reuse downstream_map
+      - AR-903  # Earlier-phase metadata forwarded to IMPLEMENT
+      - AR-904  # TEST deterministic pre-review validation
+      - AR-905  # Metadata provenance audit trail
+      - AR-906  # FINALIZE structured diagnostics
+      - AR-907  # Post-generation compliance validation
+      - AR-908  # File integrity at IMPLEMENT output time
+    benefits_delivered:
+      - mottainai_compliance
+      - artifact_reuse
+      - deterministic_pre_review
+
 # ==============================================================================
 # CROSS-REFERENCE: Requirement -> Benefit
 # ==============================================================================
@@ -2402,13 +2614,16 @@ traceability:
   safety_resilience:
     requirements: [AR-800, AR-801, AR-802, AR-803, AR-804, AR-805, AR-806, AR-807, AR-808, AR-809, AR-810]
     count: 11
+  mottainai_compliance:
+    requirements: [AR-900, AR-901, AR-902, AR-903, AR-904, AR-905, AR-906, AR-907, AR-908]
+    count: 9
 
 # ==============================================================================
 # SUMMARY
 # ==============================================================================
 
 summary:
-  total_requirements: 110
+  total_requirements: 119
   by_layer:
     phase_behavior: 39    # AR-1xx (includes AR-127..AR-128, AR-143..AR-147)
     orchestration: 12     # AR-2xx
@@ -2418,10 +2633,11 @@ summary:
     observability: 8      # AR-6xx
     configuration: 8      # AR-7xx
     safety_resilience: 11 # AR-8xx (includes AR-810)
+    mottainai_compliance: 9  # AR-9xx
   by_status:
     implemented: 74
     partial: 1
-    planned: 35
+    planned: 44
   by_implementation_phase:
     phase_1b_semantic_validators: 6  # AR-143..AR-147, AR-810 (DONE)
     phase_1_contextcore: 5
@@ -2429,4 +2645,5 @@ summary:
     phase_3_recovery: 4
     phase_4_orchestration: 5
     phase_5_interactive: 6
+    phase_6_mottainai: 9
     already_implemented: 72
