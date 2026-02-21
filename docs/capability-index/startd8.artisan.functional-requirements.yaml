@@ -290,6 +290,59 @@ phase_behavior_requirements:
       file: src/startd8/contractors/context_seed_handlers.py
       class: DesignPhaseHandler
 
+  - id: AR-127
+    description: "DESIGN phase detects existing target files and sets design_mode"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Intersects task.target_files with context['scaffold']['existing_target_files']"
+      - "Sets design_mode to 'update' when target file exists on disk, 'create' otherwise"
+      - "When update: reads existing file content (up to 50KB configurable ceiling)"
+      - "When update: builds structured summary (classes, functions, imports, __all__) as existing_file_inventory"
+      - "When update: injects existing_file_inventory into FeatureContext.additional_context['existing_file_inventory']"
+      - "When update: adds PRESERVE annotations for public API surface to FeatureContext.constraints"
+      - "When update: adds prompt constraint instructing LLM to describe additions/modifications, not complete replacement"
+      - "When create: no change to existing behavior"
+      - "Stores design_mode in design_results[task_id]"
+
+    depends_on: [AR-110, AR-120]
+    source: "docs/ARTISAN_WORKFLOW_ISSUES_CATALOG.md A-15 (Mottainai principle — existing production code must not be silently discarded)"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+      reuses:
+        - "context['scaffold']['existing_target_files'] (populated by ScaffoldPhaseHandler, line ~891)"
+        - "context['scaffold']['staleness_classification'] (populated by ScaffoldPhaseHandler, lines ~894-919)"
+        - "FeatureContext.additional_context (existing injection point, line ~1077)"
+        - "FeatureContext.constraints (existing injection point, line ~1310)"
+
+  - id: AR-128
+    description: "design_mode propagates through handoff to IMPLEMENT phase"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "design_results[task_id]['design_mode'] persisted in handoff JSON"
+      - "_tasks_to_chunks propagates design_mode into DevelopmentChunk.metadata['design_mode']"
+      - "When update: adds prompt constraints for incremental-only output with PRESERVE list"
+      - "When update: includes existing_file_inventory in chunk metadata"
+      - "Post-generation validation: warns if update-mode output has >50% line reduction without merge markers"
+      - "design_mode appears in generation-manifest.json per-task entry"
+      - "Default design_mode is 'create' for backward compatibility"
+
+    depends_on: [AR-127, AR-130, AR-131]
+    source: "docs/ARTISAN_WORKFLOW_ISSUES_CATALOG.md A-15"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+      reuses:
+        - "DevelopmentChunk.metadata (existing metadata dict)"
+        - "_tasks_to_chunks() (existing conversion function)"
+        - "generation-manifest.json (existing FINALIZE artifact)"
+
   # ---------------------------------------------------------------------------
   # IMPLEMENT Phase (AR-130 – AR-137)
   # ---------------------------------------------------------------------------
@@ -2326,8 +2379,8 @@ implementation_order:
 
 traceability:
   phase_behavior:
-    requirements: [AR-100, AR-101, AR-102, AR-110, AR-111, AR-120, AR-121, AR-122, AR-123, AR-124, AR-125, AR-126, AR-130, AR-131, AR-132, AR-133, AR-134, AR-135, AR-136, AR-137, AR-140, AR-141, AR-142, AR-143, AR-144, AR-145, AR-146, AR-147, AR-150, AR-151, AR-152, AR-160, AR-161, AR-162, AR-163, AR-164, AR-165]
-    count: 37
+    requirements: [AR-100, AR-101, AR-102, AR-110, AR-111, AR-120, AR-121, AR-122, AR-123, AR-124, AR-125, AR-126, AR-127, AR-128, AR-130, AR-131, AR-132, AR-133, AR-134, AR-135, AR-136, AR-137, AR-140, AR-141, AR-142, AR-143, AR-144, AR-145, AR-146, AR-147, AR-150, AR-151, AR-152, AR-160, AR-161, AR-162, AR-163, AR-164, AR-165]
+    count: 39
   orchestration:
     requirements: [AR-200, AR-201, AR-202, AR-203, AR-204, AR-205, AR-206, AR-207, AR-208, AR-209, AR-210, AR-211]
     count: 12
@@ -2355,9 +2408,9 @@ traceability:
 # ==============================================================================
 
 summary:
-  total_requirements: 108
+  total_requirements: 110
   by_layer:
-    phase_behavior: 37    # AR-1xx (includes AR-143..AR-147)
+    phase_behavior: 39    # AR-1xx (includes AR-127..AR-128, AR-143..AR-147)
     orchestration: 12     # AR-2xx
     contextcore_data_flow: 12  # AR-3xx
     cost_model: 8         # AR-4xx
@@ -2368,7 +2421,7 @@ summary:
   by_status:
     implemented: 74
     partial: 1
-    planned: 33
+    planned: 35
   by_implementation_phase:
     phase_1b_semantic_validators: 6  # AR-143..AR-147, AR-810 (DONE)
     phase_1_contextcore: 5

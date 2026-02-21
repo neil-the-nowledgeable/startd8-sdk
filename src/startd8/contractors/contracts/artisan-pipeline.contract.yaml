@@ -97,6 +97,19 @@ phases:
         - name: task_index
           type: dict
           severity: blocking
+      enrichment:
+        - name: scaffold.existing_target_files
+          type: list
+          severity: warning
+          default: []
+          source_phase: scaffold
+          description: "List of target files that already exist on disk (populated by ScaffoldPhaseHandler)"
+        - name: scaffold.staleness_classification
+          type: dict
+          severity: advisory
+          default: {}
+          source_phase: scaffold
+          description: "Per-file staleness classification (fresh/stale/unknown) from scaffold phase"
     exit:
       required:
         - name: design_results
@@ -107,6 +120,10 @@ phases:
             threshold: 2
             on_below: warning
             description: "Design output should have at least 2 sections (architecture + implementation notes)"
+      advisory:
+        - name: design_results.*.design_mode
+          type: str
+          description: "Per-task design mode: 'create' (new file) or 'update' (existing file). Default 'create' for backward compatibility."
 
   implement:
     description: "Test construction + code development"
@@ -124,6 +141,12 @@ phases:
             on_below: blocking
             description: "Design doc must have substance (>= 50 lines) before IMPLEMENT consumes it"
       enrichment:
+        - name: design_results.*.design_mode
+          type: str
+          severity: warning
+          default: "create"
+          source_phase: design
+          description: "Per-task design mode ('create' or 'update') from AR-127. When 'update', IMPLEMENT adds prompt constraints for incremental-only output."
         - name: domain_summary.domain
           type: str
           severity: warning
@@ -328,3 +351,17 @@ propagation_chains:
       phase: finalize
       field: truncation_flags
     severity: warning
+
+  - chain_id: design_mode_to_implement
+    description: >
+      Per-task design_mode flows from design phase (AR-127) to implement
+      phase (AR-128) where it constrains code generation to incremental-only
+      output for existing files, preventing production file destruction (A-15).
+    source:
+      phase: design
+      field: design_results.*.design_mode
+    destination:
+      phase: implement
+      field: DevelopmentChunk.metadata.design_mode
+    severity: warning
+    verification: "dest in ('create', 'update')"

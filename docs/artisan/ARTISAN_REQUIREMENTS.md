@@ -14,7 +14,7 @@ This document provides narrative context, dependency diagrams, and a traceabilit
 
 | Layer | ID Range | Total | Implemented | Partial | Planned |
 |-------|----------|-------|-------------|---------|---------|
-| Phase Behavior | AR-1xx | 37 | 30 | 0 | 7 |
+| Phase Behavior | AR-1xx | 39 | 30 | 0 | 9 |
 | Orchestration | AR-2xx | 12 | 9 | 0 | 3 |
 | ContextCore Data Flow | AR-3xx | 12 | 2 | 0 | 10 |
 | Cost Model | AR-4xx | 8 | 6 | 1 | 1 |
@@ -22,7 +22,7 @@ This document provides narrative context, dependency diagrams, and a traceabilit
 | Observability | AR-6xx | 8 | 6 | 0 | 2 |
 | Configuration | AR-7xx | 8 | 8 | 0 | 0 |
 | Safety and Resilience | AR-8xx | 11 | 6 | 0 | 5 |
-| **Total** | | **108** | **75** | **1** | **32** |
+| **Total** | | **110** | **75** | **1** | **34** |
 
 ---
 
@@ -53,6 +53,8 @@ flowchart LR
         AR124[AR-124 Cross-Task Context]
         AR125[AR-125 Parameter Sources]
         AR126[AR-126 Semantic Conventions]
+        AR127[AR-127 Existing File Detection]
+        AR128[AR-128 design_mode Propagation]
     end
 
     subgraph implement [IMPLEMENT]
@@ -101,7 +103,7 @@ flowchart LR
 |-------|-----------------|--------|
 | PLAN | `tasks`, `task_index`, `plan_title`, `plan_goals`, `domain_summary`, `preflight_summary`, `total_estimated_loc`, `architectural_context`, `design_calibration`, `example_artifacts` | AR-100 |
 | SCAFFOLD | `scaffold` (directories_needed, directories_exist, directories_created, existing_target_files, skipped_targets, project_root) | AR-110 |
-| DESIGN | `design_results` (per-task: design_document, status, agreed, iterations, cost) | AR-120 |
+| DESIGN | `design_results` (per-task: design_document, status, agreed, iterations, cost, design_mode, existing_file_inventory) | AR-120, AR-127 |
 | IMPLEMENT | `implementation`, `generation_results`, `_downstream_map` | AR-130 |
 | TEST | `test_results` (test_plan, total_passed, total_failed, per_task) | AR-140..AR-147 |
 | REVIEW | `review_results` (review_items, total_cost, total_passed, total_failed, per_task) | AR-150 |
@@ -314,6 +316,8 @@ Defense-in-depth measures for the generation pipeline.
 | AR-100..AR-102 | `src/startd8/contractors/context_seed_handlers.py` (PlanPhaseHandler) | |
 | AR-110..AR-111 | `src/startd8/contractors/context_seed_handlers.py` (ScaffoldPhaseHandler) | |
 | AR-120..AR-126 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | `artisan_phases/design_documentation.py` |
+| AR-127 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | Reuses `scaffold.existing_target_files` from ScaffoldPhaseHandler |
+| AR-128 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `handoff.py`, `artisan_phases/development.py` |
 | AR-130..AR-137 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `artisan_phases/development.py` |
 | AR-140..AR-142 | `src/startd8/contractors/context_seed_handlers.py` (TestPhaseHandler) | |
 | AR-143..AR-147 | `src/startd8/contractors/artisan_phases/self_consistency.py` | `context_seed_handlers.py` (Gate 3b), `rules_validators.py` |
@@ -359,6 +363,7 @@ Requirements with no `verified_by` test file (need new tests):
 
 | Requirement | Status | What Needs Testing |
 |-------------|--------|-------------------|
+| AR-127, AR-128 | planned | Existing file detection, design_mode propagation, update-mode prompt constraints, post-generation line-reduction validation |
 | AR-111 | planned | SCAFFOLD output_conventions validation |
 | AR-125, AR-126 | planned | DESIGN parameter_sources / semantic_conventions injection |
 | AR-137 | planned | IMPLEMENT parameter_sources in chunk metadata |
@@ -375,6 +380,7 @@ Requirements with no `verified_by` test file (need new tests):
 
 | Phase | Requirements | Priority | Impact |
 |-------|-------------|----------|--------|
+| 0. Update-First Design Mode | AR-127, AR-128 | **Critical** | Prevents A-15 production file destruction |
 | ~~1b. Semantic Validators~~ | ~~AR-143..AR-147, AR-810~~ | ~~**High**~~ | ~~DONE — Commits `bed77d5`, `dc3c241`~~ |
 | 1. ContextCore Data Flow Fixes | AR-300..AR-302, AR-164, AR-165 | **High** | Closes provenance chain, enables Gate 3 |
 | 2. Onboarding Metadata Consumption | AR-303..AR-308, AR-111, AR-125..AR-126, AR-137 | **Medium** | Enriches code generation with export data |

@@ -465,13 +465,65 @@ Six of seven artifact types have `derived_from` rules populated in `generate_art
 
 ---
 
+### A-15: IMPLEMENT Phase Overwrites Production Files Instead of Surgically Adding Code
+
+**Phase**: IMPLEMENT
+**Severity**: Critical
+**Status**: Requirements Defined (AR-127, AR-128)
+**Date**: 2026-02-21
+**Project under test**: startd8-sdk (Prime Execution Modes plan, 23 tasks)
+
+**Symptom**: PI-001 ("ExecutionMode and ModeConfig foundation") was designed to *add* `ExecutionMode` enum, `ModeConfig` dataclass, and `SeedContext` to the existing `prime_contractor.py`. Instead, the IMPLEMENT phase replaced the entire 1,337-line production file with a 284-line module containing only the new types. This deleted `PrimeContractorWorkflow`, `FeatureProcessor`, checkpoint recovery, OTel integration, cost tracking, Mottainai reuse, and all orchestration logic.
+
+**Observed across 3 separate pipeline runs**:
+1. First run (phase-serial, `--lane-parallel`): PI-001 through PI-011 committed, each overwriting its target file. `prime_contractor.py` went from 1,337→284 lines. `protocols.py` lost `agent_spec` property. Production code destroyed.
+2. Second run (phase-serial, no flag): Ran all designs first (phase-serial default). Stopped before IMPLEMENT.
+3. Third run (feature-serial, `--task PI-001`): Single task, correct execution order. Same result — PI-001 replaced the file wholesale (1,284 deletions).
+
+**Root cause**: The design doc and/or seed instruct the LLM to produce the *complete file contents* for each target file. The LLM generates the new types but does not preserve existing code because:
+1. The design doc describes what PI-001 should *contain*, not what it should *add to the existing file*
+2. The IMPLEMENT phase's LeadContractor drafter receives the design doc as the primary spec and writes the full file
+3. There is no mechanism to diff the generated output against the existing file and merge surgically — the generated code replaces the file wholesale
+
+**Impact**: Every task that targets an existing production file destroys the file's current content. For a plan with 23 interdependent tasks touching shared files (`prime_contractor.py`, `protocols.py`, `queue.py`), this makes the pipeline unusable — each task overwrites the previous task's work and deletes unrelated production code.
+
+**Reproduction**:
+```bash
+cd .cap-dev-pipe
+./run-artisan.sh --provenance pipeline-output/prime-execution-modes/run-provenance.json --task PI-001 --cost-budget 5
+# Check: git diff --stat HEAD~1 shows ~1,284 deletions in prime_contractor.py
+```
+
+**Contributing factors**:
+- The plan spec says "Phase 1: Introduce the mode abstraction without changing any behavior" but the pipeline has no way to enforce additive-only changes
+- The seed's `target_files` field points to existing files but doesn't communicate "modify" vs "create" semantics
+- Design docs generated against the current codebase snapshot don't include explicit "preserve these existing classes/functions" constraints
+- No post-generation validation checks whether the diff is additive vs destructive
+
+**Potential fixes**:
+1. **Diff-aware merge strategy**: After generation, diff the output against the existing file. If >50% of existing lines are deleted, flag for human review instead of auto-committing.
+2. **Preserve-list in seed/design**: Include explicit list of classes/functions that must survive in the target file. Validate post-generation.
+3. **Additive-only mode**: New flag/config that instructs the drafter to produce only the new code to be inserted, with insertion point markers, rather than the complete file.
+4. **Pre-commit gate**: Compare generated file against existing file. Reject if existing public API surface (classes, functions in `__all__`) is reduced.
+5. **Design doc prompt engineering**: Include the existing file's class/function inventory in the design doc with explicit "PRESERVE — do not remove or replace" annotations.
+
+**Resolution**: Two formal requirements (AR-127, AR-128) address this defect by combining potential fixes #3 (additive-only mode) and #5 (design doc prompt engineering with existing file inventory):
+
+- **AR-127** (DESIGN phase): Detects existing target files by intersecting `task.target_files` with `context["scaffold"]["existing_target_files"]` (already populated by ScaffoldPhaseHandler). Sets `design_mode` to `"update"` for existing files. Reads existing file content (up to 50KB), builds a structured summary (classes, functions, imports, `__all__`), injects it into `FeatureContext.additional_context["existing_file_inventory"]`, and adds PRESERVE annotations for public API surface to `FeatureContext.constraints`. The LLM prompt is constrained to describe additions/modifications rather than complete file replacement.
+
+- **AR-128** (IMPLEMENT phase): Propagates `design_mode` through the handoff JSON into `DevelopmentChunk.metadata["design_mode"]`. When `"update"`, adds prompt constraints for incremental-only output with the PRESERVE list. Post-generation validation warns if an update-mode output has >50% line reduction without merge markers. The `design_mode` field appears in `generation-manifest.json` for auditability.
+
+See: `docs/capability-index/startd8.artisan.functional-requirements.yaml` (AR-127, AR-128), `docs/artisan/ARTISAN_REQUIREMENTS.md`, `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`.
+
+---
+
 ## Summary
 
 | Category | Count | Fixed/Addressed | Open | In Progress |
 |----------|-------|----------------|------|-------------|
-| **Session (A-series)** | 14 | 4 | 4 | 6 |
+| **Session (A-series)** | 15 | 5 | 4 | 6 |
 | **Other sources (B-series)** | 19 | 13 | 6 | 0 |
-| **Total** | 33 | 17 | 10 | 6 |
+| **Total** | 34 | 18 | 10 | 6 |
 
 ### Priority Next Actions
 
