@@ -2068,7 +2068,7 @@ class TestEmitPhaseArtisanRoute:
         assert kr["metric"] == "latency_p95"
         assert kr["target"] == "<=250ms"
 
-    def test_prime_does_not_emit_context_seed(self, tmp_path):
+    def test_prime_emits_prime_context_seed(self, tmp_path):
         doc_path = tmp_path / "plan-ingestion-tasks.yaml"
         doc_path.write_text("project: {}")
         complexity = ComplexityScore(composite=20, route=ContractorRoute.PRIME)
@@ -2082,7 +2082,8 @@ class TestEmitPhaseArtisanRoute:
             parsed_plan=parsed_plan,
         )
 
-        assert seed_path is None
+        assert seed_path is not None
+        assert seed_path.name == "prime-context-seed.json"
         assert not (tmp_path / "artisan-context-seed.json").exists()
 
     def test_artisan_without_parsed_plan_skips_seed(self, tmp_path):
@@ -2222,6 +2223,13 @@ class TestEndToEndArtisanContextSeed:
         assert data["artifacts"]["plan_document_path"] == str(tmp_path / "PLAN-ingested.md")
         assert data["ingestion_metrics"]["total_cost"] > 0
 
+        # Verify REFINE forwarding fields present (empty when review_output is {})
+        onboarding = data.get("onboarding", {})
+        assert "refine_suggestions" in onboarding
+        assert onboarding["refine_suggestions"] == []
+        assert "refine_provenance" in data["artifacts"]
+        assert data["artifacts"]["refine_provenance"]["origin_phase"] == "ingestion.refine"
+
     @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
     @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
     def test_prime_flow_no_context_seed(self, mock_resolve, MockReviewWf, tmp_path):
@@ -2254,5 +2262,296 @@ class TestEndToEndArtisanContextSeed:
 
         assert result.success
         assert result.output["route"] == "prime"
-        assert "context_seed_path" not in result.output
+        # Prime route now emits prime-context-seed.json
+        assert "context_seed_path" in result.output
+        assert Path(result.output["context_seed_path"]).name == "prime-context-seed.json"
         assert not (tmp_path / "artisan-context-seed.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# TestExtractRefineSuggestionsForSeed
+# ---------------------------------------------------------------------------
+
+class TestExtractRefineSuggestionsForSeed:
+    def test_empty_review_output(self):
+        assert PlanIngestionWorkflow._extract_refine_suggestions_for_seed({}) == []
+
+    def test_no_triage_key(self):
+        assert PlanIngestionWorkflow._extract_refine_suggestions_for_seed(
+            {"apply": {"applied_count": 1}}
+        ) == []
+
+    def test_triage_not_dict(self):
+        assert PlanIngestionWorkflow._extract_refine_suggestions_for_seed(
+            {"triage": "invalid"}
+        ) == []
+
+    def test_zero_accepted(self):
+        result = PlanIngestionWorkflow._extract_refine_suggestions_for_seed({
+            "triage": {"accepted": 0, "rejected": 2, "decisions": []},
+        })
+        assert result == []
+
+    def test_filters_only_accept(self):
+        result = PlanIngestionWorkflow._extract_refine_suggestions_for_seed({
+            "triage": {
+                "accepted": 2,
+                "rejected": 1,
+                "decisions": [
+                    {"id": "S-001", "decision": "ACCEPT", "rationale": "Good", "area": "arch", "severity": "high"},
+                    {"id": "S-002", "decision": "REJECT", "rationale": "Bad", "area": "perf", "severity": "low"},
+                    {"id": "S-003", "decision": "ACCEPT", "rationale": "Also good", "area": "sec", "severity": "medium"},
+                ],
+            },
+        })
+        assert len(result) == 2
+        assert result[0]["id"] == "S-001"
+        assert result[0]["decision"] == "ACCEPT"
+        assert result[1]["id"] == "S-003"
+
+    def test_extracts_decision_fields(self):
+        result = PlanIngestionWorkflow._extract_refine_suggestions_for_seed({
+            "triage": {
+                "accepted": 1,
+                "rejected": 0,
+                "decisions": [
+                    {
+                        "id": "S-010",
+                        "decision": "ACCEPT",
+                        "rationale": "Important fix",
+                        "area": "error_handling",
+                        "severity": "critical",
+                    },
+                ],
+            },
+        })
+        assert len(result) == 1
+        d = result[0]
+        assert d["id"] == "S-010"
+        assert d["decision"] == "ACCEPT"
+        assert d["rationale"] == "Important fix"
+        assert d["area"] == "error_handling"
+        assert d["severity"] == "critical"
+
+    def test_fallback_to_summary_when_no_decisions(self):
+        """Old-format triage without decisions key returns aggregate summary."""
+        result = PlanIngestionWorkflow._extract_refine_suggestions_for_seed({
+            "triage": {
+                "accepted": 3,
+                "rejected": 1,
+                "substantially_addressed_areas": ["architecture", "security"],
+                "areas_needing_review": ["performance"],
+            },
+        })
+        assert len(result) == 1
+        assert result[0]["source"] == "triage_summary"
+        assert result[0]["triage_accepted_count"] == 3
+        assert result[0]["triage_rejected_count"] == 1
+        assert result[0]["substantially_addressed_areas"] == ["architecture", "security"]
+        assert result[0]["areas_needing_review"] == ["performance"]
+
+
+# ---------------------------------------------------------------------------
+# TestRefineForwardingIntegration
+# ---------------------------------------------------------------------------
+
+class TestRefineForwardingIntegration:
+    def setup_method(self):
+        self.wf = PlanIngestionWorkflow()
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_review_output_reaches_artisan_seed(self, mock_resolve, MockReviewWf, tmp_path):
+        """Full mock: REFINE output propagates to artisan seed onboarding."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_ARTISAN, cost=0.02),
+            _mock_generate_return(TRANSFORM_MARKDOWN, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.05)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_result.output = {
+            "triage": {
+                "accepted": 2,
+                "rejected": 1,
+                "decisions": [
+                    {"id": "S-001", "decision": "ACCEPT", "rationale": "Good", "area": "arch", "severity": "high"},
+                    {"id": "S-002", "decision": "REJECT", "rationale": "Nope", "area": "perf", "severity": "low"},
+                    {"id": "S-003", "decision": "ACCEPT", "rationale": "Yes", "area": "sec", "severity": "medium"},
+                ],
+            },
+            "apply": {
+                "applied_count": 1,
+                "applied_ids": ["S-001"],
+                "warning_ids": [],
+                "error": None,
+            },
+            "state_path": "/tmp/review-state.json",
+        }
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 1,
+        })
+
+        assert result.success
+        seed_path = Path(result.output["context_seed_path"])
+        data = json.loads(seed_path.read_text())
+
+        # Verify refine_suggestions in onboarding
+        onboarding = data.get("onboarding", {})
+        suggestions = onboarding.get("refine_suggestions", [])
+        assert len(suggestions) == 2  # Only ACCEPT decisions
+        assert suggestions[0]["id"] == "S-001"
+        assert suggestions[1]["id"] == "S-003"
+
+        # Verify refine_provenance in artifacts
+        provenance = data["artifacts"].get("refine_provenance", {})
+        assert provenance["origin_phase"] == "ingestion.refine"
+        assert provenance["triage_accepted"] == 2
+        assert provenance["triage_rejected"] == 1
+        assert provenance["applied_ids"] == ["S-001"]
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_review_output_none_graceful(self, mock_resolve, MockReviewWf, tmp_path):
+        """When REFINE is disabled (0 rounds), seed has empty refine_suggestions."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_ARTISAN, cost=0.02),
+            _mock_generate_return(TRANSFORM_MARKDOWN, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 0,
+        })
+
+        assert result.success
+        seed_path = Path(result.output["context_seed_path"])
+        data = json.loads(seed_path.read_text())
+
+        onboarding = data.get("onboarding", {})
+        assert onboarding.get("refine_suggestions") == []
+
+        provenance = data["artifacts"].get("refine_provenance", {})
+        assert provenance["origin_phase"] == "ingestion.refine"
+        assert provenance.get("apply_enabled") is False
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_apply_provenance_in_prime_seed(self, mock_resolve, MockReviewWf, tmp_path):
+        """Prime seed also receives refine provenance (route parity)."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.02),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.05)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_result.output = {
+            "triage": {
+                "accepted": 1,
+                "rejected": 0,
+                "decisions": [
+                    {"id": "S-010", "decision": "ACCEPT", "rationale": "Fix", "area": "arch", "severity": "high"},
+                ],
+            },
+            "apply": {"applied_count": 0, "applied_ids": [], "warning_ids": [], "error": None},
+        }
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "review_rounds": 1,
+        })
+
+        assert result.success
+        prime_seed_path = tmp_path / "prime-context-seed.json"
+        assert prime_seed_path.exists()
+        data = json.loads(prime_seed_path.read_text())
+
+        onboarding = data.get("onboarding", {})
+        suggestions = onboarding.get("refine_suggestions", [])
+        assert len(suggestions) == 1
+        assert suggestions[0]["id"] == "S-010"
+
+        provenance = data["artifacts"].get("refine_provenance", {})
+        assert provenance["origin_phase"] == "ingestion.refine"
+        assert provenance["triage_accepted"] == 1
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_chain_status_logging(self, mock_resolve, MockReviewWf, tmp_path, caplog):
+        """Verify chain status logging (INTACT/N_A)."""
+        import logging
+
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_ARTISAN, cost=0.02),
+            _mock_generate_return(TRANSFORM_MARKDOWN, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.05)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_result.output = {
+            "triage": {
+                "accepted": 1,
+                "rejected": 0,
+                "decisions": [
+                    {"id": "S-001", "decision": "ACCEPT", "rationale": "Ok", "area": "arch", "severity": "high"},
+                ],
+            },
+            "apply": {},
+        }
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        with caplog.at_level(logging.INFO, logger="startd8.workflows.builtin.plan_ingestion_workflow"):
+            self.wf.run({
+                "plan_path": str(plan_file),
+                "output_dir": str(tmp_path),
+                "review_rounds": 1,
+            })
+
+        assert any("REFINE→seed chain INTACT" in m for m in caplog.messages)
