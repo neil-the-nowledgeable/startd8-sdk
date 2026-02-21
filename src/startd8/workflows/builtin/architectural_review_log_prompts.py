@@ -14,6 +14,7 @@ from .architectural_review_log_constants import (
     ALLOWED_SEVERITIES,
     REQUIRED_COLUMNS,
     REVIEW_PROFILES,
+    _MAX_DISPLAYED_IDS,
     _normalize_area,
     _now_utc,
     _OPTIONAL_COLUMN_DEFAULT,
@@ -56,8 +57,8 @@ def _build_prompt(
     Note: template_override uses Python ``str.format()``; literal braces in the
     template must be doubled (``{{`` / ``}}``) to avoid ``KeyError``.
     """
-    applied_list = ", ".join(applied_ids[:50]) if applied_ids else "(none)"
-    rejected_list = ", ".join(rejected_ids[:50]) if rejected_ids else "(none)"
+    applied_list = ", ".join(applied_ids[:_MAX_DISPLAYED_IDS]) if applied_ids else "(none)"
+    rejected_list = ", ".join(rejected_ids[:_MAX_DISPLAYED_IDS]) if rejected_ids else "(none)"
     areas = allowed_areas or ALLOWED_AREAS
     role = persona or "expert enterprise architect"
     default_focus = "architecture clarity, execution safety, risk management, validation completeness, and operational readiness"
@@ -261,8 +262,8 @@ def _build_triage_prompt(
     When *use_system_prompt* is True the document body is omitted (it is
     expected to be in the system prompt via ``_build_shared_system_prompt``).
     """
-    applied_list = ", ".join(applied_ids[:50]) if applied_ids else "(none)"
-    rejected_list = ", ".join(rejected_ids[:50]) if rejected_ids else "(none)"
+    applied_list = ", ".join(applied_ids[:_MAX_DISPLAYED_IDS]) if applied_ids else "(none)"
+    rejected_list = ", ".join(rejected_ids[:_MAX_DISPLAYED_IDS]) if rejected_ids else "(none)"
     areas = allowed_areas or ALLOWED_AREAS
     role = persona or "expert enterprise architect"
 
@@ -403,7 +404,9 @@ def _build_untriaged_block(suggestions: List[Dict[str, Any]]) -> str:
              "| ---- | ---- | ---- | ---- | ---- | ---- | ---- |"]
     for s in suggestions:
         lines.append(
-            f"| {s['id']} | {s['area']} | {s['severity']} | {s['suggestion']} "
-            f"| {s['rationale']} | {s['placement']} | {s['validation']} |"
+            f"| {s.get('id', '?')} | {s.get('area', '')} | {s.get('severity', '')} "
+            f"| {s.get('suggestion', '')} | {s.get('rationale', '')} "
+            f"| {s.get('placement', _OPTIONAL_COLUMN_DEFAULT)} "
+            f"| {s.get('validation', _OPTIONAL_COLUMN_DEFAULT)} |"
         )
     return "\n".join(lines)

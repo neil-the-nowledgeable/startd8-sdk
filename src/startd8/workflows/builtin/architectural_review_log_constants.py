@@ -182,6 +182,9 @@ OPTIONAL_COLUMNS = [
 REQUIRED_COLUMNS = CORE_COLUMNS + OPTIONAL_COLUMNS
 _OPTIONAL_COLUMN_DEFAULT = "N/A"
 
+# Maximum number of applied/rejected IDs to display in prompts (avoid bloating context).
+_MAX_DISPLAYED_IDS = 50
+
 
 # ---------------------------------------------------------------------------
 # Agent detection helpers
@@ -194,14 +197,17 @@ def _is_agent_type(agent: BaseAgent, module_suffix: str) -> bool:
 
 
 def _is_openai_agent(agent: BaseAgent) -> bool:
+    """Return True if *agent* is an OpenAI-backed agent."""
     return _is_agent_type(agent, "openai")
 
 
 def _is_gemini_agent(agent: BaseAgent) -> bool:
+    """Return True if *agent* is a Gemini-backed agent."""
     return _is_agent_type(agent, "gemini")
 
 
 def _is_anthropic_agent(agent: BaseAgent) -> bool:
+    """Return True if *agent* is an Anthropic/Claude-backed agent."""
     return _is_agent_type(agent, "claude")
 
 
@@ -238,6 +244,10 @@ def _extract_token_metrics(token_usage: Any) -> Tuple[int, int, float]:
     )
 
 
+# Valid quality tiers for model selection.
+_KNOWN_TIERS = {"flagship", "balanced", "fast", "mini"}
+
+
 def _select_default_agents(
     quality_tier: str,
     reviewer_count: int,
@@ -250,11 +260,6 @@ def _select_default_agents(
     """
     tier = (quality_tier or "flagship").strip().lower()
 
-    # For strategic architectural review, default to Opus + Gemini Pro.
-    # OpenAI o3 removed from defaults due to org TPM limits vs large prompts.
-    # Users can add other models (e.g. mistral:mistral-large-latest) via
-    # the "agents" config or the "providers" allowlist.
-    _KNOWN_TIERS = {"flagship", "balanced", "fast", "mini"}
     if tier not in _KNOWN_TIERS:
         _logger.warning(
             "Unknown quality_tier '%s' (expected one of %s); "
@@ -294,6 +299,7 @@ def _select_default_agents(
 # ---------------------------------------------------------------------------
 
 def _now_utc() -> str:
+    """Return the current UTC timestamp as a human-readable string."""
     return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
@@ -318,6 +324,7 @@ def _strip_json_fences(text: str) -> str:
 
 
 def _split_cells(row: str) -> List[str]:
+    """Split a markdown table row into trimmed cell values."""
     return [c.strip() for c in row.strip().strip("|").split("|")]
 
 

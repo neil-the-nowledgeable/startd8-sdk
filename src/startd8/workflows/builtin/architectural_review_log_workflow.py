@@ -55,6 +55,8 @@ from .architectural_review_log_constants import (  # noqa: F401 — re-exports
     OPTIONAL_COLUMNS,
     REQUIRED_COLUMNS,
     _OPTIONAL_COLUMN_DEFAULT,
+    _MAX_DISPLAYED_IDS,
+    _KNOWN_TIERS,
     _is_agent_type,
     _is_openai_agent,
     _is_gemini_agent,
@@ -459,8 +461,8 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     if p.is_file():
                         try:
                             parts.append(f"### {p.name}\n\n{p.read_text(encoding='utf-8')}")
-                        except Exception as e:
-                            _logger.warning("Failed to read context file %s: %s", p, e)
+                        except (OSError, UnicodeDecodeError) as e:
+                            _logger.warning("Failed to read context file %s: %s", p, e, exc_info=True)
                     elif p.is_dir():
                         for md_file in sorted(p.glob("**/*.md")):
                             try:
@@ -468,8 +470,8 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                     f"### {md_file.relative_to(p)}\n\n"
                                     f"{md_file.read_text(encoding='utf-8')}"
                                 )
-                            except Exception as e:
-                                _logger.warning("Failed to read context file %s: %s", md_file, e)
+                            except (OSError, UnicodeDecodeError) as e:
+                                _logger.warning("Failed to read context file %s: %s", md_file, e, exc_info=True)
                 context_content = "\n\n".join(parts)
                 if len(context_content) > max_context_chars:
                     context_content = context_content[:max_context_chars] + "\n\n[... truncated ...]"
@@ -644,7 +646,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             curr_feat = feature_doc_path.read_text(encoding="utf-8")
                             updated_feat = curr_feat.rstrip() + "\n\n" + feature_snippet + "\n"
                             atomic_write(feature_doc_path, updated_feat, mode="w", backup=True)
-                        except Exception as e:
+                        except (OSError, UnicodeDecodeError) as e:
                             _logger.warning("Failed to append feature suggestions: %s", e, exc_info=True)
 
                 ok, message, ids = _validate_snippet(response_text, round_number, max_suggestions, allowed_areas=allowed_areas)
@@ -925,8 +927,8 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
                                     triage_info["feature_accepted"] = sum(1 for d in feature_decisions if d["decision"] == "ACCEPT")
                                     triage_info["feature_rejected"] = sum(1 for d in feature_decisions if d["decision"] == "REJECT")
-                                except Exception as e:
-                                    _logger.warning("Failed to apply feature triage: %s", e)
+                                except (OSError, UnicodeDecodeError) as e:
+                                    _logger.warning("Failed to apply feature triage: %s", e, exc_info=True)
 
                             accepted_count = sum(1 for d in triage_decisions if d["decision"] == "ACCEPT")
                             rejected_count = sum(1 for d in triage_decisions if d["decision"] == "REJECT")

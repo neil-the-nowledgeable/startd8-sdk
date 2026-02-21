@@ -473,7 +473,7 @@ class TestArchitecturalReviewSafetyRetry:
         ]
         call_idx = 0
 
-        def _capture_and_dispatch(prompt):
+        def _capture_and_dispatch(prompt, **kwargs):
             nonlocal call_idx
             settings_during_calls.append(agent.safety_settings)
             effect = original_side_effects[call_idx]

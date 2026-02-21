@@ -41,6 +41,7 @@ _logger = get_logger(__name__)
 # ---------------------------------------------------------------------------
 
 def _max_review_round(doc: str) -> int:
+    """Return the highest review round number found in the document, or 0."""
     rounds = [int(x) for x in re.findall(r"^####\s+Review Round R(\d+)\s*$", doc, re.MULTILINE)]
     return max(rounds) if rounds else 0
 
@@ -528,21 +529,16 @@ def _insert_appendix_rows(
     if table_end_idx == -1:
         return doc
 
+    new_rows = "".join(
+        f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} | {r[4]} |\n"
+        for r in rows
+    )
+
     # Check for (none yet) placeholder in the last table line
     last_table_line = lines[table_end_idx]
     if "(none yet)" in last_table_line:
-        # Replace the placeholder line with actual rows
-        new_rows = "".join(
-            f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} | {r[4]} |\n"
-            for r in rows
-        )
         lines[table_end_idx] = new_rows
     else:
-        # Append after last table line
-        new_rows = "".join(
-            f"| {r[0]} | {r[1]} | {r[2]} | {r[3]} | {r[4]} |\n"
-            for r in rows
-        )
         lines.insert(table_end_idx + 1, new_rows)
 
     return doc[: m.end()] + "".join(lines)
@@ -579,9 +575,20 @@ def _build_id_to_area_map(
     )
     if appendix_c_match:
         appendix_c_text = doc[appendix_c_match.end():]
+        in_table = False
         for line in appendix_c_text.splitlines():
             stripped = line.strip()
-            if stripped.startswith("|") and not _is_separator_row(stripped) and "ID" not in stripped:
+            if not stripped.startswith("|"):
+                in_table = False
+                continue
+            # Skip header rows (contain "ID" in first cell) and separator rows
+            if _is_separator_row(stripped):
+                continue
+            first_cell = _split_cells(stripped)[0] if _split_cells(stripped) else ""
+            if _normalize_header(first_cell).casefold() == "id":
+                in_table = True
+                continue
+            if in_table:
                 cells = _split_cells(stripped)
                 if len(cells) >= 2 and re.match(r"R\d+-S\d+", cells[0]):
                     id_to_area[cells[0]] = _normalize_area(cells[1], allowed_areas)
@@ -795,6 +802,10 @@ def _apply_suggestions_to_doc(
 
     Returns ``(updated_doc, ok, message, warning_ids, time_ms,
     input_tokens, output_tokens, cost)``.
+
+    Raises:
+        Exception: Propagates any exception from ``agent.generate()``
+            (e.g., API errors, safety filter errors).
     """
     original_body = _strip_appendix_for_prompt(doc_text)
     appendix_idx = doc_text.find(APPENDIX_HEADING)
@@ -914,7 +925,7 @@ def _extract_feature_snippet(
     if marker not in response_text:
         return ""
 
-    parts = response_text.split(marker)
+    parts = response_text.split(marker, maxsplit=1)
     if len(parts) < 2:
         return ""
 
