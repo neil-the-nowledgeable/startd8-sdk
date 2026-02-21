@@ -7,12 +7,15 @@ Detects four kinds of drift:
   3. Version drift — version string mismatch between YAML header and MD header
   4. Status alignment — per-requirement status mismatch between YAML and MD
      (only checks IDs with explicit status in both files)
+  5. Status resolution (--resolve) — for each status mismatch, walks git history
+     to find when each file's status was last set and reports which is newer
 
 Usage:
     python3 scripts/validate_requirements_sync.py              # Check all pairs
     python3 scripts/validate_requirements_sync.py --pair artisan
     python3 scripts/validate_requirements_sync.py --json       # JSON output for CI
     python3 scripts/validate_requirements_sync.py --verbose    # Per-requirement detail
+    python3 scripts/validate_requirements_sync.py --resolve    # Git-based mismatch resolution
 
 Exit code: 0 if all PASS, 1 if any FAIL. Warnings don't cause non-zero exit.
 """
@@ -22,10 +25,11 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 try:
     import yaml
@@ -202,12 +206,7 @@ def _parse_dashboard_row(line: str) -> Optional[Tuple[str, LayerCounts]]:
     Expected columns: | Layer | ID Range | Total | Implemented | Partial | Planned |
     or the 5-column variant without Partial.
     """
-    cells = [c.strip() for c in line.split("|")]
-    # split on "|" gives ['', cell1, cell2, ..., '']
-    cells = [c for c in cells if c != "" or False]
-    # Remove empty strings from leading/trailing pipes
-    cells = line.strip().strip("|").split("|")
-    cells = [c.strip() for c in cells]
+    cells = [c.strip() for c in line.strip().strip("|").split("|")]
 
     if len(cells) < 4:
         return None
@@ -291,8 +290,8 @@ def _expand_id_cell(cell: str, id_prefix: str) -> List[str]:
     return ids
 
 
-def parse_md_requirement_statuses(path: Path, id_prefix: str) -> Dict[str, str]:
-    """Extract per-requirement statuses from the markdown body.
+def _parse_md_statuses_from_text(text: str, id_prefix: str) -> Dict[str, str]:
+    """Extract per-requirement statuses from markdown text.
 
     Two patterns are recognised:
       1. **Table rows with a Status column** — any markdown table whose header
@@ -303,8 +302,6 @@ def parse_md_requirement_statuses(path: Path, id_prefix: str) -> Dict[str, str]:
     IDs after an Appendix C heading are excluded (same as ``parse_md_requirement_ids``).
     Returns ``{requirement_id: lowercase_status}``.
     """
-    text = path.read_text(encoding="utf-8")
-
     # Truncate at Appendix C if present
     appendix_match = re.search(r"^###?\s+Appendix\s+C\b", text, re.MULTILINE | re.IGNORECASE)
     if appendix_match:
@@ -371,6 +368,223 @@ def parse_md_requirement_statuses(path: Path, id_prefix: str) -> Dict[str, str]:
     return result
 
 
+def parse_md_requirement_statuses(path: Path, id_prefix: str) -> Dict[str, str]:
+    """Extract per-requirement statuses from a companion markdown file."""
+    text = path.read_text(encoding="utf-8")
+    return _parse_md_statuses_from_text(text, id_prefix)
+
+
+def _parse_yaml_id_to_status(text: str, layer_display_names: Dict[str, str]) -> Dict[str, str]:
+    """Extract {req_id: status} from YAML text without building the full YAMLParseResult."""
+    try:
+        data = yaml.safe_load(text)
+    except yaml.YAMLError:
+        # Historical commits may contain truncated or binary content after renames
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    result: Dict[str, str] = {}
+    for yaml_key in layer_display_names:
+        reqs = data.get(yaml_key)
+        if not isinstance(reqs, list):
+            continue
+        for req in reqs:
+            req_id = req.get("id", "")
+            status = req.get("status", "").lower()
+            if req_id and status:
+                result[req_id] = status
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Resolution data model
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StatusResolution:
+    req_id: str
+    yaml_status: str
+    md_status: str
+    yaml_commit: Optional[str] = None   # short hash
+    yaml_date: Optional[str] = None     # ISO date
+    md_commit: Optional[str] = None
+    md_date: Optional[str] = None
+    likely_correct: Optional[str] = None  # "yaml" | "md" | None
+    reason: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Git history helpers
+# ---------------------------------------------------------------------------
+
+def _repo_relative_posix(path: Path) -> Optional[str]:
+    """Return *path* relative to _REPO_ROOT as a POSIX string for git commands."""
+    try:
+        return path.resolve().relative_to(_REPO_ROOT.resolve()).as_posix()
+    except ValueError:
+        return None
+
+
+def _is_git_repo() -> bool:
+    """Return True if _REPO_ROOT is inside a git work tree."""
+    try:
+        proc = subprocess.run(
+            ["git", "rev-parse", "--is-inside-work-tree"],
+            capture_output=True, text=True, cwd=_REPO_ROOT, timeout=30,
+        )
+        return proc.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def _git_file_history(
+    path: Path, max_commits: int = 20,
+) -> List[Tuple[str, str, str]]:
+    """Return up to *max_commits* entries for *path* (newest first).
+
+    Each entry is ``(short_hash, iso_date, subject)``.
+    """
+    rel = _repo_relative_posix(path)
+    if rel is None:
+        return []
+    try:
+        proc = subprocess.run(
+            [
+                "git", "log", "--follow", f"--max-count={max_commits}",
+                "--format=%h\t%aI\t%s", "--", rel,
+            ],
+            capture_output=True, text=True, cwd=_REPO_ROOT, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if proc.returncode != 0:
+        return []
+    entries: List[Tuple[str, str, str]] = []
+    for line in proc.stdout.strip().splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3:
+            entries.append((parts[0], parts[1], parts[2]))
+    return entries
+
+
+_SAFE_COMMIT_RE = re.compile(r"^[0-9a-f]{4,40}$")
+
+
+def _git_show_text(commit: str, path: Path) -> Optional[str]:
+    """Return the content of *path* at *commit*, or None on failure."""
+    if not _SAFE_COMMIT_RE.match(commit):
+        return None
+    rel = _repo_relative_posix(path)
+    if rel is None:
+        return None
+    try:
+        proc = subprocess.run(
+            ["git", "show", f"{commit}:{rel}"],
+            capture_output=True, text=True, cwd=_REPO_ROOT, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
+def _find_status_introduction(
+    history: List[Tuple[str, str, str]],
+    file_path: Path,
+    req_id: str,
+    current_status: str,
+    parse_fn: Callable[[str], Dict[str, str]],
+) -> Optional[Tuple[str, str, str]]:
+    """Walk commits newest→oldest to find when *current_status* was introduced.
+
+    *parse_fn* accepts ``(text) -> dict[req_id, status]``.
+    Returns ``(commit, date, subject)`` of the introducing commit, or None.
+    """
+    introducing: Optional[Tuple[str, str, str]] = None
+    for commit, date, subject in history:
+        text = _git_show_text(commit, file_path)
+        if text is None:
+            break
+        statuses = parse_fn(text)
+        if statuses.get(req_id) == current_status:
+            introducing = (commit, date, subject)
+        else:
+            # Status differs or req doesn't exist — previous match was the intro
+            break
+    return introducing
+
+
+def resolve_status_mismatches(
+    mismatched_ids: List[Tuple[str, str, str]],
+    pair: "PairConfig",
+) -> List["StatusResolution"]:
+    """For each (req_id, yaml_status, md_status), walk git history to find which is newer.
+
+    Returns a list of StatusResolution objects.
+    """
+    if not _is_git_repo():
+        return [
+            StatusResolution(
+                req_id=rid, yaml_status=ys, md_status=ms,
+                reason="Not a git repository",
+            )
+            for rid, ys, ms in mismatched_ids
+        ]
+
+    yaml_history = _git_file_history(pair.yaml_path)
+    md_history = _git_file_history(pair.md_path)
+
+    def yaml_parser(text: str) -> Dict[str, str]:
+        return _parse_yaml_id_to_status(text, pair.layer_display_names)
+
+    def md_parser(text: str) -> Dict[str, str]:
+        return _parse_md_statuses_from_text(text, pair.id_prefix)
+
+    resolutions: List[StatusResolution] = []
+    for req_id, yaml_status, md_status in mismatched_ids:
+        res = StatusResolution(
+            req_id=req_id, yaml_status=yaml_status, md_status=md_status,
+        )
+
+        yaml_intro = _find_status_introduction(
+            yaml_history, pair.yaml_path, req_id, yaml_status, yaml_parser,
+        )
+        md_intro = _find_status_introduction(
+            md_history, pair.md_path, req_id, md_status, md_parser,
+        )
+
+        if yaml_intro:
+            res.yaml_commit, res.yaml_date = yaml_intro[0], yaml_intro[1]
+        if md_intro:
+            res.md_commit, res.md_date = md_intro[0], md_intro[1]
+
+        if yaml_intro and md_intro:
+            # ISO-8601 string comparison is correct when TZ offsets match (same machine).
+            # Multi-contributor repos with mixed TZs could compare incorrectly.
+            if res.yaml_date > res.md_date:  # type: ignore[operator]
+                res.likely_correct = "yaml"
+                res.reason = "YAML change is newer"
+            elif res.md_date > res.yaml_date:  # type: ignore[operator]
+                res.likely_correct = "md"
+                res.reason = "MD change is newer"
+            else:
+                res.likely_correct = "yaml"
+                res.reason = "Same date; YAML wins as canonical source"
+        elif yaml_intro and not md_intro:
+            res.likely_correct = "yaml"
+            res.reason = "MD has no trackable history for this status"
+        elif md_intro and not yaml_intro:
+            res.likely_correct = "md"
+            res.reason = "YAML has no trackable history for this status"
+        else:
+            res.reason = "No trackable history in either file"
+
+        resolutions.append(res)
+
+    return resolutions
+
+
 # ---------------------------------------------------------------------------
 # Checks
 # ---------------------------------------------------------------------------
@@ -381,6 +595,7 @@ class CheckResult:
     status: str  # "PASS", "FAIL", "WARN"
     message: str
     details: List[str] = field(default_factory=list)
+    resolutions: List[StatusResolution] = field(default_factory=list)
 
 
 @dataclass
@@ -500,33 +715,62 @@ def check_version(
 def check_status_alignment(
     yaml_id_to_status: Dict[str, str],
     md_id_to_status: Dict[str, str],
+    pair: Optional[PairConfig] = None,
+    resolve: bool = False,
 ) -> CheckResult:
     """Compare per-requirement status between YAML and MD.
 
     Only checks IDs present in both maps.  IDs without MD status are not
     treated as failures — they are noted as unchecked in the detail output.
+
+    When *resolve* is True and mismatches exist, walks git history to
+    determine which file's status was set more recently.
     """
     common_ids = sorted(set(yaml_id_to_status) & set(md_id_to_status))
     total_yaml = len(yaml_id_to_status)
     unchecked = total_yaml - len(common_ids)
 
-    mismatches: List[str] = []
+    mismatch_tuples: List[Tuple[str, str, str]] = []
+    mismatch_lines: List[str] = []
     for rid in common_ids:
         y_status = yaml_id_to_status[rid].lower()
         m_status = md_id_to_status[rid].lower()
         if y_status != m_status:
-            mismatches.append(f"  - {rid}: YAML={y_status}, MD={m_status}")
+            mismatch_tuples.append((rid, y_status, m_status))
+            mismatch_lines.append(f"  - {rid}: YAML={y_status}, MD={m_status}")
 
-    details: List[str] = list(mismatches)
+    details: List[str] = list(mismatch_lines)
+    resolutions: List[StatusResolution] = []
+
+    if mismatch_tuples and resolve and pair is not None:
+        resolutions = resolve_status_mismatches(mismatch_tuples, pair)
+        # Append resolution detail lines after each mismatch
+        details = []
+        for ml, sr in zip(mismatch_lines, resolutions):
+            details.append(ml)
+            if sr.yaml_commit:
+                details.append(f"      -> YAML: \"{sr.yaml_status}\" since {sr.yaml_commit} ({sr.yaml_date})")
+            else:
+                details.append(f"      -> YAML: no trackable history")
+            if sr.md_commit:
+                details.append(f"      -> MD:   \"{sr.md_status}\" since {sr.md_commit} ({sr.md_date})")
+            else:
+                details.append(f"      -> MD:   no trackable history")
+            if sr.likely_correct:
+                details.append(f"      -> Likely correct: {sr.likely_correct.upper()} ({sr.reason})")
+            else:
+                details.append(f"      -> Unable to determine ({sr.reason})")
+
     if unchecked > 0:
         details.append(f"  ({unchecked} IDs have no explicit MD status — not checked)")
 
-    if mismatches:
+    if mismatch_tuples:
         return CheckResult(
             name="status-alignment",
             status="FAIL",
-            message=f"Status alignment: {len(mismatches)} mismatch(es) in {len(common_ids)} checked",
+            message=f"Status alignment: {len(mismatch_tuples)} mismatch(es) in {len(common_ids)} checked",
             details=details,
+            resolutions=resolutions,
         )
 
     return CheckResult(
@@ -541,7 +785,7 @@ def check_status_alignment(
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def validate_pair(pair: PairConfig, verbose: bool = False) -> PairResult:
+def validate_pair(pair: PairConfig, verbose: bool = False, resolve: bool = False) -> PairResult:
     """Run all checks for a single YAML/MD pair."""
     result = PairResult(pair_name=pair.name)
 
@@ -567,7 +811,7 @@ def validate_pair(pair: PairConfig, verbose: bool = False) -> PairResult:
 
     md_statuses = parse_md_requirement_statuses(pair.md_path, pair.id_prefix)
     result.checks.append(
-        check_status_alignment(yaml_result.id_to_status, md_statuses)
+        check_status_alignment(yaml_result.id_to_status, md_statuses, pair=pair, resolve=resolve)
     )
 
     return result
@@ -645,6 +889,21 @@ def build_json_report(results: List[PairResult]) -> dict:
                 check: dict = {"name": cr.name, "status": cr.status, "message": cr.message}
                 if cr.details:
                     check["details"] = cr.details
+                if cr.resolutions:
+                    check["resolutions"] = [
+                        {
+                            "req_id": sr.req_id,
+                            "yaml_status": sr.yaml_status,
+                            "md_status": sr.md_status,
+                            "yaml_commit": sr.yaml_commit,
+                            "yaml_date": sr.yaml_date,
+                            "md_commit": sr.md_commit,
+                            "md_date": sr.md_date,
+                            "likely_correct": sr.likely_correct,
+                            "reason": sr.reason,
+                        }
+                        for sr in cr.resolutions
+                    ]
                 entry["checks"].append(check)
         report["pairs"].append(entry)
 
@@ -678,6 +937,11 @@ def main() -> int:
         action="store_true",
         help="Show per-requirement detail for all checks (not just failures)",
     )
+    parser.add_argument(
+        "--resolve",
+        action="store_true",
+        help="Walk git history to determine which file is likely correct for status mismatches",
+    )
     args = parser.parse_args()
 
     pairs = PAIR_REGISTRY
@@ -689,7 +953,7 @@ def main() -> int:
         if isinstance(pair, PairConfig_MDOnly):
             results.append(validate_md_only(pair))
         else:
-            results.append(validate_pair(pair, verbose=args.verbose))
+            results.append(validate_pair(pair, verbose=args.verbose, resolve=args.resolve))
 
     if args.json_output:
         report = build_json_report(results)
