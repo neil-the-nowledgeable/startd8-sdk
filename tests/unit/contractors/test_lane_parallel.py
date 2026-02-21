@@ -385,6 +385,136 @@ class TestLaneParallelCheckpoint:
 
 
 # ============================================================================
+# TEST: Lane checkpoint persistence through feature-serial loop
+# ============================================================================
+
+
+class TestLaneCheckpointPersistence:
+    """Tests that lane state is persisted through _execute_feature_serial_loop."""
+
+    @staticmethod
+    def _stub_execute_phase(wf):
+        """Replace _execute_phase with a stub that skips contract validation."""
+        from datetime import datetime, timezone
+
+        def stub(phase, context, remaining_total_timeout):
+            handler_obj = wf.handlers.get(phase, wf._default_handler)
+            result_dict = handler_obj.execute(phase, context, wf.config.dry_run)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            return PhaseResult(
+                phase=phase,
+                status=PhaseStatus.DRY_RUN,
+                start_time=now_iso,
+                end_time=now_iso,
+                duration_seconds=0.01,
+                cost=float(result_dict.get("cost", 0.0)),
+                output=result_dict.get("output"),
+                metadata=result_dict.get("metadata", {}),
+            )
+
+        wf._execute_phase = stub
+
+    def _make_wf_with_handler(self):
+        """Create a feature-serial workflow with mock handler and stub phase."""
+        config = WorkflowConfig(
+            feature_serial=True,
+            project_root="/tmp/test",
+            checkpoint_dir=None,
+        )
+        wf = ArtisanContractorWorkflow(config=config)
+        store = InMemoryCheckpointStore()
+        wf.checkpoint_store = store
+
+        handler = _MockFeatureSerialHandler()
+        for phase in WorkflowPhase:
+            wf.register_handler(phase, handler)
+        self._stub_execute_phase(wf)
+
+        return wf, store, handler
+
+    @staticmethod
+    def _minimal_context(tasks):
+        return {
+            "tasks": tasks,
+            "task_index": {t.task_id: t for t in tasks},
+            "enriched_seed_path": "/dev/null",
+            "plan_title": "test",
+            "plan_goals": [],
+            "domain_summary": {},
+            "preflight_summary": {},
+            "total_estimated_loc": 0,
+            "design_results": {},
+            "generation_results": {},
+            "test_results": {},
+            "review_results": {},
+            "scaffold": {},
+        }
+
+    def test_feature_serial_loop_forwards_lane_extras(self):
+        """Checkpoint persisted after each feature includes lane fields."""
+        import threading
+        import time
+
+        from startd8.contractors.artisan_contractor import _CostTracker
+
+        wf, store, _ = self._make_wf_with_handler()
+        tasks = [FakeSeedTask(task_id="PI-001", target_files=["a.py"])]
+        context = self._minimal_context(tasks)
+
+        lane_assignments = {"PI-001": 0}
+        completed_lanes: list[int] = []
+        lane_results_map: dict[str, dict] = {}
+        lock = threading.Lock()
+        cost_tracker = _CostTracker(budget=10.0)
+
+        wf._execute_feature_serial_loop(
+            context=context,
+            phase_results=[],
+            cost_tracker=cost_tracker,
+            workflow_start=time.monotonic(),
+            loaded_checkpoint=None,
+            lane_checkpoint_extras={
+                "lane_assignments": lane_assignments,
+                "completed_lanes": completed_lanes,
+                "lane_results": lane_results_map,
+            },
+            checkpoint_lock=lock,
+        )
+
+        saved = next(iter(store._store.values()), None)
+        assert saved is not None
+        assert saved.lane_assignments == {"PI-001": 0}
+        assert saved.completed_lanes == []
+        assert saved.lane_results == {}
+
+    def test_feature_serial_loop_without_lane_extras(self):
+        """Feature-serial loop works without lane extras (backward compat)."""
+        import time
+
+        from startd8.contractors.artisan_contractor import _CostTracker
+
+        wf, store, _ = self._make_wf_with_handler()
+        tasks = [FakeSeedTask(task_id="PI-001", target_files=["a.py"])]
+        context = self._minimal_context(tasks)
+        cost_tracker = _CostTracker(budget=10.0)
+
+        status, features, _, _, _ = wf._execute_feature_serial_loop(
+            context=context,
+            phase_results=[],
+            cost_tracker=cost_tracker,
+            workflow_start=time.monotonic(),
+            loaded_checkpoint=None,
+        )
+
+        assert status == WorkflowStatus.COMPLETED
+        assert "PI-001" in features
+        saved = next(iter(store._store.values()), None)
+        assert saved is not None
+        assert saved.lane_assignments == {}
+        assert saved.completed_lanes == []
+
+
+# ============================================================================
 # TEST: _commit_changes short-circuit
 # ============================================================================
 

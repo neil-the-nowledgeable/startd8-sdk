@@ -2352,6 +2352,13 @@ class ArtisanContractorWorkflow:
                 [t.task_id for t in lane_tasks],
             )
 
+        # Persist lane assignments immediately so checkpoint reflects lane state
+        self._persist_checkpoint(
+            WorkflowPhase.SCAFFOLD, phase_results, cost_tracker.cumulative_cost,
+            WorkflowStatus.IN_PROGRESS, context=context,
+            lane_assignments=lane_assignments,
+        )
+
         # Restore completed lanes from checkpoint
         completed_lanes: list[int] = []
         lane_results_map: dict[str, dict[str, Any]] = {}
@@ -2397,10 +2404,16 @@ class ArtisanContractorWorkflow:
                 _current_feature_phase,
             ) = self._execute_feature_serial_loop(
                 context=lane_ctx,
-                phase_results=[],  # Lane has its own phase results
+                phase_results=phase_results,  # Global phase results (read-only)
                 cost_tracker=lane_cost_tracker,
                 workflow_start=workflow_start,
                 loaded_checkpoint=None,  # Each lane starts fresh
+                lane_checkpoint_extras={
+                    "lane_assignments": lane_assignments,
+                    "completed_lanes": completed_lanes,
+                    "lane_results": lane_results_map,
+                },
+                checkpoint_lock=checkpoint_lock,
             )
 
             # Accumulate cost back to global tracker under lock
@@ -2739,6 +2752,9 @@ class ArtisanContractorWorkflow:
         cost_tracker: "_CostTracker",
         workflow_start: float,
         loaded_checkpoint: Optional[WorkflowCheckpoint],
+        *,
+        lane_checkpoint_extras: Optional[dict[str, Any]] = None,
+        checkpoint_lock: Optional[threading.Lock] = None,
     ) -> tuple[
         WorkflowStatus,
         list[str],
@@ -2867,7 +2883,8 @@ class ArtisanContractorWorkflow:
                 break
 
             # Persist checkpoint after each feature completes
-            self._persist_checkpoint(
+            _extras = lane_checkpoint_extras or {}
+            _persist = lambda: self._persist_checkpoint(
                 last_completed_phase=WorkflowPhase.SCAFFOLD,
                 phase_results=phase_results,
                 cumulative_cost=cost_tracker.cumulative_cost,
@@ -2877,7 +2894,13 @@ class ArtisanContractorWorkflow:
                 current_feature=None,  # Feature completed, no longer in-progress
                 current_feature_phase=None,
                 feature_partial_results=feature_partial_results,
+                **_extras,
             )
+            if checkpoint_lock is not None:
+                with checkpoint_lock:
+                    _persist()
+            else:
+                _persist()
 
         # All features completed successfully
         if final_status == WorkflowStatus.IN_PROGRESS:

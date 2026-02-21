@@ -1941,7 +1941,7 @@ configuration_requirements:
       - "tracer_name: str (default 'startd8.artisan_contractor')"
       - "drafter_model, validator_model, reviewer_model: str (from catalog defaults)"
       - "project_root: Optional[str]"
-      - "feature_serial: bool (default True)"
+      - "feature_serial: bool (default False)"
       - "metadata: dict[str, Any] (default {})"
 
     depends_on: []
