@@ -13,10 +13,11 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass, field
+from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, Generator, List, Optional, Sequence, Set, Tuple
 
 from ..base import WorkflowBase, ProgressCallback
 from ..models import (
@@ -196,24 +197,51 @@ OPTIONAL_COLUMNS = [
 REQUIRED_COLUMNS = CORE_COLUMNS + OPTIONAL_COLUMNS
 _OPTIONAL_COLUMN_DEFAULT = "N/A"
 
-def _is_openai_agent(agent: BaseAgent) -> bool:
+def _is_agent_type(agent: BaseAgent, module_suffix: str) -> bool:
+    """Check if *agent* belongs to a specific provider by module path suffix."""
     mod = getattr(agent.__class__, "__module__", "") or ""
-    return ".agents.openai" in mod or mod.endswith("agents.openai")
+    return f".agents.{module_suffix}" in mod or mod.endswith(f"agents.{module_suffix}")
+
+
+def _is_openai_agent(agent: BaseAgent) -> bool:
+    return _is_agent_type(agent, "openai")
 
 
 def _is_gemini_agent(agent: BaseAgent) -> bool:
-    mod = getattr(agent.__class__, "__module__", "") or ""
-    return ".agents.gemini" in mod or mod.endswith("agents.gemini")
+    return _is_agent_type(agent, "gemini")
 
 
 def _is_anthropic_agent(agent: BaseAgent) -> bool:
-    mod = getattr(agent.__class__, "__module__", "") or ""
-    return ".agents.claude" in mod or mod.endswith("agents.claude")
+    return _is_agent_type(agent, "claude")
 
 
 def _looks_like_model_not_found_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return ("model" in msg and ("not found" in msg or "not available" in msg or "does not exist" in msg))
+
+
+@contextmanager
+def _relaxed_safety(agent: BaseAgent) -> Generator[None, None, None]:
+    """Temporarily apply relaxed safety settings to a Gemini agent, restoring on exit."""
+    original_safety = getattr(agent, "safety_settings", None)
+    try:
+        if _is_gemini_agent(agent):
+            agent.safety_settings = RELAXED_SAFETY_SETTINGS
+        yield
+    finally:
+        if _is_gemini_agent(agent):
+            agent.safety_settings = original_safety
+
+
+def _extract_token_metrics(token_usage: Any) -> Tuple[int, int, float]:
+    """Extract (input_tokens, output_tokens, cost) from a token_usage object, defaulting to zero."""
+    if not token_usage:
+        return 0, 0, 0.0
+    return (
+        token_usage_input(token_usage),
+        token_usage_output(token_usage),
+        token_usage_cost(token_usage),
+    )
 
 
 def _now_utc() -> str:
@@ -700,20 +728,11 @@ def _compute_substantially_addressed(
     return {area: ids for area, ids in area_ids.items() if len(ids) >= threshold}
 
 
-def _compute_substantially_addressed_from_doc(
+def _build_id_to_area_map(
     doc: str,
-    threshold: int,
     allowed_areas: Optional[Set[str]] = None,
-) -> Dict[str, List[str]]:
-    """
-    Extract applied suggestions from Appendix A and compute substantially addressed areas.
-    Parses the Area from Appendix C for each applied ID.
-    """
-    applied_ids = _extract_table_ids(doc, "### Appendix A: Applied Suggestions")
-    if not applied_ids:
-        return {}
-
-    # Build ID → area mapping from Appendix C
+) -> Dict[str, str]:
+    """Parse Appendix C to build a mapping of suggestion ID → normalized area name."""
     id_to_area: Dict[str, str] = {}
     appendix_c_match = re.search(
         r"^### Appendix C: Incoming Suggestions.*$",
@@ -728,7 +747,23 @@ def _compute_substantially_addressed_from_doc(
                 cells = _split_cells(stripped)
                 if len(cells) >= 2 and re.match(r"R\d+-S\d+", cells[0]):
                     id_to_area[cells[0]] = _normalize_area(cells[1], allowed_areas)
+    return id_to_area
 
+
+def _compute_substantially_addressed_from_doc(
+    doc: str,
+    threshold: int,
+    allowed_areas: Optional[Set[str]] = None,
+) -> Dict[str, List[str]]:
+    """
+    Extract applied suggestions from Appendix A and compute substantially addressed areas.
+    Parses the Area from Appendix C for each applied ID.
+    """
+    applied_ids = _extract_table_ids(doc, "### Appendix A: Applied Suggestions")
+    if not applied_ids:
+        return {}
+
+    id_to_area = _build_id_to_area_map(doc, allowed_areas)
     applied_with_area = [(sid, id_to_area.get(sid, "unknown")) for sid in applied_ids]
     return _compute_substantially_addressed(applied_with_area, threshold)
 
@@ -747,21 +782,7 @@ def _compute_area_coverage(
     applied_ids = _extract_table_ids(doc, "### Appendix A: Applied Suggestions")
     areas = allowed_areas or ALLOWED_AREAS
 
-    # Build ID → area mapping from Appendix C
-    id_to_area: Dict[str, str] = {}
-    appendix_c_match = re.search(
-        r"^### Appendix C: Incoming Suggestions.*$",
-        doc,
-        re.MULTILINE,
-    )
-    if appendix_c_match:
-        appendix_c_text = doc[appendix_c_match.end():]
-        for line in appendix_c_text.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("|") and not _is_separator_row(stripped) and "ID" not in stripped:
-                cells = _split_cells(stripped)
-                if len(cells) >= 2 and re.match(r"R\d+-S\d+", cells[0]):
-                    id_to_area[cells[0]] = _normalize_area(cells[1], areas)
+    id_to_area = _build_id_to_area_map(doc, areas)
 
     # Group applied IDs by area
     area_ids: Dict[str, List[str]] = {area: [] for area in areas}
@@ -1109,9 +1130,7 @@ def _apply_suggestions_to_doc(
         generate_kwargs["system_prompt"] = system_prompt
 
     response_text, time_ms, token_usage = agent.generate(prompt, **generate_kwargs)
-    input_tokens = token_usage_input(token_usage) if token_usage else 0
-    output_tokens = token_usage_output(token_usage) if token_usage else 0
-    cost = token_usage_cost(token_usage) if token_usage else 0.0
+    input_tokens, output_tokens, cost = _extract_token_metrics(token_usage)
 
     # Strip code fences
     response_text = _strip_code_fences(response_text)
@@ -1268,7 +1287,6 @@ If you want to revisit a rejected idea, explicitly reference its rejected ID and
     # Substantially addressed areas — two-tier priority guidance
     focus_line = f"- Focus on: {focus}."
     if substantially_addressed_areas:
-        # ... (same as before)
         covered = set(substantially_addressed_areas.keys())
         uncovered = sorted(areas - covered)
         addressed_lines = []
@@ -1439,7 +1457,7 @@ def _validate_snippet(
             if i + 1 >= len(lines):
                 break
             sep = lines[i+1]
-            if not sep.strip().startswith("|") or not "-" in sep:
+            if not sep.strip().startswith("|") or "-" not in sep:
                 i += 1
                 continue
             
@@ -1527,7 +1545,7 @@ def _validate_snippet(
             return (m.group(1), int(m.group(2)))
         return (sid, 0)
 
-    unique_ids = sorted(list(set(ids)), key=sort_key)
+    unique_ids = sorted(set(ids), key=sort_key)
 
     if not unique_ids:
         # Leniency: It's technically okay to have no suggestions if the review found nothing
@@ -1536,7 +1554,7 @@ def _validate_snippet(
     # Check max suggestions for PLAN suggestions (S-prefix)
     s_ids = [x for x in unique_ids if "-S" in x]
     if len(s_ids) > max_suggestions:
-         return False, f"Too many plan suggestions: {len(s_ids)} > {max_suggestions}", unique_ids
+        return False, f"Too many plan suggestions: {len(s_ids)} > {max_suggestions}", unique_ids
 
     return True, "ok", unique_ids
 
@@ -1985,20 +2003,20 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
             if feature_doc_path:
                 try:
                     requirements_content = feature_doc_path.read_text(encoding="utf-8")
-                except Exception as e:
+                except (OSError, UnicodeDecodeError) as e:
                     _logger.warning("Failed to read feature requirements doc: %s", e, exc_info=True)
 
             doc_text = doc_path.read_text(encoding="utf-8")
             if init_if_missing:
                 doc_text = _ensure_appendix_exists(doc_text)
-                
+
                 # Also initialize feature doc if present
                 if feature_doc_path:
                     try:
                         fd_text = feature_doc_path.read_text(encoding="utf-8")
                         fd_text = _ensure_appendix_exists(fd_text)
                         atomic_write(feature_doc_path, fd_text, mode="w", backup=True)
-                    except Exception as e:
+                    except (OSError, UnicodeDecodeError) as e:
                         _logger.warning("Failed to initialize feature doc appendix: %s", e)
 
             applied_ids = _extract_table_ids(doc_text, "### Appendix A: Applied Suggestions")
@@ -2022,7 +2040,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         try:
                             parts.append(f"### {p.name}\n\n{p.read_text(encoding='utf-8')}")
                         except Exception as e:
-                            _logger.debug("Failed to read context file %s: %s", p, e)
+                            _logger.warning("Failed to read context file %s: %s", p, e)
                     elif p.is_dir():
                         for md_file in sorted(p.glob("**/*.md")):
                             try:
@@ -2031,7 +2049,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                     f"{md_file.read_text(encoding='utf-8')}"
                                 )
                             except Exception as e:
-                                _logger.debug("Failed to read context file %s: %s", md_file, e)
+                                _logger.warning("Failed to read context file %s: %s", md_file, e)
                 context_content = "\n\n".join(parts)
                 if len(context_content) > max_context_chars:
                     context_content = context_content[:max_context_chars] + "\n\n[... truncated ...]"
@@ -2133,11 +2151,9 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             on_progress, i, total_rounds,
                             f"R{round_number}: retrying with relaxed safety settings",
                         )
-                        original_safety = getattr(agent, "safety_settings", None)
                         try:
-                            if _is_gemini_agent(agent):
-                                agent.safety_settings = RELAXED_SAFETY_SETTINGS
-                            response_text, time_ms, token_usage = agent.generate(reduced_prompt)
+                            with _relaxed_safety(agent):
+                                response_text, time_ms, token_usage = agent.generate(reduced_prompt)
                         except Exception as e3:
                             # Give up on this reviewer, continue to next
                             _logger.warning(
@@ -2153,10 +2169,6 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 f"Gemini SAFETY filter (skipped): {e3}",
                             ))
                             continue  # ← skip, don't break — let remaining reviewers run
-                        finally:
-                            # Restore original settings so they don't leak to later operations
-                            if _is_gemini_agent(agent):
-                                agent.safety_settings = original_safety
 
                 except Exception as e:
                     # If OpenAI model is unavailable, retry once with a fallback model
@@ -2178,14 +2190,12 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             agent = fallback_agent  # record agent/model that actually ran
                         except Exception as e2:
                             step_results.append(_make_error_step(step_name, agent, str(e2)))
-                            break
+                            continue  # skip reviewer, let remaining reviewers run
                     else:
                         step_results.append(_make_error_step(step_name, agent, str(e)))
-                        break
+                        continue  # skip reviewer, let remaining reviewers run
 
-                input_tokens = token_usage_input(token_usage) if token_usage else 0
-                output_tokens = token_usage_output(token_usage) if token_usage else 0
-                cost = token_usage_cost(token_usage) if token_usage else 0.0
+                input_tokens, output_tokens, cost = _extract_token_metrics(token_usage)
                 totals.add(input_tokens, output_tokens, cost, time_ms)
 
                 if warn_cost_usd is not None and totals.cost >= float(warn_cost_usd):
@@ -2256,9 +2266,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     try:
                         retry_text, retry_time_ms, retry_token_usage = agent.generate(retry_prompt, **gen_kwargs)
                         retry_text = _strip_code_fences(retry_text)
-                        retry_input = token_usage_input(retry_token_usage) if retry_token_usage else 0
-                        retry_output = token_usage_output(retry_token_usage) if retry_token_usage else 0
-                        retry_cost = token_usage_cost(retry_token_usage) if retry_token_usage else 0.0
+                        retry_input, retry_output, retry_cost = _extract_token_metrics(retry_token_usage)
                         totals.add(retry_input, retry_output, retry_cost, retry_time_ms)
 
                         ok2, message2, ids = _validate_snippet(retry_text, round_number, max_suggestions, allowed_areas=allowed_areas)
@@ -2363,7 +2371,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                     }
                     atomic_write_json(state_path, state, indent=2, sort_keys=False)
                 except Exception as e:
-                    _logger.warning("Failed to write state file %s: %s", state_path, e)
+                    _logger.warning("Failed to write state file %s: %s", state_path, e, exc_info=True)
 
                 self._emit_progress(on_progress, i + 1, total_rounds, f"Appended Round R{round_number}")
 
@@ -2423,11 +2431,9 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt, **triage_gen_kwargs)
                     except GeminiSafetyFilterError:
                         _logger.warning("Triage blocked by Gemini SAFETY filter; retrying with relaxed settings")
-                        original_safety = getattr(triage_agent, "safety_settings", None)
                         try:
-                            if _is_gemini_agent(triage_agent):
-                                triage_agent.safety_settings = RELAXED_SAFETY_SETTINGS
-                            triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt, **triage_gen_kwargs)
+                            with _relaxed_safety(triage_agent):
+                                triage_text, triage_time_ms, triage_token_usage = triage_agent.generate(triage_prompt, **triage_gen_kwargs)
                         except Exception as triage_err:
                             _logger.warning("Triage failed after retry: %s", triage_err)
                             step_results.append(_make_error_step(
@@ -2436,9 +2442,6 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             triage_text = None
                             triage_time_ms = 0
                             triage_token_usage = None
-                        finally:
-                            if _is_gemini_agent(triage_agent):
-                                triage_agent.safety_settings = original_safety
                     except Exception as triage_err:
                         _logger.warning("Triage failed: %s", triage_err)
                         step_results.append(_make_error_step(
@@ -2449,9 +2452,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         triage_token_usage = None
 
                     if triage_text is not None:
-                        triage_input_tokens = token_usage_input(triage_token_usage) if triage_token_usage else 0
-                        triage_output_tokens = token_usage_output(triage_token_usage) if triage_token_usage else 0
-                        triage_cost = token_usage_cost(triage_token_usage) if triage_token_usage else 0.0
+                        triage_input_tokens, triage_output_tokens, triage_cost = _extract_token_metrics(triage_token_usage)
                         totals.add(triage_input_tokens, triage_output_tokens, triage_cost, triage_time_ms)
 
                         triage_ok, triage_msg, triage_decisions, triage_missing = _validate_triage_output(
@@ -2470,9 +2471,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                             )
                             try:
                                 retry_text, retry_time_ms, retry_token_usage = triage_agent.generate(retry_prompt, **triage_gen_kwargs)
-                                retry_input = token_usage_input(retry_token_usage) if retry_token_usage else 0
-                                retry_output = token_usage_output(retry_token_usage) if retry_token_usage else 0
-                                retry_cost = token_usage_cost(retry_token_usage) if retry_token_usage else 0.0
+                                retry_input, retry_output, retry_cost = _extract_token_metrics(retry_token_usage)
                                 totals.add(retry_input, retry_output, retry_cost, retry_time_ms)
                                 triage_input_tokens += retry_input
                                 triage_output_tokens += retry_output
@@ -2647,18 +2646,16 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
                     except GeminiSafetyFilterError:
                         _logger.warning("Apply step blocked by Gemini SAFETY filter; retrying with relaxed settings")
-                        original_safety = getattr(apply_agent, "safety_settings", None)
                         try:
-                            if _is_gemini_agent(apply_agent):
-                                apply_agent.safety_settings = RELAXED_SAFETY_SETTINGS
-                            (
-                                updated_doc, apply_ok, apply_msg, apply_warnings,
-                                apply_time_ms, apply_input, apply_output, apply_cost,
-                            ) = _apply_suggestions_to_doc(
-                                doc_text, plan_accepted, apply_agent,
-                                persona=persona,
-                                system_prompt=shared_system_prompt,
-                            )
+                            with _relaxed_safety(apply_agent):
+                                (
+                                    updated_doc, apply_ok, apply_msg, apply_warnings,
+                                    apply_time_ms, apply_input, apply_output, apply_cost,
+                                ) = _apply_suggestions_to_doc(
+                                    doc_text, plan_accepted, apply_agent,
+                                    persona=persona,
+                                    system_prompt=shared_system_prompt,
+                                )
                             totals.add(apply_input, apply_output, apply_cost, apply_time_ms)
                             if apply_ok:
                                 doc_text = updated_doc
@@ -2669,9 +2666,6 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                         except Exception as e2:
                             _logger.warning("Apply SAFETY retry failed: %s", e2, exc_info=True)
                             apply_info["error"] = f"Apply SAFETY retry failed: {e2}"
-                        finally:
-                            if _is_gemini_agent(apply_agent):
-                                apply_agent.safety_settings = original_safety
                         # Record success or error step based on outcome
                         if apply_info.get("error"):
                             step_results.append(_make_error_step(
@@ -2752,7 +2746,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                 }
                 atomic_write_json(state_path, state, indent=2, sort_keys=False)
             except Exception as e:
-                _logger.warning("Failed to write state file %s: %s", state_path, e)
+                _logger.warning("Failed to write state file %s: %s", state_path, e, exc_info=True)
 
         completed_at = datetime.now(timezone.utc)
         success = bool(round_records) and all(
