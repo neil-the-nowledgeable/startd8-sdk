@@ -861,12 +861,20 @@ class TestDownstreamFileConstraint:
                 "src/pkg/artifact_generators.py",
             ],
         )
+        # Design doc must be >= 50 lines to pass DP-2 boundary validation
+        _substantial_body = "\n".join(
+            f"# Line {i}: implementation detail" for i in range(55)
+        )
         design_results = {
             "T1": {
                 "status": "designed",
                 "design_document": (
+                    "# Package Design\n"
+                    "## File Layout\n"
                     "├── __init__.py   ← THIS FILE\n"
                     "├── artifact_generators.py   ← shared, F-002+\n"
+                    "## Implementation\n"
+                    + _substantial_body + "\n"
                 ),
             },
         }

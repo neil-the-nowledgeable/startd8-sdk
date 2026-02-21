@@ -551,7 +551,7 @@ class TestEdgeCases:
             task_index={"T1": FakeSeedTask()},
             plan_title="T",
             plan_goals=[],
-            domain_summary={},
+            domain_summary={"backend": 1},
             preflight_summary={},
             total_estimated_loc=0,
             # architectural_context, design_calibration, example_artifacts not provided

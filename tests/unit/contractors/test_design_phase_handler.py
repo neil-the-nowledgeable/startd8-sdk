@@ -215,10 +215,10 @@ class TestTaskToFeatureContext:
         assert "siblings" in fc.additional_context
         assert "sibling1" in fc.additional_context["siblings"]
 
-    def test_multiple_target_files_uses_first(self):
+    def test_multiple_target_files_uses_all(self):
         task = _seed_task("T1", target_files=["scripts/fetch.py", "data/output.csv"])
         fc = DesignPhaseHandler._task_to_feature_context(task)
-        assert fc.target_file == "scripts/fetch.py"
+        assert fc.target_file == "scripts/fetch.py, data/output.csv"
 
 
 # ============================================================================
@@ -473,7 +473,7 @@ class TestOrchestratorWithDesign:
             "task_index": {"T1": _FakeTask()},
             "plan_title": "Test",
             "plan_goals": [],
-            "domain_summary": {},
+            "domain_summary": {"backend": 1},
             "preflight_summary": {},
             "total_estimated_loc": 0,
             # SCAFFOLD exit

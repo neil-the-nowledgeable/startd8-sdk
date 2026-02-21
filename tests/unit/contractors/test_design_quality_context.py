@@ -273,7 +273,7 @@ class TestDesignCalibration:
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "brief"
         assert cal["T1"]["max_output_tokens"] == 4096
-        assert cal["T1"]["implement_max_output_tokens"] == 8192
+        assert cal["T1"]["implement_max_output_tokens"] == 16384  # PI-003/PI-005: 2x previous
         assert len(cal["T1"]["sections"]) == 3
 
     def test_standard_for_medium_tasks(self):
@@ -281,7 +281,7 @@ class TestDesignCalibration:
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "standard"
         assert cal["T1"]["max_output_tokens"] == 8192
-        assert cal["T1"]["implement_max_output_tokens"] == 16384
+        assert cal["T1"]["implement_max_output_tokens"] == 32768  # PI-003/PI-005: 2x previous
         assert len(cal["T1"]["sections"]) == 5
 
     def test_comprehensive_for_large_tasks(self):
@@ -289,7 +289,7 @@ class TestDesignCalibration:
         cal = PlanIngestionWorkflow._derive_design_calibration(tasks)
         assert cal["T1"]["depth_tier"] == "comprehensive"
         assert cal["T1"]["max_output_tokens"] == 16384
-        assert cal["T1"]["implement_max_output_tokens"] == 32768
+        assert cal["T1"]["implement_max_output_tokens"] == 49152  # PI-003/PI-005: 1.5x previous
         assert len(cal["T1"]["sections"]) == 7
 
     def test_calibration_fallback_heuristics(self):
