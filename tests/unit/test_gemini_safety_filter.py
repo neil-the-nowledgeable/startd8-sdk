@@ -684,16 +684,16 @@ class TestValidationFailureHandling:
 """
 
     def _make_invalid_snippet(self, round_number):
-        """Snippet with wrong column count to trigger validation failure."""
+        """Snippet missing a core column (Rationale) to trigger validation failure."""
         return f"""#### Review Round R{round_number}
 
 - **Reviewer**: test-agent (test-model)
 - **Date**: 2026-02-09 00:00:00 UTC
 - **Scope**: Architecture-focused review
 
-| ID | Area | Severity | Suggestion | Rationale | Proposed Placement |
-| ---- | ---- | ---- | ---- | ---- | ---- |
-| R{round_number}-S1 | Architecture | high | Test | Rationale | Section 1 |
+| ID | Area | Severity | Suggestion |
+| ---- | ---- | ---- | ---- |
+| R{round_number}-S1 | Architecture | high | Test |
 """
 
     def _make_mock_agent(self, name="gemini-test", model="gemini-2.5-pro", is_gemini=True):

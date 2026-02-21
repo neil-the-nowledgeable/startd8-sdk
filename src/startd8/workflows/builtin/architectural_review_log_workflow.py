@@ -177,15 +177,22 @@ REVIEW_PROFILES = {
 
 ALLOWED_SEVERITIES = {"critical", "high", "medium", "low"}
 
-REQUIRED_COLUMNS = [
+CORE_COLUMNS = [
     "ID",
     "Area",
     "Severity",
     "Suggestion",
     "Rationale",
+]
+
+OPTIONAL_COLUMNS = [
     "Proposed Placement",
     "Validation Approach",
 ]
+
+# Full column list — used for prompt generation and display formatting.
+# Validation only enforces CORE_COLUMNS; OPTIONAL_COLUMNS default to "N/A" when missing.
+REQUIRED_COLUMNS = CORE_COLUMNS + OPTIONAL_COLUMNS
 
 def _is_openai_agent(agent: BaseAgent) -> bool:
     mod = getattr(agent.__class__, "__module__", "") or ""
@@ -350,7 +357,7 @@ def _extract_untriaged_suggestions(
 
                 if stripped.startswith("|"):
                     cells = _split_cells(stripped)
-                    if len(cells) >= 7:
+                    if len(cells) >= len(CORE_COLUMNS):
                         sid = cells[0]
                         if sid in triaged or sid.startswith("("):
                             continue
@@ -360,8 +367,8 @@ def _extract_untriaged_suggestions(
                             "severity": cells[2],
                             "suggestion": cells[3],
                             "rationale": cells[4],
-                            "placement": cells[5],
-                            "validation": cells[6],
+                            "placement": cells[5] if len(cells) > 5 else "N/A",
+                            "validation": cells[6] if len(cells) > 6 else "N/A",
                             "round": round_num,
                         })
                 else:
@@ -1424,9 +1431,17 @@ def _validate_snippet(
             header_cf = [h.casefold() for h in header]
             # Leniency: Accept header if it has the required columns, even if extra or slightly different order
             header_cf_set = set(header_cf)
-            missing_cols = [col for col in REQUIRED_COLUMNS if col.casefold() not in header_cf_set]
-            if missing_cols:
-                return False, f"Table header mismatch. Missing columns: {missing_cols}", []
+            # Only enforce CORE_COLUMNS; OPTIONAL_COLUMNS get defaults when missing
+            missing_core = [col for col in CORE_COLUMNS if col.casefold() not in header_cf_set]
+            if missing_core:
+                return False, f"Table header mismatch. Missing columns: {missing_core}", []
+
+            missing_optional = [col for col in OPTIONAL_COLUMNS if col.casefold() not in header_cf_set]
+            if missing_optional:
+                _logger.info(
+                    "Table missing optional columns %s — will default to 'N/A'",
+                    missing_optional,
+                )
 
             # Build case-insensitive column index map for row extraction
             col_idx = {name.casefold(): idx for idx, name in enumerate(header_cf)}
@@ -1440,8 +1455,8 @@ def _validate_snippet(
                     break # End of table
 
                 cells = _split_cells(row)
-                # Leniency: Allow extra cells, just truncate to match header length
-                if len(cells) < len(REQUIRED_COLUMNS):
+                # Leniency: Require at least CORE_COLUMNS cells; allow fewer than full REQUIRED_COLUMNS
+                if len(cells) < len(CORE_COLUMNS):
                     _logger.debug("Skipping row with insufficient columns: %s", row)
                     i += 1
                     continue
