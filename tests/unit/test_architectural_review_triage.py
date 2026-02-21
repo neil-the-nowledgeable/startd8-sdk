@@ -23,6 +23,8 @@ from startd8.workflows.builtin.architectural_review_log_workflow import (
     APPENDIX_HEADING,
     APPENDIX_TEMPLATE,
     ALLOWED_AREAS,
+    _is_separator_row,
+    _normalize_area,
     _strip_json_fences,
     _extract_untriaged_suggestions,
     _validate_triage_output,
@@ -178,9 +180,47 @@ class TestExtractUntriagedSuggestions:
     def test_suggestion_metadata(self):
         suggestions, _ = _extract_untriaged_suggestions(SAMPLE_DOC_WITH_SUGGESTIONS, [], [])
         r1s1 = next(s for s in suggestions if s["id"] == "R1-S1")
-        assert r1s1["area"] == "Architecture"
+        assert r1s1["area"] == "architecture"
         assert r1s1["severity"] == "high"
         assert r1s1["round"] == 1
+
+    def test_compact_separator_not_treated_as_data(self):
+        """Regression: |---|---| separators were parsed as suggestion rows, producing '---' IDs."""
+        doc_with_compact_sep = """# Plan
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1
+
+- **Reviewer**: test-agent (test-model)
+- **Date**: 2026-02-20 00:00:00 UTC
+- **Scope**: Review
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+|---|---|---|---|---|---|---|
+| R1-S1 | architecture | high | Add tests | Coverage | Section 1 | Unit tests |
+| R1-S2 | security | medium | Add auth | Access control | Section 2 | Pen test |
+"""
+        suggestions, _ = _extract_untriaged_suggestions(doc_with_compact_sep, [], [])
+        ids = [s["id"] for s in suggestions]
+        assert "---" not in ids
+        assert ids == ["R1-S1", "R1-S2"]
 
 
 # ---------------------------------------------------------------------------
@@ -225,7 +265,7 @@ class TestValidateTriageOutput:
         ]
         ok, msg, decisions, missing = _validate_triage_output(json.dumps(data), ["R1-S1"])
         assert ok is False
-        assert "invalid area" in msg.lower()
+        assert "not recognized" in msg.lower()
 
     def test_unknown_id(self):
         data = [
@@ -2405,3 +2445,92 @@ class TestPromptCachingIntegration:
 
         # Gemini agent should NOT have enable_prompt_caching set to True
         assert agent.enable_prompt_caching is False
+
+
+# ---------------------------------------------------------------------------
+# _is_separator_row tests
+# ---------------------------------------------------------------------------
+
+class TestIsSeparatorRow:
+
+    def test_spaced_separator(self):
+        assert _is_separator_row("| ---- | ---- | ---- |") is True
+
+    def test_compact_separator(self):
+        """The bug: |---|---| was not detected as separator."""
+        assert _is_separator_row("|---|---|") is True
+
+    def test_mixed_separator(self):
+        assert _is_separator_row("| --- |---|") is True
+
+    def test_alignment_colons(self):
+        assert _is_separator_row("| :--- | :---: | ---: |") is True
+
+    def test_data_row(self):
+        assert _is_separator_row("| R1-S1 | Architecture | high |") is False
+
+    def test_header_row(self):
+        assert _is_separator_row("| ID | Area | Severity |") is False
+
+    def test_non_pipe_line(self):
+        assert _is_separator_row("Some text") is False
+
+    def test_empty_string(self):
+        assert _is_separator_row("") is False
+
+    def test_single_column(self):
+        assert _is_separator_row("|---|") is True
+
+
+# ---------------------------------------------------------------------------
+# _normalize_area tests
+# ---------------------------------------------------------------------------
+
+class TestNormalizeArea:
+
+    def test_canonical_passthrough(self):
+        for area in ALLOWED_AREAS:
+            assert _normalize_area(area) == area
+
+    def test_case_insensitive(self):
+        assert _normalize_area("Architecture") == "architecture"
+        assert _normalize_area("SECURITY") == "security"
+
+    def test_alias_clarity(self):
+        assert _normalize_area("clarity") == "architecture"
+
+    def test_alias_testability(self):
+        assert _normalize_area("testability") == "validation"
+
+    def test_alias_completeness(self):
+        assert _normalize_area("completeness") == "validation"
+
+    def test_alias_scalability(self):
+        assert _normalize_area("scalability") == "architecture"
+
+    def test_alias_maintainability(self):
+        assert _normalize_area("maintainability") == "architecture"
+
+    def test_alias_performance(self):
+        assert _normalize_area("performance") == "ops"
+
+    def test_unknown_passthrough(self):
+        assert _normalize_area("cooking") == "cooking"
+
+    def test_profile_specific_areas(self):
+        """Design profile has 'clarity' as an allowed area — should not remap."""
+        design_areas = {"architecture", "clarity", "completeness", "maintainability",
+                        "scalability", "security", "testability"}
+        assert _normalize_area("clarity", design_areas) == "clarity"
+        assert _normalize_area("testability", design_areas) == "testability"
+        assert _normalize_area("completeness", design_areas) == "completeness"
+
+    def test_profile_specific_unknown_still_normalizes(self):
+        """When area isn't in profile but is in aliases, normalize via alias."""
+        design_areas = {"architecture", "clarity", "completeness", "maintainability",
+                        "scalability", "security", "testability"}
+        assert _normalize_area("deployment", design_areas) == "ops"
+
+    def test_whitespace_stripped(self):
+        assert _normalize_area("  security  ") == "security"
+        assert _normalize_area(" clarity ") == "architecture"

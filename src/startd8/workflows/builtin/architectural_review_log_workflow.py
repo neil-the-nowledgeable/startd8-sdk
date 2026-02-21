@@ -92,6 +92,67 @@ ALLOWED_AREAS = {
     "security",
 }
 
+# Map common LLM-generated area synonyms to canonical ALLOWED_AREAS values.
+# When a reviewer outputs a non-canonical area name, normalize it before
+# validation or coverage computation.
+_AREA_ALIASES: Dict[str, str] = {
+    # architecture synonyms
+    "design": "architecture",
+    "structure": "architecture",
+    "modularity": "architecture",
+    "scalability": "architecture",
+    "maintainability": "architecture",
+    "extensibility": "architecture",
+    # interfaces synonyms
+    "api": "interfaces",
+    "apis": "interfaces",
+    "contracts": "interfaces",
+    "integration": "interfaces",
+    # data synonyms
+    "data model": "data",
+    "data models": "data",
+    "storage": "data",
+    "database": "data",
+    "persistence": "data",
+    # risks synonyms
+    "risk": "risks",
+    "reliability": "risks",
+    "resilience": "risks",
+    "fault tolerance": "risks",
+    "error handling": "risks",
+    # validation synonyms
+    "testing": "validation",
+    "testability": "validation",
+    "test": "validation",
+    "quality": "validation",
+    "completeness": "validation",
+    # ops synonyms
+    "operations": "ops",
+    "deployment": "ops",
+    "observability": "ops",
+    "monitoring": "ops",
+    "performance": "ops",
+    "infrastructure": "ops",
+    # security synonyms (already canonical, but add common variants)
+    "auth": "security",
+    "authentication": "security",
+    "authorization": "security",
+    # clarity — maps to architecture (document/design clarity)
+    "clarity": "architecture",
+    "readability": "architecture",
+    "documentation": "architecture",
+}
+
+
+def _normalize_area(area: str, allowed: Optional[Set[str]] = None) -> str:
+    """Normalize an area name to a canonical ALLOWED_AREAS value."""
+    key = area.strip().lower()
+    areas = allowed or ALLOWED_AREAS
+    if key in areas:
+        return key
+    return _AREA_ALIASES.get(key, key)
+
+
 REVIEW_PROFILES = {
     "architecture": {
         "areas": ALLOWED_AREAS,
@@ -172,6 +233,14 @@ def _strip_json_fences(text: str) -> str:
 
 def _split_cells(row: str) -> List[str]:
     return [c.strip() for c in row.strip().strip("|").split("|")]
+
+
+def _is_separator_row(stripped: str) -> bool:
+    """Detect markdown table separator rows like ``| --- | --- |`` or ``|---|---|``."""
+    if not stripped.startswith("|"):
+        return False
+    cells = _split_cells(stripped)
+    return bool(cells) and all(re.fullmatch(r":?-+:?", c) for c in cells if c)
 
 
 def _normalize_header(cell: str) -> str:
@@ -276,10 +345,9 @@ def _extract_untriaged_suggestions(
                 continue
             
             if in_table:
-                if stripped.startswith("|") and stripped.startswith("| -"):
-                    # Separator row
+                if _is_separator_row(stripped):
                     continue
-                
+
                 if stripped.startswith("|"):
                     cells = _split_cells(stripped)
                     if len(cells) >= 7:
@@ -288,7 +356,7 @@ def _extract_untriaged_suggestions(
                             continue
                         suggestions.append({
                             "id": sid,
-                            "area": cells[1],
+                            "area": _normalize_area(cells[1]),
                             "severity": cells[2],
                             "suggestion": cells[3],
                             "rationale": cells[4],
@@ -466,12 +534,12 @@ def _validate_triage_output(
                 errors.append(f"Entry {i}: 'decision' must be a string, got {type(raw_decision).__name__}")
                 continue
             decision = raw_decision.upper()  # Leniency: case-insensitive decision
-            area = entry["area"].strip().lower()
+            area = _normalize_area(entry["area"], areas)
 
             if sid not in untriaged_set:
                 errors.append(f"Entry {i}: unknown ID '{sid}'")
                 continue
-            
+
             if decision not in ("ACCEPT", "REJECT"):
                 # Leniency check for common typos
                 if "ACCEPT" in decision:
@@ -481,9 +549,9 @@ def _validate_triage_output(
                 else:
                     errors.append(f"Entry {i}: invalid decision '{decision}' (must be ACCEPT or REJECT)")
                     continue
-            
+
             if area not in areas:
-                errors.append(f"Entry {i}: invalid area '{area}' (allowed: {sorted(areas)})")
+                errors.append(f"Entry {i}: area '{entry['area']}' not recognized (allowed: {sorted(areas)})")
                 continue
 
             seen_ids.add(sid)
@@ -607,6 +675,7 @@ def _compute_substantially_addressed(
 def _compute_substantially_addressed_from_doc(
     doc: str,
     threshold: int,
+    allowed_areas: Optional[Set[str]] = None,
 ) -> Dict[str, List[str]]:
     """
     Extract applied suggestions from Appendix A and compute substantially addressed areas.
@@ -627,10 +696,10 @@ def _compute_substantially_addressed_from_doc(
         appendix_c_text = doc[appendix_c_match.end():]
         for line in appendix_c_text.splitlines():
             stripped = line.strip()
-            if stripped.startswith("|") and not stripped.startswith("| -") and "ID" not in stripped:
+            if stripped.startswith("|") and not _is_separator_row(stripped) and "ID" not in stripped:
                 cells = _split_cells(stripped)
                 if len(cells) >= 2 and re.match(r"R\d+-S\d+", cells[0]):
-                    id_to_area[cells[0]] = cells[1].strip().lower()
+                    id_to_area[cells[0]] = _normalize_area(cells[1], allowed_areas)
 
     applied_with_area = [(sid, id_to_area.get(sid, "unknown")) for sid in applied_ids]
     return _compute_substantially_addressed(applied_with_area, threshold)
@@ -661,10 +730,10 @@ def _compute_area_coverage(
         appendix_c_text = doc[appendix_c_match.end():]
         for line in appendix_c_text.splitlines():
             stripped = line.strip()
-            if stripped.startswith("|") and not stripped.startswith("| -") and "ID" not in stripped:
+            if stripped.startswith("|") and not _is_separator_row(stripped) and "ID" not in stripped:
                 cells = _split_cells(stripped)
                 if len(cells) >= 2 and re.match(r"R\d+-S\d+", cells[0]):
-                    id_to_area[cells[0]] = cells[1].strip().lower()
+                    id_to_area[cells[0]] = _normalize_area(cells[1], areas)
 
     # Group applied IDs by area
     area_ids: Dict[str, List[str]] = {area: [] for area in areas}
@@ -1349,12 +1418,18 @@ def _validate_snippet(
             # Found table
             tables_found += 1
             raw_header = _split_cells(ln)
-            # Normalize header cells: strip markdown bold/italic so **Area** matches Area
+            # Normalize header cells: strip markdown bold/italic and casefold
+            # so **Area**, "area", "AREA" all match the required column name.
             header = [_normalize_header(h) for h in raw_header]
+            header_cf = [h.casefold() for h in header]
             # Leniency: Accept header if it has the required columns, even if extra or slightly different order
-            missing_cols = [col for col in REQUIRED_COLUMNS if col not in header]
+            header_cf_set = set(header_cf)
+            missing_cols = [col for col in REQUIRED_COLUMNS if col.casefold() not in header_cf_set]
             if missing_cols:
                 return False, f"Table header mismatch. Missing columns: {missing_cols}", []
+
+            # Build case-insensitive column index map for row extraction
+            col_idx = {name.casefold(): idx for idx, name in enumerate(header_cf)}
 
             i += 2 # Skip header and sep
 
@@ -1371,12 +1446,12 @@ def _validate_snippet(
                     i += 1
                     continue
 
-                # Extract values by mapping column names to indices
+                # Extract values by mapping column names to indices (case-insensitive)
                 try:
-                    sid = cells[header.index("ID")]
-                    area = cells[header.index("Area")].strip().lower()
-                    severity = cells[header.index("Severity")].strip().lower()
-                except ValueError:
+                    sid = cells[col_idx["id"]]
+                    area = cells[col_idx["area"]].strip().lower()
+                    severity = cells[col_idx["severity"]].strip().lower()
+                except (ValueError, KeyError, IndexError):
                     i += 1
                     continue
 
@@ -1926,7 +2001,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
 
             # Compute substantially addressed areas and per-area coverage from existing Appendix A
             sa_threshold = int(config.get("substantially_addressed_threshold", 3))
-            substantially_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold)
+            substantially_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold, allowed_areas=allowed_areas)
             coverage = _compute_area_coverage(doc_text, sa_threshold, allowed_areas=allowed_areas)
 
             # Build shared system prompt for prompt caching (document + context + requirements)
@@ -2387,7 +2462,7 @@ class ArchitecturalReviewLogWorkflow(WorkflowBase):
                                 # Compute substantially addressed areas
                                 applied_with_area = [(d["id"], d["area"]) for d in plan_decisions if d["decision"] == "ACCEPT"]
                                 # Also include previously applied suggestions
-                                prev_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold)
+                                prev_addressed = _compute_substantially_addressed_from_doc(doc_text, sa_threshold, allowed_areas=allowed_areas)
                                 # Merge with new accepts
                                 for area, ids in prev_addressed.items():
                                     for sid in ids:
