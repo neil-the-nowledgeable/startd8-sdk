@@ -251,6 +251,18 @@ class IntegrationListener(Protocol):
     def on_integration_completed(self, unit: IntegrationUnit, files: List[Path]) -> None: ...
 
 
+class IntegrationStatus(Enum):
+    """Status of an integration operation."""
+    SUCCESS = "success"
+    PARTIAL = "partial"
+    BLOCKED = "blocked"
+    FAILED = "failed"
+
+
+# Distinct exit code for size regression blocks (PCA-604).
+EXIT_SIZE_REGRESSION = 78
+
+
 @dataclass
 class IntegrationResult:
     """Outcome of an IntegrationEngine.integrate() call."""
@@ -261,6 +273,9 @@ class IntegrationResult:
     warnings: List[str] = field(default_factory=list)
     rollback_performed: bool = False
     checkpoint_results: List[Any] = field(default_factory=list)
+    skipped_files: List[Dict[str, Any]] = field(default_factory=list)
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    status: IntegrationStatus = IntegrationStatus.SUCCESS
 
 
 class ModelRole(str, Enum):
@@ -556,6 +571,7 @@ __all__ = [
     'LessonQuery', 'Lesson', 'LessonResult', 'ModelCatalogEntry',
     'LessonsProvider',
     'IntegrationUnit', 'IntegrationListener', 'IntegrationResult',
+    'IntegrationStatus', 'EXIT_SIZE_REGRESSION',
     'DRAFT_MODEL_CLAUDE_HAIKU', 'VALIDATE_MODEL_CLAUDE_SONNET',
     'REVIEW_MODEL_CLAUDE_OPUS',
     'MODEL_CATALOG',

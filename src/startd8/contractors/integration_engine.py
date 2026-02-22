@@ -10,6 +10,7 @@ and the Artisan INTEGRATE phase (via SeedTaskUnit adapter).
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -22,9 +23,14 @@ from .gate_contracts import GateEmitter
 from .protocols import (
     IntegrationListener,
     IntegrationResult,
+    IntegrationStatus,
     IntegrationUnit,
     MergeStrategy,
 )
+
+# PCA-604: Size regression guard thresholds (configurable).
+_INTEGRATION_SIZE_REGRESSION_THRESHOLD = 0.60
+_INTEGRATION_MIN_LINES = 50
 
 logger = get_logger(__name__)
 
@@ -288,6 +294,8 @@ class IntegrationEngine:
         errors: List[str] = []
         warnings: List[str] = []
         checkpoint_results: List[Any] = []
+        skipped_files: List[Dict[str, Any]] = []
+        result_obj_metadata: Dict[str, Any] = {}
 
         self._validate_boundary(unit)
 
@@ -449,6 +457,106 @@ class IntegrationEngine:
                             f"Possible truncation in {source_path.name}"
                         )
 
+            # PCA-604: Path traversal protection — ensure target is within project root
+            try:
+                canonical_target = target_path.resolve()
+                canonical_root = self.project_root.resolve()
+                if (
+                    canonical_target != canonical_root
+                    and not str(canonical_target).startswith(str(canonical_root) + os.sep)
+                ):
+                    msg = (
+                        f"Path traversal blocked: {target_path} resolves to "
+                        f"{canonical_target} outside project root {canonical_root}"
+                    )
+                    logger.error(msg, extra={"unit_id": unit.id})
+                    warnings.append(msg)
+                    continue
+                if target_path.is_symlink():
+                    link_target = target_path.resolve()
+                    if not str(link_target).startswith(str(canonical_root) + os.sep):
+                        msg = (
+                            f"Symlink traversal blocked: {target_path} -> "
+                            f"{link_target} outside project root"
+                        )
+                        logger.error(msg, extra={"unit_id": unit.id})
+                        warnings.append(msg)
+                        continue
+            except (OSError, ValueError) as exc:
+                logger.warning(
+                    "Path resolution failed for %s: %s", target_path, exc,
+                    extra={"unit_id": unit.id},
+                )
+
+            # PCA-604: Size regression guard — block overwrites that would lose significant code
+            if target_path.is_file() and source_path.exists():
+                try:
+                    target_content = target_path.read_text(encoding="utf-8")
+                    target_lines = len(target_content.splitlines())
+                    source_content_text = source_path.read_text(encoding="utf-8")
+                    source_lines = len(source_content_text.splitlines())
+
+                    ctx = unit.context or {}
+                    allow_override = ctx.get("allow_size_regression", False)
+                    file_manifest = ctx.get("file_manifest", {})
+                    file_override = file_manifest.get(
+                        str(source_path), {},
+                    ).get("size_regression_override", False)
+                    if not allow_override and file_override:
+                        allow_override = True
+                    override_source = (
+                        "cli_flag" if ctx.get("allow_size_regression")
+                        else "plan_annotation" if file_override
+                        else None
+                    )
+
+                    if (
+                        target_lines > _INTEGRATION_MIN_LINES
+                        and source_lines / target_lines < _INTEGRATION_SIZE_REGRESSION_THRESHOLD
+                    ):
+                        ratio = source_lines / target_lines
+                        if allow_override:
+                            logger.warning(
+                                "Size regression override: %s (%d/%d lines, %.0f%% of original)"
+                                " — override source: %s",
+                                source_path.name, source_lines, target_lines,
+                                ratio * 100, override_source,
+                                extra={"unit_id": unit.id},
+                            )
+                            result_obj_metadata.setdefault(
+                                "size_regression_overrides", [],
+                            ).append({
+                                "path": str(source_path),
+                                "source_lines": source_lines,
+                                "target_lines": target_lines,
+                                "ratio": ratio,
+                                "override_source": override_source,
+                            })
+                        else:
+                            msg = (
+                                f"Size regression blocked: {source_path.name} has "
+                                f"{source_lines} lines but target has {target_lines} "
+                                f"lines ({ratio:.0%} < "
+                                f"{_INTEGRATION_SIZE_REGRESSION_THRESHOLD:.0%} threshold). "
+                                f"Use --allow-size-regression to override."
+                            )
+                            logger.error(msg, extra={"unit_id": unit.id})
+                            warnings.append(msg)
+                            skipped_files.append({
+                                "path": str(source_path),
+                                "reason": "size_regression",
+                                "source_lines": source_lines,
+                                "target_lines": target_lines,
+                                "ratio": ratio,
+                            })
+                            continue
+                except (OSError, UnicodeDecodeError) as exc:
+                    logger.warning(
+                        "Size regression check failed for %s: %s — proceeding",
+                        source_path.name, exc,
+                        extra={"unit_id": unit.id},
+                    )
+
             # Dirty file protection
             if target_path.exists() and not self.allow_dirty:
                 if not self._protect_dirty_target(target_path):
@@ -501,10 +609,17 @@ class IntegrationEngine:
             error_msg = "No files were integrated"
             errors.append(error_msg)
             listener.on_integration_failed(unit, error_msg)
+            status = (
+                IntegrationStatus.BLOCKED if skipped_files
+                else IntegrationStatus.FAILED
+            )
             return IntegrationResult(
                 success=False,
                 errors=errors,
                 warnings=warnings,
+                skipped_files=skipped_files,
+                metadata=result_obj_metadata,
+                status=status,
             )
 
         # 6. Post-merge: auto-fix lint + run checkpoints
@@ -592,6 +707,8 @@ class IntegrationEngine:
                     warnings=warnings,
                     rollback_performed=True,
                     checkpoint_results=checkpoint_results,
+                    skipped_files=skipped_files,
+                    metadata=result_obj_metadata,
                 )
         elif self.dry_run:
             logger.info(
@@ -606,6 +723,27 @@ class IntegrationEngine:
         # 8. Cleanup snapshots
         self._cleanup_snapshots(integrated_files)
 
+        # PCA-604: Partial integration warning — when some files were
+        # blocked by size regression but others succeeded.
+        if skipped_files and integrated_files:
+            partial_msg = (
+                f"Partial integration for unit {unit.name}: "
+                f"{len(integrated_files)} files integrated, "
+                f"{len(skipped_files)} files blocked by size regression guard. "
+                f"Project may be in an inconsistent state."
+            )
+            logger.warning(partial_msg, extra={"unit_id": unit.id})
+            warnings.append(partial_msg)
+
+        # Determine final status
+        if skipped_files:
+            final_status = (
+                IntegrationStatus.PARTIAL if integrated_files
+                else IntegrationStatus.BLOCKED
+            )
+        else:
+            final_status = IntegrationStatus.SUCCESS
+
         # 9. Notify completed
         listener.on_integration_completed(unit, integrated_files)
         logger.info(
@@ -614,9 +752,12 @@ class IntegrationEngine:
         )
 
         return IntegrationResult(
-            success=True,
+            success=not skipped_files,
             integrated_files=integrated_files,
             errors=errors,
             warnings=warnings,
             checkpoint_results=checkpoint_results,
+            skipped_files=skipped_files,
+            metadata=result_obj_metadata,
+            status=final_status,
         )

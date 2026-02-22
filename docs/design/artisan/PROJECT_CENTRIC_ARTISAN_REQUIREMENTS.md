@@ -1,6 +1,6 @@
 # Project-Centric Artisan (PCA) Requirements
 
-> **Version:** 1.2.0
+> **Version:** 1.3.0
 > **Status:** Draft
 > **Date:** 2026-02-21
 > **Scope:** Artisan 8-phase pipeline context propagation, checkpoint persistence, prompt enrichment, and edit-first behavior
@@ -17,6 +17,7 @@
    - [Layer 3: Prompt Enrichment (PCA-3xx)](#layer-3-prompt-enrichment-pca-3xx)
    - [Layer 4: Cross-Phase Propagation (PCA-4xx)](#layer-4-cross-phase-propagation-pca-4xx)
    - [Layer 5: Edit-First Behavior (PCA-5xx)](#layer-5-edit-first-behavior-pca-5xx)
+   - [Layer 6: Edit-First Enforcement (PCA-6xx)](#layer-6-edit-first-enforcement-pca-6xx)
 4. [Data Flow Diagrams](#4-data-flow-diagrams)
 5. [Traceability Matrix](#5-traceability-matrix)
 6. [Priority Phasing](#6-priority-phasing)
@@ -663,6 +664,98 @@ The REVIEW phase should know the project name and whether the task modified exis
 
 ---
 
+## Layer 6: Edit-First Enforcement (PCA-6xx)
+
+Layer 6 provides defense-in-depth enforcement for edit-first behavior — PCA-5xx got the edit-first context to the LLM, PCA-6xx ensures the LLM's output honors it.
+
+### PCA-600: Upstream Signal Consumption for Edit-Mode Classification
+
+- **Priority:** P0
+- **Closes:** Mottainai Gaps 22, 25, 15
+- **Overlaps:** AR-903 (Metadata Forwarding)
+
+Five signals produced by SCAFFOLD and DESIGN are computed but never consumed by IMPLEMENT for edit-first behavior. `_classify_edit_mode()` consumes all five using weighted multi-signal consensus (Tier 1 weight=2, Tier 2 weight=1).
+
+**Acceptance Criteria:**
+
+1. `ImplementPhaseHandler._classify_edit_mode(task, scaffold, design_mode_summary)` returns per-task `{mode, per_file, confidence}` dict.
+2. Classification uses weighted multi-signal consensus with 2-tier system. Weighted sum ≥ 3 → high confidence, ≥ 1 → medium, 0 → create mode.
+3. Result stored in `chunk.metadata["_edit_mode"]` via `_tasks_to_chunks()`.
+4. `_build_task_description()` includes `## Edit Mode Classification` section when mode is "edit".
+5. `_build_generation_context()` sets `gen_ctx["edit_mode"]` for downstream workflow consumption.
+6. IMPLEMENT logs edit mode classification summary with signal conflict count.
+7. For mixed tasks, task-level mode is "edit" if ANY per_file is "edit"; per_file modes are authoritative for enforcement.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py`, `src/startd8/contractors/artisan_phases/development.py`
+
+---
+
+### PCA-601: Thread Edit Context to Drafter (Spec→Draft Gap Fix)
+
+- **Priority:** P0
+
+**Acceptance Criteria:**
+
+1. `lead_contractor.yaml` draft template includes `{existing_files_section}` slot.
+2. `_build_existing_files_section(existing_files, edit_mode)` returns empty for greenfield, full section otherwise.
+3. Edit-mode section includes file contents (80KB budget with overflow), edit-first rules, and classification.
+4. `_create_draft()` and `_acreate_draft()` accept `existing_files` and `edit_mode` params.
+5. `_execute()` and `_aexecute()` thread context values to draft creation.
+
+**Source files:** `src/startd8/workflows/builtin/prompts/lead_contractor.yaml`, `src/startd8/workflows/builtin/lead_contractor_workflow.py`
+
+---
+
+### PCA-602: Edit-Aware Output Format (Terminal-Position Fix)
+
+- **Priority:** P0
+
+**Acceptance Criteria:**
+
+1. `lead_contractor.yaml` includes `single_file_edit_output` and `multi_file_edit_output` templates that say "You are EDITING an existing file... preserve ALL existing code."
+2. `_build_output_format(target_files, existing_files)` selects edit templates when existing_files is non-empty.
+3. Greenfield tasks continue to use existing templates.
+
+**Source files:** `src/startd8/workflows/builtin/prompts/lead_contractor.yaml`, `src/startd8/workflows/builtin/lead_contractor_workflow.py`
+
+---
+
+### PCA-603: Gate 4 Size Regression Detection
+
+- **Priority:** P0
+- **Overlaps:** AR-908 (Integrity at Output Time)
+
+**Acceptance Criteria:**
+
+1. `_SIZE_REGRESSION_THRESHOLD` defaults to 0.70 (configurable).
+2. `_validate_truncation()` accepts `existing_file_sizes` and runs Check 4: size regression.
+3. Flagged tasks get `source: "size_regression"` classification.
+4. `ImplementPhaseHandler.execute()` builds `existing_file_sizes` from chunk metadata.
+5. Files ≤ 50 lines existing are excluded.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py`
+
+---
+
+### PCA-604: Integration Engine Size Guard
+
+- **Priority:** P0
+- **Overlaps:** AR-175 (Truncation Guard)
+
+**Acceptance Criteria:**
+
+1. `_INTEGRATION_SIZE_REGRESSION_THRESHOLD` defaults to 0.60 (configurable).
+2. In `integrate()` per-file loop: if target > 50 lines and source/target < threshold, block with ERROR.
+3. New files and trivial files skip the check.
+4. Skipped files reported in IntegrationResult with structured entries.
+5. Override via `--allow-size-regression` CLI flag or per-file plan annotation, with audit logging.
+6. When files are blocked, returns `IntegrationStatus.PARTIAL` or `BLOCKED` with exit code 78.
+7. Path traversal protection before target file reads.
+
+**Source files:** `src/startd8/contractors/integration_engine.py`
+
+---
+
 ## 4. Data Flow Diagrams
 
 ### 4.1 Current State: Context Propagation Gaps
@@ -1131,6 +1224,9 @@ propagation_chains:
 | PCA-403 | AR-124 (Cross-Task Context) | Extends: AR-124 is DESIGN-phase cross-task; PCA-403 adds IMPLEMENT-phase |
 | PCA-402 | AR-905 (Provenance Audit Trail) | Complement: AR-905 tracks metadata provenance; PCA-402 tracks consumption |
 | PCA-404 | AR-903, IMP-P2 | Complement: IMP-P2 validates requirements text passthrough in Prime; PCA-404 mirrors it for Artisan |
+| PCA-600 | AR-903 (Metadata Forwarding) | Closes: AR-903 covers compute-but-don't-forward; PCA-600 wires scaffold+design signals to IMPLEMENT |
+| PCA-603 | AR-908 (Integrity at Output Time) | Extends: AR-908 validates integrity; PCA-603 adds size regression check |
+| PCA-604 | AR-175 (Truncation Guard) | Extends: AR-175 blocks truncated files; PCA-604 adds size regression guard |
 
 ### 8.2 IMP Boundary Requirements
 
@@ -1157,7 +1253,8 @@ Note: The INTEGRATE phase sits between IMPLEMENT and TEST. It does not alter the
 | Prompt Enrichment | PCA-300..304 | 5 | 5 | `3bf5e55` (P0), `3a4d1c8` (P1), pre-existing (304) |
 | Cross-Phase Propagation | PCA-400..404 | 5 | 5 | `3bf5e55` (P0), `3a4d1c8` (P1) |
 | Edit-First Behavior | PCA-500..505 | 5 | 5 | (current) |
-| **Total** | | **25** | **25** | |
+| Edit-First Enforcement | PCA-600..604 | 5 | 0 | Planned |
+| **Total** | | **30** | **25** | |
 
 ### Per-Requirement Status
 

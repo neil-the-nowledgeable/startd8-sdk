@@ -469,7 +469,7 @@ Six of seven artifact types have `derived_from` rules populated in `generate_art
 
 **Phase**: IMPLEMENT
 **Severity**: Critical
-**Status**: Requirements Defined (AR-127, AR-128)
+**Status**: In Progress (PCA-600..604)
 **Date**: 2026-02-21
 **Project under test**: startd8-sdk (Prime Execution Modes plan, 23 tasks)
 
@@ -514,6 +514,13 @@ cd .cap-dev-pipe
 - **AR-128** (IMPLEMENT phase): Propagates `design_mode` through the handoff JSON into `DevelopmentChunk.metadata["design_mode"]`. When `"update"`, adds prompt constraints for incremental-only output with the PRESERVE list. Post-generation validation warns if an update-mode output has >50% line reduction without merge markers. The `design_mode` field appears in `generation-manifest.json` for auditability.
 
 See: `docs/capability-index/startd8.artisan.functional-requirements.yaml` (AR-127, AR-128), `docs/artisan/ARTISAN_REQUIREMENTS.md`, `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`.
+
+**Resolution update (PCA-600..604):** PCA-500..505 (edit-first prompt context) are implemented but insufficient — PI-001 still produced a 493-line rewrite of a 1222-line file. PCA-600..604 adds 5 defense-in-depth enforcement layers:
+- PCA-600: Upstream signal consumption for edit-mode classification (weighted consensus)
+- PCA-601: Thread edit context to drafter (spec→draft gap fix with 80KB budget)
+- PCA-602: Edit-aware output format (terminal-position fix)
+- PCA-603: Gate 4 size regression detection (configurable threshold, default 70%)
+- PCA-604: Integration engine size guard (configurable threshold, default 60%, hard block with override)
 
 ---
 

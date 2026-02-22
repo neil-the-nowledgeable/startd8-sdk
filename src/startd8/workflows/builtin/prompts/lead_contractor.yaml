@@ -78,6 +78,8 @@ prompts:
       ## Previous Feedback (if any)
       {feedback}
 
+      {existing_files_section}
+
       ## Instructions
       1. Follow the specification EXACTLY
       2. Implement all requirements listed
@@ -99,6 +101,7 @@ prompts:
       - spec
       - feedback
       - output_format
+      - existing_files_section
 
   single_file_output:
     description: "Output format for single-file tasks"
@@ -238,3 +241,48 @@ prompts:
       - implementation
       - review_history
       - integration_instructions
+
+  single_file_edit_output:
+    description: "Output format for single-file edit tasks (PCA-602)"
+    template: |
+      You are EDITING an existing file. Your output must contain the COMPLETE
+      modified file — every line of the original plus your additions/changes.
+      You must strive to preserve all existing code. Significant code removal
+      will be blocked by downstream integration guards.
+      Do NOT omit, summarize, or abbreviate any existing code.
+
+      ```
+      [Your complete modified implementation here]
+      ```
+    placeholders: []
+
+  multi_file_edit_output:
+    description: "Output format for multi-file edit tasks (PCA-602)"
+    template: |
+      You are EDITING existing files. For each file, your output must contain the
+      COMPLETE modified file — every line of the original plus your additions/changes.
+      You must strive to preserve all existing code. Significant code removal
+      will be blocked by downstream integration guards.
+      Do NOT omit, summarize, or abbreviate any existing code.
+
+      REQUIRED files (you MUST produce ALL of these — do not skip any):
+      {file_list}
+
+      Use this exact format for EACH file:
+      ```
+      # <full path to file>
+      <complete modified implementation preserving all existing code>
+      ```
+
+      ## VERIFICATION CHECKLIST
+      Before submitting, count your code blocks and verify each required file has one:
+      {file_checklist}
+
+      CRITICAL RULES:
+      - Every target file MUST have its own distinct block. No exceptions.
+      - Do NOT combine multiple files into a single block.
+      - Do NOT skip any file — missing blocks will cause the implementation to FAIL.
+      - PRESERVE all existing code that is not explicitly being changed.
+    placeholders:
+      - file_list
+      - file_checklist

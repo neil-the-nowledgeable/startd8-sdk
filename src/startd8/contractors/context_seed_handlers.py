@@ -113,6 +113,77 @@ _CACHE_SCHEMA_VERSION = 3
 # are skipped to prevent memory spikes during cache validation.
 _MAX_GEN_FILE_HASH_BYTES = 50 * 1024 * 1024
 
+# PCA-603: Gate 4 size regression detection thresholds (configurable).
+_SIZE_REGRESSION_THRESHOLD = 0.70
+_SIZE_REGRESSION_MIN_LINES = 50
+
+
+# ---------------------------------------------------------------------------
+# PCA-600: Typed data structures for edit-mode classification
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class PerFileMode:
+    """Per-file edit/create classification with supporting signals."""
+
+    mode: str  # "edit" or "create"
+    staleness: str  # "fresh", "stale", or ""
+    has_hash: bool
+    edit_weight: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "staleness": self.staleness,
+            "has_hash": self.has_hash,
+            "edit_weight": self.edit_weight,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PerFileMode:
+        return cls(
+            mode=data["mode"],
+            staleness=data.get("staleness", ""),
+            has_hash=data.get("has_hash", False),
+            edit_weight=data.get("edit_weight", 0),
+        )
+
+
+@dataclass(frozen=True)
+class EditModeClassification:
+    """Typed result of edit-mode classification for a task.
+
+    Consumed by Steps 0b, 0c, 0d, and Layers A, B, C, D.
+    JSON-serializable for checkpoint persistence and resume.
+    """
+
+    mode: str  # "edit" or "create"
+    per_file: dict[str, PerFileMode]
+    confidence: str  # "high", "medium", or "low"
+    signal_conflicts: list[str] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "per_file": {k: v.to_dict() for k, v in self.per_file.items()},
+            "confidence": self.confidence,
+            "signal_conflicts": list(self.signal_conflicts),
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> EditModeClassification:
+        per_file_raw = data.get("per_file", {})
+        per_file = {
+            k: PerFileMode.from_dict(v) if isinstance(v, dict) else v
+            for k, v in per_file_raw.items()
+        }
+        return cls(
+            mode=data["mode"],
+            per_file=per_file,
+            confidence=data.get("confidence", "low"),
+            signal_conflicts=data.get("signal_conflicts", []),
+        )
+
 
 def _compute_gen_file_hash(
     file_paths: list[Any],
@@ -2518,23 +2589,32 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         tasks: list[SeedTask],
         generation_results: dict[str, "GenerationResult"],
         project_root: Path,
+        existing_file_sizes: dict[str, dict[str, int]] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Gate 4: post-IMPLEMENT truncation detection on generated files.
 
         For each successfully generated task, reads every generated file from
-        disk and runs three checks:
+        disk and runs four checks:
 
         1. ``detect_truncation()`` with ``code_mode=None`` (auto-detect).
         2. ``compile()`` syntax validation for Python files.
         3. Line-count ratio against ``task.estimated_loc`` (flag if < 30%).
+        4. Size regression vs existing file (PCA-603): flag when generated
+           file is < ``_SIZE_REGRESSION_THRESHOLD`` (default 70%) of existing
+           file, for files > ``_SIZE_REGRESSION_MIN_LINES`` lines.
+
+        Args:
+            existing_file_sizes: Optional mapping of task_id → {path: line_count}
+                for existing files on disk. Used for Check 4 size regression.
 
         Returns:
             Dict mapping task_id to a flag dict with keys:
             ``detected`` (bool), ``max_confidence`` (float),
-            ``source`` (str: syntax|heuristic_high|ratio|heuristic),
+            ``source`` (str: syntax|heuristic_high|ratio|size_regression|heuristic),
             ``indicators`` (list[str]), ``file_results`` (list[dict]),
             ``syntax_errors`` (list[str]), ``total_lines`` (int),
-            ``estimated_loc`` (int|None), and optionally ``ratio`` (float).
+            ``estimated_loc`` (int|None), and optionally ``ratio`` (float)
+            or ``size_regression_ratio`` (float).
             Only tasks with at least one positive signal are included;
             clean tasks are omitted (empty dict for a fully clean run).
         """
@@ -2642,6 +2722,45 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     ratio_flag = True
                     any_detected = True
 
+            # --- Check 4: Size regression vs existing file (PCA-603) ---
+            size_regression_flag = False
+            size_regression_details: list[dict[str, Any]] = []
+            if existing_file_sizes:
+                task_sizes = existing_file_sizes.get(task.task_id, {})
+                # Build a map of generated file paths → line counts from file_results
+                gen_line_counts: dict[str, int] = {}
+                for fr_item in file_results:
+                    gen_line_counts[fr_item["file"]] = fr_item.get("lines", 0)
+
+                for existing_path, existing_lines in task_sizes.items():
+                    if existing_lines <= _SIZE_REGRESSION_MIN_LINES:
+                        continue
+                    # Find matching generated file — match by filename
+                    gen_lines = 0
+                    for gen_path, gen_lc in gen_line_counts.items():
+                        if gen_path.endswith(existing_path) or Path(gen_path).name == Path(existing_path).name:
+                            gen_lines = gen_lc
+                            break
+                    if gen_lines <= 0:
+                        continue  # File not generated — skip (handled by Gate 3)
+                    if existing_lines > 0 and gen_lines / existing_lines < _SIZE_REGRESSION_THRESHOLD:
+                        size_regression_flag = True
+                        any_detected = True
+                        size_regression_details.append({
+                            "file": existing_path,
+                            "existing_lines": existing_lines,
+                            "generated_lines": gen_lines,
+                            "ratio": gen_lines / existing_lines,
+                        })
+                        logger.warning(
+                            "Gate 4 [size_regression]: task %s file %s — "
+                            "%d generated / %d existing (%.0f%% < %.0f%% threshold)",
+                            task.task_id, existing_path,
+                            gen_lines, existing_lines,
+                            (gen_lines / existing_lines) * 100,
+                            _SIZE_REGRESSION_THRESHOLD * 100,
+                        )
+
             if not any_detected:
                 continue
 
@@ -2650,6 +2769,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 source = "syntax"
             elif max_confidence >= CONFIDENCE_HIGH:
                 source = "heuristic_high"
+            elif size_regression_flag:
+                source = "size_regression"
             elif ratio_flag:
                 source = "ratio"
             else:
@@ -2671,6 +2792,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     if task.estimated_loc and task.estimated_loc > 0
                     else None
                 )
+            if size_regression_flag:
+                task_flag["size_regression"] = size_regression_details
             # Aggregate unique indicators
             for fr in file_results:
                 task_flag["indicators"].extend(fr.get("truncation_indicators", []))
@@ -2873,6 +2996,119 @@ class Test{class_name}:
         return downstream_map
 
     @staticmethod
+    def _classify_edit_mode(
+        task: SeedTask,
+        scaffold: dict[str, Any],
+        design_mode_summary: dict[str, str],
+    ) -> EditModeClassification:
+        """Classify each target file as 'create' or 'edit' using upstream signals.
+
+        Consumes 5 signals computed but previously unconsumed by IMPLEMENT:
+          - scaffold["existing_target_files"] (Tier 1, weight 2)
+          - task.existing_content_hash (Tier 1, weight 2)
+          - design_mode_summary[task_id] (Tier 2, weight 1)
+          - scaffold["staleness_classification"] (Tier 2, weight 1)
+          - task.file_scope (Tier 2, weight 1)
+
+        Returns EditModeClassification with typed fields for mode, per_file,
+        confidence, and signal_conflicts.
+        """
+        existing_targets = set(scaffold.get("existing_target_files", []))
+        staleness_map = scaffold.get("staleness_classification", {})
+        design_mode = design_mode_summary.get(task.task_id, "")
+
+        per_file: dict[str, PerFileMode] = {}
+        signal_conflicts: list[str] = []
+
+        for fpath in task.target_files:
+            # Collect per-file signals with tier weights
+            edit_weight = 0
+            create_weight = 0
+            file_signals_edit: list[str] = []
+            file_signals_create: list[str] = []
+
+            # Tier 1 (weight 2): existing_content_hash — non-None means file
+            # physically existed at preflight time
+            has_hash = task.existing_content_hash is not None
+            if has_hash:
+                edit_weight += 2
+                file_signals_edit.append("existing_content_hash")
+
+            # Tier 1 (weight 2): scaffold.existing_target_files
+            in_existing = fpath in existing_targets
+            if in_existing:
+                edit_weight += 2
+                file_signals_edit.append("scaffold.existing_target_files")
+
+            # Tier 2 (weight 1): design_mode_summary
+            if design_mode == "update":
+                edit_weight += 1
+                file_signals_edit.append("design_mode_summary=update")
+            elif design_mode == "create":
+                create_weight += 1
+                file_signals_create.append("design_mode_summary=create")
+
+            # Tier 2 (weight 1): staleness_classification
+            staleness = staleness_map.get(fpath, "")
+            if staleness in ("fresh", "stale"):
+                edit_weight += 1
+                file_signals_edit.append(f"staleness={staleness}")
+
+            # Tier 2 (weight 1): file_scope
+            scope = (task.file_scope or {}).get(fpath, "")
+            if scope == "primary":
+                edit_weight += 1
+                file_signals_edit.append("file_scope=primary")
+
+            # Classify this file
+            if edit_weight >= 1:
+                file_mode = "edit"
+            else:
+                file_mode = "create"
+
+            # Detect Tier 1 vs Tier 2 conflicts
+            tier1_edit = has_hash or in_existing
+            tier2_create = design_mode == "create"
+            if tier1_edit and tier2_create:
+                conflict = (
+                    f"Signal conflict for file {fpath}: Tier 1 signals "
+                    f"{file_signals_edit} indicate 'edit' but Tier 2 signals "
+                    f"{file_signals_create} indicate 'create'. "
+                    f"Tier 1 precedence applied."
+                )
+                signal_conflicts.append(conflict)
+                logger.warning(conflict)
+
+            per_file[fpath] = PerFileMode(
+                mode=file_mode,
+                staleness=staleness,
+                has_hash=has_hash,
+                edit_weight=edit_weight,
+            )
+
+        # Task-level aggregation: "edit" if ANY per_file is "edit"
+        any_edit = any(pf.mode == "edit" for pf in per_file.values())
+        task_mode = "edit" if any_edit else "create"
+
+        # Confidence from max edit weight across files
+        max_weight = max(
+            (pf.edit_weight for pf in per_file.values()), default=0,
+        )
+        if max_weight >= 3:
+            confidence = "high"
+        elif max_weight >= 1:
+            confidence = "medium"
+        else:
+            confidence = "low"
+
+        return EditModeClassification(
+            mode=task_mode,
+            per_file=per_file,
+            confidence=confidence,
+            signal_conflicts=signal_conflicts,
+        )
+
+    @staticmethod
     def _tasks_to_chunks(
         tasks: list[SeedTask],
         max_retries: int = 2,
@@ -2892,6 +3128,8 @@ class Test{class_name}:
         # PCA-501: project identity for edit-first behavior
         project_name: str | None = None,
         project_root_path: str | None = None,
+        # PCA-600: edit mode classification from upstream signals
+        edit_mode_map: dict[str, EditModeClassification] | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -3322,6 +3560,10 @@ class Test{class_name}:
                     # PCA-501: project identity for edit-first behavior
                     "project_name": project_name,
                     "project_root_path": project_root_path,
+                    # PCA-600: edit mode classification from upstream signals
+                    "_edit_mode": (edit_mode_map or {}).get(task.task_id, EditModeClassification(
+                        mode="create", per_file={}, confidence="low",
+                    )).to_dict() if edit_mode_map else None,
                 },
             ))
 
@@ -3893,6 +4135,27 @@ class Test{class_name}:
             # PCA-501: derive project name from plan_title with fallback
             _project_name = context.get("plan_title") or project_root.name
 
+            # PCA-600: Build per-task edit mode classification from upstream signals
+            scaffold = context.get("scaffold", {})
+            design_mode_summary = context.get("design_mode_summary", {})
+            edit_mode_map: dict[str, EditModeClassification] = {}
+            for task in tasks:
+                edit_mode_map[task.task_id] = self._classify_edit_mode(
+                    task, scaffold, design_mode_summary,
+                )
+            edit_tasks = sum(1 for v in edit_mode_map.values() if v.mode == "edit")
+            conflict_tasks = sum(1 for v in edit_mode_map.values() if v.signal_conflicts)
+            logger.info(
+                "IMPLEMENT: edit mode classification: %d edit, %d create "
+                "(%d with signal conflicts) (from 5 upstream signals, 2-tier weighted consensus)",
+                edit_tasks, len(tasks) - edit_tasks, conflict_tasks,
+            )
+            # PCA-600 AC 9: Persist structured classifications for post-hoc debugging
+            context["edit_mode_classifications"] = {
+                task_id: classification.to_dict()
+                for task_id, classification in edit_mode_map.items()
+            }
+
             chunks, skipped_reports = self._tasks_to_chunks(
                 tasks,
                 max_retries=2,
@@ -3912,6 +4175,8 @@ class Test{class_name}:
                 # PCA-501: project identity
                 project_name=_project_name,
                 project_root_path=str(project_root),
+                # PCA-600: edit mode classification
+                edit_mode_map=edit_mode_map,
             )
 
             # PCA-402: track onboarding field consumption
@@ -4080,12 +4345,57 @@ class Test{class_name}:
                     len(generation_results),
                 )
 
+            # ── PCA-603: Build existing file sizes for Gate 4 size regression ──
+            # Uses _existing_file_contents populated by PCA-502 disk reads.
+            # PCA-603 AC 6: When edit-mode file has no cached content,
+            # attempt fresh disk read as fallback before skipping.
+            existing_file_sizes: dict[str, dict[str, int]] = {}
+            for chunk in chunks:
+                _efc = chunk.metadata.get("_existing_file_contents", {})
+                _edit_mode_dict = chunk.metadata.get("_edit_mode")
+                task_sizes: dict[str, int] = {}
+
+                if _efc:
+                    for epath, econtent in _efc.items():
+                        task_sizes[epath] = len(econtent.splitlines())
+
+                # Fallback: check for edit-mode files missing from cache
+                if _edit_mode_dict and _edit_mode_dict.get("mode") == "edit":
+                    per_file_modes = _edit_mode_dict.get("per_file", {})
+                    for fpath, finfo in per_file_modes.items():
+                        if finfo.get("mode") == "edit" and fpath not in task_sizes:
+                            logger.warning(
+                                "Edit-mode file %s has no cached content for "
+                                "size regression check — attempting fresh disk "
+                                "read as fallback.",
+                                fpath,
+                            )
+                            try:
+                                fallback_path = project_root / fpath
+                                fallback_content = fallback_path.read_text(
+                                    encoding="utf-8",
+                                )
+                                task_sizes[fpath] = len(
+                                    fallback_content.splitlines(),
+                                )
+                            except (OSError, UnicodeDecodeError) as exc:
+                                logger.warning(
+                                    "Edit-mode file %s: fallback disk read "
+                                    "failed (%s) — size regression guard "
+                                    "bypassed for this file.",
+                                    fpath, exc,
+                                )
+
+                if task_sizes:
+                    existing_file_sizes[chunk.chunk_id] = task_sizes
+
             # ── Gate 4: post-IMPLEMENT truncation detection ─────────
             # Per Context Correctness by Construction: detect truncated
             # or syntactically broken generated files BEFORE they
             # propagate to TEST/REVIEW/FINALIZE.
             truncation_flags = self._validate_truncation(
                 tasks, generation_results, project_root,
+                existing_file_sizes=existing_file_sizes,
             )
             if truncation_flags:
                 output["_gate4_truncation"] = truncation_flags

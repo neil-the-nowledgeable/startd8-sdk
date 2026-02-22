@@ -988,6 +988,13 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if svc_meta:
             gen_ctx["service_metadata"] = svc_meta
 
+        # PCA-600: edit mode classification for downstream workflow consumption
+        # Stored as dict in metadata (via to_dict()); pass as dict for
+        # downstream LeadContractorWorkflow which uses dict-based access.
+        edit_mode_info = meta.get("_edit_mode")
+        if edit_mode_info:
+            gen_ctx["edit_mode"] = edit_mode_info  # dict for workflow consumption
+
         return gen_ctx
 
     def _build_task_description(
@@ -1088,6 +1095,37 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "If the design document describes new functionality, integrate it alongside "
                 "the existing code.\n"
             )
+            parts.append("\n---\n")
+
+        # PCA-600: Edit Mode Classification — supplements PCA-503 directive
+        # with structured upstream signal analysis
+        _edit_mode = chunk.metadata.get("_edit_mode")
+        if _edit_mode and _edit_mode.get("mode") == "edit":
+            _em_parts: List[str] = ["## Edit Mode Classification\n"]
+            _em_parts.append(
+                f"**Task mode:** EDIT (confidence: {_edit_mode.get('confidence', 'unknown')})\n"
+            )
+            _per_file = _edit_mode.get("per_file", {})
+            if _per_file:
+                _edit_files = [f for f, info in _per_file.items() if info.get("mode") == "edit"]
+                _create_files = [f for f, info in _per_file.items() if info.get("mode") == "create"]
+                if _edit_files:
+                    _em_parts.append("**Files being EDITED:** " + ", ".join(f"`{f}`" for f in _edit_files))
+                if _create_files:
+                    _em_parts.append("**Files being CREATED:** " + ", ".join(f"`{f}`" for f in _create_files))
+                for fpath, info in _per_file.items():
+                    staleness = info.get("staleness", "")
+                    if staleness:
+                        _em_parts.append(f"- `{fpath}`: staleness={staleness}")
+            _conflicts = _edit_mode.get("signal_conflicts", [])
+            if _conflicts:
+                _em_parts.append("\n**Signal conflicts detected:**")
+                for _c in _conflicts[:3]:
+                    _em_parts.append(f"- {_c}")
+            _em_parts.append(
+                "\nSignificant code removal will be blocked by downstream integration guards."
+            )
+            parts.extend(_em_parts)
             parts.append("\n---\n")
 
         # ── Layer 2: Authoritative design document framing ────────────

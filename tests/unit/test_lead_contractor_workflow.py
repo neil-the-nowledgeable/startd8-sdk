@@ -418,6 +418,7 @@ class TestPromptTemplates:
         prompt = DRAFT_PROMPT_TEMPLATE.format(
             spec="Detailed spec...",
             feedback="No feedback yet",
+            existing_files_section="",
             output_format=_build_output_format(None),
         )
         assert "Detailed spec..." in prompt
@@ -431,6 +432,7 @@ class TestPromptTemplates:
         prompt = DRAFT_PROMPT_TEMPLATE.format(
             spec="Multi-file spec",
             feedback="No feedback",
+            existing_files_section="",
             output_format=_build_output_format(target_files),
         )
         assert "SEPARATE fenced code block" in prompt
