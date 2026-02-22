@@ -807,6 +807,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         fail_on_truncation: bool = True,
         check_truncation: bool = True,
         strict_truncation: bool = False,
+        project_root: Optional[Path] = None,
     ):
         """
         Initialize the LeadContractor chunk executor.
@@ -831,6 +832,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         self._fail_on_truncation = fail_on_truncation
         self._check_truncation = check_truncation
         self._strict_truncation = strict_truncation
+        self._project_root = project_root
         self._generator: Optional[Any] = None
         self.logger = logging.getLogger("startd8.development.lead_executor")
 
@@ -902,12 +904,30 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if mt is not None:
             gen_ctx["max_tokens"] = mt
 
-        # Read existing file contents for modify-in-place tasks
+        # PCA-502: Read existing file contents — project_root first, staging overrides.
+        # This ensures the LLM sees production files when modifying existing code.
         for target in chunk.file_targets:
-            target_path = self._output_dir / target
-            if target_path.exists():
+            # Layer 1: read from project_root (production files)
+            if self._project_root is not None:
+                prod_path = self._project_root / target
+                if prod_path.exists():
+                    try:
+                        content = prod_path.read_text(encoding="utf-8")
+                        if len(content) > self._MAX_EXISTING_FILE_BYTES:
+                            content = (
+                                content[: self._MAX_EXISTING_FILE_BYTES]
+                                + f"\n\n# ... truncated ({len(content)} bytes total)"
+                            )
+                        gen_ctx.setdefault("existing_files", {})[target] = content
+                    except (UnicodeDecodeError, OSError) as exc:
+                        self.logger.warning(
+                            "Could not read existing file %s: %s", prod_path, exc,
+                        )
+            # Layer 2: staging overrides (latest generation takes precedence)
+            staging_path = self._output_dir / target
+            if staging_path.exists():
                 try:
-                    content = target_path.read_text(encoding="utf-8")
+                    content = staging_path.read_text(encoding="utf-8")
                     if len(content) > self._MAX_EXISTING_FILE_BYTES:
                         content = (
                             content[: self._MAX_EXISTING_FILE_BYTES]
@@ -916,7 +936,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                     gen_ctx.setdefault("existing_files", {})[target] = content
                 except (UnicodeDecodeError, OSError) as exc:
                     self.logger.warning(
-                        "Could not read existing file %s: %s", target_path, exc,
+                        "Could not read existing file %s: %s", staging_path, exc,
                     )
 
         # Inject retry feedback from orchestrator context
@@ -989,6 +1009,25 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         """
         parts: List[str] = []
 
+        # PCA-500: Project identity section — tells the LLM what project it's
+        # working on so it can make contextually appropriate decisions.
+        _proj_name = chunk.metadata.get("project_name")
+        if _proj_name:
+            _pi_parts = [f"## Project Identity\n", f"**Project:** {_proj_name}"]
+            _proj_root = chunk.metadata.get("project_root_path")
+            if _proj_root:
+                _pi_parts.append(f"**Root:** `{_proj_root}`")
+            _pg = chunk.metadata.get("plan_goals", [])
+            if _pg:
+                _pi_parts.append("**Goals:**")
+                for _g in _pg[:2]:
+                    _pi_parts.append(f"- {_g}")
+            _pi_text = "\n".join(_pi_parts)
+            if len(_pi_text) > 500:
+                _pi_text = _pi_text[:500] + "\n..."
+            parts.append(_pi_text)
+            parts.append("\n---\n")
+
         # Prepend target file format hint so the drafter knows WHAT to generate
         # before reading the design doc (which may contain test examples).
         if chunk.file_targets:
@@ -1007,6 +1046,48 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                     "py": "Python module",
                 }.get(ext, "")
                 parts.append(f"- `{target}`" + (f" ({fmt_hint})" if fmt_hint else ""))
+            parts.append("\n---\n")
+
+        # PCA-503: Existing Files + Edit-First Directive
+        # When target files already exist in the project, show their contents
+        # and instruct the LLM to edit rather than overwrite.
+        _existing = chunk.metadata.get("_existing_file_contents", {})
+        if _existing:
+            _MAX_EXISTING_TOTAL = 120_000
+            _ef_parts: List[str] = ["## Existing Files\n"]
+            _ef_parts.append(
+                "The following target files ALREADY EXIST in the project. "
+                "Your output MUST preserve existing functionality and only "
+                "add or modify what is specified in the design document.\n"
+            )
+            _total_bytes = 0
+            for _ef_path, _ef_content in _existing.items():
+                _ef_size = len(_ef_content)
+                if _total_bytes + _ef_size > _MAX_EXISTING_TOTAL:
+                    _ef_parts.append(
+                        f"\n### `{_ef_path}` (skipped — total existing file budget exceeded)"
+                    )
+                    continue
+                _total_bytes += _ef_size
+                _ef_parts.append(f"\n### `{_ef_path}` ({_ef_size:,} bytes)")
+                _ef_parts.append(f"```\n{_ef_content}\n```")
+            parts.extend(_ef_parts)
+            parts.append("\n---\n")
+
+            parts.append("## Edit-First Directive\n")
+            parts.append(
+                "**CRITICAL:** The target files shown above already exist in the project. "
+                "You MUST:\n"
+                "1. PRESERVE all existing functions, classes, imports, and logic "
+                "that are not explicitly being changed\n"
+                "2. ADD or MODIFY only what the design document specifies\n"
+                "3. NEVER remove existing code unless the design explicitly requires it\n"
+                "4. MAINTAIN backward compatibility — existing callers must continue to work\n"
+                "5. Keep existing docstrings, type hints, and error handling intact\n"
+                "\nTreat this as an EDIT to production code, not a greenfield implementation. "
+                "If the design document describes new functionality, integrate it alongside "
+                "the existing code.\n"
+            )
             parts.append("\n---\n")
 
         # ── Layer 2: Authoritative design document framing ────────────
@@ -1172,8 +1253,15 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
         try:
             generator = self._resolve_generator()
-            task_desc = self._build_task_description(chunk, context)
             gen_ctx = self._build_generation_context(chunk, context)
+
+            # PCA-503: Store existing file contents in chunk metadata so
+            # _build_task_description can render them in the prompt.
+            existing_files = gen_ctx.get("existing_files")
+            if existing_files:
+                chunk.metadata["_existing_file_contents"] = existing_files
+
+            task_desc = self._build_task_description(chunk, context)
 
             self.logger.info(
                 "Generating code for chunk %s via LeadContractor (%d file targets)",

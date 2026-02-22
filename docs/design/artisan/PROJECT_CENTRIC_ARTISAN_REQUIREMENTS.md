@@ -1,9 +1,9 @@
 # Project-Centric Artisan (PCA) Requirements
 
-> **Version:** 1.1.0
+> **Version:** 1.2.0
 > **Status:** Draft
 > **Date:** 2026-02-21
-> **Scope:** Artisan 8-phase pipeline context propagation, checkpoint persistence, and prompt enrichment
+> **Scope:** Artisan 8-phase pipeline context propagation, checkpoint persistence, prompt enrichment, and edit-first behavior
 
 ---
 
@@ -16,6 +16,7 @@
    - [Layer 2: Checkpoint Persistence (PCA-2xx)](#layer-2-checkpoint-persistence-pca-2xx)
    - [Layer 3: Prompt Enrichment (PCA-3xx)](#layer-3-prompt-enrichment-pca-3xx)
    - [Layer 4: Cross-Phase Propagation (PCA-4xx)](#layer-4-cross-phase-propagation-pca-4xx)
+   - [Layer 5: Edit-First Behavior (PCA-5xx)](#layer-5-edit-first-behavior-pca-5xx)
 4. [Data Flow Diagrams](#4-data-flow-diagrams)
 5. [Traceability Matrix](#5-traceability-matrix)
 6. [Priority Phasing](#6-priority-phasing)
@@ -248,7 +249,7 @@ Each phase handler should log a structured summary of which project-level contex
 
 **Acceptance Criteria:**
 
-1. At the start of `execute()` in DESIGN, IMPLEMENT, INTEGRATE, TEST, REVIEW, and FINALIZE handlers, log an INFO message listing: `project_root` (present/absent), `service_metadata` (present/absent), `plan_document_text` (present/absent), `architectural_context` (present/absent), `onboarding_*` field count (N/6).
+1. At the start of `execute()` in SCAFFOLD, DESIGN, IMPLEMENT, INTEGRATE, TEST, REVIEW, and FINALIZE handlers, log an INFO message listing: `project_root` (present/absent), `service_metadata` (present/absent), `plan_document_text` (present/absent), `architectural_context` (present/absent), `onboarding_*` field count (N/6).
 2. If fewer than 3 of the 10 project-level context fields are present, log a WARNING: `"Degraded project context: only N/10 fields available — code quality may be reduced."`
 3. For INTEGRATE, the logging is advisory — the phase has no LLM prompts and consumes no tokens, but completeness logging provides a consistent diagnostic signal across all 8 phases.
 

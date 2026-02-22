@@ -1066,6 +1066,7 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
         dry_run: bool = False,
     ) -> dict[str, Any]:
         start = time.monotonic()
+        _log_context_completeness("SCAFFOLD", context)
         tasks: list[SeedTask] = _ensure_context_loaded(context)
         project_root = Path(context.get("project_root", "."))
 
@@ -2888,6 +2889,9 @@ class Test{class_name}:
         # PCA-401/403/404: additional IMPLEMENT enrichment
         calibration_hints: dict[str, Any] | None = None,
         prior_impl_summaries: list[dict[str, Any]] | None = None,
+        # PCA-501: project identity for edit-first behavior
+        project_name: str | None = None,
+        project_root_path: str | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -3315,6 +3319,9 @@ class Test{class_name}:
                     "prior_implementations": (prior_impl_summaries or [])[-3:] if prior_impl_summaries else None,
                     # PCA-404: requirements text for IMPLEMENT prompt
                     "requirements_text": task.requirements_text[:3000] if task.requirements_text else None,
+                    # PCA-501: project identity for edit-first behavior
+                    "project_name": project_name,
+                    "project_root_path": project_root_path,
                 },
             ))
 
@@ -3376,6 +3383,8 @@ class Test{class_name}:
                 "depends_on": chunk.dependencies,
                 "prompt_constraints_count": len(meta.get("prompt_constraints", [])),
                 "validators": meta.get("post_generation_validators", []),
+                # PCA-505: track whether existing files were present for review
+                "had_existing_files": bool(meta.get("_existing_file_contents")),
             }
 
             if state.status == ChunkStatus.PASSED and gen_result is not None:
@@ -3881,6 +3890,9 @@ class Test{class_name}:
                     tasks, design_results, project_root,
                 )
 
+            # PCA-501: derive project name from plan_title with fallback
+            _project_name = context.get("plan_title") or project_root.name
+
             chunks, skipped_reports = self._tasks_to_chunks(
                 tasks,
                 max_retries=2,
@@ -3897,6 +3909,9 @@ class Test{class_name}:
                 # PCA-401/403/404
                 calibration_hints=context.get("onboarding_calibration_hints"),
                 prior_impl_summaries=context.get("_prior_impl_summaries"),
+                # PCA-501: project identity
+                project_name=_project_name,
+                project_root_path=str(project_root),
             )
 
             # PCA-402: track onboarding field consumption
@@ -3948,6 +3963,7 @@ class Test{class_name}:
                 fail_on_truncation=self.config.fail_on_truncation,
                 check_truncation=self.config.check_truncation,
                 strict_truncation=self.config.strict_truncation,
+                project_root=project_root,
             )
             if self._code_generator is not None:
                 # _generator is the lazy-init slot on LeadContractorChunkExecutor;
@@ -5291,9 +5307,13 @@ PASS if score >= {pass_threshold} and no blocking issues.
             pass_threshold=self.config.pass_threshold,
         )
 
-        # PCA-302: project-level context for architectural review
+        # PCA-302/505: project-level context for architectural review
         if project_context:
             _pc_parts = ["## Project Context"]
+            # PCA-505: project name in review
+            _pn = project_context.get("project_name")
+            if _pn:
+                _pc_parts.append(f"**Project:** {_pn}")
             _pt = project_context.get("plan_title")
             if _pt:
                 _pc_parts.append(f"**Plan:** {_pt}")
@@ -5311,6 +5331,14 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 _pc_parts.append("**Constraints:**")
                 for c in (list(_cons) if isinstance(_cons, list) else [_cons])[:5]:
                     _pc_parts.append(f"- {c}")
+            # PCA-505: edit-first review check when task had existing files
+            if project_context.get("had_existing_files"):
+                _pc_parts.append("\n**Edit-First Verification:**")
+                _pc_parts.append(
+                    "This task modified EXISTING production files. Verify the "
+                    "implementation preserves existing functionality and does not "
+                    "remove or break existing code that was not part of the change scope."
+                )
             _pc_text = "\n".join(_pc_parts)
             if len(_pc_text) > 2000:
                 _pc_text = _pc_text[:2000] + "\n... [truncated for prompt budget]"
@@ -5999,11 +6027,27 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 # Gate 4: truncation info for this task (if flagged)
                 task_truncation = truncation_flags.get(task.task_id)
 
-                # PCA-302: assemble project context for review
+                # PCA-302/505: assemble project context for review
+                _project_name = context.get("plan_title") or (
+                    Path(context.get("project_root", ".")).name
+                    if context.get("project_root") else None
+                )
+                # PCA-505: check if this task had existing files during IMPLEMENT
+                _gen_meta = getattr(gen_result, "metadata", {}) or {}
+                _had_existing = bool(_gen_meta.get("had_existing_files"))
+                # Also check generation_results for existing file info
+                if not _had_existing:
+                    _impl_results = context.get("implementation", {})
+                    for _tr in _impl_results.get("task_reports", []):
+                        if _tr.get("task_id") == task.task_id and _tr.get("had_existing_files"):
+                            _had_existing = True
+                            break
                 _project_context = {
                     "plan_title": context.get("plan_title"),
                     "plan_goals": context.get("plan_goals", []),
                     "architectural_context": context.get("architectural_context", {}),
+                    "project_name": _project_name,
+                    "had_existing_files": _had_existing,
                 }
 
                 # PCA-402: track onboarding field consumption in REVIEW

@@ -204,6 +204,16 @@ phases:
           severity: advisory
           source_phase: plan
           description: "Project architecture for code generation context"
+        - name: project_name
+          type: str
+          severity: advisory
+          source_phase: plan
+          description: "Project name derived from plan_title or project_root dirname (PCA-501)"
+        - name: existing_file_contents
+          type: dict
+          severity: advisory
+          source_phase: implement
+          description: "Per-file existing production code read from project_root (PCA-502/503)"
     exit:
       required:
         - name: implementation
@@ -317,6 +327,11 @@ phases:
           severity: advisory
           source_phase: plan
           description: "Project-level context (plan_title, plan_goals, architectural_context)"
+        - name: project_name
+          type: str
+          severity: advisory
+          source_phase: plan
+          description: "Project name for review context identification (PCA-505)"
     exit:
       required:
         - name: review_results
