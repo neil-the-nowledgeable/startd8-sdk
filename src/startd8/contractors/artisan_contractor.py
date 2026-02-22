@@ -47,7 +47,11 @@ import uuid
 import questionary
 from abc import ABC, abstractmethod
 from collections import deque
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from concurrent.futures import (
+    ThreadPoolExecutor,
+    TimeoutError as FuturesTimeoutError,
+    as_completed,
+)
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -347,7 +351,7 @@ class WorkflowConfig:
         validator_model: Model ID for the validation/gating role.
         reviewer_model: Model ID for the independent review role.
         feature_serial: If True, use feature-serial execution where each feature
-                        completes all inner phases (DESIGN→IMPLEMENT→TEST→REVIEW)
+                        completes all inner phases (DESIGN→IMPLEMENT→INTEGRATE→TEST→REVIEW)
                         before the next feature begins. If False (default), use
                         phase-serial execution where all features complete one
                         phase before moving to the next.
@@ -411,7 +415,7 @@ class PhaseResult:
 
 @dataclass
 class InnerPhaseResult:
-    """Result of a single inner phase (DESIGN/IMPLEMENT/TEST/REVIEW) for a feature.
+    """Result of a single inner phase (DESIGN/IMPLEMENT/INTEGRATE/TEST/REVIEW) for a feature.
 
     Used to track granular progress within feature-serial execution.
     """
@@ -424,6 +428,7 @@ class InnerPhaseResult:
     # Phase-specific artifacts:
     # - design: {"design_document": str}
     # - implement: {"files_written": list[str], "partial_files": dict[str, str]}
+    # - integrate: {"merged_files": list[str], "rollback_available": bool}
     # - test: {"test_results": dict, "coverage": float}
     # - review: {"score": float, "issues": list}
 
@@ -499,7 +504,7 @@ class WorkflowCheckpoint:
     schema_version: int = CHECKPOINT_SCHEMA_VERSION
     completed_features: list[str] = field(default_factory=list)
     current_feature: Optional[str] = None
-    current_feature_phase: Optional[str] = None  # DESIGN/IMPLEMENT/TEST/REVIEW
+    current_feature_phase: Optional[str] = None  # DESIGN/IMPLEMENT/INTEGRATE/TEST/REVIEW
     feature_partial_results: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     # Lane-parallel execution fields (v3+)
@@ -2194,7 +2199,7 @@ class ArtisanContractorWorkflow:
             context: Optional workflow context dict for snapshotting.
             completed_features: List of feature IDs that completed all inner phases.
             current_feature: Feature ID currently being processed (if any).
-            current_feature_phase: Inner phase for current feature (DESIGN/IMPLEMENT/TEST/REVIEW).
+            current_feature_phase: Inner phase for current feature (DESIGN/IMPLEMENT/INTEGRATE/TEST/REVIEW).
             feature_partial_results: Partial results for features that failed mid-execution.
             lane_assignments: task_id → lane_index mapping (lane-parallel mode).
             completed_lanes: List of lane indices that completed successfully.
@@ -2581,8 +2586,8 @@ class ArtisanContractorWorkflow:
     ) -> WorkflowStatus:
         """Execute phases in feature-serial order.
 
-        Each feature completes DESIGN → IMPLEMENT → TEST → REVIEW before
-        the next feature begins. PLAN and SCAFFOLD run globally first;
+        Each feature completes DESIGN → IMPLEMENT → INTEGRATE → TEST → REVIEW
+        before the next feature begins. PLAN and SCAFFOLD run globally first;
         FINALIZE runs globally at the end.
 
         Args:
@@ -2781,7 +2786,7 @@ class ArtisanContractorWorkflow:
             )
 
         # --- Compute lanes ---
-        tasks = context.get("tasks", [])
+        tasks = context.get("tasks") or []
         if not tasks:
             self._logger.warning("Lane-parallel: no tasks in context")
         lanes = compute_lanes(tasks) if tasks else []
@@ -3073,7 +3078,7 @@ class ArtisanContractorWorkflow:
             )
 
         # --- B. Compute waves from context tasks ---
-        tasks = context.get("tasks", [])
+        tasks = context.get("tasks") or []
         if not tasks:
             self._logger.warning("Wave-parallel: no tasks in context")
 
@@ -3369,7 +3374,7 @@ class ArtisanContractorWorkflow:
                     # ensure every exception is captured before merge.
                     # ThreadPoolExecutor wraps worker exceptions —
                     # BaseException from the main thread is not caught here.
-                    for future in concurrent.futures.as_completed(futures):
+                    for future in as_completed(futures):
                         try:
                             future.result()
                         except (PhaseExecutionError, WorkflowTimeoutError,
@@ -3777,7 +3782,7 @@ class ArtisanContractorWorkflow:
             )
 
         # Get ordered feature list from context
-        tasks = context.get("tasks", [])
+        tasks = context.get("tasks") or []
         if not tasks:
             self._logger.warning("Feature-serial: no tasks in context")
             return (
