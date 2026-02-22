@@ -131,3 +131,4 @@ startd8-mixin/jsonnetfile.lock.json
 # Pipeline artifacts (generated at runtime)
 # ---------------------------------------------------------------------------
 .cap-dev-pipe/pipeline-output/
+.cap-dev-pipe/.startd8/
