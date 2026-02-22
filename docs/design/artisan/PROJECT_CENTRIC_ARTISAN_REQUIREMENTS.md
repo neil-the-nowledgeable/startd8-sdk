@@ -571,6 +571,98 @@ The Prime Contractor forwards `requirements_text` from `feature.metadata` to `ge
 
 ---
 
+### Layer 5: Edit-First Behavior (PCA-5xx)
+
+---
+
+#### PCA-500: Project Identity in IMPLEMENT Prompt
+
+- **Priority:** P0
+- **Closes:** Gap 3 (partially — LLM has no awareness of project)
+
+The IMPLEMENT phase generates code without knowing what project it is working on. This causes the LLM to produce generic code that ignores existing patterns and conventions.
+
+**Acceptance Criteria:**
+
+1. `_build_task_description()` prepends a `## Project Identity` section containing `project_name`, `project_root`, and first 2 plan goals.
+2. The section is capped at 500 characters.
+3. The section is only present when `project_name` is available in chunk metadata.
+
+**Source files:** `src/startd8/contractors/artisan_phases/development.py` (`_build_task_description`)
+
+---
+
+#### PCA-501: Thread Project Identity into Chunk Metadata
+
+- **Priority:** P0
+- **Closes:** Gap 3
+
+`_tasks_to_chunks()` creates `DevelopmentChunk` objects with no project identity. The LLM cannot tell which project it is modifying.
+
+**Acceptance Criteria:**
+
+1. `_tasks_to_chunks()` accepts `project_name: str | None` and `project_root_path: str | None` parameters.
+2. Both values are injected into `DevelopmentChunk.metadata`.
+3. `ImplementPhaseHandler.execute()` derives `project_name` from `context.get("plan_title")` with fallback to `Path(project_root).name`.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (`_tasks_to_chunks`, `ImplementPhaseHandler.execute`)
+
+---
+
+#### PCA-502: Read Existing Files from `project_root`
+
+- **Priority:** P0
+- **Closes:** Gap 3 (LLM cannot see production code)
+
+`LeadContractorChunkExecutor._build_generation_context()` only reads existing files from `output_dir` (staging). When target files exist in `project_root` (the production directory), the LLM cannot see them and generates complete replacements.
+
+**Acceptance Criteria:**
+
+1. `LeadContractorChunkExecutor.__init__()` accepts an optional `project_root: Path` parameter.
+2. `_build_generation_context()` reads from `project_root` FIRST, then `output_dir` (staging overrides production).
+3. The existing 60KB per-file cap (`_MAX_EXISTING_FILE_BYTES`) applies to both sources.
+4. `ImplementPhaseHandler.execute()` passes `project_root` to the executor constructor.
+
+**Source files:** `src/startd8/contractors/artisan_phases/development.py` (`LeadContractorChunkExecutor`), `src/startd8/contractors/context_seed_handlers.py` (`ImplementPhaseHandler.execute`)
+
+---
+
+#### PCA-503: Edit-First Directive in IMPLEMENT Prompt
+
+- **Priority:** P0
+- **Closes:** Gap 3 (LLM overwrites existing code)
+
+When target files already exist, the LLM should receive explicit instructions to preserve existing functionality and only add/modify what is specified in the design document.
+
+**Acceptance Criteria:**
+
+1. `execute()` stores `gen_ctx["existing_files"]` into `chunk.metadata["_existing_file_contents"]` after building generation context.
+2. `_build_task_description()` adds `## Existing Files` section showing file content with 60KB/file and 120KB total cap.
+3. `_build_task_description()` adds `## Edit-First Directive` with explicit preservation instructions.
+4. Both sections are ONLY present when existing files are found (greenfield tasks are unaffected).
+
+**Source files:** `src/startd8/contractors/artisan_phases/development.py` (`LeadContractorChunkExecutor.execute`, `_build_task_description`)
+
+---
+
+#### PCA-505: Project Identity in REVIEW Prompt
+
+- **Priority:** P1
+- **Closes:** Gap 4
+
+The REVIEW phase should know the project name and whether the task modified existing files, so it can check for preservation of existing functionality.
+
+**Acceptance Criteria:**
+
+1. `_build_review_prompt()` includes `**Project:** {project_name}` in the `## Project Context` section.
+2. When a task had existing files, the review prompt includes an edit-first verification directive.
+3. `ReviewPhaseHandler.execute()` derives `project_name` and `had_existing_files` from context and passes them in `project_context`.
+4. `_map_development_result()` includes `had_existing_files` in task reports for downstream consumption.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (`ReviewPhaseHandler._build_review_prompt`, `ReviewPhaseHandler.execute`, `_map_development_result`)
+
+---
+
 ## 4. Data Flow Diagrams
 
 ### 4.1 Current State: Context Propagation Gaps
@@ -686,6 +778,7 @@ _ensure_context_loaded() (expanded via PCA-201):
   ▼
 IMPLEMENT phase (DevelopmentChunk):
   Writes to staging_dir (.startd8/staging/)       ← no direct project_root writes
+  Reads existing files from project_root          ← PCA-502
   metadata gains:
     service_metadata                              ← PCA-400
     plan_context (truncated summary)              ← PCA-401
@@ -693,12 +786,18 @@ IMPLEMENT phase (DevelopmentChunk):
     calibration_hints (per-task)                   ← PCA-401
     requirements_text                             ← PCA-404
     prior_implementations (last 3)                ← PCA-403
+    project_name                                  ← PCA-501
+    project_root_path                             ← PCA-501
+    _existing_file_contents                       ← PCA-503
   _build_prompt() gains:
+    "## Project Identity" section                  ← PCA-500
     "## Project Architecture" section              ← PCA-300
     "## Service Metadata" section                  ← PCA-301
     "## Requirements" section                     ← PCA-404
     "## Plan Context" section                     ← PCA-401
     "## Prior Implementations" section            ← PCA-403
+    "## Existing Files" section (when files exist) ← PCA-503
+    "## Edit-First Directive" (when files exist)   ← PCA-503
   │
   ▼
 INTEGRATE phase (IntegrationEngine):
@@ -714,8 +813,9 @@ TEST phase:
   ▼
 REVIEW phase:
   _build_review_prompt() gains:
-    "## Project Context" section                   ← PCA-302
+    "## Project Context" section (with project_name) ← PCA-302, PCA-505
     "## Service Metadata Compliance" section       ← PCA-303
+    Edit-first verification (when files existed)   ← PCA-505
   │
   ▼
 FINALIZE phase:
@@ -752,6 +852,11 @@ FINALIZE phase:
 | PCA-402 | `src/startd8/contractors/context_seed_handlers.py` | all handlers | `FinalizePhaseHandler` |
 | PCA-403 | `src/startd8/contractors/context_seed_handlers.py` | `ImplementPhaseHandler` | `artisan_phases/development.py` |
 | PCA-404 | `src/startd8/contractors/context_seed_handlers.py` | 3092–3127 | `artisan_phases/development.py` (542) |
+| PCA-500 | `src/startd8/contractors/artisan_phases/development.py` | `_build_task_description` | |
+| PCA-501 | `src/startd8/contractors/context_seed_handlers.py` | `_tasks_to_chunks`, `ImplementPhaseHandler.execute` | |
+| PCA-502 | `src/startd8/contractors/artisan_phases/development.py` | `__init__`, `_build_generation_context` | `context_seed_handlers.py` |
+| PCA-503 | `src/startd8/contractors/artisan_phases/development.py` | `execute`, `_build_task_description` | |
+| PCA-505 | `src/startd8/contractors/context_seed_handlers.py` | `_build_review_prompt`, `execute`, `_map_development_result` | |
 
 ### 5.2 Requirement → Test File
 
@@ -948,7 +1053,44 @@ integrate:
 
 No PCA enrichment fields (`service_metadata`, `architectural_context`, `plan_document_text`) need to be added to INTEGRATE's entry because the phase does not construct LLM prompts.
 
-### 7.5 New Propagation Chain
+### 7.5 `implement.entry.enrichment` (PCA-5xx additions)
+
+Add edit-first context enrichment to the IMPLEMENT phase entry:
+
+```yaml
+implement:
+  entry:
+    enrichment:
+      # ... existing fields ...
+      project_name:
+        type: str
+        severity: advisory
+        source_phase: plan
+        description: "Project name from plan_title or project_root dirname (PCA-501)"
+      existing_file_contents:
+        type: dict
+        severity: advisory
+        source_phase: implement
+        description: "Per-file existing production code read from project_root (PCA-502/503)"
+```
+
+### 7.6 `review.entry.enrichment` (PCA-5xx additions)
+
+Add project identity to the REVIEW phase entry:
+
+```yaml
+review:
+  entry:
+    enrichment:
+      # ... existing fields ...
+      project_name:
+        type: str
+        severity: advisory
+        source_phase: plan
+        description: "Project name for review context identification (PCA-505)"
+```
+
+### 7.7 New Propagation Chain
 
 Add a new end-to-end propagation chain:
 
@@ -1004,9 +1146,9 @@ Note: The INTEGRATE phase sits between IMPLEMENT and TEST. It does not alter the
 
 ## 9. Status Dashboard
 
-> **Status: 20/20 COMPLETE** (2026-02-21)
+> **Status: 25/25 COMPLETE** (2026-02-21)
 >
-> All P0 and P1 requirements implemented and tested. 51 tests in `test_pca_p0.py`.
+> All P0, P1, and Layer 5 requirements implemented and tested.
 
 | Layer | ID Range | Total | Done | Commits |
 |---|---|---|---|---|
@@ -1014,7 +1156,8 @@ Note: The INTEGRATE phase sits between IMPLEMENT and TEST. It does not alter the
 | Checkpoint Persistence | PCA-200..203 | 4 | 4 | `3bf5e55` (P0), `3a4d1c8` (P1) |
 | Prompt Enrichment | PCA-300..304 | 5 | 5 | `3bf5e55` (P0), `3a4d1c8` (P1), pre-existing (304) |
 | Cross-Phase Propagation | PCA-400..404 | 5 | 5 | `3bf5e55` (P0), `3a4d1c8` (P1) |
-| **Total** | | **20** | **20** | |
+| Edit-First Behavior | PCA-500..505 | 5 | 5 | (current) |
+| **Total** | | **25** | **25** | |
 
 ### Per-Requirement Status
 
@@ -1024,7 +1167,7 @@ Note: The INTEGRATE phase sits between IMPLEMENT and TEST. It does not alter the
 | PCA-101 | P1 | DONE | Pre-existing (PLAN phase, line 872) |
 | PCA-102 | P1 | DONE | Pre-existing (PLAN phase, lines 890–906) |
 | PCA-103 | P1 | DONE | Pre-existing (PLAN phase, lines 855–885) |
-| PCA-104 | P1 | DONE | `_log_context_completeness()` in 6 phase handlers |
+| PCA-104 | P1 | DONE | `_log_context_completeness()` in 7 phase handlers (incl. SCAFFOLD) |
 | PCA-105 | P0 | DONE | `context.setdefault("project_root", ...)` already compliant |
 | PCA-200 | P0 | DONE | 8 keys added to `_CHECKPOINT_CONTEXT_KEYS` |
 | PCA-201 | P0 | DONE | `_ensure_context_loaded()` re-extracts onboarding + plan_document_text |
@@ -1040,6 +1183,11 @@ Note: The INTEGRATE phase sits between IMPLEMENT and TEST. It does not alter the
 | PCA-402 | P1 | DONE | `_track_onboarding_consumption()` in IMPLEMENT/REVIEW + FINALIZE provenance |
 | PCA-403 | P1 | DONE | `prior_impl_summaries` accumulated (last 3) + `## Prior Implementations` section |
 | PCA-404 | P1 | DONE | `requirements_text` in chunk metadata (3000 char cap) + `## Requirements` section |
+| PCA-500 | P0 | DONE | `## Project Identity` section in IMPLEMENT prompt |
+| PCA-501 | P0 | DONE | `project_name` + `project_root_path` in `DevelopmentChunk.metadata` |
+| PCA-502 | P0 | DONE | `project_root` file reading in `LeadContractorChunkExecutor` |
+| PCA-503 | P0 | DONE | `## Existing Files` + `## Edit-First Directive` in IMPLEMENT prompt |
+| PCA-505 | P1 | DONE | Project name + edit-first verification in REVIEW prompt |
 
 **Note on INTEGRATE phase:** The INTEGRATE phase (added between IMPLEMENT and TEST) is a purely mechanical phase — it merges staged files into `project_root` via `IntegrationEngine` with snapshot/validate/merge/checkpoint/rollback. It makes no LLM calls and consumes no tokens. Therefore, no PCA prompt enrichment requirements (Layer 3) apply to it. PCA-104 (context completeness logging) includes INTEGRATE for diagnostic consistency, but the logging is advisory since no LLM prompt benefits from the context in this phase.
 

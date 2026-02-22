@@ -301,6 +301,7 @@ class TestPCA300GenerationContext:
 
         executor = LeadContractorChunkExecutor.__new__(LeadContractorChunkExecutor)
         executor._output_dir = tmp_path
+        executor._project_root = None
         executor._MAX_EXISTING_FILE_BYTES = 50_000
         executor.logger = MagicMock()
         return executor
@@ -370,6 +371,7 @@ class TestPCA300TaskDescription:
 
         executor = LeadContractorChunkExecutor.__new__(LeadContractorChunkExecutor)
         executor._output_dir = tmp_path
+        executor._project_root = None
         executor._MAX_EXISTING_FILE_BYTES = 50_000
         executor.logger = MagicMock()
         return executor
@@ -805,6 +807,7 @@ class TestPCA401CalibrationHints:
 
         executor = LeadContractorChunkExecutor.__new__(LeadContractorChunkExecutor)
         executor._output_dir = tmp_path
+        executor._project_root = None
         executor._MAX_EXISTING_FILE_BYTES = 50_000
         executor.logger = MagicMock()
 
@@ -956,6 +959,7 @@ class TestPCA403PriorImplSummaries:
 
         executor = LeadContractorChunkExecutor.__new__(LeadContractorChunkExecutor)
         executor._output_dir = tmp_path
+        executor._project_root = None
         executor._MAX_EXISTING_FILE_BYTES = 50_000
         executor.logger = MagicMock()
 
@@ -1037,6 +1041,7 @@ class TestPCA404RequirementsText:
 
         executor = LeadContractorChunkExecutor.__new__(LeadContractorChunkExecutor)
         executor._output_dir = tmp_path
+        executor._project_root = None
         executor._MAX_EXISTING_FILE_BYTES = 50_000
         executor.logger = MagicMock()
 
