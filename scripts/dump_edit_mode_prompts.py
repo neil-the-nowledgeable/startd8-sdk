@@ -258,6 +258,17 @@ def _dump_task_prompts(
             "If the design document describes new functionality, integrate it alongside "
             "the existing code.\n"
         )
+        # PCA-605b Change A: Quantitative line-count constraint
+        _ef_total_lines = sum(
+            len(content.splitlines())
+            for content in existing_files.values()
+        )
+        _ef_min_lines = int(_ef_total_lines * 0.80)
+        td_parts.append(
+            f"\n**SIZE CONSTRAINT:** The existing file(s) total {_ef_total_lines} lines. "
+            f"Your output MUST be AT LEAST {_ef_min_lines} lines (80% of original). "
+            f"Outputs significantly shorter than the original will be REJECTED.\n"
+        )
         td_parts.append("\n---\n")
 
     # Edit mode classification section (PCA-600)
@@ -280,8 +291,11 @@ def _dump_task_prompts(
             td_parts.append("\n**Signal conflicts detected:**")
             for c in edit_class.signal_conflicts[:3]:
                 td_parts.append(f"- {c}")
+        # PCA-605b Change B: Quantitative constraint replaces passive warning
         td_parts.append(
-            "\nSignificant code removal will be blocked by downstream integration guards."
+            "\n**MINIMUM OUTPUT:** Your output must be AT LEAST 80% of the existing file size. "
+            "Outputs that drop below this threshold will be REJECTED by automated guards. "
+            "Do NOT rewrite from scratch — EDIT the existing code."
         )
         td_parts.append("\n---\n")
 

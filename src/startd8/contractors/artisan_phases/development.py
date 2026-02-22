@@ -1097,6 +1097,17 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "If the design document describes new functionality, integrate it alongside "
                 "the existing code.\n"
             )
+            # PCA-605b Change A: Quantitative line-count constraint
+            _ef_total_lines = sum(
+                len(content.splitlines())
+                for content in _existing.values()
+            )
+            _ef_min_lines = int(_ef_total_lines * 0.80)
+            parts.append(
+                f"\n**SIZE CONSTRAINT:** The existing file(s) total {_ef_total_lines} lines. "
+                f"Your output MUST be AT LEAST {_ef_min_lines} lines (80% of original). "
+                f"Outputs significantly shorter than the original will be REJECTED.\n"
+            )
             parts.append("\n---\n")
 
         # PCA-600: Edit Mode Classification — supplements PCA-503 directive
@@ -1124,8 +1135,11 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 _em_parts.append("\n**Signal conflicts detected:**")
                 for _c in _conflicts[:3]:
                     _em_parts.append(f"- {_c}")
+            # PCA-605b Change B: Quantitative constraint replaces passive warning
             _em_parts.append(
-                "\nSignificant code removal will be blocked by downstream integration guards."
+                f"\n**MINIMUM OUTPUT:** Your output must be AT LEAST 80% of the existing file size. "
+                f"Outputs that drop below this threshold will be REJECTED by automated guards. "
+                f"Do NOT rewrite from scratch — EDIT the existing code."
             )
             parts.extend(_em_parts)
             parts.append("\n---\n")
@@ -1144,18 +1158,35 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 if line.strip().startswith("##")
             )
 
-            parts.append("## AUTHORITATIVE Design Document\n")
-            parts.append(
-                "The following design document was approved during the DESIGN phase. "
-                "It is the AUTHORITATIVE specification for this task.\n"
-            )
-            parts.append(
-                "**CRITICAL:** This design document OVERRIDES the Task Summary below "
-                "when they differ in scope or detail. The Task Summary is only a brief "
-                "label. The design document defines the FULL scope of what must be "
-                "implemented — all sections, rules, structures, and patterns specified "
-                "in the design MUST appear in your output.\n"
-            )
+            # PCA-605b Change C: Conditional framing for edit vs greenfield
+            if _existing:
+                # Edit mode: design describes changes, not a replacement
+                parts.append("## AUTHORITATIVE Design Changes\n")
+                parts.append(
+                    "The following design document describes CHANGES to apply to the "
+                    "existing code shown above. It is the AUTHORITATIVE specification "
+                    "for what to ADD or MODIFY.\n"
+                )
+                parts.append(
+                    "**CRITICAL:** Apply these changes to the existing code. "
+                    "Do NOT rewrite the file from scratch. The existing code is the "
+                    "foundation — the design document describes what to change, not "
+                    "what the entire file should look like.\n"
+                )
+            else:
+                # Greenfield: original framing
+                parts.append("## AUTHORITATIVE Design Document\n")
+                parts.append(
+                    "The following design document was approved during the DESIGN phase. "
+                    "It is the AUTHORITATIVE specification for this task.\n"
+                )
+                parts.append(
+                    "**CRITICAL:** This design document OVERRIDES the Task Summary below "
+                    "when they differ in scope or detail. The Task Summary is only a brief "
+                    "label. The design document defines the FULL scope of what must be "
+                    "implemented — all sections, rules, structures, and patterns specified "
+                    "in the design MUST appear in your output.\n"
+                )
             parts.append(
                 f"**Design Scope:** {design_lines} lines across {design_sections} "
                 f"sections. A partial implementation that omits designed sections "
