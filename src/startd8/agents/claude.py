@@ -124,6 +124,18 @@ class ClaudeAgent(BaseAgent):
         else:
             self.retry_config = None
 
+        # Ensure Anthropic-specific connection errors are retryable.
+        # AnthropicAPIConnectionError inherits from anthropic.APIError, NOT
+        # Python's ConnectionError, so the default retryable_exceptions tuple
+        # (ConnectionError, TimeoutError, OSError) misses it.
+        if self.retry_config is not None and AnthropicAPIConnectionError is not None:
+            if AnthropicAPIConnectionError not in self.retry_config.retryable_exceptions:
+                from dataclasses import replace as _dc_replace
+                self.retry_config = _dc_replace(
+                    self.retry_config,
+                    retryable_exceptions=self.retry_config.retryable_exceptions + (AnthropicAPIConnectionError,),
+                )
+
         self._cleanup_registered = False
         if self._owns_clients:
             self._register_cleanup()

@@ -115,6 +115,18 @@ class GPT4Agent(BaseAgent):
         else:
             self.retry_config = None
 
+        # Ensure OpenAI-specific connection errors are retryable.
+        # OpenAIAPIConnectionError inherits from openai.APIError, NOT
+        # Python's ConnectionError, so the default retryable_exceptions tuple
+        # misses it.
+        if self.retry_config is not None and OpenAIAPIConnectionError is not None:
+            if OpenAIAPIConnectionError not in self.retry_config.retryable_exceptions:
+                from dataclasses import replace as _dc_replace
+                self.retry_config = _dc_replace(
+                    self.retry_config,
+                    retryable_exceptions=self.retry_config.retryable_exceptions + (OpenAIAPIConnectionError,),
+                )
+
     async def _make_api_call(self, prompt: str, system_prompt: Optional[str] = None):
         """
         Make the raw API call to OpenAI.
@@ -447,6 +459,15 @@ class OpenAICompatibleAgent(BaseAgent):
             self.retry_config = self.DEFAULT_RETRY_CONFIG
         else:
             self.retry_config = None
+
+        # Ensure OpenAI-specific connection errors are retryable.
+        if self.retry_config is not None and OpenAIAPIConnectionError is not None:
+            if OpenAIAPIConnectionError not in self.retry_config.retryable_exceptions:
+                from dataclasses import replace as _dc_replace
+                self.retry_config = _dc_replace(
+                    self.retry_config,
+                    retryable_exceptions=self.retry_config.retryable_exceptions + (OpenAIAPIConnectionError,),
+                )
 
     def _register_cleanup(self):
         """Register cleanup handler to run on exit"""

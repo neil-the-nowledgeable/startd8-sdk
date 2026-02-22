@@ -46,7 +46,7 @@ class TestGPT4AgentRetryConfig:
             assert 429 in agent.retry_config.retryable_status_codes
 
     def test_custom_retry_config(self):
-        """Custom retry config overrides default"""
+        """Custom retry config overrides default, augmented with OpenAI exceptions"""
         with patch.dict('os.environ', {'OPENAI_API_KEY': 'test-key'}):
             from startd8.agents import GPT4Agent
             custom_config = RetryConfig(max_attempts=5, base_delay=2.0)
@@ -55,8 +55,10 @@ class TestGPT4AgentRetryConfig:
                 model="gpt-4",
                 retry_config=custom_config
             )
-            assert agent.retry_config is custom_config
+            # Config is augmented with OpenAIAPIConnectionError
             assert agent.retry_config.max_attempts == 5
+            from openai import APIConnectionError as OpenAIAPIConnectionError
+            assert OpenAIAPIConnectionError in agent.retry_config.retryable_exceptions
 
     def test_default_retry_config_class_attribute(self):
         """DEFAULT_RETRY_CONFIG is accessible as class attribute"""
@@ -215,7 +217,7 @@ class TestClaudeAgentRetryConfig:
             assert 529 in agent.retry_config.retryable_status_codes  # Anthropic overloaded
 
     def test_custom_retry_config(self):
-        """Custom retry config overrides default"""
+        """Custom retry config overrides default, augmented with Anthropic exceptions"""
         with patch.dict('os.environ', {'ANTHROPIC_API_KEY': 'test-key'}):
             from startd8.agents import ClaudeAgent
             custom_config = RetryConfig(max_attempts=5, base_delay=2.0)
@@ -224,9 +226,13 @@ class TestClaudeAgentRetryConfig:
                 model="claude-3-opus-20240229",
                 retry_config=custom_config
             )
-            assert agent.retry_config is custom_config
+            # Config is augmented with AnthropicAPIConnectionError, so identity
+            # won't match, but all original fields are preserved.
             assert agent.retry_config.max_attempts == 5
             assert agent.retry_config.base_delay == 2.0
+            # Verify Anthropic connection error is now retryable
+            from anthropic import APIConnectionError as AnthropicAPIConnectionError
+            assert AnthropicAPIConnectionError in agent.retry_config.retryable_exceptions
 
     def test_retry_config_takes_precedence_over_enable_retry(self):
         """retry_config parameter takes precedence over enable_retry flag"""
@@ -598,7 +604,7 @@ class TestOpenAICompatibleAgentRetryConfig:
         assert 429 in agent.retry_config.retryable_status_codes
 
     def test_custom_retry_config(self):
-        """Custom retry config overrides default"""
+        """Custom retry config overrides default, augmented with OpenAI exceptions"""
         from startd8.agents import OpenAICompatibleAgent
         custom_config = RetryConfig(max_attempts=5, base_delay=2.0)
         agent = OpenAICompatibleAgent(
@@ -607,8 +613,10 @@ class TestOpenAICompatibleAgentRetryConfig:
             base_url="http://localhost:11434/v1",
             retry_config=custom_config
         )
-        assert agent.retry_config is custom_config
+        # Config is augmented with OpenAIAPIConnectionError
         assert agent.retry_config.max_attempts == 5
+        from openai import APIConnectionError as OpenAIAPIConnectionError
+        assert OpenAIAPIConnectionError in agent.retry_config.retryable_exceptions
 
     def test_default_retry_config_class_attribute(self):
         """DEFAULT_RETRY_CONFIG is accessible as class attribute"""
