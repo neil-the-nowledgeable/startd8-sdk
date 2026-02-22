@@ -163,7 +163,7 @@ File-based job queue for batch processing:
 Multi-phase workflow orchestration for code generation:
 
 - **PrimeContractor**: Per-feature `generate -> integrate -> validate` loop with protocol-based design (CodeGenerator, Instrumentor, SizeEstimator, MergeStrategy)
-- **ArtisanContractor**: 7-phase workflow (PLAN -> SCAFFOLD -> DESIGN -> IMPLEMENT -> TEST -> REVIEW -> FINALIZE) with phase handlers, checkpoints, cost budget enforcement, and OTel tracing
+- **ArtisanContractor**: 8-phase workflow (PLAN -> SCAFFOLD -> DESIGN -> IMPLEMENT -> INTEGRATE -> TEST -> REVIEW -> FINALIZE) with phase handlers, checkpoints, cost budget enforcement, and OTel tracing
 - **Design Handoff**: Serializable context state (`design-handoff.json`) enabling two-half split execution where design and implementation run as separate processes
 - **Context Seed Handlers**: Bridges enriched context seeds to the orchestrator via `ContextSeedHandlers.create_all()`
 

@@ -281,12 +281,12 @@ dashboards.withPanels(baseDashboard, [
       ## Critical Path
 
       ```
-      PLAN → SCAFFOLD → DESIGN → IMPLEMENT → TEST → REVIEW → FINALIZE
+      PLAN → SCAFFOLD → DESIGN → IMPLEMENT → INTEGRATE → TEST → REVIEW → FINALIZE
       ```
 
       ### Dependency Clusters
       - **Foundation**: PLAN, SCAFFOLD (must complete before DESIGN)
-      - **Core**: DESIGN, IMPLEMENT (sequential, design-first)
+      - **Core**: DESIGN, IMPLEMENT, INTEGRATE (sequential, design-first)
       - **Validation**: TEST, REVIEW (can partial overlap)
       - **Delivery**: FINALIZE (requires all above)
     |||,

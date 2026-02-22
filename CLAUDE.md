@@ -4,7 +4,7 @@ This file provides guidance to Claude Code for the StartDate (startd8) SDK repos
 
 ## Project Overview
 
-StartD8 is a Python SDK and CLI tool for managing multi-LLM agent workflows, benchmarking different models (Anthropic, OpenAI, Gemini, Mistral, Ollama), and prompt version control. It provides a unified interface for comparing LLM responses, tracking costs, and orchestrating multi-phase code generation (Artisan Contractor 7-phase pipeline, PrimeContractor batch workflows). Includes ContextCore integration for project observability and OTel-based telemetry.
+StartD8 is a Python SDK and CLI tool for managing multi-LLM agent workflows, benchmarking different models (Anthropic, OpenAI, Gemini, Mistral, Ollama), and prompt version control. It provides a unified interface for comparing LLM responses, tracking costs, and orchestrating multi-phase code generation (Artisan Contractor 8-phase pipeline, PrimeContractor batch workflows). Includes ContextCore integration for project observability and OTel-based telemetry.
 
 ## Tech Stack
 
@@ -97,10 +97,10 @@ src/startd8/              # Main package
 │   └── usage_limits.py   # Usage limit management
 │
 ├── contractors/          # Multi-phase workflow orchestration
-│   ├── artisan_contractor.py     # ArtisanContractorWorkflow (7-phase orchestrator)
+│   ├── artisan_contractor.py     # ArtisanContractorWorkflow (8-phase orchestrator)
 │   ├── artisan_models.py         # Artisan phase data models
 │   ├── artisan_prompts.py        # Artisan phase prompt templates
-│   ├── context_seed_handlers.py  # Phase handlers (Design/Implement/Review/Finalize/Test)
+│   ├── context_seed_handlers.py  # Phase handlers (Design/Implement/Integrate/Review/Finalize/Test)
 │   ├── context_schema.py         # Pydantic output models (DesignPhaseOutput, ImplementPhaseOutput, ValidationPhaseOutput)
 │   ├── gate_contracts.py         # Phase boundary validation (QualitySpec, EvaluationSpec)
 │   ├── handoff.py                # Design↔Implementation handoff (two-half split)
@@ -170,9 +170,9 @@ src/startd8/              # Main package
 └── help_content/         # TUI help YAML files (topics, contextual, workflow, advanced)
 
 scripts/                  # Runner and utility scripts (~25 files)
-├── run_artisan_workflow.py       # Full 7-phase artisan workflow
+├── run_artisan_workflow.py       # Full 8-phase artisan workflow
 ├── run_artisan_design_only.py    # Design half (PLAN→SCAFFOLD→DESIGN)
-├── run_artisan_implement_only.py # Impl half (IMPLEMENT→TEST→REVIEW→FINALIZE)
+├── run_artisan_implement_only.py # Impl half (IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE)
 ├── run_artisan_contractor.py     # Main artisan contractor runner
 ├── run_prime_workflow.py         # PrimeContractor batch workflow runner
 ├── run_contextcore_workflow.py   # ContextCore integration workflow
@@ -211,21 +211,22 @@ provider.validate_config({})
 agent = provider.create_agent("claude-sonnet-4-20250514")
 ```
 
-### Artisan Contractor (7-Phase Orchestrator)
+### Artisan Contractor (8-Phase Orchestrator)
 
 The primary code generation pipeline, split into a design half and implementation half:
 
 1. **PLAN** - Plan deconstruction into implementable chunks
 2. **SCAFFOLD** - Project structure scaffolding
 3. **DESIGN** - Design documentation with dual-review orchestration (`AgentLLMBackend`)
-4. **IMPLEMENT** - Code generation via `LLMChunkExecutor` with cost tracking
-5. **TEST** - Test generation via `LLMTestGenerator` with retry
-6. **REVIEW** - LLM-powered quality review
-7. **FINALIZE** - Final assembly and validation
+4. **IMPLEMENT** - Code generation via `LLMChunkExecutor` with cost tracking (writes to staging)
+5. **INTEGRATE** - Merge staged files into project root with validation and rollback (no LLM calls)
+6. **TEST** - Test generation via `LLMTestGenerator` with retry
+7. **REVIEW** - LLM-powered quality review
+8. **FINALIZE** - Final assembly and validation
 
 Key patterns:
-- **Handoff**: Design half (PLAN→SCAFFOLD→DESIGN) produces a handoff file consumed by implementation half (IMPLEMENT→TEST→REVIEW→FINALIZE)
-- **Context Seed Handlers**: `DesignPhaseHandler`, `ImplementPhaseHandler`, `TestPhaseHandler`, `ReviewPhaseHandler`, `FinalizePhaseHandler` in `context_seed_handlers.py`
+- **Handoff**: Design half (PLAN→SCAFFOLD→DESIGN) produces a handoff file consumed by implementation half (IMPLEMENT→INTEGRATE→TEST→REVIEW→FINALIZE)
+- **Context Seed Handlers**: `DesignPhaseHandler`, `ImplementPhaseHandler`, `IntegratePhaseHandler`, `TestPhaseHandler`, `ReviewPhaseHandler`, `FinalizePhaseHandler` in `context_seed_handlers.py`
 - **HandlerConfig.from_config()**: Loads handler configuration from artisan YAML config
 - **Checkpoint/Recovery**: Per-phase crash recovery via `checkpoint.py`; generation results saved for resume
 - **Resume Caching**: IMPLEMENT, TEST, and REVIEW phases persist results to `.startd8/state/` with 3-layer validation (schema version → source checksum → per-task file hash)
@@ -240,7 +241,7 @@ Key patterns:
 - `Pipeline` - Sequential workflow execution
 - `ProviderRegistry` - Dynamic provider discovery via entry points
 - `CostTracker` - Track API costs across providers
-- `ArtisanContractorWorkflow` - 7-phase code generation orchestrator
+- `ArtisanContractorWorkflow` - 8-phase code generation orchestrator
 - `PrimeContractorWorkflow` - Multi-feature batch code generation
 - `WorkflowBase` - Base class for registered workflows
 - `ModelCatalogEntry` - Centralized model defaults with `.agent_spec` property

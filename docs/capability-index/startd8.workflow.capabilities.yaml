@@ -549,14 +549,14 @@ capabilities:
   - capability_id: startd8.workflow.contractor.artisan_orchestrator
     category: action
     maturity: beta
-    summary: "7-phase artisan workflow orchestrator with cost budget, checkpoints, design quality context, and OTel tracing"
+    summary: "8-phase artisan workflow orchestrator with cost budget, checkpoints, design quality context, integration validation, and OTel tracing"
     audiences: [workflow_user, ai_agent, workflow_developer]
     user_benefit: "Structured multi-phase code generation with design quality calibration and explicit review before implementation"
     delivers_benefit: workflow.execution.validated_run
     description:
       developer: |
-        ArtisanContractorWorkflow: 7-phase orchestrator (PLAN → SCAFFOLD → DESIGN → IMPLEMENT →
-        TEST → REVIEW → FINALIZE). Phase handlers registered via ContextSeedHandlers.create_all().
+        ArtisanContractorWorkflow: 8-phase orchestrator (PLAN → SCAFFOLD → DESIGN → IMPLEMENT →
+        INTEGRATE → TEST → REVIEW → FINALIZE). Phase handlers registered via ContextSeedHandlers.create_all().
         3-tier cost model architecture: Haiku drafter, Sonnet validator, Opus reviewer (default
         runtime 2-tier: Haiku+Opus via HandlerConfig; Sonnet tier activable via --lead-agent). Supports phase subsets,
         cost budget enforcement, per-phase and total timeouts, checkpoint persistence, OTel tracing.
@@ -590,7 +590,7 @@ capabilities:
         description: "ArtisanContractorWorkflow orchestrator with checkpoints, cost budget, OTel"
       - type: code
         ref: src/startd8/contractors/context_seed_handlers.py
-        description: "7 phase handlers: ImplementPhaseHandler wired to LeadContractorCodeGenerator; design quality context: architectural_context + design_calibration"
+        description: "8 phase handlers: ImplementPhaseHandler wired to LeadContractorCodeGenerator; IntegratePhaseHandler for validated merging; design quality context: architectural_context + design_calibration"
       - type: test
         ref: tests/unit/contractors/test_design_phase_handler.py
         description: "22 tests covering phases, orchestrator integration, dry-run"
@@ -1428,7 +1428,7 @@ changelog:
   - version: "2.4.0"
     date: "2026-02-11"
     changes:
-      - "Added startd8.workflow.contractor.artisan_orchestrator: 7-phase orchestrator with cost budget, checkpoints, OTel (beta)"
+      - "Added startd8.workflow.contractor.artisan_orchestrator: 8-phase orchestrator with cost budget, checkpoints, OTel (beta)"
       - "Added startd8.workflow.contractor.design_handoff: cross-process handoff for two-half split execution (beta)"
       - "Total capabilities: 42 (was 40)"
   - version: "2.3.0"

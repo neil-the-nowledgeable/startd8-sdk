@@ -8,7 +8,7 @@
 
 ## Overview
 
-This document defines functional requirements for the Prime Contractor workflow. The prime contractor is a code generation route that uses a FeatureQueue → LeadContractorCodeGenerator → PrimeContractorWorkflow pattern, simpler than the artisan's 7-phase workflow but with fewer quality gates.
+This document defines functional requirements for the Prime Contractor workflow. The prime contractor is a code generation route that uses a FeatureQueue → LeadContractorCodeGenerator → PrimeContractorWorkflow pattern, simpler than the artisan's 8-phase workflow but with fewer quality gates.
 
 The Run 2 post-mortem and Mottainai analysis identified that the prime contractor has **worse context propagation** than the artisan — no onboarding injection, no architectural context, no design calibration, and no post-generation validation. These requirements close those gaps.
 

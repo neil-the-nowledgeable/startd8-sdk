@@ -48,7 +48,7 @@ import questionary
 from abc import ABC, abstractmethod
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional, Protocol, Sequence, runtime_checkable
@@ -650,6 +650,10 @@ class JsonFileCheckpointStore(CheckpointStore):
             self._writable = True
 
     def _path(self, workflow_id: str) -> Path:
+        if not _SAFE_TASK_ID_PATTERN.match(workflow_id):
+            raise ValueError(
+                f"Unsafe workflow_id for checkpoint path: {workflow_id!r}"
+            )
         return self.directory / f"{workflow_id}.checkpoint.json"
 
     def save(self, checkpoint: WorkflowCheckpoint) -> None:
@@ -664,14 +668,36 @@ class JsonFileCheckpointStore(CheckpointStore):
         # are here — same directory).  This guarantees the checkpoint
         # is either fully persisted or not persisted at all.
         tmp_path = path.with_suffix(".tmp")
-        tmp_path.write_text(data, encoding="utf-8")
-        tmp_path.replace(path)
+        try:
+            tmp_path.write_text(data, encoding="utf-8")
+            tmp_path.replace(path)
+        except OSError as exc:
+            logger.warning(
+                "Checkpoint save failed for workflow %s: %s — "
+                "workflow continues without persistence",
+                checkpoint.workflow_id,
+                exc,
+            )
+            # Clean up orphaned temp file
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
     def load(self, workflow_id: str) -> Optional[WorkflowCheckpoint]:
         path = self._path(workflow_id)
         if not path.exists():
             return None
-        data = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.error(
+                "Checkpoint file for workflow %s is corrupt or unreadable: %s — "
+                "treating as absent (will not resume)",
+                workflow_id,
+                exc,
+            )
+            return None
 
         # Backward compatibility: v1 checkpoints lack feature-serial fields
         if "schema_version" not in data:
@@ -751,6 +777,24 @@ class JsonFileCheckpointStore(CheckpointStore):
                     data["wave_assignments"] = {}
                     break
 
+        # Filter out unknown keys to tolerate future schema additions or
+        # manual edits without crashing on TypeError.
+        known_fields = {f.name for f in fields(WorkflowCheckpoint)}
+        unknown = set(data.keys()) - known_fields
+        if unknown:
+            logger.warning(
+                "Checkpoint for workflow %s contains unknown fields %s — "
+                "ignoring them (possible future schema or manual edit)",
+                workflow_id,
+                sorted(unknown),
+            )
+            data = {k: v for k, v in data.items() if k in known_fields}
+
+        logger.info(
+            "Loaded checkpoint for workflow %s (schema v%d)",
+            workflow_id,
+            data.get("schema_version", 1),
+        )
         return WorkflowCheckpoint(**data)
 
     def delete(self, workflow_id: str) -> None:
@@ -812,7 +856,7 @@ def compute_waves(
     *,
     strict: bool = False,
 ) -> list[list[WaveComputeTask]]:
-    """Group tasks into dependency-depth waves using BFS level assignment.
+    """Group tasks into dependency-depth waves using Kahn's topological sort with wave-depth tracking.
 
     Wave 0 = tasks with no dependencies. Wave N = tasks whose deps all
     resolve to waves < N.  Cycle detection falls back to a single wave
@@ -1061,7 +1105,7 @@ def compute_lanes(tasks: list) -> list[list]:
         task_id_to_idx[task.task_id] = i
 
         # Merge by shared target_files
-        for tf in task.target_files:
+        for tf in (task.target_files or []):
             if tf in file_to_idx:
                 union(i, file_to_idx[tf])
             else:
@@ -1069,7 +1113,7 @@ def compute_lanes(tasks: list) -> list[list]:
 
     # Merge by depends_on (both sides must be in same lane)
     for i, task in enumerate(tasks):
-        for dep_id in task.depends_on:
+        for dep_id in (task.depends_on or []):
             dep_idx = task_id_to_idx.get(dep_id)
             if dep_idx is not None:
                 union(i, dep_idx)
@@ -1108,8 +1152,9 @@ def _isolate_context_for_lane(
     ctx = copy.deepcopy(base_context)
     lane_task_ids = {t.task_id for t in lane_tasks}
 
-    # Replace "tasks" with only this lane's tasks
-    ctx["tasks"] = lane_tasks
+    # Replace "tasks" with only this lane's tasks.
+    # Deep-copy to prevent handler mutations from corrupting shared objects.
+    ctx["tasks"] = copy.deepcopy(lane_tasks)
 
     # Narrow task-keyed dicts to this lane (uses module-level constant)
     for field_name in _TASK_KEYED_FIELDS:
@@ -1220,6 +1265,9 @@ class _CostTracker:
         self.cumulative_cost: float = 0.0
 
     def add(self, cost: float) -> None:
+        if cost < 0:
+            logger.warning("Negative cost %s clamped to 0", cost)
+            cost = 0.0
         self.cumulative_cost += cost
 
     def set_cumulative(self, cost: float) -> None:
@@ -1365,6 +1413,9 @@ class ArtisanContractorWorkflow:
                 self._tracer = _NoOpTracer()
         return self._tracer
 
+    # Sentinel indicating error store init was attempted and failed.
+    _ERROR_STORE_UNAVAILABLE = object()
+
     @property
     def error_store(self) -> Any:
         """Lazy-initialised :class:`TaskErrorStore` for persisting errors."""
@@ -1374,8 +1425,15 @@ class ArtisanContractorWorkflow:
 
                 project_root = self.config.project_root or str(Path.cwd())
                 self._error_store = TaskErrorStore(project_root=project_root)
-            except Exception:
-                self._error_store = None
+            except Exception as exc:
+                self._logger.warning(
+                    "TaskErrorStore unavailable: %s — errors will not be "
+                    "persisted to disk",
+                    exc,
+                )
+                self._error_store = self._ERROR_STORE_UNAVAILABLE
+        if self._error_store is self._ERROR_STORE_UNAVAILABLE:
+            return None
         return self._error_store
 
     def _record_error(
@@ -1534,7 +1592,7 @@ class ArtisanContractorWorkflow:
             _telem_state = get_otel_runtime_state()
             self._logger.info(format_telemetry_banner(_telem_state))
         except Exception:
-            pass
+            self._logger.debug("Telemetry banner unavailable", exc_info=True)
 
         # Start OTel root span
         root_span_context = self.tracer.start_as_current_span(
@@ -2250,6 +2308,109 @@ class ArtisanContractorWorkflow:
                 f"Unsupported handlers: {', '.join(unsupported)}"
             )
 
+    def _execute_global_phase(
+        self,
+        phase: WorkflowPhase,
+        context: dict[str, Any],
+        phase_results: list[PhaseResult],
+        cost_tracker: "_CostTracker",
+        workflow_start: float,
+        mode_label: str,
+        **extra_checkpoint_kwargs: Any,
+    ) -> None:
+        """Execute a single global phase with timeout, checkpoint, and error handling.
+
+        This is the shared implementation for global phases (PLAN, SCAFFOLD,
+        FINALIZE) across all execution modes. It handles:
+        1. Timeout check before execution
+        2. Phase execution and result recording
+        3. Checkpoint persistence after completion
+        4. Raising PhaseExecutionError / WorkflowTimeoutError on failure
+
+        Args:
+            phase: The global phase to execute.
+            context: Shared mutable context dict.
+            phase_results: List to append the phase result to.
+            cost_tracker: Cost accumulator for budget enforcement.
+            workflow_start: Monotonic time when workflow started.
+            mode_label: Log prefix for the execution mode (e.g. "Feature-serial").
+            **extra_checkpoint_kwargs: Additional kwargs passed to _persist_checkpoint
+                (e.g. completed_features, lane_assignments, wave state).
+
+        Raises:
+            WorkflowTimeoutError: If timeout expires before or during execution.
+            PhaseExecutionError: If the phase fails.
+        """
+        config = self.config
+        phase_idx = self.phases.index(phase)
+
+        elapsed = time.monotonic() - workflow_start
+        if config.total_timeout_seconds is not None:
+            remaining = config.total_timeout_seconds - elapsed
+            if remaining <= 0:
+                checkpoint = self._persist_checkpoint(
+                    self.phases[phase_idx - 1] if phase_idx > 0 else None,
+                    phase_results,
+                    cost_tracker.cumulative_cost,
+                    WorkflowStatus.TIMED_OUT,
+                    context=context,
+                    **extra_checkpoint_kwargs,
+                )
+                raise WorkflowTimeoutError(
+                    f"Timeout before global phase {phase.value}",
+                    checkpoint=checkpoint,
+                )
+        else:
+            remaining = None
+
+        self._logger.info("%s: executing global phase %s", mode_label, phase.value)
+
+        phase_result = self._execute_phase(phase, context, remaining)
+        phase_results.append(phase_result)
+        cost_tracker.add(phase_result.cost)
+
+        if phase_result.status == PhaseStatus.COMPLETED:
+            self._commit_changes(phase)
+
+        # Persist checkpoint after global phase
+        self._persist_checkpoint(
+            phase,
+            phase_results,
+            cost_tracker.cumulative_cost,
+            WorkflowStatus.IN_PROGRESS,
+            context=context,
+            **extra_checkpoint_kwargs,
+        )
+
+        if phase_result.status == PhaseStatus.FAILED:
+            checkpoint = self._persist_checkpoint(
+                phase,
+                phase_results,
+                cost_tracker.cumulative_cost,
+                WorkflowStatus.FAILED,
+                context=context,
+                **extra_checkpoint_kwargs,
+            )
+            raise PhaseExecutionError(
+                f"Global phase {phase.value} failed: {phase_result.error_message}",
+                phase=phase,
+                checkpoint=checkpoint,
+            )
+
+        if phase_result.status == PhaseStatus.TIMED_OUT:
+            checkpoint = self._persist_checkpoint(
+                phase,
+                phase_results,
+                cost_tracker.cumulative_cost,
+                WorkflowStatus.TIMED_OUT,
+                context=context,
+                **extra_checkpoint_kwargs,
+            )
+            raise WorkflowTimeoutError(
+                f"Global phase {phase.value} timed out",
+                checkpoint=checkpoint,
+            )
+
     def _execute_phase_serial_mode(
         self,
         context: dict[str, Any],
@@ -2442,6 +2603,9 @@ class ArtisanContractorWorkflow:
                     break
 
         # Execute global start phases (PLAN, SCAFFOLD)
+        _fs_checkpoint_kwargs = dict(
+            current_feature=None, current_feature_phase=None,
+        )
         for phase in GLOBAL_START_PHASES:
             if phase not in self.phases:
                 continue
@@ -2456,77 +2620,11 @@ class ArtisanContractorWorkflow:
                 )
                 continue
 
-            elapsed = time.monotonic() - workflow_start
-            if config.total_timeout_seconds is not None:
-                remaining = config.total_timeout_seconds - elapsed
-                if remaining <= 0:
-                    checkpoint = self._persist_checkpoint(
-                        self.phases[phase_idx - 1] if phase_idx > 0 else None,
-                        phase_results,
-                        cost_tracker.cumulative_cost,
-                        WorkflowStatus.TIMED_OUT,
-                        context=context,
-                        current_feature=None,
-                        current_feature_phase=None,
-                    )
-                    raise WorkflowTimeoutError(
-                        f"Timeout before global phase {phase.value}",
-                        checkpoint=checkpoint,
-                    )
-            else:
-                remaining = None
-
-            self._logger.info("Feature-serial: executing global phase %s", phase.value)
-
-            phase_result = self._execute_phase(phase, context, remaining)
-            phase_results.append(phase_result)
-            cost_tracker.add(phase_result.cost)
-
-            if phase_result.status == PhaseStatus.COMPLETED:
-                self._commit_changes(phase)
-
-            # Persist checkpoint after global phase
-            self._persist_checkpoint(
-                phase,
-                phase_results,
-                cost_tracker.cumulative_cost,
-                WorkflowStatus.IN_PROGRESS,
-                context=context,
-                current_feature=None,
-                current_feature_phase=None,
+            self._execute_global_phase(
+                phase, context, phase_results, cost_tracker,
+                workflow_start, "Feature-serial",
+                **_fs_checkpoint_kwargs,
             )
-
-            # Check for failure/timeout
-            if phase_result.status == PhaseStatus.FAILED:
-                checkpoint = self._persist_checkpoint(
-                    phase,
-                    phase_results,
-                    cost_tracker.cumulative_cost,
-                    WorkflowStatus.FAILED,
-                    context=context,
-                    current_feature=None,
-                    current_feature_phase=None,
-                )
-                raise PhaseExecutionError(
-                    f"Global phase {phase.value} failed: {phase_result.error_message}",
-                    phase=phase,
-                    checkpoint=checkpoint,
-                )
-
-            if phase_result.status == PhaseStatus.TIMED_OUT:
-                checkpoint = self._persist_checkpoint(
-                    phase,
-                    phase_results,
-                    cost_tracker.cumulative_cost,
-                    WorkflowStatus.TIMED_OUT,
-                    context=context,
-                    current_feature=None,
-                    current_feature_phase=None,
-                )
-                raise WorkflowTimeoutError(
-                    f"Global phase {phase.value} timed out",
-                    checkpoint=checkpoint,
-                )
 
         # Execute feature-serial inner loop
         (
@@ -2583,88 +2681,21 @@ class ArtisanContractorWorkflow:
                 )
 
         # Execute global end phases (FINALIZE)
+        _fs_end_kwargs = dict(
+            completed_features=completed_features,
+            current_feature=None,
+            current_feature_phase=None,
+            feature_partial_results=feature_partial_results,
+        )
         for phase in GLOBAL_END_PHASES:
             if phase not in self.phases:
                 continue
 
-            elapsed = time.monotonic() - workflow_start
-            if config.total_timeout_seconds is not None:
-                remaining = config.total_timeout_seconds - elapsed
-                if remaining <= 0:
-                    checkpoint = self._persist_checkpoint(
-                        WorkflowPhase.REVIEW,  # Last inner phase
-                        phase_results,
-                        cost_tracker.cumulative_cost,
-                        WorkflowStatus.TIMED_OUT,
-                        context=context,
-                        completed_features=completed_features,
-                        current_feature=None,
-                        current_feature_phase=None,
-                        feature_partial_results=feature_partial_results,
-                    )
-                    raise WorkflowTimeoutError(
-                        f"Timeout before global phase {phase.value}",
-                        checkpoint=checkpoint,
-                    )
-            else:
-                remaining = None
-
-            self._logger.info("Feature-serial: executing global phase %s", phase.value)
-
-            phase_result = self._execute_phase(phase, context, remaining)
-            phase_results.append(phase_result)
-            cost_tracker.add(phase_result.cost)
-
-            if phase_result.status == PhaseStatus.COMPLETED:
-                self._commit_changes(phase)
-
-            # Persist final checkpoint
-            self._persist_checkpoint(
-                phase,
-                phase_results,
-                cost_tracker.cumulative_cost,
-                WorkflowStatus.IN_PROGRESS,
-                context=context,
-                completed_features=completed_features,
-                current_feature=None,
-                current_feature_phase=None,
-                feature_partial_results=feature_partial_results,
+            self._execute_global_phase(
+                phase, context, phase_results, cost_tracker,
+                workflow_start, "Feature-serial",
+                **_fs_end_kwargs,
             )
-
-            if phase_result.status == PhaseStatus.FAILED:
-                checkpoint = self._persist_checkpoint(
-                    phase,
-                    phase_results,
-                    cost_tracker.cumulative_cost,
-                    WorkflowStatus.FAILED,
-                    context=context,
-                    completed_features=completed_features,
-                    current_feature=None,
-                    current_feature_phase=None,
-                    feature_partial_results=feature_partial_results,
-                )
-                raise PhaseExecutionError(
-                    f"Global phase {phase.value} failed: {phase_result.error_message}",
-                    phase=phase,
-                    checkpoint=checkpoint,
-                )
-
-            if phase_result.status == PhaseStatus.TIMED_OUT:
-                checkpoint = self._persist_checkpoint(
-                    phase,
-                    phase_results,
-                    cost_tracker.cumulative_cost,
-                    WorkflowStatus.TIMED_OUT,
-                    context=context,
-                    completed_features=completed_features,
-                    current_feature=None,
-                    current_feature_phase=None,
-                    feature_partial_results=feature_partial_results,
-                )
-                raise WorkflowTimeoutError(
-                    f"Global phase {phase.value} timed out",
-                    checkpoint=checkpoint,
-                )
 
         return WorkflowStatus.COMPLETED
 
@@ -2731,50 +2762,10 @@ class ArtisanContractorWorkflow:
                 )
                 continue
 
-            elapsed = time.monotonic() - workflow_start
-            if config.total_timeout_seconds is not None:
-                remaining = config.total_timeout_seconds - elapsed
-                if remaining <= 0:
-                    checkpoint = self._persist_checkpoint(
-                        self.phases[phase_idx - 1] if phase_idx > 0 else None,
-                        phase_results, cost_tracker.cumulative_cost,
-                        WorkflowStatus.TIMED_OUT, context=context,
-                    )
-                    raise WorkflowTimeoutError(
-                        f"Timeout before global phase {phase.value}",
-                        checkpoint=checkpoint,
-                    )
-            else:
-                remaining = None
-
-            self._logger.info("Lane-parallel: executing global phase %s", phase.value)
-            phase_result = self._execute_phase(phase, context, remaining)
-            phase_results.append(phase_result)
-            cost_tracker.add(phase_result.cost)
-
-            self._persist_checkpoint(
-                phase, phase_results, cost_tracker.cumulative_cost,
-                WorkflowStatus.IN_PROGRESS, context=context,
+            self._execute_global_phase(
+                phase, context, phase_results, cost_tracker,
+                workflow_start, "Lane-parallel",
             )
-
-            if phase_result.status == PhaseStatus.FAILED:
-                checkpoint = self._persist_checkpoint(
-                    phase, phase_results, cost_tracker.cumulative_cost,
-                    WorkflowStatus.FAILED, context=context,
-                )
-                raise PhaseExecutionError(
-                    f"Global phase {phase.value} failed: {phase_result.error_message}",
-                    phase=phase, checkpoint=checkpoint,
-                )
-            if phase_result.status == PhaseStatus.TIMED_OUT:
-                checkpoint = self._persist_checkpoint(
-                    phase, phase_results, cost_tracker.cumulative_cost,
-                    WorkflowStatus.TIMED_OUT, context=context,
-                )
-                raise WorkflowTimeoutError(
-                    f"Global phase {phase.value} timed out",
-                    checkpoint=checkpoint,
-                )
 
         # --- Compute lanes ---
         tasks = context.get("tasks", [])
@@ -2834,9 +2825,11 @@ class ArtisanContractorWorkflow:
             lane_ctx = _isolate_context_for_lane(context, lane_tasks)
             lane_cost_tracker = _CostTracker(budget=config.cost_budget)
 
-            # Restore cumulative cost so budget checks are global
+            # Snapshot global cost at lane start so we can compute an
+            # accurate delta after the lane finishes.
             with cost_lock:
-                lane_cost_tracker.set_cumulative(cost_tracker.cumulative_cost)
+                initial_cumulative = cost_tracker.cumulative_cost
+                lane_cost_tracker.set_cumulative(initial_cumulative)
 
             self._logger.info(
                 "Lane %d: starting (%d tasks: %s)",
@@ -2852,7 +2845,7 @@ class ArtisanContractorWorkflow:
                 _current_feature_phase,
             ) = self._execute_feature_serial_loop(
                 context=lane_ctx,
-                phase_results=phase_results,  # Global phase results (read-only)
+                phase_results=phase_results,  # Shared; read for checkpoint serialization
                 cost_tracker=lane_cost_tracker,
                 workflow_start=workflow_start,
                 loaded_checkpoint=None,  # Each lane starts fresh
@@ -2864,12 +2857,13 @@ class ArtisanContractorWorkflow:
                 checkpoint_lock=checkpoint_lock,
             )
 
-            # Accumulate cost back to global tracker under lock
-            lane_cost = lane_cost_tracker.cumulative_cost - cost_tracker.cumulative_cost
-            if lane_cost < 0:
-                lane_cost = lane_cost_tracker.cumulative_cost
+            # Accumulate lane-local cost delta back to global tracker
+            # under lock. Delta is relative to the snapshot taken at
+            # lane start, avoiding the TOCTOU race of reading
+            # cost_tracker.cumulative_cost outside the lock.
+            lane_cost = max(0.0, lane_cost_tracker.cumulative_cost - initial_cumulative)
             with cost_lock:
-                cost_tracker.add(max(0.0, lane_cost))
+                cost_tracker.add(lane_cost)
 
             lane_contexts[lane_idx] = lane_ctx
 
@@ -2927,12 +2921,22 @@ class ArtisanContractorWorkflow:
                 for future in futures:
                     try:
                         future.result()  # Block until done
-                    except Exception as exc:
+                    except (PhaseExecutionError, WorkflowTimeoutError,
+                            CostBudgetExceededError) as exc:
                         lane_idx = futures[future]
                         lane_errors[lane_idx] = str(exc)
                         cancel_event.set()
                         self._logger.error(
-                            "Lane %d raised exception: %s", lane_idx, exc,
+                            "Lane %d: %s: %s",
+                            lane_idx, type(exc).__name__, exc,
+                        )
+                    except Exception as exc:
+                        lane_idx = futures[future]
+                        lane_errors[lane_idx] = repr(exc)
+                        cancel_event.set()
+                        self._logger.error(
+                            "Lane %d raised unexpected exception: %s",
+                            lane_idx, exc, exc_info=True,
                         )
 
         # --- Check for lane failures ---
@@ -2961,66 +2965,20 @@ class ArtisanContractorWorkflow:
         _merge_lane_results(context, completed_lane_contexts)
 
         # --- Execute global end phases (FINALIZE) ---
+        _lp_end_kwargs = dict(
+            lane_assignments=lane_assignments,
+            completed_lanes=completed_lanes,
+            lane_results=lane_results_map,
+        )
         for phase in GLOBAL_END_PHASES:
             if phase not in self.phases:
                 continue
 
-            elapsed = time.monotonic() - workflow_start
-            if config.total_timeout_seconds is not None:
-                remaining = config.total_timeout_seconds - elapsed
-                if remaining <= 0:
-                    checkpoint = self._persist_checkpoint(
-                        WorkflowPhase.REVIEW, phase_results,
-                        cost_tracker.cumulative_cost,
-                        WorkflowStatus.TIMED_OUT, context=context,
-                        lane_assignments=lane_assignments,
-                        completed_lanes=completed_lanes,
-                        lane_results=lane_results_map,
-                    )
-                    raise WorkflowTimeoutError(
-                        f"Timeout before global phase {phase.value}",
-                        checkpoint=checkpoint,
-                    )
-            else:
-                remaining = None
-
-            self._logger.info("Lane-parallel: executing global phase %s", phase.value)
-            phase_result = self._execute_phase(phase, context, remaining)
-            phase_results.append(phase_result)
-            cost_tracker.add(phase_result.cost)
-
-            self._persist_checkpoint(
-                phase, phase_results, cost_tracker.cumulative_cost,
-                WorkflowStatus.IN_PROGRESS, context=context,
-                lane_assignments=lane_assignments,
-                completed_lanes=completed_lanes,
-                lane_results=lane_results_map,
+            self._execute_global_phase(
+                phase, context, phase_results, cost_tracker,
+                workflow_start, "Lane-parallel",
+                **_lp_end_kwargs,
             )
-
-            if phase_result.status == PhaseStatus.FAILED:
-                checkpoint = self._persist_checkpoint(
-                    phase, phase_results, cost_tracker.cumulative_cost,
-                    WorkflowStatus.FAILED, context=context,
-                    lane_assignments=lane_assignments,
-                    completed_lanes=completed_lanes,
-                    lane_results=lane_results_map,
-                )
-                raise PhaseExecutionError(
-                    f"Global phase {phase.value} failed: {phase_result.error_message}",
-                    phase=phase, checkpoint=checkpoint,
-                )
-            if phase_result.status == PhaseStatus.TIMED_OUT:
-                checkpoint = self._persist_checkpoint(
-                    phase, phase_results, cost_tracker.cumulative_cost,
-                    WorkflowStatus.TIMED_OUT, context=context,
-                    lane_assignments=lane_assignments,
-                    completed_lanes=completed_lanes,
-                    lane_results=lane_results_map,
-                )
-                raise WorkflowTimeoutError(
-                    f"Global phase {phase.value} timed out",
-                    checkpoint=checkpoint,
-                )
 
         return WorkflowStatus.COMPLETED
 
@@ -3099,53 +3057,10 @@ class ArtisanContractorWorkflow:
                 )
                 continue
 
-            elapsed = time.monotonic() - workflow_start
-            if config.total_timeout_seconds is not None:
-                remaining = config.total_timeout_seconds - elapsed
-                if remaining <= 0:
-                    checkpoint = self._persist_checkpoint(
-                        self.phases[phase_idx - 1] if phase_idx > 0 else None,
-                        phase_results, cost_tracker.cumulative_cost,
-                        WorkflowStatus.TIMED_OUT, context=context,
-                    )
-                    raise WorkflowTimeoutError(
-                        f"Timeout before global phase {phase.value}",
-                        checkpoint=checkpoint,
-                    )
-            else:
-                remaining = None
-
-            self._logger.info(
-                "Wave-parallel: executing global phase %s", phase.value,
+            self._execute_global_phase(
+                phase, context, phase_results, cost_tracker,
+                workflow_start, "Wave-parallel",
             )
-            phase_result = self._execute_phase(phase, context, remaining)
-            phase_results.append(phase_result)
-            cost_tracker.add(phase_result.cost)
-
-            self._persist_checkpoint(
-                phase, phase_results, cost_tracker.cumulative_cost,
-                WorkflowStatus.IN_PROGRESS, context=context,
-            )
-
-            if phase_result.status == PhaseStatus.FAILED:
-                checkpoint = self._persist_checkpoint(
-                    phase, phase_results, cost_tracker.cumulative_cost,
-                    WorkflowStatus.FAILED, context=context,
-                )
-                raise PhaseExecutionError(
-                    f"Global phase {phase.value} failed: "
-                    f"{phase_result.error_message}",
-                    phase=phase, checkpoint=checkpoint,
-                )
-            if phase_result.status == PhaseStatus.TIMED_OUT:
-                checkpoint = self._persist_checkpoint(
-                    phase, phase_results, cost_tracker.cumulative_cost,
-                    WorkflowStatus.TIMED_OUT, context=context,
-                )
-                raise WorkflowTimeoutError(
-                    f"Global phase {phase.value} timed out",
-                    checkpoint=checkpoint,
-                )
 
         # --- B. Compute waves from context tasks ---
         tasks = context.get("tasks", [])
@@ -3447,13 +3362,22 @@ class ArtisanContractorWorkflow:
                     for future in concurrent.futures.as_completed(futures):
                         try:
                             future.result()
-                        except Exception as exc:
+                        except (PhaseExecutionError, WorkflowTimeoutError,
+                                CostBudgetExceededError) as exc:
                             li = futures[future]
                             lane_errors[li] = str(exc)
                             cancel_event.set()
                             self._logger.error(
-                                "Wave %d Lane %d raised exception: %s",
-                                wave_idx, li, exc,
+                                "Wave %d Lane %d: %s: %s",
+                                wave_idx, li, type(exc).__name__, exc,
+                            )
+                        except Exception as exc:
+                            li = futures[future]
+                            lane_errors[li] = repr(exc)
+                            cancel_event.set()
+                            self._logger.error(
+                                "Wave %d Lane %d raised unexpected exception: %s",
+                                wave_idx, li, exc, exc_info=True,
                             )
 
             # C.3 Barrier: check for lane failures
@@ -3514,16 +3438,19 @@ class ArtisanContractorWorkflow:
                 checkpoint_restored_task_ids=restored_ids,
             )
 
-            # Post-barrier: verify global context fields unchanged
+            # Post-barrier: verify global context fields unchanged.
+            # If a lane thread mutated a read-only field, restore from
+            # the pre-wave snapshot to prevent corrupt state from
+            # propagating to subsequent waves.
             for gf in _READ_ONLY_GLOBAL_FIELDS:
                 if gf in context and gf in pre_wave_global_snapshot:
                     if context[gf] != pre_wave_global_snapshot[gf]:
                         self._logger.error(
                             "Global context field '%s' was modified during "
-                            "wave %d — this indicates a lane thread mutated "
-                            "shared state",
+                            "wave %d — restoring from pre-wave snapshot",
                             gf, wave_idx,
                         )
+                        context[gf] = pre_wave_global_snapshot[gf]
 
             # C.5 Layer 2: authoritative per-wave cost budget check
             cumulative_after_wave = cost_tracker.cumulative_cost
@@ -3590,69 +3517,20 @@ class ArtisanContractorWorkflow:
                 return WorkflowStatus.FAILED_CHECKPOINT
 
         # --- D. Global end phase (FINALIZE) ---
+        _wl_end_kwargs = dict(
+            wave_assignments=wave_assignments,
+            completed_waves=list(completed_waves_set),
+            wave_resume_count=cp_wave_resume_count,
+        )
         for phase in GLOBAL_END_PHASES:
             if phase not in self.phases:
                 continue
 
-            elapsed = time.monotonic() - workflow_start
-            if config.total_timeout_seconds is not None:
-                remaining = config.total_timeout_seconds - elapsed
-                if remaining <= 0:
-                    checkpoint = self._persist_checkpoint(
-                        WorkflowPhase.REVIEW, phase_results,
-                        cost_tracker.cumulative_cost,
-                        WorkflowStatus.TIMED_OUT, context=context,
-                        wave_assignments=wave_assignments,
-                        completed_waves=list(completed_waves_set),
-                        wave_resume_count=cp_wave_resume_count,
-                    )
-                    raise WorkflowTimeoutError(
-                        f"Timeout before global phase {phase.value}",
-                        checkpoint=checkpoint,
-                    )
-            else:
-                remaining = None
-
-            self._logger.info(
-                "Wave-parallel: executing global phase %s", phase.value,
+            self._execute_global_phase(
+                phase, context, phase_results, cost_tracker,
+                workflow_start, "Wave-parallel",
+                **_wl_end_kwargs,
             )
-            phase_result = self._execute_phase(phase, context, remaining)
-            phase_results.append(phase_result)
-            cost_tracker.add(phase_result.cost)
-
-            self._persist_checkpoint(
-                phase, phase_results, cost_tracker.cumulative_cost,
-                WorkflowStatus.IN_PROGRESS, context=context,
-                wave_assignments=wave_assignments,
-                completed_waves=list(completed_waves_set),
-                wave_resume_count=cp_wave_resume_count,
-            )
-
-            if phase_result.status == PhaseStatus.FAILED:
-                checkpoint = self._persist_checkpoint(
-                    phase, phase_results, cost_tracker.cumulative_cost,
-                    WorkflowStatus.FAILED, context=context,
-                    wave_assignments=wave_assignments,
-                    completed_waves=list(completed_waves_set),
-                    wave_resume_count=cp_wave_resume_count,
-                )
-                raise PhaseExecutionError(
-                    f"Global phase {phase.value} failed: "
-                    f"{phase_result.error_message}",
-                    phase=phase, checkpoint=checkpoint,
-                )
-            if phase_result.status == PhaseStatus.TIMED_OUT:
-                checkpoint = self._persist_checkpoint(
-                    phase, phase_results, cost_tracker.cumulative_cost,
-                    WorkflowStatus.TIMED_OUT, context=context,
-                    wave_assignments=wave_assignments,
-                    completed_waves=list(completed_waves_set),
-                    wave_resume_count=cp_wave_resume_count,
-                )
-                raise WorkflowTimeoutError(
-                    f"Global phase {phase.value} timed out",
-                    checkpoint=checkpoint,
-                )
 
         return WorkflowStatus.COMPLETED
 
@@ -3733,10 +3611,10 @@ class ArtisanContractorWorkflow:
                         "artifacts": phase_result.output or {},
                     }
 
-                # Track cost
+                    # Track cost
                     cost_tracker.add(phase_result.cost)
 
-                # Check for phase failure
+                    # Check for phase failure
                     if phase_result.status == PhaseStatus.FAILED:
                         inner_results[inner_phase.value]["status"] = "failed"
                         self._logger.warning(
@@ -3756,7 +3634,7 @@ class ArtisanContractorWorkflow:
                         )
                         return False, WorkflowStatus.TIMED_OUT, inner_results
 
-                # Check budget after each inner phase
+                    # Check budget after each inner phase
                     if not cost_tracker.check_budget():
                         inner_results[inner_phase.value]["status"] = "budget_exceeded"
                         self._logger.warning(
@@ -3846,7 +3724,7 @@ class ArtisanContractorWorkflow:
         """Execute the feature-serial inner loop.
 
         This method orchestrates feature-serial execution where each feature
-        completes DESIGN → IMPLEMENT → TEST → REVIEW before the next feature
+        completes DESIGN → IMPLEMENT → INTEGRATE → TEST → REVIEW before the next feature
         begins. Global phases (PLAN, SCAFFOLD, FINALIZE) are handled by the
         caller.
 

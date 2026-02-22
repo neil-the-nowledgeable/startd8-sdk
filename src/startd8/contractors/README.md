@@ -154,7 +154,7 @@ src/startd8/contractors/
 ├── queue.py                  # FeatureQueue - ordered feature queue with dependencies
 ├── checkpoint.py             # IntegrationCheckpoint - validates code after integration
 ├── prime_contractor.py       # PrimeContractorWorkflow - per-feature orchestration
-├── artisan_contractor.py     # ArtisanContractorWorkflow - 7-phase orchestrator
+├── artisan_contractor.py     # ArtisanContractorWorkflow - 8-phase orchestrator
 ├── context_seed_handlers.py  # Phase handlers for artisan workflow
 ├── handoff.py                # Design handoff persistence (two-half split)
 ├── registry.py               # Plugin discovery via entry points
@@ -170,12 +170,12 @@ src/startd8/contractors/
 
 ## Artisan Contractor
 
-The `ArtisanContractorWorkflow` is a 7-phase orchestrator that separates design from implementation. It consumes an enriched context seed and provides explicit phase gates, checkpoint persistence, cost budget enforcement, and a two-half split execution model.
+The `ArtisanContractorWorkflow` is an 8-phase orchestrator that separates design from implementation. It consumes an enriched context seed and provides explicit phase gates, checkpoint persistence, cost budget enforcement, and a two-half split execution model.
 
 ### Phases
 
 ```
-PLAN ──▶ SCAFFOLD ──▶ DESIGN ──▶ IMPLEMENT ──▶ TEST ──▶ REVIEW ──▶ FINALIZE
+PLAN ──▶ SCAFFOLD ──▶ DESIGN ──▶ IMPLEMENT ──▶ INTEGRATE ──▶ TEST ──▶ REVIEW ──▶ FINALIZE
 ```
 
 ### Quick Start

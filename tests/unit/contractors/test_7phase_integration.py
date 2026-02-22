@@ -57,7 +57,7 @@ def _build_enriched_seed(tmp_path: Path) -> Path:
     seed_data = {
         "plan": {
             "title": "Test Integration Plan",
-            "goals": ["Verify 7-phase pipeline integration"],
+            "goals": ["Verify 8-phase pipeline integration"],
         },
         "_preflight": {
             "check_summary": {"pass": 2, "fail": 0, "warn": 0},
@@ -158,14 +158,14 @@ def _create_workflow_and_handlers(
 
 
 class TestSevenPhaseIntegration:
-    """Dry-run integration tests for the full 7-phase workflow pipeline."""
+    """Dry-run integration tests for the full 8-phase workflow pipeline."""
 
     # ------------------------------------------------------------------
     # test_create_all_returns_all_phases
     # ------------------------------------------------------------------
 
     def test_create_all_returns_all_phases(self, tmp_path: Path) -> None:
-        """Verify create_all() returns exactly 7 WorkflowPhase entries."""
+        """Verify create_all() returns exactly 8 WorkflowPhase entries."""
         seed_path = _build_enriched_seed(tmp_path)
 
         with patch(
@@ -185,7 +185,7 @@ class TestSevenPhaseIntegration:
     # ------------------------------------------------------------------
 
     def test_all_phases_execute_in_order(self, tmp_path: Path) -> None:
-        """Verify all 7 phases run in order and context accumulates expected keys."""
+        """Verify all 8 phases run in order and context accumulates expected keys."""
         seed_path = _build_enriched_seed(tmp_path)
         workflow, _handlers = _create_workflow_and_handlers(tmp_path, seed_path)
 

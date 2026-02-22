@@ -3,7 +3,7 @@
 Covers:
 - Entry validation for each phase (missing keys raise PhaseContextError)
 - Exit validation for each phase (invalid output raises PhaseContextError)
-- Happy-path validation through all 7 phases
+- Happy-path validation through all 8 phases
 - OrchestratorContext model validation
 - Edge cases (empty tasks, None values, extra keys)
 """
@@ -333,7 +333,7 @@ class TestValidatePhaseExit:
 
 
 class TestFullWorkflowHappyPath:
-    """Validate a context dict incrementally through all 7 phases."""
+    """Validate a context dict incrementally through all 8 phases."""
 
     def test_all_phases_entry_and_exit(self):
         ctx = _make_plan_context()

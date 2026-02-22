@@ -499,19 +499,20 @@ capabilities:
   - capability_id: startd8.workflow.builtin.artisan
     category: action
     maturity: beta
-    summary: 7-phase structured code generation with design review and quality calibration
+    summary: 8-phase structured code generation with design review, integration validation, and quality calibration
     audiences:
       - agent
       - human
     description:
       agent: |
         ArtisanContractorWorkflow with phases: PLAN, SCAFFOLD, DESIGN, IMPLEMENT,
-        TEST, REVIEW, FINALIZE. Supports phase subsets, cost budget, checkpoints, OTel.
+        INTEGRATE, TEST, REVIEW, FINALIZE. Supports phase subsets, cost budget, checkpoints, OTel.
         Design quality context: architectural_context + design_calibration depth tiers.
       human: |
-        Full software development lifecycle in 7 phases. Design half produces
-        reviewed specifications; implementation half generates code. Supports
-        human review between halves via design handoff files.
+        Full software development lifecycle in 8 phases. Design half produces
+        reviewed specifications; implementation half generates and integrates code
+        with validation and rollback. Supports human review between halves via
+        design handoff files.
     triggers:
       - artisan workflow
       - multi-phase generation
@@ -520,7 +521,7 @@ capabilities:
     evidence:
       - type: code
         ref: src/startd8/contractors/artisan_contractor.py
-        description: 7-phase orchestrator with checkpoints and cost budget
+        description: 8-phase orchestrator with checkpoints and cost budget
       - type: doc
         ref: docs/ARTISAN_WORKFLOW_GUIDE.md
         description: Comprehensive guide with phases, scripts, configuration

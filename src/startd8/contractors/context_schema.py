@@ -265,6 +265,36 @@ class IntegratePhaseOutput(BaseModel):
 
     integration_results: Dict[str, Any]  # task_id -> {success, integrated_files, errors, ...}
 
+    @field_validator("integration_results")
+    @classmethod
+    def integration_results_has_required_structure(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        for task_id, entry in v.items():
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"integration_results[{task_id!r}] should be a dict, "
+                    f"got {type(entry).__name__}"
+                )
+            required = {"success", "integrated_files", "errors"}
+            missing = required - set(entry.keys())
+            if missing:
+                raise ValueError(
+                    f"integration_results[{task_id!r}] missing required keys: "
+                    f"{sorted(missing)}"
+                )
+            if not isinstance(entry.get("success"), bool):
+                raise ValueError(
+                    f"integration_results[{task_id!r}]['success'] must be a bool"
+                )
+            if not isinstance(entry.get("integrated_files"), list):
+                raise ValueError(
+                    f"integration_results[{task_id!r}]['integrated_files'] must be a list"
+                )
+            if not isinstance(entry.get("errors"), list):
+                raise ValueError(
+                    f"integration_results[{task_id!r}]['errors'] must be a list"
+                )
+        return v
+
 
 class FinalizePhaseOutput(BaseModel):
     """Output of the FINALIZE phase."""

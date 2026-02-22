@@ -265,7 +265,7 @@ def main() -> int:
         default=None,
         help=(
             "Comma-separated task IDs to process (e.g. PI-001 or PI-001,PI-002). "
-            "Only these tasks run through all 7 phases. "
+            "Only these tasks run through all 8 phases. "
             "Enables deterministic workflow IDs for reliable --resume per task."
         ),
     )

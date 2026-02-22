@@ -28,7 +28,7 @@
 
 ## Overview
 
-The **Artisan Contractor** is a 7-phase workflow orchestrator that goes beyond the PrimeContractor by decomposing plans granularly before writing any code. Where PrimeContractor operates on a per-feature `generate -> integrate -> validate` loop, the Artisan Contractor separates **design** from **implementation** with explicit phase gates, checkpoint persistence, and cost budget enforcement.
+The **Artisan Contractor** is an 8-phase workflow orchestrator that goes beyond the PrimeContractor by decomposing plans granularly before writing any code. Where PrimeContractor operates on a per-feature `generate -> integrate -> validate` loop, the Artisan Contractor separates **design** from **implementation** with explicit phase gates, checkpoint persistence, and cost budget enforcement.
 
 ### Key Differences from PrimeContractor
 
@@ -36,7 +36,7 @@ The **Artisan Contractor** is a 7-phase workflow orchestrator that goes beyond t
 |--------|----------------|-------------------|
 | **Input** | Feature queue with descriptions | Enriched context seed (from PlanIngestion + DomainPreflight) |
 | **Design** | Implicit (LLM decides structure) | Explicit DESIGN phase with design documents per task |
-| **Phase control** | Single loop | 7 discrete phases with handlers, checkpoints, and budget gates |
+| **Phase control** | Single loop | 8 discrete phases with handlers, checkpoints, and budget gates |
 | **Execution model** | All-in-one | Supports split execution (design-only, implement-only) |
 | **Cost model** | Single agent tier | 3-tier architecture: Haiku (drafter) / Sonnet (validator) / Opus (reviewer). Default runtime: 2-tier (Haiku + Opus via `HandlerConfig`) |
 | **Resume** | Feature-level | Phase-level checkpoints with JSON persistence |
@@ -65,13 +65,13 @@ The **Artisan Contractor** is a 7-phase workflow orchestrator that goes beyond t
 │                               │                                          │
 │                    ┌──────────▼──────────┐                               │
 │                    │ ContextSeedHandlers │                               │
-│                    │  (7 phase handlers) │                               │
+│                    │  (8 phase handlers) │                               │
 │                    └──────────┬──────────┘                               │
 │                               │                                          │
-│  ┌────────┬────────┬──────────┼──────────┬────────┬────────┬────────┐   │
-│  │ PLAN   │SCAFFOLD│ DESIGN   │IMPLEMENT │ TEST   │ REVIEW │FINALIZE│   │
-│  │handler │handler │ handler  │ handler  │handler │handler │handler │   │
-│  └────────┴────────┴──────────┴──────────┴────────┴────────┴────────┘   │
+│  ┌──────┬───────┬──────┬─────┼────┬────────┬──────┬──────┬────────┐    │
+│  │ PLAN │SCAFF- │DESIGN│IMPL-│INT-│  TEST  │REVIEW│FINAL-│        │    │
+│  │      │ OLD   │      │EMENT│GRT │        │      │ IZE  │        │    │
+│  └──────┴───────┴──────┴─────┴────┴────────┴──────┴──────┴────────┘    │
 │                                                                          │
 │  ┌───────────────────────────────────────────────────────────────────┐   │
 │  │                       Support Layers                              │   │
@@ -86,7 +86,7 @@ The **Artisan Contractor** is a 7-phase workflow orchestrator that goes beyond t
 | Component | Module | Role |
 |-----------|--------|------|
 | `ArtisanContractorWorkflow` | `artisan_contractor.py` | Orchestrator: phase sequencing, timeouts, cost budget, checkpoints |
-| `ContextSeedHandlers` | `context_seed_handlers.py` | Factory that creates all 7 phase handler instances |
+| `ContextSeedHandlers` | `context_seed_handlers.py` | Factory that creates all 8 phase handler instances |
 | `HandlerConfig` | `context_seed_handlers.py` | Shared config (agent specs, thresholds, timeouts) with 3-tier priority |
 | `HandoffData` | `handoff.py` | Serializable context state for two-half workflow split |
 | `SeedTask` | `context_seed_handlers.py` | Parsed task from the enriched context seed |
@@ -97,10 +97,10 @@ The **Artisan Contractor** is a 7-phase workflow orchestrator that goes beyond t
 
 ## Phases
 
-The workflow consists of 7 phases executed sequentially. Each phase receives a shared mutable `context` dict and returns output, cost, and metadata.
+The workflow consists of 8 phases executed sequentially. Each phase receives a shared mutable `context` dict and returns output, cost, and metadata.
 
 ```
-PLAN ──▶ SCAFFOLD ──▶ DESIGN ──▶ IMPLEMENT ──▶ TEST ──▶ REVIEW ──▶ FINALIZE
+PLAN ──▶ SCAFFOLD ──▶ DESIGN ──▶ IMPLEMENT ──▶ INTEGRATE ──▶ TEST ──▶ REVIEW ──▶ FINALIZE
 ```
 
 ### Phase Details
@@ -186,7 +186,7 @@ Runs PLAN -> SCAFFOLD -> DESIGN and writes a **design handoff file** containing 
 
 ### Second Half: Implementation
 
-Loads the handoff file, reconstructs the shared context dict, and runs IMPLEMENT -> TEST -> REVIEW -> FINALIZE. If no handoff is available, the handlers automatically reload tasks from the enriched seed file via `_ensure_context_loaded()`.
+Loads the handoff file, reconstructs the shared context dict, and runs IMPLEMENT -> INTEGRATE -> TEST -> REVIEW -> FINALIZE. If no handoff is available, the handlers automatically reload tasks from the enriched seed file via `_ensure_context_loaded()`.
 
 ---
 
@@ -198,7 +198,7 @@ Loads the handoff file, reconstructs the shared context dict, and runs IMPLEMENT
 2. The SDK installed in dev mode: `pip3 install -e ".[all,dev]"`
 3. `ANTHROPIC_API_KEY` set in your environment
 
-### Full Workflow (All 7 Phases)
+### Full Workflow (All 8 Phases)
 
 ```bash
 python3 scripts/run_artisan_workflow.py \
@@ -326,7 +326,7 @@ export ARTISAN_SEED=/path/to/artisan-context-seed.json
 
 ### `scripts/run_artisan_workflow.py`
 
-Full 7-phase workflow runner.
+Full 8-phase workflow runner.
 
 | Flag | Description |
 |------|-------------|
@@ -365,7 +365,7 @@ Convenience wrapper that runs only PLAN -> SCAFFOLD -> DESIGN. Always writes `de
 
 ### `scripts/run_artisan_implement_only.py`
 
-Runs only IMPLEMENT -> TEST -> REVIEW -> FINALIZE using a design handoff.
+Runs only IMPLEMENT -> INTEGRATE -> TEST -> REVIEW -> FINALIZE using a design handoff.
 
 | Flag | Description |
 |------|-------------|
@@ -583,7 +583,7 @@ workflow = ArtisanContractorWorkflow(
     config: WorkflowConfig = None,        # Defaults to WorkflowConfig()
     handlers: dict[WorkflowPhase, AbstractPhaseHandler] = None,
     checkpoint_store: CheckpointStore = None,
-    phases: list[WorkflowPhase] = None,   # Defaults to all 7 phases
+    phases: list[WorkflowPhase] = None,   # Defaults to all 8 phases
 )
 
 workflow.register_handler(phase, handler)

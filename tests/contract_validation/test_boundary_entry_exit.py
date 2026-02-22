@@ -164,21 +164,20 @@ class TestDesignBoundary:
 
 class TestImplementBoundary:
 
-    def test_entry_blocked_by_quality_gate_on_dict(
+    def test_entry_warns_on_quality_gate_for_dict(
         self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
     ) -> None:
-        """IMPLEMENT entry has a blocking line_count >= 50 quality gate on
-        design_results. Since design_results is a dict, str(dict) produces
-        ~1 line → quality check always reports line_count=1.0 < 50.0.
-        This documents a gap: the quality extractor doesn't meaningfully
-        measure line_count on dict values.
+        """IMPLEMENT entry has a warning line_count >= 50 quality gate on
+        design_results (downgraded from blocking per CV-500). Since
+        design_results is a dict, str(dict) produces ~1 line → quality
+        check reports line_count=1.0 < 50.0 as a warning, not blocking.
         """
         ctx = build_plan_exit_context(tmp_path)
         build_scaffold_exit_context(ctx)
         build_design_exit_context(ctx)
         result = validator.validate_entry("implement", ctx, loaded_contract)
-        # Blocked by quality gate — str(dict) is ~1 line
-        assert result.passed is False
+        # Warning severity: entry passes
+        assert result.passed is True
         violations = [v for v in result.quality_violations if v.metric == "line_count"]
         assert len(violations) > 0
         assert violations[0].actual < 50.0

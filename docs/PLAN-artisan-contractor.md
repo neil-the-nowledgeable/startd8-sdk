@@ -2072,7 +2072,7 @@ def test_artisan_preflight_fails(tmp_path):
 
 ### Problem
 
-The orchestrator's shared `context` dict lives only in memory. When the first-half process (PLAN -> SCAFFOLD -> DESIGN) exits, `design_results`, `scaffold`, and other context keys are lost. The checkpoint mechanism stores phase execution metadata (cost, status, timing) but not context state. This prevents running the second half (IMPLEMENT -> TEST -> REVIEW -> FINALIZE) as a separate process.
+The orchestrator's shared `context` dict lives only in memory. When the first-half process (PLAN -> SCAFFOLD -> DESIGN) exits, `design_results`, `scaffold`, and other context keys are lost. The checkpoint mechanism stores phase execution metadata (cost, status, timing) but not context state. This prevents running the second half (IMPLEMENT -> INTEGRATE -> TEST -> REVIEW -> FINALIZE) as a separate process.
 
 ### Solution
 
@@ -2109,7 +2109,7 @@ A **design handoff file** (`design-handoff.json`) serializes the context state n
 |--------|--------|-----------------|
 | `run_artisan_design_only.py` | PLAN, SCAFFOLD, DESIGN | **Writes** handoff on success |
 | `run_artisan_workflow.py` with `--stop-after design` | PLAN through DESIGN | **Writes** handoff on success |
-| `run_artisan_implement_only.py` | IMPLEMENT, TEST, REVIEW, FINALIZE | **Reads** handoff (or falls back to seed-only) |
+| `run_artisan_implement_only.py` | IMPLEMENT, INTEGRATE, TEST, REVIEW, FINALIZE | **Reads** handoff (or falls back to seed-only) |
 
 ### Fallback Path
 

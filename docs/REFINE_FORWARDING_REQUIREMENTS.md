@@ -1,8 +1,10 @@
 # REFINE Output Forwarding — Functional Requirements
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Created:** 2026-02-21
+**Updated:** 2026-02-21
 **Source:** Mottainai audit (Gaps 5, 13), ContextCore propagation contract analysis
+**Status:** All 12 requirements implemented as of 2026-02-21. Test coverage in `tests/unit/test_plan_ingestion_workflow.py` (16 REFINE tests passing).
 **Prerequisite reading:**
 - [Mottainai Design Principle](design-princples/MOTTAINAI_DESIGN_PRINCIPLE.md) — Gaps 5, 13 define the problem
 - [Context Correctness by Construction](../../ContextCore/docs/design/CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md) — Layer 1 propagation chain model
@@ -19,9 +21,9 @@ Plan ingestion's REFINE phase runs a full `ArchitecturalReviewLogWorkflow` on th
 2. **Apply metadata** — which accepted suggestions were integrated into the document body, with warning IDs and integration status
 3. **Prompt caching savings** — available via `enable_prompt_caching` but not currently forwarded to the REFINE config
 
-None of this structured output reaches downstream consumers. The `_phase_refine()` return signature is `Tuple[int, List[StepResult], float]` — round count, step log, and cost. The `result.output` dict (containing triage, apply, area coverage, state path) is a local variable that goes out of scope.
+As of 2026-02-21, all structured output reaches downstream consumers. The `_phase_refine()` return signature is `Tuple[int, List[StepResult], float, Dict[str, Any]]` — round count, step log, cost, and review output. The review output (triage, apply, area coverage, state path) is forwarded through EMIT into both artisan and prime context seeds.
 
-This is a textbook instance of the Mottainai **Anti-Pattern 2: Compute-But-Don't-Forward** and a **BROKEN propagation chain** under the ContextCore Layer 1 contract model.
+This document was originally written when the chain was **BROKEN** (Mottainai Anti-Pattern 2: Compute-But-Don't-Forward). The propagation chain is now **INTACT** under the ContextCore Layer 1 contract model.
 
 **Primary source files:**
 - `src/startd8/workflows/builtin/plan_ingestion_workflow.py` (~line 1950, `_phase_refine`)
@@ -32,44 +34,17 @@ This is a textbook instance of the Mottainai **Anti-Pattern 2: Compute-But-Don't
 
 | Layer | ID Range | Total | Implemented | Planned |
 |-------|----------|-------|-------------|---------|
-| Return Type and Forwarding | REQ-RF-001–003 | 3 | 0 | 3 |
-| Seed Injection | REQ-RF-004–006 | 3 | 0 | 3 |
-| Config Passthrough | REQ-RF-007–009 | 3 | 0 | 3 |
-| Provenance and Observability | REQ-RF-010–012 | 3 | 0 | 3 |
-| **Total** | | **12** | **0** | **12** |
+| Return Type and Forwarding | REQ-RF-001–003 | 3 | 3 | 0 |
+| Seed Injection | REQ-RF-004–006 | 3 | 3 | 0 |
+| Config Passthrough | REQ-RF-007–009 | 3 | 3 | 0 |
+| Provenance and Observability | REQ-RF-010–012 | 3 | 3 | 0 |
+| **Total** | | **12** | **12** | **0** |
 
 ---
 
 ## Data Flow
 
-### Current (Broken Chain)
-
-```
-REFINE phase
-    │
-    ├── calls ArchitecturalReviewLogWorkflow.run()
-    │       │
-    │       └── returns WorkflowResult with:
-    │           ├── .output["triage"]          ← DISCARDED
-    │           ├── .output["apply"]           ← DISCARDED
-    │           ├── .output["state_path"]      ← DISCARDED
-    │           ├── .output["cumulative_cost_usd"]  ← REDUNDANT (also in .metrics)
-    │           ├── .metrics                   ← total_cost consumed
-    │           ├── .steps                     ← re-wrapped as refine:* steps
-    │           └── .success / .error          ← consumed
-    │
-    └── returns (rounds_completed, refine_steps, review_cost)
-                                    ↓
-                              EMIT phase
-                                    │
-                                    ├── builds ArtisanContextSeed
-                                    │   └── onboarding.refine_suggestions = None  ← ALWAYS NULL
-                                    │
-                                    └── builds prime-context-seed.json
-                                        └── onboarding.refine_suggestions = None  ← ALWAYS NULL
-```
-
-### Target (Intact Chain)
+### Current (Intact Chain)
 
 ```
 REFINE phase
@@ -93,6 +68,10 @@ REFINE phase
                                         ├── onboarding.refine_suggestions = [structured suggestions]
                                         └── artifacts.refine_provenance = {triage + apply metadata}
 ```
+
+### Historical (Pre-Implementation)
+
+Prior to implementation (2026-02-21), `_phase_refine()` returned only `Tuple[int, List[StepResult], float]` and all `result.output` data was discarded. Both artisan and prime seeds had `onboarding.refine_suggestions = None`.
 
 ### ContextCore Propagation Chain Declaration
 
@@ -133,7 +112,8 @@ propagation_chains:
 
 ### REQ-RF-001: Widen `_phase_refine()` Return Type
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Mottainai Anti-Pattern 2 (Compute-But-Don't-Forward) at the REFINE boundary
 **Source files:** `plan_ingestion_workflow.py` (~line 1950, `_phase_refine`)
 
@@ -150,7 +130,8 @@ propagation_chains:
 
 ### REQ-RF-002: Forward `review_output` to `_phase_emit()`
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Mottainai Gap 5 (data availability prerequisite)
 **Source files:** `plan_ingestion_workflow.py` (~line 2811, `_phase_emit`)
 
@@ -166,8 +147,10 @@ propagation_chains:
 
 ### REQ-RF-003: Extract Accepted Suggestions as Structured Data
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Mottainai Gap 5 (structured extraction), Gap 13 (prime route)
+**Implementation note:** The returned dicts include 5 fields (`id`, `area`, `severity`, `rationale`, `decision`) rather than the 7 specified (`suggestion`, `triage_rationale` omitted). The `rationale` field serves the combined purpose of both `suggestion` and `triage_rationale`, making separate fields redundant.
 **Source files:** `plan_ingestion_workflow.py` (new helper function)
 
 A helper function MUST extract accepted suggestions from `review_output["triage"]` into a structured list suitable for seed injection.
@@ -185,7 +168,8 @@ A helper function MUST extract accepted suggestions from `review_output["triage"
 
 ### REQ-RF-004: Inject Accepted Suggestions into Artisan Seed
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Mottainai Gap 5 (artisan route)
 **Source files:** `plan_ingestion_workflow.py` (~line 2952, artisan seed construction)
 **Depends on:** REQ-RF-002, REQ-RF-003
@@ -202,7 +186,8 @@ During artisan seed construction, extracted REFINE suggestions MUST be injected 
 
 ### REQ-RF-005: Inject Accepted Suggestions into Prime Seed
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Mottainai Gap 13 (prime route)
 **Source files:** `plan_ingestion_workflow.py` (~line 3064, prime seed construction)
 **Depends on:** REQ-RF-002, REQ-RF-003
@@ -218,7 +203,8 @@ During prime seed construction, the same extracted suggestions MUST be injected 
 
 ### REQ-RF-006: Inject Apply Provenance into Seed Artifacts
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** New gap (apply metadata as provenance)
 **Source files:** `plan_ingestion_workflow.py` (artisan + prime seed construction)
 **Depends on:** REQ-RF-002
@@ -243,7 +229,8 @@ Apply-step metadata MUST be recorded in the seed's `artifacts` dict for downstre
 
 ### REQ-RF-007: Pass `enable_apply` to REFINE Config
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Configuration gap — REFINE runs without the apply step
 **Source files:** `plan_ingestion_workflow.py` (~line 1968, `_phase_refine` review_config)
 
@@ -259,7 +246,8 @@ The REFINE phase's `review_config` MUST include `enable_apply` when present in t
 
 ### REQ-RF-008: Pass `enable_prompt_caching` to REFINE Config
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Configuration gap — REFINE runs without prompt caching cost savings
 **Source files:** `plan_ingestion_workflow.py` (~line 1968, `_phase_refine` review_config)
 
@@ -276,7 +264,8 @@ The REFINE phase's `review_config` MUST include `enable_prompt_caching` when pre
 
 ### REQ-RF-009: Pass `enable_triage` to REFINE Config
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Configuration gap — triage toggle not forwarded
 **Source files:** `plan_ingestion_workflow.py` (~line 1968, `_phase_refine` review_config)
 
@@ -294,7 +283,8 @@ The REFINE phase's `review_config` MUST include `enable_triage` when present in 
 
 ### REQ-RF-010: Extend Artifact Inventory with Apply Metadata
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Mottainai Rule 4 (Register what you produce)
 **Source files:** `plan_ingestion_workflow.py` (~line 2542, `_extend_inventory_with_ingestion`)
 **Depends on:** REQ-RF-002
@@ -322,7 +312,8 @@ The `_extend_inventory_with_ingestion()` method MUST register apply provenance a
 
 ### REQ-RF-011: Log Chain Status at EMIT Boundary
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Closes:** Mottainai Rule 6 (Measure the gap), ContextCore Layer 1 observability
 **Source files:** `plan_ingestion_workflow.py` (`_phase_emit`)
 **Depends on:** REQ-RF-004
@@ -339,7 +330,8 @@ The EMIT phase MUST log the propagation chain status for REFINE suggestions.
 
 ### REQ-RF-012: Update Convergent Review Config Passthrough
 
-**Status:** planned
+**Status:** implemented
+**Implemented:** 2026-02-21
 **Source files:** `convergent_review_workflow.py` (~line 144, ~line 191)
 
 `ConvergentReviewWorkflow` MUST forward all new architectural review config keys to its inner workflow calls.

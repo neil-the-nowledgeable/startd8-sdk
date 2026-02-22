@@ -100,6 +100,12 @@ class IntegrationEngine:
 
         Idempotent — skips if a snapshot already exists for this target.
         Stores ``None`` for absent targets so rollback knows to delete.
+
+        Limitation: snapshots are file-based (``.pre_integration`` sidecars)
+        and live only in the in-memory ``_pre_integration_snapshots`` dict.
+        If the process dies mid-integration, sidecar files may be orphaned
+        and no automatic recovery is possible.  AR-807 (git tag restore
+        points) is planned to address this with durable, git-based rollback.
         """
         key = str(target_path)
         if key in self._pre_integration_snapshots:

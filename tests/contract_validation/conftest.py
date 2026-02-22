@@ -8,7 +8,6 @@ Provides:
 
 from __future__ import annotations
 
-import copy
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -224,6 +223,8 @@ def build_design_exit_context(ctx: dict[str, Any]) -> dict[str, Any]:
             "design_mode": "update",
         },
     }
+    # Derived summary for chain 5 (design_mode_to_implement)
+    ctx["design_mode_summary"] = {"T1": "create", "T2": "create"}
     return ctx
 
 
@@ -234,6 +235,10 @@ def build_implement_exit_context(ctx: dict[str, Any]) -> dict[str, Any]:
         "task_reports": {"T1": {"status": "ok"}, "T2": {"status": "ok"}},
         "tasks_processed": 2,
         "total_cost": 0.05,
+        "metadata": {
+            "design_mode_summary": ctx.get("design_mode_summary", {}),
+            "service_metadata": ctx.get("service_metadata"),
+        },
     }
     ctx["generation_results"] = {
         "T1": {"code": gen_code, "file_path": "src/auth/login.py", "lines": 20},

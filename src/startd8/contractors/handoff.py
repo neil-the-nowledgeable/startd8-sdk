@@ -2,7 +2,7 @@
 Design handoff persistence for the two-half artisan workflow.
 
 The first half (PLAN → SCAFFOLD → DESIGN) writes a handoff file containing
-context state needed by the second half (IMPLEMENT → TEST → REVIEW → FINALIZE).
+context state needed by the second half (IMPLEMENT → INTEGRATE → TEST → REVIEW → FINALIZE).
 
 The second half auto-detects or explicitly loads this handoff file,
 reconstructs the shared context dict, and continues execution.

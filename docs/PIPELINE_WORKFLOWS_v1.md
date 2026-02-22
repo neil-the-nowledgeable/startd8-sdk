@@ -21,7 +21,7 @@ Startd8 provides a powerful pipeline orchestration system for chaining multiple 
 | Critical Review | `critical-review` | Multi-agent review | Multi-agent |
 | Lead Contractor | `lead-contractor` | Spec-driven iteration | Config-based |
 | Lead Contractor + ContextCore | `lead-contractor-contextcore` | Spec-driven + tracking | Config-based |
-| **Artisan Contractor** | `artisan-contractor` | **7-phase design+implement** | **3-tier architecture (Haiku/Sonnet/Opus); default runtime: Haiku+Opus** |
+| **Artisan Contractor** | `artisan-contractor` | **8-phase design+implement** | **3-tier architecture (Haiku/Sonnet/Opus); default runtime: Haiku+Opus** |
 | Policy Analysis | `policy-analysis` | Parallel critical analysis | 2-5 agents |
 | Plain Language | `plain-language` | Content simplification | 1-5 agents |
 
@@ -508,14 +508,14 @@ result = pipeline.run("REST API documentation for user service")
 
 ## Artisan Contractor Workflow
 
-The Artisan Contractor is a 7-phase orchestrated workflow for batch code generation with explicit design review. Unlike the simpler Pipeline workflows above, it operates on an **enriched context seed** (from PlanIngestion + DomainPreflight) and separates design from implementation.
+The Artisan Contractor is an 8-phase orchestrated workflow for batch code generation with explicit design review. Unlike the simpler Pipeline workflows above, it operates on an **enriched context seed** (from PlanIngestion + DomainPreflight) and separates design from implementation.
 
 > **Enriched seed naming:** DomainPreflightWorkflow derives the enriched filename from the input seed. The artisan route produces `artisan-context-seed-enriched.json`; the prime route produces `prime-context-seed-enriched.json`.
 
 ### Phases
 
 ```
-PLAN ──▶ SCAFFOLD ──▶ DESIGN ──▶ IMPLEMENT ──▶ TEST ──▶ REVIEW ──▶ FINALIZE
+PLAN ──▶ SCAFFOLD ──▶ DESIGN ──▶ IMPLEMENT ──▶ INTEGRATE ──▶ TEST ──▶ REVIEW ──▶ FINALIZE
 ```
 
 ### Two-Half Execution

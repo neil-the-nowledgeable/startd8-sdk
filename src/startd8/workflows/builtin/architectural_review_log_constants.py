@@ -182,6 +182,55 @@ OPTIONAL_COLUMNS = [
 REQUIRED_COLUMNS = CORE_COLUMNS + OPTIONAL_COLUMNS
 _OPTIONAL_COLUMN_DEFAULT = "N/A"
 
+# Alias map: common LLM column name synonyms → canonical CORE/OPTIONAL column names.
+# Keys are casefolded; values are the canonical column name (casefolded).
+# This lets the validator accept "recommendation" as "suggestion", etc.
+_COLUMN_ALIAS_MAP: Dict[str, str] = {
+    # ID synonyms
+    "#": "id",
+    "no": "id",
+    "no.": "id",
+    "number": "id",
+    "item": "id",
+    "ref": "id",
+    "suggestion id": "id",
+    # Area synonyms
+    "category": "area",
+    "domain": "area",
+    "focus area": "area",
+    "topic": "area",
+    # Severity synonyms
+    "level": "severity",
+    "priority": "severity",
+    "impact": "severity",
+    "sev": "severity",
+    # Suggestion synonyms
+    "recommendation": "suggestion",
+    "finding": "suggestion",
+    "issue": "suggestion",
+    "description": "suggestion",
+    "detail": "suggestion",
+    "details": "suggestion",
+    # Rationale synonyms
+    "reasoning": "rationale",
+    "justification": "rationale",
+    "reason": "rationale",
+    "explanation": "rationale",
+    "why": "rationale",
+    # Optional: Proposed Placement synonyms
+    "placement": "proposed placement",
+    "location": "proposed placement",
+    "file": "proposed placement",
+    "file path": "proposed placement",
+    "where": "proposed placement",
+    # Optional: Validation Approach synonyms
+    "validation": "validation approach",
+    "test": "validation approach",
+    "testing": "validation approach",
+    "how to validate": "validation approach",
+    "verification": "validation approach",
+}
+
 # Maximum number of applied/rejected IDs to display in prompts (avoid bloating context).
 _MAX_DISPLAYED_IDS = 50
 

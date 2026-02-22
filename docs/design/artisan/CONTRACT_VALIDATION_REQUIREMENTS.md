@@ -1,7 +1,7 @@
 # Contract Validation Requirements
 
-> **Version:** 1.0.0
-> **Status:** Implemented (test suite) / Draft (gap resolutions)
+> **Version:** 1.1.0
+> **Status:** Implemented (test suite + gap resolutions CV-500, CV-501, CV-301, CV-302, CV-201)
 > **Date:** 2026-02-21
 > **Scope:** Artisan 8-phase pipeline contract enforcement, propagation chain validation, quality gates, and provenance tracking
 > **Depends on:** `ARTISAN_REQUIREMENTS.md` (AR-201, AR-128, AR-300), `PROJECT_CENTRIC_ARTISAN_REQUIREMENTS.md` (PCA-4xx)
@@ -177,14 +177,14 @@ Each of the 8 phases must have its exit requirements validated by `BoundaryValid
 - **Status:** Implemented (test suite)
 - **Test file:** `tests/contract_validation/test_full_pipeline_contracts.py`
 
-A fully-populated synthetic context (simulating all 8 phases' successful output) must pass all entry, exit, and enrichment validations in a single sweep, except where known quality gate gaps apply (see CV-500).
+A fully-populated synthetic context (simulating all 8 phases' successful output) must pass all entry, exit, and enrichment validations in a single sweep.
 
 **Acceptance Criteria:**
 
 1. All 8 phase exits pass validation with the full pipeline context.
-2. All 8 phase entries pass validation, except IMPLEMENT which fails due to the dict quality gate (documented as CV-500).
+2. All 8 phase entries pass validation (IMPLEMENT quality gate downgraded to warning per CV-500).
 3. All enrichment validations pass for phases that declare enrichment fields.
-4. Propagation chain validation returns exactly 6 results: 4 INTACT, 2 BROKEN (chains 5-6, documented as CV-301/CV-302).
+4. Propagation chain validation returns exactly 7 results: at least 6 INTACT (chains 5-6 resolved per CV-301/CV-302).
 
 **Source files:** `tests/contract_validation/test_full_pipeline_contracts.py`
 
@@ -222,7 +222,7 @@ When a field with `severity: warning` is absent from the context, `BoundaryValid
 #### CV-201: Advisory Severity Does Not Inject Defaults
 
 - **Priority:** P1
-- **Status:** Implemented (test suite)
+- **Status:** Implemented (test suite + inert defaults removed)
 - **Closes:** Gap 5
 - **Test file:** `tests/contract_validation/test_default_application.py`
 
@@ -230,11 +230,16 @@ Fields with `severity: advisory` are logged when absent but their declared `defa
 
 **Acceptance Criteria:**
 
-1. `design_calibration` with `severity: advisory` and `default: {}` is NOT injected into context when absent at IMPLEMENT enrichment.
+1. `design_calibration` with `severity: advisory` is NOT injected into context when absent at IMPLEMENT enrichment.
 2. `architectural_context` with `severity: advisory` is NOT injected when absent.
 3. Enrichment validation still returns `passed=True` when advisory fields are absent.
 
-**Known tension:** The contract YAML declares defaults on advisory fields that are never applied. Consider either (a) removing defaults from advisory fields to avoid misleading the reader, or (b) upgrading semantically-important fields like `design_calibration` to `severity: warning` so their defaults are actually applied.
+**Resolution:** Inert `default` declarations removed from 5 advisory-severity fields in the contract YAML to avoid misleading readers:
+- `implement.entry.enrichment`: `design_calibration` (was `default: {}`)
+- `implement.entry.enrichment`: `architectural_context` (was `default: {}`)
+- `review.entry.enrichment`: `service_metadata` (was `default: null`)
+- `review.entry.enrichment`: `project_context` (was `default: {}`)
+- `design.entry.enrichment`: `scaffold.staleness_classification` (was `default: {}`)
 
 **Source files:** `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`, ContextCore `contracts/propagation/validator.py`
 
@@ -295,43 +300,42 @@ The 4 chains that use simple dot-path field references (no wildcards, no object 
 #### CV-301: Wildcard Path Resolution for Chain 5
 
 - **Priority:** P2
-- **Status:** Documented (broken by design)
+- **Status:** Implemented (option b)
 - **Closes:** Gap 2
 - **Test file:** `tests/contract_validation/test_propagation_chains.py`
 
-Chain 5 (`design_mode_to_implement`) declares source `design_results.*.design_mode` using a wildcard that `_resolve_field()` cannot resolve.
+Chain 5 (`design_mode_to_implement`) previously declared source `design_results.*.design_mode` using a wildcard that `_resolve_field()` could not resolve.
 
-**Acceptance Criteria:**
+**Resolution:** Option (b) — replaced the wildcard source with `design_mode_summary`, a concrete `Dict[task_id, str]` set by `DesignPhaseHandler` after computing design results. Chain 5 now reports INTACT with a fully-populated context.
 
-1. Test verifies that chain 5 reports `BROKEN` in its current form (source_present=False).
-2. Test verifies that the *intent* works: `_resolve_field(ctx, "design_results.T1.design_mode")` resolves to `"create"` or `"update"`.
-3. Resolution (one of):
-   - (a) Extend `_resolve_field()` in ContextCore to support `*` wildcard: iterate over all keys at that level and return `True` if ANY match.
-   - (b) Replace the wildcard with a concrete sentinel path in the contract YAML (e.g., a summary field `design_mode_summary` set by DESIGN phase).
-   - (c) Accept chain 5 as declarative-only (documents intent but is not machine-verified) with a `verified: false` annotation.
+**Acceptance Criteria:** (resolved)
 
-**Source files:** ContextCore `contracts/propagation/tracker.py` (`_resolve_field`), `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`
+1. ~~Test verifies that chain 5 reports `BROKEN` in its current form~~ → Chain 5 now reports INTACT.
+2. `DesignPhaseHandler` sets `context["design_mode_summary"]` as a `Dict[task_id, str]` derived from `design_results[tid]["status"]`.
+3. Tests verify INTACT, DEGRADED, and BROKEN status for the new summary field.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler), `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`
 
 ---
 
 #### CV-302: Object Path Resolution for Chains 5-6
 
 - **Priority:** P2
-- **Status:** Documented (broken by design)
+- **Status:** Implemented (option a)
 - **Closes:** Gap 3
 - **Test file:** `tests/contract_validation/test_propagation_chains.py`
 
-Chains 5 and 6 declare destination fields as runtime object attribute paths (`DevelopmentChunk.metadata.design_mode`, `DevelopmentChunk.metadata.service_metadata`). The `_resolve_field()` function only traverses dicts, so these destinations never resolve.
+Chains 5 and 6 previously declared destination fields as runtime object attribute paths (`DevelopmentChunk.metadata.design_mode`, `DevelopmentChunk.metadata.service_metadata`). The `_resolve_field()` function only traverses dicts, so these destinations never resolved.
 
-**Acceptance Criteria:**
+**Resolution:** Option (a) — replaced object-path destinations with dict-path equivalents. `ImplementPhaseHandler` now sets `output["metadata"]` with `design_mode_summary` and `service_metadata` at all three `context["implementation"] = output` sites. Chains 5-6 now report INTACT.
 
-1. Tests verify that chains 5 and 6 report `destination_present=False`.
-2. Resolution (one of):
-   - (a) Replace object-path destinations with dict-path equivalents that IMPLEMENT phase sets in context (e.g., `implementation.metadata.design_mode`).
-   - (b) Add a post-IMPLEMENT hook that mirrors runtime object attributes back into the context dict for chain verification.
-   - (c) Annotate chains 5-6 as `runtime_only: true` — contract declares intent but verification is deferred to integration tests.
+**Acceptance Criteria:** (resolved)
 
-**Source files:** ContextCore `contracts/propagation/tracker.py` (`_resolve_field`), `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`
+1. ~~Tests verify that chains 5 and 6 report `destination_present=False`~~ → Both now report `destination_present=True`.
+2. `ImplementPhaseHandler` mirrors `design_mode_summary` and `service_metadata` into `implementation.metadata` at all output paths (dry-run, no-chunks, normal).
+3. Fault injection tests verify BROKEN when `implementation.metadata` is removed.
+
+**Source files:** `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler), `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`
 
 ---
 
@@ -341,12 +345,12 @@ Chains 5 and 6 declare destination fields as runtime object attribute paths (`De
 - **Status:** Implemented (test suite)
 - **Test file:** `tests/contract_validation/test_propagation_chains.py`
 
-`PropagationTracker.validate_all_chains()` must return results for all 6 declared chains.
+`PropagationTracker.validate_all_chains()` must return results for all 7 declared chains.
 
 **Acceptance Criteria:**
 
-1. `validate_all_chains(contract, context)` returns exactly 6 `PropagationChainResult` objects.
-2. With a fully-populated context: 4 chains report INTACT, 2 chains report BROKEN (chains 5-6).
+1. `validate_all_chains(contract, context)` returns exactly 7 `PropagationChainResult` objects.
+2. With a fully-populated context: at least 6 chains report INTACT (chains 5-6 resolved per CV-301/CV-302).
 3. Each result includes `chain_id`, `status`, `source_present`, `destination_present`, `waypoints_present`, and `message`.
 
 **Source files:** ContextCore `contracts/propagation/tracker.py`
@@ -426,21 +430,17 @@ All 4 chain sources with simple dict paths (chains 1-4) can be stamped and retri
 #### CV-500: Quality Metric Applicability for Dict-Typed Fields
 
 - **Priority:** P1
-- **Status:** Documented (gap)
+- **Status:** Implemented (option c — downgrade to warning)
 - **Closes:** Gap 1
 - **Test file:** `tests/contract_validation/test_quality_gates.py`
 
 The quality extractors (`line_count`, `section_count`, `char_count`, `length`) convert values to strings via `str()` before measuring. For dict values, `str()` produces a Python repr (single line, no Markdown headers). This makes `line_count` and `section_count` meaningless when applied to dict-typed fields like `design_results` and `generation_results`.
 
-**Acceptance Criteria (resolution — one of):**
+**Resolution:** Option (c) — downgraded the IMPLEMENT entry `design_results` quality gate from `on_below: blocking` to `on_below: warning`. The Pydantic exit models (`DesignPhaseOutput`, `ImplementPhaseOutput`) already validate structural completeness, so the line_count gate serves as an advisory signal only.
 
-1. **(a) Type-aware extractors:** Add dict-specific extraction logic to `_QUALITY_EXTRACTORS`. For dicts, `line_count` should aggregate `str(v).splitlines()` across all leaf values; `section_count` should count `##` headers across all leaf string values.
-2. **(b) Content-path quality specs:** Extend `QualitySpec` with an optional `content_path` field (e.g., `content_path: "*.design_doc"`) that tells the extractor which nested value to measure, rather than measuring the top-level dict.
-3. **(c) Downgrade severity:** Change the IMPLEMENT entry `design_results` quality gate from `blocking` to `advisory` and rely on the Pydantic exit models (which already validate structural completeness) for blocking enforcement.
-
-Pending resolution, the test suite documents the current behavior:
-- `test_line_count_on_dict_always_low` verifies IMPLEMENT entry fails (blocking).
-- `test_section_count_on_dict_always_zero` verifies DESIGN exit warns (non-blocking).
+**Test suite reflects resolution:**
+- `test_line_count_on_dict_warns_but_passes` verifies IMPLEMENT entry passes with warning violation.
+- `test_section_count_on_dict_always_zero` verifies DESIGN exit warns (non-blocking, unchanged).
 
 **Source files:** ContextCore `contracts/propagation/validator.py` (`_QUALITY_EXTRACTORS`), `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`
 
@@ -449,26 +449,22 @@ Pending resolution, the test suite documents the current behavior:
 #### CV-501: Unknown Quality Metric Handling
 
 - **Priority:** P1
-- **Status:** Documented (gap)
+- **Status:** Implemented (option a — extractors added)
 - **Closes:** Gap 4
 - **Test file:** `tests/contract_validation/test_quality_gates.py`
 
-When the contract YAML declares a quality metric that has no corresponding `_QUALITY_EXTRACTORS` entry, the validator silently skips the check. Three metrics are affected: `success_rate`, `total_passed`.
+When the contract YAML declares a quality metric that has no corresponding `_QUALITY_EXTRACTORS` entry, the validator silently skips the check. Three metrics were affected: `success_rate`, `total_passed`.
 
-**Acceptance Criteria (resolution — one of):**
+**Resolution:** Option (a) — added `success_rate` and `total_passed` extractors to `_QUALITY_EXTRACTORS` in ContextCore's `validator.py`:
+- `_extract_success_rate`: For dicts with `success` boolean fields, computes `count(success=True) / total`.
+- `_extract_total_passed`: Reads `total_passed` key first, falls back to counting `per_task.*.passed` entries.
+- Unknown metric log level upgraded from DEBUG to WARNING for visibility.
 
-1. **(a) Implement missing extractors:** Add `success_rate` and `total_passed` to `_QUALITY_EXTRACTORS`:
-   - `success_rate`: For dicts with `success` boolean fields, compute `count(success=True) / total`.
-   - `total_passed`: For dicts with `passed` or `total_passed` fields, sum the pass counts.
-2. **(b) Fail on unknown metrics:** Change the validator to produce a `QualityViolation` with a clear message when a metric is not in `_QUALITY_EXTRACTORS`, rather than silently skipping.
-3. **(c) Validate contract YAML at load time:** `ContractLoader.load()` should emit a warning when a `QualitySpec.metric` references an unknown extractor.
+**Test suite reflects resolution:**
+- `TestIntegrateExitSuccessRate`: 3 tests for success_rate enforcement (passes, warns on all-fail, warns below threshold).
+- `TestTestReviewExitTotalPassed`: 2 tests for total_passed enforcement (test exit, review exit).
 
-Pending resolution, the test suite verifies graceful handling:
-- `test_integrate_exit_success_rate_skipped_gracefully`
-- `test_test_exit_total_passed_skipped_gracefully`
-- `test_review_exit_total_passed_skipped_gracefully`
-
-**Source files:** ContextCore `contracts/propagation/validator.py` (`_QUALITY_EXTRACTORS`), `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`
+**Source files:** ContextCore `contracts/propagation/validator.py` (`_QUALITY_EXTRACTORS`, `_extract_success_rate`, `_extract_total_passed`), `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml`
 
 ---
 
@@ -617,22 +613,22 @@ flowchart TB
 | CV-101 | `test_boundary_entry_exit.py` | 16 (exit) | Implemented | — |
 | CV-102 | `test_full_pipeline_contracts.py` | 4 | Implemented | — |
 | CV-200 | `test_default_application.py` | 7 | Implemented | — |
-| CV-201 | `test_default_application.py` | 2 | Implemented | Gap 5 |
+| CV-201 | `test_default_application.py` | 2 | Implemented (defaults removed) | Gap 5 |
 | CV-202 | — | 0 | Planned | Gap 6 |
 | CV-300 | `test_propagation_chains.py` | 14 | Implemented | — |
-| CV-301 | `test_propagation_chains.py` | 3 | Documented | Gap 2 |
-| CV-302 | `test_propagation_chains.py` | 5 | Documented | Gap 3 |
+| CV-301 | `test_propagation_chains.py` | 3 | Implemented | Gap 2 |
+| CV-302 | `test_propagation_chains.py` | 5 | Implemented | Gap 3 |
 | CV-303 | `test_propagation_chains.py` | 4 | Implemented | — |
 | CV-400 | `test_provenance_tracking.py` | 6 | Implemented | — |
 | CV-401 | `test_provenance_tracking.py` | 1 | Implemented | — |
 | CV-402 | `test_provenance_tracking.py` | 3 | Implemented | — |
-| CV-500 | `test_quality_gates.py` | 2 | Documented | Gap 1 |
-| CV-501 | `test_quality_gates.py` | 3 | Documented | Gap 4 |
+| CV-500 | `test_quality_gates.py` | 2 | Implemented | Gap 1 |
+| CV-501 | `test_quality_gates.py` | 8 | Implemented | Gap 4 |
 | CV-502 | `test_quality_gates.py` | 4 | Implemented | — |
 | CV-600 | `test_fault_injection.py` | 5 | Implemented | — |
 | CV-601 | `test_fault_injection.py` | 4 | Implemented | — |
 | CV-602 | `test_fault_injection.py` | 2 | Implemented | — |
-| **Total** | **7 files** | **99** | | **6 gaps** |
+| **Total** | **7 files** | **103** | | **6 gaps** |
 
 ---
 
@@ -727,21 +723,21 @@ All P0 requirements are implemented as the test suite itself:
 - CV-502 (string quality gates)
 - CV-600, CV-601, CV-602 (fault detection)
 
-### Phase 2: Gap Documentation (P1) — Current
+### Phase 2: Gap Documentation (P1) — Implemented
 
-Test suite documents gaps without fixing them:
-- CV-201 (advisory default semantics documented)
+Gap documentation + resolution:
+- CV-201 (advisory default semantics — inert defaults removed from contract YAML)
 - CV-401 (provenance for all simple chains)
 - CV-402 (evaluation stamping)
-- CV-500 (dict quality metrics documented as known gap)
-- CV-501 (unknown metrics documented as known gap)
+- CV-500 (dict quality metrics — downgraded IMPLEMENT entry from blocking to warning)
+- CV-501 (unknown metrics — `success_rate` and `total_passed` extractors added to ContextCore)
 
-### Phase 3: Gap Resolution (P2) — Planned
+### Phase 3: Gap Resolution (P2) — Implemented
 
-Requires changes to ContextCore and/or contract YAML:
-- CV-202 (per-task enrichment strategy)
-- CV-301 (wildcard path resolution)
-- CV-302 (object path resolution)
+Changes to ContextCore and contract YAML:
+- CV-301 (wildcard path → `design_mode_summary` summary field, set by DesignPhaseHandler)
+- CV-302 (object path → `implementation.metadata.*` mirror, set by ImplementPhaseHandler)
+- CV-202 (per-task enrichment strategy — planned, not yet implemented)
 
 ---
 
@@ -751,11 +747,11 @@ Requires changes to ContextCore and/or contract YAML:
 |-------|----------|-------|-------------|------------|---------|
 | Boundary Validation | CV-1xx | 3 | 3 | 0 | 0 |
 | Enrichment Propagation | CV-2xx | 3 | 2 | 0 | 1 |
-| Propagation Chains | CV-3xx | 4 | 2 | 2 | 0 |
+| Propagation Chains | CV-3xx | 4 | 4 | 0 | 0 |
 | Provenance Tracking | CV-4xx | 3 | 3 | 0 | 0 |
-| Quality Gates | CV-5xx | 3 | 1 | 2 | 0 |
+| Quality Gates | CV-5xx | 3 | 3 | 0 | 0 |
 | Fault Detection | CV-6xx | 3 | 3 | 0 | 0 |
-| **Total** | | **19** | **14** | **4** | **1** |
+| **Total** | | **19** | **18** | **0** | **1** |
 
 ---
 

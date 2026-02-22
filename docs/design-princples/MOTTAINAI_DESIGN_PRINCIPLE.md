@@ -66,6 +66,8 @@ ContextCore export produces a deterministic artifact dependency graph (e.g., not
 
 ### Gap 5: REFINE Suggestions — Plan-Ingestion → DESIGN
 
+> **Status: CLOSED** (2026-02-21). REQ-RF-001–006 forward REFINE triage suggestions into `seed.onboarding.refine_suggestions`. IMP-8 in DesignPhaseHandler injects them into the DESIGN prompt's additional context. Chain verified: INTACT logging at EMIT boundary (REQ-RF-011).
+
 Plan-ingestion's REFINE phase runs an architectural review that produces structured suggestions (area, severity, rationale, validation approach). These are written into the plan document's Appendix C but never extracted into the seed. The artisan DESIGN phase never reads the plan document.
 
 **Waste**: The entire REFINE LLM call produces output that does not reach DESIGN. The DESIGN LLM regenerates architectural decisions from scratch.
@@ -129,6 +131,8 @@ The artisan seed includes `design_calibration` (per-task depth tiers from `SizeE
 **Fix**: Compute lightweight per-task token budgets from estimated LOC (already available in `ParsedFeature.estimated_loc`). No LLM call needed — just arithmetic.
 
 ### Gap 13: REFINE Suggestions Not Forwarded to Code Generation
+
+> **Status: CLOSED** (2026-02-21). REQ-RF-005 injects suggestions into prime seed with route parity. Chain verified: INTACT logging at EMIT boundary (REQ-RF-011).
 
 Same as Gap 5 but for the prime route. Plan-ingestion's REFINE phase produces architectural review suggestions that are written to the plan document appendix. The prime workflow never reads the plan document — it works exclusively from the seed's task list.
 
@@ -236,7 +240,7 @@ semantic_conventions:          4 entries
 
 ## Artisan Internal Audit (2026-02-21)
 
-Gaps 1–16 cover the **export → artisan** and **prime** boundaries. This audit examines waste *within* the artisan 7-phase pipeline itself — data produced by one phase that a downstream phase either discards, re-derives, or never reads. Findings are grouped by anti-pattern.
+Gaps 1–16 cover the **export → artisan** and **prime** boundaries. This audit examines waste *within* the artisan 8-phase pipeline itself — data produced by one phase that a downstream phase either discards, re-derives, or never reads. Findings are grouped by anti-pattern.
 
 ### Anti-Pattern 1: Serialize-and-Forget
 
@@ -414,7 +418,7 @@ When designing new pipeline stages or modifying existing ones:
 | [Manifest Export Requirements](./MANIFEST_EXPORT_REQUIREMENTS.md) | Defines the export outputs that are the primary source of reusable artifacts |
 | [A2A Gate Requirements](./A2A_GATE_REQUIREMENTS.md) | Gates validate artifact integrity at boundaries — mottainai adds the question "are we using what we validated?" |
 | [Export Pipeline Analysis Guide](../guides/EXPORT_PIPELINE_ANALYSIS_GUIDE.md) | The operational guide that describes the 7-step pipeline where mottainai violations occur |
-| [`startd8.artisan.functional-requirements.yaml`](../capability-index/startd8.artisan.functional-requirements.yaml) (AR-900..AR-908) | Formal requirements for Mottainai compliance within the artisan 7-phase pipeline — maps Gaps 17–36 to testable acceptance criteria |
+| [`startd8.artisan.functional-requirements.yaml`](../capability-index/startd8.artisan.functional-requirements.yaml) (AR-900..AR-908) | Formal requirements for Mottainai compliance within the artisan 8-phase pipeline — maps Gaps 17–36 to testable acceptance criteria |
 | [REFINE Forwarding Requirements](../REFINE_FORWARDING_REQUIREMENTS.md) (REQ-RF-001..012) | Closes Gaps 5 and 13 — forwards REFINE triage, apply, and area coverage output through the seed to downstream consumers |
 
 ---

@@ -131,7 +131,6 @@ phases:
         - name: scaffold.staleness_classification
           type: dict
           severity: advisory
-          default: {}
           source_phase: scaffold
           description: "Per-file staleness classification (fresh/stale/unknown) from scaffold phase"
     exit:
@@ -311,13 +310,11 @@ phases:
         - name: service_metadata
           type: dict
           severity: advisory
-          default: null
           source_phase: plan
           description: "Service metadata for protocol compliance review"
         - name: project_context
           type: dict
           severity: advisory
-          default: {}
           source_phase: plan
           description: "Project-level context (plan_title, plan_goals, architectural_context)"
     exit:
@@ -427,29 +424,27 @@ propagation_chains:
 
   - chain_id: design_mode_to_implement
     description: >
-      Per-task design_mode flows from design phase (AR-127) to implement
-      phase (AR-128) where it constrains code generation to incremental-only
-      output for existing files, preventing production file destruction (A-15).
+      Per-task design mode summary flows from design phase to implement phase.
+      Derived from design_results status values by DesignPhaseHandler.
     source:
       phase: design
-      field: design_results.*.design_mode
+      field: design_mode_summary
     destination:
       phase: implement
-      field: DevelopmentChunk.metadata.design_mode
+      field: implementation.metadata.design_mode_summary
     severity: warning
-    verification: "dest in ('create', 'update')"
 
   - chain_id: onboarding_context_to_implement
     description: >
-      Project-level onboarding context flows from seed through IMPLEMENT and REVIEW
-      phases for protocol compliance and architectural alignment.
+      Project-level onboarding context flows from plan through implement
+      for protocol compliance and architectural alignment.
     source:
       phase: plan
       field: service_metadata
     waypoints: []
     destination:
       phase: implement
-      field: DevelopmentChunk.metadata.service_metadata
+      field: implementation.metadata.service_metadata
     severity: warning
 
   - chain_id: project_metadata_to_review

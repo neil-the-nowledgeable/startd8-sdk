@@ -226,7 +226,7 @@
       {
         "id": "startd8.workflow.builtin.artisan",
         "name": "Artisan",
-        "description": "7-phase structured code generation with design review and quality calibration",
+        "description": "8-phase structured code generation with design review, integration validation, and quality calibration",
         "tags": [
           "artisan workflow",
           "multi-phase generation",

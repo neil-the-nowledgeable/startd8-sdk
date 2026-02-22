@@ -1,8 +1,9 @@
 # Artisan Prompt Externalization and Quality Improvements — Requirements
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Created:** 2026-02-20
-**Implements:** IMP-1 through IMP-7 (from Online Boutique regeneration defect analysis)
+**Updated:** 2026-02-21
+**Implements:** IMP-1 through IMP-9 (IMP-1–7 from Online Boutique regeneration defect analysis; IMP-8–9 from REFINE output forwarding)
 
 ---
 
@@ -33,6 +34,8 @@ Hardcoded prompt strings in Python source create three problems:
 | IMP-5 Constraint tagging | Implemented |
 | IMP-6 Critical parameters | Implemented |
 | IMP-7 Validation gate | Implemented |
+| IMP-8 Structured refine suggestions | Implemented |
+| IMP-9 REFINE compliance in REVIEW | Implemented |
 
 ---
 
@@ -99,7 +102,7 @@ Implementation requirements:
 
 ---
 
-## Part B: Quality Improvements (IMP-1 through IMP-7)
+## Part B: Quality Improvements (IMP-1 through IMP-9)
 
 ### IMP-1: Requirements Text in DESIGN Prompt
 
@@ -173,9 +176,78 @@ Implementation requirements:
 - `_build_task_description()` in `LeadContractorChunkExecutor` MUST inject a `## Design Completeness Warning` section when the warning is non-empty.
 - When the warning is empty, no section MUST be injected.
 
+### IMP-8: Structured Refine Suggestions in DESIGN
+
+**Defect:** REFINE output forwarding (REQ-RF-001–012) now places structured triage decisions in `seed.onboarding.refine_suggestions` — a list of dicts with `id`, `decision`, `rationale`, `area`, `severity`. However, the DESIGN phase handler consumes refine suggestions exclusively through a **text-based path**: artifact inventory lookup (`lookup_artifact(inventory, "refine_suggestions")` → string) or plan document fallback (`inv_plan_document` → full Appendix C text), parsed by `_extract_task_suggestions()` which scans for `S-`/`F-` prefixed lines. The structured data is richer (pre-filtered to ACCEPT only, includes acceptance rationale and severity) but has no consumer.
+
+Additionally, the `design_system` YAML template contains no guidance on how to use refine suggestions when they appear in `{additional_context}`. They arrive as one of 20+ opaque key-value entries with no signal that they represent pre-triaged, accepted architectural review feedback that should take priority over general context.
+
+**Prerequisite:** REQ-RF-001–006 (REFINE output forwarding) — implemented.
+
+**Requirements:**
+
+#### IMP-8a: Structured data extraction in DesignPhaseHandler
+
+- `DesignPhaseHandler.execute()` MUST extract `onboarding.refine_suggestions` from the seed (via `context.get("onboarding_refine_suggestions")`) as a `List[Dict[str, Any]]`.
+- When this structured data is non-empty, `_task_to_feature_context()` MUST format it as a markdown section and inject into `additional_context["refine_suggestions"]`, replacing the text-based extraction for that task.
+- Format: one bullet per accepted suggestion — `- **[{severity}] {area}** ({id}): {rationale}`
+- When the structured data is empty or absent, the existing text-based path (artifact inventory → `_extract_task_suggestions()`) MUST remain as fallback for backward compatibility.
+
+#### IMP-8b: Seed extraction and checkpoint persistence
+
+- `_build_initial_context()` in `context_seed_handlers.py` MUST extract `onboarding.refine_suggestions` into `context["onboarding_refine_suggestions"]` (following the PCA-201 pattern at lines 654–671).
+- `_CHECKPOINT_CONTEXT_KEYS` in `artisan_contractor.py` MUST include `"onboarding_refine_suggestions"` so the structured data survives checkpoint resume.
+
+#### IMP-8c: DESIGN system prompt guidance
+
+- The `design_system` YAML template MUST include guidance in the `Rules:` section:
+  ```
+  - When refine_suggestions appear in Additional Context, they contain accepted
+    architectural review feedback from the REFINE phase. These have been triaged
+    and approved — incorporate them into your design rather than contradicting or
+    ignoring them. Each suggestion includes an area and severity to guide priority.
+  ```
+- The `refine_system` template MUST include equivalent guidance in its `Rules:` section, emphasizing that the refinement should address accepted suggestions rather than discarding them.
+
+### IMP-9: REFINE Compliance in REVIEW Prompt
+
+**Defect:** REFINE output forwarding places apply provenance in `seed.artifacts.refine_provenance` — including `applied_ids` (suggestion IDs integrated into the plan document body), `triage_accepted`/`triage_rejected` counts, and `warning_ids`. The REVIEW phase has no awareness of these accepted suggestions. It evaluates code against the design document and constraints but cannot verify that architectural review suggestions were properly reflected in the implementation.
+
+The REVIEW prompt already injects contextual sections (design compliance, parameter sources, semantic conventions, truncation warnings) before `## Review Instructions` using `prompt.replace()`. REFINE compliance fits this established pattern.
+
+**Prerequisite:** REQ-RF-004–006 (seed injection) — implemented.
+
+**Requirements:**
+
+#### IMP-9a: Refine provenance extraction
+
+- `ReviewPhaseHandler._review_single_task()` MUST read `refine_provenance` from the context (extracted from `seed.artifacts.refine_provenance` during seed loading).
+- The provenance dict MUST be passed to `_build_review_prompt()` as a new optional parameter: `refine_provenance: dict[str, Any] | None = None`.
+
+#### IMP-9b: REFINE compliance section injection
+
+- `_build_review_prompt()` MUST inject a `## REFINE Compliance` section before `## Review Instructions` when `refine_provenance` is present and `applied_ids` is non-empty.
+- The section MUST contain:
+  - The count of accepted suggestions that were applied to the plan document.
+  - The list of applied suggestion IDs.
+  - An instruction: *"These architectural suggestions were accepted during plan refinement and integrated into the design document. Verify the implementation reflects them. Score lower if accepted suggestions are contradicted by the implementation."*
+- When `applied_ids` is empty or `refine_provenance` is absent, no section MUST be injected.
+- The section MUST be truncated to 1500 chars maximum (consistent with other injected sections).
+
+#### IMP-9c: Checkpoint persistence
+
+- `_CHECKPOINT_CONTEXT_KEYS` in `artisan_contractor.py` MUST include `"refine_provenance"` so the provenance data survives checkpoint resume.
+- `_build_initial_context()` MUST extract `seed.artifacts.refine_provenance` into `context["refine_provenance"]`.
+
+#### IMP-9d: `review.yaml` documentation
+
+- The `review_user` prompt `placeholders` list in `review.yaml` MUST document that a `## REFINE Compliance` section may be injected dynamically (matching existing documentation pattern for design compliance and truncation warning sections).
+
 ---
 
 ## Files Modified
+
+### IMP-1 through IMP-7 (Implemented)
 
 | File | Changes |
 |------|---------|
@@ -195,7 +267,26 @@ Implementation requirements:
 | `tests/unit/contractors/conftest.py` | FakeSeedTask new fields |
 | `tests/unit/contractors/test_artisan_prompt_improvements.py` | NEW — 32 tests |
 
+### IMP-8 and IMP-9 (Implemented)
+
+| File | Changes |
+|------|---------|
+| `src/startd8/contractors/context_seed_handlers.py` | IMP-8a: structured refine_suggestions extraction in `_task_to_feature_context()` + `DesignPhaseHandler.execute()`. IMP-8b: `onboarding_refine_suggestions` extraction in `_build_initial_context()`. IMP-9a: `refine_provenance` extraction + passthrough to `_build_review_prompt()` |
+| `src/startd8/contractors/artisan_contractor.py` | IMP-8b/9c: add `onboarding_refine_suggestions` and `refine_provenance` to `_CHECKPOINT_CONTEXT_KEYS` |
+| `src/startd8/contractors/artisan_phases/prompts/design.yaml` | IMP-8c: refine suggestions guidance in `design_system` and `refine_system` Rules sections |
+| `src/startd8/contractors/artisan_phases/prompts/review.yaml` | IMP-9d: document dynamic `## REFINE Compliance` section in `review_user` placeholders |
+
 ## Verification
+
+### IMP-1 through IMP-7
 
 - 32/32 new tests pass (`test_artisan_prompt_improvements.py`)
 - 1194/1195 contractor regression tests pass (1 pre-existing failure unrelated to these changes)
+
+### IMP-8 and IMP-9 (Implemented)
+
+- Structured extraction: test that `onboarding_refine_suggestions` from seed overrides text-based path, with fallback when absent
+- Prompt content: test that `design_system` formatted prompt contains refine suggestions guidance text
+- REVIEW compliance: test that `_build_review_prompt()` injects `## REFINE Compliance` section when `applied_ids` non-empty, omits when empty
+- Checkpoint: test that `_CHECKPOINT_CONTEXT_KEYS` includes both new keys and that checkpoint round-trip preserves them
+- Backward compat: test that text-based refine path still works when structured data absent (old seeds)

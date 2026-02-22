@@ -20,6 +20,7 @@ from .architectural_review_log_constants import (
     CORE_COLUMNS,
     OPTIONAL_COLUMNS,
     REQUIRED_COLUMNS,
+    _COLUMN_ALIAS_MAP,
     _OPTIONAL_COLUMN_DEFAULT,
     _extract_token_metrics,
     _is_separator_row,
@@ -217,7 +218,7 @@ def _validate_snippet(
 
     while i < len(lines):
         ln = lines[i]
-        if ln.strip().startswith("|") and "ID" in ln:
+        if ln.strip().startswith("|") and re.search(r'\bID\b|^\|\s*#\s*\|', ln, re.IGNORECASE):
             # Possible table header
             if i + 1 >= len(lines):
                 break
@@ -233,6 +234,9 @@ def _validate_snippet(
             # so **Area**, "area", "AREA" all match the required column name.
             header = [_normalize_header(h) for h in raw_header]
             header_cf = [h.casefold() for h in header]
+            # Resolve LLM synonyms to canonical column names via alias map.
+            # e.g. "recommendation" → "suggestion", "reasoning" → "rationale"
+            header_cf = [_COLUMN_ALIAS_MAP.get(h, h) for h in header_cf]
             # Leniency: Accept header if it has the required columns, even if extra or slightly different order
             header_cf_set = set(header_cf)
             # Only enforce CORE_COLUMNS; OPTIONAL_COLUMNS get defaults when missing

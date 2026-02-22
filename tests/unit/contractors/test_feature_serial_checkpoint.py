@@ -35,6 +35,7 @@ from startd8.contractors.artisan_contractor import (
     WorkflowStatus,
     AbstractPhaseHandler,
     CostBudgetExceededError,
+    _CostTracker,
 )
 from startd8.contractors.context_seed_handlers import _ensure_context_loaded
 
@@ -581,6 +582,53 @@ class TestBuildFeaturePartialResult:
         assert "fitness_summary" in result
         assert result["fitness_summary"]["has_design"] is True
         assert result["fitness_summary"]["failed_phase"] == "implement"
+
+
+class TestExecuteFeatureRunsIntegrate:
+    """Tests that _execute_feature runs INTEGRATE between IMPLEMENT and TEST."""
+
+    def test_execute_feature_runs_integrate(self):
+        """INTEGRATE handler must be called between IMPLEMENT and TEST."""
+        config = WorkflowConfig(workflow_id="test-integrate-order", feature_serial=True)
+        workflow = ArtisanContractorWorkflow(config=config)
+
+        called_phases: list[str] = []
+
+        def fake_execute_phase(phase, context, timeout=None):
+            called_phases.append(phase.value)
+            return PhaseResult(
+                phase=phase,
+                status=PhaseStatus.COMPLETED,
+                start_time="2026-01-01T00:00:00+00:00",
+                end_time="2026-01-01T00:00:01+00:00",
+                duration_seconds=1.0,
+                cost=0.01,
+                output={},
+                retry_count=0,
+                metadata={},
+            )
+
+        cost_tracker = _CostTracker(budget=None)
+
+        with patch.object(workflow, "_execute_phase", side_effect=fake_execute_phase), \
+             patch.object(workflow, "_commit_changes", return_value=None):
+            success, status, inner_results = workflow._execute_feature(
+                feature_id="F-001",
+                context={"tasks": []},
+                remaining_total_timeout=None,
+                cost_tracker=cost_tracker,
+            )
+
+        assert success is True
+        assert status == WorkflowStatus.COMPLETED
+        assert "integrate" in called_phases
+        # Verify canonical order: IMPLEMENT before INTEGRATE before TEST
+        impl_idx = called_phases.index("implement")
+        integ_idx = called_phases.index("integrate")
+        test_idx = called_phases.index("test")
+        assert impl_idx < integ_idx < test_idx, (
+            f"Expected implement < integrate < test, got: {called_phases}"
+        )
 
 
 class TestFeatureTaskSelection:

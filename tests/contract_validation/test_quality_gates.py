@@ -2,26 +2,18 @@
 
 Validates that:
 - DESIGN exit section_count threshold works (>= 2 sections)
-- IMPLEMENT entry line_count threshold works (>= 50 lines on design_results)
+- IMPLEMENT entry line_count threshold warns (>= 50 lines on design_results, CV-500)
 - IMPLEMENT exit line_count threshold works (>= 10 lines on generation_results)
-- Unknown metrics (success_rate, total_passed) are skipped gracefully
-
-The ``_QUALITY_EXTRACTORS`` dict only supports: line_count, char_count,
-section_count, length. Metrics like ``success_rate`` and ``total_passed``
-declared in the contract YAML have no corresponding extractor and are
-silently skipped — tests document this gap.
+- INTEGRATE exit success_rate threshold works (>= 0.5, CV-501)
+- TEST/REVIEW exit total_passed metric works (CV-501)
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
-
-import pytest
 
 from contextcore.contracts.propagation import BoundaryValidator
 from contextcore.contracts.propagation.schema import ContextContract
-from contextcore.contracts.propagation.validator import QualityViolation
 
 from .conftest import (
     build_design_exit_context,
@@ -81,32 +73,35 @@ class TestDesignExitQuality:
 
 
 class TestImplementEntryQuality:
-    """IMPLEMENT entry: design_results quality metric = line_count, threshold = 50, blocking."""
+    """IMPLEMENT entry: design_results quality metric = line_count, threshold = 50, warning.
 
-    def test_line_count_on_dict_always_low(
+    Downgraded from blocking to warning (CV-500) because line_count on a dict
+    value always measures ~1 line (Python repr). Entry still passes.
+    """
+
+    def test_line_count_on_dict_warns_but_passes(
         self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
     ) -> None:
         """design_results is a dict → str(dict) is ~1 line.
 
         The quality extractor runs ``line_count`` on the stringified dict
         repr, which is a single line regardless of content inside.
-        Blocking severity → entry fails.  This documents a gap: line_count
-        is meaningful for prose/code strings, not for dicts.
+        Warning severity → entry passes with quality violation.
         """
         ctx = build_plan_exit_context(tmp_path)
         build_scaffold_exit_context(ctx)
         build_design_exit_context(ctx)
         result = validator.validate_entry("implement", ctx, loaded_contract)
-        # Blocking severity: entry fails
-        assert result.passed is False
+        # Warning severity: entry passes
+        assert result.passed is True
         violations = [v for v in result.quality_violations if v.metric == "line_count"]
         assert len(violations) > 0
         assert violations[0].actual < 50.0
 
-    def test_fails_with_too_few_lines(
+    def test_warns_with_too_few_lines(
         self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
     ) -> None:
-        """Design results with <50 lines fails as blocking."""
+        """Design results with <50 lines produces a warning violation."""
         ctx = build_plan_exit_context(tmp_path)
         build_scaffold_exit_context(ctx)
         # Create design_results with very short content
@@ -114,8 +109,8 @@ class TestImplementEntryQuality:
             "T1": {"status": "completed", "domain": "backend", "design_doc": "short"},
         }
         result = validator.validate_entry("implement", ctx, loaded_contract)
-        # This is a blocking quality gate
-        assert result.passed is False
+        # Warning severity: entry passes
+        assert result.passed is True
         violations = [
             v for v in result.quality_violations if v.metric == "line_count"
         ]
@@ -156,49 +151,99 @@ class TestImplementExitQuality:
         assert len(violations) > 0
 
 
-class TestUnknownQualityMetrics:
-    """Metrics declared in YAML but not in _QUALITY_EXTRACTORS are skipped.
+class TestIntegrateExitSuccessRate:
+    """INTEGRATE exit: integration_results quality metric = success_rate, threshold = 0.5, warning."""
 
-    The contract declares ``success_rate`` (integrate exit) and
-    ``total_passed`` (test exit, review exit) but these have no
-    corresponding extractor in the validator — they are silently
-    skipped rather than raising errors.
-    """
-
-    def test_integrate_exit_success_rate_skipped_gracefully(
+    def test_passes_with_all_successful(
         self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
     ) -> None:
-        """integrate exit declares success_rate metric — no crash."""
+        """All tasks succeed → success_rate = 1.0 → no violation."""
         ctx = build_full_pipeline_context(tmp_path)
         result = validator.validate_exit("integrate", ctx, loaded_contract)
-        # Should pass without crashing despite unknown metric
         assert result.passed is True
-        # No quality violations for success_rate (metric unknown → skipped)
-        success_rate_violations = [
+        sr_violations = [
             v for v in result.quality_violations if v.metric == "success_rate"
         ]
-        assert len(success_rate_violations) == 0
+        assert len(sr_violations) == 0
 
-    def test_test_exit_total_passed_skipped_gracefully(
+    def test_warns_when_all_fail(
         self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
     ) -> None:
-        """test exit declares total_passed metric — no crash."""
+        """All tasks fail → success_rate = 0.0 → warning violation (not blocking)."""
+        ctx = build_full_pipeline_context(tmp_path)
+        ctx["integration_results"] = {
+            "T1": {"success": False, "integrated_files": [], "errors": ["syntax error"]},
+            "T2": {"success": False, "integrated_files": [], "errors": ["lint error"]},
+        }
+        result = validator.validate_exit("integrate", ctx, loaded_contract)
+        # Warning severity: exit still passes
+        assert result.passed is True
+        sr_violations = [
+            v for v in result.quality_violations if v.metric == "success_rate"
+        ]
+        assert len(sr_violations) == 1
+        assert sr_violations[0].actual == 0.0
+        assert sr_violations[0].threshold == 0.5
+
+    def test_warns_when_below_threshold(
+        self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
+    ) -> None:
+        """1 of 3 succeeds → success_rate ≈ 0.33 < 0.5 → warning."""
+        ctx = build_full_pipeline_context(tmp_path)
+        ctx["integration_results"] = {
+            "T1": {"success": True, "integrated_files": ["src/auth/login.py"], "errors": []},
+            "T2": {"success": False, "integrated_files": [], "errors": ["error"]},
+            "T3": {"success": False, "integrated_files": [], "errors": ["error"]},
+        }
+        result = validator.validate_exit("integrate", ctx, loaded_contract)
+        assert result.passed is True
+        sr_violations = [
+            v for v in result.quality_violations if v.metric == "success_rate"
+        ]
+        assert len(sr_violations) == 1
+        assert sr_violations[0].actual < 0.5
+
+
+class TestTestReviewExitTotalPassed:
+    """TEST and REVIEW exit: total_passed metric is now enforced."""
+
+    def test_test_exit_total_passed_extracted(
+        self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
+    ) -> None:
+        """TEST exit: total_passed = 2 → no violation."""
         ctx = build_full_pipeline_context(tmp_path)
         result = validator.validate_exit("test", ctx, loaded_contract)
         assert result.passed is True
-        total_passed_violations = [
-            v for v in result.quality_violations if v.metric == "total_passed"
-        ]
-        assert len(total_passed_violations) == 0
 
-    def test_review_exit_total_passed_skipped_gracefully(
+    def test_review_exit_total_passed_extracted(
         self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
     ) -> None:
-        """review exit declares total_passed metric — no crash."""
+        """REVIEW exit: total_passed = 2 → no violation."""
         ctx = build_full_pipeline_context(tmp_path)
         result = validator.validate_exit("review", ctx, loaded_contract)
         assert result.passed is True
-        total_passed_violations = [
+
+    def test_test_exit_warns_when_zero_passed(
+        self, loaded_contract: ContextContract, validator: BoundaryValidator, tmp_path: Path,
+    ) -> None:
+        """TEST exit: total_passed = 0 → warning violation (threshold >= 1)."""
+        ctx = build_full_pipeline_context(tmp_path)
+        ctx["test_results"] = {
+            "test_plan": [],
+            "total_passed": 0,
+            "total_failed": 2,
+            "per_task": {
+                "T1": {"passed": False, "validators_run": ["ruff"]},
+                "T2": {"passed": False, "validators_run": ["ruff"]},
+            },
+            "unique_validators": ["ruff"],
+        }
+        result = validator.validate_exit("test", ctx, loaded_contract)
+        # Warning severity: exit still passes
+        assert result.passed is True
+        tp_violations = [
             v for v in result.quality_violations if v.metric == "total_passed"
         ]
-        assert len(total_passed_violations) == 0
+        assert len(tp_violations) == 1
+        assert tp_violations[0].actual == 0.0
+        assert tp_violations[0].threshold == 1.0

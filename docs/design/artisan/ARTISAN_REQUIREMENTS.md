@@ -8,13 +8,13 @@
 
 ## Overview
 
-This document provides narrative context, dependency diagrams, and a traceability matrix for the formal functional requirements defined in the canonical YAML. The artisan contractor is a 7-phase workflow orchestrator for structured multi-task code generation with design review, cost budget enforcement, and checkpoint-based recovery.
+This document provides narrative context, dependency diagrams, and a traceability matrix for the formal functional requirements defined in the canonical YAML. The artisan contractor is an 8-phase workflow orchestrator for structured multi-task code generation with design review, cost budget enforcement, and checkpoint-based recovery.
 
 ### Status Dashboard
 
 | Layer | ID Range | Total | Implemented | Partial | Planned |
 |-------|----------|-------|-------------|---------|---------|
-| Phase Behavior | AR-1xx | 39 | 30 | 0 | 9 |
+| Phase Behavior | AR-1xx | 46 | 37 | 0 | 9 |
 | Orchestration | AR-2xx | 16 | 9 | 0 | 7 |
 | ContextCore Data Flow | AR-3xx | 12 | 2 | 0 | 10 |
 | Cost Model | AR-4xx | 8 | 6 | 1 | 1 |
@@ -24,13 +24,13 @@ This document provides narrative context, dependency diagrams, and a traceabilit
 | Safety and Resilience | AR-8xx | 13 | 6 | 0 | 7 |
 | Mottainai Compliance | AR-9xx | 9 | 0 | 0 | 9 |
 | Project-Centric Context | AR-10xx | 20 | 3 | 0 | 17 |
-| **Total** | | **147** | **78** | **1** | **68** |
+| **Total** | | **154** | **85** | **1** | **68** |
 
 ---
 
 ## Layer 1: Phase Behavior (AR-1xx)
 
-Defines input, behavior, and output contracts for each of the 7 phases.
+Defines input, behavior, and output contracts for each of the 8 phases.
 
 ### Pipeline Data Flow
 
@@ -70,6 +70,16 @@ flowchart LR
         AR137[AR-137 Param Sources]
     end
 
+    subgraph integrate [INTEGRATE]
+        AR170[AR-170 Staging Merge]
+        AR171[AR-171 Pre-Validation]
+        AR172[AR-172 Snapshot Rollback]
+        AR173[AR-173 Success Rate Gate]
+        AR174[AR-174 Dirty File Protection]
+        AR175[AR-175 Truncation Guard]
+        AR176[AR-176 Auto-Commit Scope]
+    end
+
     subgraph test [TEST]
         AR140[AR-140 Validators]
         AR141[AR-141 Results]
@@ -96,7 +106,7 @@ flowchart LR
         AR165[AR-165 Gate 3 Compat]
     end
 
-    plan --> scaffold --> design --> implement --> test --> review --> finalize
+    plan --> scaffold --> design --> implement --> integrate --> test --> review --> finalize
 ```
 
 ### Per-Phase Context Keys
@@ -107,9 +117,102 @@ flowchart LR
 | SCAFFOLD | `scaffold` (directories_needed, directories_exist, directories_created, existing_target_files, skipped_targets, project_root) | AR-110 |
 | DESIGN | `design_results` (per-task: design_document, status, agreed, iterations, cost, design_mode, existing_file_inventory) | AR-120, AR-127 |
 | IMPLEMENT | `implementation`, `generation_results`, `_downstream_map` | AR-130 |
+| INTEGRATE | `integration_results` (per-task: success, integrated_files, errors, rollback_performed) | AR-170..AR-176 |
 | TEST | `test_results` (test_plan, total_passed, total_failed, per_task) | AR-140..AR-147 |
 | REVIEW | `review_results` (review_items, total_cost, total_passed, total_failed, per_task) | AR-150 |
 | FINALIZE | `workflow_summary` | AR-160 |
+
+### INTEGRATE Phase Requirements (AR-170..AR-176)
+
+The INTEGRATE phase is a purely mechanical (no LLM) merge step that moves staged generated code from `_staging_dir` into `project_root` with validation and rollback. It bridges the gap between code generation (IMPLEMENT) and code verification (TEST), ensuring that downstream phases operate on a fully integrated codebase.
+
+**Entry:** `generation_results` (blocking), `_staging_dir` (warning, default: `.startd8/staging/`)
+**Exit:** `integration_results` (blocking, quality: `success_rate >= 0.5` warning)
+
+#### AR-170: Staging-to-Project Merge
+
+**Status:** implemented
+**Source:** `context_seed_handlers.py` (IntegratePhaseHandler), `integration_engine.py`
+
+For each task in `generation_results` with `success=True`, copy staged files from `_staging_dir` into `project_root` using the configured `MergeStrategy`. Update `generation_results` file paths to reflect their final project_root locations. Clean `_staging_dir` after all tasks complete (unless `dry_run=True`).
+
+**Acceptance criteria:**
+1. Only tasks with `generation_results[task_id].success == True` are processed.
+2. Staged files are resolved via `sanitize_path()` relative to `project_root`.
+3. `generation_results` file paths are updated in-place to project_root locations after successful merge.
+4. `_staging_dir` is removed after integration (non-dry-run).
+
+#### AR-171: Pre-Merge Validation
+
+**Status:** implemented
+**Source:** `integration_engine.py` (pre-validate step)
+
+Before merging, validate all generated `.py` files for syntax correctness and lint compliance. Syntax failures are blocking (halt integration for that task). Lint failures are advisory (logged, do not block).
+
+**Acceptance criteria:**
+1. `py_compile` or `ast.parse` is run on each generated `.py` file before merge.
+2. Syntax errors produce a blocking failure — the task's integration is skipped.
+3. Lint check failures are logged as advisory warnings.
+
+#### AR-172: Snapshot-Based Rollback
+
+**Status:** implemented (file-based; AR-807 for git-based upgrade is planned)
+**Source:** `integration_engine.py` (_snapshot_target, _restore_target, _cleanup_snapshots)
+
+Before overwriting any existing file, create a `.pre_integration` sidecar snapshot. If post-merge checkpoint validation fails, restore all targets from snapshots (atomic per-task rollback). Clean up sidecar files on success.
+
+**Acceptance criteria:**
+1. Each target file is snapshotted before the first merge attempt (idempotent).
+2. Absent targets are recorded as `None` so rollback can delete newly created files.
+3. On checkpoint failure, all targets for the failing task are restored from snapshots.
+4. Sidecar files are cleaned up after successful integration.
+
+#### AR-173: Success Rate Quality Gate
+
+**Status:** implemented
+**Source:** `artisan-pipeline.contract.yaml` (integrate exit), `_QUALITY_EXTRACTORS["success_rate"]`
+
+The INTEGRATE exit contract declares a `success_rate` quality metric with threshold 0.5 and warning severity. The metric computes the fraction of per-task results where `success == True`. Below-threshold triggers a warning (pipeline continues) but is logged for observability.
+
+**Acceptance criteria:**
+1. `success_rate` extractor is registered in `_QUALITY_EXTRACTORS`.
+2. A success rate of 0.0 (all tasks failed) triggers a warning violation.
+3. A success rate >= 0.5 produces no quality violation.
+
+#### AR-174: Dirty File Protection
+
+**Status:** implemented
+**Source:** `integration_engine.py` (dirty file check)
+
+Before merging into an existing file, check if the target has uncommitted changes in git. If `allow_dirty=False` (default), abort the merge for that file to prevent overwriting in-progress work.
+
+**Acceptance criteria:**
+1. `git status --porcelain` is consulted for each target before overwrite.
+2. Dirty files cause the task's integration to fail (not the entire pipeline).
+
+#### AR-175: Truncation Guard
+
+**Status:** implemented
+**Source:** `integration_engine.py` (truncation detection)
+
+Apply code-mode-aware truncation detection to each generated file before merge. High-confidence truncation (above reject threshold) blocks the merge for that task. Lower-confidence truncation produces a warning.
+
+**Acceptance criteria:**
+1. `detect_truncation()` is called with `code_mode=True` on generated code.
+2. High-confidence truncation rejects the file and records an error.
+3. Lower-confidence truncation logs a warning but allows the merge.
+
+#### AR-176: Scoped Auto-Commit
+
+**Status:** implemented
+**Source:** `integration_engine.py` (_commit_files), `context_seed_handlers.py` (IntegratePhaseHandler)
+
+Auto-commit (when enabled) happens in INTEGRATE, not in IMPLEMENT. Commits are scoped to the specific files that were successfully integrated — never `git add -A`.
+
+**Acceptance criteria:**
+1. `git add` is called with explicit file paths (not `-A` or `.`).
+2. `git add` return code is checked; failures are logged.
+3. Only successfully integrated files are staged for commit.
 
 ---
 
@@ -139,11 +242,11 @@ flowchart TD
 | Mode | Config | Behavior | Requirements |
 |------|--------|----------|-------------|
 | **Phase-serial** (default) | `feature_serial=False` | All tasks complete each phase before moving to next | AR-200 |
-| **Feature-serial** | `feature_serial=True` | Each task completes DESIGN->IMPLEMENT->TEST->REVIEW before next task. Mutually exclusive with `wave_parallel` mode (`WorkflowConfig` validation raises `ValueError` if both are set). | AR-206 |
+| **Feature-serial** | `feature_serial=True` | Each task completes DESIGN->IMPLEMENT->INTEGRATE->TEST->REVIEW before next task. Mutually exclusive with `wave_parallel` mode (`WorkflowConfig` validation raises `ValueError` if both are set). | AR-206 |
 | **Wave-parallel** | `wave_parallel=True` | Tasks are grouped into dependency waves derived from `depends_on`; lanes within each wave execute concurrently, with a barrier between waves for context merge and budget enforcement. Mutually exclusive with `feature_serial` and `lane_parallel` modes. Degenerates to lane-parallel when no inter-task dependencies exist. | AR-212 |
 | **Dry-run** | `dry_run=True` | All phases execute but skip LLM calls; cost=0 | AR-205 |
 | **Design-only** | `--stop-after design` | PLAN->SCAFFOLD->DESIGN, writes handoff | AR-207, AR-208 |
-| **Implement-only** | loads handoff | IMPLEMENT->TEST->REVIEW->FINALIZE | AR-208 |
+| **Implement-only** | loads handoff | IMPLEMENT->INTEGRATE->TEST->REVIEW->FINALIZE | AR-208 |
 
 ### AR-212: Wave-Parallel Execution Mode
 
@@ -809,6 +912,7 @@ Phase 3 (P1 — Completeness):
 | AR-127 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | Reuses `scaffold.existing_target_files` from ScaffoldPhaseHandler |
 | AR-128 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `handoff.py`, `artisan_phases/development.py` |
 | AR-130..AR-137 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `artisan_phases/development.py` |
+| AR-170..AR-176 | `src/startd8/contractors/context_seed_handlers.py` (IntegratePhaseHandler) | `integration_engine.py` |
 | AR-140..AR-142 | `src/startd8/contractors/context_seed_handlers.py` (TestPhaseHandler) | |
 | AR-143..AR-147 | `src/startd8/contractors/artisan_phases/self_consistency.py` | `context_seed_handlers.py` (Gate 3b), `rules_validators.py` |
 | AR-150..AR-152 | `src/startd8/contractors/context_seed_handlers.py` (ReviewPhaseHandler) | |
@@ -851,6 +955,7 @@ Phase 3 (P1 — Completeness):
 | AR-110 | `tests/unit/contractors/test_7phase_integration.py` |
 | AR-120..AR-124 | `tests/unit/contractors/test_design_phase_handler.py`, `test_design_quality_context.py`, `test_artisan_design_documentation.py` |
 | AR-130..AR-136 | `tests/unit/contractors/test_implement_phase_integration.py`, `test_implement_auto_commit.py` |
+| AR-170..AR-176 | `tests/unit/contractors/test_integrate_phase.py`, `tests/contract_validation/test_quality_gates.py` |
 | AR-140..AR-142 | `tests/unit/contractors/test_context_seed_review_finalize.py`, `test_artisan_test_construction.py` |
 | AR-143..AR-147 | `tests/unit/contractors/test_self_consistency_validators.py`, `test_gate3b_content_validation.py` |
 | AR-150..AR-152 | `tests/unit/contractors/test_review_phase_handler.py`, `test_context_seed_review_finalize.py` |

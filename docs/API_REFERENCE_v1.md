@@ -360,7 +360,7 @@ workflow = ArtisanContractorWorkflow(
     config: WorkflowConfig = None,
     handlers: dict[WorkflowPhase, AbstractPhaseHandler] = None,
     checkpoint_store: CheckpointStore = None,
-    phases: list[WorkflowPhase] = None,   # Default: all 7 phases
+    phases: list[WorkflowPhase] = None,   # Default: all 8 phases
 )
 
 # Register a phase handler

@@ -145,10 +145,10 @@ Input ────────┼──▶ Agent B ──┼──▶ aggregator
 ### Pattern 3: Phase-Based Context Sharing (Artisan)
 
 **Implementation**: `context_seed_handlers.py`, `artisan_phases/`
-**Topology**: 7 sequential phases sharing a mutable context dictionary
+**Topology**: 8 sequential phases sharing a mutable context dictionary
 
 ```text
-PLAN ──[context]──▶ SCAFFOLD ──[context]──▶ DESIGN ──[context]──▶ IMPLEMENT ──[context]──▶ TEST ──[context]──▶ REVIEW ──[context]──▶ FINALIZE
+PLAN ──[context]──▶ SCAFFOLD ──[context]──▶ DESIGN ──[context]──▶ IMPLEMENT ──[context]──▶ INTEGRATE ──[context]──▶ TEST ──[context]──▶ REVIEW ──[context]──▶ FINALIZE
 ```
 
 **Data format**: `context: dict[str, Any]` — each phase reads keys set by prior phases and writes new keys.
@@ -269,11 +269,11 @@ The context propagation for ContextCore-enriched workflows is:
 
 ### Design-to-Implementation Handoff (Implemented)
 
-The artisan workflow supports a two-half split: design half (PLAN → SCAFFOLD → DESIGN) produces a `HandoffData` JSON file consumed by the implementation half (IMPLEMENT → TEST → REVIEW → FINALIZE).
+The artisan workflow supports a two-half split: design half (PLAN → SCAFFOLD → DESIGN) produces a `HandoffData` JSON file consumed by the implementation half (IMPLEMENT → INTEGRATE → TEST → REVIEW → FINALIZE).
 
 ```text
 Design Half                              Implementation Half
-PLAN → SCAFFOLD → DESIGN ──────────────▶ IMPLEMENT → TEST → REVIEW → FINALIZE
+PLAN → SCAFFOLD → DESIGN ──────────────▶ IMPLEMENT → INTEGRATE → TEST → REVIEW → FINALIZE
                            │
                     design-handoff.json
                     (HandoffData model)

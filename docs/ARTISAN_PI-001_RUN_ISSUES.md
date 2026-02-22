@@ -89,7 +89,7 @@ WARNING [startd8.providers.registry] Overwriting existing provider: openai
 
 ## 5. Workflow Duration
 
-**Observed:** The DESIGN phase alone took ~60+ seconds (one LLM call truncated at 4096 tokens). Full 7-phase run for PI-001 will take several minutes.
+**Observed:** The DESIGN phase alone took ~60+ seconds (one LLM call truncated at 4096 tokens). Full 8-phase run for PI-001 will take several minutes.
 
 **Mitigation:** Use `--stop-after design` for faster design-only validation, or `--timeout 300` to cap total run time.
 

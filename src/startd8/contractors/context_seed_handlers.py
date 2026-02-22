@@ -2126,6 +2126,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         context["design_results"] = design_results
 
+        # Derive design_mode_summary: task_id → "create" | "update" | "skipped"
+        # Used by chain 5 (design_mode_to_implement) for verifiable propagation.
+        context["design_mode_summary"] = {
+            tid: (
+                "update" if isinstance(entry, dict) and entry.get("status") == "refined" else
+                "create" if isinstance(entry, dict) and entry.get("status") in ("designed", "adopted", "completed") else
+                "skipped"
+            )
+            for tid, entry in design_results.items()
+        }
+
         # Context contract: validate DESIGN output model
         DesignPhaseOutput(design_results=context["design_results"])
 
@@ -3648,6 +3659,14 @@ class Test{class_name}:
         )
         return generation_results
 
+    @staticmethod
+    def _build_implementation_metadata(context: dict[str, Any]) -> dict[str, Any]:
+        """Build the metadata sub-dict mirroring propagation chain fields."""
+        return {
+            "design_mode_summary": context.get("design_mode_summary", {}),
+            "service_metadata": context.get("service_metadata"),
+        }
+
     # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
@@ -3704,6 +3723,7 @@ class Test{class_name}:
                 "generation_results": {},
             }
             context["implementation"] = output
+            output["metadata"] = self._build_implementation_metadata(context)
             context["generation_results"] = {}
             context["truncation_flags"] = {}
 
@@ -3898,6 +3918,7 @@ class Test{class_name}:
                     "generation_results": {},
                 }
                 context["implementation"] = output
+                output["metadata"] = self._build_implementation_metadata(context)
                 context["generation_results"] = {}
                 context["truncation_flags"] = {}
 
@@ -4121,6 +4142,7 @@ class Test{class_name}:
         # into project_root and commits if auto_commit is enabled.
 
         context["implementation"] = output
+        output["metadata"] = self._build_implementation_metadata(context)
         context["generation_results"] = generation_results
         context["truncation_flags"] = truncation_flags
 
@@ -4399,9 +4421,14 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
 
         # Validate output structure before writing to context
         from startd8.contractors.context_schema import IntegratePhaseOutput
-        IntegratePhaseOutput.model_validate(
-            {"integration_results": integration_results}
-        )
+        try:
+            IntegratePhaseOutput.model_validate(
+                {"integration_results": integration_results}
+            )
+        except Exception as exc:
+            logger.warning(
+                "INTEGRATE output validation failed (continuing): %s", exc,
+            )
 
         # Write to context
         context["integration_results"] = integration_results

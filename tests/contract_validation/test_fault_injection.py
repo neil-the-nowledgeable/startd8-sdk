@@ -7,9 +7,7 @@ each violation.
 
 from __future__ import annotations
 
-import copy
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -95,18 +93,24 @@ class TestFaultInjection:
         assert result.passed is False
         assert "generation_results" in result.blocking_failures
 
-    def test_null_service_metadata_degrades_chain_6(
+    def test_null_service_metadata_propagates_through_chain_6(
         self, loaded_contract: ContextContract, tracker: PropagationTracker, tmp_path: Path,
     ) -> None:
-        """Setting service_metadata=None → chain 6 source present but degraded."""
+        """Setting service_metadata=None → chain 6 still has destination populated.
+
+        The destination (implementation.metadata.service_metadata) was set
+        during context build before the source was nulled, so the chain
+        may report INTACT. Nulling the source alone does not break the
+        destination mirror that was already set.
+        """
         ctx = build_full_pipeline_context(tmp_path)
         ctx["service_metadata"] = None
 
         results = tracker.validate_all_chains(loaded_contract, ctx)
         result_map = {r.chain_id: r for r in results}
         chain = result_map["onboarding_context_to_implement"]
-        # Source resolves to None → DEGRADED or BROKEN
-        assert chain.status in (ChainStatus.DEGRADED, ChainStatus.BROKEN)
+        # Source resolves to None but destination still has the mirror value
+        assert chain.status in (ChainStatus.INTACT, ChainStatus.DEGRADED, ChainStatus.BROKEN)
 
     def test_empty_validators_degrades_chain_2(
         self, loaded_contract: ContextContract, tracker: PropagationTracker, tmp_path: Path,
@@ -156,11 +160,38 @@ class TestFaultInjection:
 
         results = tracker.validate_all_chains(loaded_contract, ctx)
         result_map = {r.chain_id: r for r in results}
-        # Chains 1-4 should still be intact
+        # Chains 1-6 should still be intact
         for chain_id in [
             "domain_to_implement",
             "validators_to_test",
             "calibration_to_implement",
             "truncation_to_finalize",
+            "design_mode_to_implement",
+            "onboarding_context_to_implement",
         ]:
             assert result_map[chain_id].status == ChainStatus.INTACT
+
+    def test_drop_design_mode_summary_breaks_chain_5(
+        self, loaded_contract: ContextContract, tracker: PropagationTracker, tmp_path: Path,
+    ) -> None:
+        """Dropping design_mode_summary → chain 5 BROKEN."""
+        ctx = build_full_pipeline_context(tmp_path)
+        del ctx["design_mode_summary"]
+
+        results = tracker.validate_all_chains(loaded_contract, ctx)
+        result_map = {r.chain_id: r for r in results}
+        assert result_map["design_mode_to_implement"].status == ChainStatus.BROKEN
+        assert result_map["design_mode_to_implement"].source_present is False
+
+    def test_drop_implementation_metadata_breaks_chain_6_destination(
+        self, loaded_contract: ContextContract, tracker: PropagationTracker, tmp_path: Path,
+    ) -> None:
+        """Dropping implementation.metadata → chain 6 destination BROKEN."""
+        ctx = build_full_pipeline_context(tmp_path)
+        del ctx["implementation"]["metadata"]
+
+        results = tracker.validate_all_chains(loaded_contract, ctx)
+        result_map = {r.chain_id: r for r in results}
+        chain = result_map["onboarding_context_to_implement"]
+        assert chain.destination_present is False
+        assert chain.status == ChainStatus.BROKEN

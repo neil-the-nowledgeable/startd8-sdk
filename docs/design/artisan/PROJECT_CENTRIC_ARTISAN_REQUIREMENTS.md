@@ -1003,15 +1003,42 @@ Note: The INTEGRATE phase sits between IMPLEMENT and TEST. It does not alter the
 
 ## 9. Status Dashboard
 
-| Layer | ID Range | Total | P0 | P1 | Already Done |
-|---|---|---|---|---|---|
-| Context Injection | PCA-100..105 | 6 | 2 | 2 | 2 (101, 102) |
-| Checkpoint Persistence | PCA-200..203 | 4 | 3 | 1 | 0 |
-| Prompt Enrichment | PCA-300..304 | 5 | 3 | 2 | 0 |
-| Cross-Phase Propagation | PCA-400..404 | 5 | 1 | 4 | 0 |
-| **Total** | | **20** | **9** | **9** | **2** |
+> **Status: 20/20 COMPLETE** (2026-02-21)
+>
+> All P0 and P1 requirements implemented and tested. 51 tests in `test_pca_p0.py`.
 
-LOE estimate (new work only): ~180–220 lines of production code + ~300 lines of tests.
+| Layer | ID Range | Total | Done | Commits |
+|---|---|---|---|---|
+| Context Injection | PCA-100..105 | 6 | 6 | `3bf5e55` (P0), `3a4d1c8` (P1), pre-existing (101–103) |
+| Checkpoint Persistence | PCA-200..203 | 4 | 4 | `3bf5e55` (P0), `3a4d1c8` (P1) |
+| Prompt Enrichment | PCA-300..304 | 5 | 5 | `3bf5e55` (P0), `3a4d1c8` (P1), pre-existing (304) |
+| Cross-Phase Propagation | PCA-400..404 | 5 | 5 | `3bf5e55` (P0), `3a4d1c8` (P1) |
+| **Total** | | **20** | **20** | |
+
+### Per-Requirement Status
+
+| Req | Priority | Status | Notes |
+|---|---|---|---|
+| PCA-100 | P0 | DONE | `project_root` in `initial_context` |
+| PCA-101 | P1 | DONE | Pre-existing (PLAN phase, line 872) |
+| PCA-102 | P1 | DONE | Pre-existing (PLAN phase, lines 890–906) |
+| PCA-103 | P1 | DONE | Pre-existing (PLAN phase, lines 855–885) |
+| PCA-104 | P1 | DONE | `_log_context_completeness()` in 6 phase handlers |
+| PCA-105 | P0 | DONE | `context.setdefault("project_root", ...)` already compliant |
+| PCA-200 | P0 | DONE | 8 keys added to `_CHECKPOINT_CONTEXT_KEYS` |
+| PCA-201 | P0 | DONE | `_ensure_context_loaded()` re-extracts onboarding + plan_document_text |
+| PCA-202 | P1 | DONE | `_PLAN_DOC_CHECKPOINT_MAX_CHARS = 1000` + truncation marker |
+| PCA-203 | P0 | DONE | Backward compat test (v4 checkpoints load without new keys) |
+| PCA-300 | P0 | DONE | `architectural_context`, `plan_goals`, `plan_context` in chunk metadata + prompt |
+| PCA-301 | P0 | DONE | `service_metadata` in chunk metadata + `## Service Metadata` prompt section |
+| PCA-302 | P0 | DONE | `## Project Context` section in review prompt (capped at 2000 chars) |
+| PCA-303 | P1 | DONE | `## Service Metadata Compliance` section in review prompt |
+| PCA-304 | P1 | DONE | Pre-existing (TEST/FINALIZE `validate_protocol_fidelity()`) |
+| PCA-400 | P0 | DONE | `service_metadata` propagated to `DevelopmentChunk.metadata` |
+| PCA-401 | P1 | DONE | `calibration_hints` + `plan_context` in chunk metadata + `## Plan Context` section |
+| PCA-402 | P1 | DONE | `_track_onboarding_consumption()` in IMPLEMENT/REVIEW + FINALIZE provenance |
+| PCA-403 | P1 | DONE | `prior_impl_summaries` accumulated (last 3) + `## Prior Implementations` section |
+| PCA-404 | P1 | DONE | `requirements_text` in chunk metadata (3000 char cap) + `## Requirements` section |
 
 **Note on INTEGRATE phase:** The INTEGRATE phase (added between IMPLEMENT and TEST) is a purely mechanical phase — it merges staged files into `project_root` via `IntegrationEngine` with snapshot/validate/merge/checkpoint/rollback. It makes no LLM calls and consumes no tokens. Therefore, no PCA prompt enrichment requirements (Layer 3) apply to it. PCA-104 (context completeness logging) includes INTEGRATE for diagnostic consistency, but the logging is advisory since no LLM prompt benefits from the context in this phase.
 

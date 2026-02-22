@@ -21,7 +21,7 @@ version: "1.0.0"
 
 # ==============================================================================
 # LAYER: PHASE BEHAVIOR (AR-1xx)
-# Per-phase input/behavior/output contracts for the 7-phase pipeline
+# Per-phase input/behavior/output contracts for the 8-phase pipeline
 # ==============================================================================
 
 phase_behavior_requirements:
@@ -891,12 +891,12 @@ phase_behavior_requirements:
 orchestration_requirements:
 
   - id: AR-200
-    description: "Phases execute in fixed order: PLAN -> SCAFFOLD -> DESIGN -> IMPLEMENT -> TEST -> REVIEW -> FINALIZE"
+    description: "Phases execute in fixed order: PLAN -> SCAFFOLD -> DESIGN -> IMPLEMENT -> INTEGRATE -> TEST -> REVIEW -> FINALIZE"
     status: implemented
     type: orchestration
 
     acceptance_criteria:
-      - "WorkflowPhase.ordered() returns all 7 phases in canonical order"
+      - "WorkflowPhase.ordered() returns all 8 phases in canonical order"
       - "Orchestrator iterates phases in order, executing each handler"
       - "Phase N cannot start before Phase N-1 completes successfully"
       - "Phase ordering is invariant (cannot be reordered at runtime)"
@@ -1055,7 +1055,7 @@ orchestration_requirements:
 
     acceptance_criteria:
       - "Design-only: runs PLAN -> SCAFFOLD -> DESIGN, writes design-handoff.json"
-      - "Implement-only: loads design-handoff.json, runs IMPLEMENT -> TEST -> REVIEW -> FINALIZE"
+      - "Implement-only: loads design-handoff.json, runs IMPLEMENT -> INTEGRATE -> TEST -> REVIEW -> FINALIZE"
       - "Dedicated runner scripts for each half"
       - "Implement-only reconstructs context from handoff file"
 
@@ -1579,7 +1579,7 @@ handoff_recovery_requirements:
     acceptance_criteria:
       - "Design-only runner executes PLAN, SCAFFOLD, DESIGN phases"
       - "Writes design-handoff.json after DESIGN completes"
-      - "Does not execute IMPLEMENT, TEST, REVIEW, FINALIZE"
+      - "Does not execute IMPLEMENT, INTEGRATE, TEST, REVIEW, FINALIZE"
       - "Equivalent to --stop-after design"
 
     depends_on: [AR-200, AR-500]
@@ -1591,14 +1591,14 @@ handoff_recovery_requirements:
       - tests/unit/contractors/test_handoff.py
 
   - id: AR-504
-    description: "Two-half split: implement-only runs IMPLEMENT -> TEST -> REVIEW -> FINALIZE"
+    description: "Two-half split: implement-only runs IMPLEMENT -> INTEGRATE -> TEST -> REVIEW -> FINALIZE"
     status: implemented
     type: handoff
 
     acceptance_criteria:
       - "Implement-only runner loads design-handoff.json"
       - "Reconstructs context from handoff data"
-      - "Executes IMPLEMENT, TEST, REVIEW, FINALIZE phases"
+      - "Executes IMPLEMENT, INTEGRATE, TEST, REVIEW, FINALIZE phases"
       - "Does not execute PLAN, SCAFFOLD, DESIGN"
 
     depends_on: [AR-200, AR-502]

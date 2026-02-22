@@ -26,7 +26,7 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 **Out of scope (deferred):**
 - Implementing the actual Gate 3b validators (AR-143–AR-149 equivalents) — these are registered as validation hooks but the validator implementations are a separate body of work
 - Plan ingestion upstream changes (REQ-PI-*) — the pipeline strategy consumes whatever the seed provides; it doesn't fix the seed
-- Artisan convergence — making Prime's 4-stage flow (spec→draft→review→integrate) match artisan's 7-phase flow is not a goal
+- Artisan convergence — making Prime's 4-stage flow (spec→draft→review→integrate) match artisan's 8-phase flow is not a goal
 
 ### Key Design Decisions
 

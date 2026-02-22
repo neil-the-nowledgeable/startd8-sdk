@@ -395,7 +395,7 @@ class TestOrchestratorWithDesign:
     """Integration tests for the orchestrator with DESIGN phase."""
 
     def test_full_dry_run_with_design_phase(self, tmp_path: Path):
-        """Full workflow dry-run produces 7 phase results including DESIGN."""
+        """Full workflow dry-run produces 8 phase results including DESIGN."""
         seed_path = tmp_path / "seed.json"
         seed_path.write_text(json.dumps({
             "plan": {"title": "Test Plan", "goals": []},
