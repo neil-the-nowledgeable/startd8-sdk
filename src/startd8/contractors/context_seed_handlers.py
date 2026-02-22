@@ -53,6 +53,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -575,6 +576,60 @@ def _parse_tasks(seed_data: dict[str, Any]) -> list[SeedTask]:
         if isinstance(entry, dict):
             tasks.append(SeedTask.from_seed_entry(entry))
     return tasks
+
+
+# ---------------------------------------------------------------------------
+# PCA-605c: Design-to-Implement target file propagation
+# ---------------------------------------------------------------------------
+
+_DESIGN_FILE_MARKER_RE = re.compile(r'\*\*File:\s*`([^`]+)`\*\*', re.MULTILINE)
+
+
+def _extract_design_target_files(
+    design_doc: str,
+    current_targets: list[str],
+) -> list[str]:
+    """Parse a design document for file markers and merge with current targets.
+
+    Design documents use markers like::
+
+        **File: `execution_mode.py`** (new file):
+        **File: `prime_contractor.py`** (additive change only):
+
+    Bare filenames (no directory) are normalized by prepending the common
+    directory prefix from *current_targets* so that downstream consumers
+    (e.g. ``_tasks_to_chunks``) receive fully-qualified relative paths.
+
+    Returns:
+        Merged list of target files — original targets first (order preserved),
+        then any newly discovered files appended.  Deduped via ``dict.fromkeys``.
+    """
+    matches = _DESIGN_FILE_MARKER_RE.findall(design_doc)
+    if not matches:
+        return current_targets
+
+    # Determine the common directory prefix from existing targets for
+    # normalizing bare filenames discovered in the design doc.
+    prefix = ""
+    if current_targets:
+        first_target = current_targets[0]
+        slash_idx = first_target.rfind("/")
+        if slash_idx >= 0:
+            prefix = first_target[: slash_idx + 1]  # includes trailing '/'
+
+    discovered: list[str] = []
+    for raw in matches:
+        # Normalize: if the match is a bare filename and we have a prefix,
+        # prepend it.  If it already contains a '/' assume it's qualified.
+        if "/" not in raw and prefix:
+            normalized = prefix + raw
+        else:
+            normalized = raw
+        discovered.append(normalized)
+
+    # Merge: original order first, then new discoveries (deduped).
+    merged = list(dict.fromkeys(current_targets + discovered))
+    return merged
 
 
 def _topological_sort(tasks: list[SeedTask]) -> list[SeedTask]:
@@ -2140,6 +2195,22 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     serialized["cost"] = task_cost
                     design_results[task.task_id] = serialized
 
+                    # PCA-605c: extract file decisions from design doc
+                    _design_text = serialized.get("design_document", "")
+                    if _design_text and task.target_files:
+                        _discovered = _extract_design_target_files(
+                            _design_text, task.target_files,
+                        )
+                        if _discovered != task.target_files:
+                            design_results[task.task_id]["discovered_target_files"] = _discovered
+                            logger.info(
+                                "DESIGN→IMPLEMENT file propagation: task %s "
+                                "target_files expanded %s → %s",
+                                task.task_id,
+                                task.target_files,
+                                _discovered,
+                            )
+
                     if prior_design_text:
                         tasks_refined += 1
                     else:
@@ -3469,6 +3540,26 @@ class Test{class_name}:
                 f for f in task.target_files
                 if f not in task_downstream
             ] if task_downstream else task.target_files
+
+            # ── PCA-605c: merge design-discovered files into targets ──────
+            # The DESIGN phase may split code into new files not in the
+            # original target_files.  Merge them so IMPLEMENT generates
+            # code for the right set of files.
+            _discovered_targets = (
+                design_results.get(task.task_id, {}).get("discovered_target_files")
+            )
+            if _discovered_targets:
+                _before = list(effective_targets)
+                effective_targets = list(
+                    dict.fromkeys(effective_targets + _discovered_targets)
+                )
+                if effective_targets != _before:
+                    logger.info(
+                        "PCA-605c: task %s effective_targets expanded %s → %s",
+                        task.task_id,
+                        _before,
+                        effective_targets,
+                    )
 
             # Strip dependencies on tasks not in this run (already completed
             # or filtered out by --task-filter).  The plan validator rejects
