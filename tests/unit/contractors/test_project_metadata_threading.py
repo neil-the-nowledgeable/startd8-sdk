@@ -8,11 +8,8 @@ Covers plan criteria 1-4:
 """
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any, Dict
-from unittest.mock import patch
 
 import pytest
 

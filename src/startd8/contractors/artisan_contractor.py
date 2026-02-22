@@ -1397,6 +1397,9 @@ class ArtisanContractorWorkflow:
         # Error store — writes to .startd8/task_errors/ under project_root
         self._error_store: Optional[Any] = None  # Lazy init on first error
 
+        # One-shot guard: emit budget-approaching warning at most once.
+        self._budget_warning_emitted: bool = False
+
         self._tracer: Optional[Any] = None
 
     # ------------------------------------------------------------------
@@ -1853,7 +1856,7 @@ class ArtisanContractorWorkflow:
                 f" (feature {feature_id})" if feature_id else "",
             )
 
-        except (subprocess.CalledProcessError, FileNotFoundError, Exception) as e:
+        except Exception as e:  # Covers CalledProcessError, FileNotFoundError, etc.
             # Construct a clear error message
             if isinstance(e, subprocess.CalledProcessError):
                 stderr = e.stderr
@@ -1983,7 +1986,15 @@ class ArtisanContractorWorkflow:
                         if config.dry_run
                         else PhaseStatus.COMPLETED
                     )
-                    cost = float(result_dict.get("cost") or 0.0)
+                    raw_cost = result_dict.get("cost")
+                    try:
+                        cost = float(raw_cost) if raw_cost is not None else 0.0
+                    except (TypeError, ValueError):
+                        self._logger.warning(
+                            "Phase %s returned non-numeric cost %r, treating as 0.0",
+                            phase.value, raw_cost,
+                        )
+                        cost = 0.0
                     output = result_dict.get("output")
                     metadata = result_dict.get("metadata", {})
 
@@ -2207,7 +2218,9 @@ class ArtisanContractorWorkflow:
                     json.dumps(value)  # verify serializable
                     snapshot[key] = value
                 except (TypeError, ValueError, OverflowError):
-                    pass  # skip non-serializable values
+                    self._logger.debug(
+                        "Checkpoint context key %r not serializable, skipping", key,
+                    )
 
             # PCA-202: truncate plan_document_text to prevent checkpoint bloat.
             pdt = snapshot.get("plan_document_text")
@@ -2482,12 +2495,14 @@ class ArtisanContractorWorkflow:
             # Track cost
             cost_tracker.add(phase_result.cost)
 
-            # Warn when cost approaches the budget
+            # Warn when cost approaches the budget (once only)
             if (
-                config.cost_budget is not None
+                not self._budget_warning_emitted
+                and config.cost_budget is not None
                 and cost_tracker.cumulative_cost
                 >= config.cost_budget * _BUDGET_WARNING_THRESHOLD_FRACTION
             ):
+                self._budget_warning_emitted = True
                 self._logger.warning(
                     "Cost warning: %.4f of %.4f budget used "
                     "(%.0f%% >= %.0f%% threshold) after phase %s",
@@ -2589,11 +2604,6 @@ class ArtisanContractorWorkflow:
         config = self.config
         self._validate_feature_serial_handlers()
 
-        # Global phases that run once at the start (before feature loop)
-        GLOBAL_START_PHASES = (WorkflowPhase.PLAN, WorkflowPhase.SCAFFOLD)
-        # Global phases that run once at the end (after feature loop)
-        GLOBAL_END_PHASES = (WorkflowPhase.FINALIZE,)
-
         # Determine which global phases to skip based on checkpoint
         last_global_phase_idx = -1
         if loaded_checkpoint and loaded_checkpoint.last_completed_phase:
@@ -2606,7 +2616,7 @@ class ArtisanContractorWorkflow:
         _fs_checkpoint_kwargs = dict(
             current_feature=None, current_feature_phase=None,
         )
-        for phase in GLOBAL_START_PHASES:
+        for phase in self.GLOBAL_START_PHASES:
             if phase not in self.phases:
                 continue
 
@@ -2646,8 +2656,8 @@ class ArtisanContractorWorkflow:
         # If feature loop failed, persist checkpoint and raise
         if feature_status != WorkflowStatus.COMPLETED:
             last_global = (
-                GLOBAL_START_PHASES[-1]
-                if GLOBAL_START_PHASES[-1] in self.phases
+                self.GLOBAL_START_PHASES[-1]
+                if self.GLOBAL_START_PHASES[-1] in self.phases
                 else None
             )
             checkpoint = self._persist_checkpoint(
@@ -2687,7 +2697,7 @@ class ArtisanContractorWorkflow:
             current_feature_phase=None,
             feature_partial_results=feature_partial_results,
         )
-        for phase in GLOBAL_END_PHASES:
+        for phase in self.GLOBAL_END_PHASES:
             if phase not in self.phases:
                 continue
 
@@ -2735,12 +2745,15 @@ class ArtisanContractorWorkflow:
             WorkflowTimeoutError: If timeout exceeded.
             CostBudgetExceededError: If budget exceeded.
             PhaseExecutionError: If a phase fails.
+
+        Thread Safety:
+            - ``cost_lock``: protects ``cost_tracker`` reads/writes
+            - ``checkpoint_lock``: protects checkpoint writes, ``completed_lanes``
+            - ``cancel_event``: coordinates shutdown across lanes
+            - ``lane_contexts``: pre-allocated list, each lane writes to distinct index
         """
         config = self.config
         self._validate_feature_serial_handlers()
-
-        GLOBAL_START_PHASES = (WorkflowPhase.PLAN, WorkflowPhase.SCAFFOLD)
-        GLOBAL_END_PHASES = (WorkflowPhase.FINALIZE,)
 
         # Determine which global phases to skip based on checkpoint
         last_global_phase_idx = -1
@@ -2751,7 +2764,7 @@ class ArtisanContractorWorkflow:
                     break
 
         # --- Execute global start phases (PLAN, SCAFFOLD) ---
-        for phase in GLOBAL_START_PHASES:
+        for phase in self.GLOBAL_START_PHASES:
             if phase not in self.phases:
                 continue
             phase_idx = self.phases.index(phase)
@@ -2970,7 +2983,7 @@ class ArtisanContractorWorkflow:
             completed_lanes=completed_lanes,
             lane_results=lane_results_map,
         )
-        for phase in GLOBAL_END_PHASES:
+        for phase in self.GLOBAL_END_PHASES:
             if phase not in self.phases:
                 continue
 
@@ -3019,9 +3032,6 @@ class ArtisanContractorWorkflow:
         config = self.config
         self._validate_feature_serial_handlers()
 
-        GLOBAL_START_PHASES = (WorkflowPhase.PLAN, WorkflowPhase.SCAFFOLD)
-        GLOBAL_END_PHASES = (WorkflowPhase.FINALIZE,)
-
         # --- Determine resume point from checkpoint ---
         last_global_phase_idx = -1
         if loaded_checkpoint and loaded_checkpoint.last_completed_phase:
@@ -3046,7 +3056,7 @@ class ArtisanContractorWorkflow:
             cp_lane_results = dict(loaded_checkpoint.lane_results)
 
         # --- A. Execute global start phases (PLAN, SCAFFOLD) ---
-        for phase in GLOBAL_START_PHASES:
+        for phase in self.GLOBAL_START_PHASES:
             if phase not in self.phases:
                 continue
             phase_idx = self.phases.index(phase)
@@ -3522,7 +3532,7 @@ class ArtisanContractorWorkflow:
             completed_waves=list(completed_waves_set),
             wave_resume_count=cp_wave_resume_count,
         )
-        for phase in GLOBAL_END_PHASES:
+        for phase in self.GLOBAL_END_PHASES:
             if phase not in self.phases:
                 continue
 
@@ -3547,6 +3557,13 @@ class ArtisanContractorWorkflow:
         WorkflowPhase.TEST,
         WorkflowPhase.REVIEW,
     )
+
+    # Global phases that run once at the start (before feature loop)
+    GLOBAL_START_PHASES: tuple[WorkflowPhase, ...] = (
+        WorkflowPhase.PLAN, WorkflowPhase.SCAFFOLD,
+    )
+    # Global phases that run once at the end (after feature loop)
+    GLOBAL_END_PHASES: tuple[WorkflowPhase, ...] = (WorkflowPhase.FINALIZE,)
 
     def _execute_feature(
         self,
@@ -3647,7 +3664,7 @@ class ArtisanContractorWorkflow:
                 except Exception as err:
                     inner_results[inner_phase.value] = {
                         "status": "failed",
-                        "cost": 0.0,
+                        "cost": 0.0,  # Actual cost unknown -- phase may have incurred partial cost
                         "timestamp": phase_start,
                         "error": str(err),
                         "artifacts": {},
@@ -3802,7 +3819,6 @@ class ArtisanContractorWorkflow:
                         feature_id,
                     )
                     final_status = WorkflowStatus.TIMED_OUT
-                    current_feature = feature_id
                     break
             else:
                 remaining = None
@@ -3843,23 +3859,23 @@ class ArtisanContractorWorkflow:
 
             # Persist checkpoint after each feature completes
             _extras = lane_checkpoint_extras or {}
-            _persist = lambda: self._persist_checkpoint(
+            _ckpt_kwargs = dict(
                 last_completed_phase=WorkflowPhase.SCAFFOLD,
                 phase_results=phase_results,
                 cumulative_cost=cost_tracker.cumulative_cost,
                 status=WorkflowStatus.IN_PROGRESS,
                 context=context,
                 completed_features=completed_features,
-                current_feature=None,  # Feature completed, no longer in-progress
+                current_feature=None,
                 current_feature_phase=None,
                 feature_partial_results=feature_partial_results,
                 **_extras,
             )
             if checkpoint_lock is not None:
                 with checkpoint_lock:
-                    _persist()
+                    self._persist_checkpoint(**_ckpt_kwargs)
             else:
-                _persist()
+                self._persist_checkpoint(**_ckpt_kwargs)
 
         # All features completed successfully
         if final_status == WorkflowStatus.IN_PROGRESS:

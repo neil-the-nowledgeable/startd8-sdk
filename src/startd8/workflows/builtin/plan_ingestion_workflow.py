@@ -2627,11 +2627,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                     if hasattr(criticality, "value")
                     else str(criticality)
                 )
+            # v2 BusinessSpec has .business_owner, v1 has .owner
             owner = getattr(business, "business_owner", None) or getattr(
                 business, "owner", None
             )
             if owner:
                 meta["business_owner"] = str(owner)
+            # v2 BusinessSpec has .business_value, v1 has .value
             value = getattr(business, "business_value", None) or getattr(
                 business, "value", None
             )
@@ -2657,6 +2659,9 @@ class PlanIngestionWorkflow(WorkflowBase):
                 meta["requirements"] = reqs
 
         # --- risk inventory ---
+        # Risk fields are all string-semantic (type, priority, description,
+        # etc.), so non-enum values are coerced with str() — unlike
+        # requirements/observability where numeric values are preserved.
         risks_raw = getattr(spec, "risks", None)
         if risks_raw:
             risks_list = []
