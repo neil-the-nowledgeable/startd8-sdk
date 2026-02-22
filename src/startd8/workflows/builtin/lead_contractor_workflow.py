@@ -846,6 +846,12 @@ class LeadContractorWorkflow(WorkflowBase):
         # --- PCA-605: Edit-aware spec framing ---
         # When the task modifies existing files, prepend an edit-mode preamble
         # so the spec LLM frames its output as a delta, not a greenfield design.
+        # PCA-605b: Pop existing_files so the full file content doesn't leak
+        # into the JSON context dump.  The spec LLM already sees existing code
+        # in the task description's "Existing Files" section; the draft LLM
+        # receives it via the separate existing_files parameter.
+        context.pop("existing_files", None)
+
         edit_mode = context.pop("edit_mode", None)
         if edit_mode and edit_mode.get("mode") == "edit":
             edit_preamble = (
