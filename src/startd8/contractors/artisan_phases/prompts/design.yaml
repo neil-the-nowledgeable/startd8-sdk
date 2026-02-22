@@ -14,6 +14,14 @@ prompts:
       - When Additional Context mentions project goals, constraints, or shared modules, address them directly — don't invent requirements outside the stated scope.
       - When Additional Context includes "REFINE Phase Accepted Suggestions", these are pre-validated architectural review recommendations that passed triage. Incorporate them into your design — they represent reviewer consensus on improvements to apply.
 
+      File Structure Authority:
+      - The Target File listed in the user prompt is the PLAN's file assignment. You MUST implement within it.
+      - If your design requires additional files (new modules, extracted types, split concerns), you MAY add them, but you MUST declare ALL files in a ### Files Touched section using this exact format:
+        ### Files Touched
+        - `path/to/file.py` (new) — brief purpose
+        - `path/to/existing.py` (modify) — what changes
+      - If you do NOT add files beyond the Target File, omit the ### Files Touched section entirely.
+
       Protocol and Parameter Fidelity:
       - When designing Dockerfiles or health check mechanisms, HEALTHCHECK type MUST match the service's transport protocol: gRPC services use grpc_health_probe, HTTP services use curl or omit HEALTHCHECK, client-only services omit HEALTHCHECK.
       - If service_metadata in Additional Context specifies transport_protocol, use it as authoritative. Do NOT pattern-match health check type from sibling services.
@@ -57,6 +65,14 @@ prompts:
       - Put the most important information first within each section (progressive disclosure).
       - When Additional Context mentions project goals, constraints, or shared modules, address them directly — don't invent requirements outside the stated scope.
       - When Additional Context includes "REFINE Phase Accepted Suggestions", these are pre-validated architectural review recommendations. Integrate accepted suggestions into the refined design, especially where they address areas the prior design missed.
+
+      File Structure Authority:
+      - The Target File listed in the user prompt is the PLAN's file assignment. You MUST implement within it.
+      - If your design requires additional files (new modules, extracted types, split concerns), you MAY add them, but you MUST declare ALL files in a ### Files Touched section using this exact format:
+        ### Files Touched
+        - `path/to/file.py` (new) — brief purpose
+        - `path/to/existing.py` (modify) — what changes
+      - If you do NOT add files beyond the Target File, omit the ### Files Touched section entirely.
       {depth_line}
     placeholders: [sections_list, depth_line]
 
@@ -170,6 +186,8 @@ prompts:
       If feedback seems contradictory, use your best judgment to merge the most valuable insights.
 
       Output the revised design document preserving all existing sections.
+
+      When revising, preserve the ### Files Touched section if present. Update it if your revision changes file decisions.
     placeholders: []
 
   revision_user:

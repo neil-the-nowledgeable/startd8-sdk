@@ -578,57 +578,167 @@ def _parse_tasks(seed_data: dict[str, Any]) -> list[SeedTask]:
     return tasks
 
 
-# ---------------------------------------------------------------------------
-# PCA-605c: Design-to-Implement target file propagation
-# ---------------------------------------------------------------------------
+# --------------------------------------------------------------------------
+# PCA-605d: Defense-in-depth design→implement file discovery (4 layers)
+# --------------------------------------------------------------------------
 
+# Layer 1: bold file markers (original PCA-605c)
 _DESIGN_FILE_MARKER_RE = re.compile(r'\*\*File:\s*`([^`]+)`\*\*', re.MULTILINE)
+
+# Layer 2: fenced code block file paths
+_DESIGN_FENCED_BLOCK_RE = re.compile(r'```(\S*)\s*\n(.*?)```', re.DOTALL)
+_DESIGN_FIRST_LINE_FILE_RE = re.compile(r'^(?://|#)\s*(\S+\.\w+)')
+
+# Layer 3: prose "new file" signals near backtick-quoted filenames
+_PROSE_NEW_FILE_RE = re.compile(
+    r'(?:new\s+(?:file|module)|extract(?:ed)?\s+to|dedicated\s+(?:module|file)|'
+    r'separate\s+(?:module|file)|split\s+(?:into|to)|'
+    r'create\s+(?:a\s+)?(?:new\s+)?(?:module|file))'
+    r'[^`]{0,80}`([^`]+\.\w{1,5})`',
+    re.IGNORECASE | re.MULTILINE,
+)
+_CONDITIONAL_FILTER_RE = re.compile(
+    r'\b(?:when|if\s+(?:needed|required)|eventually|later|future|'
+    r'could\s+be|might\s+be)\b',
+    re.IGNORECASE,
+)
+
+# Layer 4: structured ### Files Touched section (prompt-guided, primary)
+_FILES_TOUCHED_SECTION_RE = re.compile(
+    r'###\s*Files?\s+Touched\s*\n(.*?)(?=\n##|\n###|\Z)',
+    re.IGNORECASE | re.DOTALL,
+)
+_FILES_TOUCHED_ENTRY_RE = re.compile(r'-\s*`([^`]+\.\w{1,5})`')
+
+# Shared validation
+_VALID_FILE_EXTENSIONS = frozenset({
+    '.py', '.ts', '.tsx', '.js', '.jsx', '.yaml', '.yml',
+    '.json', '.toml', '.cfg', '.sh', '.sql', '.html', '.css',
+    '.go', '.rs', '.java', '.kt', '.rb',
+})
+
+
+def _infer_path_prefix(targets: list[str]) -> str:
+    """Infer common directory prefix from existing target files."""
+    if not targets:
+        return ""
+    first_target = targets[0]
+    slash_idx = first_target.rfind("/")
+    if slash_idx >= 0:
+        return first_target[: slash_idx + 1]  # includes trailing '/'
+    return ""
+
+
+def _has_valid_extension(path: str) -> bool:
+    """Check if path has a recognized source file extension."""
+    dot_idx = path.rfind(".")
+    if dot_idx < 0:
+        return False
+    return path[dot_idx:].lower() in _VALID_FILE_EXTENSIONS
 
 
 def _extract_design_target_files(
     design_doc: str,
     current_targets: list[str],
 ) -> list[str]:
-    """Parse a design document for file markers and merge with current targets.
+    """Parse a design document for file decisions and merge with current targets.
 
-    Design documents use markers like::
+    Uses 4 extraction layers in priority order for defense-in-depth:
 
-        **File: `execution_mode.py`** (new file):
-        **File: `prime_contractor.py`** (additive change only):
+    - **Layer 4** (primary): ``### Files Touched`` structured section — the
+      prompt-guided output format, most reliable when present.
+    - **Layer 1** (fallback): ``**File: \\`name\\`**`` bold markers from
+      PCA-605c.
+    - **Layer 2** (fallback): Fenced code blocks with file paths in the
+      language tag or a first-line comment.
+    - **Layer 3** (fallback): Prose "new file" signals within 80 chars of a
+      backtick-quoted filename, with a conditional-language filter to avoid
+      false positives (e.g. "when a second consumer…").
 
-    Bare filenames (no directory) are normalized by prepending the common
-    directory prefix from *current_targets* so that downstream consumers
-    (e.g. ``_tasks_to_chunks``) receive fully-qualified relative paths.
+    All layers accumulate into a single list → normalize bare filenames using
+    prefix → filter by extension → dedup with ``dict.fromkeys`` → return
+    merged list.
 
     Returns:
         Merged list of target files — original targets first (order preserved),
         then any newly discovered files appended.  Deduped via ``dict.fromkeys``.
     """
-    matches = _DESIGN_FILE_MARKER_RE.findall(design_doc)
-    if not matches:
+    prefix = _infer_path_prefix(current_targets)
+    discovered: list[str] = []
+    layer_counts: dict[str, int] = {}
+
+    # --- Layer 4 (primary): ### Files Touched section ---
+    section_match = _FILES_TOUCHED_SECTION_RE.search(design_doc)
+    if section_match:
+        entries = _FILES_TOUCHED_ENTRY_RE.findall(section_match.group(1))
+        layer_counts["layer4_files_touched"] = len(entries)
+        discovered.extend(entries)
+
+    # --- Layer 1 (fallback): **File: `name`** bold markers ---
+    bold_matches = _DESIGN_FILE_MARKER_RE.findall(design_doc)
+    layer_counts["layer1_bold_markers"] = len(bold_matches)
+    discovered.extend(bold_matches)
+
+    # --- Layer 2 (fallback): fenced code blocks with file paths ---
+    layer2_count = 0
+    for block_match in _DESIGN_FENCED_BLOCK_RE.finditer(design_doc):
+        lang_tag = block_match.group(1)
+        block_body = block_match.group(2)
+
+        # Check language tag for a file path (must contain '/' and valid ext)
+        if lang_tag and "/" in lang_tag and _has_valid_extension(lang_tag):
+            discovered.append(lang_tag)
+            layer2_count += 1
+            continue
+
+        # Check first line for a file-path comment (# path/to/file.py)
+        first_line = block_body.split("\n", 1)[0].strip()
+        fl_match = _DESIGN_FIRST_LINE_FILE_RE.match(first_line)
+        if fl_match:
+            candidate = fl_match.group(1)
+            if "/" in candidate and _has_valid_extension(candidate):
+                discovered.append(candidate)
+                layer2_count += 1
+    layer_counts["layer2_fenced_blocks"] = layer2_count
+
+    # --- Layer 3 (fallback): prose "new file" signals ---
+    layer3_count = 0
+    for prose_match in _PROSE_NEW_FILE_RE.finditer(design_doc):
+        candidate = prose_match.group(1)
+        # Conditional filter: check a 200-char window around the match
+        start = max(0, prose_match.start() - 100)
+        end = min(len(design_doc), prose_match.end() + 100)
+        window = design_doc[start:end]
+        if _CONDITIONAL_FILTER_RE.search(window):
+            continue
+        discovered.append(candidate)
+        layer3_count += 1
+    layer_counts["layer3_prose_signals"] = layer3_count
+
+    if not discovered:
         return current_targets
 
-    # Determine the common directory prefix from existing targets for
-    # normalizing bare filenames discovered in the design doc.
-    prefix = ""
-    if current_targets:
-        first_target = current_targets[0]
-        slash_idx = first_target.rfind("/")
-        if slash_idx >= 0:
-            prefix = first_target[: slash_idx + 1]  # includes trailing '/'
-
-    discovered: list[str] = []
-    for raw in matches:
-        # Normalize: if the match is a bare filename and we have a prefix,
-        # prepend it.  If it already contains a '/' assume it's qualified.
+    # Normalize bare filenames and filter by valid extension
+    normalized: list[str] = []
+    for raw in discovered:
         if "/" not in raw and prefix:
-            normalized = prefix + raw
+            path = prefix + raw
         else:
-            normalized = raw
-        discovered.append(normalized)
+            path = raw
+        if _has_valid_extension(path):
+            normalized.append(path)
+
+    if not normalized:
+        return current_targets
 
     # Merge: original order first, then new discoveries (deduped).
-    merged = list(dict.fromkeys(current_targets + discovered))
+    merged = list(dict.fromkeys(current_targets + normalized))
+
+    logger.debug(
+        "PCA-605d file discovery layers: %s, discovered=%d, merged=%d",
+        layer_counts, len(normalized), len(merged),
+    )
+
     return merged
 
 
@@ -2127,6 +2237,22 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         out_path.parent.mkdir(parents=True, exist_ok=True)
                         out_path.write_text(doc_text, encoding="utf-8")
                         design_results[task.task_id]["output_file"] = str(out_path)
+
+                    # PCA-605c: extract file decisions from adopted design doc
+                    if doc_text and task.target_files:
+                        if "discovered_target_files" not in design_results[task.task_id]:
+                            _discovered = _extract_design_target_files(
+                                doc_text, task.target_files,
+                            )
+                            if _discovered != task.target_files:
+                                design_results[task.task_id]["discovered_target_files"] = _discovered
+                                logger.info(
+                                    "DESIGN→IMPLEMENT file propagation (adopted): task %s "
+                                    "target_files expanded %s → %s",
+                                    task.task_id,
+                                    task.target_files,
+                                    _discovered,
+                                )
 
                     logger.info(
                         "DESIGN: adopted prior result for %s (agreed=%s, cost=$%.4f)",
