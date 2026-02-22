@@ -60,8 +60,6 @@ from typing import Any, Optional, Protocol, Sequence, runtime_checkable
 from startd8.contractors.context_schema import (
     PhaseContextError,
     validate_phase_boundary,
-    validate_phase_entry,
-    validate_phase_exit,
 )
 from startd8.contractors.protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
@@ -1946,42 +1944,48 @@ class ArtisanContractorWorkflow:
             with span_context as span:
                 try:
                     # --- Context contract: entry validation ---
-                    validate_phase_entry(phase, context)
-
-                    # --- Enrichment validation (opt-in via contract_path) ---
-                    if self._contract_path:
-                        enrichment_result = validate_phase_boundary(
-                            phase, context, "entry", self._contract_path
-                        )
-                        if enrichment_result:
-                            try:
-                                from contextcore.contracts.propagation.otel import (
-                                    emit_boundary_result,
-                                )
-                                emit_boundary_result(enrichment_result)
-                            except ImportError:
-                                pass
+                    # validate_phase_boundary runs legacy validation
+                    # internally, then contract entry + enrichment when
+                    # a contract_path is configured.
+                    entry_result = validate_phase_boundary(
+                        phase, context, "entry", self._contract_path
+                    )
+                    if entry_result:
+                        try:
+                            from contextcore.contracts.propagation.otel import (
+                                emit_boundary_result,
+                            )
+                            emit_boundary_result(entry_result)
+                        except ImportError:
+                            pass
+                        if not entry_result.passed:
+                            raise PhaseContextError(
+                                f"{phase.value.upper()} contract entry "
+                                f"validation failed: "
+                                f"{entry_result.blocking_failures}",
+                                phase=phase.value,
+                                missing_keys=entry_result.blocking_failures,
+                                direction="entry",
+                            )
 
                     result_dict = self._run_handler_with_timeout(
                         handler, phase, context, effective_timeout
                     )
 
                     # --- Context contract: exit validation ---
-                    validate_phase_exit(phase, context)
-
-                    # --- Enrichment validation on exit (quality + evaluation gates) ---
-                    if self._contract_path:
-                        exit_result = validate_phase_boundary(
-                            phase, context, "exit", self._contract_path
-                        )
-                        if exit_result:
-                            try:
-                                from contextcore.contracts.propagation.otel import (
-                                    emit_boundary_result,
-                                )
-                                emit_boundary_result(exit_result)
-                            except ImportError:
-                                pass
+                    # validate_phase_boundary runs legacy validation
+                    # internally, then contract exit when configured.
+                    exit_result = validate_phase_boundary(
+                        phase, context, "exit", self._contract_path
+                    )
+                    if exit_result:
+                        try:
+                            from contextcore.contracts.propagation.otel import (
+                                emit_boundary_result,
+                            )
+                            emit_boundary_result(exit_result)
+                        except ImportError:
+                            pass
 
                     phase_end = time.monotonic()
                     duration = phase_end - phase_start

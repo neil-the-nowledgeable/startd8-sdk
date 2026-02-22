@@ -485,12 +485,18 @@ def validate_phase_boundary(
     direction: str = "entry",
     contract_path: Optional[Path] = None,
 ) -> Any:
-    """Extended validation with optional contract-aware enrichment checking.
+    """Unified boundary validation: legacy checks + contract entry/enrichment/exit.
 
     Always runs the existing blocking validation (``validate_phase_entry`` or
     ``validate_phase_exit``).  When a *contract_path* is provided and the
     ``contextcore.contracts.propagation`` package is importable, additionally
-    validates enrichment fields and tracks propagation provenance.
+    runs ``BoundaryValidator.validate_entry()`` (required fields + quality
+    gates) and ``validate_enrichment()`` on entry, or ``validate_exit()`` on
+    exit.
+
+    On entry the two contract results are merged: ``validate_entry()`` is
+    authoritative for ``passed`` / ``blocking_failures``; quality violations,
+    warnings and field results from enrichment are appended.
 
     This function preserves full backward compatibility — callers that do not
     pass *contract_path* get identical behavior to calling
@@ -514,7 +520,7 @@ def validate_phase_boundary(
     else:
         validate_phase_exit(phase, context)  # raises PhaseContextError
 
-    # 2. If contract available, validate enrichment + track propagation
+    # 2. If contract available, run contract-aware validation
     if contract_path is not None:
         try:
             from contextcore.contracts.propagation import (
@@ -533,7 +539,20 @@ def validate_phase_boundary(
         validator = BoundaryValidator()
 
         if direction == "entry":
-            return validator.validate_enrichment(phase_value, context, contract)
+            entry_result = validator.validate_entry(
+                phase_value, context, contract,
+            )
+            enrichment_result = validator.validate_enrichment(
+                phase_value, context, contract,
+            )
+            # Merge: entry is authoritative for passed/blocking_failures;
+            # append enrichment quality violations, warnings, field results.
+            entry_result.quality_violations.extend(
+                enrichment_result.quality_violations,
+            )
+            entry_result.warnings.extend(enrichment_result.warnings)
+            entry_result.field_results.extend(enrichment_result.field_results)
+            return entry_result
         else:
             return validator.validate_exit(phase_value, context, contract)
 

@@ -19,7 +19,10 @@ from contextcore.contracts.propagation.schema import ContextContract
 from contextcore.contracts.propagation.validator import ContractValidationResult
 from contextcore.contracts.types import PropagationStatus
 
+from startd8.contractors.context_schema import PhaseContextError
+
 from .conftest import (
+    CONTRACT_YAML_PATH,
     build_design_exit_context,
     build_finalize_exit_context,
     build_full_pipeline_context,
@@ -404,3 +407,45 @@ class TestFinalizeBoundary:
         result = validator.validate_exit("finalize", ctx, loaded_contract)
         assert result.passed is False
         assert "workflow_summary" in result.blocking_failures
+
+
+# ============================================================================
+# validate_phase_boundary() integration — entry wiring
+# ============================================================================
+
+
+class TestValidatePhaseBoundaryEntryWiring:
+    """Verify that validate_phase_boundary() calls BoundaryValidator.validate_entry()
+    and merges enrichment results on the entry path."""
+
+    def test_boundary_runs_contract_entry_and_enrichment(
+        self,
+        loaded_contract: ContextContract,
+        validator: BoundaryValidator,
+        tmp_path: Path,
+    ) -> None:
+        """validate_phase_boundary('entry') returns merged entry + enrichment result."""
+        from startd8.contractors.context_schema import validate_phase_boundary
+
+        ctx = build_plan_exit_context(tmp_path)
+        build_scaffold_exit_context(ctx)
+        build_design_exit_context(ctx)
+        result = validate_phase_boundary(
+            "implement", ctx, "entry", CONTRACT_YAML_PATH
+        )
+        assert result is not None
+        assert result.passed is True
+        # Entry's quality gate on design_results (line_count < 50 for dict)
+        violations = [v for v in result.quality_violations if v.metric == "line_count"]
+        assert len(violations) > 0
+
+    def test_boundary_entry_blocking_failure_raises(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        """Missing blocking field triggers PhaseContextError from legacy validation."""
+        from startd8.contractors.context_schema import validate_phase_boundary
+
+        ctx = {"project_root": str(tmp_path)}  # missing tasks, design_results
+        with pytest.raises(PhaseContextError):
+            validate_phase_boundary("implement", ctx, "entry", CONTRACT_YAML_PATH)

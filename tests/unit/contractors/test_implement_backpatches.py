@@ -78,44 +78,46 @@ def mock_handoff_validation():
 
 
 class TestBP1ExitSideContractValidation:
-    """Verify validate_phase_boundary is called on exit when _contract_path set."""
+    """Verify validate_phase_boundary is called on exit path in _execute_phase.
 
-    def test_exit_validation_called_when_contract_path_set(self):
-        """_execute_phase should call validate_phase_boundary on exit."""
+    After the double-validation consolidation, _execute_phase no longer calls
+    validate_phase_exit directly — validate_phase_boundary handles both legacy
+    and contract validation internally.  The exit boundary call always runs
+    (contract_path is passed through; None falls back to legacy-only).
+    """
+
+    def test_exit_validation_called_via_boundary(self):
+        """_execute_phase calls validate_phase_boundary on exit path."""
         from startd8.contractors.artisan_contractor import ArtisanContractorWorkflow
 
-        # Read the source to verify the exit-side validation is wired
         import inspect
         source = inspect.getsource(ArtisanContractorWorkflow._execute_phase)
 
-        # Verify the exit-side boundary validation call exists after
-        # validate_phase_exit and before phase_end
-        exit_idx = source.index("validate_phase_exit(phase, context)")
+        # The exit-side boundary call should appear after _run_handler_with_timeout
+        # and before phase_end
+        handler_idx = source.index("_run_handler_with_timeout")
         boundary_idx = source.index(
             'validate_phase_boundary(\n'
-            '                            phase, context, "exit", self._contract_path'
+            '                        phase, context, "exit", self._contract_path'
         )
         phase_end_idx = source.index("phase_end = time.monotonic()")
 
-        # Exit validation comes after phase_exit, boundary validation after that
-        assert exit_idx < boundary_idx < phase_end_idx
+        assert handler_idx < boundary_idx < phase_end_idx
 
-    def test_exit_validation_guarded_by_contract_path(self):
-        """Exit boundary validation only runs when _contract_path is set."""
+    def test_exit_boundary_always_runs(self):
+        """Exit boundary validation runs unconditionally (no contract_path guard).
+
+        validate_phase_boundary internally falls through to legacy-only
+        validation when contract_path is None.
+        """
         from startd8.contractors.artisan_contractor import ArtisanContractorWorkflow
         import inspect
         source = inspect.getsource(ArtisanContractorWorkflow._execute_phase)
 
-        # Find the exit-side guard
-        assert 'if self._contract_path:' in source
-        # The exit-side block should appear after validate_phase_exit
-        exit_idx = source.index("validate_phase_exit(phase, context)")
-        # There should be a contract_path guard between exit and phase_end
-        guard_after_exit = source.index(
-            "if self._contract_path:", exit_idx
-        )
-        phase_end_idx = source.index("phase_end = time.monotonic()")
-        assert exit_idx < guard_after_exit < phase_end_idx
+        # The consolidated call passes self._contract_path directly
+        assert 'phase, context, "exit", self._contract_path' in source
+        # No separate contract_path guard on exit path
+        # (validate_phase_boundary handles the None case internally)
 
     def test_emit_boundary_result_called_on_exit(self):
         """When exit_result is non-None, emit_boundary_result is called."""
@@ -123,11 +125,12 @@ class TestBP1ExitSideContractValidation:
         import inspect
         source = inspect.getsource(ArtisanContractorWorkflow._execute_phase)
 
-        # Verify emit_boundary_result import+call appears in exit block
-        # (after validate_phase_exit)
-        exit_idx = source.index("validate_phase_exit(phase, context)")
-        emit_idx = source.index("emit_boundary_result(exit_result)", exit_idx)
-        assert emit_idx > exit_idx
+        # Find the exit-side boundary call, then verify emit follows
+        exit_boundary_idx = source.index(
+            'phase, context, "exit", self._contract_path'
+        )
+        emit_idx = source.index("emit_boundary_result(exit_result)", exit_boundary_idx)
+        assert emit_idx > exit_boundary_idx
 
 
 # ============================================================================
