@@ -103,6 +103,42 @@ prompts:
       - output_format
       - existing_files_section
 
+  draft_edit:
+    description: "Drafter implementation prompt for edit-mode tasks (PCA-605) — existing files shown BEFORE spec"
+    template: |
+      You are modifying an existing codebase based on a specification from a senior architect.
+
+      {existing_files_section}
+
+      ## Implementation Specification (changes to apply)
+      {spec}
+
+      ## Previous Feedback (if any)
+      {feedback}
+
+      ## Instructions
+      1. Your output must contain the COMPLETE file with ALL existing code preserved
+      2. Apply ONLY the changes described in the specification
+      3. Do NOT remove, reorganize, or rewrite code that the specification does not mention
+      4. Keep all existing imports, classes, functions, docstrings, and comments intact
+      5. Add new code at the insertion points described in the specification
+
+      ## Coding Standards (ruff/linter compliance)
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
+
+      ## Output Format
+      {output_format}
+
+      ## Explanation
+      [Brief notes on what you changed and why — reference specific line ranges]
+    placeholders:
+      - spec
+      - feedback
+      - output_format
+      - existing_files_section
+
   single_file_output:
     description: "Output format for single-file tasks"
     template: |
@@ -243,18 +279,25 @@ prompts:
       - integration_instructions
 
   single_file_edit_output:
-    description: "Output format for single-file edit tasks (PCA-602)"
+    description: "Output format for single-file edit tasks (PCA-602 + PCA-605)"
     template: |
-      You are EDITING an existing file. Your output must contain the COMPLETE
-      modified file — every line of the original plus your additions/changes.
-      You must strive to preserve all existing code. Significant code removal
-      will be blocked by downstream integration guards.
+      You are EDITING an existing file ({existing_line_count} lines).
+      Your output must contain the COMPLETE modified file.
+
+      CRITICAL SIZE CONSTRAINT: Your output must be AT LEAST {min_output_lines} lines.
+      The existing file has {existing_line_count} lines. Outputs shorter than {min_pct}% of
+      the original will be REJECTED by automated guards. If your changes only add code,
+      your output should be LONGER than the original.
+
       Do NOT omit, summarize, or abbreviate any existing code.
 
       ```
       [Your complete modified implementation here]
       ```
-    placeholders: []
+    placeholders:
+      - existing_line_count
+      - min_output_lines
+      - min_pct
 
   multi_file_edit_output:
     description: "Output format for multi-file edit tasks (PCA-602)"

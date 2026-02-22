@@ -56,6 +56,7 @@ import json
 import logging
 import os
 import time
+import uuid
 from abc import ABC, abstractmethod
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -1076,8 +1077,9 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                     )
                     continue
                 _total_bytes += _ef_size
+                _nonce = uuid.uuid4().hex[:8]
                 _ef_parts.append(f"\n### `{_ef_path}` ({_ef_size:,} bytes)")
-                _ef_parts.append(f"```\n{_ef_content}\n```")
+                _ef_parts.append(f"```source-{_nonce}\n{_ef_content}\n```")
             parts.extend(_ef_parts)
             parts.append("\n---\n")
 

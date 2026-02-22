@@ -51,6 +51,7 @@ from startd8.contractors.context_seed_handlers import (
     _parse_tasks,
 )
 from startd8.workflows.builtin.lead_contractor_workflow import (
+    DRAFT_EDIT_PROMPT_TEMPLATE,
     DRAFT_PROMPT_TEMPLATE,
     LeadContractorWorkflow,
     _build_existing_files_section,
@@ -236,9 +237,11 @@ def _dump_task_prompts(
             "Your output MUST preserve existing functionality and only "
             "add or modify what is specified in the design document.\n"
         )
+        import uuid as _uuid
         for ef_path, ef_content in existing_files.items():
+            _nonce = _uuid.uuid4().hex[:8]
             td_parts.append(f"\n### `{ef_path}` ({len(ef_content):,} bytes)")
-            td_parts.append(f"```\n{ef_content}\n```")
+            td_parts.append(f"```source-{_nonce}\n{ef_content}\n```")
         td_parts.append("\n---\n")
 
         td_parts.append("## Edit-First Directive\n")
@@ -328,11 +331,13 @@ def _dump_task_prompts(
     (task_dir / "spec_prompt.md").write_text(spec_prompt, encoding="utf-8")
 
     # Step 7: Build draft prompt (with existing files section)
+    # PCA-605: Select edit template when existing files are present
     existing_files_section = _build_existing_files_section(
         existing_files=existing_files if existing_files else None,
         edit_mode=edit_dict if edit_class.mode == "edit" else None,
     )
-    draft_prompt = DRAFT_PROMPT_TEMPLATE.format(
+    draft_template = DRAFT_EDIT_PROMPT_TEMPLATE if existing_files else DRAFT_PROMPT_TEMPLATE
+    draft_prompt = draft_template.format(
         spec="[SPEC WOULD BE LLM-GENERATED — showing template placeholder]",
         feedback="This is the initial implementation attempt.",
         output_format=output_format,

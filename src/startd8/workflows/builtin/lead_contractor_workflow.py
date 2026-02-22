@@ -84,6 +84,8 @@ INTEGRATION_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "integratio
 # PCA-602: Edit-mode output templates
 SINGLE_FILE_EDIT_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "single_file_edit_output")
 MULTI_FILE_EDIT_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "multi_file_edit_output")
+# PCA-605: Edit-mode draft template (existing files BEFORE spec)
+DRAFT_EDIT_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "draft_edit")
 
 # PCA-601: Budget for existing file content in draft prompt
 _EXISTING_FILES_BUDGET_BYTES = 80 * 1024  # 80 KB
@@ -202,6 +204,9 @@ def _build_existing_files_section(
     return "\n".join(result_parts)
 
 
+_EDIT_MIN_PCT = 80  # Minimum percentage of original lines expected in edit output
+
+
 def _build_output_format(
     target_files: Optional[List[str]] = None,
     existing_files: Optional[Dict[str, str]] = None,
@@ -212,11 +217,23 @@ def _build_output_format(
     Multi-file tasks get explicit per-file fencing instructions with a
     verification checklist (Layer 2 defense-in-depth).
     When existing_files are present (PCA-602), selects edit-mode templates.
+    PCA-605: Edit templates now include quantitative line-count constraints.
     """
     is_edit = bool(existing_files)
 
     if not target_files or len(target_files) <= 1:
-        return SINGLE_FILE_EDIT_OUTPUT_FORMAT if is_edit else SINGLE_FILE_OUTPUT_FORMAT
+        if is_edit:
+            # PCA-605: Compute total line count across all existing files
+            total_lines = sum(
+                len(content.splitlines()) for content in existing_files.values()
+            )
+            min_output_lines = int(total_lines * _EDIT_MIN_PCT / 100)
+            return SINGLE_FILE_EDIT_OUTPUT_FORMAT.format(
+                existing_line_count=total_lines,
+                min_output_lines=min_output_lines,
+                min_pct=_EDIT_MIN_PCT,
+            )
+        return SINGLE_FILE_OUTPUT_FORMAT
 
     # Order __init__.py first so the model produces it before other files
     ordered = sorted(
@@ -826,6 +843,24 @@ class LeadContractorWorkflow(WorkflowBase):
         from ...contractors.prompt_utils import format_constraints
         from .prompts import get_template as _get_ctx_template
 
+        # --- PCA-605: Edit-aware spec framing ---
+        # When the task modifies existing files, prepend an edit-mode preamble
+        # so the spec LLM frames its output as a delta, not a greenfield design.
+        edit_mode = context.pop("edit_mode", None)
+        if edit_mode and edit_mode.get("mode") == "edit":
+            edit_preamble = (
+                "## EDIT MODE — Existing Code Modification\n"
+                "This task MODIFIES an existing file. The existing code is shown "
+                "below in the task description.\n"
+                "Your specification must:\n"
+                "- Describe ONLY the additions and modifications needed\n"
+                "- List which existing functions/classes to keep unchanged\n"
+                "- NOT redesign or restructure existing code\n"
+                "- Specify exact insertion points (e.g., 'Add after class X' "
+                "or 'Modify method Y')\n\n"
+            )
+            task_description = edit_preamble + task_description
+
         # --- IMP-P5: Constraint categorization ---
         raw_constraints = context.pop("domain_constraints", None)
         if raw_constraints and isinstance(raw_constraints, list):
@@ -977,9 +1012,18 @@ class LeadContractorWorkflow(WorkflowBase):
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
-        output_format = _build_output_format(target_files, existing_files=existing_files)
+        output_format = _build_output_format(
+            target_files, existing_files=existing_files,
+        )
         existing_files_section = _build_existing_files_section(existing_files, edit_mode)
-        prompt = DRAFT_PROMPT_TEMPLATE.format(
+
+        # PCA-605: Use edit-mode draft template when existing files are present.
+        # This puts existing code BEFORE the spec so the LLM sees it first.
+        if existing_files:
+            draft_template = DRAFT_EDIT_PROMPT_TEMPLATE
+        else:
+            draft_template = DRAFT_PROMPT_TEMPLATE
+        prompt = draft_template.format(
             spec=spec.raw_spec,
             feedback=feedback if feedback else "This is the initial implementation attempt.",
             output_format=output_format,
@@ -1535,9 +1579,17 @@ class LeadContractorWorkflow(WorkflowBase):
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
-        output_format = _build_output_format(target_files, existing_files=existing_files)
+        output_format = _build_output_format(
+            target_files, existing_files=existing_files,
+        )
         existing_files_section = _build_existing_files_section(existing_files, edit_mode)
-        prompt = DRAFT_PROMPT_TEMPLATE.format(
+
+        # PCA-605: Use edit-mode draft template when existing files are present.
+        if existing_files:
+            draft_template = DRAFT_EDIT_PROMPT_TEMPLATE
+        else:
+            draft_template = DRAFT_PROMPT_TEMPLATE
+        prompt = draft_template.format(
             spec=spec.raw_spec,
             feedback=feedback if feedback else "This is the initial implementation attempt.",
             output_format=output_format,
