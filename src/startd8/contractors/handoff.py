@@ -88,6 +88,7 @@ HANDOFF_SCHEMA: dict[str, Any] = {
         "context_files": {"type": "array", "items": {"type": "object"}},
         "example_artifacts": {"type": "object"},
         "coverage_gaps": {"type": "array", "items": {"type": "string"}},
+        "design_mode_summary": {"type": "object"},
         "source_checksum": {"type": ["string", "null"]},
         "created_at": {"type": "string"},
         "schema_version": {"type": "integer"},
@@ -151,6 +152,8 @@ class HandoffData:
     example_artifacts: dict[str, Any] = field(default_factory=dict)
     # Coverage gaps — artifact types to generate first (Item 11)
     coverage_gaps: list[str] = field(default_factory=list)
+    # B-6: Per-task edit mode classification ("create" | "update" | "skipped")
+    design_mode_summary: dict[str, str] = field(default_factory=dict)
     # SHA-256 of the enriched seed file at design time (provenance chain)
     source_checksum: str | None = None
     created_at: str = ""
@@ -352,6 +355,7 @@ def write_design_handoff(
     example_artifacts: dict[str, Any] | None = None,
     coverage_gaps: list[str] | None = None,
     source_checksum: str | None = None,
+    design_mode_summary: dict[str, str] | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -398,6 +402,7 @@ def write_design_handoff(
         context_files=enriched_context_files,
         example_artifacts=example_artifacts or {},
         coverage_gaps=coverage_gaps or [],
+        design_mode_summary=design_mode_summary or {},
         source_checksum=source_checksum,
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,
@@ -496,6 +501,7 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         context_files=raw.get("context_files", []),
         example_artifacts=raw.get("example_artifacts", {}),
         coverage_gaps=raw.get("coverage_gaps", []),
+        design_mode_summary=raw.get("design_mode_summary", {}),
         source_checksum=raw.get("source_checksum"),
         created_at=raw.get("created_at", ""),
         schema_version=version,

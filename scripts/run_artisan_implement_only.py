@@ -47,7 +47,7 @@ from startd8.contractors.artisan_contractor import (
     WorkflowStatus,
 )
 from startd8.contractors.context_seed_handlers import ContextSeedHandlers
-from startd8.contractors.handoff import load_design_handoff, verify_context_checksums, verify_source_checksum, HandoffContextDriftError
+from startd8.contractors.handoff import HandoffData, load_design_handoff, verify_context_checksums, verify_source_checksum, HandoffContextDriftError
 
 _DEFAULT_TEST_TIMEOUT_SECONDS = 300
 
@@ -213,6 +213,7 @@ def main() -> int:
     design_results: dict = {}
     scaffold: dict = {}
     handoff_workflow_id: str | None = None
+    handoff: HandoffData | None = None
 
     if args.handoff:
         # Explicit handoff file
@@ -343,6 +344,10 @@ def main() -> int:
         initial_context["design_results"] = design_results
     if scaffold:
         initial_context["scaffold"] = scaffold
+
+    # B-6: Reconstruct design_mode_summary from handoff (lost in split runs)
+    if handoff is not None and handoff.design_mode_summary:
+        initial_context["design_mode_summary"] = handoff.design_mode_summary
 
     logger.info("Workflow ID: %s", config.workflow_id)
     logger.info("Implementation-only: phases=%s", [p.value for p in phases])

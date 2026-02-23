@@ -95,7 +95,9 @@ from startd8.contractors.context_schema import (
     ScaffoldPhaseOutput,
     ValidationPhaseOutput,
 )
+from startd8.contractors.artisan_contractor import HAS_OTEL, _NoOpTracer, _NoOpSpan
 from startd8.logging_config import get_logger
+from startd8.otel import attach_context, capture_context, detach_context
 from startd8.utils.artifact_inventory import (
     load_artifact_content,
     load_inventory,
@@ -107,6 +109,15 @@ from startd8.contractors.artisan_phases.self_consistency import (
 )
 
 logger = get_logger(__name__)
+
+# Module-level tracer — reuses the HAS_OTEL/_NoOpTracer pattern from
+# artisan_contractor.py for per-task span instrumentation.
+try:
+    from opentelemetry import trace as _trace
+
+    _phase_tracer = _trace.get_tracer("startd8.artisan.phases")
+except ImportError:
+    _phase_tracer = _NoOpTracer()
 
 _CACHE_SCHEMA_VERSION = 3
 
@@ -330,11 +341,17 @@ class HandlerConfig:
     review_agent: Optional[str] = None
     enable_prompt_caching: bool = False
     staging_dir: Optional[str] = None  # None = .startd8/staging/
+    forensic_log_level: str = "INFO"  # "DEBUG" | "INFO" | "WARNING"
 
     def __post_init__(self) -> None:
         if self.force_design and self.refine_design:
             raise ValueError(
                 "force_design and refine_design are mutually exclusive"
+            )
+        if self.forensic_log_level not in ("DEBUG", "INFO", "WARNING"):
+            raise ValueError(
+                f"forensic_log_level must be DEBUG, INFO, or WARNING; "
+                f"got {self.forensic_log_level!r}"
             )
 
     @classmethod
@@ -1516,6 +1533,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         inv_calibration_hints: dict[str, Any] | None = None,
         inv_open_questions: list[dict[str, Any]] | None = None,
         inv_dependency_graph: dict[str, list[str]] | None = None,
+        scaffold_existing_files: list[str] | None = None,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -1774,6 +1792,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             else cal.get("max_output_tokens")
         )
 
+        # B-6: Compute edit_mode_hint from filesystem ground truth
+        _scaffold_existing = set(scaffold_existing_files or [])
+        _existing_targets = [
+            f for f in (task.target_files or []) if f in _scaffold_existing
+        ]
+        _edit_mode_hint: str | None = None
+        if _existing_targets:
+            _edit_mode_hint = "edit"
+        elif task.target_files:
+            _edit_mode_hint = "create"
+
         return FeatureContext(
             feature_name=task.title,
             description=task.description,
@@ -1785,6 +1814,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             depth_guidance=depth_guidance,
             prior_design=prior_design_text,
             requirements_text=task.requirements_text,
+            edit_mode_hint=_edit_mode_hint,
+            existing_target_files=_existing_targets,
         )
 
     @staticmethod
@@ -1919,19 +1950,33 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         """
         result_box: dict[str, Any] = {}
         error_box: dict[str, BaseException] = {}
+        parent_ctx = capture_context()
+        # OT-710: Capture boundary result for thread propagation
+        from startd8.contractors.forensic_log import (
+            get_boundary_result as _get_br,
+            set_boundary_result as _set_br,
+            _boundary_result_var,
+        )
+        parent_boundary_result = _get_br()
 
         def _runner() -> None:
-            loop = asyncio.new_event_loop()
+            token = attach_context(parent_ctx)
+            br_token = _set_br(parent_boundary_result)
             try:
-                asyncio.set_event_loop(loop)
-                result_box["result"] = loop.run_until_complete(
-                    design_phase.run(feature_context)
-                )
-            except BaseException as exc:
-                error_box["error"] = exc
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    result_box["result"] = loop.run_until_complete(
+                        design_phase.run(feature_context)
+                    )
+                except BaseException as exc:
+                    error_box["error"] = exc
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
             finally:
-                loop.close()
-                asyncio.set_event_loop(None)
+                _boundary_result_var.reset(br_token)
+                detach_context(token)
 
         thread = threading.Thread(target=_runner, daemon=True)
         thread.start()
@@ -2170,6 +2215,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             logger.info("DESIGN: refine_suggestions derived from plan document text")
 
         for idx, task in enumerate(tasks, start=1):
+            _task_span_cm = _phase_tracer.start_as_current_span(
+                f"task.{task.task_id}",
+                attributes={
+                    "task.id": task.task_id,
+                    "task.title": task.title,
+                    "task.domain": task.domain or "",
+                    "task.phase": "design",
+                    "task.target_files": ",".join(task.target_files[:5]),
+                },
+            )
+            _task_span = _task_span_cm.__enter__()
             previous_task_started_mono = _log_task_timing(
                 "DESIGN",
                 task.task_id,
@@ -2194,6 +2250,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "status": "env_blocked",
                     "environment_issues": env_fails,
                 }
+                _task_span.set_attribute("task.status", "env_blocked")
+                _task_span_cm.__exit__(None, None, None)
                 continue
 
             # ----------------------------------------------------------
@@ -2258,6 +2316,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         "DESIGN: adopted prior result for %s (agreed=%s, cost=$%.4f)",
                         task.task_id, prior.get("agreed"), prior.get("cost", 0.0),
                     )
+                    _task_span.set_attribute("task.status", "adopted")
+                    _task_span_cm.__exit__(None, None, None)
                     continue
 
             if dry_run:
@@ -2268,6 +2328,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "constraints_count": len(task.prompt_constraints),
                     "domain": task.domain,
                 }
+                _task_span.set_attribute("task.status", "dry_run_skipped")
+                _task_span_cm.__exit__(None, None, None)
                 continue
 
             # Real-mode: run design documentation phase per task
@@ -2290,6 +2352,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 inv_calibration_hints=inv_calibration_hints,
                 inv_open_questions=context.get("onboarding_open_questions"),
                 inv_dependency_graph=context.get("onboarding_dependency_graph"),
+                scaffold_existing_files=context.get("scaffold", {}).get("existing_target_files", []),
             )
 
             # Snapshot cost before this task
@@ -2360,6 +2423,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         design_results[task.task_id]["output_file"] = str(out_path)
                         logger.info("Wrote design doc: %s", out_path)
 
+                    _task_span.set_attribute("task.cost", task_cost)
+                    _task_span.set_attribute("task.attempts", _attempt + 1)
+                    _task_span.set_attribute("task.status", "designed")
                     break  # success — exit retry loop
 
                 except Exception as exc:
@@ -2393,18 +2459,38 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     }
                     break  # non-retryable or final attempt — exit retry loop
 
+            # Close the per-task span after the retry loop completes
+            _task_span_cm.__exit__(None, None, None)
+
         context["design_results"] = design_results
 
-        # Derive design_mode_summary: task_id → "create" | "update" | "skipped"
+        # B-6: Derive design_mode_summary from filesystem ground truth
+        # (scaffold.existing_target_files) instead of design iteration status.
         # Used by chain 5 (design_mode_to_implement) for verifiable propagation.
-        context["design_mode_summary"] = {
-            tid: (
-                "update" if isinstance(entry, dict) and entry.get("status") == "refined" else
-                "create" if isinstance(entry, dict) and entry.get("status") in ("designed", "adopted", "completed") else
-                "skipped"
-            )
-            for tid, entry in design_results.items()
-        }
+        _scaffold_existing = set(
+            context.get("scaffold", {}).get("existing_target_files", [])
+        )
+        _task_by_id = {t.task_id: t for t in tasks}
+
+        context["design_mode_summary"] = {}
+        for tid, entry in design_results.items():
+            if not isinstance(entry, dict) or entry.get("status") in (
+                "design_failed", "env_blocked", "dry_run_skipped",
+            ):
+                context["design_mode_summary"][tid] = "skipped"
+            elif _task_by_id.get(tid) and any(
+                f in _scaffold_existing
+                for f in _task_by_id[tid].target_files
+            ):
+                context["design_mode_summary"][tid] = "update"
+            elif _task_by_id.get(tid) and getattr(
+                _task_by_id[tid], "existing_content_hash", None
+            ) is not None:
+                context["design_mode_summary"][tid] = "update"
+            elif entry.get("status") == "refined":
+                context["design_mode_summary"][tid] = "update"
+            else:
+                context["design_mode_summary"][tid] = "create"
 
         # Context contract: validate DESIGN output model
         DesignPhaseOutput(design_results=context["design_results"])
@@ -2422,6 +2508,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     design_results=design_results,
                     scaffold=context.get("scaffold", {}),
                     source_checksum=context.get("source_checksum"),
+                    design_mode_summary=context.get("design_mode_summary", {}),
                 )
                 logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
             except (OSError, ValueError, TypeError) as exc:
@@ -3922,19 +4009,33 @@ class Test{class_name}:
         """
         result_box: dict[str, Any] = {}
         error_box: dict[str, BaseException] = {}
+        parent_ctx = capture_context()
+        # OT-710: Capture boundary result for thread propagation
+        from startd8.contractors.forensic_log import (
+            get_boundary_result as _get_br_dev,
+            set_boundary_result as _set_br_dev,
+            _boundary_result_var as _br_var_dev,
+        )
+        parent_boundary_result_dev = _get_br_dev()
 
         def _runner() -> None:
-            loop = asyncio.new_event_loop()
+            token = attach_context(parent_ctx)
+            br_token = _set_br_dev(parent_boundary_result_dev)
             try:
-                asyncio.set_event_loop(loop)
-                result_box["result"] = loop.run_until_complete(
-                    dev_phase.run(plan)
-                )
-            except BaseException as exc:  # pragma: no cover - propagated
-                error_box["error"] = exc
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    result_box["result"] = loop.run_until_complete(
+                        dev_phase.run(plan)
+                    )
+                except BaseException as exc:  # pragma: no cover - propagated
+                    error_box["error"] = exc
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
             finally:
-                loop.close()
-                asyncio.set_event_loop(None)
+                _br_var_dev.reset(br_token)
+                detach_context(token)
 
         # daemon=True is intentional: if the main process exits (e.g.
         # KeyboardInterrupt or SIGTERM), we don't want this thread to keep
@@ -4944,19 +5045,27 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
             if not task:
                 continue
 
-            unit = SeedTaskUnit(task, gr)
-            listener = ArtisanIntegrationListener(task_id)
-            result = engine.integrate(unit, listener=listener)
-            integration_results[task_id] = {
-                "success": result.success,
-                "integrated_files": [str(f) for f in result.integrated_files],
-                "errors": result.errors,
-                "rollback_performed": result.rollback_performed,
-            }
+            with _phase_tracer.start_as_current_span(
+                f"task.{task_id}",
+                attributes={
+                    "task.id": task_id,
+                    "task.phase": "integrate",
+                },
+            ) as _int_span:
+                unit = SeedTaskUnit(task, gr)
+                listener = ArtisanIntegrationListener(task_id)
+                result = engine.integrate(unit, listener=listener)
+                integration_results[task_id] = {
+                    "success": result.success,
+                    "integrated_files": [str(f) for f in result.integrated_files],
+                    "errors": result.errors,
+                    "rollback_performed": result.rollback_performed,
+                }
+                _int_span.set_attribute("task.success", result.success)
 
-            # Update generation_results paths: staging → project_root
-            if result.success:
-                gr.generated_files = [Path(f) for f in result.integrated_files]
+                # Update generation_results paths: staging → project_root
+                if result.success:
+                    gr.generated_files = [Path(f) for f in result.integrated_files]
 
         # Clean staging dir
         if staging_dir.exists() and not dry_run:
@@ -5493,6 +5602,16 @@ class TestPhaseHandler(AbstractPhaseHandler):
         _service_metadata = context.get("service_metadata")
 
         for idx, task in enumerate(tasks, start=1):
+            _task_span_cm = _phase_tracer.start_as_current_span(
+                f"task.{task.task_id}",
+                attributes={
+                    "task.id": task.task_id,
+                    "task.title": task.title,
+                    "task.domain": task.domain or "",
+                    "task.phase": "test",
+                },
+            )
+            _task_span = _task_span_cm.__enter__()
             previous_task_started_mono = _log_task_timing(
                 "TEST",
                 task.task_id,
@@ -5516,6 +5635,8 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "status": "dry_run_planned",
                 }
                 test_plan.append(test_entry)
+                _task_span.set_attribute("task.status", "dry_run_planned")
+                _task_span_cm.__exit__(None, None, None)
                 continue
 
             # --- Real-mode path ---
@@ -5536,6 +5657,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                         "validator_count": len(validators),
                         "status": "skipped_no_generation",
                     })
+                    _task_span.set_attribute("task.status", "skipped_no_generation")
                     continue
 
                 # Run validators
@@ -5550,8 +5672,10 @@ class TestPhaseHandler(AbstractPhaseHandler):
 
                 if task_test_result["all_passed"]:
                     total_passed += 1
+                    _task_span.set_attribute("task.status", "passed")
                 else:
                     total_failed += 1
+                    _task_span.set_attribute("task.status", "failed")
             except Exception as exc:
                 logger.warning(
                     "TEST: unexpected error for task %s: %s",
@@ -5568,6 +5692,9 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "error": str(exc),
                 })
                 total_failed += 1
+                _task_span.set_attribute("task.status", "error")
+            finally:
+                _task_span_cm.__exit__(None, None, None)
 
         per_task: dict[str, Any] = {}
         for entry in test_plan:
@@ -6188,6 +6315,38 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "output": token_usage_output(token_usage),
                 }
                 review["status"] = "reviewed"
+
+                # CS7: Forensic log for review.evaluate
+                from startd8.contractors.forensic_log import emit_forensic_log
+                _agent_spec = self.config.review_agent or self.config.lead_agent
+                emit_forensic_log(
+                    call_type="review.evaluate",
+                    call={
+                        "prompt_length": len(prompt),
+                        "model_spec": _agent_spec,
+                        "response_time_ms": _time_ms,
+                        "tokens_input": token_usage_input(token_usage),
+                        "tokens_output": token_usage_output(token_usage),
+                        "cost_usd": token_usage_cost(token_usage),
+                        "attempt": _attempt + 1,
+                        "max_attempts": _max_attempts,
+                    },
+                    task={
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "domain": task.domain,
+                        "phase": "review",
+                        "target_files": list(task.file_scope) if task.file_scope else None,
+                    },
+                    context_propagation={
+                        "design_doc_present": design_document is not None,
+                        "design_doc_line_count": len(design_document.splitlines()) if design_document else None,
+                        "parameter_sources_present": parameter_sources is not None,
+                        "prompt_constraints_count": len(task.prompt_constraints) if task.prompt_constraints else 0,
+                    },
+                    forensic_log_level=self.config.forensic_log_level,
+                )
+
                 return review
             except Exception as exc:
                 if (
@@ -6416,6 +6575,16 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 cached_reviews = {}
 
         for idx, task in enumerate(tasks, start=1):
+            _task_span_cm = _phase_tracer.start_as_current_span(
+                f"task.{task.task_id}",
+                attributes={
+                    "task.id": task.task_id,
+                    "task.title": task.title,
+                    "task.domain": task.domain or "",
+                    "task.phase": "review",
+                },
+            )
+            _task_span = _task_span_cm.__enter__()
             previous_task_started_mono = _log_task_timing(
                 "REVIEW",
                 task.task_id,
@@ -6449,6 +6618,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "env_warnings": len(env_warns),
                     "review_status": "dry_run_pending",
                 })
+                _task_span.set_attribute("task.status", "dry_run_pending")
+                _task_span_cm.__exit__(None, None, None)
                 continue
 
             # --- Real-mode path ---
@@ -6632,6 +6803,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     self._make_error_review_entry(task, exc, env_fails, env_warns)
                 )
                 total_failed += 1
+                _task_span.set_attribute("task.status", "error")
+            finally:
+                _task_span_cm.__exit__(None, None, None)
 
         per_task: dict[str, Any] = {}
         for item in review_items:

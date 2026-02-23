@@ -838,6 +838,7 @@ def main() -> int:
             context_files=extras.get("context_files", []),
             example_artifacts=extras.get("example_artifacts", {}),
             coverage_gaps=extras.get("coverage_gaps", []),
+            design_mode_summary=initial_context.get("design_mode_summary", {}),
         )
         logger.info("Wrote design handoff: %s", handoff_path)
 

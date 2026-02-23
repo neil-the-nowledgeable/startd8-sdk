@@ -21,14 +21,14 @@ prompts:
         - `path/to/file.py` (new) — brief purpose
         - `path/to/existing.py` (modify) — what changes
       - If you do NOT add files beyond the Target File, omit the ### Files Touched section entirely.
-
+      {edit_mode_block}
       Protocol and Parameter Fidelity:
       - When designing Dockerfiles or health check mechanisms, HEALTHCHECK type MUST match the service's transport protocol: gRPC services use grpc_health_probe, HTTP services use curl or omit HEALTHCHECK, client-only services omit HEALTHCHECK.
       - If service_metadata in Additional Context specifies transport_protocol, use it as authoritative. Do NOT pattern-match health check type from sibling services.
       - When requirements or the task description specify exact parameter values (e.g., user="postgres", embedding_service=..., specific model names, system packages), carry these through verbatim into the design document. Do not substitute, generalize, or omit specific parameter values from requirements.
       - When a service explicitly does NOT use a capability (e.g., "no OpenTelemetry"), state this in the design document so the implementation phase does not add it.
       {depth_line}
-    placeholders: [sections_list, depth_line]
+    placeholders: [sections_list, depth_line, edit_mode_block]
 
   design_user:
     description: "User prompt for DESIGN generation"
@@ -73,8 +73,9 @@ prompts:
         - `path/to/file.py` (new) — brief purpose
         - `path/to/existing.py` (modify) — what changes
       - If you do NOT add files beyond the Target File, omit the ### Files Touched section entirely.
+      {edit_mode_block}
       {depth_line}
-    placeholders: [sections_list, depth_line]
+    placeholders: [sections_list, depth_line, edit_mode_block]
 
   refine_user:
     description: "User prompt for refining an existing design document"
@@ -83,7 +84,7 @@ prompts:
 
       **Feature Name:** {feature_name}
 
-      **Description:** {description}
+      {requirements_block}**Description:** {description}
 
       **Target File:** {target_file}
 
@@ -107,7 +108,7 @@ prompts:
       - Maintain the same section structure (## headers).
 
       {revision_guidance}
-    placeholders: [feature_name, description, target_file, constraints, additional_context, prior_design, revision_guidance]
+    placeholders: [feature_name, requirements_block, description, target_file, constraints, additional_context, prior_design, revision_guidance]
 
   review_json_schema:
     description: "JSON schema for reviewer/arbiter verdicts (helper, not a prompt)"

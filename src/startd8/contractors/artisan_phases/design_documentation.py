@@ -31,9 +31,27 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 
+import contextlib
+
 from startd8.contractors.protocols import VALIDATE_MODEL_CLAUDE_SONNET
+from startd8.contractors.artisan_phases.prompts import get_template, format_prompt
 from startd8.utils.retry import RetryConfig, _is_retryable_exception, _calculate_delay
+
+# OTel instrumentation (graceful degradation when unavailable)
+try:
+    from opentelemetry import trace as _trace
+    _HAS_OTEL = True
+except ImportError:
+    _HAS_OTEL = False
 from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
+
+
+def _get_design_tracer():
+    """Lazy tracer for design phase spans."""
+    if _HAS_OTEL:
+        return _trace.get_tracer("startd8.artisan.design")
+    from startd8.contractors.artisan_contractor import _NoOpTracer
+    return _NoOpTracer()
 
 __all__ = [
     # Enums
@@ -68,8 +86,9 @@ __all__ = [
     "REFINE_DESIGN_USER_PROMPT_TEMPLATE",
 ]
 
-# Configure logging
-logger = logging.getLogger(__name__)
+# Configure logging — uses get_logger() for OTel log bridge attachment (R3-S7)
+from startd8.logging_config import get_logger
+logger = get_logger(__name__)
 
 
 # ============================================================================
@@ -153,6 +172,9 @@ class FeatureContext:
     prior_design: str | None = None
     # IMP-1: Verbatim requirements text from plan
     requirements_text: str = ""
+    # B-6: Edit-mode awareness for existing-file tasks
+    edit_mode_hint: str | None = None  # "edit" | "create" | None
+    existing_target_files: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -464,7 +486,7 @@ class ResolutionCallback(Protocol):
 
 
 # ============================================================================
-# PROMPT CONSTANTS
+# PROMPT ACCESSORS — single source of truth is prompts/design.yaml
 # ============================================================================
 
 _DEFAULT_SECTIONS = [
@@ -473,13 +495,40 @@ _DEFAULT_SECTIONS = [
 ]
 
 
+def _build_edit_mode_block(
+    edit_mode_hint: str | None = None,
+    existing_target_files: list[str] | None = None,
+) -> str:
+    """Build the edit-mode instruction block for design system prompts.
+
+    When ``edit_mode_hint`` is ``"edit"``, returns instructions directing the
+    LLM to describe modifications to existing files rather than greenfield
+    implementations.  Returns an empty string otherwise (greenfield unchanged).
+    """
+    if edit_mode_hint != "edit" or not existing_target_files:
+        return ""
+    file_list = "\n".join(f"        - `{f}`" for f in existing_target_files)
+    return (
+        "\n      Edit-Mode Guidance (IMPORTANT — this task modifies existing code):\n"
+        "      - The following target files ALREADY EXIST in the project:\n"
+        f"{file_list}\n"
+        "      - Describe CHANGES to existing code, not a greenfield implementation.\n"
+        "      - In ### Files Touched, use `(modify)` annotations for existing files.\n"
+        "      - Focus on what to add, remove, or alter — preserve existing functionality.\n"
+        "      - Do NOT rewrite the entire file; specify surgical modifications.\n"
+    )
+
+
 def build_design_system_prompt(
     sections: list[str] | None = None,
     depth_guidance: str | None = None,
+    edit_mode_hint: str | None = None,
+    existing_target_files: list[str] | None = None,
 ) -> str:
     """Build a dynamic system prompt with calibrated section list.
 
-    Loads the template from design.yaml and injects sections_list and depth_line.
+    Loads the template from design.yaml and injects sections_list, depth_line,
+    and edit_mode_block.
     """
     from startd8.contractors.artisan_phases.prompts import get_template
 
@@ -491,51 +540,32 @@ def build_design_system_prompt(
     if depth_guidance:
         depth_line = f"\n\n**Scope guidance:** {depth_guidance}"
 
+    edit_mode_block = _build_edit_mode_block(edit_mode_hint, existing_target_files)
+
     template = get_template("design", "design_system")
-    return template.format(sections_list=section_list, depth_line=depth_line)
+    return template.format(
+        sections_list=section_list,
+        depth_line=depth_line,
+        edit_mode_block=edit_mode_block,
+    )
 
 
 # Backward-compatible constant for code that references it directly
 DESIGN_GENERATION_SYSTEM_PROMPT = build_design_system_prompt()
 
-DESIGN_GENERATION_USER_PROMPT_TEMPLATE = (
-    "Generate a design document for the following feature:\n\n"
-    "**Feature Name:** {feature_name}\n\n"
-    "**Description:** {description}\n\n"
-    "**Target File:** {target_file}\n\n"
-    "**Constraints:** {constraints}\n\n"
-    "**Additional Context:** {additional_context}\n\n"
-    "{revision_guidance}"
-)
-
-REFINE_DESIGN_USER_PROMPT_TEMPLATE = (
-    "Refine and improve the following existing design document for this feature.\n\n"
-    "**Feature Name:** {feature_name}\n\n"
-    "**Description:** {description}\n\n"
-    "**Target File:** {target_file}\n\n"
-    "**Constraints:** {constraints}\n\n"
-    "**Additional Context:** {additional_context}\n\n"
-    "---\n\n"
-    "**Existing Design Document (to refine):**\n\n"
-    "{prior_design}\n\n"
-    "---\n\n"
-    "**Refinement Instructions:**\n"
-    "- Preserve sections and decisions that are still valid.\n"
-    "- Improve specificity, correctness, and completeness.\n"
-    "- Address any gaps, ambiguities, or inconsistencies.\n"
-    "- Update sections that conflict with the constraints or additional context above.\n"
-    "- Maintain the same section structure (## headers).\n\n"
-    "{revision_guidance}"
-)
+REFINE_DESIGN_USER_PROMPT_TEMPLATE = get_template("design", "refine_user")
 
 
 def build_refine_system_prompt(
     sections: list[str] | None = None,
     depth_guidance: str | None = None,
+    edit_mode_hint: str | None = None,
+    existing_target_files: list[str] | None = None,
 ) -> str:
     """Build a system prompt for refining an existing design document.
 
-    Loads the template from design.yaml and injects sections_list and depth_line.
+    Loads the template from design.yaml and injects sections_list, depth_line,
+    and edit_mode_block.
     """
     from startd8.contractors.artisan_phases.prompts import get_template
 
@@ -547,78 +577,25 @@ def build_refine_system_prompt(
     if depth_guidance:
         depth_line = f"\n\n**Scope guidance:** {depth_guidance}"
 
+    edit_mode_block = _build_edit_mode_block(edit_mode_hint, existing_target_files)
+
     template = get_template("design", "refine_system")
-    return template.format(sections_list=section_list, depth_line=depth_line)
+    return template.format(
+        sections_list=section_list,
+        depth_line=depth_line,
+        edit_mode_block=edit_mode_block,
+    )
 
 
-_REVIEW_JSON_SCHEMA = (
-    "{{\n"
-    '    "approved": true or false,\n'
-    '    "confidence": 0.0 to 1.0,\n'
-    '    "concerns": ["concern1", "concern2", ...],\n'
-    '    "suggestions": ["suggestion1", "suggestion2", ...],\n'
-    '    "summary": "Brief summary of your review"\n'
-    "}}"
-)
-
-REVIEWER_SYSTEM_PROMPT = (
-    "You are a senior code reviewer with deep expertise in software design "
-    "patterns, correctness, completeness, and best practices.\n\n"
-    "Your task is to review the provided design document and produce a JSON "
-    f"verdict with the following schema:\n{_REVIEW_JSON_SCHEMA}\n\n"
-    "Focus on:\n"
-    "- Technical correctness and soundness\n"
-    "- Completeness of all required sections\n"
-    "- Alignment with established best practices\n"
-    "- Missing important considerations\n\n"
-    "Output ONLY valid JSON, no additional text."
-)
-
-REVIEWER_USER_PROMPT_TEMPLATE = (
-    "{project_context}"
-    "Review this design document:\n\n"
-    "{design_document}\n\n"
-    "Provide your verdict as JSON matching the specified schema."
-)
-
-ARBITER_SYSTEM_PROMPT = (
-    "You are a pragmatic arbiter with expertise in project feasibility, "
-    "simplicity, and practical implementation constraints.\n\n"
-    "Your task is to review the provided design document and produce a JSON "
-    f"verdict with the following schema:\n{_REVIEW_JSON_SCHEMA}\n\n"
-    "Focus on:\n"
-    "- Feasibility and implementability\n"
-    "- Simplicity vs. over-engineering\n"
-    "- Alignment with project constraints and timeline\n"
-    "- Practical concerns and real-world considerations\n\n"
-    "Output ONLY valid JSON, no additional text."
-)
-
-ARBITER_USER_PROMPT_TEMPLATE = (
-    "{project_context}"
-    "Review this design document:\n\n"
-    "{design_document}\n\n"
-    "Provide your verdict as JSON matching the specified schema."
-)
-
-REVISION_SYSTEM_PROMPT = (
-    "You are a senior software architect tasked with revising a design document "
-    "based on review feedback.\n\n"
-    "Incorporate the feedback thoughtfully, addressing concerns while maintaining "
-    "the document's core objectives.\n"
-    "If feedback seems contradictory, use your best judgment to merge the most "
-    "valuable insights.\n\n"
-    "Output the revised design document preserving all existing sections."
-)
-
-REVISION_USER_PROMPT_TEMPLATE = (
-    "Original design document:\n\n"
-    "{original_document}\n\n"
-    "Review feedback to incorporate:\n\n"
-    "{review_feedback}\n\n"
-    "Additional guidance:\n{guidance}\n\n"
-    "Revise the design document to address the feedback."
-)
+# Backward-compatible prompt constants — single source of truth is design.yaml.
+# Internal methods use format_prompt()/get_template() directly.
+# format_prompt() resolves {{ → { in YAML templates with escaped braces.
+REVIEWER_SYSTEM_PROMPT = format_prompt("design", "reviewer_system")
+REVIEWER_USER_PROMPT_TEMPLATE = get_template("design", "reviewer_user")
+ARBITER_SYSTEM_PROMPT = format_prompt("design", "arbiter_system")
+ARBITER_USER_PROMPT_TEMPLATE = get_template("design", "arbiter_user")
+REVISION_SYSTEM_PROMPT = format_prompt("design", "revision_system")
+REVISION_USER_PROMPT_TEMPLATE = get_template("design", "revision_user")
 
 
 # ============================================================================
@@ -866,6 +843,10 @@ class AgentLLMBackend:
         )
         return self._agent
 
+    def get_model_spec(self) -> str | None:
+        """Return the model spec string for forensic logging (OT-714)."""
+        return self._agent_spec
+
     async def generate(
         self,
         prompt: str,
@@ -894,6 +875,13 @@ class AgentLLMBackend:
         if max_tokens is not None and hasattr(agent, "max_tokens"):
             agent.max_tokens = max_tokens
         try:
+            if _HAS_OTEL:
+                span = _trace.get_current_span()
+                if span and span.is_recording():
+                    span.add_event("llm.call.start", attributes={
+                        "llm.prompt_length": len(prompt),
+                        "llm.max_tokens": max_tokens or -1,
+                    })
             # Use native system_prompt parameter (all agents support it)
             response_text, response_time_ms, token_usage = await agent.agenerate(
                 prompt, system_prompt=system_prompt,
@@ -901,6 +889,15 @@ class AgentLLMBackend:
             self.total_input_tokens += token_usage_input(token_usage)
             self.total_output_tokens += token_usage_output(token_usage)
             self.total_cost_usd += token_usage_cost(token_usage)
+            if _HAS_OTEL:
+                span = _trace.get_current_span()
+                if span and span.is_recording():
+                    span.add_event("llm.call.complete", attributes={
+                        "llm.response_time_ms": response_time_ms,
+                        "llm.tokens_input": token_usage_input(token_usage),
+                        "llm.tokens_output": token_usage_output(token_usage),
+                        "llm.cost_usd": token_usage_cost(token_usage),
+                    })
             return response_text
         finally:
             if max_tokens is not None and original_max is not None:
@@ -1127,51 +1124,107 @@ class DesignDocumentationPhase:
             else "None"
         )
 
-        if context.prior_design is not None:
-            # Refine mode: pass prior design to LLM for improvement
-            prompt = REFINE_DESIGN_USER_PROMPT_TEMPLATE.format(
-                feature_name=context.feature_name,
-                description=context.description,
-                target_file=context.target_file,
-                constraints=constraints_str,
-                additional_context=additional_context_str,
-                prior_design=context.prior_design,
-                revision_guidance=revision_guidance,
+        # IMP-1: Build requirements block from plan requirements
+        requirements_block = ""
+        if context.requirements_text:
+            requirements_block = (
+                "**Requirements (verbatim — authoritative for "
+                "parameter details):**\n"
+                f"{context.requirements_text}\n\n"
+            )
+
+        is_refine = context.prior_design is not None
+
+        # Shared parameters for both fresh and refine user prompts
+        prompt_params = dict(
+            feature_name=context.feature_name,
+            description=context.description,
+            target_file=context.target_file,
+            constraints=constraints_str,
+            additional_context=additional_context_str,
+            requirements_block=requirements_block,
+            revision_guidance=revision_guidance,
+        )
+
+        if is_refine:
+            prompt_params["prior_design"] = context.prior_design
+            prompt = format_prompt("design", "refine_user", **prompt_params)
+            system_prompt = build_refine_system_prompt(
+                context.sections,
+                depth_guidance=context.depth_guidance,
+                edit_mode_hint=context.edit_mode_hint,
+                existing_target_files=context.existing_target_files,
             )
             logger.info(
                 "Refining existing design document for '%s' (iteration %d)",
                 context.feature_name,
                 iteration,
             )
-            system_prompt = build_refine_system_prompt(
+        else:
+            prompt = format_prompt("design", "design_user", **prompt_params)
+            system_prompt = build_design_system_prompt(
                 context.sections,
                 depth_guidance=context.depth_guidance,
-            )
-        else:
-            # Fresh generation (default)
-            prompt = DESIGN_GENERATION_USER_PROMPT_TEMPLATE.format(
-                feature_name=context.feature_name,
-                description=context.description,
-                target_file=context.target_file,
-                constraints=constraints_str,
-                additional_context=additional_context_str,
-                revision_guidance=revision_guidance,
+                edit_mode_hint=context.edit_mode_hint,
+                existing_target_files=context.existing_target_files,
             )
             logger.info(
                 "Generating design document for '%s' (iteration %d)",
                 context.feature_name,
                 iteration,
             )
-            system_prompt = build_design_system_prompt(
-                context.sections,
-                depth_guidance=context.depth_guidance,
-            )
 
-        raw_text = await self.llm.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
-            max_tokens=context.max_output_tokens,
-        )
+        _tracer = _get_design_tracer()
+        with _tracer.start_as_current_span(
+            "design.generate",
+            attributes={
+                "design.feature_name": context.feature_name,
+                "design.iteration": iteration,
+                "design.is_refine": context.prior_design is not None,
+            },
+        ):
+            # Delta tracking for per-call token/cost accuracy (R2-S5)
+            _pre_input = self.llm.total_input_tokens if hasattr(self.llm, "total_input_tokens") else 0
+            _pre_output = self.llm.total_output_tokens if hasattr(self.llm, "total_output_tokens") else 0
+            _pre_cost = self.llm.total_cost_usd if hasattr(self.llm, "total_cost_usd") else 0.0
+            raw_text = await self.llm.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+                max_tokens=context.max_output_tokens,
+            )
+            # CS1: Forensic log for design.generate
+            from startd8.contractors.forensic_log import emit_forensic_log
+            emit_forensic_log(
+                call_type="design.generate",
+                call={
+                    "prompt_length": len(prompt),
+                    "max_tokens": context.max_output_tokens,
+                    "model_spec": self.llm.get_model_spec() if hasattr(self.llm, "get_model_spec") else None,
+                    "tokens_input": (self.llm.total_input_tokens - _pre_input) if hasattr(self.llm, "total_input_tokens") else None,
+                    "tokens_output": (self.llm.total_output_tokens - _pre_output) if hasattr(self.llm, "total_output_tokens") else None,
+                    "cost_usd": (self.llm.total_cost_usd - _pre_cost) if hasattr(self.llm, "total_cost_usd") else None,
+                },
+                task={
+                    "task_id": None,
+                    "title": context.feature_name,
+                    "domain": None,
+                    "feature_id": context.feature_name,
+                    "phase": "design",
+                    "target_files": [context.target_file] if context.target_file else None,
+                },
+                context_propagation={
+                    "design_calibration_present": context.sections is not None and len(context.sections) > 0,
+                    "depth_tier": context.depth_guidance if hasattr(context, "depth_guidance") else None,
+                    "prompt_constraints_count": len(context.constraints) if context.constraints else 0,
+                    "environment_checks_count": len(context.environment_checks) if hasattr(context, "environment_checks") and context.environment_checks else None,
+                    "design_doc_present": context.prior_design is not None,
+                    "design_doc_line_count": len(context.prior_design.splitlines()) if context.prior_design else None,
+                },
+                provenance={
+                    "iteration": iteration,
+                    "prior_design_available": context.prior_design is not None,
+                },
+            )
         return parse_design_document(
             raw_text,
             context.feature_name,
@@ -1199,12 +1252,7 @@ class DesignDocumentationPhase:
         Returns:
             Parsed ``ReviewVerdict``.
         """
-        if role == ReviewRole.REVIEWER:
-            system_prompt = REVIEWER_SYSTEM_PROMPT
-            user_template = REVIEWER_USER_PROMPT_TEMPLATE
-        else:
-            system_prompt = ARBITER_SYSTEM_PROMPT
-            user_template = ARBITER_USER_PROMPT_TEMPLATE
+        role_key = "reviewer" if role == ReviewRole.REVIEWER else "arbiter"
 
         # Format project context for evidence-anchored review
         project_context = ""
@@ -1231,7 +1279,9 @@ class DesignDocumentationPhase:
                     + "\n\n"
                 )
 
-        prompt = user_template.format(
+        system_prompt = format_prompt("design", f"{role_key}_system")
+        prompt = format_prompt(
+            "design", f"{role_key}_user",
             design_document=design.raw_text,
             project_context=project_context,
         )
@@ -1243,10 +1293,46 @@ class DesignDocumentationPhase:
             design.iteration,
         )
 
-        raw_text = await self.llm.generate(
-            prompt=prompt,
-            system_prompt=system_prompt,
-        )
+        _tracer = _get_design_tracer()
+        with _tracer.start_as_current_span(
+            f"design.review.{role.value}",
+            attributes={
+                "design.review_role": role.value,
+                "design.iteration": design.iteration,
+            },
+        ):
+            _pre_input = self.llm.total_input_tokens if hasattr(self.llm, "total_input_tokens") else 0
+            _pre_output = self.llm.total_output_tokens if hasattr(self.llm, "total_output_tokens") else 0
+            _pre_cost = self.llm.total_cost_usd if hasattr(self.llm, "total_cost_usd") else 0.0
+            raw_text = await self.llm.generate(
+                prompt=prompt,
+                system_prompt=system_prompt,
+            )
+            # CS2: Forensic log for design.review
+            from startd8.contractors.forensic_log import emit_forensic_log
+            emit_forensic_log(
+                call_type="design.review",
+                call={
+                    "prompt_length": len(prompt),
+                    "model_spec": self.llm.get_model_spec() if hasattr(self.llm, "get_model_spec") else None,
+                    "tokens_input": (self.llm.total_input_tokens - _pre_input) if hasattr(self.llm, "total_input_tokens") else None,
+                    "tokens_output": (self.llm.total_output_tokens - _pre_output) if hasattr(self.llm, "total_output_tokens") else None,
+                    "cost_usd": (self.llm.total_cost_usd - _pre_cost) if hasattr(self.llm, "total_cost_usd") else None,
+                },
+                task={
+                    "title": design.feature_name,
+                    "phase": "design",
+                },
+                context_propagation={
+                    "design_calibration_present": True,
+                    "design_doc_present": True,
+                    "design_doc_line_count": len(design.raw_text.splitlines()) if design.raw_text else 0,
+                },
+                provenance={
+                    "iteration": design.iteration,
+                    "reviewer_verdict": role.value,
+                },
+            )
         return parse_review_verdict(raw_text, role)
 
     # ------------------------------------------------------------------
@@ -1446,7 +1532,8 @@ class DesignDocumentationPhase:
             "\n\n".join(feedback_parts) or "No specific feedback."
         )
 
-        prompt = REVISION_USER_PROMPT_TEMPLATE.format(
+        prompt = format_prompt(
+            "design", "revision_user",
             original_document=design.raw_text,
             review_feedback=review_feedback,
             guidance=guidance,
@@ -1458,10 +1545,44 @@ class DesignDocumentationPhase:
             iteration,
         )
 
-        raw_text = await self.llm.generate(
-            prompt=prompt,
-            system_prompt=REVISION_SYSTEM_PROMPT,
-        )
+        _tracer = _get_design_tracer()
+        with _tracer.start_as_current_span(
+            "design.revision",
+            attributes={"design.iteration": iteration},
+        ):
+            _pre_input = self.llm.total_input_tokens if hasattr(self.llm, "total_input_tokens") else 0
+            _pre_output = self.llm.total_output_tokens if hasattr(self.llm, "total_output_tokens") else 0
+            _pre_cost = self.llm.total_cost_usd if hasattr(self.llm, "total_cost_usd") else 0.0
+            raw_text = await self.llm.generate(
+                prompt=prompt,
+                system_prompt=format_prompt("design", "revision_system"),
+            )
+            # CS3: Forensic log for design.revise
+            from startd8.contractors.forensic_log import emit_forensic_log
+            emit_forensic_log(
+                call_type="design.revise",
+                call={
+                    "prompt_length": len(prompt),
+                    "model_spec": self.llm.get_model_spec() if hasattr(self.llm, "get_model_spec") else None,
+                    "tokens_input": (self.llm.total_input_tokens - _pre_input) if hasattr(self.llm, "total_input_tokens") else None,
+                    "tokens_output": (self.llm.total_output_tokens - _pre_output) if hasattr(self.llm, "total_output_tokens") else None,
+                    "cost_usd": (self.llm.total_cost_usd - _pre_cost) if hasattr(self.llm, "total_cost_usd") else None,
+                },
+                task={
+                    "title": design.feature_name,
+                    "phase": "design",
+                },
+                context_propagation={
+                    "design_calibration_present": True,
+                    "design_doc_present": True,
+                    "design_doc_line_count": len(design.raw_text.splitlines()) if design.raw_text else 0,
+                },
+                provenance={
+                    "iteration": iteration,
+                    "reviewer_verdict": reviewer.summary if reviewer else None,
+                    "arbiter_verdict": arbiter.summary if arbiter else None,
+                },
+            )
         return parse_design_document(
             raw_text,
             design.feature_name,
@@ -1504,7 +1625,13 @@ class DesignDocumentationPhase:
         reviewer_verdict: ReviewVerdict | None = None
         arbiter_verdict: ReviewVerdict | None = None
 
+        _tracer = _get_design_tracer()
         for iteration in range(1, self.max_iterations + 1):
+            _iter_span_cm = _tracer.start_as_current_span(
+                f"design.iteration.{iteration}",
+                attributes={"design.iteration": iteration},
+            )
+            _iter_span_cm.__enter__()
             try:
                 # --- Generate or revise ---
                 revision_guidance = ""
@@ -1641,6 +1768,8 @@ class DesignDocumentationPhase:
                     f"Design documentation failed at iteration "
                     f"{iteration} ({type(exc).__name__}): {exc}"
                 ) from exc
+            finally:
+                _iter_span_cm.__exit__(None, None, None)
 
         # Max iterations reached without full convergence
         logger.warning(
