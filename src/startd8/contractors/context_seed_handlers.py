@@ -327,7 +327,7 @@ class HandlerConfig:
     strict_truncation: bool = False
     test_timeout_seconds: int = 300  # Aligned with FinalTestingPhase.pytest_timeout
     review_temperature: float = 0.0
-    review_max_code_chars: int = 8000
+    review_max_code_chars: int = 32000
     review_task_retries: int = 2
     development_timeout_seconds: Optional[float] = None
     auto_commit: bool = True
@@ -735,15 +735,37 @@ def _extract_design_target_files(
     if not discovered:
         return current_targets
 
-    # Normalize bare filenames and filter by valid extension
+    # Normalize bare filenames, filter by valid extension, and exclude test
+    # files.  Test files are the TEST phase's responsibility — including them
+    # here causes the drafter to generate test code instead of the primary
+    # implementation artifact.
     normalized: list[str] = []
+    _test_filtered: list[str] = []
     for raw in discovered:
         if "/" not in raw and prefix:
             path = prefix + raw
         else:
             path = raw
-        if _has_valid_extension(path):
-            normalized.append(path)
+        if not _has_valid_extension(path):
+            continue
+        # Exclude test files: tests/ directory, test_*.py, *_test.py
+        _basename = path.rsplit("/", 1)[-1] if "/" in path else path
+        if (
+            path.startswith("tests/")
+            or "/tests/" in path
+            or _basename.startswith("test_")
+            or _basename.endswith("_test.py")
+        ):
+            _test_filtered.append(path)
+            continue
+        normalized.append(path)
+    if _test_filtered:
+        logger.info(
+            "PCA-605d: filtered %d test file(s) from design doc discovery "
+            "(TEST phase handles these): %s",
+            len(_test_filtered),
+            _test_filtered,
+        )
 
     if not normalized:
         return current_targets

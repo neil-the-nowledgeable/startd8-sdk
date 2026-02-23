@@ -240,6 +240,77 @@ class TestIntegration:
         assert result == CURRENT_TARGETS
 
 
+# ── Test file filtering ──────────────────────────────────────────────────
+
+class TestTestFileFiltering:
+    """Test files discovered from design docs are filtered out.
+
+    The TEST phase handles test generation — IMPLEMENT should not receive
+    test file targets, as this causes the drafter to generate test code
+    instead of the primary implementation artifact.
+    """
+
+    def test_layer2_test_file_filtered(self):
+        """PI-002 real case: fenced code block with test file path."""
+        doc = (
+            "```python\n"
+            "# tests/unit/scripts/test_verify_otel_trace.py\n"
+            "import importlib.util\n"
+            "```\n"
+        )
+        result = _extract_design_target_files(doc, ["scripts/verify_otel_trace.py"])
+        assert result == ["scripts/verify_otel_trace.py"]
+        assert "tests/unit/scripts/test_verify_otel_trace.py" not in result
+
+    def test_layer4_test_file_filtered(self):
+        """Test file in Files Touched section is filtered."""
+        doc = (
+            "### Files Touched\n"
+            "- `scripts/verify_otel_trace.py` (new) — main script\n"
+            "- `tests/unit/test_verify.py` (new) — tests\n"
+        )
+        result = _extract_design_target_files(doc, ["scripts/verify_otel_trace.py"])
+        assert "scripts/verify_otel_trace.py" in result
+        assert "tests/unit/test_verify.py" not in result
+
+    def test_layer1_test_file_filtered(self):
+        """Test file via bold marker is filtered."""
+        doc = "**File: `tests/test_feature.py`** (new):\n"
+        result = _extract_design_target_files(doc, CURRENT_TARGETS)
+        assert result == CURRENT_TARGETS
+
+    def test_test_prefix_bare_name_filtered(self):
+        """Bare filename starting with test_ is filtered."""
+        doc = "**File: `test_something.py`** (new):\n"
+        result = _extract_design_target_files(doc, CURRENT_TARGETS)
+        assert result == CURRENT_TARGETS
+
+    def test_test_suffix_name_filtered(self):
+        """File ending with _test.py is filtered."""
+        doc = "**File: `src/pkg/feature_test.py`** (new):\n"
+        result = _extract_design_target_files(doc, CURRENT_TARGETS)
+        assert result == CURRENT_TARGETS
+
+    def test_non_test_file_not_filtered(self):
+        """Non-test file in tests-adjacent path is preserved."""
+        doc = "**File: `src/startd8/testing/helpers.py`** (new):\n"
+        result = _extract_design_target_files(doc, CURRENT_TARGETS)
+        assert "src/startd8/testing/helpers.py" in result
+
+    def test_mixed_test_and_impl_files(self):
+        """Test files filtered, implementation files kept."""
+        doc = (
+            "### Files Touched\n"
+            "- `scripts/verify_otel_trace.py` (new) — script\n"
+            "- `tests/unit/test_verify.py` (new) — tests\n"
+            "- `src/startd8/utils/trace_parser.py` (new) — parser\n"
+        )
+        result = _extract_design_target_files(doc, ["scripts/verify_otel_trace.py"])
+        assert "scripts/verify_otel_trace.py" in result
+        assert "src/startd8/utils/trace_parser.py" in result
+        assert "tests/unit/test_verify.py" not in result
+
+
 # ── Helper function tests ────────────────────────────────────────────────
 
 class TestHelpers:

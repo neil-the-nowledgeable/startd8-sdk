@@ -1908,8 +1908,92 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         return "\n".join(parts)
 
     # ------------------------------------------------------------------
-    # File writing for search/replace applied content
+    # File writing helpers
     # ------------------------------------------------------------------
+
+    def _write_generated_files(
+        self,
+        code: str,
+        chunk: DevelopmentChunk,
+    ) -> List[Path]:
+        """Write extracted code to staging for create-mode chunks.
+
+        For multi-file chunks, splits the response into per-file blocks
+        using :func:`extract_multi_file_code`.  For single-file chunks,
+        writes the code directly.
+
+        Args:
+            code: Extracted code from the LLM response.
+            chunk: The chunk (for ``file_targets``).
+
+        Returns:
+            List of paths that were written.
+        """
+        written: List[Path] = []
+
+        if not chunk.file_targets:
+            default_path = self._output_dir / f"{chunk.chunk_id}.py"
+            default_path.parent.mkdir(parents=True, exist_ok=True)
+            default_path.write_text(code, encoding="utf-8")
+            written.append(default_path)
+            return written
+
+        # Multi-file splitting
+        per_file_code: Dict[str, str] = {}
+        if len(chunk.file_targets) > 1:
+            from startd8.utils.code_extraction import (
+                _generate_stub,
+                extract_multi_file_code,
+            )
+
+            per_file_code = extract_multi_file_code(code, chunk.file_targets)
+            if len(per_file_code) < len(chunk.file_targets):
+                unmatched = [
+                    f for f in chunk.file_targets if f not in per_file_code
+                ]
+                # When the splitter matched nothing but there is
+                # substantial code, assign the full output to the
+                # primary (first) target file instead of stubbing
+                # everything.  Only secondary targets get stubs.
+                if not per_file_code and code and len(code.strip()) > 100:
+                    primary = chunk.file_targets[0]
+                    per_file_code[primary] = code
+                    unmatched = [
+                        f for f in chunk.file_targets[1:]
+                        if f not in per_file_code
+                    ]
+                    self.logger.info(
+                        "Multi-file split found no file markers for chunk "
+                        "%s — assigning full output (%d chars) to primary "
+                        "target %s; stubbing %d secondary target(s).",
+                        chunk.chunk_id,
+                        len(code),
+                        primary,
+                        len(unmatched),
+                    )
+                else:
+                    self.logger.warning(
+                        "Multi-file split incomplete for chunk %s: matched "
+                        "%s but not %s. Generating stubs for missing files.",
+                        chunk.chunk_id,
+                        list(per_file_code.keys()),
+                        unmatched,
+                    )
+                for missing_file in unmatched:
+                    per_file_code[missing_file] = _generate_stub(missing_file)
+                chunk.metadata.setdefault("_stubbed_files", []).extend(
+                    unmatched,
+                )
+
+        for target in chunk.file_targets:
+            output_path = self._output_dir / target
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            content = per_file_code.get(target, code)
+            output_path.write_text(content, encoding="utf-8")
+            written.append(output_path)
+            self.logger.info("Wrote generated file: %s", output_path)
+
+        return written
 
     def _write_applied_files(
         self,
