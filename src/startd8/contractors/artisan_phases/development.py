@@ -72,6 +72,7 @@ from startd8.contractors.protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
     VALIDATE_MODEL_CLAUDE_SONNET,
 )
+from startd8.logging_config import get_logger
 
 # OTel instrumentation (graceful degradation when unavailable)
 try:
@@ -79,6 +80,30 @@ try:
     _HAS_OTEL = True
 except ImportError:
     _HAS_OTEL = False
+
+
+_log = get_logger(__name__)
+
+
+def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]:
+    """Load and format a template from ``implement.yaml``.
+
+    Returns the formatted string on success, or ``None`` when the YAML
+    file or template is unavailable (e.g. downstream installs that
+    haven't updated).  Failures are logged at DEBUG so they're
+    traceable without cluttering normal output.
+    """
+    try:
+        from startd8.contractors.artisan_phases.prompts import format_prompt
+
+        return format_prompt("implement", template_name, **kwargs)
+    except (FileNotFoundError, KeyError) as exc:
+        _log.debug(
+            "YAML template implement/%s unavailable, using inline fallback: %s",
+            template_name,
+            exc,
+        )
+        return None
 
 
 # ============================================================================
@@ -412,7 +437,7 @@ class DefaultChunkExecutor(ChunkExecutor):
                 If None, operates in no-op mode.
         """
         self.callback = callback
-        self.logger = logging.getLogger("startd8.development.executor")
+        self.logger = get_logger("startd8.development.executor")
 
     async def execute(
         self, chunk: DevelopmentChunk, context: Dict[str, Any]
@@ -504,7 +529,7 @@ class LLMChunkExecutor(ChunkExecutor):
         self._drafter: Optional[Any] = None
         self._lead: Optional[Any] = None
 
-        self.logger = logging.getLogger("startd8.development.llm_executor")
+        self.logger = get_logger("startd8.development.llm_executor")
 
     # ------------------------------------------------------------------
     # Agent resolution (lazy, cached)
@@ -741,6 +766,35 @@ class LLMChunkExecutor(ChunkExecutor):
                 token_usage.output,
             )
 
+            # CS4: Forensic log for implement.chunk
+            from startd8.contractors.forensic_log import emit_forensic_log
+            emit_forensic_log(
+                call_type="implement.chunk",
+                call={
+                    "prompt_length": len(prompt),
+                    "max_tokens": self._max_tokens,
+                    "model_spec": self._drafter_spec,
+                    "response_time_ms": time_ms,
+                    "tokens_input": token_usage.input,
+                    "tokens_output": token_usage.output,
+                    "cost_usd": token_usage.cost_estimate,
+                    "attempt": context.get("_retry_attempt", 1),
+                },
+                task={
+                    "task_id": chunk.chunk_id,
+                    "title": chunk.description,
+                    "phase": "implement",
+                    "target_files": chunk.file_targets,
+                },
+                context_propagation={
+                    "domain_defaulted": context.get("_domain_defaulted"),
+                    "design_doc_present": context.get("project_context") is not None,
+                    "prompt_constraints_count": len(context.get("domain_constraints", []))
+                        if isinstance(context.get("domain_constraints"), list) else 0,
+                    "environment_checks_count": context.get("_environment_checks_count"),
+                },
+            )
+
             # Extract code from the response
             from startd8.utils.code_extraction import extract_code_from_response
 
@@ -806,6 +860,19 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     #: Maximum bytes to read from an existing file before truncating.
     _MAX_EXISTING_FILE_BYTES: int = 60_000
 
+    #: Minimum fraction of existing file size that output must retain.
+    #: Used in Edit-First Directive and Edit Mode Classification guidance.
+    _MIN_OUTPUT_FRACTION: float = 0.80
+
+    #: File extension → human-readable format hint for Target Files section.
+    _EXT_FORMAT_HINTS: Dict[str, str] = {
+        "yaml": "Valid YAML configuration",
+        "yml": "Valid YAML configuration",
+        "json": "Valid JSON",
+        "md": "Markdown document",
+        "py": "Python module",
+    }
+
     def __init__(
         self,
         lead_agent: str = VALIDATE_MODEL_CLAUDE_SONNET.agent_spec,
@@ -844,7 +911,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         self._strict_truncation = strict_truncation
         self._project_root = project_root
         self._generator: Optional[Any] = None
-        self.logger = logging.getLogger("startd8.development.lead_executor")
+        self.logger = get_logger("startd8.development.lead_executor")
 
     # ------------------------------------------------------------------
     # Generator resolution (lazy, cached)
@@ -1057,7 +1124,12 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     def _build_project_identity(
         self, chunk: DevelopmentChunk
     ) -> List[str]:
-        """PCA-500: Project identity header."""
+        """PCA-500: Project identity header.
+
+        Args:
+            chunk: The development chunk whose metadata carries project
+                name, root path, and plan goals.
+        """
         _proj_name = chunk.metadata.get("project_name")
         if not _proj_name:
             return []
@@ -1071,16 +1143,14 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         else:
             goals_block = ""
 
-        try:
-            from startd8.contractors.artisan_phases.prompts import format_prompt
-            text = format_prompt(
-                "implement", "project_identity",
-                project_name=_proj_name,
-                project_root_line=project_root_line,
-                goals_block=goals_block,
-            )
-        except (FileNotFoundError, KeyError):
-            _pi_parts = [f"## Project Identity\n", f"**Project:** {_proj_name}"]
+        text = _format_implement_prompt(
+            "project_identity",
+            project_name=_proj_name,
+            project_root_line=project_root_line,
+            goals_block=goals_block,
+        )
+        if text is None:
+            _pi_parts = ["## Project Identity\n", f"**Project:** {_proj_name}"]
             if project_root_line:
                 _pi_parts.append(project_root_line)
             if goals_block:
@@ -1096,30 +1166,29 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     def _build_target_files(
         self, chunk: DevelopmentChunk, is_edit: bool
     ) -> List[str]:
-        """Target file listing — verb conditioned on edit vs create mode."""
+        """Target file listing — verb conditioned on edit vs create mode.
+
+        Args:
+            chunk: The development chunk whose ``file_targets`` list the
+                files the drafter must produce.
+            is_edit: When ``True``, the section uses "update" language;
+                otherwise it uses "generate" language.
+        """
         if not chunk.file_targets:
             return []
 
         file_list_parts: List[str] = []
         for target in chunk.file_targets:
             ext = target.rsplit(".", 1)[-1] if "." in target else ""
-            fmt_hint = {
-                "yaml": "Valid YAML configuration",
-                "yml": "Valid YAML configuration",
-                "json": "Valid JSON",
-                "md": "Markdown document",
-                "py": "Python module",
-            }.get(ext, "")
+            fmt_hint = self._EXT_FORMAT_HINTS.get(ext, "")
             file_list_parts.append(
                 f"- `{target}`" + (f" ({fmt_hint})" if fmt_hint else "")
             )
         file_list = "\n".join(file_list_parts)
 
         template_name = "target_files_edit" if is_edit else "target_files_create"
-        try:
-            from startd8.contractors.artisan_phases.prompts import format_prompt
-            text = format_prompt("implement", template_name, file_list=file_list)
-        except (FileNotFoundError, KeyError):
+        text = _format_implement_prompt(template_name, file_list=file_list)
+        if text is None:
             if is_edit:
                 header = (
                     "## Target Files\n"
@@ -1142,7 +1211,12 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     def _build_existing_files(
         existing: Dict[str, str],
     ) -> List[str]:
-        """PCA-503: Existing file contents section."""
+        """PCA-503: Existing file contents section.
+
+        Shows the full source of each existing target file so the LLM
+        can preserve code it must not overwrite.  Files are capped at a
+        120 KB aggregate budget to prevent prompt token overflow.
+        """
         if not existing:
             return []
 
@@ -1170,22 +1244,22 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
     # -- helper: edit-first directive --------------------------------------
 
-    @staticmethod
+    @classmethod
     def _build_edit_first_directive(
+        cls,
         existing: Dict[str, str],
     ) -> List[str]:
         """PCA-503/605b: Edit-First Directive with quantitative size constraint."""
         total_lines = sum(len(c.splitlines()) for c in existing.values())
-        min_lines = int(total_lines * 0.80)
+        min_lines = int(total_lines * cls._MIN_OUTPUT_FRACTION)
 
-        try:
-            from startd8.contractors.artisan_phases.prompts import format_prompt
-            text = format_prompt(
-                "implement", "edit_first_directive",
-                total_lines=total_lines,
-                min_lines=min_lines,
-            )
-        except (FileNotFoundError, KeyError):
+        text = _format_implement_prompt(
+            "edit_first_directive",
+            total_lines=total_lines,
+            min_lines=min_lines,
+        )
+        if text is None:
+            pct = int(cls._MIN_OUTPUT_FRACTION * 100)
             text = (
                 "## Edit-First Directive\n"
                 "**CRITICAL:** The target files shown above already exist in the project. "
@@ -1200,7 +1274,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "If the design document describes new functionality, integrate it alongside "
                 "the existing code.\n"
                 f"\n**SIZE CONSTRAINT:** The existing file(s) total {total_lines} lines. "
-                f"Your output MUST be AT LEAST {min_lines} lines (80% of original). "
+                f"Your output MUST be AT LEAST {min_lines} lines ({pct}% of original). "
                 f"Outputs significantly shorter than the original will be REJECTED.\n"
             )
 
@@ -1208,8 +1282,9 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
     # -- helper: edit mode classification (B-3 fix) ------------------------
 
-    @staticmethod
+    @classmethod
     def _build_edit_mode_classification(
+        cls,
         edit_mode: Optional[Dict[str, Any]],
     ) -> List[str]:
         """PCA-600: Edit mode classification — shown for ALL modes (B-3 fix).
@@ -1225,32 +1300,33 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         mode_upper = mode.upper()
         confidence = edit_mode.get("confidence", "unknown")
 
-        # Per-file details
+        # Per-file details (single-pass partition into edit/create buckets)
         per_file_lines: List[str] = []
         _per_file = edit_mode.get("per_file", {})
-        if _per_file:
-            _edit_files = [
-                f for f, info in _per_file.items()
-                if info.get("mode") == "edit"
-            ]
-            _create_files = [
-                f for f, info in _per_file.items()
-                if info.get("mode") == "create"
-            ]
-            if _edit_files:
-                per_file_lines.append(
-                    "**Files being EDITED:** "
-                    + ", ".join(f"`{f}`" for f in _edit_files)
-                )
-            if _create_files:
-                per_file_lines.append(
-                    "**Files being CREATED:** "
-                    + ", ".join(f"`{f}`" for f in _create_files)
-                )
+        if isinstance(_per_file, dict) and _per_file:
+            _edit_files: List[str] = []
+            _create_files: List[str] = []
             for fpath, info in _per_file.items():
-                staleness = info.get("staleness", "")
+                file_mode = info.get("mode") if isinstance(info, dict) else None
+                if file_mode == "edit":
+                    _edit_files.append(fpath)
+                elif file_mode == "create":
+                    _create_files.append(fpath)
+                staleness = info.get("staleness", "") if isinstance(info, dict) else ""
                 if staleness:
                     per_file_lines.append(f"- `{fpath}`: staleness={staleness}")
+            if _edit_files:
+                per_file_lines.insert(
+                    0,
+                    "**Files being EDITED:** "
+                    + ", ".join(f"`{f}`" for f in _edit_files),
+                )
+            if _create_files:
+                per_file_lines.insert(
+                    1 if _edit_files else 0,
+                    "**Files being CREATED:** "
+                    + ", ".join(f"`{f}`" for f in _create_files),
+                )
         per_file_details = "\n".join(per_file_lines)
 
         # Signal conflicts
@@ -1263,10 +1339,11 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         else:
             signal_conflicts = ""
 
-        # Mode-appropriate guidance (Step 4 of plan)
+        # Mode-appropriate guidance
+        pct = int(cls._MIN_OUTPUT_FRACTION * 100)
         if mode == "edit":
             mode_guidance = (
-                "\n**MINIMUM OUTPUT:** Your output must be AT LEAST 80% of the "
+                f"\n**MINIMUM OUTPUT:** Your output must be AT LEAST {pct}% of the "
                 "existing file size. Outputs that drop below this threshold will "
                 "be REJECTED by automated guards. Do NOT rewrite from scratch — "
                 "EDIT the existing code."
@@ -1278,19 +1355,17 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "placeholder or stub implementations."
             )
 
-        try:
-            from startd8.contractors.artisan_phases.prompts import format_prompt
-            text = format_prompt(
-                "implement", "edit_mode_classification",
-                mode_upper=mode_upper,
-                confidence=confidence,
-                per_file_details=per_file_details,
-                signal_conflicts=signal_conflicts,
-                mode_guidance=mode_guidance,
-            )
-        except (FileNotFoundError, KeyError):
+        text = _format_implement_prompt(
+            "edit_mode_classification",
+            mode_upper=mode_upper,
+            confidence=confidence,
+            per_file_details=per_file_details,
+            signal_conflicts=signal_conflicts,
+            mode_guidance=mode_guidance,
+        )
+        if text is None:
             _em_parts = [
-                f"## Edit Mode Classification\n",
+                "## Edit Mode Classification\n",
                 f"**Task mode:** {mode_upper} (confidence: {confidence})\n",
             ]
             if per_file_details:
@@ -1314,27 +1389,26 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if not design_doc:
             return []
 
-        design_lines = len(design_doc.strip().splitlines())
-        design_sections = sum(
-            1 for line in design_doc.splitlines()
-            if line.strip().startswith("##")
-        )
+        # Single-pass: count lines and ## section headers together.
+        design_lines = 0
+        design_sections = 0
+        for line in design_doc.strip().splitlines():
+            design_lines += 1
+            if line.strip().startswith("##"):
+                design_sections += 1
 
         # B-5 fix: use edit framing when existing files are present,
         # greenfield framing ONLY when there are truly no existing files.
-        if existing:
-            template_name = "design_doc_edit"
-        else:
-            template_name = "design_doc_create"
+        template_name = "design_doc_edit" if existing else "design_doc_create"
 
-        try:
-            from startd8.contractors.artisan_phases.prompts import format_prompt
-            framing = format_prompt(
-                "implement", template_name,
-                design_lines=design_lines,
-                design_sections=design_sections,
-            )
-        except (FileNotFoundError, KeyError):
+        framing = _format_implement_prompt(
+            template_name,
+            design_lines=design_lines,
+            design_sections=design_sections,
+        )
+        summary_label = _format_implement_prompt("task_summary_label")
+
+        if framing is None:
             if existing:
                 framing = (
                     "## AUTHORITATIVE Design Changes\n"
@@ -1363,11 +1437,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                     f"sections. A partial implementation that omits designed sections "
                     f"will be rejected in review.\n"
                 )
-
-        try:
-            from startd8.contractors.artisan_phases.prompts import format_prompt
-            summary_label = format_prompt("implement", "task_summary_label")
-        except (FileNotFoundError, KeyError):
+        if summary_label is None:
             summary_label = (
                 "## Task Summary (label only — see AUTHORITATIVE Design Document "
                 "above for full scope)\n"
@@ -1470,14 +1540,12 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         error_block = f"\nPrevious error:\n{last_error}" if last_error else ""
         test_block = f"\nTest output:\n{test_output}" if test_output else ""
 
-        try:
-            from startd8.contractors.artisan_phases.prompts import format_prompt
-            text = format_prompt(
-                "implement", "retry_feedback",
-                error_block=error_block,
-                test_block=test_block,
-            )
-        except (FileNotFoundError, KeyError):
+        text = _format_implement_prompt(
+            "retry_feedback",
+            error_block=error_block,
+            test_block=test_block,
+        )
+        if text is None:
             text = (
                 "\n## Retry Feedback\n"
                 "The previous attempt failed. Please fix the issues "
@@ -1649,7 +1717,7 @@ class DefaultTestRunner(TestRunner):
             timeout: Timeout in seconds for each individual test command.
         """
         self.timeout = timeout
-        self.logger = logging.getLogger("startd8.development.tests")
+        self.logger = get_logger("startd8.development.tests")
 
     async def run_tests(
         self, chunk: DevelopmentChunk, context: Dict[str, Any]
@@ -1735,7 +1803,7 @@ class JsonFileStateStore(StateStore):
         self._legacy_directory = Path(
             str(directory).replace(".startd8/state", ".startd8_state")
         ) if ".startd8/state" in str(directory) else None
-        self.logger = logging.getLogger("startd8.development.state")
+        self.logger = get_logger("startd8.development.state")
 
     def _get_state_path(self, plan_id: str) -> Path:
         """Get the file path for a plan's state."""
@@ -2069,7 +2137,7 @@ class DevelopmentPhase:
         self.test_runner = test_runner or DefaultTestRunner()
         self.state_store = state_store or JsonFileStateStore()
         self.max_parallel = max_parallel
-        self.logger = logger or logging.getLogger("startd8.development")
+        self.logger = logger or get_logger("startd8.development")
         self.domain_checklist = domain_checklist
 
     async def run(self, plan: DevelopmentPlan) -> DevelopmentResult:
