@@ -1823,6 +1823,20 @@ class ArtisanContractorWorkflow:
             self._logger.info("Auto-commit disabled (--no-auto-commit)")
             return
 
+        # Do not commit if any task failed review
+        review_results = ctx.get("review_results", {})
+        if review_results:
+            any_failed = any(
+                not r.get("passed", False)
+                for r in review_results.values()
+                if isinstance(r, dict)
+            )
+            if any_failed:
+                self._logger.warning(
+                    "Skipping auto-commit: one or more tasks failed review"
+                )
+                return
+
         # Lane-parallel mode: concurrent git operations would race.
         # Auto-commit is disabled; user commits after workflow completes.
         if self.config.lane_parallel:
