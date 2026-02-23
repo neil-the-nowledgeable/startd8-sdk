@@ -53,6 +53,7 @@ import asyncio
 import datetime
 import hashlib
 import json
+import os.path
 import re
 import shlex
 import subprocess
@@ -900,7 +901,6 @@ _CCD_DESIGN_SPAN_ATTRS = frozenset({
 
 def _normalize_target_path(path: str) -> str:
     """Normalize a target file path for comparison (CCD-300)."""
-    import os.path
     return os.path.normpath(path).replace("\\", "/")
 
 
@@ -1066,6 +1066,35 @@ def _apply_lane_peer_token_budget(
             len(result) - 1,
         )
     return result, was_truncated
+
+
+def _compute_ccd_task_metadata(
+    task: SeedTask,
+    lane_assignments: dict[str, int],
+    design_lanes: list[list] | None,
+    total_task_count: int,
+    shared_file_manifest: dict[str, list[str]],
+    critical_task_ids: set[str],
+) -> dict[str, Any]:
+    """Compute CCD metadata fields for a single design result entry (CCD-401).
+
+    Returns a dict to merge into ``design_results[task.task_id]``.
+    Shared between adopted-design and fresh-design success paths.
+    """
+    return {
+        "wave_index": task.wave_index,
+        "lane_index": lane_assignments.get(task.task_id, 0),
+        "lane_peer_count": (
+            len(design_lanes[lane_assignments[task.task_id]]) - 1
+            if design_lanes and task.task_id in lane_assignments
+            else total_task_count - 1
+        ),
+        "shared_file_count": sum(
+            1 for f in (task.target_files or [])
+            if _normalize_target_path(f) in shared_file_manifest
+        ),
+        "critical_path": task.task_id in critical_task_ids,
+    }
 
 
 def _topological_sort(tasks: list[SeedTask]) -> list[SeedTask]:
@@ -2437,7 +2466,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if not plan_text:
             return ""
         # Find the section header (## or ###)
-        pattern = rf"^(#{2,3})\s+{re.escape(section_name)}.*$"
+        pattern = rf"^(#{{2,3}})\s+{re.escape(section_name)}.*$"
         match = re.search(pattern, plan_text, re.MULTILINE | re.IGNORECASE)
         if not match:
             return ""
@@ -3032,18 +3061,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         "design_document": doc_text,
                     })
                     # CCD-401: Wave/lane metadata in design results
-                    design_results[task.task_id]["wave_index"] = task.wave_index
-                    design_results[task.task_id]["lane_index"] = _lane_assignments.get(task.task_id, 0)
-                    design_results[task.task_id]["lane_peer_count"] = (
-                        len(_design_lanes[_lane_assignments[task.task_id]]) - 1
-                        if _design_lanes and task.task_id in _lane_assignments
-                        else len(tasks) - 1
+                    design_results[task.task_id].update(
+                        _compute_ccd_task_metadata(
+                            task, _lane_assignments, _design_lanes,
+                            len(tasks), shared_file_manifest, _critical_task_ids,
+                        )
                     )
-                    design_results[task.task_id]["shared_file_count"] = len([
-                        f for f in task.target_files
-                        if _normalize_target_path(f) in shared_file_manifest
-                    ])
-                    design_results[task.task_id]["critical_path"] = task.task_id in _critical_task_ids
 
                     # Copy design doc to current output_dir if configured
                     if self.output_dir:
@@ -3232,18 +3255,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         "design_document": doc_text,
                     })
                     # CCD-401: Wave/lane metadata in design results
-                    design_results[task.task_id]["wave_index"] = task.wave_index
-                    design_results[task.task_id]["lane_index"] = _lane_assignments.get(task.task_id, 0)
-                    design_results[task.task_id]["lane_peer_count"] = (
-                        len(_design_lanes[_lane_assignments[task.task_id]]) - 1
-                        if _design_lanes and task.task_id in _lane_assignments
-                        else len(tasks) - 1
+                    design_results[task.task_id].update(
+                        _compute_ccd_task_metadata(
+                            task, _lane_assignments, _design_lanes,
+                            len(tasks), shared_file_manifest, _critical_task_ids,
+                        )
                     )
-                    design_results[task.task_id]["shared_file_count"] = len([
-                        f for f in task.target_files
-                        if _normalize_target_path(f) in shared_file_manifest
-                    ])
-                    design_results[task.task_id]["critical_path"] = task.task_id in _critical_task_ids
 
                     # REQ-PD-012/014: Foundation coverage + provenance
                     _foundation_field_keys = [
@@ -3292,12 +3309,20 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     _task_span.set_attribute("task.attempts", _attempt + 1)
                     _task_span.set_attribute("task.status", "designed")
                     # CCD-601: lane-peer context injection attributes
-                    _task_span.set_attribute(
-                        "task.lane_prior_designs_count",
-                        len(lane_prior_designs) - 1 if lane_prior_designs else 0,
+                    # Compute truncation flag: same estimation as _apply_lane_peer_token_budget
+                    _peer_count = len(lane_prior_designs) - 1 if lane_prior_designs else 0
+                    _peers_before_this = lane_prior_designs[:-1] if lane_prior_designs else []
+                    _peer_chars = sum(len(d.get("design_document", "")) for d in _peers_before_this)
+                    _was_truncated = (
+                        _peer_chars // 4 > self.config.design_lane_peer_token_budget
+                        if _peers_before_this and self.config.design_lane_peer_token_budget > 0
+                        else False
                     )
                     _task_span.set_attribute(
-                        "task.lane_prior_designs_truncated", False,
+                        "task.lane_prior_designs_count", _peer_count,
+                    )
+                    _task_span.set_attribute(
+                        "task.lane_prior_designs_truncated", _was_truncated,
                     )
                     break  # success — exit retry loop
 
@@ -8688,7 +8713,6 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
     # Gate 3b severity rollup
     # ------------------------------------------------------------------
 
-    @staticmethod
     @staticmethod
     def _build_design_coherence_summary(
         context: dict[str, Any],

@@ -8,7 +8,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from itertools import combinations
+from typing import Any, Literal
 
 from startd8.logging_config import get_logger
 
@@ -42,7 +43,9 @@ class DesignCollision:
     file_path: str  # Shared file where the collision was detected
     task_a: str  # task_id of first task
     task_b: str  # task_id of second task
-    conflict_type: str  # "mode_conflict" | "duplicate_class" | "duplicate_function" | "mode_double_create"
+    conflict_type: Literal[
+        "mode_conflict", "duplicate_class", "duplicate_function", "mode_double_create"
+    ]
     severity: CollisionSeverity
     detail: str  # Human-readable description
 
@@ -136,22 +139,21 @@ def _check_mode_conflicts(
 
     # Two creators for same file: both would overwrite the file from scratch
     if len(creators) >= 2:
-        for i in range(len(creators)):
-            for j in range(i + 1, len(creators)):
-                result.collisions.append(
-                    DesignCollision(
-                        file_path=fpath,
-                        task_a=creators[i],
-                        task_b=creators[j],
-                        conflict_type="mode_double_create",
-                        severity=CollisionSeverity.CONFLICTING,
-                        detail=(
-                            f"Both tasks plan to CREATE {fpath} from scratch. "
-                            f"Second write will clobber the first. "
-                            f"One task should be redesigned to use 'update' mode."
-                        ),
-                    )
+        for ca, cb in combinations(creators, 2):
+            result.collisions.append(
+                DesignCollision(
+                    file_path=fpath,
+                    task_a=ca,
+                    task_b=cb,
+                    conflict_type="mode_double_create",
+                    severity=CollisionSeverity.CONFLICTING,
+                    detail=(
+                        f"Both tasks plan to CREATE {fpath} from scratch. "
+                        f"Second write will clobber the first. "
+                        f"One task should be redesigned to use 'update' mode."
+                    ),
                 )
+            )
 
     # Create + update: create assumes file doesn't exist, update assumes it does
     for creator in creators:
@@ -171,7 +173,8 @@ def _check_mode_conflicts(
                 )
             )
 
-    # update + update: informational only
+    # update + update: informational only (when no creators are present;
+    # create+update pairs are already captured above as mode_conflict)
     if len(updaters) >= 2 and not creators:
         logger.info(
             "DESIGN CCD-501: %d tasks update shared file %s -- "
@@ -196,30 +199,28 @@ def _check_entity_collisions(
     result: LaneCollisionResult,
 ) -> None:
     """Pairwise duplicate class/function detection for a shared file."""
-    for i in range(len(task_ids)):
-        for j in range(i + 1, len(task_ids)):
-            ta, tb = task_ids[i], task_ids[j]
-            ents_a = task_entities.get(ta, {})
-            ents_b = task_entities.get(tb, {})
+    for ta, tb in combinations(task_ids, 2):
+        ents_a = task_entities.get(ta, {})
+        ents_b = task_entities.get(tb, {})
 
-            for etype in ("classes", "functions"):
-                shared = ents_a.get(etype, set()) & ents_b.get(etype, set())
-                if shared:
-                    singular = _ENTITY_SINGULAR[etype]
-                    result.collisions.append(
-                        DesignCollision(
-                            file_path=fpath,
-                            task_a=ta,
-                            task_b=tb,
-                            conflict_type=f"duplicate_{singular}",
-                            severity=CollisionSeverity.WARNING,
-                            detail=(
-                                f"Both tasks define {etype} {sorted(shared)} "
-                                f"in {fpath}. Verify they are identical definitions "
-                                f"or designed for non-overlapping scopes."
-                            ),
-                        )
+        for etype in ("classes", "functions"):
+            shared = ents_a.get(etype, set()) & ents_b.get(etype, set())
+            if shared:
+                singular = _ENTITY_SINGULAR[etype]
+                result.collisions.append(
+                    DesignCollision(
+                        file_path=fpath,
+                        task_a=ta,
+                        task_b=tb,
+                        conflict_type=f"duplicate_{singular}",
+                        severity=CollisionSeverity.WARNING,
+                        detail=(
+                            f"Both tasks define {etype} {sorted(shared)} "
+                            f"in {fpath}. Verify they are identical definitions "
+                            f"or designed for non-overlapping scopes."
+                        ),
                     )
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -241,11 +242,12 @@ def check_lane_collisions(
     Also checks design_mode_summary for create/update conflicts (REQ-CCD-501).
     """
     lane_task_ids = [t.task_id for t in lane_tasks]
+    lane_task_id_set = set(lane_task_ids)
     # Identify shared files that involve 2+ tasks in THIS lane
     lane_shared_files: list[str] = [
         fpath
         for fpath, contesting in shared_file_manifest.items()
-        if len(set(contesting) & set(lane_task_ids)) >= 2
+        if len(set(contesting) & lane_task_id_set) >= 2
     ]
 
     result = LaneCollisionResult(
@@ -268,7 +270,7 @@ def check_lane_collisions(
         contesting_in_lane = [
             tid
             for tid in (shared_file_manifest.get(fpath) or [])
-            if tid in lane_task_ids
+            if tid in lane_task_id_set
         ]
         if len(contesting_in_lane) < 2:
             continue
