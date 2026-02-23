@@ -548,6 +548,10 @@ class AbstractPhaseHandler(ABC):
     # This prevents silently running incompatible custom handlers.
     supports_feature_serial: bool = False
 
+    # OT-710: Last entry boundary result for forensic logging.
+    # Set by _execute_phase() after entry gate validation.
+    _last_entry_boundary_result: Any = None
+
     @abstractmethod
     def execute(
         self,
@@ -1947,45 +1951,87 @@ class ArtisanContractorWorkflow:
                     # validate_phase_boundary runs legacy validation
                     # internally, then contract entry + enrichment when
                     # a contract_path is configured.
-                    entry_result = validate_phase_boundary(
-                        phase, context, "entry", self._contract_path
-                    )
-                    if entry_result:
-                        try:
-                            from contextcore.contracts.propagation.otel import (
-                                emit_boundary_result,
+                    with self.tracer.start_as_current_span(
+                        "gate.entry",
+                        attributes={"gate.phase": phase.value},
+                    ) as gate_entry_span:
+                        entry_result = validate_phase_boundary(
+                            phase, context, "entry", self._contract_path
+                        )
+                        if entry_result:
+                            gate_entry_span.set_attribute(
+                                "gate.passed", entry_result.passed
                             )
-                            emit_boundary_result(entry_result)
-                        except ImportError:
-                            pass
-                        if not entry_result.passed:
-                            raise PhaseContextError(
-                                f"{phase.value.upper()} contract entry "
-                                f"validation failed: "
-                                f"{entry_result.blocking_failures}",
-                                phase=phase.value,
-                                missing_keys=entry_result.blocking_failures,
-                                direction="entry",
+                            gate_entry_span.set_attribute(
+                                "gate.propagation_status",
+                                (
+                                    entry_result.propagation_status.value
+                                    if hasattr(entry_result, "propagation_status")
+                                    else "unknown"
+                                ),
                             )
+                            try:
+                                from contextcore.contracts.propagation.otel import (
+                                    emit_boundary_result,
+                                )
+                                emit_boundary_result(entry_result)
+                            except ImportError:
+                                pass
+                            if not entry_result.passed:
+                                raise PhaseContextError(
+                                    f"{phase.value.upper()} contract entry "
+                                    f"validation failed: "
+                                    f"{entry_result.blocking_failures}",
+                                    phase=phase.value,
+                                    missing_keys=entry_result.blocking_failures,
+                                    direction="entry",
+                                )
 
-                    result_dict = self._run_handler_with_timeout(
-                        handler, phase, context, effective_timeout
+                    # OT-710: Store boundary result for forensic logging
+                    from startd8.contractors.forensic_log import (
+                        set_boundary_result as _set_br,
                     )
+                    handler._last_entry_boundary_result = entry_result
+                    _br_token = _set_br(entry_result)
+                    try:
+                        result_dict = self._run_handler_with_timeout(
+                            handler, phase, context, effective_timeout
+                        )
+                    finally:
+                        from startd8.contractors.forensic_log import (
+                            _boundary_result_var,
+                        )
+                        _boundary_result_var.reset(_br_token)
 
                     # --- Context contract: exit validation ---
                     # validate_phase_boundary runs legacy validation
                     # internally, then contract exit when configured.
-                    exit_result = validate_phase_boundary(
-                        phase, context, "exit", self._contract_path
-                    )
-                    if exit_result:
-                        try:
-                            from contextcore.contracts.propagation.otel import (
-                                emit_boundary_result,
+                    with self.tracer.start_as_current_span(
+                        "gate.exit",
+                        attributes={"gate.phase": phase.value},
+                    ) as gate_exit_span:
+                        exit_result = validate_phase_boundary(
+                            phase, context, "exit", self._contract_path
+                        )
+                        if exit_result:
+                            gate_exit_span.set_attribute(
+                                "gate.passed", exit_result.passed
                             )
-                            emit_boundary_result(exit_result)
-                        except ImportError:
-                            pass
+                            gate_exit_span.set_attribute(
+                                "gate.propagation_status",
+                                (
+                                    exit_result.propagation_status.value
+                                    if hasattr(exit_result, "propagation_status")
+                                    else "unknown"
+                                ),
+                            )
+                            try:
+                                from contextcore.contracts.propagation.otel import (
+                                    emit_boundary_result,
+                                )
+                                emit_boundary_result(exit_result)
+                            except ImportError:
+                                pass
 
                     phase_end = time.monotonic()
                     duration = phase_end - phase_start

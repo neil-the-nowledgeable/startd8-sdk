@@ -29,15 +29,25 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
+import contextlib
+
 from startd8.contractors.protocols import DRAFT_MODEL_CLAUDE_HAIKU
 from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
+
+# OTel instrumentation (graceful degradation when unavailable)
+try:
+    from opentelemetry import trace as _trace
+    _HAS_OTEL = True
+except ImportError:
+    _HAS_OTEL = False
 
 if TYPE_CHECKING:
     from startd8.contractors.artisan_phases.design_documentation import (
         DesignDocument as DesignPhaseDocument,
     )
 
-logger = logging.getLogger(__name__)
+from startd8.logging_config import get_logger
+logger = get_logger(__name__)
 
 
 # ============================================================================
@@ -1161,7 +1171,7 @@ class LLMTestGenerator:
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
 
-        self.logger = logging.getLogger("startd8.test_construction.llm_gen")
+        self.logger = get_logger("startd8.test_construction.llm_gen")
 
     # ------------------------------------------------------------------
     # Agent resolution (lazy, cached)
@@ -1502,24 +1512,66 @@ class LLMTestGenerator:
             implementation_code is not None,
         )
 
-        response_text, time_ms, token_usage = await agent.agenerate(
-            prompt, system_prompt=_LLM_TEST_SYSTEM_PROMPT,
+        _span_ctx = (
+            _trace.get_tracer("startd8.artisan.test").start_as_current_span(
+                "test.generate",
+                attributes={
+                    "test.feature_name": design.feature_name,
+                    "test.prompt_length": len(prompt),
+                    "test.has_implementation": implementation_code is not None,
+                },
+            )
+            if _HAS_OTEL
+            else contextlib.nullcontext()
         )
+        with _span_ctx as _test_span:
+            response_text, time_ms, token_usage = await agent.agenerate(
+                prompt, system_prompt=_LLM_TEST_SYSTEM_PROMPT,
+            )
 
-        # Accumulate cost metrics
-        self.total_cost_usd += token_usage_cost(token_usage)
-        self.total_input_tokens += token_usage_input(token_usage)
-        self.total_output_tokens += token_usage_output(token_usage)
+            # Accumulate cost metrics
+            self.total_cost_usd += token_usage_cost(token_usage)
+            self.total_input_tokens += token_usage_input(token_usage)
+            self.total_output_tokens += token_usage_output(token_usage)
 
-        self.logger.info(
-            "LLM test generation for '%s': %dms, %d in / %d out tokens, "
-            "$%.4f",
-            design.feature_name,
-            time_ms,
-            token_usage_input(token_usage),
-            token_usage_output(token_usage),
-            token_usage_cost(token_usage),
-        )
+            self.logger.info(
+                "LLM test generation for '%s': %dms, %d in / %d out tokens, "
+                "$%.4f",
+                design.feature_name,
+                time_ms,
+                token_usage_input(token_usage),
+                token_usage_output(token_usage),
+                token_usage_cost(token_usage),
+            )
+
+            if _test_span and hasattr(_test_span, "set_attribute"):
+                _test_span.set_attribute("test.response_time_ms", time_ms)
+                _test_span.set_attribute("test.tokens_input", token_usage_input(token_usage))
+                _test_span.set_attribute("test.tokens_output", token_usage_output(token_usage))
+                _test_span.set_attribute("test.cost_usd", token_usage_cost(token_usage))
+
+            # CS5: Forensic log for test.generate
+            from startd8.contractors.forensic_log import emit_forensic_log
+            emit_forensic_log(
+                call_type="test.generate",
+                call={
+                    "prompt_length": len(prompt),
+                    "max_tokens": self._max_tokens,
+                    "model_spec": self._agent_spec,
+                    "response_time_ms": time_ms,
+                    "tokens_input": token_usage_input(token_usage),
+                    "tokens_output": token_usage_output(token_usage),
+                    "cost_usd": token_usage_cost(token_usage),
+                },
+                task={
+                    "title": design.feature_name,
+                    "phase": "test",
+                },
+                context_propagation={
+                    "design_doc_present": implementation_code is not None or design_phase_doc is not None,
+                    "existing_file_inventory_present": implementation_code is not None,
+                },
+            )
 
         code = self._extract_code(response_text)
         if not code or not code.strip():
@@ -1568,6 +1620,29 @@ class LLMTestGenerator:
             design.feature_name,
             time_ms,
             token_usage_cost(token_usage),
+        )
+
+        # CS6: Forensic log for test.retry
+        from startd8.contractors.forensic_log import emit_forensic_log
+        emit_forensic_log(
+            call_type="test.retry",
+            call={
+                "prompt_length": len(prompt),
+                "max_tokens": self._max_tokens,
+                "model_spec": self._agent_spec,
+                "response_time_ms": time_ms,
+                "tokens_input": token_usage_input(token_usage),
+                "tokens_output": token_usage_output(token_usage),
+                "cost_usd": token_usage_cost(token_usage),
+                "attempt": 2,  # retry is always attempt >= 2
+            },
+            task={
+                "title": design.feature_name,
+                "phase": "test",
+            },
+            context_propagation={
+                "design_doc_present": True,
+            },
         )
 
         code = self._extract_code(response_text)

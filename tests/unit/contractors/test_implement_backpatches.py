@@ -98,7 +98,7 @@ class TestBP1ExitSideContractValidation:
         handler_idx = source.index("_run_handler_with_timeout")
         boundary_idx = source.index(
             'validate_phase_boundary(\n'
-            '                        phase, context, "exit", self._contract_path'
+            '                            phase, context, "exit", self._contract_path'
         )
         phase_end_idx = source.index("phase_end = time.monotonic()")
 
@@ -116,8 +116,9 @@ class TestBP1ExitSideContractValidation:
 
         # The consolidated call passes self._contract_path directly
         assert 'phase, context, "exit", self._contract_path' in source
-        # No separate contract_path guard on exit path
-        # (validate_phase_boundary handles the None case internally)
+        # Old per-direction guard removed — validate_phase_boundary
+        # handles the None case internally.
+        assert "if self._contract_path:" not in source
 
     def test_emit_boundary_result_called_on_exit(self):
         """When exit_result is non-None, emit_boundary_result is called."""

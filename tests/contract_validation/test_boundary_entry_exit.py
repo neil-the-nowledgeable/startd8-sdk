@@ -420,8 +420,6 @@ class TestValidatePhaseBoundaryEntryWiring:
 
     def test_boundary_runs_contract_entry_and_enrichment(
         self,
-        loaded_contract: ContextContract,
-        validator: BoundaryValidator,
         tmp_path: Path,
     ) -> None:
         """validate_phase_boundary('entry') returns merged entry + enrichment result."""

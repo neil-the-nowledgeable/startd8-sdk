@@ -773,6 +773,43 @@ def add_project_context_to_span(
         span.set_attribute(CONTEXTCORE_BUSINESS_CRITICALITY, project_context.business_criticality)
 
 
+# --- Thread context propagation helpers ---
+
+
+def capture_context():
+    """Capture current OTel context for cross-thread propagation.
+
+    Call in the parent thread before spawning a child thread.
+    Returns None when OTel is not available (graceful degradation).
+    """
+    if not OTEL_AVAILABLE:
+        return None
+    from opentelemetry import context as context_api
+
+    return context_api.get_current()
+
+
+def attach_context(ctx):
+    """Attach captured OTel context in a child thread.
+
+    Returns a detach token (or None if OTel unavailable / ctx is None).
+    """
+    if not OTEL_AVAILABLE or ctx is None:
+        return None
+    from opentelemetry import context as context_api
+
+    return context_api.attach(ctx)
+
+
+def detach_context(token):
+    """Detach previously attached OTel context."""
+    if not OTEL_AVAILABLE or token is None:
+        return
+    from opentelemetry import context as context_api
+
+    context_api.detach(token)
+
+
 # Re-export for convenience
 __all__ = [
     # Constants
@@ -797,4 +834,7 @@ __all__ = [
     "format_telemetry_banner",
     "shutdown_otel",
     "add_project_context_to_span",
+    "capture_context",
+    "attach_context",
+    "detach_context",
 ]
