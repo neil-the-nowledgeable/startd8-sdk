@@ -1,0 +1,116 @@
+prompts:
+  project_identity:
+    description: "Project identity header (project name, root, goals)"
+    template: |
+      ## Project Identity
+      **Project:** {project_name}
+      {project_root_line}
+      {goals_block}
+    placeholders: [project_name, project_root_line, goals_block]
+
+  target_files_edit:
+    description: "Target file listing for EDIT mode tasks (B-1/B-7 fix)"
+    template: |
+      ## Target Files
+      You MUST update the following existing file(s). Focus on applying the
+      changes described in the design document — do NOT rewrite from scratch.
+      {file_list}
+    placeholders: [file_list]
+
+  target_files_create:
+    description: "Target file listing for CREATE mode tasks"
+    template: |
+      ## Target Files
+      You MUST generate the following file(s). Focus on implementing
+      the PRIMARY artifact — do NOT generate test code.
+      {file_list}
+    placeholders: [file_list]
+
+  existing_files:
+    description: "Existing file contents section (PCA-503)"
+    template: |
+      ## Existing Files
+      The following target files ALREADY EXIST in the project.
+      Your output MUST preserve existing functionality and only
+      add or modify what is specified in the design document.
+      {file_blocks}
+    placeholders: [file_blocks]
+
+  edit_first_directive:
+    description: "Edit-First Directive with quantitative size constraint (PCA-503/605b)"
+    template: |
+      ## Edit-First Directive
+      **CRITICAL:** The target files shown above already exist in the project.
+      You MUST:
+      1. PRESERVE all existing functions, classes, imports, and logic
+         that are not explicitly being changed
+      2. ADD or MODIFY only what the design document specifies
+      3. NEVER remove existing code unless the design explicitly requires it
+      4. MAINTAIN backward compatibility — existing callers must continue to work
+      5. Keep existing docstrings, type hints, and error handling intact
+
+      Treat this as an EDIT to production code, not a greenfield implementation.
+      If the design document describes new functionality, integrate it alongside
+      the existing code.
+
+      **SIZE CONSTRAINT:** The existing file(s) total {total_lines} lines.
+      Your output MUST be AT LEAST {min_lines} lines (80% of original).
+      Outputs significantly shorter than the original will be REJECTED.
+    placeholders: [total_lines, min_lines]
+
+  edit_mode_classification:
+    description: "Edit mode classification from upstream signals (PCA-600, B-3 fix: always shown)"
+    template: |
+      ## Edit Mode Classification
+      **Task mode:** {mode_upper} (confidence: {confidence})
+      {per_file_details}
+      {signal_conflicts}
+      {mode_guidance}
+    placeholders: [mode_upper, confidence, per_file_details, signal_conflicts, mode_guidance]
+
+  design_doc_edit:
+    description: "Design document framing for EDIT mode (B-5 fix: no rewrite-biasing language)"
+    template: |
+      ## AUTHORITATIVE Design Changes
+      The following design document describes CHANGES to apply to the
+      existing code shown above. It is the AUTHORITATIVE specification
+      for what to ADD or MODIFY.
+
+      **CRITICAL:** Apply these changes to the existing code.
+      Do NOT rewrite the file from scratch. The existing code is the
+      foundation — the design document describes what to change, not
+      what the entire file should look like.
+
+      **Design Scope:** {design_lines} lines across {design_sections} sections. A partial implementation that omits designed sections will be rejected in review.
+    placeholders: [design_lines, design_sections]
+
+  design_doc_create:
+    description: "Design document framing for CREATE mode"
+    template: |
+      ## AUTHORITATIVE Design Document
+      The following design document was approved during the DESIGN phase.
+      It is the AUTHORITATIVE specification for this task.
+
+      **CRITICAL:** This design document OVERRIDES the Task Summary below
+      when they differ in scope or detail. The Task Summary is only a brief
+      label. The design document defines the FULL scope of what must be
+      implemented — all sections, rules, structures, and patterns specified
+      in the design MUST appear in your output.
+
+      **Design Scope:** {design_lines} lines across {design_sections} sections. A partial implementation that omits designed sections will be rejected in review.
+    placeholders: [design_lines, design_sections]
+
+  task_summary_label:
+    description: "Task summary demotion label (when design doc is present)"
+    template: |
+      ## Task Summary (label only — see AUTHORITATIVE Design Document above for full scope)
+    placeholders: []
+
+  retry_feedback:
+    description: "Retry feedback section for error-informed retries"
+    template: |
+      ## Retry Feedback
+      The previous attempt failed. Please fix the issues and regenerate.
+      {error_block}
+      {test_block}
+    placeholders: [error_block, test_block]

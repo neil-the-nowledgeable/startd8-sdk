@@ -7,7 +7,7 @@ calibration tiers (used by plan ingestion).
 
 YAML files live alongside this module — one per source phase:
 ``design.yaml``, ``plan_ingestion.yaml``, ``test_construction.yaml``,
-``review.yaml``.
+``review.yaml``, ``implement.yaml``.
 
 The loaded dicts are cached via ``lru_cache``.  Callers **must not**
 mutate the returned data; public accessors return only strings or copies.

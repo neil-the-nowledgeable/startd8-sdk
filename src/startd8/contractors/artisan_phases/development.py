@@ -66,10 +66,19 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import contextlib
+
 from startd8.contractors.protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
     VALIDATE_MODEL_CLAUDE_SONNET,
 )
+
+# OTel instrumentation (graceful degradation when unavailable)
+try:
+    from opentelemetry import trace as _trace
+    _HAS_OTEL = True
+except ImportError:
+    _HAS_OTEL = False
 
 
 # ============================================================================
@@ -998,6 +1007,10 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
         return gen_ctx
 
+    # ------------------------------------------------------------------
+    # Task description builder (refactored into helpers using YAML)
+    # ------------------------------------------------------------------
+
     def _build_task_description(
         self,
         chunk: DevelopmentChunk,
@@ -1008,6 +1021,11 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         Enriches the chunk description with the design document (if available),
         prompt constraints, and retry feedback for error-informed retries.
 
+        Each logical section is built by a helper method that loads its
+        template from ``implement.yaml`` (falling back to an inline string
+        when the YAML file is absent, e.g. in downstream installs that
+        haven't updated).
+
         Args:
             chunk: The chunk being executed.
             context: Execution context.
@@ -1016,75 +1034,160 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             Enriched task description string.
         """
         parts: List[str] = []
-
-        # PCA-500: Project identity section — tells the LLM what project it's
-        # working on so it can make contextually appropriate decisions.
-        _proj_name = chunk.metadata.get("project_name")
-        if _proj_name:
-            _pi_parts = [f"## Project Identity\n", f"**Project:** {_proj_name}"]
-            _proj_root = chunk.metadata.get("project_root_path")
-            if _proj_root:
-                _pi_parts.append(f"**Root:** `{_proj_root}`")
-            _pg = chunk.metadata.get("plan_goals", [])
-            if _pg:
-                _pi_parts.append("**Goals:**")
-                for _g in _pg[:2]:
-                    _pi_parts.append(f"- {_g}")
-            _pi_text = "\n".join(_pi_parts)
-            if len(_pi_text) > 500:
-                _pi_text = _pi_text[:500] + "\n..."
-            parts.append(_pi_text)
-            parts.append("\n---\n")
-
-        # Prepend target file format hint so the drafter knows WHAT to generate
-        # before reading the design doc (which may contain test examples).
-        if chunk.file_targets:
-            parts.append("## Target Files\n")
-            parts.append(
-                "You MUST generate the following file(s). Focus on implementing "
-                "the PRIMARY artifact — do NOT generate test code.\n"
-            )
-            for target in chunk.file_targets:
-                ext = target.rsplit(".", 1)[-1] if "." in target else ""
-                fmt_hint = {
-                    "yaml": "Valid YAML configuration",
-                    "yml": "Valid YAML configuration",
-                    "json": "Valid JSON",
-                    "md": "Markdown document",
-                    "py": "Python module",
-                }.get(ext, "")
-                parts.append(f"- `{target}`" + (f" ({fmt_hint})" if fmt_hint else ""))
-            parts.append("\n---\n")
-
-        # PCA-503: Existing Files + Edit-First Directive
-        # When target files already exist in the project, show their contents
-        # and instruct the LLM to edit rather than overwrite.
         _existing = chunk.metadata.get("_existing_file_contents", {})
-        if _existing:
-            _MAX_EXISTING_TOTAL = 120_000
-            _ef_parts: List[str] = ["## Existing Files\n"]
-            _ef_parts.append(
-                "The following target files ALREADY EXIST in the project. "
-                "Your output MUST preserve existing functionality and only "
-                "add or modify what is specified in the design document.\n"
-            )
-            _total_bytes = 0
-            for _ef_path, _ef_content in _existing.items():
-                _ef_size = len(_ef_content)
-                if _total_bytes + _ef_size > _MAX_EXISTING_TOTAL:
-                    _ef_parts.append(
-                        f"\n### `{_ef_path}` (skipped — total existing file budget exceeded)"
-                    )
-                    continue
-                _total_bytes += _ef_size
-                _nonce = uuid.uuid4().hex[:8]
-                _ef_parts.append(f"\n### `{_ef_path}` ({_ef_size:,} bytes)")
-                _ef_parts.append(f"```source-{_nonce}\n{_ef_content}\n```")
-            parts.extend(_ef_parts)
-            parts.append("\n---\n")
+        _edit_mode = chunk.metadata.get("_edit_mode")
+        is_edit = bool(_existing) or (
+            _edit_mode is not None and _edit_mode.get("mode") == "edit"
+        )
 
-            parts.append("## Edit-First Directive\n")
-            parts.append(
+        parts.extend(self._build_project_identity(chunk))
+        parts.extend(self._build_target_files(chunk, is_edit))       # B-1/B-7 fix
+        parts.extend(self._build_existing_files(_existing))
+        if _existing:
+            parts.extend(self._build_edit_first_directive(_existing))
+        parts.extend(self._build_edit_mode_classification(_edit_mode))  # B-3 fix
+        parts.extend(self._build_design_framing(chunk, _existing))      # B-5 fix
+        parts.append(chunk.description)
+        parts.extend(self._build_supplementary_context(chunk))
+        parts.extend(self._build_retry_feedback(context))
+        return "\n".join(parts)
+
+    # -- helper: project identity ------------------------------------------
+
+    def _build_project_identity(
+        self, chunk: DevelopmentChunk
+    ) -> List[str]:
+        """PCA-500: Project identity header."""
+        _proj_name = chunk.metadata.get("project_name")
+        if not _proj_name:
+            return []
+
+        _proj_root = chunk.metadata.get("project_root_path")
+        project_root_line = f"**Root:** `{_proj_root}`" if _proj_root else ""
+
+        _pg = chunk.metadata.get("plan_goals", [])
+        if _pg:
+            goals_block = "**Goals:**\n" + "\n".join(f"- {g}" for g in _pg[:2])
+        else:
+            goals_block = ""
+
+        try:
+            from startd8.contractors.artisan_phases.prompts import format_prompt
+            text = format_prompt(
+                "implement", "project_identity",
+                project_name=_proj_name,
+                project_root_line=project_root_line,
+                goals_block=goals_block,
+            )
+        except (FileNotFoundError, KeyError):
+            _pi_parts = [f"## Project Identity\n", f"**Project:** {_proj_name}"]
+            if project_root_line:
+                _pi_parts.append(project_root_line)
+            if goals_block:
+                _pi_parts.append(goals_block)
+            text = "\n".join(_pi_parts)
+
+        if len(text) > 500:
+            text = text[:500] + "\n..."
+        return [text, "\n---\n"]
+
+    # -- helper: target files (B-1/B-7 fix) --------------------------------
+
+    def _build_target_files(
+        self, chunk: DevelopmentChunk, is_edit: bool
+    ) -> List[str]:
+        """Target file listing — verb conditioned on edit vs create mode."""
+        if not chunk.file_targets:
+            return []
+
+        file_list_parts: List[str] = []
+        for target in chunk.file_targets:
+            ext = target.rsplit(".", 1)[-1] if "." in target else ""
+            fmt_hint = {
+                "yaml": "Valid YAML configuration",
+                "yml": "Valid YAML configuration",
+                "json": "Valid JSON",
+                "md": "Markdown document",
+                "py": "Python module",
+            }.get(ext, "")
+            file_list_parts.append(
+                f"- `{target}`" + (f" ({fmt_hint})" if fmt_hint else "")
+            )
+        file_list = "\n".join(file_list_parts)
+
+        template_name = "target_files_edit" if is_edit else "target_files_create"
+        try:
+            from startd8.contractors.artisan_phases.prompts import format_prompt
+            text = format_prompt("implement", template_name, file_list=file_list)
+        except (FileNotFoundError, KeyError):
+            if is_edit:
+                header = (
+                    "## Target Files\n"
+                    "You MUST update the following existing file(s). Focus on applying the\n"
+                    "changes described in the design document — do NOT rewrite from scratch.\n"
+                )
+            else:
+                header = (
+                    "## Target Files\n"
+                    "You MUST generate the following file(s). Focus on implementing "
+                    "the PRIMARY artifact — do NOT generate test code.\n"
+                )
+            text = header + file_list
+
+        return [text, "\n---\n"]
+
+    # -- helper: existing file contents ------------------------------------
+
+    @staticmethod
+    def _build_existing_files(
+        existing: Dict[str, str],
+    ) -> List[str]:
+        """PCA-503: Existing file contents section."""
+        if not existing:
+            return []
+
+        _MAX_EXISTING_TOTAL = 120_000
+        _ef_parts: List[str] = [
+            "## Existing Files\n",
+            "The following target files ALREADY EXIST in the project. "
+            "Your output MUST preserve existing functionality and only "
+            "add or modify what is specified in the design document.\n",
+        ]
+        _total_bytes = 0
+        for _ef_path, _ef_content in existing.items():
+            _ef_size = len(_ef_content)
+            if _total_bytes + _ef_size > _MAX_EXISTING_TOTAL:
+                _ef_parts.append(
+                    f"\n### `{_ef_path}` (skipped — total existing file budget exceeded)"
+                )
+                continue
+            _total_bytes += _ef_size
+            _nonce = uuid.uuid4().hex[:8]
+            _ef_parts.append(f"\n### `{_ef_path}` ({_ef_size:,} bytes)")
+            _ef_parts.append(f"```source-{_nonce}\n{_ef_content}\n```")
+
+        return _ef_parts + ["\n---\n"]
+
+    # -- helper: edit-first directive --------------------------------------
+
+    @staticmethod
+    def _build_edit_first_directive(
+        existing: Dict[str, str],
+    ) -> List[str]:
+        """PCA-503/605b: Edit-First Directive with quantitative size constraint."""
+        total_lines = sum(len(c.splitlines()) for c in existing.values())
+        min_lines = int(total_lines * 0.80)
+
+        try:
+            from startd8.contractors.artisan_phases.prompts import format_prompt
+            text = format_prompt(
+                "implement", "edit_first_directive",
+                total_lines=total_lines,
+                min_lines=min_lines,
+            )
+        except (FileNotFoundError, KeyError):
+            text = (
+                "## Edit-First Directive\n"
                 "**CRITICAL:** The target files shown above already exist in the project. "
                 "You MUST:\n"
                 "1. PRESERVE all existing functions, classes, imports, and logic "
@@ -1096,112 +1199,190 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "\nTreat this as an EDIT to production code, not a greenfield implementation. "
                 "If the design document describes new functionality, integrate it alongside "
                 "the existing code.\n"
-            )
-            # PCA-605b Change A: Quantitative line-count constraint
-            _ef_total_lines = sum(
-                len(content.splitlines())
-                for content in _existing.values()
-            )
-            _ef_min_lines = int(_ef_total_lines * 0.80)
-            parts.append(
-                f"\n**SIZE CONSTRAINT:** The existing file(s) total {_ef_total_lines} lines. "
-                f"Your output MUST be AT LEAST {_ef_min_lines} lines (80% of original). "
+                f"\n**SIZE CONSTRAINT:** The existing file(s) total {total_lines} lines. "
+                f"Your output MUST be AT LEAST {min_lines} lines (80% of original). "
                 f"Outputs significantly shorter than the original will be REJECTED.\n"
             )
-            parts.append("\n---\n")
 
-        # PCA-600: Edit Mode Classification — supplements PCA-503 directive
-        # with structured upstream signal analysis
-        _edit_mode = chunk.metadata.get("_edit_mode")
-        if _edit_mode and _edit_mode.get("mode") == "edit":
-            _em_parts: List[str] = ["## Edit Mode Classification\n"]
-            _em_parts.append(
-                f"**Task mode:** EDIT (confidence: {_edit_mode.get('confidence', 'unknown')})\n"
-            )
-            _per_file = _edit_mode.get("per_file", {})
-            if _per_file:
-                _edit_files = [f for f, info in _per_file.items() if info.get("mode") == "edit"]
-                _create_files = [f for f, info in _per_file.items() if info.get("mode") == "create"]
-                if _edit_files:
-                    _em_parts.append("**Files being EDITED:** " + ", ".join(f"`{f}`" for f in _edit_files))
-                if _create_files:
-                    _em_parts.append("**Files being CREATED:** " + ", ".join(f"`{f}`" for f in _create_files))
-                for fpath, info in _per_file.items():
-                    staleness = info.get("staleness", "")
-                    if staleness:
-                        _em_parts.append(f"- `{fpath}`: staleness={staleness}")
-            _conflicts = _edit_mode.get("signal_conflicts", [])
-            if _conflicts:
-                _em_parts.append("\n**Signal conflicts detected:**")
-                for _c in _conflicts[:3]:
-                    _em_parts.append(f"- {_c}")
-            # PCA-605b Change B: Quantitative constraint replaces passive warning
-            _em_parts.append(
-                f"\n**MINIMUM OUTPUT:** Your output must be AT LEAST 80% of the existing file size. "
-                f"Outputs that drop below this threshold will be REJECTED by automated guards. "
-                f"Do NOT rewrite from scratch — EDIT the existing code."
-            )
-            parts.extend(_em_parts)
-            parts.append("\n---\n")
+        return [text, "\n---\n"]
 
-        # ── Layer 2: Authoritative design document framing ────────────
-        # When a design document is present and substantial, make it the
-        # AUTHORITATIVE specification and demote the task summary to a label.
-        # This prevents the LLM from latching onto the shorter task
-        # description and ignoring the comprehensive design.
+    # -- helper: edit mode classification (B-3 fix) ------------------------
+
+    @staticmethod
+    def _build_edit_mode_classification(
+        edit_mode: Optional[Dict[str, Any]],
+    ) -> List[str]:
+        """PCA-600: Edit mode classification — shown for ALL modes (B-3 fix).
+
+        Previously this section was only rendered when ``mode == "edit"``.
+        Now it is rendered whenever upstream classification is available,
+        giving the LLM a clear signal regardless of classification result.
+        """
+        if not edit_mode:
+            return []
+
+        mode = edit_mode.get("mode", "unknown")
+        mode_upper = mode.upper()
+        confidence = edit_mode.get("confidence", "unknown")
+
+        # Per-file details
+        per_file_lines: List[str] = []
+        _per_file = edit_mode.get("per_file", {})
+        if _per_file:
+            _edit_files = [
+                f for f, info in _per_file.items()
+                if info.get("mode") == "edit"
+            ]
+            _create_files = [
+                f for f, info in _per_file.items()
+                if info.get("mode") == "create"
+            ]
+            if _edit_files:
+                per_file_lines.append(
+                    "**Files being EDITED:** "
+                    + ", ".join(f"`{f}`" for f in _edit_files)
+                )
+            if _create_files:
+                per_file_lines.append(
+                    "**Files being CREATED:** "
+                    + ", ".join(f"`{f}`" for f in _create_files)
+                )
+            for fpath, info in _per_file.items():
+                staleness = info.get("staleness", "")
+                if staleness:
+                    per_file_lines.append(f"- `{fpath}`: staleness={staleness}")
+        per_file_details = "\n".join(per_file_lines)
+
+        # Signal conflicts
+        _conflicts = edit_mode.get("signal_conflicts", [])
+        if _conflicts:
+            signal_conflicts = (
+                "\n**Signal conflicts detected:**\n"
+                + "\n".join(f"- {c}" for c in _conflicts[:3])
+            )
+        else:
+            signal_conflicts = ""
+
+        # Mode-appropriate guidance (Step 4 of plan)
+        if mode == "edit":
+            mode_guidance = (
+                "\n**MINIMUM OUTPUT:** Your output must be AT LEAST 80% of the "
+                "existing file size. Outputs that drop below this threshold will "
+                "be REJECTED by automated guards. Do NOT rewrite from scratch — "
+                "EDIT the existing code."
+            )
+        else:
+            mode_guidance = (
+                "\n**NEW FILE:** This task creates a new file. Implement all "
+                "sections described in the design document. Do not leave "
+                "placeholder or stub implementations."
+            )
+
+        try:
+            from startd8.contractors.artisan_phases.prompts import format_prompt
+            text = format_prompt(
+                "implement", "edit_mode_classification",
+                mode_upper=mode_upper,
+                confidence=confidence,
+                per_file_details=per_file_details,
+                signal_conflicts=signal_conflicts,
+                mode_guidance=mode_guidance,
+            )
+        except (FileNotFoundError, KeyError):
+            _em_parts = [
+                f"## Edit Mode Classification\n",
+                f"**Task mode:** {mode_upper} (confidence: {confidence})\n",
+            ]
+            if per_file_details:
+                _em_parts.append(per_file_details)
+            if signal_conflicts:
+                _em_parts.append(signal_conflicts)
+            _em_parts.append(mode_guidance)
+            text = "\n".join(_em_parts)
+
+        return [text, "\n---\n"]
+
+    # -- helper: design document framing (B-5 fix) -------------------------
+
+    @staticmethod
+    def _build_design_framing(
+        chunk: DevelopmentChunk,
+        existing: Dict[str, str],
+    ) -> List[str]:
+        """Authoritative design document framing + task summary demotion."""
         design_doc = chunk.metadata.get("design_document")
-        if design_doc:
-            design_lines = len(design_doc.strip().splitlines())
-            design_sections = sum(
-                1
-                for line in design_doc.splitlines()
-                if line.strip().startswith("##")
-            )
+        if not design_doc:
+            return []
 
-            # PCA-605b Change C: Conditional framing for edit vs greenfield
-            if _existing:
-                # Edit mode: design describes changes, not a replacement
-                parts.append("## AUTHORITATIVE Design Changes\n")
-                parts.append(
+        design_lines = len(design_doc.strip().splitlines())
+        design_sections = sum(
+            1 for line in design_doc.splitlines()
+            if line.strip().startswith("##")
+        )
+
+        # B-5 fix: use edit framing when existing files are present,
+        # greenfield framing ONLY when there are truly no existing files.
+        if existing:
+            template_name = "design_doc_edit"
+        else:
+            template_name = "design_doc_create"
+
+        try:
+            from startd8.contractors.artisan_phases.prompts import format_prompt
+            framing = format_prompt(
+                "implement", template_name,
+                design_lines=design_lines,
+                design_sections=design_sections,
+            )
+        except (FileNotFoundError, KeyError):
+            if existing:
+                framing = (
+                    "## AUTHORITATIVE Design Changes\n"
                     "The following design document describes CHANGES to apply to the "
                     "existing code shown above. It is the AUTHORITATIVE specification "
-                    "for what to ADD or MODIFY.\n"
-                )
-                parts.append(
+                    "for what to ADD or MODIFY.\n\n"
                     "**CRITICAL:** Apply these changes to the existing code. "
                     "Do NOT rewrite the file from scratch. The existing code is the "
                     "foundation — the design document describes what to change, not "
-                    "what the entire file should look like.\n"
+                    "what the entire file should look like.\n\n"
+                    f"**Design Scope:** {design_lines} lines across {design_sections} "
+                    f"sections. A partial implementation that omits designed sections "
+                    f"will be rejected in review.\n"
                 )
             else:
-                # Greenfield: original framing
-                parts.append("## AUTHORITATIVE Design Document\n")
-                parts.append(
+                framing = (
+                    "## AUTHORITATIVE Design Document\n"
                     "The following design document was approved during the DESIGN phase. "
-                    "It is the AUTHORITATIVE specification for this task.\n"
-                )
-                parts.append(
+                    "It is the AUTHORITATIVE specification for this task.\n\n"
                     "**CRITICAL:** This design document OVERRIDES the Task Summary below "
                     "when they differ in scope or detail. The Task Summary is only a brief "
                     "label. The design document defines the FULL scope of what must be "
                     "implemented — all sections, rules, structures, and patterns specified "
-                    "in the design MUST appear in your output.\n"
+                    "in the design MUST appear in your output.\n\n"
+                    f"**Design Scope:** {design_lines} lines across {design_sections} "
+                    f"sections. A partial implementation that omits designed sections "
+                    f"will be rejected in review.\n"
                 )
-            parts.append(
-                f"**Design Scope:** {design_lines} lines across {design_sections} "
-                f"sections. A partial implementation that omits designed sections "
-                f"will be rejected in review.\n"
-            )
-            parts.append(design_doc)
-            parts.append("\n---\n")
-            parts.append(
+
+        try:
+            from startd8.contractors.artisan_phases.prompts import format_prompt
+            summary_label = format_prompt("implement", "task_summary_label")
+        except (FileNotFoundError, KeyError):
+            summary_label = (
                 "## Task Summary (label only — see AUTHORITATIVE Design Document "
                 "above for full scope)\n"
             )
 
-        parts.append(chunk.description)
+        return [framing, design_doc, "\n---\n", summary_label]
 
-        # IMP-7: Inject design completeness warning if parameters were lost
+    # -- helper: supplementary context sections ----------------------------
+
+    @staticmethod
+    def _build_supplementary_context(chunk: DevelopmentChunk) -> List[str]:
+        """IMP-7, PCA-300/301/401/403/404: supplementary context sections."""
+        parts: List[str] = []
+
+        # IMP-7: Design completeness warning
         completeness_warning = chunk.metadata.get("design_completeness_warning", "")
         if completeness_warning:
             parts.append("\n## Design Completeness Warning")
@@ -1267,28 +1448,45 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 _files = ", ".join(pi.get("files", [])[:3])
                 parts.append(f"- {_tid}: {_files}")
 
-        # Append prompt constraints from enrichment (IMP-5: grouped by priority)
+        # IMP-5: grouped prompt constraints
         constraints = chunk.metadata.get("prompt_constraints", [])
         if constraints:
             from startd8.contractors.artisan_phases.prompts import format_constraints
             parts.append("\n## Constraints")
             parts.append(format_constraints(constraints))
 
-        # Append retry feedback
+        return parts
+
+    # -- helper: retry feedback --------------------------------------------
+
+    @staticmethod
+    def _build_retry_feedback(context: Dict[str, Any]) -> List[str]:
+        """Retry feedback section for error-informed retries."""
         last_error = context.get("last_error")
         test_output = context.get("test_output")
-        if last_error or test_output:
-            parts.append("\n## Retry Feedback")
-            parts.append(
+        if not last_error and not test_output:
+            return []
+
+        error_block = f"\nPrevious error:\n{last_error}" if last_error else ""
+        test_block = f"\nTest output:\n{test_output}" if test_output else ""
+
+        try:
+            from startd8.contractors.artisan_phases.prompts import format_prompt
+            text = format_prompt(
+                "implement", "retry_feedback",
+                error_block=error_block,
+                test_block=test_block,
+            )
+        except (FileNotFoundError, KeyError):
+            text = (
+                "\n## Retry Feedback\n"
                 "The previous attempt failed. Please fix the issues "
                 "and regenerate."
+                + error_block
+                + test_block
             )
-            if last_error:
-                parts.append(f"\nPrevious error:\n{last_error}")
-            if test_output:
-                parts.append(f"\nTest output:\n{test_output}")
 
-        return "\n".join(parts)
+        return [text]
 
     # ------------------------------------------------------------------
     # Core execute
@@ -2197,6 +2395,19 @@ class DevelopmentPhase:
             Updated ChunkState.
         """
         max_attempts = chunk.max_retries + 1
+        _chunk_span_cm = (
+            _trace.get_tracer("startd8.artisan.implement").start_as_current_span(
+                f"implement.chunk.{chunk.chunk_id}",
+                attributes={
+                    "chunk.id": chunk.chunk_id,
+                    "chunk.file_targets": ",".join(chunk.file_targets[:5]),
+                    "chunk.max_retries": chunk.max_retries,
+                },
+            )
+            if _HAS_OTEL
+            else contextlib.nullcontext()
+        )
+        _chunk_span = _chunk_span_cm.__enter__()
 
         while state.attempts < max_attempts:
             state.attempts += 1
@@ -2354,6 +2565,10 @@ class DevelopmentPhase:
             self.logger.info(
                 f"Chunk {chunk.chunk_id}: PASSED (attempt {attempt_label})"
             )
+            if _chunk_span and hasattr(_chunk_span, "set_attribute"):
+                _chunk_span.set_attribute("chunk.status", "passed")
+                _chunk_span.set_attribute("chunk.attempts", state.attempts)
+            _chunk_span_cm.__exit__(None, None, None)
             return state
 
         # All retries exhausted
@@ -2363,6 +2578,10 @@ class DevelopmentPhase:
             f"Chunk {chunk.chunk_id}: FAILED after {state.attempts} "
             f"attempt(s). Last error: {state.last_error}"
         )
+        if _chunk_span and hasattr(_chunk_span, "set_attribute"):
+            _chunk_span.set_attribute("chunk.status", "failed")
+            _chunk_span.set_attribute("chunk.attempts", state.attempts)
+        _chunk_span_cm.__exit__(None, None, None)
         return state
 
     def _propagate_skips(

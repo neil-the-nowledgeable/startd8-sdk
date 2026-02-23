@@ -51,6 +51,7 @@ All artisan pipeline prompt templates MUST be stored as YAML files in `src/start
 | `plan_ingestion.yaml` | `plan_ingestion_workflow.py` | 4 + depth_tiers |
 | `test_construction.yaml` | `test_construction.py` | 4 |
 | `review.yaml` | `context_seed_handlers.py` | 2 |
+| `implement.yaml` | `development.py` | 10 |
 
 #### YAML Structure
 
