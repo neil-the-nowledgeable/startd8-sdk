@@ -3,9 +3,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import (
-    Any, Callable, Dict, Iterator, List, Optional,
+    Any, Callable, Dict, Iterator, List, Literal, Optional,
     Protocol, runtime_checkable,
 )
+
+from pydantic import BaseModel, Field, model_validator
 
 class MergeStatus(Enum):
     """Status of a merge operation."""
@@ -432,6 +434,167 @@ class ModelCatalogEntry:
         if self.max_tokens < 1:
             raise ValueError('max_tokens must be >= 1')
 
+@dataclass
+class ValidationDiagnostic(BaseModel):
+    """Single diagnostic entry from validation.
+    
+    Attributes:
+        code: Machine-readable diagnostic code, e.g. 'MISSING_KEY'.
+        message: Human-readable description.
+        severity: Severity level ('error', 'warning', or 'info').
+        context_key: The context key this diagnostic relates to, if applicable.
+    """
+    code: str = Field(description="Machine-readable diagnostic code, e.g. 'MISSING_KEY'.")
+    message: str = Field(description="Human-readable description.")
+    severity: Literal["error", "warning", "info"] = "info"
+    context_key: Optional[str] = Field(
+        default=None,
+        description="The context key this diagnostic relates to, if applicable.",
+    )
+
+
+@dataclass
+class ValidationConfig(BaseModel):
+    """Configuration for post-generation validation hookpoint.
+    
+    Attributes:
+        mode: Execution mode ('standalone' or 'pipeline').
+        fail_on_warning: Whether warnings should cause validation failure.
+            Default False preserves standalone behavior.
+        required_context_keys: Context keys that must be present in resolved output.
+            Empty list (standalone default) means no mandatory keys.
+        custom_validators: Named validator hooks to run during validation.
+            Hook names are resolved by the concrete strategy implementation.
+    """
+    mode: Literal["standalone", "pipeline"] = "standalone"
+    fail_on_warning: bool = Field(
+        default=False,
+        description="Whether warnings should cause validation failure. "
+        "Default False preserves standalone behavior. "
+        "Pipeline mode typically sets this to True.",
+    )
+    required_context_keys: List[str] = Field(
+        default_factory=list,
+        description="Context keys that must be present in resolved output. "
+        "Empty list (standalone default) means no mandatory keys.",
+    )
+    custom_validators: List[str] = Field(
+        default_factory=list,
+        description="Named validator hooks to run during validation. "
+        "Hook names are resolved by the concrete strategy implementation. "
+        "Unrecognized names should produce a diagnostic with code 'UNKNOWN_VALIDATOR'.",
+    )
+
+
+@dataclass
+class ValidationResult(BaseModel):
+    """Structured result from post-generation validation.
+
+    The model_validator enforces that is_valid cannot be True when errors
+    are present. When fail_on_warning metadata is set and warnings are
+    present, is_valid is also forced to False.
+    
+    Attributes:
+        is_valid: Overall pass/fail status of validation.
+        mode: Execution mode that produced this result.
+        errors: List of error diagnostics.
+        warnings: List of warning diagnostics.
+        info: List of informational diagnostics.
+        metadata: Arbitrary provenance/diagnostic metadata.
+    """
+    is_valid: bool = Field(
+        description="Overall pass/fail status of validation."
+    )
+    mode: Literal["standalone", "pipeline"]
+    errors: List[ValidationDiagnostic] = Field(default_factory=list)
+    warnings: List[ValidationDiagnostic] = Field(default_factory=list)
+    info: List[ValidationDiagnostic] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Arbitrary provenance/diagnostic metadata. "
+        "May include 'fail_on_warning': bool to control warning-as-failure semantics.",
+    )
+
+    @model_validator(mode="after")
+    def _enforce_is_valid_invariant(self) -> "ValidationResult":
+        """Structurally enforce is_valid consistency.
+
+        - If errors is non-empty, is_valid is forced to False.
+        - If metadata['fail_on_warning'] is True and warnings is non-empty,
+          is_valid is forced to False.
+
+        This prevents implementors from accidentally constructing a
+        ValidationResult(is_valid=True, errors=[...]).
+        """
+        if self.errors:
+            self.is_valid = False
+        if self.metadata.get("fail_on_warning", False) and self.warnings:
+            self.is_valid = False
+        return self
+
+
+@runtime_checkable
+class ContextResolutionStrategy(Protocol):
+    """Strategy protocol for context resolution in standalone/pipeline modes.
+
+    Implementations provide mode-specific resolution logic, generation
+    provenance, and post-generation validation. The protocol uses structural
+    subtyping — concrete classes need not inherit from this type.
+
+    Note on @runtime_checkable: isinstance() checks verify structural
+    presence of methods and properties only — they do NOT verify parameter
+    signatures, return types, or behavioral contracts. Pair isinstance()
+    guards with integration tests for full contract verification.
+    Requires CPython >= 3.12 for correct @property member detection.
+    """
+
+    @property
+    def mode(self) -> Literal["standalone", "pipeline"]:
+        """The execution mode this strategy implements."""
+        ...
+
+    @property
+    def provenance(self) -> Dict[str, Any]:
+        """Generation provenance metadata for audit/tracing."""
+        ...
+
+    def resolve(self, context_seed: Dict[str, Any]) -> Dict[str, Any]:
+        """Resolve a context seed into a fully-populated context dict.
+
+        Args:
+            context_seed: Raw context data (may be minimal in standalone,
+                rich with onboarding/architectural/calibration data in pipeline).
+
+        Returns:
+            Resolved context dictionary ready for consumption by the workflow.
+
+        Note on mandatory key validation: resolve() performs best-effort
+        resolution and SHOULD NOT duplicate the mandatory-key checking that
+        validate() performs via ValidationConfig.required_context_keys.
+        In pipeline mode, resolve() may raise KeyError only for keys that
+        are structurally required to *perform* resolution (e.g., a data
+        source URI), not for keys that are required in the *output*.
+        Output completeness is the responsibility of validate().
+        """
+        ...
+
+    def validate(
+        self, result: Dict[str, Any], config: ValidationConfig
+    ) -> ValidationResult:
+        """Post-generation validation hookpoint.
+
+        Args:
+            result: The generated/resolved output to validate.
+            config: Validation configuration controlling strictness and rules.
+
+        Returns:
+            Structured validation result with diagnostics. Implementors
+            SHOULD set metadata["fail_on_warning"] = config.fail_on_warning
+            to enable the ValidationResult model_validator enforcement.
+        """
+        ...
+
+
 @runtime_checkable
 class LessonsProvider(Protocol):
     """Protocol defining the interface for lessons providers.
@@ -577,4 +740,6 @@ __all__ = [
     'MODEL_CATALOG',
     'get_models_by_role', 'get_draft_models', 'get_validate_models',
     'get_review_models', 'get_model_by_id',
+    'ValidationDiagnostic', 'ValidationConfig', 'ValidationResult',
+    'ContextResolutionStrategy',
 ]
