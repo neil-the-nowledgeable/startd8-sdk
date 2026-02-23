@@ -1,3 +1,4 @@
+import dataclasses
 import enum
 import re
 import shutil
@@ -22,6 +23,7 @@ from .protocols import (
 )
 from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
+from .seed_context import SeedContext
 
 logger = get_logger(__name__)
 
@@ -300,6 +302,8 @@ class PrimeContractorWorkflow:
         )
         self._domain_checklist = None  # lazy-init DomainChecklist
         self._current_enrichment = None  # per-feature enrichment cache
+        # SeedContext — typed container for pipeline context
+        self.seed_context: SeedContext = SeedContext()
         # Seed-level context — set by run_prime_workflow.py after loading
         # the context seed.  Declared here so _generate_code can access
         # them directly without getattr guards.
@@ -309,6 +313,95 @@ class PrimeContractorWorkflow:
         self.seed_service_metadata: Dict[str, Any] = {}
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
+
+    def configure_seed_context(self, **kwargs: Any) -> None:
+        """Configure seed context before execution. Raises if already frozen.
+
+        Validates that all keys correspond to actual ``SeedContext`` dataclass
+        fields (excluding internal ``_``-prefixed fields). This prevents
+        accidental overwrite of methods or properties like ``freeze``,
+        ``as_dict``, or ``is_pipeline``.
+
+        Args:
+            **kwargs: Field assignments for the seed context.
+
+        Raises:
+            ValueError: If a key is not a valid SeedContext field name.
+            AttributeError: If seed_context is already frozen.
+
+        Example:
+            >>> workflow.configure_seed_context(
+            ...     mode="pipeline",
+            ...     project_name="myproject",
+            ...     onboarding_metadata={"key": "value"},
+            ... )
+        """
+        valid_fields = {
+            f.name
+            for f in dataclasses.fields(self.seed_context)
+            if not f.name.startswith("_")
+        }
+        for key, value in kwargs.items():
+            if key not in valid_fields:
+                raise ValueError(
+                    f"Unknown SeedContext field: '{key}'. "
+                    f"Valid fields: {sorted(valid_fields)}"
+                )
+            setattr(self.seed_context, key, value)
+        logger.info(
+            "SeedContext configured",
+            extra={"seed_mode": self.seed_context.mode},
+        )
+
+    # --- Backward-compatible property accessors ---
+    # Rule: one read-only @property per non-internal SeedContext field.
+    # These are READ-ONLY. Mutation must go through configure_seed_context()
+    # or direct seed_context attribute assignment (before freeze).
+
+    @property
+    def project_name(self) -> Optional[str]:
+        """Read-only accessor delegating to seed_context.project_name."""
+        return self.seed_context.project_name
+
+    @property
+    def project_description(self) -> Optional[str]:
+        """Read-only accessor delegating to seed_context.project_description."""
+        return self.seed_context.project_description
+
+    @property
+    def onboarding_metadata(self) -> Optional[Dict[str, Any]]:
+        """Read-only accessor delegating to seed_context.onboarding_metadata."""
+        return self.seed_context.onboarding_metadata
+
+    @property
+    def architectural_context(self) -> Optional[Dict[str, Any]]:
+        """Read-only accessor delegating to seed_context.architectural_context."""
+        return self.seed_context.architectural_context
+
+    @property
+    def design_decisions(self) -> Optional[List[Dict[str, Any]]]:
+        """Read-only accessor delegating to seed_context.design_decisions."""
+        return self.seed_context.design_decisions
+
+    @property
+    def calibration_params(self) -> Optional[Dict[str, Any]]:
+        """Read-only accessor delegating to seed_context.calibration_params."""
+        return self.seed_context.calibration_params
+
+    @property
+    def quality_targets(self) -> Optional[Dict[str, Any]]:
+        """Read-only accessor delegating to seed_context.quality_targets."""
+        return self.seed_context.quality_targets
+
+    @property
+    def source_pipeline(self) -> Optional[str]:
+        """Read-only accessor delegating to seed_context.source_pipeline."""
+        return self.seed_context.source_pipeline
+
+    @property
+    def seed_version(self) -> Optional[str]:
+        """Read-only accessor delegating to seed_context.seed_version."""
+        return self.seed_context.seed_version
 
     def _rel_display(self, path: Path) -> str:
         """Safe relative path for display, falling back to the full path."""
@@ -792,7 +885,9 @@ class PrimeContractorWorkflow:
         Returns:
             Summary dict with results
         """
-        logger.info('PRIME CONTRACTOR WORKFLOW started — mode=%s, auto_commit=%s, stop_on_failure=%s', 'DRY RUN' if self.dry_run else 'LIVE', self.auto_commit, stop_on_failure, extra={'dry_run': self.dry_run, 'auto_commit': self.auto_commit})
+        # Freeze seed context at execution boundary to prevent mutation
+        self.seed_context.freeze()
+        logger.info('PRIME CONTRACTOR WORKFLOW started — mode=%s, auto_commit=%s, stop_on_failure=%s', 'DRY RUN' if self.dry_run else 'LIVE', self.auto_commit, stop_on_failure, extra={'dry_run': self.dry_run, 'auto_commit': self.auto_commit, 'seed_mode': self.seed_context.mode})
         is_clean, dirty_files = self.check_git_status()
         if not is_clean:
             if self.auto_stash:
