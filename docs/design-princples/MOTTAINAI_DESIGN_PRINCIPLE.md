@@ -392,6 +392,44 @@ Generated file checksums are first computed at **TEST cache time** (`context_see
 
 ---
 
+## PI-012/PI-013 Failure Analysis (2026-02-23)
+
+The PI-012 + PI-013 artisan run ($0.74, 6m22s) exposed three new mottainai violations. Each caused measurable waste in a real pipeline execution. See [Pipeline Safety Gate Requirements](../design/artisan/PIPELINE_SAFETY_GATE_REQUIREMENTS.md) for the full root cause analysis and 13 formal requirements (AR-813..AR-825).
+
+### Gap 37: FINALIZE Crash Destroys Manifest — Serialize-and-Forget
+
+**Anti-pattern**: Serialize-and-forget (same as Gaps 17–20)
+
+A missing `@staticmethod` on `_count_gate3b_by_severity()` caused a `TypeError` that killed the entire FINALIZE phase. 7 phases of pipeline work ($0.74) produced no final `generation-manifest.json`. No partial manifest was written — the crash destroyed all accumulated value.
+
+**Waste**: Full pipeline cost ($0.74 in this run). All generation results, test results, and review results were computed but never surfaced in a manifest.
+
+**Fix**: AR-813 (per-task error guard in FINALIZE), AR-814 (static method audit), AR-815 (partial manifest on crash). **Violated rules**: 4 (Register what you produce), 3 (Degrade gracefully).
+
+### Gap 38: Truncated Code Overwrites Working Production Code
+
+**Anti-pattern**: Overwrite existing assets (new category)
+
+Gate 4 detected truncation at confidence >= 0.5 on 3 files but only logged warnings (contract declares `severity: warning`). INTEGRATE merged the truncated code over existing production files, destroying working code that represented prior development investment.
+
+**Waste**: Existing code value + regeneration cost. The overwritten files were working production code that had been developed, tested, and reviewed in prior iterations.
+
+**Fix**: AR-816 (truncation escalation to blocking), AR-817 (contract YAML severity upgrade), AR-818 (size regression hard block), AR-819 (compound gate for truncation + existing file). **Violated rules**: 2 (Forward, don't regenerate — the existing file was the invested asset), 1 (Inventory before generating — should have known the file existed and was larger).
+
+### Gap 39: SCAFFOLD Module Inventory Not Forwarded to IMPLEMENT
+
+**Anti-pattern**: Compute-but-don't-forward (same as Gaps 21–26)
+
+SCAFFOLD walked the project directory tree and identified target files, but did not extract importable Python module names. IMPLEMENT had no module inventory context. The LLM hallucinated an import of `context_strategies.py` (which doesn't exist), causing cascading test failures.
+
+**Waste**: Wasted IMPLEMENT + TEST cost for tasks with bad imports. The information needed to prevent the hallucination (which modules actually exist) was available at zero additional cost during SCAFFOLD's directory walk.
+
+**Fix**: AR-821 (SCAFFOLD module inventory), AR-822 (inject into IMPLEMENT prompts), AR-823 (import validation at INTEGRATE), AR-824 (contract YAML propagation). **Violated rules**: 2 (Forward, don't regenerate), 5 (Prefer deterministic over stochastic — module existence is deterministic).
+
+> **Formalized**: Gaps 37–39 are tracked as formal requirements **AR-813 through AR-825** in [ARTISAN_REQUIREMENTS.md](../artisan/ARTISAN_REQUIREMENTS.md) Layer 8 (Safety and Resilience). See [Pipeline Safety Gate Requirements](../design/artisan/PIPELINE_SAFETY_GATE_REQUIREMENTS.md) for the full analysis.
+
+---
+
 ## Application Rules
 
 When designing new pipeline stages or modifying existing ones:
@@ -420,6 +458,7 @@ When designing new pipeline stages or modifying existing ones:
 | [Export Pipeline Analysis Guide](../guides/EXPORT_PIPELINE_ANALYSIS_GUIDE.md) | The operational guide that describes the 7-step pipeline where mottainai violations occur |
 | [`startd8.artisan.functional-requirements.yaml`](../capability-index/startd8.artisan.functional-requirements.yaml) (AR-900..AR-908) | Formal requirements for Mottainai compliance within the artisan 8-phase pipeline — maps Gaps 17–36 to testable acceptance criteria |
 | [REFINE Forwarding Requirements](../REFINE_FORWARDING_REQUIREMENTS.md) (REQ-RF-001..012) | Closes Gaps 5 and 13 — forwards REFINE triage, apply, and area coverage output through the seed to downstream consumers |
+| [Pipeline Safety Gate Requirements](../design/artisan/PIPELINE_SAFETY_GATE_REQUIREMENTS.md) (AR-813..AR-825) | Closes Gaps 37–39 — FINALIZE resilience, truncation enforcement, module resolution fidelity |
 
 ---
 
@@ -434,3 +473,4 @@ When designing new pipeline stages or modifying existing ones:
 | 2026-02-20 | Gap 15 partially resolved: CID-018 source types (5) registered in ArtifactType enum with full onboarding dict coverage. Gap 16 resolved: auto-derive service_metadata from manifest artifacts |
 | 2026-02-21 | Artisan Internal Audit: added Gaps 17–36 (20 intra-pipeline violations across 3 anti-patterns: serialize-and-forget, compute-but-don't-forward, inject-but-don't-validate). A-15 addressed by AR-127/AR-128 |
 | 2026-02-21 | Added [REFINE Forwarding Requirements](../REFINE_FORWARDING_REQUIREMENTS.md) (REQ-RF-001..012) to close Gaps 5 and 13 — REFINE triage/apply/config forwarding through the seed, informed by ContextCore propagation contract model |
+| 2026-02-23 | PI-012/PI-013 failure analysis: added Gaps 37–39 (FINALIZE crash destroys manifest, truncated code overwrites production files, SCAFFOLD module inventory not forwarded). Formalized as AR-813..AR-825 in [Pipeline Safety Gate Requirements](../design/artisan/PIPELINE_SAFETY_GATE_REQUIREMENTS.md) |

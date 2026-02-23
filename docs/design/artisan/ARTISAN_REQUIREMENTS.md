@@ -21,10 +21,10 @@ This document provides narrative context, dependency diagrams, and a traceabilit
 | Handoff and Recovery | AR-5xx | 12 | 8 | 0 | 4 |
 | Observability | AR-6xx | 8 | 6 | 0 | 2 |
 | Configuration | AR-7xx | 10 | 8 | 0 | 2 |
-| Safety and Resilience | AR-8xx | 13 | 6 | 0 | 7 |
+| Safety and Resilience | AR-8xx | 26 | 6 | 0 | 20 |
 | Mottainai Compliance | AR-9xx | 9 | 0 | 0 | 9 |
 | Project-Centric Context | AR-10xx | 20 | 3 | 0 | 17 |
-| **Total** | | **154** | **85** | **1** | **68** |
+| **Total** | | **167** | **85** | **1** | **81** |
 
 ---
 
@@ -493,6 +493,119 @@ During wave-parallel execution, multiple lane threads read shared global context
 2. Each lane receives an isolated mutable context scope for lane-local writes; lane-local writes do not affect other lanes or the global context until the wave barrier merge.
 3. Attempted mutation of a read-only global context field from a lane thread raises an error or is silently prevented (implementation may choose between enforcement strategies).
 
+### Pipeline Safety Gates (AR-813–825)
+
+These 13 requirements address three systemic gaps exposed by the PI-012/PI-013 artisan run failure ($0.74, 6m22s). See [Pipeline Safety Gate Requirements](PIPELINE_SAFETY_GATE_REQUIREMENTS.md) for the full root cause analysis, principle mapping, and cap-dev-pipe phase placement.
+
+| Sub-Layer | ID Range | Count | Principle | Cap-Dev-Pipe Phase |
+|-----------|----------|-------|-----------|-------------------|
+| FINALIZE Resilience | AR-813–815 | 3 | by Construction + Mottainai | FINALIZE |
+| Truncation Enforcement | AR-816–820 | 5 | by Construction + Mottainai | IMPLEMENT (Gate 4) → INTEGRATE |
+| Module Resolution Fidelity | AR-821–825 | 5 | by Design + by Construction + Mottainai | SCAFFOLD → IMPLEMENT → INTEGRATE |
+
+#### AR-813: Per-Task Error Guard in FINALIZE
+
+**Status:** planned (P0)
+**Source:** `context_seed_handlers.py` (FinalizePhaseHandler._build_finalize_summary)
+**Cross-ref:** AR-165, OT-507, Mottainai Gap 30
+
+`_build_finalize_summary()` wraps per-task processing in try/except; a single task's Gate 3b error does not crash the manifest for all tasks.
+
+#### AR-814: Static Method Audit
+
+**Status:** planned (P0)
+**Source:** `context_seed_handlers.py` (all phase handler classes)
+
+All non-`self`-using methods in phase handlers are decorated `@staticmethod`. CI lint or mypy strict catches missing decorators.
+
+#### AR-815: Partial Manifest on FINALIZE Failure
+
+**Status:** planned (P3)
+**Source:** `context_seed_handlers.py` (FinalizePhaseHandler)
+**Cross-ref:** AR-161, AR-906, Mottainai Gap 37
+
+If FINALIZE crashes after processing N of M tasks, write a partial `generation-manifest.json` with `incomplete: true` flag and error details.
+
+#### AR-816: Gate 4 Truncation Escalation
+
+**Status:** planned (P1)
+**Source:** `context_seed_handlers.py` (ImplementPhaseHandler), `integration_engine.py`
+**Cross-ref:** AR-175, AR-908, Mottainai Gap 32
+
+When Gate 4 detects truncation with confidence >= 0.5, set `truncation_blocked: true` on the generation result. INTEGRATE skips the file.
+
+#### AR-817: Contract YAML Truncation Severity Upgrade
+
+**Status:** planned (P1)
+**Source:** `artisan-pipeline.contract.yaml` (IMPLEMENT exit)
+**Cross-ref:** AR-175
+
+`artisan-pipeline.contract.yaml` IMPLEMENT exit: truncation severity escalated to `blocking` for tasks with `truncation_blocked: true`.
+
+#### AR-818: Size Regression Hard Block
+
+**Status:** planned (P1)
+**Source:** `integration_engine.py`
+**Cross-ref:** AR-175, REQ-EFE-020, REQ-CCD-501, Mottainai Gap 38
+
+Generated file < 70% of existing file size AND truncation confidence >= 0.5 → INTEGRATE rejects the file (preserves existing).
+
+#### AR-819: Truncation + Existing File Compound Gate
+
+**Status:** planned (P1)
+**Source:** `integration_engine.py`
+**Cross-ref:** AR-175, REQ-EFE-020
+
+When both truncation is detected (any confidence) and target file exists, INTEGRATE applies the stricter threshold (0.5 instead of 0.7).
+
+#### AR-820: Truncation Rejection OTel Event
+
+**Status:** planned (P3)
+**Source:** `integration_engine.py`
+**Cross-ref:** OT-300
+
+INTEGRATE emits span event on truncation-based file rejection: `truncation.confidence`, `truncation.action`, `file.size_ratio`, `file.existing_size`, `file.generated_size`.
+
+#### AR-821: SCAFFOLD Module Inventory
+
+**Status:** planned (P2)
+**Source:** `context_seed_handlers.py` (ScaffoldPhaseHandler)
+**Cross-ref:** AR-903, Mottainai Gap 39
+
+SCAFFOLD collects importable Python module names from `project_root/src/` (`__init__.py` presence). Stored as `scaffold.module_inventory: list[str]`.
+
+#### AR-822: Module Inventory Injection in IMPLEMENT Prompts
+
+**Status:** planned (P2)
+**Source:** `context_seed_handlers.py` (ImplementPhaseHandler), `artisan_phases/development.py`
+**Cross-ref:** AR-130, REQ-CCD-302, Mottainai Gap 10
+
+When `scaffold.module_inventory` is available, inject it into the code generation prompt with instruction to import only from listed modules.
+
+#### AR-823: Import Validation at INTEGRATE
+
+**Status:** planned (P2)
+**Source:** `integration_engine.py`
+**Cross-ref:** AR-175
+
+Before merging a `.py` file, parse imports via `ast.parse` and validate first-party imports against `scaffold.module_inventory`. Reject files with unresolvable first-party imports.
+
+#### AR-824: Contract YAML Module Inventory Propagation
+
+**Status:** planned (P2)
+**Source:** `artisan-pipeline.contract.yaml` (IMPLEMENT entry enrichment)
+**Cross-ref:** REQ-CCD-600
+
+`scaffold.module_inventory` added to IMPLEMENT phase enrichment with `severity: warning`, `source_phase: scaffold`.
+
+#### AR-825: Module Resolution OTel Span Attribute
+
+**Status:** planned (P3)
+**Source:** `integration_engine.py`
+**Cross-ref:** OT-300
+
+Per-task INTEGRATE span includes `task.import_validation.unresolved_count` (int) and `task.import_validation.unresolved_modules` (string).
+
 ---
 
 ## Layer 9: Mottainai Compliance (AR-9xx)
@@ -927,6 +1040,19 @@ Phase 3 (P1 — Completeness):
 | AR-800..AR-810 | `src/startd8/contractors/artisan_phases/preflight.py` | `context_seed_handlers.py`, `artisan_contractor.py`, `rules_common.py` |
 | AR-811 | `src/startd8/contractors/context_seed_handlers.py` | `artisan_contractor.py` (wave computation) |
 | AR-812 | `src/startd8/contractors/artisan_contractor.py` | `context_seed_handlers.py` |
+| AR-813 | `src/startd8/contractors/context_seed_handlers.py` (FinalizePhaseHandler) | |
+| AR-814 | `src/startd8/contractors/context_seed_handlers.py` (all phase handlers) | CI lint/mypy configuration |
+| AR-815 | `src/startd8/contractors/context_seed_handlers.py` (FinalizePhaseHandler) | |
+| AR-816 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `integration_engine.py` |
+| AR-817 | `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml` | `gate_contracts.py` |
+| AR-818 | `src/startd8/contractors/integration_engine.py` | |
+| AR-819 | `src/startd8/contractors/integration_engine.py` | |
+| AR-820 | `src/startd8/contractors/integration_engine.py` | |
+| AR-821 | `src/startd8/contractors/context_seed_handlers.py` (ScaffoldPhaseHandler) | |
+| AR-822 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `artisan_phases/development.py` |
+| AR-823 | `src/startd8/contractors/integration_engine.py` | |
+| AR-824 | `src/startd8/contractors/contracts/artisan-pipeline.contract.yaml` | `gate_contracts.py` |
+| AR-825 | `src/startd8/contractors/integration_engine.py` | |
 | AR-900 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | |
 | AR-901 | `src/startd8/contractors/artisan_phases/design_documentation.py` | `context_seed_handlers.py` |
 | AR-902 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | |
@@ -1003,6 +1129,11 @@ Requirements with no `verified_by` test file (need new tests):
 | AR-805, AR-807..AR-809 | planned | Interactive mode, git tags, advisory lock, stalled retry |
 | AR-811 | planned | Task ID input validation: path separator rejection, shell metacharacter rejection, null byte rejection, format string pattern rejection |
 | AR-812 | planned | Global context immutability during concurrent lane execution: read-only enforcement, lane-local isolation, wave barrier merge correctness |
+| AR-813 | planned | FINALIZE per-task error guard: single task Gate 3b crash does not kill manifest for all tasks |
+| AR-814 | planned | Static method audit: all non-self-using methods in phase handlers are @staticmethod; CI lint catches missing decorators |
+| AR-815 | planned | Partial manifest on FINALIZE crash: `incomplete: true` flag, error details, partial task entries |
+| AR-816..AR-820 | planned | Truncation enforcement: Gate 4 escalation, contract YAML severity upgrade, size regression hard block, compound gate, OTel rejection event |
+| AR-821..AR-825 | planned | Module resolution fidelity: SCAFFOLD module inventory, IMPLEMENT prompt injection, INTEGRATE import validation, contract YAML propagation, OTel attributes |
 | AR-900..AR-908 | planned | Mottainai compliance — full review metadata serialization (reviewer_verdict dict, parsed DesignSection persistence, plan constraint storage, serialization round-trip fidelity), metadata forwarding, deterministic pre-review validation, provenance audit trail, structured diagnostics, integrity timing |
 | AR-1000, AR-1005 | planned | `project_root` injection into `initial_context` and defense-in-depth `WorkflowConfig` propagation |
 | AR-1010..AR-1013 | planned | Checkpoint persistence expansion for onboarding fields, service_metadata, plan_document_text |
@@ -1016,12 +1147,16 @@ Requirements with no `verified_by` test file (need new tests):
 
 | Phase | Requirements | Priority | Impact |
 |-------|-------------|----------|--------|
+| 0a. FINALIZE Crash Prevention | AR-813, AR-814 | **Critical** | Per-task error guard + static method audit — without this, every future run risks losing its manifest |
 | 0. Update-First Design Mode | AR-127, AR-128 | **Critical** | Prevents A-15 production file destruction |
+| 0b. Truncation Enforcement | AR-816, AR-817, AR-818, AR-819 | **High** | Prevents destructive overwrites of existing code with truncated generation |
 | ~~1b. Semantic Validators~~ | ~~AR-143..AR-147, AR-810~~ | ~~**High**~~ | ~~DONE — Commits `bed77d5`, `dc3c241`~~ |
 | 1. ContextCore Data Flow Fixes | AR-300..AR-302, AR-164, AR-165 | **High** | Closes provenance chain, enables Gate 3 |
 | 2. Onboarding Metadata Consumption | AR-303..AR-308, AR-111, AR-125..AR-126, AR-137 | **Medium** | Enriches code generation with export data |
 | 3. Recovery Hardening | AR-508..AR-511 | **Medium** | Robust resume across config changes |
 | 4. Orchestration Enhancements | AR-209..AR-212, AR-405, AR-708, AR-809, AR-811, AR-812 | **Medium** | Wave-parallel execution, concurrency control, cost projection, operational safety, task ID validation, context immutability |
+| 4b. Module Resolution Fidelity | AR-821, AR-822, AR-823, AR-824 | **Medium** | Prevents LLM from importing non-existent modules |
+| 4c. Safety Observability | AR-815, AR-820, AR-825 | **Medium** | Partial manifest, OTel events for truncation and import validation |
 | 5. Interactive and Git Safety | AR-605..AR-606, AR-805..AR-808 | **Low** | Interactive operation, event durability |
 | 6. Mottainai Compliance | AR-900..AR-908 | **Medium** | Eliminates 20 intra-pipeline waste gaps (Gaps 17–36). Note: AR-900 (P0) and AR-902 (P0) must be implemented before or alongside AR-212 wave-parallel mode, as wave context merging depends on full design metadata serialization (AR-900) and `_downstream_map` population (AR-902). |
 | 7a. Project-Centric Context Survival | AR-1000, AR-1005, AR-1010, AR-1011, AR-1013 | **High** | P0 context injection + checkpoint persistence — prerequisite for prompt enrichment. ~25 lines of production code. |
@@ -1039,6 +1174,7 @@ Requirements with no `verified_by` test file (need new tests):
 | [`ARTISAN_WORKFLOW_GUIDE.md`](ARTISAN_WORKFLOW_GUIDE.md) | User/developer guide |
 | [`plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md`](plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md) | Code fix plan for AR-3xx |
 | [`PROJECT_CENTRIC_ARTISAN_REQUIREMENTS.md`](PROJECT_CENTRIC_ARTISAN_REQUIREMENTS.md) | Original PCA requirements (PCA-1xx..PCA-4xx → AR-10xx) — gap analysis, data flow diagrams, contract YAML amendments |
+| [`PIPELINE_SAFETY_GATE_REQUIREMENTS.md`](PIPELINE_SAFETY_GATE_REQUIREMENTS.md) | PI-012/PI-013 failure analysis — AR-813..AR-825 (FINALIZE resilience, truncation enforcement, module resolution) |
 | [`startd8.workflow.functional-requirements.yaml`](capability-index/startd8.workflow.functional-requirements.yaml) | Workflow framework requirements (FR-1xx..FR-5xx) |
 | [`PLAN_INGESTION_CONTEXTCORE_RECOMMENDATIONS.md`](PLAN_INGESTION_CONTEXTCORE_RECOMMENDATIONS.md) | Upstream ingestion design recommendations |
 
