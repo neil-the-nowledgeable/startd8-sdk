@@ -1936,7 +1936,13 @@ class ArtisanContractorWorkflow:
         tasks = ctx.get("tasks") or []
 
         # Find the task matching this feature/filter
-        task_id = feature_id or ctx.get("task_filter")
+        task_id = feature_id
+        if not task_id:
+            _filter = ctx.get("task_filter")
+            if isinstance(_filter, list) and len(_filter) == 1:
+                task_id = _filter[0]
+            elif isinstance(_filter, str):
+                task_id = _filter
         task_title = ""
         if task_id and tasks:
             for t in tasks:

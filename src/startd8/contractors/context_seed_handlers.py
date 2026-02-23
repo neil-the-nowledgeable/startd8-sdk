@@ -5050,7 +5050,7 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 project_root=project_root, run_tests=False,
             ),
             dry_run=dry_run,
-            auto_commit=self.config.auto_commit,
+            auto_commit=False,  # Workflow commits once at FINALIZE
             allow_dirty=False,
             check_truncation=self.config.check_truncation,
         )
