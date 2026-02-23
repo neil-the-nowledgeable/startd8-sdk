@@ -8768,6 +8768,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             "lane_details": lane_details,
         }
 
+    @staticmethod
     def _count_gate3b_by_severity(
         gate3b: dict[str, list[dict[str, Any]]],
     ) -> dict[str, int]:
@@ -8905,7 +8906,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         # Task 11a: Gate 3b content validation summary
         gate3b_data: dict[str, Any] = implementation.get("_gate3b_content_validation", {})
         if gate3b_data:
-            severity_counts = self._count_gate3b_by_severity(gate3b_data)
+            severity_counts = FinalizePhaseHandler._count_gate3b_by_severity(gate3b_data)
             total_issues = sum(len(v) for v in gate3b_data.values())
             summary["gate3b_validation"] = {
                 "tasks_with_issues": len(gate3b_data),
