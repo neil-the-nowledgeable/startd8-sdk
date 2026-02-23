@@ -8,7 +8,7 @@
 # Version convention follows Weaver (start at 0.1.0 to signal instability).
 # =============================================================================
 
-schema_version: "0.3.0"
+schema_version: "0.4.0"
 pipeline_id: artisan
 description: >
   Context propagation contract for the 8-phase Artisan contractor workflow.
@@ -133,6 +133,34 @@ phases:
           severity: advisory
           source_phase: scaffold
           description: "Per-file staleness classification (fresh/stale/unknown) from scaffold phase"
+        - name: lane_assignments
+          type: dict
+          severity: advisory
+          description: "Per-task lane assignments from compute_lanes(). Advisory — DESIGN falls back to flat iteration if absent."
+        - name: wave_assignments
+          type: dict
+          severity: advisory
+          description: "Per-task wave indices for lane-internal ordering."
+        - name: plan_document_text
+          type: string
+          severity: advisory
+          source_phase: plan
+          description: "Full plan document text from TRANSFORM phase for FOUNDATION prefix injection (REQ-PD-001)"
+        - name: complexity_dimensions
+          type: dict
+          severity: advisory
+          source_phase: plan
+          description: "Per-dimension complexity scores from ASSESS phase for depth calibration (REQ-PD-002)"
+        - name: onboarding_refine_suggestions
+          type: any
+          severity: advisory
+          source_phase: plan
+          description: "Structured REFINE triage suggestions for design elaboration (REQ-PD-006)"
+        - name: wave_metadata
+          type: dict
+          severity: advisory
+          source_phase: plan
+          description: "Wave execution metadata (wave_count, wave_summary, critical_path_length) for context accumulation (REQ-PD-008)"
     exit:
       required:
         - name: design_results
@@ -147,6 +175,18 @@ phases:
         - name: design_results.*.design_mode
           type: str
           description: "Per-task design mode: 'create' (new file) or 'update' (existing file). Default 'create' for backward compatibility."
+        - name: design_results.*.lane_index
+          type: int
+          description: "Lane index assigned to this task during DESIGN."
+        - name: design_results.*.wave_index
+          type: int
+          description: "Wave index used for lane-internal ordering."
+        - name: shared_file_manifest
+          type: dict
+          description: "Per-file map of contesting task IDs. Empty dict if no shared files."
+        - name: lane_conflicts
+          type: list
+          description: "Post-lane compatibility check results. Empty list if no conflicts."
 
   implement:
     description: "Test construction + code development"

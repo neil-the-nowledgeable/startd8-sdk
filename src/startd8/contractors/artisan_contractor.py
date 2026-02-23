@@ -163,6 +163,10 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "service_metadata", "plan_document_text",
     # IMP-8b / IMP-9c: REFINE forwarding fields for resume survival
     "onboarding_refine_suggestions", "refine_provenance",
+    # CCD: Context Correctness by Design — lane/manifest/collision data
+    "shared_file_manifest", "lane_to_file_mapping", "lane_conflicts",
+    "_design_lane_computation_skipped", "_design_lane_count",
+    "design_mode_summary",
 })
 
 

@@ -68,6 +68,7 @@ from startd8.contractors.artisan_contractor import (
     AbstractPhaseHandler,
     WorkflowPhase,
     _SAFE_TASK_ID_PATTERN,
+    compute_lanes,
     compute_wave_index_map,
     compute_wave_metadata,
     compute_waves,
@@ -429,6 +430,12 @@ class HandlerConfig:
     enable_prompt_caching: bool = False
     staging_dir: Optional[str] = None  # None = .startd8/staging/
     forensic_log_level: str = "INFO"  # "DEBUG" | "INFO" | "WARNING"
+    # CCD-203: Token budget for lane-peer design context injection
+    design_lane_peer_token_budget: int = 8000
+    # CCD-503: Collision resolution strategy ("warn" | "redesign" | "abort")
+    design_collision_strategy: str = "warn"
+
+    _VALID_COLLISION_STRATEGIES = frozenset({"warn", "redesign", "abort"})
 
     def __post_init__(self) -> None:
         if self.force_design and self.refine_design:
@@ -439,6 +446,12 @@ class HandlerConfig:
             raise ValueError(
                 f"forensic_log_level must be DEBUG, INFO, or WARNING; "
                 f"got {self.forensic_log_level!r}"
+            )
+        if self.design_collision_strategy not in self._VALID_COLLISION_STRATEGIES:
+            raise ValueError(
+                f"design_collision_strategy must be one of "
+                f"{sorted(self._VALID_COLLISION_STRATEGIES)}; "
+                f"got {self.design_collision_strategy!r}"
             )
 
     @classmethod
@@ -868,6 +881,193 @@ def _extract_design_target_files(
     return merged
 
 
+# ============================================================================
+# CCD: Context Correctness by Design helpers
+# ============================================================================
+
+# CCD-601/602: Canonical span attribute names for design-phase lane-awareness.
+# Changing these names breaks dashboard queries documented in
+# docs/design/artisan/plans/CCD_LAYER6_TEMPO_QUERIES.md
+_CCD_DESIGN_SPAN_ATTRS = frozenset({
+    "task.lane_index",
+    "task.lane_peer_count",
+    "task.shared_file_count",
+    "task.lane_prior_designs_count",
+    "task.lane_prior_designs_truncated",
+    "design.collision_severity",
+})
+
+
+def _normalize_target_path(path: str) -> str:
+    """Normalize a target file path for comparison (CCD-300)."""
+    import os.path
+    return os.path.normpath(path).replace("\\", "/")
+
+
+def build_shared_file_manifest(
+    tasks: list[SeedTask],
+) -> dict[str, list[str]]:
+    """Build mapping from target file paths to task IDs that target them.
+
+    Only files targeted by 2+ tasks are included (CCD-300).
+    """
+    file_to_tasks: dict[str, list[str]] = defaultdict(list)
+    for task in tasks:
+        for tf in (task.target_files or []):
+            normalized = _normalize_target_path(tf)
+            file_to_tasks[normalized].append(task.task_id)
+    return {
+        path: task_ids
+        for path, task_ids in file_to_tasks.items()
+        if len(task_ids) >= 2
+    }
+
+
+def compute_lane_to_file_mapping(
+    lanes: list[list[SeedTask]],
+    shared_file_manifest: dict[str, list[str]],
+) -> dict[int, list[str]]:
+    """For each lane, which shared files caused its formation (CCD-302)."""
+    mapping: dict[int, list[str]] = {}
+    for lane_idx, lane_tasks in enumerate(lanes):
+        lane_task_ids = {t.task_id for t in lane_tasks}
+        lane_files = [
+            fpath for fpath, contesting_ids in shared_file_manifest.items()
+            if len(lane_task_ids & set(contesting_ids)) >= 2
+        ]
+        if lane_files:
+            mapping[lane_idx] = sorted(lane_files)
+    return mapping
+
+
+def compute_critical_path_tasks(
+    tasks: list[SeedTask],
+    shared_file_manifest: dict[str, list[str]],
+    top_fraction: float = 0.20,
+) -> set[str]:
+    """Identify tasks with highest shared-file contention score (CCD-403).
+
+    Contention score = sum of (len(contesting_task_ids) - 1) across
+    all of a task's target files that appear in the manifest.
+    """
+    if not tasks or not shared_file_manifest:
+        return set()
+
+    scores: dict[str, int] = {}
+    for task in tasks:
+        score = 0
+        for tf in (task.target_files or []):
+            normalized = _normalize_target_path(tf)
+            contesting = shared_file_manifest.get(normalized, [])
+            score += max(0, len(contesting) - 1)
+        scores[task.task_id] = score
+
+    contested_scores = [s for s in scores.values() if s > 0]
+    if not contested_scores:
+        return set()
+
+    threshold_idx = max(0, int(len(contested_scores) * (1 - top_fraction)))
+    sorted_scores = sorted(contested_scores)
+    score_threshold = (
+        sorted_scores[threshold_idx]
+        if threshold_idx < len(sorted_scores)
+        else sorted_scores[-1]
+    )
+    return {
+        tid for tid, score in scores.items()
+        if score >= score_threshold and score > 0
+    }
+
+
+def _format_lane_peer_context(
+    lane_prior_designs: list[dict[str, Any]],
+    shared_file_manifest: dict[str, list[str]] | None,
+    current_task: SeedTask,
+) -> str:
+    """Format lane-peer designs with compatibility instruction (CCD-202)."""
+    if not lane_prior_designs:
+        return ""
+
+    lines = [
+        "=== LANE-PEER DESIGN CONTEXT ===",
+        "The following tasks share files with this task. Your design MUST be "
+        "compatible with their designs.\n",
+    ]
+    current_files = set(
+        _normalize_target_path(f) for f in (current_task.target_files or [])
+    )
+    for peer in lane_prior_designs:
+        tid = peer.get("task_id", "unknown")
+        title = peer.get("title", "")
+        doc = peer.get("design_document", "")
+
+        # Find shared files between current task and this peer
+        shared = []
+        if shared_file_manifest:
+            for fpath, contesting in shared_file_manifest.items():
+                if tid in contesting and fpath in current_files:
+                    shared.append(fpath)
+
+        lines.append(f"--- Peer: {tid} ({title}) ---")
+        if shared:
+            lines.append(f"  Shared files: {', '.join(sorted(shared))}")
+        lines.append(doc)
+        lines.append(f"--- End: {tid} ---\n")
+
+    lines.append("=== END LANE-PEER DESIGN CONTEXT ===")
+    return "\n".join(lines)
+
+
+def _apply_lane_peer_token_budget(
+    lane_prior_designs: list[dict[str, Any]],
+    budget_tokens: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Apply token budget guard to lane-peer designs (CCD-203).
+
+    Estimate tokens via chars / 4. When over budget, truncate oldest
+    peers to 300-char summaries (most recent keeps full doc).
+
+    Returns:
+        (designs, was_truncated) — designs with oldest truncated if needed.
+    """
+    if not lane_prior_designs or budget_tokens <= 0:
+        return lane_prior_designs, False
+
+    total_chars = sum(
+        len(d.get("design_document", "")) for d in lane_prior_designs
+    )
+    estimated_tokens = total_chars // 4
+
+    if estimated_tokens <= budget_tokens:
+        return lane_prior_designs, False
+
+    # Truncate oldest peers first, keep most recent full
+    result = list(lane_prior_designs)
+    was_truncated = False
+    for i in range(len(result) - 1):  # Skip last (most recent)
+        doc = result[i].get("design_document", "")
+        if len(doc) > 300:
+            result[i] = {
+                **result[i],
+                "design_document": doc[:300].split("\n")[0] + " [truncated]",
+            }
+            was_truncated = True
+            # Re-check budget
+            total_chars = sum(
+                len(d.get("design_document", "")) for d in result
+            )
+            if total_chars // 4 <= budget_tokens:
+                break
+
+    if was_truncated:
+        logger.warning(
+            "CCD-203: lane-peer token budget exceeded — truncated %d/%d older peers",
+            sum(1 for d in result[:-1] if "[truncated]" in d.get("design_document", "")),
+            len(result) - 1,
+        )
+    return result, was_truncated
+
+
 def _topological_sort(tasks: list[SeedTask]) -> list[SeedTask]:
     """Sort tasks by dependency order (tasks with no deps first).
 
@@ -1280,6 +1480,14 @@ class PlanPhaseHandler(AbstractPhaseHandler):
             "example_artifacts", {}
         )
 
+        # REQ-PD-002: Forward complexity data from seed to context
+        _complexity = seed_data.get("complexity") or {}
+        context["complexity_dimensions"] = _complexity.get("dimensions", {})
+        context["complexity_composite"] = _complexity.get("composite")
+
+        # REQ-PD-008: Forward wave_metadata into context
+        context["wave_metadata"] = wave_meta
+
         # -- Phase 2 data flow fixes: extract ContextCore enrichment --
         _artifacts = seed_data.get("artifacts") or {}
 
@@ -1652,6 +1860,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         inv_open_questions: list[dict[str, Any]] | None = None,
         inv_dependency_graph: dict[str, list[str]] | None = None,
         scaffold_existing_files: list[str] | None = None,
+        # CCD-204: Lane-aware design context parameters
+        lane_prior_designs: list[dict[str, Any]] | None = None,
+        shared_file_manifest: dict[str, list[str]] | None = None,
+        wave_index: int | None = None,
+        lane_peer_token_budget: int = 8000,
+        # CCD-303: Task title lookup for contested file annotations
+        task_title_lookup: dict[str, str] | None = None,
+        # CCD-503: Collision resolution context for redesign
+        lane_collision_context: str | None = None,
+        # REQ-PD-002/007/008/009: Bridge context from Plan Ingestion
+        bridge_context: dict[str, Any] | None = None,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -1725,11 +1944,58 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if import_conventions:
             additional_context["import_conventions"] = ", ".join(import_conventions[:5])
 
-        # Cross-task context from prior designs
+        # CCD-201: Two-tier context model
+        # Tier 1: Lane-peer designs (full documents)
+        if lane_prior_designs:
+            budgeted, _truncated = _apply_lane_peer_token_budget(
+                lane_prior_designs, lane_peer_token_budget,
+            )
+            additional_context["lane_peer_designs"] = _format_lane_peer_context(
+                budgeted, shared_file_manifest, task,
+            )
+
+        # Tier 2: Cross-lane summaries (exclude lane peers to avoid duplication)
         if prior_design_summaries:
-            additional_context["prior_designs"] = (
-                "Previously designed tasks:\n"
-                + "\n".join(f"- {s}" for s in prior_design_summaries[-5:])
+            lane_peer_ids = {d["task_id"] for d in (lane_prior_designs or [])}
+            cross_lane = [
+                s for s in prior_design_summaries
+                if not any(s.startswith(f"{pid} (") for pid in lane_peer_ids)
+            ]
+            if cross_lane:
+                additional_context["prior_designs"] = (
+                    "Previously designed tasks (other lanes):\n"
+                    + "\n".join(f"- {s}" for s in cross_lane[-5:])
+                )
+
+        # CCD-303: Contested files prompt injection
+        if shared_file_manifest and task.target_files:
+            task_contested: list[str] = []
+            for tf in task.target_files:
+                normalized_tf = _normalize_target_path(tf)
+                contesting_ids = shared_file_manifest.get(normalized_tf)
+                if contesting_ids:
+                    others = [tid for tid in contesting_ids if tid != task.task_id]
+                    if others:
+                        other_descs = [
+                            f"{tid} ({(task_title_lookup or {}).get(tid, '')})"
+                            for tid in others
+                        ]
+                        task_contested.append(
+                            f"  - `{tf}`: {', '.join(other_descs)}"
+                        )
+            if task_contested:
+                additional_context["contested_files"] = (
+                    "SHARED FILE WARNING: These files are targeted by multiple "
+                    "tasks. Coordinate your design with theirs.\n"
+                    + "\n".join(task_contested)
+                )
+
+        # CCD-503: Inject collision resolution context when redesigning
+        if lane_collision_context:
+            additional_context["collision_resolution"] = (
+                "DESIGN COLLISION ALERT: Your previous design conflicted with "
+                "another task in the same lane. Please redesign with these "
+                "constraints:\n" + lane_collision_context
             )
 
         # Calibration: depth guidance
@@ -1812,18 +2078,59 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 if task_suggestions:
                     additional_context["refine_suggestions"] = task_suggestions
 
-        # Mottainai: inject plan architecture and risks sections
+        # Mottainai + REQ-PD-001: inject plan architecture, risks, and
+        # verification strategy with FOUNDATION prefix instructing the LLM
+        # to elaborate rather than regenerate from scratch.
+        _FOUNDATION_PREFIX = (
+            "FOUNDATION (from Plan Ingestion TRANSFORM — elaborate and "
+            "add implementation detail, do NOT regenerate from scratch):\n"
+        )
         if inv_plan_document:
             arch_section = DesignPhaseHandler._extract_plan_section(
                 inv_plan_document, "Architecture",
             )
-            if arch_section:
-                additional_context["plan_architecture"] = arch_section
             risk_section = DesignPhaseHandler._extract_plan_section(
                 inv_plan_document, "Risk",
             )
+            verification_section = DesignPhaseHandler._extract_plan_section(
+                inv_plan_document, "Verification",
+            )
+
+            # REQ-PD-001: enforce 6000-char combined cap with priority
+            # truncation: architecture (highest) > risk > verification
+            _foundation_budget = 6000
+            _foundation_parts: list[tuple[str, str]] = []
+            if arch_section:
+                _foundation_parts.append(("plan_architecture", arch_section))
             if risk_section:
-                additional_context["plan_risks"] = risk_section
+                _foundation_parts.append(("plan_risks", risk_section))
+            if verification_section:
+                _foundation_parts.append(
+                    ("plan_verification_strategy", verification_section)
+                )
+
+            _remaining = _foundation_budget
+            for _fkey, _ftext in _foundation_parts:
+                if _remaining <= 0:
+                    break
+                truncated = _ftext[:_remaining]
+                if len(_ftext) > _remaining:
+                    truncated += "\n... (truncated)"
+                additional_context[_fkey] = _FOUNDATION_PREFIX + truncated
+                _remaining -= len(truncated)
+
+        # REQ-PD-004: inject api_signatures and protocol from seed task
+        if task.api_signatures:
+            additional_context["api_signatures"] = (
+                "PLAN-SPECIFIED API SIGNATURES (preserve exactly):\n"
+                + "\n".join(f"- {sig}" for sig in task.api_signatures)
+            )
+        if task.protocol:
+            additional_context["transport_protocol"] = (
+                f"Transport protocol constraint: {task.protocol}. "
+                "All network interfaces, health checks, and client "
+                "configurations MUST use this protocol."
+            )
 
         # Mottainai: calibration hints override depth_guidance when not already set.
         # When artifact_types_addressed is empty (Gap 6 / Phase 2.1), fall back
@@ -1910,6 +2217,102 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             else cal.get("max_output_tokens")
         )
 
+        # ── REQ-PD-002/007/008/009: Process bridge_context ──
+        _bc = bridge_context or {}
+
+        # REQ-PD-002: Complexity-aware depth calibration
+        _complexity_dims = _bc.get("complexity_dimensions", {})
+        _complexity_composite = _bc.get("complexity_composite")
+        if _complexity_dims:
+            _high_dims = [
+                (dim, score) for dim, score in _complexity_dims.items()
+                if isinstance(score, (int, float)) and score > 70
+            ]
+            if _high_dims:
+                _guidance_parts = [
+                    f"- {dim} (score {score}): provide extra detail"
+                    for dim, score in _high_dims
+                ]
+                additional_context["complexity_guidance"] = (
+                    "COMPLEXITY ALERT — these dimensions scored high:\n"
+                    + "\n".join(_guidance_parts)
+                )
+        if (
+            _complexity_composite is not None
+            and _complexity_composite > 60
+            and not depth_guidance
+        ):
+            depth_guidance = "comprehensive"
+
+        # REQ-PD-007: Dependency-ordered cross-task context
+        _dep_designs = _bc.get("dependency_designs", {})
+        if _dep_designs:
+            _dep_parts: list[str] = []
+            for _dep_id, _dep_summary in list(_dep_designs.items())[:3]:
+                _dep_parts.append(
+                    f"- {_dep_id}: {_dep_summary[:500]}"
+                )
+            if _dep_parts:
+                additional_context["dependency_designs"] = (
+                    "DEPENDENCY DESIGNS (tasks this task depends on):\n"
+                    + "\n".join(_dep_parts)
+                )
+
+        # REQ-PD-008: Wave-aware context accumulation
+        _wave_meta = _bc.get("wave_metadata")
+        _wave_idx = _bc.get("wave_index")
+        if _wave_meta and _wave_idx is not None:
+            _wave_count = _wave_meta.get("wave_count", 1)
+            additional_context["wave_context"] = (
+                f"Wave {_wave_idx + 1} of {_wave_count}. "
+                "Tasks in the same wave execute in parallel — avoid "
+                "design decisions that create implicit ordering dependencies "
+                "with same-wave peers."
+            )
+
+        # REQ-PD-009: Staleness-aware design mode
+        _staleness = _bc.get("staleness_classification", {})
+        if _staleness and task.target_files:
+            _stale_files = [
+                f for f in task.target_files
+                if _staleness.get(f) == "stale"
+            ]
+            _current_files = [
+                f for f in task.target_files
+                if _staleness.get(f) == "current"
+            ]
+            if _stale_files:
+                additional_context["staleness_guidance"] = (
+                    "STALE FILES (older than plan seed): "
+                    + ", ".join(_stale_files)
+                    + ". Focus design on delta changes needed."
+                )
+            elif _current_files:
+                additional_context["staleness_guidance"] = (
+                    "CURRENT FILES (newer than plan seed): "
+                    + ", ".join(_current_files)
+                    + ". Minimize changes — these files are up to date."
+                )
+
+        # REQ-PD-011: Plan-delta indicator
+        if task.design_doc_sections and cal.get("sections"):
+            _plan_sections = set(task.design_doc_sections)
+            _cal_sections = set(cal["sections"])
+            if _plan_sections != _cal_sections:
+                additional_context["plan_delta"] = (
+                    "NOTE: Task design_doc_sections differ from calibration "
+                    "sections. Task sections: "
+                    + ", ".join(sorted(_plan_sections))
+                    + ". Calibration sections: "
+                    + ", ".join(sorted(_cal_sections))
+                )
+        if task.api_signatures:
+            additional_context["api_signature_verification"] = (
+                "VERIFY: Implementation must match these plan-specified "
+                "API signatures exactly: "
+                + "; ".join(task.api_signatures)
+            )
+
         # B-6: Compute edit_mode_hint from filesystem ground truth
         _scaffold_existing = set(scaffold_existing_files or [])
         _existing_targets = [
@@ -1920,6 +2323,15 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             _edit_mode_hint = "edit"
         elif task.target_files:
             _edit_mode_hint = "create"
+
+        # REQ-PD-005: Compute has_plan_foundation flag
+        _foundation_keys = {
+            "plan_architecture", "plan_risks", "plan_verification_strategy",
+            "refine_suggestions", "complexity_guidance",
+        }
+        _has_plan_foundation = bool(
+            _foundation_keys & set(additional_context.keys())
+        )
 
         return FeatureContext(
             feature_name=task.title,
@@ -1934,6 +2346,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             requirements_text=task.requirements_text,
             edit_mode_hint=_edit_mode_hint,
             existing_target_files=_existing_targets,
+            has_plan_foundation=_has_plan_foundation,
         )
 
     @staticmethod
@@ -2141,6 +2554,84 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         logger.info("DESIGN phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
+        # REQ-PD-010: Source checksum drift detection (advisory only)
+        _source_checksum = context.get("source_checksum")
+        _source_checksum_status = "unavailable"
+        if _source_checksum:
+            # Try to find a reference file to verify against
+            _ref_file: Path | None = None
+            for _candidate_dir in [
+                Path(self.output_dir) if self.output_dir else None,
+                Path(context.get("enriched_seed_path", "")).parent if context.get("enriched_seed_path") else None,
+            ]:
+                if _candidate_dir is None:
+                    continue
+                for _fname in (".contextcore.yaml", "onboarding-metadata.json"):
+                    _cpath = _candidate_dir / _fname
+                    if _cpath.exists():
+                        _ref_file = _cpath
+                        break
+                if _ref_file:
+                    break
+
+            if _ref_file:
+                try:
+                    _ref_hash = hashlib.sha256(
+                        _ref_file.read_bytes()
+                    ).hexdigest()
+                    if _ref_hash == _source_checksum:
+                        _source_checksum_status = "match"
+                        logger.info(
+                            "DESIGN: source_checksum MATCH — provenance intact "
+                            "(ref=%s)", _ref_file.name,
+                        )
+                    else:
+                        _source_checksum_status = "mismatch"
+                        logger.warning(
+                            "DESIGN: source_checksum MISMATCH — reference file "
+                            "%s may have changed since plan ingestion "
+                            "(expected %s..., got %s...)",
+                            _ref_file.name,
+                            _source_checksum[:16],
+                            _ref_hash[:16],
+                        )
+                except OSError:
+                    logger.debug(
+                        "DESIGN: could not read reference file for checksum verification"
+                    )
+            else:
+                logger.debug(
+                    "DESIGN: no reference file found for source_checksum verification"
+                )
+        else:
+            logger.debug("DESIGN: source_checksum not present in context")
+        context["_source_checksum_status"] = _source_checksum_status
+
+        # REQ-PD-013: Chain status logging — assess Plan→Design data chain
+        _chain_signals = {
+            "plan_document_text": bool(context.get("plan_document_text")),
+            "complexity_dimensions": bool(context.get("complexity_dimensions")),
+            "complexity_composite": context.get("complexity_composite") is not None,
+            "wave_metadata": bool(context.get("wave_metadata")),
+            "architectural_context": bool(context.get("architectural_context")),
+            "design_calibration": bool(context.get("design_calibration")),
+            "source_checksum": bool(context.get("source_checksum")),
+        }
+        _chain_present = sum(1 for v in _chain_signals.values() if v)
+        _chain_total = len(_chain_signals)
+        if _chain_present == _chain_total:
+            _pi_design_chain_status = "INTACT"
+        elif _chain_present > 0:
+            _pi_design_chain_status = "DEGRADED"
+        else:
+            _pi_design_chain_status = "BROKEN"
+        context["_pi_design_chain_status"] = _pi_design_chain_status
+        logger.info(
+            "DESIGN: Plan→Design chain status: %s (%d/%d signals present: %s)",
+            _pi_design_chain_status, _chain_present, _chain_total,
+            {k for k, v in _chain_signals.items() if v},
+        )
+
         design_results: dict[str, dict[str, Any]] = {}
         total_cost = 0.0
         tasks_designed = 0
@@ -2208,6 +2699,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         calibration_map = context.get("design_calibration", {})
         prior_summaries: list[str] = []
         previous_task_started_mono: Optional[float] = None
+        # REQ-PD-007: Completed design summaries for dependency injection
+        completed_designs: dict[str, str] = {}
+        # REQ-PD-008: Wave boundary tracking
+        _prev_wave_index: int | None = None
 
         # Mottainai: load artifact inventory from export-stage provenance
         inv_derivation_rules: dict[str, Any] | None = None
@@ -2332,7 +2827,116 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             inv_refine_suggestions = inv_plan_document
             logger.info("DESIGN: refine_suggestions derived from plan document text")
 
-        for idx, task in enumerate(tasks, start=1):
+        # ==============================================================
+        # CCD-100: Compute lane assignments at DESIGN time
+        # ==============================================================
+        _design_lanes: list[list[SeedTask]] | None = None
+        _lane_assignments: dict[str, int] = {}
+        try:
+            _design_lanes = compute_lanes(tasks)
+            for _lane_idx, _lane_tasks in enumerate(_design_lanes):
+                for _lt in _lane_tasks:
+                    _lane_assignments[_lt.task_id] = _lane_idx
+            logger.info(
+                "DESIGN: computed %d lane(s) for %d tasks",
+                len(_design_lanes), len(tasks),
+            )
+        except Exception as _lane_exc:
+            # CCD-104: Graceful fallback
+            logger.warning(
+                "DESIGN: compute_lanes() failed — falling back to flat "
+                "iteration: %s",
+                _lane_exc,
+            )
+            _design_lanes = None
+
+        # CCD-603: Lane computation state flags for FINALIZE coherence summary
+        context["_design_lane_computation_skipped"] = _design_lanes is None
+        context["_design_lane_count"] = (
+            len(_design_lanes) if _design_lanes else 0
+        )
+
+        # CCD-101: Wave-sort tasks within each lane
+        if _design_lanes is not None:
+            for _li, _lane in enumerate(_design_lanes):
+                _design_lanes[_li] = sorted(
+                    _lane,
+                    key=lambda t: (
+                        t.wave_index if t.wave_index is not None else float("inf"),
+                        t.task_id,
+                    ),
+                )
+
+        # CCD-300: Build shared-file manifest
+        shared_file_manifest: dict[str, list[str]] = {}
+        try:
+            shared_file_manifest = build_shared_file_manifest(tasks)
+            if shared_file_manifest:
+                logger.info(
+                    "DESIGN: %d contested file(s) across %d tasks",
+                    len(shared_file_manifest),
+                    len({tid for tids in shared_file_manifest.values() for tid in tids}),
+                )
+        except Exception as exc:
+            logger.warning("DESIGN: manifest computation failed: %s", exc)
+            shared_file_manifest = {}
+
+        # CCD-302: Lane-to-file mapping
+        lane_to_file_mapping: dict[int, list[str]] = {}
+        if _design_lanes is not None and shared_file_manifest:
+            lane_to_file_mapping = compute_lane_to_file_mapping(
+                _design_lanes, shared_file_manifest,
+            )
+
+        # CCD-400: Validate wave_index populated at DESIGN time
+        _tasks_without_wave = [t.task_id for t in tasks if t.wave_index is None]
+        if _tasks_without_wave:
+            logger.warning(
+                "DESIGN: %d task(s) have no wave_index: %s",
+                len(_tasks_without_wave),
+                ", ".join(_tasks_without_wave[:10]),
+            )
+
+        # CCD-403: Critical-path task detection
+        _critical_task_ids: set[str] = set()
+        try:
+            _critical_task_ids = compute_critical_path_tasks(
+                tasks, shared_file_manifest,
+            )
+            if _critical_task_ids:
+                logger.info(
+                    "DESIGN: %d critical-path task(s): %s",
+                    len(_critical_task_ids),
+                    ", ".join(sorted(_critical_task_ids)),
+                )
+        except Exception as _crit_exc:
+            logger.warning("DESIGN: critical-path detection failed: %s", _crit_exc)
+
+        # CCD-200: Lane-peer design accumulator
+        lane_prior_designs: list[dict[str, Any]] = []
+        # CCD-303: Task title lookup for contested file annotations
+        _task_title_lookup = {t.task_id: t.title for t in tasks}
+
+        # CCD-102: Lane-sequential design iteration
+        _current_lane_idx: int = -1
+        if _design_lanes is not None:
+            _iteration_order: list[tuple[int, SeedTask, int]] = []
+            _global_idx = 0
+            for _li, _lane in enumerate(_design_lanes):
+                for _task in _lane:
+                    _global_idx += 1
+                    _iteration_order.append((_global_idx, _task, _li))
+        else:
+            # CCD-104: Flat iteration fallback
+            _iteration_order = [
+                (i, t, 0) for i, t in enumerate(tasks, start=1)
+            ]
+
+        for idx, task, _task_lane_idx in _iteration_order:
+            # CCD-200: Reset lane-peer accumulator at lane boundary
+            if _task_lane_idx != _current_lane_idx:
+                lane_prior_designs = []
+                _current_lane_idx = _task_lane_idx
             _task_span_cm = _phase_tracer.start_as_current_span(
                 f"task.{task.task_id}",
                 attributes={
@@ -2341,6 +2945,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "task.domain": task.domain or "",
                     "task.phase": "design",
                     "task.target_files": ",".join(task.target_files[:5]),
+                    # CCD-601: lane-awareness attributes
+                    "task.lane_index": _lane_assignments.get(task.task_id, 0),
+                    "task.lane_peer_count": (
+                        len(_design_lanes[_lane_assignments[task.task_id]]) - 1
+                        if _design_lanes and task.task_id in _lane_assignments
+                        else -1
+                    ),
+                    "task.shared_file_count": sum(
+                        1 for tf in task.target_files
+                        if _normalize_target_path(tf) in shared_file_manifest
+                    ) if shared_file_manifest else 0,
                 },
             )
             _task_span = _task_span_cm.__enter__()
@@ -2406,9 +3021,29 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     # Feed into cross-task progressive context
                     doc_text = prior["design_document"]
                     first_line = doc_text[:300].split("\n")[0]
-                    prior_summaries.append(
-                        f"{task.task_id} ({task.title}): {first_line}"
+                    summary = f"{task.task_id} ({task.title}): {first_line}"
+                    prior_summaries.append(summary)
+                    # REQ-PD-007: Track completed designs for dependency injection
+                    completed_designs[task.task_id] = summary
+                    # CCD-200/205: Lane-peer design accumulation
+                    lane_prior_designs.append({
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "design_document": doc_text,
+                    })
+                    # CCD-401: Wave/lane metadata in design results
+                    design_results[task.task_id]["wave_index"] = task.wave_index
+                    design_results[task.task_id]["lane_index"] = _lane_assignments.get(task.task_id, 0)
+                    design_results[task.task_id]["lane_peer_count"] = (
+                        len(_design_lanes[_lane_assignments[task.task_id]]) - 1
+                        if _design_lanes and task.task_id in _lane_assignments
+                        else len(tasks) - 1
                     )
+                    design_results[task.task_id]["shared_file_count"] = len([
+                        f for f in task.target_files
+                        if _normalize_target_path(f) in shared_file_manifest
+                    ])
+                    design_results[task.task_id]["critical_path"] = task.task_id in _critical_task_ids
 
                     # Copy design doc to current output_dir if configured
                     if self.output_dir:
@@ -2459,6 +3094,48 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 _task_span_cm.__exit__(None, None, None)
                 continue
 
+            # REQ-PD-008: Wave boundary logging
+            if task.wave_index is not None and task.wave_index != _prev_wave_index:
+                if _prev_wave_index is not None:
+                    _wave_task_count = sum(
+                        1 for _, t, _ in _iteration_order
+                        if t.wave_index == task.wave_index
+                    )
+                    logger.info(
+                        "DESIGN: wave boundary %d → %d (%d tasks in wave %d)",
+                        _prev_wave_index, task.wave_index,
+                        _wave_task_count, task.wave_index,
+                    )
+                _prev_wave_index = task.wave_index
+
+            # REQ-PD-007: Build dependency designs from completed_designs
+            _dep_designs: dict[str, str] = {}
+            for _dep_id in (task.depends_on or []):
+                if _dep_id in completed_designs:
+                    _dep_designs[_dep_id] = completed_designs[_dep_id]
+                else:
+                    logger.debug(
+                        "DESIGN: task %s depends on %s but design not yet "
+                        "available (may be in a later wave or failed)",
+                        task.task_id, _dep_id,
+                    )
+
+            # REQ-PD-002/007/008/009: Build bridge_context
+            _bridge_context: dict[str, Any] = {}
+            if context.get("complexity_dimensions"):
+                _bridge_context["complexity_dimensions"] = context["complexity_dimensions"]
+            if context.get("complexity_composite") is not None:
+                _bridge_context["complexity_composite"] = context["complexity_composite"]
+            if _dep_designs:
+                _bridge_context["dependency_designs"] = _dep_designs
+            _scaffold = context.get("scaffold", {})
+            if _scaffold.get("staleness_classification"):
+                _bridge_context["staleness_classification"] = _scaffold["staleness_classification"]
+            if context.get("wave_metadata"):
+                _bridge_context["wave_metadata"] = context["wave_metadata"]
+            if task.wave_index is not None:
+                _bridge_context["wave_index"] = task.wave_index
+
             # Real-mode: run design documentation phase per task
             task_calibration = calibration_map.get(task.task_id, {})
             feature_context = self._task_to_feature_context(
@@ -2480,6 +3157,13 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 inv_open_questions=context.get("onboarding_open_questions"),
                 inv_dependency_graph=context.get("onboarding_dependency_graph"),
                 scaffold_existing_files=context.get("scaffold", {}).get("existing_target_files", []),
+                # CCD-204: Lane-aware design context
+                lane_prior_designs=lane_prior_designs,
+                shared_file_manifest=shared_file_manifest,
+                wave_index=task.wave_index,
+                lane_peer_token_budget=self.config.design_lane_peer_token_budget,
+                task_title_lookup=_task_title_lookup,
+                bridge_context=_bridge_context if _bridge_context else None,
             )
 
             # Snapshot cost before this task
@@ -2539,6 +3223,60 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     first_line = doc_text[:300].split("\n")[0]
                     summary = f"{task.task_id} ({task.title}): {first_line}"
                     prior_summaries.append(summary)
+                    # REQ-PD-007: Track completed designs for dependency injection
+                    completed_designs[task.task_id] = summary
+                    # CCD-200/205: Lane-peer design accumulation
+                    lane_prior_designs.append({
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "design_document": doc_text,
+                    })
+                    # CCD-401: Wave/lane metadata in design results
+                    design_results[task.task_id]["wave_index"] = task.wave_index
+                    design_results[task.task_id]["lane_index"] = _lane_assignments.get(task.task_id, 0)
+                    design_results[task.task_id]["lane_peer_count"] = (
+                        len(_design_lanes[_lane_assignments[task.task_id]]) - 1
+                        if _design_lanes and task.task_id in _lane_assignments
+                        else len(tasks) - 1
+                    )
+                    design_results[task.task_id]["shared_file_count"] = len([
+                        f for f in task.target_files
+                        if _normalize_target_path(f) in shared_file_manifest
+                    ])
+                    design_results[task.task_id]["critical_path"] = task.task_id in _critical_task_ids
+
+                    # REQ-PD-012/014: Foundation coverage + provenance
+                    _foundation_field_keys = [
+                        "plan_architecture", "plan_risks",
+                        "plan_verification_strategy", "refine_suggestions",
+                        "complexity_guidance", "api_signatures",
+                        "transport_protocol", "dependency_designs",
+                        "wave_context", "staleness_guidance",
+                    ]
+                    _fc_additional = feature_context.additional_context
+                    _fc_count = sum(
+                        1 for k in _foundation_field_keys if k in _fc_additional
+                    )
+                    # +1 for requirements_text
+                    if feature_context.requirements_text:
+                        _fc_count += 1
+                    _foundation_coverage = _fc_count / 11.0
+                    design_results[task.task_id]["foundation_coverage"] = _foundation_coverage
+                    if _foundation_coverage < 0.3:
+                        logger.warning(
+                            "DESIGN: task %s foundation_coverage=%.1f%% (<30%%)",
+                            task.task_id, _foundation_coverage * 100,
+                        )
+                    # REQ-PD-014: Foundation provenance
+                    design_results[task.task_id]["foundation_provenance"] = {
+                        "chain_status": context.get("_pi_design_chain_status", "unknown"),
+                        "fields_consumed": [
+                            k for k in _foundation_field_keys if k in _fc_additional
+                        ] + (["requirements_text"] if feature_context.requirements_text else []),
+                        "foundation_coverage": _foundation_coverage,
+                        "source_checksum_status": context.get("_source_checksum_status", "unavailable"),
+                        "complexity_composite": context.get("complexity_composite"),
+                    }
 
                     # Write design doc to output_dir if configured
                     if self.output_dir:
@@ -2553,6 +3291,14 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     _task_span.set_attribute("task.cost", task_cost)
                     _task_span.set_attribute("task.attempts", _attempt + 1)
                     _task_span.set_attribute("task.status", "designed")
+                    # CCD-601: lane-peer context injection attributes
+                    _task_span.set_attribute(
+                        "task.lane_prior_designs_count",
+                        len(lane_prior_designs) - 1 if lane_prior_designs else 0,
+                    )
+                    _task_span.set_attribute(
+                        "task.lane_prior_designs_truncated", False,
+                    )
                     break  # success — exit retry loop
 
                 except Exception as exc:
@@ -2593,7 +3339,48 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             # Close the per-task span after the retry loop completes
             _task_span_cm.__exit__(None, None, None)
 
+        # REQ-PD-015: Artifact inventory extension — aggregate foundation stats
+        _tasks_with_foundation = sum(
+            1 for r in design_results.values()
+            if isinstance(r, dict) and r.get("foundation_coverage", 0) > 0
+        )
+        _tasks_without_foundation = sum(
+            1 for r in design_results.values()
+            if isinstance(r, dict) and r.get("foundation_coverage", 0) == 0
+            and r.get("status") not in ("env_blocked", "dry_run_skipped", "design_failed")
+        )
+        _coverages = [
+            r["foundation_coverage"]
+            for r in design_results.values()
+            if isinstance(r, dict) and "foundation_coverage" in r
+        ]
+        _mean_coverage = (
+            sum(_coverages) / len(_coverages) if _coverages else 0.0
+        )
+        # Collect all consumed fields across tasks
+        _all_fields: set[str] = set()
+        for r in design_results.values():
+            if isinstance(r, dict):
+                prov = r.get("foundation_provenance", {})
+                if isinstance(prov, dict):
+                    _all_fields.update(prov.get("fields_consumed", []))
+
+        _inventory_entry = {
+            "phase": "design",
+            "bridge": "plan_to_design",
+            "tasks_with_foundation": _tasks_with_foundation,
+            "tasks_without_foundation": _tasks_without_foundation,
+            "mean_foundation_coverage": round(_mean_coverage, 3),
+            "fields_consumed_summary": sorted(_all_fields),
+            "chain_status": context.get("_pi_design_chain_status", "unknown"),
+        }
+        context.setdefault("_artifact_inventory", []).append(_inventory_entry)
+
         context["design_results"] = design_results
+        # CCD-301: Persist shared-file manifest in context
+        context["shared_file_manifest"] = shared_file_manifest
+        # CCD-302: Lane-to-file mapping
+        context["lane_to_file_mapping"] = lane_to_file_mapping
 
         # B-6: Derive design_mode_summary from filesystem ground truth
         # (scaffold.existing_target_files) instead of design iteration status.
@@ -2623,6 +3410,56 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             else:
                 context["design_mode_summary"][tid] = "create"
 
+        # CCD-500: Post-lane compatibility check
+        _lane_conflicts: list[dict[str, Any]] = []
+        if _design_lanes is not None and shared_file_manifest:
+            try:
+                from startd8.contractors.design_collision import (
+                    CollisionSeverity,
+                    check_lane_collisions,
+                )
+                for _li, _lane_tasks in enumerate(_design_lanes):
+                    _lc = check_lane_collisions(
+                        lane_index=_li,
+                        lane_tasks=_lane_tasks,
+                        design_results=design_results,
+                        shared_file_manifest=shared_file_manifest,
+                        design_mode_summary=context["design_mode_summary"],
+                    )
+                    _lane_conflicts.append(_lc.to_dict())
+
+                # CCD-503: Apply collision resolution strategy
+                _conflicting_lanes = [
+                    lc for lc in _lane_conflicts
+                    if lc.get("status") == "CONFLICTING"
+                ]
+                if _conflicting_lanes:
+                    _strategy = self.config.design_collision_strategy
+                    if _strategy == "warn":
+                        logger.warning(
+                            "DESIGN CCD-503 [warn]: %d lane(s) have CONFLICTING designs",
+                            len(_conflicting_lanes),
+                        )
+                    elif _strategy == "abort":
+                        logger.error(
+                            "DESIGN CCD-503 [abort]: marking %d conflicting lane(s) "
+                            "as design_failed",
+                            len(_conflicting_lanes),
+                        )
+                        for _clc in _conflicting_lanes:
+                            for _tid in _clc.get("task_ids", []):
+                                design_results[_tid] = {
+                                    **design_results.get(_tid, {}),
+                                    "status": "design_failed",
+                                    "error": (
+                                        f"CCD-503 abort: design collision in lane "
+                                        f"{_clc['lane_index']}"
+                                    ),
+                                }
+            except ImportError:
+                logger.debug("DESIGN: design_collision module not available — skipping")
+        context["lane_conflicts"] = _lane_conflicts
+
         # Context contract: validate DESIGN output model
         DesignPhaseOutput(design_results=context["design_results"])
 
@@ -2640,6 +3477,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     scaffold=context.get("scaffold", {}),
                     source_checksum=context.get("source_checksum"),
                     design_mode_summary=context.get("design_mode_summary", {}),
+                    shared_file_manifest=shared_file_manifest,
                 )
                 logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
             except (OSError, ValueError, TypeError) as exc:
@@ -2937,6 +3775,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         from startd8.contractors.artisan_phases.self_consistency import (
             validate_placeholder_detection,
             validate_import_dependency,
+            validate_intra_project_imports,
             validate_proto_field_references,
             validate_protocol_fidelity,
             validate_dockerfile_coherence,
@@ -2968,9 +3807,10 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 # AR-146: Placeholder detection (all files)
                 task_issues.extend(validate_placeholder_detection(code, enrichment))
 
-                # AR-143, AR-145: Python-specific validators
+                # AR-143, AR-145, AR-150: Python-specific validators
                 if rel_path.endswith(".py"):
                     task_issues.extend(validate_import_dependency(code, enrichment))
+                    task_issues.extend(validate_intra_project_imports(code, enrichment))
                     task_issues.extend(validate_proto_field_references(code, enrichment))
 
                 # AR-144: Protocol fidelity (with service_metadata)
@@ -5696,6 +6536,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
             "no_substring_tag_matching",
             "placeholder_detection",
             "import_dependency",
+            "intra_project_imports",
             "proto_field_references",
         }
         if validator_name in enrichment_validators:
@@ -7827,6 +8668,10 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                 ),
                 "status": summary.get("status", "unknown"),
             },
+            # CCD-603: Design coherence data at manifest root
+            "design_coherence": summary.get(
+                "design_coherence", {"status": "NOT_COMPUTED"},
+            ),
         }
 
         manifest_path = output_dir / "generation-manifest.json"
@@ -7844,6 +8689,61 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
     # ------------------------------------------------------------------
 
     @staticmethod
+    @staticmethod
+    def _build_design_coherence_summary(
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Build design coherence summary for generation-manifest.json (CCD-603)."""
+        lane_conflicts: list[dict[str, Any]] = context.get("lane_conflicts", [])
+        lane_to_file_mapping: dict[int, list[str]] = context.get(
+            "lane_to_file_mapping", {},
+        )
+        shared_file_manifest: dict[str, list[str]] = context.get(
+            "shared_file_manifest", {},
+        )
+
+        if context.get("_design_lane_computation_skipped", False):
+            return {
+                "status": "NOT_COMPUTED",
+                "reason": "lane computation fell back to flat iteration",
+            }
+
+        total_lanes = context.get("_design_lane_count", 0)
+        shared_file_lanes = len(lane_to_file_mapping)
+
+        coherent_lanes = sum(
+            1 for lc in lane_conflicts if lc.get("status") == "COHERENT"
+        )
+        warning_lanes = sum(
+            1 for lc in lane_conflicts if lc.get("status") == "WARNING"
+        )
+        conflicting_lanes = sum(
+            1 for lc in lane_conflicts if lc.get("status") == "CONFLICTING"
+        )
+
+        lane_details: list[dict[str, Any]] = []
+        for lc in lane_conflicts:
+            lane_idx = lc.get("lane_index")
+            if lane_idx is None:
+                continue
+            shared_files = lane_to_file_mapping.get(lane_idx, [])
+            lane_details.append({
+                "lane_index": lane_idx,
+                "task_ids": lc.get("task_ids", []),
+                "shared_files": shared_files,
+                "status": lc.get("status", "COHERENT"),
+            })
+
+        return {
+            "total_lanes": total_lanes,
+            "shared_file_lanes": shared_file_lanes,
+            "coherent_lanes": coherent_lanes,
+            "warning_lanes": warning_lanes,
+            "conflicting_lanes": conflicting_lanes,
+            "shared_file_count": len(shared_file_manifest),
+            "lane_details": lane_details,
+        }
+
     def _count_gate3b_by_severity(
         gate3b: dict[str, list[dict[str, Any]]],
     ) -> dict[str, int]:
@@ -8008,6 +8908,9 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                 logger.error(error_msg)
                 summary["status"] = "failed"
                 summary["strict_validation_error"] = error_msg
+
+        # CCD-603: Design coherence summary
+        summary["design_coherence"] = self._build_design_coherence_summary(context)
 
         # Write report and manifest
         if self.output_dir and not dry_run:

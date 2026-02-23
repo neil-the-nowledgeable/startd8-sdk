@@ -154,6 +154,8 @@ class HandoffData:
     coverage_gaps: list[str] = field(default_factory=list)
     # B-6: Per-task edit mode classification ("create" | "update" | "skipped")
     design_mode_summary: dict[str, str] = field(default_factory=dict)
+    # CCD-301: Shared-file manifest (file_path → list of contesting task_ids)
+    shared_file_manifest: dict[str, list[str]] = field(default_factory=dict)
     # SHA-256 of the enriched seed file at design time (provenance chain)
     source_checksum: str | None = None
     created_at: str = ""
@@ -356,6 +358,7 @@ def write_design_handoff(
     coverage_gaps: list[str] | None = None,
     source_checksum: str | None = None,
     design_mode_summary: dict[str, str] | None = None,
+    shared_file_manifest: dict[str, list[str]] | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -403,6 +406,7 @@ def write_design_handoff(
         example_artifacts=example_artifacts or {},
         coverage_gaps=coverage_gaps or [],
         design_mode_summary=design_mode_summary or {},
+        shared_file_manifest=shared_file_manifest or {},
         source_checksum=source_checksum,
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,

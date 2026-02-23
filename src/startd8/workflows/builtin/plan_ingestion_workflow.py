@@ -48,6 +48,7 @@ from .plan_ingestion_models import (
 )
 from ...contractors.artisan_contractor import (
     _SAFE_TASK_ID_PATTERN,
+    compute_lanes,
     compute_wave_index_map,
     compute_wave_metadata,
     compute_waves,
@@ -96,6 +97,7 @@ _ARTISAN_SEED_SCHEMA: Dict[str, Any] = {
         "context_files": {"type": ["array", "null"]},
         "service_metadata": {"type": ["object", "null"]},
         "wave_metadata": {"type": ["object", "null"]},
+        "lane_assignments": {"type": ["object", "null"]},
         "project_metadata": {"type": ["object", "null"]},
     },
     "additionalProperties": True,
@@ -168,6 +170,13 @@ class _TaskDictAdapter:
             cleaned.append(d)
         return cleaned
 
+    @property
+    def target_files(self) -> list:
+        """Read target_files from config.context (compute_lanes() protocol)."""
+        return self._data.get("config", {}).get("context", {}).get(
+            "target_files", []
+        ) or []
+
 
 def _assign_wave_indices(
     tasks: List[Dict[str, Any]],
@@ -195,6 +204,46 @@ def _assign_wave_indices(
         task["wave_index"] = wave_map.get(tid, 0)
 
     return tasks, wave_meta
+
+
+def _assign_lane_indices(
+    tasks: List[Dict[str, Any]],
+) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
+    """Assign lane_index to each task dict based on shared target_files.
+
+    Delegates to compute_lanes() via _TaskDictAdapter objects.
+    Lane indices are advisory — target_files may be incomplete at
+    plan ingestion time (populated later during PLAN/SCAFFOLD).
+
+    Returns:
+        (tasks, lane_assignments) — tasks with lane_index added
+        (at top level), and lane_assignments dict (task_id → lane_index).
+        When compute_lanes() fails or target_files are all empty,
+        lane_assignments is {} and no lane_index keys are added.
+    """
+    if not tasks:
+        return tasks, {}
+
+    adapters = [_TaskDictAdapter(t) for t in tasks]
+    try:
+        lanes = compute_lanes(adapters)
+    except Exception as exc:
+        logger.warning(
+            "Lane assignment skipped (compute_lanes() failed): %s", exc
+        )
+        return tasks, {}
+
+    lane_assignments: dict[str, int] = {}
+    for lane_idx, lane_tasks in enumerate(lanes):
+        for adapter in lane_tasks:
+            lane_assignments[adapter.task_id] = lane_idx
+
+    for task in tasks:
+        tid = task.get("task_id", "")
+        if tid in lane_assignments:
+            task["lane_index"] = lane_assignments[tid]
+
+    return tasks, lane_assignments
 
 
 def _validate_seed_field_coverage(seed_dict: Dict[str, Any]) -> List[str]:
@@ -2401,6 +2450,26 @@ class PlanIngestionWorkflow(WorkflowBase):
             if prompt_hints:
                 ctx["prompt_hints"] = prompt_hints
 
+            # REQ-PD-003: Build requirements_text from description +
+            # acceptance_obligations + source_references so DESIGN has
+            # authoritative parameter details without re-deriving.
+            _req_parts: List[str] = []
+            if feat.description:
+                _req_parts.append(feat.description)
+            if ctx.get("acceptance_obligations"):
+                _req_parts.append(
+                    "Acceptance criteria:\n"
+                    + "\n".join(f"- {a}" for a in ctx["acceptance_obligations"])
+                )
+            if ctx.get("source_references"):
+                _req_parts.append(
+                    "Source references:\n"
+                    + "\n".join(f"- {r}" for r in ctx["source_references"])
+                )
+            _requirements_text = "\n\n".join(_req_parts)
+            if len(_requirements_text) > 2000:
+                _requirements_text = _requirements_text[:2000] + " [truncated]"
+
             tasks.append({
                 "task_id": tid,
                 "title": feat.name,
@@ -2411,6 +2480,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "depends_on": deps,
                 "config": {
                     "task_description": feat.description,
+                    "requirements_text": _requirements_text,
                     "context": ctx,
                 },
             })
@@ -2430,6 +2500,16 @@ class PlanIngestionWorkflow(WorkflowBase):
             len(tasks),
             wave_metadata.get("critical_path_length", 0),
         )
+
+        # CCD-402: Lane assignment: Union-Find on shared target_files (advisory)
+        tasks, _lane_assignments = _assign_lane_indices(tasks)
+        if _lane_assignments:
+            _lane_count = len(set(_lane_assignments.values()))
+            logger.info(
+                "Lane assignment: %d lane(s) for %d tasks (advisory)",
+                _lane_count,
+                len(tasks),
+            )
 
         return tasks
 
@@ -3261,6 +3341,18 @@ class PlanIngestionWorkflow(WorkflowBase):
             else:
                 _wave_meta = None
 
+            # CCD-402: Reconstruct lane_assignments from per-task lane_index
+            _lane_assignments_emit: Optional[Dict[str, int]] = None
+            _lane_tasks = [
+                (t.get("task_id", ""), t.get("lane_index"))
+                for t in tasks
+                if t.get("lane_index") is not None
+            ]
+            if _lane_tasks:
+                _lane_assignments_emit = {
+                    tid: li for tid, li in _lane_tasks
+                }
+
             seed = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
                 source_checksum=source_checksum_val,
@@ -3278,6 +3370,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 context_files=context_files_list,
                 service_metadata=service_metadata or None,
                 wave_metadata=_wave_meta,
+                lane_assignments=_lane_assignments_emit,
                 project_metadata=project_metadata or None,
             )
 

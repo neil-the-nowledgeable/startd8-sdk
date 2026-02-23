@@ -175,6 +175,8 @@ class ArtisanContextSeed:
     service_metadata: Optional[Dict[str, Any]] = None
     # Wave computation metadata (wave_count, wave_summary, critical_path_length)
     wave_metadata: Optional[Dict[str, Any]] = None
+    # CCD-402: Lane computation metadata (task_id → lane_index). Advisory only.
+    lane_assignments: Optional[Dict[str, int]] = None
     # Operational project metadata (criticality, risks, SLOs, observability)
     project_metadata: Optional[Dict[str, Any]] = None
 
@@ -203,6 +205,8 @@ class ArtisanContextSeed:
             d["service_metadata"] = self.service_metadata
         if self.wave_metadata is not None:
             d["wave_metadata"] = self.wave_metadata
+        if self.lane_assignments is not None:
+            d["lane_assignments"] = self.lane_assignments
         if self.project_metadata is not None:
             d["project_metadata"] = self.project_metadata
         return d
