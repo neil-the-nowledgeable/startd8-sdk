@@ -116,8 +116,10 @@ try:
     from opentelemetry import trace as _trace
 
     _phase_tracer = _trace.get_tracer("startd8.artisan.phases")
+    _HAS_OTEL = True
 except ImportError:
     _phase_tracer = _NoOpTracer()
+    _HAS_OTEL = False
 
 _CACHE_SCHEMA_VERSION = 3
 
@@ -128,6 +130,89 @@ _MAX_GEN_FILE_HASH_BYTES = 50 * 1024 * 1024
 # PCA-603: Gate 4 size regression detection thresholds (configurable).
 _SIZE_REGRESSION_THRESHOLD = 0.70
 _SIZE_REGRESSION_MIN_LINES = 50
+
+
+# ---------------------------------------------------------------------------
+# E6: Cross-phase provenance linking helpers
+# ---------------------------------------------------------------------------
+
+# Maps phase names to the context key holding per-task results for that phase.
+_PHASE_RESULT_KEYS: dict[str, str] = {
+    "design": "design_results",
+    "implement": "generation_results",
+    "integrate": "integration_results",
+}
+
+
+def _capture_task_span_context(span: Any) -> dict[str, str] | None:
+    """Extract trace_id + span_id from a task span.
+
+    Returns ``None`` when OTel is unavailable, the span is a ``_NoOpSpan``,
+    or the span context is invalid.  Uses hex format matching
+    ``forensic_log._extract_exemplars()`` for consistency.
+    """
+    if not _HAS_OTEL:
+        return None
+    try:
+        ctx = span.get_span_context()
+        if ctx is None or not getattr(ctx, "is_valid", False):
+            return None
+        return {
+            "trace_id": format(ctx.trace_id, "032x"),
+            "span_id": format(ctx.span_id, "016x"),
+        }
+    except Exception:
+        return None
+
+
+def _build_provenance_links(
+    task_id: str,
+    context: dict[str, Any],
+    link_phases: list[str],
+) -> list:
+    """Build OTel ``Link`` objects from upstream phase span contexts.
+
+    Returns ``[]`` when OTel is unavailable or no upstream span contexts
+    are found for *task_id* in the requested *link_phases*.
+    """
+    if not _HAS_OTEL:
+        return []
+    from opentelemetry.trace import Link, SpanContext, TraceFlags
+
+    links: list = []
+    for phase in link_phases:
+        result_key = _PHASE_RESULT_KEYS.get(phase)
+        if not result_key:
+            continue
+        task_result = context.get(result_key, {}).get(task_id)
+        if task_result is None:
+            continue
+        # Handle both plain dicts and objects with .metadata dict
+        if isinstance(task_result, dict):
+            span_ctx = task_result.get("_span_context")
+        elif hasattr(task_result, "metadata") and isinstance(
+            task_result.metadata, dict
+        ):
+            span_ctx = task_result.metadata.get("_span_context")
+        else:
+            continue
+        if not isinstance(span_ctx, dict):
+            continue
+        try:
+            links.append(
+                Link(
+                    context=SpanContext(
+                        trace_id=int(span_ctx["trace_id"], 16),
+                        span_id=int(span_ctx["span_id"], 16),
+                        is_remote=False,
+                        trace_flags=TraceFlags(0x01),
+                    ),
+                    attributes={"link.phase": phase, "link.task_id": task_id},
+                )
+            )
+        except (KeyError, ValueError, TypeError):
+            continue
+    return links
 
 
 # ---------------------------------------------------------------------------
@@ -335,6 +420,7 @@ class HandlerConfig:
     force_implement: bool = False
     force_design: bool = False
     refine_design: bool = False
+    force_rewrite: bool = False
     force_review: bool = False
     force_test: bool = False
     design_agent: Optional[str] = None
@@ -937,6 +1023,10 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
         "onboarding_open_questions": _onboarding.get("open_questions"),
         "onboarding_dependency_graph": _onboarding.get("artifact_dependency_graph"),
         "service_metadata": _onboarding.get("service_metadata"),
+        "onboarding_schema_features": (
+            _onboarding.get("capabilities", {}).get("schema_features")
+            or _onboarding.get("schema_features")
+        ),
     }
     _restored = 0
     for key, value in _pca_fields.items():
@@ -944,7 +1034,7 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
             context[key] = value
             _restored += 1
     if _restored:
-        logger.info("Restored %d/7 onboarding fields from seed on resume", _restored)
+        logger.info("Restored %d/8 onboarding fields from seed on resume", _restored)
 
     # IMP-8b: extract structured refine suggestions from onboarding
     if "onboarding_refine_suggestions" not in context:
@@ -991,7 +1081,7 @@ _PCA_CONTEXT_FIELDS = (
     "onboarding_derivation_rules",
     "onboarding_resolved_parameters", "onboarding_output_contracts",
     "onboarding_calibration_hints", "onboarding_open_questions",
-    "onboarding_dependency_graph",
+    "onboarding_dependency_graph", "onboarding_schema_features",
 )
 
 
@@ -1234,17 +1324,22 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         )
         # AR-144/AR-147: service metadata for protocol fidelity validators
         context["service_metadata"] = _onboarding.get("service_metadata")
+        # REQ-EFE-021: schema_features for edit-first enforcement gate
+        context["onboarding_schema_features"] = (
+            _onboarding.get("capabilities", {}).get("schema_features")
+            or _onboarding.get("schema_features")
+        )
         _fwd_count = sum(
             1 for k in [
                 "onboarding_derivation_rules", "onboarding_resolved_parameters",
                 "onboarding_output_contracts", "onboarding_calibration_hints",
                 "onboarding_open_questions", "onboarding_dependency_graph",
-                "service_metadata",
+                "service_metadata", "onboarding_schema_features",
             ] if context.get(k)
         )
         if _fwd_count:
             logger.info(
-                "PLAN phase: forwarded %d/7 onboarding inventory fields into context",
+                "PLAN phase: forwarded %d/8 onboarding inventory fields into context",
                 _fwd_count,
             )
 
@@ -2273,6 +2368,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "environment_issues": env_fails,
                 }
                 _task_span.set_attribute("task.status", "env_blocked")
+                _sc = _capture_task_span_context(_task_span)
+                if _sc:
+                    design_results[task.task_id]["_span_context"] = _sc
                 _task_span_cm.__exit__(None, None, None)
                 continue
 
@@ -2339,6 +2437,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         task.task_id, prior.get("agreed"), prior.get("cost", 0.0),
                     )
                     _task_span.set_attribute("task.status", "adopted")
+                    _sc = _capture_task_span_context(_task_span)
+                    if _sc:
+                        design_results[task.task_id]["_span_context"] = _sc
                     _task_span_cm.__exit__(None, None, None)
                     continue
 
@@ -2351,6 +2452,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "domain": task.domain,
                 }
                 _task_span.set_attribute("task.status", "dry_run_skipped")
+                _sc = _capture_task_span_context(_task_span)
+                if _sc:
+                    design_results[task.task_id]["_span_context"] = _sc
                 _task_span_cm.__exit__(None, None, None)
                 continue
 
@@ -2481,6 +2585,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     }
                     break  # non-retryable or final attempt — exit retry loop
 
+            # Capture span context before closing (E6 provenance linking)
+            _sc = _capture_task_span_context(_task_span)
+            if _sc and task.task_id in design_results:
+                design_results[task.task_id]["_span_context"] = _sc
             # Close the per-task span after the retry loop completes
             _task_span_cm.__exit__(None, None, None)
 
@@ -4758,6 +4866,204 @@ class Test{class_name}:
                     len(generation_results),
                 )
 
+            # ── Gate 5: Edit-First Enforcement (REQ-EFE-020) ─────────
+            from startd8.contractors.edit_first_gate import (
+                validate_task_size_regression,
+                resolve_threshold,
+                emit_rejection_telemetry,
+                build_edit_retry_prompt,
+            )
+
+            gate5_results: dict[str, Any] = {}
+            _output_contracts = context.get("onboarding_output_contracts")
+            _schema_features = context.get("onboarding_schema_features")
+
+            for task in tasks:
+                gr = generation_results.get(task.task_id)
+                if gr is None or not gr.success:
+                    continue
+
+                # Get existing content from chunk metadata
+                chunk_efc: dict[str, str] = {}
+                for chunk in chunks:
+                    if chunk.chunk_id == task.task_id:
+                        chunk_efc = chunk.metadata.get(
+                            "_existing_file_contents", {},
+                        )
+                        break
+
+                if not chunk_efc:
+                    continue  # New-file task — no size regression possible
+
+                # Read generated file content from staging
+                gen_file_contents: dict[str, str] = {}
+                for gen_path in gr.generated_files:
+                    fp = Path(gen_path)
+                    if fp.exists():
+                        try:
+                            rel_key = str(fp.relative_to(staging_dir))
+                        except ValueError:
+                            rel_key = fp.name
+                        try:
+                            gen_file_contents[rel_key] = fp.read_text(
+                                encoding="utf-8",
+                            )
+                        except (OSError, UnicodeDecodeError):
+                            pass
+
+                if not gen_file_contents:
+                    continue
+
+                # Resolve threshold for this task's artifact types
+                artifact_types = [
+                    task.artifact_type
+                ] if hasattr(task, "artifact_type") and task.artifact_type else ["source_code"]
+                threshold = resolve_threshold(
+                    artifact_types=artifact_types,
+                    output_contracts=_output_contracts,
+                    schema_features=_schema_features,
+                )
+
+                gate_result = validate_task_size_regression(
+                    task_id=task.task_id,
+                    generated_files=gen_file_contents,
+                    existing_contents=chunk_efc,
+                    threshold=threshold,
+                    artifact_type=artifact_types[0] if artifact_types else "unknown",
+                    force_rewrite=self.config.force_rewrite,
+                )
+
+                if gate_result.any_rejected:
+                    # Emit telemetry for initial rejection
+                    try:
+                        emit_rejection_telemetry(gate_result, span)
+                    except Exception:
+                        pass
+
+                    # REQ-EFE-023: single retry with edit-focused prompt
+                    # Build retry prompt per rejected file, re-generate, re-check
+                    retry_succeeded = False
+                    for fr in gate_result.file_results:
+                        if fr.action != "rejected":
+                            continue
+                        existing_content = chunk_efc.get(fr.file_path, "")
+                        design_doc = (
+                            context.get("design_results", {})
+                            .get(task.task_id, {})
+                            .get("design_document", "")
+                        )
+                        retry_prompt = build_edit_retry_prompt(
+                            original_content=existing_content,
+                            design_doc=design_doc,
+                            task_description=getattr(task, "description", str(task.task_id)),
+                            ratio=fr.ratio,
+                            threshold=fr.threshold,
+                        )
+                        logger.info(
+                            "Gate 5: retrying %s file %s with edit-focused prompt "
+                            "(ratio=%.1f%% < threshold=%.1f%%)",
+                            task.task_id, fr.file_path, fr.ratio, fr.threshold,
+                        )
+                        # Attempt retry via executor's drafter agent
+                        try:
+                            if hasattr(executor, "agent") and hasattr(executor.agent, "generate"):
+                                retry_response = executor.agent.generate(retry_prompt)
+                                from startd8.utils.code_extraction import extract_code_from_response
+                                retry_code = extract_code_from_response(
+                                    retry_response.text
+                                    if hasattr(retry_response, "text")
+                                    else str(retry_response),
+                                )
+                                if retry_code and len(retry_code) >= len(existing_content) * (threshold / 100.0):
+                                    # Write retry result to staging
+                                    for gen_path in gr.generated_files:
+                                        gfp = Path(gen_path)
+                                        try:
+                                            rel = str(gfp.relative_to(staging_dir))
+                                        except ValueError:
+                                            rel = gfp.name
+                                        if rel == fr.file_path and gfp.exists():
+                                            gfp.write_text(retry_code, encoding="utf-8")
+                                            fr.output_chars = len(retry_code)
+                                            fr.ratio = (len(retry_code) / fr.input_chars) * 100.0 if fr.input_chars > 0 else 100.0
+                                            fr.passed = True
+                                            fr.action = "passed"
+                                            retry_succeeded = True
+                                            logger.info(
+                                                "Gate 5: retry succeeded for %s file %s "
+                                                "(new ratio=%.1f%%)",
+                                                task.task_id, fr.file_path, fr.ratio,
+                                            )
+                                            break
+                                else:
+                                    logger.warning(
+                                        "Gate 5: retry for %s file %s still below threshold",
+                                        task.task_id, fr.file_path,
+                                    )
+                        except Exception as retry_exc:
+                            logger.warning(
+                                "Gate 5: retry failed for %s file %s: %s",
+                                task.task_id, fr.file_path, retry_exc,
+                            )
+
+                    # Re-evaluate after retry
+                    still_rejected = any(
+                        f.action == "rejected" for f in gate_result.file_results
+                    )
+                    gate_result.any_rejected = still_rejected
+                    gate_result.retry_succeeded = retry_succeeded and not still_rejected
+                    if still_rejected:
+                        # Emit telemetry for post-retry rejection
+                        try:
+                            emit_rejection_telemetry(gate_result, span)
+                        except Exception:
+                            pass
+
+                gate5_results[task.task_id] = {
+                    "any_rejected": gate_result.any_rejected,
+                    "retry_needed": gate_result.retry_needed,
+                    "retry_succeeded": gate_result.retry_succeeded,
+                    "file_results": [
+                        {
+                            "file_path": fr.file_path,
+                            "input_chars": fr.input_chars,
+                            "output_chars": fr.output_chars,
+                            "ratio": round(fr.ratio, 2),
+                            "threshold": fr.threshold,
+                            "artifact_type": fr.artifact_type,
+                            "passed": fr.passed,
+                            "action": fr.action,
+                        }
+                        for fr in gate_result.file_results
+                    ],
+                }
+
+            if gate5_results:
+                rejected_count = sum(
+                    1 for r in gate5_results.values() if r["any_rejected"]
+                )
+                if rejected_count:
+                    output["_gate5_edit_first"] = gate5_results
+                    logger.warning(
+                        "Gate 5: %d task(s) with edit-first size regression: %s",
+                        rejected_count,
+                        sorted(
+                            tid for tid, r in gate5_results.items()
+                            if r["any_rejected"]
+                        ),
+                    )
+                else:
+                    logger.info(
+                        "Gate 5: edit-first gate passed for %d task(s)",
+                        len(gate5_results),
+                    )
+            else:
+                logger.info(
+                    "Gate 5: no existing-file tasks to check (all new files)"
+                )
+
+            context["edit_first_gate_results"] = gate5_results
+
             # Persist generation_results to disk for crash recovery (v2 envelope)
             # Always write to the canonical .startd8/state/ location.
             # Skip when no explicit project_root (matches REVIEW's pattern).
@@ -4797,6 +5103,7 @@ class Test{class_name}:
                         },
                         "downstream_map": downstream_map,
                         "truncation_flags": truncation_flags,
+                        "edit_first_gate_results": gate5_results,
                         "tasks": serializable_tasks,
                     }
                     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -5017,6 +5324,82 @@ class ArtisanIntegrationListener:
         )
 
 
+class OTelIntegrationListener:
+    """Wraps ``ArtisanIntegrationListener`` with OTel span events (E5).
+
+    Enriches the per-task integration span via the existing
+    ``IntegrationListener`` callback protocol.  Calls
+    ``_task_span.add_event()`` which is a no-op on ``_NoOpSpan``,
+    so no ``_HAS_OTEL`` guards are needed.
+    """
+
+    def __init__(
+        self,
+        task_id: str,
+        task_span: Any,
+        wrapped: Any | None = None,
+    ) -> None:
+        self._task_id = task_id
+        self._task_span = task_span
+        self._wrapped = wrapped or ArtisanIntegrationListener(task_id)
+        self._file_count = 0
+        self._checkpoint_count = 0
+
+    def on_integration_started(self, unit: Any) -> None:
+        self._wrapped.on_integration_started(unit)
+        self._task_span.add_event(
+            "integration.started",
+            attributes={
+                "integration.task_id": self._task_id,
+                "integration.file_count": len(
+                    getattr(unit, "generated_files", [])
+                ),
+            },
+        )
+
+    def on_file_integrated(self, unit: Any, source: Path, target: Path) -> None:
+        self._wrapped.on_file_integrated(unit, source, target)
+        self._file_count += 1
+        self._task_span.add_event(
+            "integration.file.merged",
+            attributes={
+                "file.source": source.name,
+                "file.target": str(target),
+                "file.sequence": self._file_count,
+            },
+        )
+
+    def on_checkpoint_result(self, unit: Any, result: Any) -> None:
+        self._wrapped.on_checkpoint_result(unit, result)
+        self._checkpoint_count += 1
+        _name = getattr(result, "name", "unknown")
+        _status = getattr(result, "status", None)
+        _status_str = _status.value if hasattr(_status, "value") else str(_status)
+        attrs: dict[str, Any] = {
+            "checkpoint.name": _name,
+            "checkpoint.status": _status_str,
+            "checkpoint.sequence": self._checkpoint_count,
+        }
+        _errors = getattr(result, "errors", None)
+        if _errors:
+            attrs["checkpoint.error_count"] = len(_errors)
+        self._task_span.add_event("integration.checkpoint", attributes=attrs)
+
+    def on_integration_failed(self, unit: Any, error: str) -> None:
+        self._wrapped.on_integration_failed(unit, error)
+        self._task_span.add_event(
+            "integration.failed",
+            attributes={"error.message": str(error)[:500]},
+        )
+
+    def on_integration_completed(self, unit: Any, files: list[Path]) -> None:
+        self._wrapped.on_integration_completed(unit, files)
+        self._task_span.add_event(
+            "integration.completed",
+            attributes={"files.merged_count": len(files)},
+        )
+
+
 class IntegratePhaseHandler(AbstractPhaseHandler):
     """INTEGRATE phase: merge staged files into project_root with validation.
 
@@ -5083,12 +5466,14 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
             if not task:
                 continue
 
+            _links = _build_provenance_links(task_id, context, ["design", "implement"])
             with _phase_tracer.start_as_current_span(
                 f"task.{task_id}",
                 attributes={
                     "task.id": task_id,
                     "task.phase": "integrate",
                 },
+                links=_links,
             ) as _int_span:
                 # Pass edit mode classification so the integration engine
                 # can skip merge strategy for edit-mode tasks (the staging
@@ -5098,7 +5483,11 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 )
                 _task_edit_mode = _edit_classifications.get(task_id)
                 unit = SeedTaskUnit(task, gr, edit_mode=_task_edit_mode)
-                listener = ArtisanIntegrationListener(task_id)
+                listener = OTelIntegrationListener(
+                    task_id=task_id,
+                    task_span=_int_span,
+                    wrapped=ArtisanIntegrationListener(task_id),
+                )
                 result = engine.integrate(unit, listener=listener)
                 integration_results[task_id] = {
                     "success": result.success,
@@ -5110,6 +5499,18 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                     "status": result.status.value if hasattr(result.status, "value") else str(result.status),
                 }
                 _int_span.set_attribute("task.success", result.success)
+                _int_span.set_attribute(
+                    "integration.status",
+                    result.status.value if hasattr(result.status, "value") else str(result.status),
+                )
+                _int_span.set_attribute("integration.files_merged", len(result.integrated_files))
+                _int_span.set_attribute("integration.error_count", len(result.errors))
+                _int_span.set_attribute("integration.warning_count", len(result.warnings))
+                _int_span.set_attribute("integration.rollback", result.rollback_performed)
+                _int_span.set_attribute("integration.skipped_count", len(result.skipped_files))
+                _sc = _capture_task_span_context(_int_span)
+                if _sc:
+                    integration_results[task_id]["_span_context"] = _sc
 
                 # Update generation_results paths: staging → project_root
                 if result.success:
@@ -5665,6 +6066,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         _service_metadata = context.get("service_metadata")
 
         for idx, task in enumerate(tasks, start=1):
+            _links = _build_provenance_links(task.task_id, context, ["design", "implement"])
             _task_span_cm = _phase_tracer.start_as_current_span(
                 f"task.{task.task_id}",
                 attributes={
@@ -5673,6 +6075,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "task.domain": task.domain or "",
                     "task.phase": "test",
                 },
+                links=_links,
             )
             _task_span = _task_span_cm.__enter__()
             previous_task_started_mono = _log_task_timing(
@@ -5699,6 +6102,9 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 }
                 test_plan.append(test_entry)
                 _task_span.set_attribute("task.status", "dry_run_planned")
+                _sc = _capture_task_span_context(_task_span)
+                if _sc:
+                    test_entry["_span_context"] = _sc
                 _task_span_cm.__exit__(None, None, None)
                 continue
 
@@ -5757,6 +6163,9 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 total_failed += 1
                 _task_span.set_attribute("task.status", "error")
             finally:
+                _sc = _capture_task_span_context(_task_span)
+                if _sc and test_plan:
+                    test_plan[-1]["_span_context"] = _sc
                 _task_span_cm.__exit__(None, None, None)
 
         per_task: dict[str, Any] = {}
@@ -6638,6 +7047,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 cached_reviews = {}
 
         for idx, task in enumerate(tasks, start=1):
+            _links = _build_provenance_links(task.task_id, context, ["design", "implement"])
             _task_span_cm = _phase_tracer.start_as_current_span(
                 f"task.{task.task_id}",
                 attributes={
@@ -6646,6 +7056,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "task.domain": task.domain or "",
                     "task.phase": "review",
                 },
+                links=_links,
             )
             _task_span = _task_span_cm.__enter__()
             previous_task_started_mono = _log_task_timing(
@@ -6868,6 +7279,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 total_failed += 1
                 _task_span.set_attribute("task.status", "error")
             finally:
+                _sc = _capture_task_span_context(_task_span)
+                if _sc and review_items:
+                    review_items[-1]["_span_context"] = _sc
                 _task_span_cm.__exit__(None, None, None)
 
         per_task: dict[str, Any] = {}

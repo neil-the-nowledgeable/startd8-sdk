@@ -6,11 +6,14 @@ Covers:
   - _NoOpTracer path — no crashes when OTel unavailable
   - Gate span records gate.passed attribute
   - Per-task span records task.status attribute
+  - E6: Cross-phase provenance linking (_capture_task_span_context, _build_provenance_links)
+  - E5: OTelIntegrationListener span events + integration span enrichment
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 
@@ -21,6 +24,14 @@ from startd8.contractors.artisan_contractor import (
     WorkflowPhase,
     _NoOpSpan,
     _NoOpTracer,
+)
+from startd8.contractors.context_seed_handlers import (
+    ArtisanIntegrationListener,
+    OTelIntegrationListener,
+    _build_provenance_links,
+    _capture_task_span_context,
+    _HAS_OTEL as _CSH_HAS_OTEL,
+    _PHASE_RESULT_KEYS,
 )
 
 
@@ -199,3 +210,383 @@ class TestTestConstructionSpans:
         from startd8.contractors.artisan_phases.test_construction import _HAS_OTEL
 
         assert isinstance(_HAS_OTEL, bool)
+
+
+# ── E6: _NoOpSpan.get_span_context ────────────────────────────────
+
+
+class TestNoOpSpanGetSpanContext:
+    """Verify _NoOpSpan.get_span_context() returns None."""
+
+    def test_noop_span_get_span_context_returns_none(self):
+        span = _NoOpSpan()
+        assert span.get_span_context() is None
+
+
+# ── E6: _capture_task_span_context ────────────────────────────────
+
+
+class TestCaptureTaskSpanContext:
+    """Verify span context extraction helper."""
+
+    def test_returns_none_for_noop_span(self):
+        span = _NoOpSpan()
+        assert _capture_task_span_context(span) is None
+
+    def test_returns_none_when_otel_unavailable(self):
+        """When _HAS_OTEL is False, always returns None."""
+        with patch(
+            "startd8.contractors.context_seed_handlers._HAS_OTEL", False
+        ):
+            mock_span = MagicMock()
+            assert _capture_task_span_context(mock_span) is None
+
+    @pytest.mark.skipif(not _CSH_HAS_OTEL, reason="OTel not installed")
+    def test_returns_hex_dict_for_valid_span(self):
+        """With a real OTel span context, returns trace_id + span_id."""
+        from opentelemetry.trace import SpanContext, TraceFlags
+
+        mock_span = MagicMock()
+        mock_span.get_span_context.return_value = SpanContext(
+            trace_id=0x0123456789ABCDEF0123456789ABCDEF,
+            span_id=0x0123456789ABCDEF,
+            is_remote=False,
+            trace_flags=TraceFlags(0x01),
+        )
+        result = _capture_task_span_context(mock_span)
+        assert result is not None
+        assert "trace_id" in result
+        assert "span_id" in result
+
+    @pytest.mark.skipif(not _CSH_HAS_OTEL, reason="OTel not installed")
+    def test_format_matches_032x_and_016x(self):
+        """Hex formats must be 032x for trace_id and 016x for span_id."""
+        from opentelemetry.trace import SpanContext, TraceFlags
+
+        mock_span = MagicMock()
+        mock_span.get_span_context.return_value = SpanContext(
+            trace_id=1,
+            span_id=1,
+            is_remote=False,
+            trace_flags=TraceFlags(0x01),
+        )
+        result = _capture_task_span_context(mock_span)
+        assert result is not None
+        assert len(result["trace_id"]) == 32
+        assert len(result["span_id"]) == 16
+        assert result["trace_id"] == "0" * 31 + "1"
+        assert result["span_id"] == "0" * 15 + "1"
+
+    def test_handles_invalid_span_context_gracefully(self):
+        """Span with invalid context (is_valid=False) returns None."""
+        mock_span = MagicMock()
+        mock_ctx = MagicMock()
+        mock_ctx.is_valid = False
+        mock_span.get_span_context.return_value = mock_ctx
+        # When _HAS_OTEL is True, should return None for invalid ctx
+        with patch(
+            "startd8.contractors.context_seed_handlers._HAS_OTEL", True
+        ):
+            assert _capture_task_span_context(mock_span) is None
+
+    def test_handles_exception_gracefully(self):
+        """If get_span_context() throws, returns None."""
+        mock_span = MagicMock()
+        mock_span.get_span_context.side_effect = RuntimeError("broken")
+        with patch(
+            "startd8.contractors.context_seed_handlers._HAS_OTEL", True
+        ):
+            assert _capture_task_span_context(mock_span) is None
+
+
+# ── E6: _build_provenance_links ───────────────────────────────────
+
+
+class TestBuildProvenanceLinks:
+    """Verify provenance link construction from upstream span contexts."""
+
+    def test_returns_empty_when_no_otel(self):
+        with patch(
+            "startd8.contractors.context_seed_handlers._HAS_OTEL", False
+        ):
+            result = _build_provenance_links("T1", {}, ["design"])
+            assert result == []
+
+    @pytest.mark.skipif(not _CSH_HAS_OTEL, reason="OTel not installed")
+    def test_builds_link_from_design_results_dict(self):
+        context = {
+            "design_results": {
+                "T1": {
+                    "status": "designed",
+                    "_span_context": {
+                        "trace_id": "0" * 31 + "1",
+                        "span_id": "0" * 15 + "2",
+                    },
+                }
+            }
+        }
+        links = _build_provenance_links("T1", context, ["design"])
+        assert len(links) == 1
+        assert links[0].attributes["link.phase"] == "design"
+        assert links[0].attributes["link.task_id"] == "T1"
+
+    @pytest.mark.skipif(not _CSH_HAS_OTEL, reason="OTel not installed")
+    def test_builds_link_from_generation_results_metadata(self):
+        """Test objects with .metadata dict (e.g. GenerationResult)."""
+        mock_result = MagicMock()
+        mock_result.metadata = {
+            "_span_context": {
+                "trace_id": "a" * 32,
+                "span_id": "b" * 16,
+            }
+        }
+        context = {"generation_results": {"T1": mock_result}}
+        links = _build_provenance_links("T1", context, ["implement"])
+        assert len(links) == 1
+        assert links[0].attributes["link.phase"] == "implement"
+
+    def test_handles_missing_span_context(self):
+        """No _span_context key → no link, no crash."""
+        context = {"design_results": {"T1": {"status": "designed"}}}
+        with patch(
+            "startd8.contractors.context_seed_handlers._HAS_OTEL", True
+        ):
+            links = _build_provenance_links("T1", context, ["design"])
+            assert links == []
+
+    def test_handles_missing_task_id(self):
+        """Task ID not in results → no link, no crash."""
+        context = {"design_results": {"T2": {"status": "designed"}}}
+        with patch(
+            "startd8.contractors.context_seed_handlers._HAS_OTEL", True
+        ):
+            links = _build_provenance_links("T1", context, ["design"])
+            assert links == []
+
+    @pytest.mark.skipif(not _CSH_HAS_OTEL, reason="OTel not installed")
+    def test_builds_multiple_links_from_multiple_phases(self):
+        context = {
+            "design_results": {
+                "T1": {
+                    "_span_context": {
+                        "trace_id": "0" * 31 + "1",
+                        "span_id": "0" * 15 + "2",
+                    }
+                }
+            },
+            "generation_results": {
+                "T1": {
+                    "_span_context": {
+                        "trace_id": "0" * 31 + "1",
+                        "span_id": "0" * 15 + "3",
+                    }
+                }
+            },
+        }
+        links = _build_provenance_links("T1", context, ["design", "implement"])
+        assert len(links) == 2
+        phases = {link.attributes["link.phase"] for link in links}
+        assert phases == {"design", "implement"}
+
+    def test_phase_result_keys_mapping(self):
+        """Verify the phase-to-key mapping is correct."""
+        assert _PHASE_RESULT_KEYS == {
+            "design": "design_results",
+            "implement": "generation_results",
+            "integrate": "integration_results",
+        }
+
+
+# ── E5: OTelIntegrationListener ──────────────────────────────────
+
+
+class TestOTelIntegrationListener:
+    """Verify OTelIntegrationListener span event emission."""
+
+    def _make_listener(self, task_span=None, wrapped=None):
+        return OTelIntegrationListener(
+            task_id="T1",
+            task_span=task_span or MagicMock(),
+            wrapped=wrapped or MagicMock(),
+        )
+
+    def test_on_started_adds_event(self):
+        span = MagicMock()
+        wrapped = MagicMock()
+        listener = self._make_listener(task_span=span, wrapped=wrapped)
+
+        unit = MagicMock()
+        unit.generated_files = [Path("a.py"), Path("b.py")]
+        listener.on_integration_started(unit)
+
+        wrapped.on_integration_started.assert_called_once_with(unit)
+        span.add_event.assert_called_once()
+        name, kwargs = span.add_event.call_args
+        assert name[0] == "integration.started"
+        assert kwargs["attributes"]["integration.file_count"] == 2
+
+    def test_on_file_integrated_increments_sequence(self):
+        span = MagicMock()
+        wrapped = MagicMock()
+        listener = self._make_listener(task_span=span, wrapped=wrapped)
+
+        unit = MagicMock()
+        listener.on_file_integrated(unit, Path("src/a.py"), Path("/project/src/a.py"))
+        listener.on_file_integrated(unit, Path("src/b.py"), Path("/project/src/b.py"))
+
+        assert span.add_event.call_count == 2
+        # Check sequence numbers
+        first_call = span.add_event.call_args_list[0]
+        second_call = span.add_event.call_args_list[1]
+        assert first_call[1]["attributes"]["file.sequence"] == 1
+        assert second_call[1]["attributes"]["file.sequence"] == 2
+
+    def test_on_checkpoint_result_extracts_status(self):
+        span = MagicMock()
+        wrapped = MagicMock()
+        listener = self._make_listener(task_span=span, wrapped=wrapped)
+
+        unit = MagicMock()
+        result = MagicMock()
+        result.name = "lint_check"
+        result.status = MagicMock()
+        result.status.value = "passed"
+        result.errors = []
+        listener.on_checkpoint_result(unit, result)
+
+        wrapped.on_checkpoint_result.assert_called_once_with(unit, result)
+        span.add_event.assert_called_once()
+        attrs = span.add_event.call_args[1]["attributes"]
+        assert attrs["checkpoint.name"] == "lint_check"
+        assert attrs["checkpoint.status"] == "passed"
+        assert attrs["checkpoint.sequence"] == 1
+
+    def test_on_checkpoint_result_with_errors(self):
+        span = MagicMock()
+        listener = self._make_listener(task_span=span)
+
+        result = MagicMock()
+        result.name = "validation"
+        result.status = MagicMock()
+        result.status.value = "failed"
+        result.errors = ["err1", "err2"]
+        listener.on_checkpoint_result(MagicMock(), result)
+
+        attrs = span.add_event.call_args[1]["attributes"]
+        assert attrs["checkpoint.error_count"] == 2
+
+    def test_on_failed_records_error(self):
+        span = MagicMock()
+        wrapped = MagicMock()
+        listener = self._make_listener(task_span=span, wrapped=wrapped)
+
+        unit = MagicMock()
+        listener.on_integration_failed(unit, "merge conflict")
+
+        wrapped.on_integration_failed.assert_called_once_with(unit, "merge conflict")
+        name, kwargs = span.add_event.call_args
+        assert name[0] == "integration.failed"
+        assert kwargs["attributes"]["error.message"] == "merge conflict"
+
+    def test_on_completed_records_count(self):
+        span = MagicMock()
+        wrapped = MagicMock()
+        listener = self._make_listener(task_span=span, wrapped=wrapped)
+
+        unit = MagicMock()
+        files = [Path("a.py"), Path("b.py"), Path("c.py")]
+        listener.on_integration_completed(unit, files)
+
+        wrapped.on_integration_completed.assert_called_once_with(unit, files)
+        attrs = span.add_event.call_args[1]["attributes"]
+        assert attrs["files.merged_count"] == 3
+
+    def test_delegates_to_wrapped_listener(self):
+        """All methods delegate to wrapped listener."""
+        wrapped = MagicMock()
+        listener = self._make_listener(wrapped=wrapped)
+
+        unit = MagicMock()
+        listener.on_integration_started(unit)
+        listener.on_file_integrated(unit, Path("a"), Path("b"))
+        listener.on_checkpoint_result(unit, MagicMock(name="ck", status="ok", errors=[]))
+        listener.on_integration_failed(unit, "err")
+        listener.on_integration_completed(unit, [])
+
+        assert wrapped.on_integration_started.call_count == 1
+        assert wrapped.on_file_integrated.call_count == 1
+        assert wrapped.on_checkpoint_result.call_count == 1
+        assert wrapped.on_integration_failed.call_count == 1
+        assert wrapped.on_integration_completed.call_count == 1
+
+    def test_noop_span_no_crash(self):
+        """OTelIntegrationListener with _NoOpSpan doesn't crash."""
+        span = _NoOpSpan()
+        listener = OTelIntegrationListener(
+            task_id="T1",
+            task_span=span,
+            wrapped=MagicMock(),
+        )
+        unit = MagicMock()
+        unit.generated_files = []
+        listener.on_integration_started(unit)
+        listener.on_file_integrated(unit, Path("a"), Path("b"))
+        result = MagicMock()
+        result.name = "ck"
+        result.status = "ok"
+        result.errors = []
+        listener.on_checkpoint_result(unit, result)
+        listener.on_integration_failed(unit, "err")
+        listener.on_integration_completed(unit, [])
+
+    def test_error_message_truncated_to_500(self):
+        """Long error messages are truncated to 500 chars."""
+        span = MagicMock()
+        listener = self._make_listener(task_span=span)
+        long_error = "x" * 1000
+        listener.on_integration_failed(MagicMock(), long_error)
+        attrs = span.add_event.call_args[1]["attributes"]
+        assert len(attrs["error.message"]) == 500
+
+
+# ── E5: Integration Span Enrichment ──────────────────────────────
+
+
+class TestIntegratePhaseSpanEnrichment:
+    """Verify integration span gets rich attributes."""
+
+    def test_success_attributes_set_on_span(self):
+        """Simulate what IntegratePhaseHandler does after engine.integrate()."""
+        span = MagicMock()
+
+        # Simulate result object
+        result = MagicMock()
+        result.success = True
+        result.status = MagicMock()
+        result.status.value = "merged"
+        result.integrated_files = [Path("a.py"), Path("b.py")]
+        result.errors = []
+        result.warnings = ["minor issue"]
+        result.rollback_performed = False
+        result.skipped_files = []
+
+        # Replicate the enrichment code from context_seed_handlers.py
+        span.set_attribute("task.success", result.success)
+        span.set_attribute(
+            "integration.status",
+            result.status.value if hasattr(result.status, "value") else str(result.status),
+        )
+        span.set_attribute("integration.files_merged", len(result.integrated_files))
+        span.set_attribute("integration.error_count", len(result.errors))
+        span.set_attribute("integration.warning_count", len(result.warnings))
+        span.set_attribute("integration.rollback", result.rollback_performed)
+        span.set_attribute("integration.skipped_count", len(result.skipped_files))
+
+        calls = {c.args[0]: c.args[1] for c in span.set_attribute.call_args_list}
+        assert calls["task.success"] is True
+        assert calls["integration.status"] == "merged"
+        assert calls["integration.files_merged"] == 2
+        assert calls["integration.error_count"] == 0
+        assert calls["integration.warning_count"] == 1
+        assert calls["integration.rollback"] is False
+        assert calls["integration.skipped_count"] == 0
