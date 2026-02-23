@@ -96,6 +96,7 @@ from startd8.contractors.context_schema import (
     ValidationPhaseOutput,
 )
 from startd8.contractors.artisan_contractor import HAS_OTEL, _NoOpTracer, _NoOpSpan
+from startd8.exceptions import Startd8Error
 from startd8.logging_config import get_logger
 from startd8.otel import attach_context, capture_context, detach_context
 from startd8.utils.artifact_inventory import (
@@ -4873,6 +4874,7 @@ class Test{class_name}:
                 emit_rejection_telemetry,
                 build_edit_retry_prompt,
             )
+            from startd8.utils.code_extraction import extract_code_from_response
 
             gate5_results: dict[str, Any] = {}
             _output_contracts = context.get("onboarding_output_contracts")
@@ -4908,8 +4910,11 @@ class Test{class_name}:
                             gen_file_contents[rel_key] = fp.read_text(
                                 encoding="utf-8",
                             )
-                        except (OSError, UnicodeDecodeError):
-                            pass
+                        except (OSError, UnicodeDecodeError) as read_exc:
+                            logger.debug(
+                                "Gate 5: skipping unreadable generated file %s: %s",
+                                fp, read_exc,
+                            )
 
                 if not gen_file_contents:
                     continue
@@ -4937,74 +4942,15 @@ class Test{class_name}:
                     # Emit telemetry for initial rejection
                     try:
                         emit_rejection_telemetry(gate_result, span)
-                    except Exception:
+                    except (TypeError, AttributeError, RuntimeError):
                         pass
 
                     # REQ-EFE-023: single retry with edit-focused prompt
-                    # Build retry prompt per rejected file, re-generate, re-check
-                    retry_succeeded = False
-                    for fr in gate_result.file_results:
-                        if fr.action != "rejected":
-                            continue
-                        existing_content = chunk_efc.get(fr.file_path, "")
-                        design_doc = (
-                            context.get("design_results", {})
-                            .get(task.task_id, {})
-                            .get("design_document", "")
-                        )
-                        retry_prompt = build_edit_retry_prompt(
-                            original_content=existing_content,
-                            design_doc=design_doc,
-                            task_description=getattr(task, "description", str(task.task_id)),
-                            ratio=fr.ratio,
-                            threshold=fr.threshold,
-                        )
-                        logger.info(
-                            "Gate 5: retrying %s file %s with edit-focused prompt "
-                            "(ratio=%.1f%% < threshold=%.1f%%)",
-                            task.task_id, fr.file_path, fr.ratio, fr.threshold,
-                        )
-                        # Attempt retry via executor's drafter agent
-                        try:
-                            if hasattr(executor, "agent") and hasattr(executor.agent, "generate"):
-                                retry_response = executor.agent.generate(retry_prompt)
-                                from startd8.utils.code_extraction import extract_code_from_response
-                                retry_code = extract_code_from_response(
-                                    retry_response.text
-                                    if hasattr(retry_response, "text")
-                                    else str(retry_response),
-                                )
-                                if retry_code and len(retry_code) >= len(existing_content) * (threshold / 100.0):
-                                    # Write retry result to staging
-                                    for gen_path in gr.generated_files:
-                                        gfp = Path(gen_path)
-                                        try:
-                                            rel = str(gfp.relative_to(staging_dir))
-                                        except ValueError:
-                                            rel = gfp.name
-                                        if rel == fr.file_path and gfp.exists():
-                                            gfp.write_text(retry_code, encoding="utf-8")
-                                            fr.output_chars = len(retry_code)
-                                            fr.ratio = (len(retry_code) / fr.input_chars) * 100.0 if fr.input_chars > 0 else 100.0
-                                            fr.passed = True
-                                            fr.action = "passed"
-                                            retry_succeeded = True
-                                            logger.info(
-                                                "Gate 5: retry succeeded for %s file %s "
-                                                "(new ratio=%.1f%%)",
-                                                task.task_id, fr.file_path, fr.ratio,
-                                            )
-                                            break
-                                else:
-                                    logger.warning(
-                                        "Gate 5: retry for %s file %s still below threshold",
-                                        task.task_id, fr.file_path,
-                                    )
-                        except Exception as retry_exc:
-                            logger.warning(
-                                "Gate 5: retry failed for %s file %s: %s",
-                                task.task_id, fr.file_path, retry_exc,
-                            )
+                    retry_succeeded = self._attempt_edit_first_retry(
+                        task, gate_result, chunk_efc, context,
+                        gr, executor, staging_dir, threshold,
+                        extract_code_from_response,
+                    )
 
                     # Re-evaluate after retry
                     still_rejected = any(
@@ -5016,7 +4962,7 @@ class Test{class_name}:
                         # Emit telemetry for post-retry rejection
                         try:
                             emit_rejection_telemetry(gate_result, span)
-                        except Exception:
+                        except (TypeError, AttributeError, RuntimeError):
                             pass
 
                 gate5_results[task.task_id] = {
@@ -5163,6 +5109,111 @@ class Test{class_name}:
             metadata["resumed_cost"] = resumed_cost  # type: ignore[possibly-undefined]
 
         return {"output": output, "cost": total_cost, "metadata": metadata}
+
+    def _attempt_edit_first_retry(
+        self,
+        task: SeedTask,
+        gate_result: Any,
+        chunk_efc: dict[str, str],
+        context: dict[str, Any],
+        gr: GenerationResult,
+        executor: Any,
+        staging_dir: Path,
+        threshold: float,
+        extract_code_fn: Any,
+    ) -> bool:
+        """Attempt a single edit-focused retry for each rejected file (REQ-EFE-023).
+
+        Returns True if at least one file was successfully retried.
+        """
+        from startd8.contractors.edit_first_gate import build_edit_retry_prompt
+
+        # Guard: executor must expose a usable drafter agent
+        if not (
+            hasattr(executor, "agent")
+            and executor.agent is not None
+            and hasattr(executor.agent, "generate")
+        ):
+            logger.debug(
+                "Gate 5: executor has no usable agent for retry — skipping "
+                "edit-first retry for %s", task.task_id,
+            )
+            return False
+
+        retry_succeeded = False
+        for fr in gate_result.file_results:
+            if fr.action != "rejected":
+                continue
+
+            existing_content = chunk_efc.get(fr.file_path, "")
+            design_doc = (
+                context.get("design_results", {})
+                .get(task.task_id, {})
+                .get("design_document", "")
+            )
+            retry_prompt = build_edit_retry_prompt(
+                original_content=existing_content,
+                design_doc=design_doc,
+                task_description=getattr(task, "description", str(task.task_id)),
+                ratio=fr.ratio,
+                threshold=fr.threshold,
+            )
+            logger.info(
+                "Gate 5: retrying %s file %s with edit-focused prompt "
+                "(ratio=%.1f%% < threshold=%.1f%%)",
+                task.task_id, fr.file_path, fr.ratio, fr.threshold,
+            )
+
+            try:
+                retry_response = executor.agent.generate(retry_prompt)
+                retry_text = (
+                    retry_response.text
+                    if hasattr(retry_response, "text")
+                    else str(retry_response)
+                )
+                retry_code = extract_code_fn(retry_text)
+
+                min_chars = len(existing_content) * (threshold / 100.0)
+                if not retry_code or len(retry_code) < min_chars:
+                    logger.warning(
+                        "Gate 5: retry for %s file %s still below threshold",
+                        task.task_id, fr.file_path,
+                    )
+                    continue
+
+                # Write retry result to staging
+                for gen_path in gr.generated_files:
+                    gfp = Path(gen_path)
+                    try:
+                        rel = str(gfp.relative_to(staging_dir))
+                    except ValueError:
+                        rel = gfp.name
+                    if rel == fr.file_path and gfp.exists():
+                        gfp.write_text(retry_code, encoding="utf-8")
+                        fr.output_chars = len(retry_code)
+                        new_ratio = (
+                            (len(retry_code) / fr.input_chars) * 100.0
+                            if fr.input_chars > 0
+                            else 100.0
+                        )
+                        fr.ratio = new_ratio
+                        fr.passed = True
+                        fr.action = "passed"
+                        retry_succeeded = True
+                        logger.info(
+                            "Gate 5: retry succeeded for %s file %s "
+                            "(new ratio=%.1f%%)",
+                            task.task_id, fr.file_path, fr.ratio,
+                        )
+                        break
+            except (OSError, RuntimeError, ValueError, Startd8Error) as retry_exc:
+                logger.warning(
+                    "Gate 5: retry failed for %s file %s: %s",
+                    task.task_id, fr.file_path, retry_exc,
+                    exc_info=True,
+                )
+
+        return retry_succeeded
 
     def _commit_features(
         self,

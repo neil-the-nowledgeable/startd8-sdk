@@ -16,11 +16,15 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from startd8.logging_config import get_logger
+from startd8.otel_conventions import EventNames
 
 logger = get_logger(__name__)
 
 # Default threshold when schema_features lacks "edit_first_enforcement"
 _DEFAULT_EDIT_MIN_PCT = 80
+
+# Valid values for EditFirstResult.action
+_VALID_ACTIONS = frozenset({"passed", "rejected", "new_file", "force_overridden"})
 
 
 @dataclass
@@ -39,7 +43,17 @@ class EditFirstResult:
 
 @dataclass
 class EditFirstGateResult:
-    """Per-task aggregate gate result."""
+    """Per-task aggregate gate result.
+
+    Attributes:
+        task_id: Task identifier.
+        file_results: Per-file check results.
+        any_rejected: True if any file failed the gate (before or after retry).
+        retry_needed: True if the initial check rejected any file (set once,
+            not cleared by retry — use ``retry_succeeded`` to check outcome).
+        retry_succeeded: True only when retry was attempted AND all previously
+            rejected files now pass.
+    """
 
     task_id: str
     file_results: list[EditFirstResult] = field(default_factory=list)
@@ -202,7 +216,7 @@ def emit_rejection_telemetry(
         if fr.action == "rejected":
             try:
                 span.add_event(
-                    "edit_first.size_regression",
+                    EventNames.EDIT_FIRST_SIZE_REGRESSION,
                     attributes={
                         "task.id": result.task_id,
                         "file.path": fr.file_path,

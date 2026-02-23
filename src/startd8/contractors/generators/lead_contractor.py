@@ -251,8 +251,12 @@ class LeadContractorCodeGenerator:
             if len(target_files) > 1:
                 from startd8.utils.code_extraction import extract_multi_file_code
 
+                # PCA-607: Prefer raw drafter response (contains ALL code blocks)
+                # over final_implementation (which is the LARGEST code block only).
+                raw_drafter = result.output.get("last_draft_raw_response", "")
+                split_source = raw_drafter if raw_drafter else final_implementation
                 per_file_code = extract_multi_file_code(
-                    final_implementation, target_files
+                    split_source, target_files
                 )
                 if len(per_file_code) == len(target_files):
                     logger.info(

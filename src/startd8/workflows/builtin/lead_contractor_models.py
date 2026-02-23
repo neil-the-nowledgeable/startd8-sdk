@@ -138,6 +138,7 @@ class DraftResult:
     time_ms: int = 0
     was_truncated: bool = False  # Whether output was truncated
     truncation_source: Optional[str] = None  # "api" or "heuristic"
+    raw_response: str = ""  # Full LLM response before code extraction (PCA-607)
 
 
 @dataclass

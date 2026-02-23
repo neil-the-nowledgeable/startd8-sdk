@@ -244,9 +244,23 @@ def _build_output_format(
     file_checklist = "\n".join(f"- [ ] `{f}` — has its own ``` code block" for f in ordered)
 
     if is_edit:
+        # PCA-607: Per-file line counts + minimum output constraint
+        line_parts = []
+        for fpath, content in existing_files.items():
+            flines = len(content.splitlines())
+            min_lines = int(flines * _EDIT_MIN_PCT / 100)
+            line_parts.append(
+                f"- `{fpath}`: {flines} lines — output MUST be AT LEAST {min_lines} lines"
+            )
+        existing_line_summary = (
+            "\n\nCRITICAL SIZE CONSTRAINT (per file):\n"
+            + "\n".join(line_parts)
+            + "\n\nOutputs shorter than 50% of the original will be REJECTED."
+        ) if line_parts else ""
         return MULTI_FILE_EDIT_OUTPUT_FORMAT.format(
             file_list=file_list,
             file_checklist=file_checklist,
+            existing_line_summary=existing_line_summary,
         )
     return MULTI_FILE_OUTPUT_FORMAT.format(
         file_list=file_list,
@@ -743,6 +757,8 @@ class LeadContractorWorkflow(WorkflowBase):
                 implementation=current_implementation,
                 reviews=result.reviews,
                 integration_instructions=integration_instructions,
+                target_files=context.get("target_files"),
+                existing_files=context.get("existing_files"),
             )
             result.integration = integration
 
@@ -796,6 +812,8 @@ class LeadContractorWorkflow(WorkflowBase):
             output={
                 "final_implementation": result.final_implementation,
                 "summary": result.to_summary(),
+                # PCA-607: Raw drafter response for multi-file extraction
+                "last_draft_raw_response": result.drafts[-1].raw_response if result.drafts else "",
             },
             metrics=metrics,
             steps=step_results,
@@ -1070,6 +1088,24 @@ class LeadContractorWorkflow(WorkflowBase):
 
         was_truncated = api_truncated or heuristic_truncated
 
+        # PCA-607: Size regression gate for edit tasks — detect catastrophic
+        # size reduction before the draft leaves this method.
+        size_regression_detected = False
+        if existing_files and implementation_code:
+            existing_total = sum(len(c.splitlines()) for c in existing_files.values())
+            extracted_lines = len(implementation_code.splitlines())
+            if existing_total > 50 and extracted_lines / existing_total < 0.50:
+                logger.warning(
+                    "Draft size regression: %d lines vs %d existing (%.0f%%)",
+                    extracted_lines, existing_total,
+                    100 * extracted_lines / existing_total,
+                )
+                size_regression_detected = True
+
+        was_truncated = was_truncated or size_regression_detected
+        if size_regression_detected and not truncation_source:
+            truncation_source = "size_regression"
+
         draft = DraftResult(
             draft_id=draft_id,
             iteration=iteration,
@@ -1082,6 +1118,7 @@ class LeadContractorWorkflow(WorkflowBase):
             time_ms=response_time_ms,
             was_truncated=was_truncated,
             truncation_source=truncation_source,
+            raw_response=response_text,  # PCA-607: preserve for multi-file extraction
         )
 
         draft.cost = self._pricing.calculate_total_cost(
@@ -1156,6 +1193,8 @@ class LeadContractorWorkflow(WorkflowBase):
         implementation: str,
         reviews: List[ReviewResult],
         integration_instructions: str,
+        target_files: Optional[List[str]] = None,
+        existing_files: Optional[Dict[str, str]] = None,
     ) -> IntegrationResult:
         """Phase 5: Lead integrates and finalizes the implementation."""
         integration_id = f"int-{uuid.uuid4().hex[:8]}"
@@ -1165,11 +1204,17 @@ class LeadContractorWorkflow(WorkflowBase):
             for r in reviews
         ])
 
+        # PCA-607: Build multi-file directive for integration context
+        multi_file_directive = self._build_multi_file_directive(
+            target_files, existing_files,
+        )
+
         prompt = INTEGRATION_PROMPT_TEMPLATE.format(
             task_description=task_description,
             implementation=implementation,
             review_history=review_history,
-            integration_instructions=integration_instructions or "Finalize for production use."
+            integration_instructions=integration_instructions or "Finalize for production use.",
+            multi_file_directive=multi_file_directive,
         )
 
         response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
@@ -1442,6 +1487,8 @@ class LeadContractorWorkflow(WorkflowBase):
                 implementation=current_implementation,
                 reviews=result.reviews,
                 integration_instructions=integration_instructions,
+                target_files=context.get("target_files"),
+                existing_files=context.get("existing_files"),
             )
             result.integration = integration
 
@@ -1493,6 +1540,8 @@ class LeadContractorWorkflow(WorkflowBase):
             output={
                 "final_implementation": result.final_implementation,
                 "summary": result.to_summary(),
+                # PCA-607: Raw drafter response for multi-file extraction
+                "last_draft_raw_response": result.drafts[-1].raw_response if result.drafts else "",
             },
             metrics=metrics,
             steps=step_results,
@@ -1633,6 +1682,23 @@ class LeadContractorWorkflow(WorkflowBase):
 
         was_truncated = api_truncated or heuristic_truncated
 
+        # PCA-607: Size regression gate for edit tasks (async mirror)
+        size_regression_detected = False
+        if existing_files and implementation_code:
+            existing_total = sum(len(c.splitlines()) for c in existing_files.values())
+            extracted_lines = len(implementation_code.splitlines())
+            if existing_total > 50 and extracted_lines / existing_total < 0.50:
+                logger.warning(
+                    "Draft size regression: %d lines vs %d existing (%.0f%%)",
+                    extracted_lines, existing_total,
+                    100 * extracted_lines / existing_total,
+                )
+                size_regression_detected = True
+
+        was_truncated = was_truncated or size_regression_detected
+        if size_regression_detected and not truncation_source:
+            truncation_source = "size_regression"
+
         draft = DraftResult(
             draft_id=draft_id,
             iteration=iteration,
@@ -1645,6 +1711,7 @@ class LeadContractorWorkflow(WorkflowBase):
             time_ms=response_time_ms,
             was_truncated=was_truncated,
             truncation_source=truncation_source,
+            raw_response=response_text,  # PCA-607: preserve for multi-file extraction
         )
 
         draft.cost = self._pricing.calculate_total_cost(
@@ -1716,6 +1783,8 @@ class LeadContractorWorkflow(WorkflowBase):
         implementation: str,
         reviews: List[ReviewResult],
         integration_instructions: str,
+        target_files: Optional[List[str]] = None,
+        existing_files: Optional[Dict[str, str]] = None,
     ) -> IntegrationResult:
         """Phase 5 (async): Lead integrates and finalizes the implementation."""
         integration_id = f"int-{uuid.uuid4().hex[:8]}"
@@ -1725,11 +1794,17 @@ class LeadContractorWorkflow(WorkflowBase):
             for r in reviews
         ])
 
+        # PCA-607: Build multi-file directive for integration context
+        multi_file_directive = self._build_multi_file_directive(
+            target_files, existing_files,
+        )
+
         prompt = INTEGRATION_PROMPT_TEMPLATE.format(
             task_description=task_description,
             implementation=implementation,
             review_history=review_history,
-            integration_instructions=integration_instructions or "Finalize for production use."
+            integration_instructions=integration_instructions or "Finalize for production use.",
+            multi_file_directive=multi_file_directive,
         )
 
         response_text, response_time_ms, token_usage = await lead_agent.agenerate(prompt)
@@ -1813,6 +1888,40 @@ class LeadContractorWorkflow(WorkflowBase):
         in ``startd8.utils.code_extraction``.
         """
         return extract_code_from_response(response)
+
+    @staticmethod
+    def _build_multi_file_directive(
+        target_files: Optional[List[str]] = None,
+        existing_files: Optional[Dict[str, str]] = None,
+    ) -> str:
+        """Build a multi-file directive for the integration prompt (PCA-607).
+
+        When the task targets multiple files *and* existing files are present,
+        returns explicit instructions listing required output files, per-file
+        fencing rules, and a preservation warning. Otherwise returns empty
+        string so the placeholder collapses to nothing.
+        """
+        if not target_files or len(target_files) <= 1:
+            return ""
+        if not existing_files:
+            return ""
+
+        file_list = "\n".join(f"  - `{f}`" for f in target_files)
+        per_file_lines = []
+        for fpath, content in existing_files.items():
+            line_count = len(content.splitlines())
+            per_file_lines.append(f"  - `{fpath}`: {line_count} lines (existing)")
+
+        return (
+            "\n## Multi-File Edit Directive\n"
+            "This task modifies MULTIPLE existing files. Your finalized output "
+            "MUST contain a SEPARATE fenced code block for EACH file:\n"
+            f"{file_list}\n\n"
+            "Per-file sizes:\n"
+            f"{''.join(per_file_lines) if per_file_lines else '  (no size data)'}\n\n"
+            "Each block must begin with `# <full path>` as the first line.\n"
+            "PRESERVE all existing code — do not summarize or abbreviate."
+        )
 
     # =========================================================================
     # Test Plan Generation Methods

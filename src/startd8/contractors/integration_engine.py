@@ -98,6 +98,33 @@ class IntegrationEngine:
             return str(path)
 
     # ------------------------------------------------------------------
+    # Path derivation (PCA-607)
+    # ------------------------------------------------------------------
+
+    def _derive_target_from_source(self, source_path: Path, unit: IntegrationUnit) -> Path:
+        """Derive a project-relative target path from a staging source path.
+
+        Strips known staging directory prefixes (e.g. ``.startd8/staging/``,
+        ``.startd8/state/``) to recover the original relative path.  Falls
+        back to ``project_root / source_path.name`` when no staging marker
+        is found (preserves previous behavior minus the hardcoded ``src/``).
+        """
+        source_resolved = source_path.resolve()
+        source_str = str(source_resolved)
+        staging_markers = [".startd8/staging", ".startd8/state"]
+        for marker in staging_markers:
+            marker_str = f"/{marker}/"
+            if marker_str in source_str:
+                relative = source_str.split(marker_str, 1)[1]
+                return sanitize_path(relative, base_dir=self.project_root)
+        logger.warning(
+            "Could not derive relative path for %s — using filename only",
+            source_path,
+            extra={"unit_id": unit.id},
+        )
+        return self.project_root / source_path.name
+
+    # ------------------------------------------------------------------
     # Snapshot management (extracted from PrimeContractor)
     # ------------------------------------------------------------------
 
@@ -377,7 +404,7 @@ class IntegrationEngine:
                     continue
             elif not source_path.exists():
                 if self.dry_run:
-                    target_path = self.project_root / "src" / source_path.name
+                    target_path = self._derive_target_from_source(source_path, unit)
                 else:
                     logger.error(
                         "Source file not found: %s", source_path,
@@ -385,7 +412,7 @@ class IntegrationEngine:
                     )
                     continue
             else:
-                target_path = self.project_root / "src" / source_path.name
+                target_path = self._derive_target_from_source(source_path, unit)
 
             # Dry run: log only
             if self.dry_run:

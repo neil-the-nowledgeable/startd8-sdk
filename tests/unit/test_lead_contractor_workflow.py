@@ -457,7 +457,8 @@ class TestPromptTemplates:
             task_description="Task",
             implementation="Code",
             review_history="History",
-            integration_instructions="Instructions"
+            integration_instructions="Instructions",
+            multi_file_directive="",
         )
         assert "Task" in prompt
         assert "Code" in prompt

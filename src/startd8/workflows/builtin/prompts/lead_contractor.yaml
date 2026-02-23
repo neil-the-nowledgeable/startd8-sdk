@@ -256,6 +256,7 @@ prompts:
 
       ## Integration Instructions
       {integration_instructions}
+      {multi_file_directive}
 
       ## Your Role
       1. Review the final implementation one last time
@@ -277,6 +278,7 @@ prompts:
       - implementation
       - review_history
       - integration_instructions
+      - multi_file_directive
 
   single_file_edit_output:
     description: "Output format for single-file edit tasks (PCA-602 + PCA-605)"
@@ -307,6 +309,7 @@ prompts:
       You must strive to preserve all existing code. Significant code removal
       will be blocked by downstream integration guards.
       Do NOT omit, summarize, or abbreviate any existing code.
+      {existing_line_summary}
 
       REQUIRED files (you MUST produce ALL of these — do not skip any):
       {file_list}
@@ -329,3 +332,4 @@ prompts:
     placeholders:
       - file_list
       - file_checklist
+      - existing_line_summary
