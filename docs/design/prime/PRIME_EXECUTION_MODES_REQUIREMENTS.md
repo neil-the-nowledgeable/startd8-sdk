@@ -48,6 +48,167 @@ This creates two problems:
 
 ## Requirements
 
+### Layer 0: Pipeline Validation Gates (REQ-PEM-000, REQ-PEM-000a)
+
+#### REQ-PEM-000: Edit-First Smoke Test
+
+**Priority:** P0 (prerequisite to all other phases)
+**Source files:** `src/startd8/contractors/prime_contractor.py`
+**Depends on:** PCA-503 (Edit-First Directive in IMPLEMENT prompt), PCA-600 (Edit-Mode Classification)
+
+Before any functional changes are made to `prime_contractor.py`, the Artisan pipeline MUST demonstrate that it can **edit the existing file** rather than regenerating it from scratch. This is a blocking validation gate for all subsequent phases.
+
+**Problem statement:** The Artisan 8-phase pipeline's IMPLEMENT phase has consistently failed to honor edit-first behavior (PCA-5xx) when targeting SDK-internal files. Instead of reading the existing `prime_contractor.py` (~1800 lines of production code) and applying surgical edits, the pipeline generates a complete replacement file, destroying all existing functionality. This has been the primary blocker for implementing the Execution Modes plan — every attempt to implement Phase 1 (FR-001–FR-004) via the Artisan pipeline results in a from-scratch rewrite that breaks the entire Prime Contractor.
+
+**Validation task:** The Artisan pipeline MUST successfully execute a single trivial edit to `prime_contractor.py`:
+
+1. Add a module-level constant to `prime_contractor.py`:
+   ```python
+   # Edit-first validation marker (REQ-PEM-000) — remove after Phase 1 completion
+   _EDIT_FIRST_VALIDATED = True
+   ```
+2. The edit MUST be applied to the **existing** file content — the file's existing code (classes, methods, imports, docstrings) MUST remain unchanged after the edit.
+3. The edit MUST NOT regenerate, rewrite, or replace the file. The diff MUST show only the addition of the constant (±5 lines for surrounding whitespace).
+
+**Success criteria:**
+- `git diff` after the Artisan run shows ONLY the addition of the `_EDIT_FIRST_VALIDATED` constant (and any necessary blank lines)
+- All existing tests pass without modification
+- The file line count changes by no more than 3 lines
+- No existing imports, classes, methods, or docstrings are modified
+
+**Failure criteria (any one triggers failure):**
+- The generated file differs from the original by more than 10 lines
+- Any existing class or method signature is altered
+- Any existing import is removed or reordered
+- The file is shorter than the original (indicates from-scratch generation)
+
+**Rationale:** This requirement exists because the Artisan pipeline has never successfully edited `prime_contractor.py` — it has only ever produced from-scratch rewrites. Until the pipeline can demonstrate a trivial edit, attempting complex multi-class refactoring (Phase 1–5) will continue to fail destructively. This is the smallest possible validation of PCA-5xx edit-first behavior against a real SDK-internal target file.
+
+**Acceptance criteria:**
+- The `_EDIT_FIRST_VALIDATED = True` constant exists in `prime_contractor.py` after a successful Artisan run
+- The Artisan run log shows edit-mode classification as `edit` (not `create` or `greenfield`)
+- The diff between pre-run and post-run `prime_contractor.py` is ≤10 lines changed
+- All existing unit tests pass
+- After validation, the constant MAY be removed or retained as a sentinel — it has no functional impact
+
+---
+
+#### REQ-PEM-000a: Full-Depth OTel Tracing Verification via Phase 0 Trace
+
+**Priority:** P0 (prerequisite to all other phases)
+**Source files:** Grafana Tempo trace produced by Phase 0 Artisan run
+**Depends on:** REQ-PEM-000 (edit-first smoke test must pass first), OT-1xx through OT-6xx (implemented OTel instrumentation), `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md` (design principle validation)
+**Validates:** `ARTISAN_OTEL_FULL_DEPTH_TRACING_REQUIREMENTS.md` (OT-100–OT-507, OT-600), `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md` (prescriptive verification of context correctness)
+
+The Phase 0 Artisan run (REQ-PEM-000) produces the simplest possible end-to-end pipeline execution: a single task, one target file, trivial edit. This makes it an ideal test subject for verifying that the full-depth OTel tracing instrumentation (OT-1xx through OT-6xx) produces a correct, complete, and queryable trace — and that context correctness by construction can be programmatically validated via trace inspection.
+
+**Problem statement:** The full-depth OTel tracing requirements (43 requirements across 7 layers) have 25 implemented and 18 planned. The implemented requirements (OT-100–OT-507, OT-600) have unit tests (`test_thread_context_propagation.py`, `test_artisan_otel_spans.py`) but no end-to-end verification against a real pipeline run. The `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md` design principle — that "silent degradation is structurally impossible when contracts generate signals at every boundary" — has never been validated programmatically. Phase 0's trivial edit provides a controlled, reproducible execution that can serve as the baseline trace for both verifications.
+
+**Verification approach:** After Phase 0 completes successfully (REQ-PEM-000 passes), the resulting trace in Grafana Tempo MUST be queried programmatically to verify the span hierarchy, context propagation, gate boundary events, and per-task attributes. This transforms the theoretical "context correctness by construction" principle into an empirical, repeatable validation.
+
+**Span hierarchy verification (§4 of ARTISAN_OTEL_FULL_DEPTH_TRACING_REQUIREMENTS.md):**
+
+The Phase 0 trace MUST contain the following span hierarchy:
+
+```
+workflow.{workflow_id}                            # AR-600
+  └── phase.plan                                   # AR-601
+  │    ├── gate.entry                              # OT-200
+  │    │    └── [context.boundary.entry event]
+  │    ├── task.{task_id}                           # OT-301 (single task)
+  │    └── gate.exit                               # OT-201
+  │         └── [context.boundary.exit event]
+  └── phase.scaffold                               # AR-601
+  │    ├── gate.entry                              # OT-200
+  │    └── gate.exit                               # OT-201
+  └── phase.design                                 # AR-601
+  │    ├── gate.entry                              # OT-200
+  │    ├── task.{task_id}                           # OT-301
+  │    │    └── design.iteration.1                 # OT-404
+  │    │         ├── design.generate               # OT-401
+  │    │         │    ├── [llm.call.start event]   # OT-400
+  │    │         │    └── [llm.call.complete event] # OT-400
+  │    │         └── design.review.reviewer         # OT-402
+  │    └── gate.exit                               # OT-201
+  └── phase.implement                              # AR-601
+  │    ├── gate.entry                              # OT-200
+  │    ├── task.{task_id}                           # OT-301 (single task)
+  │    │    └── implement.chunk.{chunk_id}         # OT-305
+  │    └── gate.exit                               # OT-201
+  └── phase.integrate                              # AR-601
+  │    ├── gate.entry                              # OT-200
+  │    ├── task.{task_id}                           # OT-302
+  │    └── gate.exit                               # OT-201
+  └── phase.test                                   # AR-601
+  │    ├── gate.entry                              # OT-200
+  │    ├── task.{task_id}                           # OT-303
+  │    │    └── test.generate                      # OT-405
+  │    └── gate.exit                               # OT-201
+  └── phase.review                                 # AR-601
+  │    ├── gate.entry                              # OT-200
+  │    ├── task.{task_id}                           # OT-304
+  │    └── gate.exit                               # OT-201
+  └── phase.finalize                               # AR-601
+       ├── gate.entry                              # OT-200
+       └── gate.exit                               # OT-201
+```
+
+**TraceQL verification queries:**
+
+Each query MUST return results from the Phase 0 trace. A query returning zero results indicates a tracing gap.
+
+| # | Query | Validates | Expected |
+|---|-------|-----------|----------|
+| V-1 | `{ resource.service.name = "startd8-sdk" && name = "workflow.*" }` | AR-600: Root span exists | 1 span |
+| V-2 | `{ name =~ "phase\\..*" } \| select(span.gate.phase)` | AR-601: All 8 phase spans present | 8 spans (plan, scaffold, design, implement, integrate, test, review, finalize) |
+| V-3 | `{ name = "gate.entry" } \| select(span.gate.passed, span.gate.propagation_status)` | OT-200: Gate entry spans with attributes | ≥8 spans (one per phase) |
+| V-4 | `{ name = "gate.exit" } \| select(span.gate.passed)` | OT-201: Gate exit spans | ≥8 spans |
+| V-5 | `{ name =~ "task\\..*" } \| select(span.task.id, span.task.status)` | OT-301–304: Per-task spans across phases | ≥4 spans (plan, design, implement, integrate, test, review) |
+| V-6 | `{ name =~ "design\\.iteration\\..*" }` | OT-404: Design iteration spans | ≥1 span |
+| V-7 | `{ name = "design.generate" }` | OT-401: Design generate span | ≥1 span |
+| V-8 | `{ name =~ "implement\\.chunk\\..*" } \| select(span.chunk.status)` | OT-305: Implement chunk span | 1 span |
+| V-9 | `{ name = "test.generate" }` | OT-405: Test generate span | 1 span |
+| V-10 | `{ name =~ "design\\.review\\..*" }` | OT-402: Design review span | ≥1 span |
+| V-11 | `{ status = error }` | OT-507: No error spans (successful run) | 0 spans |
+| V-12 | `{ name = "design.generate" } >> { name =~ "task\\..*" }` | OT-103: Design spans are children of task spans (thread propagation) | Ancestor match |
+| V-13 | `{ name =~ "implement\\.chunk\\..*" } >> { name =~ "task\\..*" }` | OT-104: Implement spans are children of task spans (thread propagation) | Ancestor match |
+
+**Context correctness by construction validation (`CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md`):**
+
+The trace produced by Phase 0 provides empirical evidence for the document's core claims:
+
+1. **"Silent degradation is structurally impossible when contracts generate signals at every boundary"** — V-3 and V-4 verify that gate spans with `gate.passed` and `gate.propagation_status` attributes exist at every phase boundary. If any gate span is missing, context propagation at that boundary is invisible — violating the principle.
+
+2. **"Prescriptive over descriptive"** — The gate span attributes (`gate.passed`, `gate.propagation_status`) declare what *should* happen (context must propagate intact) and record what *did* happen. A `gate.propagation_status = "DEGRADED"` or `"BROKEN"` is a prescriptive signal, not a post-hoc description.
+
+3. **"Observable contracts over invisible guarantees"** — The trace makes the contract system itself observable. V-3 verifies that contract validation events (`context.boundary.entry`) land inside gate spans, making them navigable in Tempo's waterfall view. Without this nesting, contract events are orphaned and undiscoverable.
+
+4. **"Layer 1: Context Propagation" is the keystone** — The Phase 0 trace validates that the Artisan pipeline's Layer 1 implementation (PropagationChainSpec → BoundaryValidator → PropagationTracker → emit_boundary_result) produces queryable spans at every phase transition. This is the structural property that all higher layers (schema compat, semantic conventions, causal ordering) depend on.
+
+**Programmatic verification script:**
+
+A verification script MUST be created that:
+1. Retrieves the Phase 0 trace from Tempo via the Tempo API (`/api/traces/{traceId}`)
+2. Executes each TraceQL query (V-1 through V-13) against the trace
+3. Asserts expected results (span counts, attribute presence, parent-child relationships)
+4. Reports pass/fail per query with diagnostic output on failure
+5. Produces a summary: `"Context Correctness Verification: {passed}/{total} checks passed"`
+
+**Acceptance criteria:**
+- All 13 TraceQL verification queries (V-1 through V-13) return expected results from the Phase 0 trace
+- The verification script runs successfully and produces a pass/fail report
+- Gate spans at every phase boundary contain `gate.passed` and `gate.propagation_status` attributes (context correctness is observable, not invisible)
+- Design and implement phase spans are correctly parented via thread context propagation (OT-103, OT-104) — no orphaned spans
+- The `context.boundary.entry` and `context.boundary.exit` events are nested inside their respective gate spans (contract events are navigable in Tempo waterfall)
+- `{ status = error }` returns 0 spans (the Phase 0 run succeeded)
+- The verification script is reusable for future Artisan runs — it accepts a trace ID as input and validates any pipeline execution
+
+**Relationship to planned requirements (OT-7xx):**
+
+This requirement validates the *implemented* OTel instrumentation (OT-1xx through OT-6xx). The *planned* forensic logging layer (OT-7xx: OT-700–OT-714) is out of scope for this verification. Once OT-7xx is implemented, the Phase 0 trace can be extended to validate forensic log emission and trace-to-log correlation (OT-708) — but that is a future addition to this requirement, not a prerequisite.
+
+---
+
 ### Layer 1: Execution Mode Declaration (REQ-PEM-001–003)
 
 #### REQ-PEM-001: ExecutionMode Enum

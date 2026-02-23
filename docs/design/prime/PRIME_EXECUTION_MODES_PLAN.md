@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0
 **Created:** 2026-02-20
-**Implements:** `PRIME_EXECUTION_MODES_REQUIREMENTS.md` (REQ-PEM-001–017)
+**Implements:** `PRIME_EXECUTION_MODES_REQUIREMENTS.md` (REQ-PEM-000–018)
 
 ---
 
@@ -46,6 +46,8 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 
 | ID | Requirement | Acceptance Criteria | Phase |
 |----|-------------|---------------------|-------|
+| FR-000 | Edit-first smoke test: trivial constant addition to existing `prime_contractor.py` | `_EDIT_FIRST_VALIDATED = True` added; diff ≤10 lines; all existing tests pass; no existing code altered | 0 |
+| FR-000a | Full-depth OTel tracing verification via Phase 0 trace | All 13 TraceQL queries pass; span hierarchy matches spec; context correctness validated programmatically | 0a |
 | FR-001 | ExecutionMode enum with STANDALONE/PIPELINE values | Enum defined, string-valued, importable from prime_contractor | 1 |
 | FR-002 | ModeConfig frozen dataclass with per-mode defaults | `ModeConfig.for_mode()` returns correct config; `dataclasses.replace()` works | 1 |
 | FR-003 | SeedContext typed container replaces ad-hoc attributes | Property accessors delegate to SeedContext; backward compatibility preserved | 1 |
@@ -62,6 +64,147 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 ---
 
 ## Implementation Phases
+
+### Phase 0: Edit-First Validation (Smoke Test)
+
+**Goal:** Prove the Artisan pipeline can surgically edit `prime_contractor.py` without rewriting it from scratch. This is a blocking prerequisite for all subsequent phases.
+
+**Motivation:** Every prior attempt to implement this plan via the Artisan 8-phase pipeline has failed because the IMPLEMENT phase generates `prime_contractor.py` from scratch (~1800 lines of production code destroyed and replaced with a partial reimplementation). The PCA-5xx edit-first requirements (PCA-500–505) and PCA-6xx enforcement requirements (PCA-600–604) exist specifically to prevent this, but have not been validated against SDK-internal target files. This phase is the smallest possible validation: a single constant addition that proves the pipeline can read, preserve, and minimally modify the existing file.
+
+**Files modified:**
+
+| File | Change |
+|------|--------|
+| `src/startd8/contractors/prime_contractor.py` | Add `_EDIT_FIRST_VALIDATED = True` module-level constant |
+
+**Steps:**
+
+1. **Configure the Artisan task** with a single task targeting `prime_contractor.py`:
+   - `target_files`: `["src/startd8/contractors/prime_contractor.py"]`
+   - Task description: "Add module-level constant `_EDIT_FIRST_VALIDATED = True` with a comment referencing REQ-PEM-000. Do not modify any existing code."
+   - The task MUST trigger edit-mode classification (not greenfield) because the target file exists
+
+2. **Run the Artisan pipeline** (PLAN → SCAFFOLD → DESIGN → IMPLEMENT → INTEGRATE → TEST → REVIEW → FINALIZE)
+
+3. **Validate the output:**
+   - `git diff src/startd8/contractors/prime_contractor.py` shows ONLY the constant addition (±5 lines)
+   - No existing imports, classes, methods, or docstrings are altered
+   - File line count increases by ≤3 lines
+   - All existing tests pass: `pytest tests/unit/contractors/ -v`
+
+4. **If validation fails** (file rewritten from scratch):
+   - Do NOT proceed to Phase 1
+   - Diagnose the edit-first pipeline failure — check:
+     - Did `_classify_edit_mode()` return `edit`? (PCA-600)
+     - Did `_build_prompt()` include the `## Existing Files` section? (PCA-503)
+     - Did `_build_prompt()` include the `## Edit-First Directive`? (PCA-503)
+     - Did the LLM response contain the full existing file or just the delta?
+   - Fix the edit-first pipeline and re-run Phase 0 until it passes
+
+**Tests:**
+- Existing tests pass unchanged
+- `_EDIT_FIRST_VALIDATED` constant is importable from `startd8.contractors.prime_contractor`
+- File diff is ≤10 lines
+
+**Deliverables:**
+- [ ] `src/startd8/contractors/prime_contractor.py` — contains `_EDIT_FIRST_VALIDATED = True` with only the constant added
+
+**Commit gate:** `git diff --stat` shows 1 file changed, ≤3 insertions. All existing tests pass.
+
+**Exit criteria for proceeding to Phase 0a:** Phase 0 MUST pass before Phase 0a begins. If the Artisan pipeline cannot add a single constant without rewriting the file, the OTel trace will be meaningless (it would trace a destructive rewrite, not a valid edit).
+
+---
+
+### Phase 0a: Full-Depth OTel Tracing Verification
+
+**Goal:** Use the trace produced by Phase 0's Artisan run to programmatically verify that the full-depth OTel instrumentation (OT-1xx through OT-6xx, 25 implemented requirements) produces a correct, complete span hierarchy — and that the `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md` design principle is empirically validated via trace queries.
+
+**Motivation:** Phase 0's hello world edit runs through all 8 Artisan phases (PLAN → SCAFFOLD → DESIGN → IMPLEMENT → INTEGRATE → TEST → REVIEW → FINALIZE) with a single task targeting one file. This is the simplest possible end-to-end pipeline execution, making it the ideal controlled environment for verifying that:
+
+1. The full span hierarchy (§4 of `ARTISAN_OTEL_FULL_DEPTH_TRACING_REQUIREMENTS.md`) is emitted correctly — workflow → phase → gate → task → design/implement/test spans
+2. Thread context propagation (OT-103, OT-104) correctly parents design and implement phase spans inside their task spans (no orphaned spans)
+3. Gate boundary spans (OT-200, OT-201) contain `gate.passed` and `gate.propagation_status` attributes at every phase transition — proving that context correctness is *observable* at every boundary, not invisible
+4. Contract events (`context.boundary.entry`, `context.boundary.exit`) are nested inside gate spans — proving that the contract system's signals are navigable in Tempo's waterfall view
+5. Per-task span attributes (`task.id`, `task.status`, `task.cost`, `task.domain`) are set (OT-301–304)
+6. LLM call span events (`llm.call.start`, `llm.call.complete`) are present in design and implement phases (OT-400)
+7. No error spans exist for a successful run (OT-507)
+
+This validates the core claim of `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md`: *"Silent degradation — no errors, reduced quality — is the hardest failure mode to detect. A contract system makes it structurally impossible for context to degrade without generating a signal."* If the trace shows gate spans with propagation status at every boundary, silent degradation at those boundaries is indeed impossible without a signal.
+
+**Prerequisites:**
+- Phase 0 has passed (REQ-PEM-000 satisfied)
+- Grafana/Tempo stack is running (`docker-compose.loki-stack.yml`)
+- Tempo datasource is configured (OT-600: `scripts/configure_tempo_datasource.sh`)
+
+**Files created:**
+
+| File | Purpose |
+|------|---------|
+| `scripts/verify_otel_trace.py` | Programmatic trace verification script |
+
+**Steps:**
+
+1. **Capture the trace ID** from Phase 0's Artisan run output. The workflow root span's trace ID is logged at workflow start and available via `workflow.{workflow_id}` span.
+
+2. **Create `scripts/verify_otel_trace.py`** — a verification script that:
+   - Accepts a trace ID as CLI argument
+   - Retrieves the trace from Tempo via the HTTP API (`GET /api/traces/{traceId}`)
+   - Parses the span hierarchy from the trace response
+   - Executes 13 verification checks (V-1 through V-13) against the span data:
+
+   | # | Check | Validates | Expected |
+   |---|-------|-----------|----------|
+   | V-1 | Root `workflow.*` span exists | AR-600 | 1 span |
+   | V-2 | All 8 `phase.*` spans present (plan, scaffold, design, implement, integrate, test, review, finalize) | AR-601 | 8 spans |
+   | V-3 | `gate.entry` spans with `gate.passed` and `gate.propagation_status` attributes | OT-200 | ≥8 spans |
+   | V-4 | `gate.exit` spans with `gate.passed` attribute | OT-201 | ≥8 spans |
+   | V-5 | `task.*` spans with `task.id` and `task.status` attributes | OT-301–304 | ≥4 spans |
+   | V-6 | `design.iteration.*` spans exist | OT-404 | ≥1 span |
+   | V-7 | `design.generate` span exists | OT-401 | ≥1 span |
+   | V-8 | `implement.chunk.*` span with `chunk.status` attribute | OT-305 | 1 span |
+   | V-9 | `test.generate` span exists | OT-405 | 1 span |
+   | V-10 | `design.review.*` span exists | OT-402 | ≥1 span |
+   | V-11 | No `status = error` spans (successful run) | OT-507 | 0 spans |
+   | V-12 | `design.generate` spans have a `task.*` ancestor (not orphaned) | OT-103 | Parent chain intact |
+   | V-13 | `implement.chunk.*` spans have a `task.*` ancestor (not orphaned) | OT-104 | Parent chain intact |
+
+   - Reports pass/fail per check with diagnostic output
+   - Produces summary: `"Context Correctness Verification: {passed}/13 checks passed"`
+   - Exits with code 0 on all-pass, code 1 on any failure
+
+3. **Run the verification script:**
+   ```bash
+   python3 scripts/verify_otel_trace.py --trace-id <trace_id_from_phase_0>
+   ```
+
+4. **Context Correctness by Construction validation** — the script's output provides empirical evidence for four claims from `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md`:
+
+   | Principle | Evidence | Checks |
+   |-----------|----------|--------|
+   | "Silent degradation is structurally impossible when contracts generate signals" | Gate spans with `gate.propagation_status` at every phase boundary | V-3, V-4 |
+   | "Prescriptive over descriptive" | Gate attributes declare expected state (`gate.passed=true`) and record actual state — a mismatch is a prescriptive signal | V-3 |
+   | "Observable contracts over invisible guarantees" | `context.boundary.*` events nested inside gate spans → navigable in Tempo waterfall | V-3, V-4 |
+   | "Context flow through service boundaries shares the same structure as data flow through a type system" | Every phase transition has a boundary validator (gate span), analogous to a type checker at every function call site | V-2, V-3, V-4 |
+
+5. **If verification fails:**
+   - For missing spans: Check whether the corresponding OT-xxx requirement is truly implemented — the unit tests may pass with mocks but the real pipeline may not execute the instrumented code path
+   - For orphaned spans (V-12, V-13 fail): Thread context propagation (OT-103, OT-104) is broken — `capture_context()` / `attach_context()` / `detach_context()` may not be called on the actual thread path
+   - For missing gate attributes: `validate_phase_boundary()` may not be called, or `emit_boundary_result()` may not emit inside the gate span
+   - Fix the instrumentation and re-run Phase 0 + Phase 0a
+
+**Tests:**
+- The verification script itself is tested: mock Tempo API responses for pass/fail scenarios
+- The script is reusable for any Artisan run — not specific to Phase 0
+
+**Deliverables:**
+- [ ] `scripts/verify_otel_trace.py` — Programmatic trace verification script (accepts trace ID, queries Tempo, validates 13 checks, reports pass/fail)
+- [ ] Phase 0 trace passes all 13 verification checks
+
+**Commit gate:** `verify_otel_trace.py` exits with code 0 for the Phase 0 trace. All 13 checks pass.
+
+**Exit criteria for proceeding to Phase 1:** Phase 0 AND Phase 0a MUST both pass before Phase 1 begins. Phase 0 proves the Artisan can edit files. Phase 0a proves the OTel instrumentation correctly traces the edit — establishing that context correctness by construction is not just a design principle but an empirically verified property of the pipeline. Together, they provide confidence that Phase 1's more complex changes (ExecutionMode enum, ModeConfig, SeedContext) will be both correctly applied AND fully observable.
+
+---
 
 ### Phase 1: Foundation (Mode + SeedContext)
 
