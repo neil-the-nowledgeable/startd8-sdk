@@ -4638,6 +4638,25 @@ class Test{class_name}:
                 dev_result, chunks, tasks, skipped_reports,
             )
 
+            # ── All-tasks-failed guard ────────────────────────────────
+            # When chunks were dispatched but zero generation results came
+            # back, every task failed (e.g. API overloaded, auth error).
+            # Raise so the orchestrator marks the phase FAILED instead of
+            # silently passing empty results to INTEGRATE/TEST/REVIEW.
+            if chunks and not generation_results:
+                failed_reports = [
+                    r for r in output.get("task_reports", [])
+                    if r.get("status") == "generation_failed"
+                ]
+                error_details = "; ".join(
+                    f"{r['task_id']}: {r.get('error', 'unknown')}"
+                    for r in failed_reports[:3]
+                )
+                raise RuntimeError(
+                    f"IMPLEMENT: all {len(chunks)} task(s) failed generation. "
+                    f"No code was produced. Details: {error_details or 'no error details'}"
+                )
+
             # ── Gate 3: post-IMPLEMENT multi-file split validation ────
             # Per defense-in-depth Principle 1 (validate at every
             # boundary): verify that every multi-file task actually

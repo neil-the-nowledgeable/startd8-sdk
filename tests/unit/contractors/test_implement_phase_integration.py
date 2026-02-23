@@ -2573,3 +2573,209 @@ class TestCacheWriteFailureNonFatal:
         # Phase should complete successfully despite write failure
         assert result["cost"] == pytest.approx(0.10)
         assert "T1" in context["generation_results"]
+
+
+# ============================================================================
+# Tests: All-tasks-failed guard (API overload / auth error propagation)
+# ============================================================================
+
+
+class TestAllTasksFailedGuard:
+    """IMPLEMENT phase raises RuntimeError when all tasks fail generation.
+
+    Covers the scenario where chunks are dispatched to DevelopmentPhase
+    but every task fails (e.g. API 529 overloaded, auth error). Without
+    this guard, the phase silently reports "completed" with empty results,
+    and downstream phases (INTEGRATE/TEST/REVIEW) run with nothing to do.
+    """
+
+    @patch.object(ImplementPhaseHandler, "_run_development_phase")
+    def test_all_tasks_failed_raises_runtime_error(
+        self, mock_run_dev, tmp_path,
+    ):
+        """When every chunk fails and gen_result is None, raise RuntimeError."""
+        # Chunk with no _generation_result (API never responded)
+        chunk = DevelopmentChunk(
+            chunk_id="T1",
+            description="test",
+            dependencies=[],
+            file_targets=["src/feature.py"],
+            implementation_prompt="test",
+            test_commands=[],
+            metadata={
+                "feature_id": "F1",
+                "title": "Test feature",
+                "domain": "backend",
+                "estimated_loc": 100,
+                "prompt_constraints": [],
+                "post_generation_validators": [],
+                # No _generation_result — API error before response
+            },
+        )
+
+        state = ChunkState(
+            chunk_id="T1",
+            status=ChunkStatus.FAILED,
+            attempts=3,
+            last_error="Error code: 529 - overloaded",
+        )
+        dev_result = DevelopmentResult(
+            plan_id="test",
+            success=False,
+            chunk_states={"T1": state},
+            execution_order=[["T1"]],
+            total_duration_seconds=45.0,
+            summary="0 passed, 1 failed",
+        )
+        mock_run_dev.return_value = dev_result
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="T1")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk], []),
+        ):
+            with pytest.raises(RuntimeError, match="all 1 task.*failed generation"):
+                handler.execute(
+                    WorkflowPhase.IMPLEMENT, context, dry_run=False,
+                )
+
+    @patch.object(ImplementPhaseHandler, "_run_development_phase")
+    def test_partial_failure_does_not_raise(
+        self, mock_run_dev, tmp_path,
+    ):
+        """When at least one task succeeds, do not raise."""
+        gen_result = _make_gen_result(success=True, cost=0.05)
+
+        chunk_ok = DevelopmentChunk(
+            chunk_id="T1",
+            description="ok",
+            dependencies=[],
+            file_targets=["src/a.py"],
+            implementation_prompt="test",
+            test_commands=[],
+            metadata={
+                "feature_id": "F1",
+                "title": "OK task",
+                "domain": "backend",
+                "estimated_loc": 50,
+                "prompt_constraints": [],
+                "post_generation_validators": [],
+                "_generation_result": gen_result,
+            },
+        )
+        chunk_fail = DevelopmentChunk(
+            chunk_id="T2",
+            description="fail",
+            dependencies=[],
+            file_targets=["src/b.py"],
+            implementation_prompt="test",
+            test_commands=[],
+            metadata={
+                "feature_id": "F2",
+                "title": "Failed task",
+                "domain": "backend",
+                "estimated_loc": 50,
+                "prompt_constraints": [],
+                "post_generation_validators": [],
+                # No _generation_result
+            },
+        )
+
+        state_ok = ChunkState(
+            chunk_id="T1", status=ChunkStatus.PASSED, attempts=1,
+        )
+        state_fail = ChunkState(
+            chunk_id="T2", status=ChunkStatus.FAILED, attempts=3,
+            last_error="API error",
+        )
+        dev_result = DevelopmentResult(
+            plan_id="test",
+            success=False,
+            chunk_states={"T1": state_ok, "T2": state_fail},
+            execution_order=[["T1", "T2"]],
+            total_duration_seconds=30.0,
+            summary="1 passed, 1 failed",
+        )
+        mock_run_dev.return_value = dev_result
+
+        handler = ImplementPhaseHandler()
+        tasks = [
+            _make_seed_task(task_id="T1"),
+            _make_seed_task(task_id="T2"),
+        ]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk_ok, chunk_fail], []),
+        ):
+            # Should NOT raise — T1 succeeded
+            result = handler.execute(
+                WorkflowPhase.IMPLEMENT, context, dry_run=False,
+            )
+
+        assert "T1" in context["generation_results"]
+        assert context["generation_results"]["T1"].success is True
+
+    @patch.object(ImplementPhaseHandler, "_run_development_phase")
+    def test_error_message_includes_task_details(
+        self, mock_run_dev, tmp_path,
+    ):
+        """Error message includes task IDs and error details."""
+        chunk = DevelopmentChunk(
+            chunk_id="PI-005",
+            description="test",
+            dependencies=[],
+            file_targets=["src/seed_context.py"],
+            implementation_prompt="test",
+            test_commands=[],
+            metadata={
+                "feature_id": "F-003",
+                "title": "SeedContext",
+                "domain": "backend",
+                "estimated_loc": 100,
+                "prompt_constraints": [],
+                "post_generation_validators": [],
+            },
+        )
+
+        state = ChunkState(
+            chunk_id="PI-005",
+            status=ChunkStatus.FAILED,
+            attempts=3,
+            last_error="529 overloaded",
+        )
+        dev_result = DevelopmentResult(
+            plan_id="test",
+            success=False,
+            chunk_states={"PI-005": state},
+            execution_order=[["PI-005"]],
+            total_duration_seconds=45.0,
+            summary="0 passed, 1 failed",
+        )
+        mock_run_dev.return_value = dev_result
+
+        handler = ImplementPhaseHandler()
+        tasks = [_make_seed_task(task_id="PI-005")]
+        context: dict[str, Any] = {
+            "tasks": tasks,
+            "project_root": str(tmp_path),
+        }
+
+        with patch.object(
+            ImplementPhaseHandler, "_tasks_to_chunks",
+            return_value=([chunk], []),
+        ):
+            with pytest.raises(RuntimeError, match="PI-005.*529 overloaded"):
+                handler.execute(
+                    WorkflowPhase.IMPLEMENT, context, dry_run=False,
+                )
