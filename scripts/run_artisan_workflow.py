@@ -807,6 +807,8 @@ def main() -> int:
         initial_context["force_regenerate"] = True
     if args.strict_validation:
         initial_context["strict_validation"] = True
+    if args.no_auto_commit:
+        initial_context["auto_commit"] = False
 
     try:
         result = workflow.execute(

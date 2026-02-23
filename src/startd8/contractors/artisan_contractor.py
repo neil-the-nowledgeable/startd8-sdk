@@ -1802,9 +1802,25 @@ class ArtisanContractorWorkflow:
         self,
         phase: WorkflowPhase,
         feature_id: Optional[str] = None,
+        context: Optional[dict[str, Any]] = None,
     ) -> None:
-        """Commit changes to git after a successful phase."""
+        """Commit changes to git after the FINALIZE phase completes.
+
+        Only commits once per feature/task at the end of the pipeline
+        (FINALIZE phase), not at every intermediate phase boundary.
+        Intermediate state is preserved by the checkpoint system.
+        """
         if self.config.dry_run:
+            return
+
+        # Only commit after FINALIZE — intermediate phases use checkpoints
+        if phase != WorkflowPhase.FINALIZE:
+            return
+
+        # Respect --no-auto-commit (propagated via context)
+        ctx = context or {}
+        if ctx.get("auto_commit") is False:
+            self._logger.info("Auto-commit disabled (--no-auto-commit)")
             return
 
         # Lane-parallel mode: concurrent git operations would race.
@@ -1844,10 +1860,8 @@ class ArtisanContractorWorkflow:
                 text=True,
             )
 
-            # Construct commit message
-            msg = f"Artisan: Completed phase {phase.value}"
-            if feature_id:
-                msg += f" for feature {feature_id}"
+            # Build a meaningful per-feature commit message from context
+            msg = self._build_commit_message(feature_id, context)
 
             # Commit
             subprocess.run(
@@ -1907,6 +1921,42 @@ class ArtisanContractorWorkflow:
                 self._logger.warning(
                     "Non-interactive session: continuing workflow despite git failure."
                 )
+
+    def _build_commit_message(
+        self,
+        feature_id: Optional[str] = None,
+        context: Optional[dict[str, Any]] = None,
+    ) -> str:
+        """Build a descriptive commit message from task context.
+
+        Format: ``feat(<task_id>): <title>``  with review score in body.
+        Falls back to generic message if context is unavailable.
+        """
+        ctx = context or {}
+        tasks = ctx.get("tasks") or []
+
+        # Find the task matching this feature/filter
+        task_id = feature_id or ctx.get("task_filter")
+        task_title = ""
+        if task_id and tasks:
+            for t in tasks:
+                tid = getattr(t, "task_id", None) or (t.get("task_id") if isinstance(t, dict) else None)
+                if tid == task_id:
+                    task_title = getattr(t, "title", None) or (t.get("title", "") if isinstance(t, dict) else "")
+                    break
+
+        # If single-task run with no feature_id, use the first (only) task
+        if not task_id and len(tasks) == 1:
+            t = tasks[0]
+            task_id = getattr(t, "task_id", None) or (t.get("task_id") if isinstance(t, dict) else None)
+            task_title = getattr(t, "title", None) or (t.get("title", "") if isinstance(t, dict) else "")
+
+        if task_id and task_title:
+            return f"feat({task_id}): {task_title}"
+        elif task_id:
+            return f"feat({task_id}): Artisan pipeline completed"
+        else:
+            return "feat: Artisan pipeline completed"
 
     def _execute_phase(
         self,
@@ -2436,7 +2486,7 @@ class ArtisanContractorWorkflow:
         cost_tracker.add(phase_result.cost)
 
         if phase_result.status == PhaseStatus.COMPLETED:
-            self._commit_changes(phase)
+            self._commit_changes(phase, context=context)
 
         # Persist checkpoint after global phase
         self._persist_checkpoint(
@@ -2543,7 +2593,7 @@ class ArtisanContractorWorkflow:
             phase_results.append(phase_result)
 
             if phase_result.status == PhaseStatus.COMPLETED:
-                self._commit_changes(phase)
+                self._commit_changes(phase, context=context)
 
             # Track cost
             cost_tracker.add(phase_result.cost)
@@ -3670,7 +3720,7 @@ class ArtisanContractorWorkflow:
                     )
 
                     if phase_result.status == PhaseStatus.COMPLETED:
-                        self._commit_changes(inner_phase, feature_id=feature_id)
+                        self._commit_changes(inner_phase, feature_id=feature_id, context=context)
 
                     # Record the inner phase result
                     inner_results[inner_phase.value] = {
