@@ -1,6 +1,8 @@
+import enum
 import re
 import shutil
 import subprocess
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -22,6 +24,93 @@ from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# ExecutionMode Enum and ModeConfig Dataclass (F-001)
+# ---------------------------------------------------------------------------
+
+class ExecutionMode(enum.Enum):
+    """Execution mode for the Prime Contractor workflow.
+
+    STANDALONE: Current behavior — no pipeline context, zero-change default.
+    PIPELINE: Full context exploitation — onboarding, architectural, calibration.
+    """
+
+    STANDALONE = "standalone"
+    PIPELINE = "pipeline"
+
+
+@dataclass(frozen=True)
+class ModeConfig:
+    """Immutable per-mode configuration for Prime Contractor execution.
+
+    Constructed via ModeConfig.for_mode() factory for correct defaults,
+    or directly for testing. Override individual fields via
+    dataclasses.replace(config, field=value).
+
+    Attributes:
+        mode: Active execution mode (STANDALONE or PIPELINE)
+        use_onboarding_context: Exploit onboarding metadata (False for STANDALONE, True for PIPELINE)
+        use_architectural_context: Exploit architectural context (False for STANDALONE, True for PIPELINE)
+        use_design_calibration: Exploit design calibration (False for STANDALONE, True for PIPELINE)
+        enable_provenance_tracking: Track generation provenance (False for STANDALONE, True for PIPELINE)
+        enable_post_validation: Enable post-generation validation hookpoints (False for STANDALONE, True for PIPELINE)
+        max_context_depth: Pipeline context traversal depth (0 for STANDALONE, 3 for PIPELINE)
+    """
+
+    mode: ExecutionMode = ExecutionMode.STANDALONE
+    use_onboarding_context: bool = False
+    use_architectural_context: bool = False
+    use_design_calibration: bool = False
+    enable_provenance_tracking: bool = False
+    enable_post_validation: bool = False
+    max_context_depth: int = 0
+
+    @classmethod
+    def for_mode(cls, mode: ExecutionMode) -> "ModeConfig":
+        """Factory: build ModeConfig with correct per-mode defaults.
+
+        Args:
+            mode: ExecutionMode (STANDALONE or PIPELINE)
+
+        Returns:
+            ModeConfig instance with mode-appropriate defaults
+        """
+        if mode is ExecutionMode.PIPELINE:
+            return cls(
+                mode=ExecutionMode.PIPELINE,
+                use_onboarding_context=True,
+                use_architectural_context=True,
+                use_design_calibration=True,
+                enable_provenance_tracking=True,
+                enable_post_validation=True,
+                max_context_depth=3,
+            )
+        # STANDALONE: all defaults are already correct (False/0)
+        return cls(mode=ExecutionMode.STANDALONE)
+
+    @classmethod
+    def from_string(cls, mode_str: str) -> "ModeConfig":
+        """Construct from CLI string argument.
+
+        Args:
+            mode_str: String representation of ExecutionMode (case-insensitive, whitespace-tolerant)
+
+        Returns:
+            ModeConfig instance with mode-appropriate defaults
+
+        Raises:
+            ValueError: If mode_str is not a valid ExecutionMode value
+        """
+        try:
+            mode = ExecutionMode(mode_str.lower().strip())
+        except ValueError:
+            valid = ", ".join(m.value for m in ExecutionMode)
+            raise ValueError(
+                f"Invalid execution mode '{mode_str}'. Valid modes: {valid}"
+            )
+        return cls.for_mode(mode)
 
 
 _EDIT_FIRST_VALIDATED: bool = True  # F-000: Remove after edit-first pipeline validated; see lifecycle in design doc
