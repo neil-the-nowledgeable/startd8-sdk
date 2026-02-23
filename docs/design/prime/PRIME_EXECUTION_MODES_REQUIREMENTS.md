@@ -279,12 +279,54 @@ Each execution mode MUST have a configuration profile that governs behavior diff
 | Cost reporting | Summary only | Per-feature + total per REQ-PC-013 | — |
 | OTel span emission | Only if instrumentor configured | Yes (via ContextCoreInstrumentor) | — |
 
+**`ModeConfig` dataclass definition:**
+
+```python
+@dataclass(frozen=True)
+class ModeConfig:
+    execution_mode: ExecutionMode
+    warn_missing_fields: bool          # Log warnings for missing onboarding/service_metadata fields
+    run_validators: bool               # Run post-generation Gate 3b validators
+    emit_provenance: bool              # Write generation-manifest.json
+    log_context_injection: bool        # Full context injection logging per REQ-PC-014
+    detect_staleness: bool             # Enforce staleness detection via source_checksum
+    detailed_cost_reporting: bool      # Per-feature + total cost (vs. summary only)
+    require_otel: bool                 # Require OTel span emission (vs. optional)
+
+    @classmethod
+    def for_mode(cls, mode: ExecutionMode) -> "ModeConfig":
+        if mode == ExecutionMode.STANDALONE:
+            return cls(
+                execution_mode=mode,
+                warn_missing_fields=False,
+                run_validators=False,
+                emit_provenance=False,
+                log_context_injection=False,
+                detect_staleness=False,
+                detailed_cost_reporting=False,
+                require_otel=False,
+            )
+        elif mode == ExecutionMode.PIPELINE:
+            return cls(
+                execution_mode=mode,
+                warn_missing_fields=True,
+                run_validators=True,
+                emit_provenance=True,
+                log_context_injection=True,
+                detect_staleness=True,
+                detailed_cost_reporting=True,
+                require_otel=True,
+            )
+        raise ValueError(f"Unknown execution mode: {mode}")
+```
+
 **ModeConfig / ContextResolutionStrategy relationship:** `ModeConfig` holds declarative boolean flags derived from `ExecutionMode`. The `ContextResolutionStrategy` implements behavioral differences in context resolution. `ModeConfig` determines *which* strategy is selected (standalone or pipeline) and governs non-context behaviors (logging, provenance, validation). The strategy does not read `ModeConfig` — it encapsulates its own context-building logic.
 
 **CLI flag precedence:** CLI flags ALWAYS take precedence over `ModeConfig` defaults. Conflicting flags (e.g., `--validate` and `--no-validate` together) MUST raise a CLI parsing error. The precedence chain is: CLI flag > ModeConfig profile > ExecutionMode default.
 
 **Acceptance criteria:**
 - Configuration is a `ModeConfig` frozen dataclass derived from the `ExecutionMode` via `ModeConfig.for_mode()`
+- `ModeConfig` fields correspond one-to-one with the behavior rows in the table above
 - CLI overrides produce a new `ModeConfig` via `dataclasses.replace()` (not mutation of frozen instance)
 - Individual behaviors can be overridden via CLI flags (e.g., `--validate` forces validation in standalone mode)
 - The mode config is accessible from the workflow instance: `workflow.mode_config`
@@ -454,6 +496,8 @@ The pipeline strategy MUST exploit full pipeline context:
 - Scalar values → inline text
 - Example: `{"patterns": ["MVVM", "Repository"], "stack": "Python 3.14"}` → `### Patterns\n- MVVM\n- Repository\n### Stack\nPython 3.14`
 
+**Plan context extraction algorithm:** Feature-specific plan excerpt MUST be extracted by searching for the feature name (case-insensitive) in plan document section headings (lines starting with `#`). If a matching section is found, the excerpt includes that section and all content until the next section heading of equal or higher level. If no matching section is found, include the first 2000 characters of the plan document as fallback. This ensures relevant plan context is included without consuming excessive LLM tokens on large plan documents.
+
 **`requirements_text` canonical path:** The authoritative location is `feature.metadata["requirements_text"]`. This field is populated from the enriched seed during `add_features_from_seed()` (see REQ-PEM-009). It is NOT a top-level `FeatureSpec` field.
 
 **`resolve_validation_config(feature)`:**
@@ -471,6 +515,7 @@ The pipeline strategy MUST exploit full pipeline context:
 - REQ-PC-008 (scope boundary enforcement) is satisfied
 - REQ-PC-009 (post-generation validation) is satisfied
 - Context injection is logged per REQ-PC-014
+- Plan context extraction uses feature-name heading search with 2000-character fallback
 
 ---
 
@@ -506,12 +551,15 @@ def find_missing_parameters(
 - Output: list of parameter names whose values are not found in the text (case-insensitive substring search)
 - This is a text-only check (no LLM call)
 
+**`resolved_parameters` data source:** The `resolved_parameters` dict is constructed from `feature.metadata['_enrichment']` by extracting all key-value pairs where the value is a non-empty string. If `_enrichment` is absent or empty, the spec completeness check is skipped entirely (no warning injected, no error raised). This ensures the check degrades gracefully when enrichment data is unavailable, which is expected in standalone mode and possible in early pipeline development.
+
 In standalone mode, this check MUST be skipped (no enrichment data to validate against).
 
 **Acceptance criteria:**
 - Pipeline mode: missing parameters produce warning in drafter context
 - Standalone mode: no warning injected
 - Check is text-only (no LLM call)
+- Check is skipped when `feature.metadata['_enrichment']` is absent or empty
 
 ---
 
@@ -784,11 +832,14 @@ The following instance attributes MUST remain accessible as properties on `Prime
 - `workflow.seed_service_metadata` → `workflow.seed_context.service_metadata`
 - `workflow.plan_document_text` → `workflow.seed_context.plan_document_text`
 
+**Pre-initialization behavior:** Property accessors MUST return empty defaults (empty dict for dict fields, `None` for optional fields) if `SeedContext` has not yet been initialized. This supports code that checks seed properties during construction, before `load_seed_context()` or seed loading has completed. Internally, this MAY be implemented by eagerly initializing `SeedContext` with all defaults at workflow construction time, or by having property getters check for an uninitialized state and return appropriate defaults. The key invariant is that property access MUST never raise `AttributeError` regardless of when it occurs in the workflow lifecycle.
+
 **Lifecycle constraint:** Property setters are valid during the initialization phase (before `_generate_code()` is first called). For the purpose of this requirement, "execution begins" is defined as the first invocation of the internal `_generate_code()` method. Setters update the underlying `SeedContext` fields. After the execution phase begins, `SeedContext` is treated as immutable per REQ-PEM-005. Property setters invoked after execution begins MUST raise `RuntimeError("SeedContext is immutable after execution begins")` to enforce the immutability contract programmatically and prevent subtle state corruption.
 
 **Acceptance criteria:**
 - Existing code that reads `workflow.seed_onboarding` continues to work
 - Existing code that writes `workflow.seed_onboarding = {...}` continues to work during initialization (setter populates `SeedContext`)
+- Property accessors return empty defaults (empty dict or None) before SeedContext is initialized — never raise `AttributeError`
 - Property setters raise `RuntimeError` if called after execution begins
 - Deprecation warnings are NOT emitted (these accessors are the stable API)
 
@@ -925,6 +976,11 @@ All external inputs from the seed file MUST be validated and sanitized before us
 | 45 | Pipeline mode handles ContextResolutionError per method criticality | REQ-PEM-004 | Pipeline |
 | 46 | Enrichment key shadowing FeatureSpec primary field is dropped with warning | REQ-PEM-009 | Both |
 | 47 | `--force-regenerate` with matching checksum logs match before bypass | REQ-PEM-013 | Pipeline |
+| 48 | Property accessors return empty defaults before SeedContext initialization | REQ-PEM-017 | Both |
+| 49 | ModeConfig fields match behavior table rows one-to-one | REQ-PEM-003 | Both |
+| 50 | Plan context extraction finds feature-name heading match | REQ-PEM-007 | Pipeline |
+| 51 | Plan context extraction falls back to first 2000 chars when no heading match | REQ-PEM-007 | Pipeline |
+| 52 | Spec completeness check skipped when _enrichment absent | REQ-PEM-008 | Both |
 
 ---
 
@@ -1060,6 +1116,10 @@ All areas have reached the substantially addressed threshold.
 | R1-F1 | Add error semantics to ContextResolutionStrategy protocol distinguishing resolution failures from empty-data degradation |  | This is substantively the same concern as R1-S1 and should be accepted for the same reasons. The prior rejection (R1-F2, 2026-02-22) dismissed this as a 'duplicate of R1-S2' but R1-S2 was about state file recovery, not strategy error contracts. The concern remains valid and unaddressed. Merging with R1-S1 for implementation. | 2026-02-22 15:35:03 UTC |
 | R1-F2 | Add conflict resolution rule when enrichment metadata keys shadow FeatureSpec built-in fields like name/description |  | REQ-PEM-009 mandates preserving all keys but doesn't address the realistic scenario where enrichment includes keys matching FeatureSpec primary fields. This was raised in R1-F4 (2026-02-22) and accepted conceptually, but the resolution rule was never formally specified in the requirements text. With 1 endorsement, this is a validated gap that needs explicit conflict resolution semantics. Primary field wins, conflicting metadata key dropped with warning is the correct resolution. | 2026-02-22 15:35:03 UTC |
 | R1-F5 | Log staleness comparison result even when --force-regenerate is active, before bypassing the cache |  | This is a low-cost observability improvement that aids debugging. Operators investigating cache behavior need to know whether the cache would have been valid. The requirement already mandates staleness comparison logging — simply ensuring this logging still occurs when force-regenerate is active (before the bypass) is consistent and useful. The log message 'Force regenerate active — bypassing cache despite {match/mismatch}' provides actionable information. | 2026-02-22 15:35:03 UTC |
+| R1-F2 | Add explicit ModeConfig dataclass field definition to REQ-PEM-003 to match the treatment given to SeedContext, ValidationConfig, and ContextFileEntry |  | This is a genuine asymmetry in the requirements. SeedContext (REQ-PEM-005), ValidationConfig (REQ-PEM-004), and ContextFileEntry (REQ-PEM-005) all have concrete dataclass definitions with typed fields. ModeConfig is described only via a behavior table, forcing implementers to infer the field set. Since ModeConfig is a frozen dataclass created via for_mode() and modified via dataclasses.replace() (per REQ-PEM-003 acceptance criteria), its fields must be well-defined for both methods to work correctly. Adding the definition eliminates implementation ambiguity. | 2026-02-23 03:11:56 UTC |
+| R1-F3 | Specify the plan document excerpt extraction algorithm for the plan_context section in REQ-PEM-007 |  | The requirement says 'feature-specific excerpt from plan document' without defining extraction semantics. Plan documents can be thousands of lines, and implementations will diverge significantly — some including the entire document (wasting LLM tokens), others using brittle heuristics. Specifying a concrete algorithm (feature name match in headings with fallback to first N characters) makes the requirement implementable and testable. This directly affects generation quality, which is the core purpose of pipeline mode. | 2026-02-23 03:11:56 UTC |
+| R1-F4 | Specify the data flow for resolved_parameters in find_missing_parameters() — where the dict comes from and skip conditions when enrichment is absent |  | REQ-PEM-008 defines find_missing_parameters() with a resolved_parameters parameter but no requirement specifies how this dict is populated. The function is a text-only utility, but its callers need to know the data source. Specifying that resolved_parameters is derived from feature.metadata['_enrichment'] (the canonical enrichment location per REQ-PEM-009) and that the check is skipped when enrichment is absent completes the data flow chain and makes the feature implementable. | 2026-02-23 03:11:56 UTC |
+| R1-F6 | Specify property accessor behavior when SeedContext has not yet been initialized (before seed loading) |  | REQ-PEM-017 specifies property accessors that delegate to SeedContext but doesn't address the temporal gap between workflow construction and seed loading. Code that checks seed properties during construction (a reasonable pattern for conditional setup logic) would encounter an AttributeError. Specifying that accessors return empty defaults before initialization is consistent with the standalone mode's graceful degradation principle and prevents a class of initialization-order bugs. | 2026-02-23 03:11:56 UTC |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -1128,6 +1188,8 @@ All areas have reached the substantially addressed threshold.
 | R1-F5 | Strengthen prompt injection mitigation to escape ALL context delimiter patterns or mandate content-hash-based unique delimiters. |  | R1-F5 from the prior round (escaping closing delimiter tags) was already accepted and incorporated into REQ-PEM-018. The requirements already mention content-hash-based unique delimiters as an alternative. The current defense-in-depth approach (escaping + system prompt instruction + delimiter wrapping) is acknowledged as not a guarantee but standard practice. Mandating escape of ALL possible delimiter patterns is impractical — the set of patterns is open-ended. The existing mitigations are proportionate to the threat model (developer-authored seeds, not adversarial input). | 2026-02-22 00:11:52 UTC |
 | R1-F3 | Exclude short parameter values and common English stop words from find_missing_parameters() completeness check to reduce false positives |  | The function is already specified as a simple text-only substring search in REQ-PEM-008. Adding stop word filtering and minimum length thresholds significantly increases implementation complexity for a P2 requirement. The false positive concern is valid but the spec completeness check produces warnings (injected into drafter feedback), not failures. False positives in warnings are acceptable and preferable to the complexity of maintaining a stop word list. This is an optimization that can be addressed during implementation if the false positive rate proves problematic. | 2026-02-22 15:35:03 UTC |
 | R1-F4 | Acknowledge fcntl.flock advisory-only limitations and add NFS filesystem detection with warnings |  | R7-S3 (Windows compatibility for fcntl.flock) was already rejected with the rationale that the codebase targets Unix-like systems. The NFS concern is a valid operational consideration but adding filesystem type detection and NFS-specific warnings is implementation-level defensive coding, not a requirements specification concern. The existing requirement for file-level locking is sufficient; the implementation can choose an appropriate locking library. | 2026-02-22 15:35:03 UTC |
+| R1-F1 | Change resolve_task_context() return type from dict to OrderedDict or typed dataclass to enforce section ordering |  | As noted in the companion R1-S8 rejection, Python dicts preserve insertion order since 3.7. The requirements already list sections in a specific order. Changing to OrderedDict adds a type import for no behavioral change, and a TaskContext dataclass would over-constrain the interface — the number and names of sections may evolve as pipeline context grows. The current dict return type with documented section ordering is sufficient and more flexible. | 2026-02-23 03:11:56 UTC |
+| R1-F5 | Change manifest write from end-of-workflow to incremental per-feature updates for long-running workflow observability |  | The current design intentionally writes the manifest after all features are processed, producing a consistent, complete provenance record. Incremental manifest updates introduce complexity: partial manifests on disk during execution could be read by concurrent pipeline stages or monitoring tools, requiring consumers to handle incomplete data. The existing .prime_contractor_state.json already provides per-feature progress tracking and resume capability. Adding incremental manifest writes duplicates this responsibility and complicates the atomic write requirement (R1-S6). Operators needing real-time progress should use the state file or OTel spans. | 2026-02-23 03:11:56 UTC |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
@@ -1432,4 +1494,20 @@ All areas have reached the substantially addressed threshold.
 | R1-F3 | architecture | medium | REQ-PEM-008 `find_missing_parameters()` specification doesn't address false positives from common English words appearing as parameter values | The function uses "case-insensitive substring search" to detect parameter values in spec text. If a parameter resolves to a common word like "service", "data", or "model", the function will always find it regardless of whether the spec actually incorporates the parameter meaningfully. This reduces the utility of the spec completeness check to near-zero for generic parameter names. | REQ-PEM-008: add note: "Parameters whose resolved values are shorter than 4 characters or match common English stop words SHOULD be excluded from the completeness check to reduce false positives." | Test: parameter value "API" (3 chars) excluded from check. Test: parameter value "PostgreSQL 16.2" correctly detected. |
 | R1-F4 | security | medium | REQ-PEM-018 file locking via `fcntl.flock` has known limitations — advisory locks don't prevent other processes from ignoring the lock, and NFS filesystems don't support flock reliably | The requirement mandates `fcntl.flock` for state file locking but this is advisory-only on Linux and broken on NFS. Pipeline deployments may use network filesystems. The requirement should either mandate mandatory locking (impractical) or acknowledge the limitation and specify the defense: check-and-warn for concurrent access rather than relying solely on flock. | REQ-PEM-018: soften to "MUST use file-level locking (e.g., `fcntl.flock` or `filelock` library) as a best-effort concurrency guard. On filesystems where advisory locking is unreliable (e.g., NFS), the system SHOULD log a warning at startup." | Test: concurrent access with flock; verify lock acquired. Test: NFS detection and warning (mock filesystem type check). |
 | R1-F5 | completeness | medium | REQ-PEM-013 staleness detection doesn't specify behavior when `--force-regenerate` is used together with a matching checksum — should it still log the match before bypassing? | The requirement says `--force-regenerate` bypasses staleness check, but operators debugging cache behavior need to know whether the cache *would have* been valid. Without logging the comparison result before bypassing, operators cannot distinguish "cache was stale anyway" from "cache was valid but force-bypassed." | REQ-PEM-013: add: "When `--force-regenerate` is active, staleness comparison MUST still be performed and logged, followed by: 'Force regenerate active — bypassing cache despite {match\|mismatch}'" | Test: force-regenerate with matching checksum; verify log shows both the match and the bypass |
+
+#### Review Round R1
+
+- **Reviewer**: claude-4 (claude-opus-4-6)
+- **Date**: 2026-02-23 03:10:54 UTC
+- **Scope**: Architecture-focused review (Feature Requirements)
+
+#### Feature Requirements Suggestions
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | interfaces | high | REQ-PEM-004 `ContextResolutionStrategy` protocol method `resolve_task_context()` returns `dict` but REQ-PEM-007 specifies structured sections with ordering semantics — the return type should be `OrderedDict` or a typed dataclass, not bare `dict` | Python `dict` preserves insertion order since 3.7, but this is an implementation detail, not a semantic contract. If context section ordering matters for LLM prompt quality (primacy/recency effects), the return type should enforce ordering explicitly. A bare `dict` return type communicates "order doesn't matter" to implementers. | REQ-PEM-004: change return type of `resolve_task_context()` to `OrderedDict[str, str]` or define a `TaskContext` dataclass with ordered fields | Implementation review: verify context sections maintain specified order through to prompt assembly |
+| R1-F2 | completeness | high | REQ-PEM-003 ModeConfig table lists 8 behaviors but `ModeConfig` dataclass definition is never shown — implementers must infer fields from the behavior table, risking omissions | The acceptance criteria say "Configuration is a `ModeConfig` frozen dataclass derived from the `ExecutionMode` via `ModeConfig.for_mode()`" but unlike `SeedContext`, `ValidationConfig`, and `ContextFileEntry`, `ModeConfig` has no concrete field listing. This is the only core dataclass without a schema definition, creating an asymmetry that forces implementers to reverse-engineer fields from prose. | REQ-PEM-003: add explicit `ModeConfig` dataclass definition with fields corresponding to each behavior row | Implementation: verify `ModeConfig` fields match behavior table 1:1 |
+| R1-F3 | architecture | medium | REQ-PEM-007 specifies `plan_context` as "feature-specific excerpt from plan document" but doesn't define the extraction algorithm — how is the relevant excerpt identified from a potentially large plan document? | The plan document could be thousands of lines. "Feature-specific excerpt" implies some selection/filtering but the mechanism is undefined. Is it keyword search? Section heading match? Full document inclusion? Without specification, implementations will diverge, some including the entire plan (wasting tokens) and others implementing brittle heuristics. | REQ-PEM-007: add: "Feature-specific plan excerpt MUST be extracted by searching for the feature name (case-insensitive) in plan document section headings. If no matching section is found, include the first 2000 characters of the plan document as fallback." | Test: plan document with multiple feature sections; verify correct section extracted for each feature |
+| R1-F4 | validation | medium | REQ-PEM-008 `find_missing_parameters()` has no specification for what constitutes `resolved_parameters` — where does this dict come from and what keys/values does it contain? | The function signature shows `resolved_parameters: Dict[str, str]` but no requirement specifies how this dict is populated. Is it derived from `feature.metadata["_enrichment"]`? Constructed from `SeedContext` fields? The data flow from enrichment → resolved_parameters → find_missing_parameters is unspecified. | REQ-PEM-008: add: "The `resolved_parameters` dict is constructed from `feature.metadata['_enrichment']` by extracting all key-value pairs where the value is a non-empty string. If `_enrichment` is absent or empty, the spec completeness check is skipped." | Test: feature with _enrichment containing 3 parameters; verify all 3 are checked against spec text |
+| R1-F5 | ops | medium | REQ-PEM-012 specifies `generation-manifest.json` written after "all features are processed" but doesn't address incremental manifest updates for long-running workflows | A 50-feature pipeline run could take hours. If the manifest is only written at the end, operators have no visibility into progress. An incremental manifest (updated after each feature) provides real-time monitoring and enables partial result recovery. The current requirement explicitly says "after all features are processed" which prevents this. | REQ-PEM-012: consider changing to "MUST be updated after each feature completes, with a final write after all features are processed" or add a separate progress file | Test: after feature N completes, manifest on disk reflects features 1..N with accurate status |
+| R1-F6 | completeness | medium | REQ-PEM-017 property accessors delegate to SeedContext but no requirement specifies what happens when `workflow.seed_context` itself is None (e.g., before seed loading) | The property accessors assume `self.seed_context` exists, but during workflow construction before `load_seed_context()` is called, the attribute may not be set. Accessing `workflow.seed_onboarding` before initialization should have defined behavior (return empty dict, raise AttributeError, or lazy-initialize). | REQ-PEM-017: add: "Property accessors MUST return empty defaults (empty dict for dict fields, None for optional fields) if SeedContext has not yet been initialized. This supports code that checks seed properties during construction." | Test: access `workflow.seed_onboarding` before seed loading; verify returns `{}` not raises |
 

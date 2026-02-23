@@ -14,8 +14,9 @@ Design principles:
 Public API (``__all__``):
 - ``emit_forensic_log`` — centralized log builder
 - ``CallMetadata``, ``TaskMetadata``, ``ContextPropagationMetadata``,
-  ``ProvenanceMetadata`` — TypedDict input types
-- ``set_boundary_result``, ``get_boundary_result`` — ContextVar accessors
+  ``ProvenanceMetadata`` — dict type aliases (documented field contracts)
+- ``set_boundary_result``, ``get_boundary_result``,
+  ``reset_boundary_result`` — ContextVar accessors
 - ``is_degraded`` — degradation evaluator
 - ``ModelSpecProvider`` — protocol for model spec access
 """
@@ -106,6 +107,7 @@ __all__ = [
     "ProvenanceMetadata",
     "set_boundary_result",
     "get_boundary_result",
+    "reset_boundary_result",
     "is_degraded",
     "ModelSpecProvider",
 ]
@@ -136,7 +138,8 @@ def set_boundary_result(result: Any) -> contextvars.Token:
     """Store a BoundaryResult in the current context.
 
     Called by ``_execute_phase()`` after entry gate validation.
-    The token must be used to reset in a ``finally`` block.
+    The token must be used to reset via ``reset_boundary_result()``
+    in a ``finally`` block.
 
     Args:
         result: A BoundaryResult object (or None).
@@ -156,6 +159,18 @@ def get_boundary_result() -> Any:
     return _boundary_result_var.get()
 
 
+def reset_boundary_result(token: contextvars.Token) -> None:
+    """Reset the boundary result ContextVar to its previous value.
+
+    Encapsulates the private ``_boundary_result_var.reset()`` so callers
+    don't need to import the private ContextVar directly.
+
+    Args:
+        token: The token returned by ``set_boundary_result()``.
+    """
+    _boundary_result_var.reset(token)
+
+
 # ---------------------------------------------------------------------------
 # List truncation limits (OT-716)
 # ---------------------------------------------------------------------------
@@ -169,6 +184,16 @@ _MAX_DEGRADATION_REASONS = 50
 # ---------------------------------------------------------------------------
 
 _SENTINEL = object()
+
+# ---------------------------------------------------------------------------
+# Log level map (module-level constant, avoids per-call dict creation — C4)
+# ---------------------------------------------------------------------------
+
+_LEVEL_MAP = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -194,8 +219,12 @@ def is_degraded(
     Returns:
         ``(is_degraded, reason_codes)`` — True if any condition fires.
     """
+    # Guard: None/empty call_type cannot be split (P2)
+    if not call_type:
+        return (False, [])
+
     reasons: list[str] = []
-    phase = call_type.split(".")[0] if call_type else ""
+    phase = call_type.split(".")[0]
 
     # 1. domain_defaulted is true
     if context_propagation.get("domain_defaulted") is True:
@@ -244,15 +273,10 @@ def is_degraded(
             reasons.append(DegradationReasons.ENTRY_GATE_FAILED)
 
         # 10. boundary_severity_max is WARNING or BLOCKING
-        sev = getattr(boundary_result, "boundary_severity_max", None)
-        if sev is None:
-            # Try alternative attribute paths
-            sev_val = getattr(boundary_result, "severity", None)
-            if sev_val is not None:
-                sev = getattr(sev_val, "value", str(sev_val))
-        else:
-            sev = getattr(sev, "value", str(sev))
-        if sev and str(sev).upper() in ("WARNING", "BLOCKING"):
+        sev = _resolve_enum_str(
+            boundary_result, "boundary_severity_max", "severity"
+        )
+        if sev and sev.upper() in ("WARNING", "BLOCKING"):
             reasons.append(DegradationReasons.BOUNDARY_SEVERITY_HIGH)
 
         # 11. Any chain_statuses value is DEGRADED or BROKEN
@@ -265,11 +289,11 @@ def is_degraded(
                         f"{DegradationReasons.CHAIN_DEGRADED}:{chain_name}"
                     )
 
-        # 12. quality_violations is non-empty
+        # 12. quality_violations is non-empty (R5: truthiness implies len>0)
         qv = getattr(boundary_result, "quality_violations", None)
         if qv is None:
             qv = getattr(boundary_result, "blocking_failures", None)
-        if qv and len(qv) > 0:
+        if qv:
             reasons.append(DegradationReasons.QUALITY_VIOLATIONS_PRESENT)
 
     return (len(reasons) > 0, reasons)
@@ -425,7 +449,9 @@ def emit_forensic_log(
         # --- Emit via get_logger() (OT-700 AC-5, OT-715) ---
         flogger = get_logger("startd8.forensic")
 
-        level = _resolve_log_level(forensic_log_level, degraded)
+        level = _resolve_log_level(forensic_log_level)
+        # "forensic" is safe as an extra key — not in Python's LogRecord
+        # reserved attributes (SDK Leg 9 #1).
         flogger.log(level, "llm.call", extra={"forensic": entry})
 
     except Exception as exc:
@@ -436,6 +462,30 @@ def emit_forensic_log(
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _resolve_enum_str(
+    obj: Any, attr: str, fallback_attr: str | None = None,
+) -> str | None:
+    """Safely extract a string from an attribute that may be an enum.
+
+    Handles the common OTel/contract pattern where a value may be a raw
+    string, an enum with a ``.value`` attribute, or absent entirely.
+
+    Args:
+        obj: The object to read from.
+        attr: Primary attribute name.
+        fallback_attr: Optional fallback attribute name if primary is None.
+
+    Returns:
+        The string value, or None if not found.
+    """
+    val = getattr(obj, attr, None)
+    if val is None and fallback_attr is not None:
+        val = getattr(obj, fallback_attr, None)
+    if val is None:
+        return None
+    return getattr(val, "value", str(val))
 
 
 def _validate_inputs(
@@ -484,9 +534,9 @@ def _extract_exemplars() -> tuple[str | None, str | None]:
         return None, None
 
     try:
+        # get_current_span() never returns None — it returns INVALID_SPAN
+        # when no span is active.  Check the span context directly (R2).
         span = _trace.get_current_span()
-        if span is None:
-            return None, None
         ctx = span.get_span_context()
         if ctx is None or not ctx.is_valid:
             return None, None
@@ -494,6 +544,9 @@ def _extract_exemplars() -> tuple[str | None, str | None]:
         span_id = format(ctx.span_id, "016x")
         return trace_id, span_id
     except Exception:
+        logging.getLogger("startd8.forensic").debug(
+            "OTel exemplar extraction failed", exc_info=True,
+        )
         return None, None
 
 
@@ -516,12 +569,8 @@ def _build_contract_state(boundary_result: Any) -> dict[str, Any]:
             "quality_violations": [],
         }
 
-    # Extract fields with safe attribute access
     passed = getattr(boundary_result, "passed", None)
-
-    prop_status = getattr(boundary_result, "propagation_status", None)
-    if prop_status is not None:
-        prop_status = getattr(prop_status, "value", str(prop_status))
+    prop_status = _resolve_enum_str(boundary_result, "propagation_status")
 
     chain_statuses_raw = getattr(boundary_result, "chain_statuses", None)
     chain_statuses = None
@@ -531,9 +580,7 @@ def _build_contract_state(boundary_result: Any) -> dict[str, Any]:
             for k, v in chain_statuses_raw.items()
         }
 
-    sev = getattr(boundary_result, "boundary_severity_max", None)
-    if sev is not None:
-        sev = getattr(sev, "value", str(sev))
+    sev = _resolve_enum_str(boundary_result, "boundary_severity_max")
 
     qv = getattr(boundary_result, "quality_violations", None)
     if qv is None:
@@ -552,29 +599,25 @@ def _build_contract_state(boundary_result: Any) -> dict[str, Any]:
     }
 
 
-def _resolve_log_level(forensic_log_level: str, degraded: bool) -> int:
-    """Map the forensic_log_level string to a logging level int.
-
-    When forensic_log_level is "INFO", always emit at INFO.
-    When "WARNING", emit at WARNING (only called if degraded — filtered above).
-    When "DEBUG", emit at DEBUG.
-    """
-    level_map = {
-        "DEBUG": logging.DEBUG,
-        "INFO": logging.INFO,
-        "WARNING": logging.WARNING,
-    }
-    return level_map.get(forensic_log_level.upper(), logging.INFO)
+def _resolve_log_level(forensic_log_level: str) -> int:
+    """Map the forensic_log_level string to a logging level int."""
+    return _LEVEL_MAP.get(forensic_log_level.upper(), logging.INFO)
 
 
 def _record_internal_error(call_type: str, exc: Exception) -> None:
     """Record an internal forensic logging error on the current OTel span.
 
-    Also logs a warning via standard logging.  Never raises.
+    Uses ``get_logger()`` for OTel bridge forwarding with a fallback
+    to ``logging.getLogger()`` if the bridge itself fails (SDK Leg 11 #31).
+    Never raises.
     """
     try:
-        # Best-effort warning log
-        _fallback_logger = logging.getLogger("startd8.forensic")
+        # Prefer get_logger for OTel bridge forwarding (R1)
+        try:
+            _fallback_logger = get_logger("startd8.forensic")
+        except Exception:
+            _fallback_logger = logging.getLogger("startd8.forensic")
+
         _fallback_logger.warning(
             "Forensic log emission failed for call_type=%s: %s",
             call_type, exc,
@@ -593,4 +636,8 @@ def _record_internal_error(call_type: str, exc: Exception) -> None:
                     },
                 )
     except Exception:
-        pass  # Absolute last resort — never crash
+        # Absolute last resort — emit a debug trace so failures are
+        # discoverable when explicitly sought, then suppress (E1).
+        logging.getLogger("startd8.forensic").debug(
+            "_record_internal_error itself failed", exc_info=True,
+        )

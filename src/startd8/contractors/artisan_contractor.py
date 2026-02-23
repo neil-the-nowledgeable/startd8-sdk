@@ -1990,6 +1990,7 @@ class ArtisanContractorWorkflow:
                     # OT-710: Store boundary result for forensic logging
                     from startd8.contractors.forensic_log import (
                         set_boundary_result as _set_br,
+                        reset_boundary_result as _reset_br,
                     )
                     handler._last_entry_boundary_result = entry_result
                     _br_token = _set_br(entry_result)
@@ -1998,10 +1999,7 @@ class ArtisanContractorWorkflow:
                             handler, phase, context, effective_timeout
                         )
                     finally:
-                        from startd8.contractors.forensic_log import (
-                            _boundary_result_var,
-                        )
-                        _boundary_result_var.reset(_br_token)
+                        _reset_br(_br_token)
 
                     # --- Context contract: exit validation ---
                     # validate_phase_boundary runs legacy validation

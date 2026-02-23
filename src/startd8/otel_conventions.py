@@ -104,7 +104,10 @@ class DegradationReasons:
     QUALITY_VIOLATIONS_PRESENT = "QUALITY_VIOLATIONS_PRESENT"
 
 
-# Valid call_type values for emit_forensic_log()
+# Valid call_type values for emit_forensic_log().
+# NOTE: These are semantic call types (e.g. "design.revise"), distinct from
+# SpanNames (e.g. DESIGN_REVISION = "design.revision"). SpanNames follow OTel
+# noun-form conventions; call_types use verb-form to describe the action taken.
 VALID_CALL_TYPES = frozenset({
     "design.generate",
     "design.review",

@@ -662,6 +662,26 @@ Each phase has its own commit gate (all existing tests must pass before proceedi
 
 ---
 
+## Self-Validating Gap Verification
+
+Each identified context propagation boundary maps to a runtime integration check (SV-*) that must fail before the fix and pass after. These serve as the plan's own test harness — if a gap fix is incomplete, the corresponding SV check catches it during execution.
+
+| ID | Propagation Boundary | Gap Description | Runtime Check | Fails Before | Passes After |
+|----|----------------------|-----------------|---------------|--------------|--------------|
+| SV-1 | SeedContext → ContextResolutionStrategy | SeedContext fields might not reach strategy `resolve_task_context()` | Assert `gen_context` contains all non-None SeedContext fields when pipeline strategy is active | Strategy receives empty dict for enriched seed fields | Strategy receives all populated SeedContext fields |
+| SV-2 | ContextResolutionStrategy → gen_context dict | Pipeline strategy IMP-P1–P5 sections might be silently dropped | Assert `gen_context` keys include `imp_p1_*` through `imp_p5_*` when `ModeConfig.emit_provenance=True` | `gen_context` missing IMP-P* keys in pipeline mode | All 5 IMP-P sections present in gen_context |
+| SV-3 | Feature queue → FeatureSpec metadata | Metadata fields added in Phase 3 might not survive `to_dict()`/`from_dict()` round-trip | Assert `FeatureSpec.from_dict(spec.to_dict()) == spec` including pipeline-injected metadata | Pipeline metadata fields silently dropped during serialization | Full round-trip equality including `source_checksum`, `mode`, `validator_results` |
+| SV-4 | Generation results → manifest | Per-feature cost/model data might not propagate to `generation-manifest.json` | Assert manifest entry for each feature contains non-null `model` and `cost_usd` fields | Manifest entries missing cost/model provenance | Every feature entry has complete provenance |
+| SV-5 | ModeConfig → phase behavior | ModeConfig boolean flags might not reach their point of use (e.g., `run_validators` checked but `ValidationConfig` empty) | Assert that `ModeConfig.run_validators=True` with a registered mock validator produces non-empty `validator_results` | Validators configured but never called | Mock validator called, results in feature metadata |
+| SV-6 | CLI --mode flag → workflow.mode | CLI argument might not propagate through to `workflow.mode` and `SeedContext.execution_mode` | Assert `workflow.mode == workflow.seed_context.execution_mode` after CLI-driven initialization | `workflow.mode` and `seed_context.execution_mode` diverge after CLI override | Both synchronized after any initialization path |
+| SV-7 | Checkpoint resume → mode consistency | Saved mode in `.prime_contractor_state.json` might conflict with CLI flag on resume | Assert resumed workflow preserves original mode unless explicitly overridden | Resume silently changes mode or ignores saved state | Resume restores saved mode; explicit `--mode` override logged as warning |
+
+**Test location:** `tests/unit/contractors/test_context_propagation_sv.py`
+
+**Execution:** These checks run as standard pytest unit tests. Each SV-* test is parametrized with `(standalone, pipeline)` mode pairs to verify both paths.
+
+---
+
 ## Risk Assessment
 
 | Risk | Mitigation |

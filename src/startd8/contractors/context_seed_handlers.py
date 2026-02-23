@@ -1953,15 +1953,15 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         parent_ctx = capture_context()
         # OT-710: Capture boundary result for thread propagation
         from startd8.contractors.forensic_log import (
-            get_boundary_result as _get_br,
-            set_boundary_result as _set_br,
-            _boundary_result_var,
+            get_boundary_result,
+            set_boundary_result,
+            reset_boundary_result,
         )
-        parent_boundary_result = _get_br()
+        parent_boundary_result = get_boundary_result()
 
         def _runner() -> None:
             token = attach_context(parent_ctx)
-            br_token = _set_br(parent_boundary_result)
+            br_token = set_boundary_result(parent_boundary_result)
             try:
                 loop = asyncio.new_event_loop()
                 try:
@@ -1975,7 +1975,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     loop.close()
                     asyncio.set_event_loop(None)
             finally:
-                _boundary_result_var.reset(br_token)
+                reset_boundary_result(br_token)
                 detach_context(token)
 
         thread = threading.Thread(target=_runner, daemon=True)
@@ -4012,15 +4012,15 @@ class Test{class_name}:
         parent_ctx = capture_context()
         # OT-710: Capture boundary result for thread propagation
         from startd8.contractors.forensic_log import (
-            get_boundary_result as _get_br_dev,
-            set_boundary_result as _set_br_dev,
-            _boundary_result_var as _br_var_dev,
+            get_boundary_result,
+            set_boundary_result,
+            reset_boundary_result,
         )
-        parent_boundary_result_dev = _get_br_dev()
+        parent_boundary_result = get_boundary_result()
 
         def _runner() -> None:
             token = attach_context(parent_ctx)
-            br_token = _set_br_dev(parent_boundary_result_dev)
+            br_token = set_boundary_result(parent_boundary_result)
             try:
                 loop = asyncio.new_event_loop()
                 try:
@@ -4034,7 +4034,7 @@ class Test{class_name}:
                     loop.close()
                     asyncio.set_event_loop(None)
             finally:
-                _br_var_dev.reset(br_token)
+                reset_boundary_result(br_token)
                 detach_context(token)
 
         # daemon=True is intentional: if the main process exits (e.g.

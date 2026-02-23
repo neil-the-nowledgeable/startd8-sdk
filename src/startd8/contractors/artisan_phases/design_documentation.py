@@ -1112,6 +1112,36 @@ class DesignDocumentationPhase:
         )
 
     # ------------------------------------------------------------------
+    # Forensic log metric helpers
+    # ------------------------------------------------------------------
+
+    def _capture_pre_metrics(self) -> tuple[int, int, float]:
+        """Snapshot cumulative LLM counters before a call (delta tracking)."""
+        return (
+            self.llm.total_input_tokens,
+            self.llm.total_output_tokens,
+            self.llm.total_cost_usd,
+        )
+
+    def _build_call_metrics(
+        self,
+        prompt_length: int,
+        pre: tuple[int, int, float],
+        *,
+        max_tokens: int | None = None,
+    ) -> dict:
+        """Build the ``call`` section for ``emit_forensic_log()``."""
+        pre_input, pre_output, pre_cost = pre
+        return {
+            "prompt_length": prompt_length,
+            "max_tokens": max_tokens,
+            "model_spec": self.llm.get_model_spec(),
+            "tokens_input": self.llm.total_input_tokens - pre_input,
+            "tokens_output": self.llm.total_output_tokens - pre_output,
+            "cost_usd": self.llm.total_cost_usd - pre_cost,
+        }
+
+    # ------------------------------------------------------------------
     # Design generation
     # ------------------------------------------------------------------
 
@@ -1213,9 +1243,7 @@ class DesignDocumentationPhase:
             },
         ):
             # Delta tracking for per-call token/cost accuracy (R2-S5)
-            _pre_input = self.llm.total_input_tokens if hasattr(self.llm, "total_input_tokens") else 0
-            _pre_output = self.llm.total_output_tokens if hasattr(self.llm, "total_output_tokens") else 0
-            _pre_cost = self.llm.total_cost_usd if hasattr(self.llm, "total_cost_usd") else 0.0
+            _pre = self._capture_pre_metrics()
             raw_text = await self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -1225,14 +1253,9 @@ class DesignDocumentationPhase:
             from startd8.contractors.forensic_log import emit_forensic_log
             emit_forensic_log(
                 call_type="design.generate",
-                call={
-                    "prompt_length": len(prompt),
-                    "max_tokens": context.max_output_tokens,
-                    "model_spec": self.llm.get_model_spec() if hasattr(self.llm, "get_model_spec") else None,
-                    "tokens_input": (self.llm.total_input_tokens - _pre_input) if hasattr(self.llm, "total_input_tokens") else None,
-                    "tokens_output": (self.llm.total_output_tokens - _pre_output) if hasattr(self.llm, "total_output_tokens") else None,
-                    "cost_usd": (self.llm.total_cost_usd - _pre_cost) if hasattr(self.llm, "total_cost_usd") else None,
-                },
+                call=self._build_call_metrics(
+                    len(prompt), _pre, max_tokens=context.max_output_tokens,
+                ),
                 task={
                     "task_id": None,
                     "title": context.feature_name,
@@ -1242,10 +1265,10 @@ class DesignDocumentationPhase:
                     "target_files": [context.target_file] if context.target_file else None,
                 },
                 context_propagation={
-                    "design_calibration_present": context.sections is not None and len(context.sections) > 0,
-                    "depth_tier": context.depth_guidance if hasattr(context, "depth_guidance") else None,
+                    "design_calibration_present": bool(context.sections),
+                    "depth_tier": context.depth_guidance,
                     "prompt_constraints_count": len(context.constraints) if context.constraints else 0,
-                    "environment_checks_count": len(context.environment_checks) if hasattr(context, "environment_checks") and context.environment_checks else None,
+                    "environment_checks_count": len(context.environment_checks) if getattr(context, "environment_checks", None) else None,
                     "design_doc_present": context.prior_design is not None,
                     "design_doc_line_count": len(context.prior_design.splitlines()) if context.prior_design else None,
                 },
@@ -1330,9 +1353,7 @@ class DesignDocumentationPhase:
                 "design.iteration": design.iteration,
             },
         ):
-            _pre_input = self.llm.total_input_tokens if hasattr(self.llm, "total_input_tokens") else 0
-            _pre_output = self.llm.total_output_tokens if hasattr(self.llm, "total_output_tokens") else 0
-            _pre_cost = self.llm.total_cost_usd if hasattr(self.llm, "total_cost_usd") else 0.0
+            _pre = self._capture_pre_metrics()
             raw_text = await self.llm.generate(
                 prompt=prompt,
                 system_prompt=system_prompt,
@@ -1341,13 +1362,7 @@ class DesignDocumentationPhase:
             from startd8.contractors.forensic_log import emit_forensic_log
             emit_forensic_log(
                 call_type="design.review",
-                call={
-                    "prompt_length": len(prompt),
-                    "model_spec": self.llm.get_model_spec() if hasattr(self.llm, "get_model_spec") else None,
-                    "tokens_input": (self.llm.total_input_tokens - _pre_input) if hasattr(self.llm, "total_input_tokens") else None,
-                    "tokens_output": (self.llm.total_output_tokens - _pre_output) if hasattr(self.llm, "total_output_tokens") else None,
-                    "cost_usd": (self.llm.total_cost_usd - _pre_cost) if hasattr(self.llm, "total_cost_usd") else None,
-                },
+                call=self._build_call_metrics(len(prompt), _pre),
                 task={
                     "title": design.feature_name,
                     "phase": "design",
@@ -1579,9 +1594,7 @@ class DesignDocumentationPhase:
             "design.revision",
             attributes={"design.iteration": iteration},
         ):
-            _pre_input = self.llm.total_input_tokens if hasattr(self.llm, "total_input_tokens") else 0
-            _pre_output = self.llm.total_output_tokens if hasattr(self.llm, "total_output_tokens") else 0
-            _pre_cost = self.llm.total_cost_usd if hasattr(self.llm, "total_cost_usd") else 0.0
+            _pre = self._capture_pre_metrics()
             raw_text = await self.llm.generate(
                 prompt=prompt,
                 system_prompt=format_prompt("design", "revision_system"),
@@ -1590,13 +1603,7 @@ class DesignDocumentationPhase:
             from startd8.contractors.forensic_log import emit_forensic_log
             emit_forensic_log(
                 call_type="design.revise",
-                call={
-                    "prompt_length": len(prompt),
-                    "model_spec": self.llm.get_model_spec() if hasattr(self.llm, "get_model_spec") else None,
-                    "tokens_input": (self.llm.total_input_tokens - _pre_input) if hasattr(self.llm, "total_input_tokens") else None,
-                    "tokens_output": (self.llm.total_output_tokens - _pre_output) if hasattr(self.llm, "total_output_tokens") else None,
-                    "cost_usd": (self.llm.total_cost_usd - _pre_cost) if hasattr(self.llm, "total_cost_usd") else None,
-                },
+                call=self._build_call_metrics(len(prompt), _pre),
                 task={
                     "title": design.feature_name,
                     "phase": "design",
