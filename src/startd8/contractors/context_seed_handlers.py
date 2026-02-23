@@ -6827,50 +6827,82 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     service_metadata=service_metadata,
                     refine_provenance=refine_provenance,
                 )
-                response_text, _time_ms, token_usage = agent.generate(
-                    prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
-                )
-                review = self._parse_review_response(response_text)
-                review["task_id"] = task.task_id
-                review["cost"] = token_usage_cost(token_usage)
-                review["tokens"] = {
-                    "input": token_usage_input(token_usage),
-                    "output": token_usage_output(token_usage),
-                }
-                review["status"] = "reviewed"
 
-                # CS7: Forensic log for review.evaluate
-                from startd8.contractors.forensic_log import emit_forensic_log
-                _agent_spec = self.config.review_agent or self.config.lead_agent
-                emit_forensic_log(
-                    call_type="review.evaluate",
-                    call={
-                        "prompt_length": len(prompt),
-                        "model_spec": _agent_spec,
-                        "response_time_ms": _time_ms,
-                        "tokens_input": token_usage_input(token_usage),
-                        "tokens_output": token_usage_output(token_usage),
-                        "cost_usd": token_usage_cost(token_usage),
-                        "attempt": _attempt + 1,
-                        "max_attempts": _max_attempts,
+                # OT-306: review.evaluate span (child of OT-304 task span)
+                with _phase_tracer.start_as_current_span(
+                    "review.evaluate",
+                    attributes={
+                        "review.task_id": task.task_id,
+                        "review.attempt": _attempt + 1,
+                        "review.has_design_doc": design_document is not None,
+                        "review.has_parameter_sources": parameter_sources is not None,
                     },
-                    task={
-                        "task_id": task.task_id,
-                        "title": task.title,
-                        "domain": task.domain,
-                        "phase": "review",
-                        "target_files": list(task.file_scope) if task.file_scope else None,
-                    },
-                    context_propagation={
-                        "design_doc_present": design_document is not None,
-                        "design_doc_line_count": len(design_document.splitlines()) if design_document else None,
-                        "parameter_sources_present": parameter_sources is not None,
-                        "prompt_constraints_count": len(task.prompt_constraints) if task.prompt_constraints else 0,
-                    },
-                    forensic_log_level=self.config.forensic_log_level,
-                )
+                ) as _eval_span:
+                    try:
+                        response_text, _time_ms, token_usage = agent.generate(
+                            prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
+                        )
+                        review = self._parse_review_response(response_text)
+                        review["task_id"] = task.task_id
+                        review["cost"] = token_usage_cost(token_usage)
+                        review["tokens"] = {
+                            "input": token_usage_input(token_usage),
+                            "output": token_usage_output(token_usage),
+                        }
+                        review["status"] = "reviewed"
 
-                return review
+                        # OT-306 AC-3: set verdict attribute
+                        _eval_span.set_attribute(
+                            "review.verdict", review.get("verdict", "UNKNOWN"),
+                        )
+
+                        # CS7: Forensic log for review.evaluate
+                        from startd8.contractors.forensic_log import emit_forensic_log
+                        _agent_spec = self.config.review_agent or self.config.lead_agent
+                        emit_forensic_log(
+                            call_type="review.evaluate",
+                            call={
+                                "prompt_length": len(prompt),
+                                "model_spec": _agent_spec,
+                                "response_time_ms": _time_ms,
+                                "tokens_input": token_usage_input(token_usage),
+                                "tokens_output": token_usage_output(token_usage),
+                                "cost_usd": token_usage_cost(token_usage),
+                                "attempt": _attempt + 1,
+                                "max_attempts": _max_attempts,
+                            },
+                            task={
+                                "task_id": task.task_id,
+                                "title": task.title,
+                                "domain": task.domain,
+                                "phase": "review",
+                                "target_files": list(task.file_scope) if task.file_scope else None,
+                            },
+                            context_propagation={
+                                "design_doc_present": design_document is not None,
+                                "design_doc_line_count": len(design_document.splitlines()) if design_document else None,
+                                "parameter_sources_present": parameter_sources is not None,
+                                "prompt_constraints_count": len(task.prompt_constraints) if task.prompt_constraints else 0,
+                            },
+                            forensic_log_level=self.config.forensic_log_level,
+                        )
+
+                        return review
+                    except Exception as _eval_err:
+                        # OT-507: record error on span before re-raising
+                        if _HAS_OTEL:
+                            from opentelemetry.trace.status import (
+                                Status as _OTelStatus,
+                                StatusCode as _OTelStatusCode,
+                            )
+                            _eval_span.record_exception(_eval_err)
+                            _eval_span.set_status(
+                                _OTelStatus(_OTelStatusCode.ERROR, str(_eval_err))
+                            )
+                        else:
+                            _eval_span.record_exception(_eval_err)
+                            _eval_span.set_status("ERROR")
+                        raise
             except Exception as exc:
                 if (
                     _attempt < _max_attempts - 1
