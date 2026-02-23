@@ -1223,6 +1223,10 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         Args:
             chunk: The development chunk whose ``file_targets`` determine
                 which package directories to scan.
+
+        Returns:
+            List of prompt text fragments (section text + separator), or
+            an empty list when no importable modules are found.
         """
         project_root = getattr(self, "_project_root", None)
         if project_root is None:
@@ -1241,7 +1245,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         for target in py_targets:
             target_path = Path(target)
             parent = target_path.parent
-            if str(parent) == ".":
+            if not parent.parts:
                 continue
             abs_parent = search_root / parent
             if not abs_parent.is_dir():
@@ -1269,7 +1273,10 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         for dotted_prefix, pkg_dir in sorted(package_dirs.items()):
             try:
                 children = sorted(pkg_dir.iterdir())
-            except OSError:
+            except OSError as exc:
+                _log.debug(
+                    "AR-150: cannot list modules in %s: %s", pkg_dir, exc,
+                )
                 continue
             for child in children:
                 if (

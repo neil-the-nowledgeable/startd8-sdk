@@ -17,13 +17,14 @@ Two follow an in-process signature for cross-file checks::
 from __future__ import annotations
 
 import ast
-import logging
 import re
 import sys
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -253,11 +254,19 @@ def validate_import_dependency(code: str, enrichment: Any) -> list[dict[str, Any
 # AR-150: Intra-Project Import Path Validation (subprocess signature)
 # ---------------------------------------------------------------------------
 
-def _discover_top_level_packages(project_root: Path) -> dict[str, Path]:
+def _discover_top_level_packages(
+    project_root: Path,
+) -> tuple[dict[str, Path], Path]:
     """Discover top-level Python packages under ``src/`` (or project root).
 
-    Returns a mapping of package name → directory path for each directory
-    that contains an ``__init__.py``.
+    Args:
+        project_root: Absolute path to the project root directory.
+
+    Returns:
+        A 2-tuple of (packages, search_root) where *packages* maps
+        package name → directory path for each directory that contains
+        an ``__init__.py``, and *search_root* is the resolved base
+        directory (``src/`` if it exists, else *project_root*).
     """
     packages: dict[str, Path] = {}
     src_dir = project_root / "src"
@@ -266,9 +275,11 @@ def _discover_top_level_packages(project_root: Path) -> dict[str, Path]:
         for child in search_root.iterdir():
             if child.is_dir() and (child / "__init__.py").exists():
                 packages[child.name] = child
-    except OSError:
-        pass
-    return packages
+    except OSError as exc:
+        logger.debug(
+            "AR-150: cannot list packages under %s: %s", search_root, exc,
+        )
+    return packages, search_root
 
 
 def validate_intra_project_imports(code: str, enrichment: Any) -> list[dict[str, Any]]:
@@ -279,8 +290,15 @@ def validate_intra_project_imports(code: str, enrichment: Any) -> list[dict[str,
     the dotted module path maps to an existing ``.py`` file or ``__init__.py``
     package directory.
 
-    Returns issues with ``confidence: 0.95`` for phantom imports, plus a
-    suggestion listing up to 5 sibling modules in the parent package.
+    Args:
+        code: Python source code to validate.
+        enrichment: Enrichment object; must expose a ``cwd`` attribute
+            pointing to the project root directory.
+
+    Returns:
+        List of issue dicts with ``confidence: 0.95`` for phantom imports,
+        plus a suggestion listing up to 5 sibling modules in the parent
+        package.  Empty list when no issues are found.
     """
     issues: list[dict[str, Any]] = []
 
@@ -289,7 +307,7 @@ def validate_intra_project_imports(code: str, enrichment: Any) -> list[dict[str,
         return issues
 
     project_root = Path(cwd)
-    packages = _discover_top_level_packages(project_root)
+    packages, search_root = _discover_top_level_packages(project_root)
     if not packages:
         return issues
 
@@ -297,9 +315,6 @@ def validate_intra_project_imports(code: str, enrichment: Any) -> list[dict[str,
         tree = ast.parse(code)
     except SyntaxError:
         return issues
-
-    src_dir = project_root / "src"
-    search_root = src_dir if src_dir.is_dir() else project_root
 
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom):
@@ -311,6 +326,12 @@ def validate_intra_project_imports(code: str, enrichment: Any) -> list[dict[str,
         top_level = parts[0]
         if top_level not in packages:
             continue  # not an intra-project import
+
+        # Bare top-level imports (e.g. ``from mypkg import X``) always
+        # resolve via __init__.py which _discover_top_level_packages
+        # already confirmed exists.
+        if len(parts) == 1:
+            continue
 
         # Resolve dotted path to filesystem
         mod_path = search_root / Path(*parts)
@@ -336,8 +357,10 @@ def validate_intra_project_imports(code: str, enrichment: Any) -> list[dict[str,
                         siblings.append(f.name)
                     if len(siblings) >= 5:
                         break
-            except OSError:
-                pass
+            except OSError as exc:
+                logger.debug(
+                    "AR-150: cannot list siblings in %s: %s", parent_dir, exc,
+                )
 
         parent_dotted = ".".join(parts[:-1])
         suggestion = ""

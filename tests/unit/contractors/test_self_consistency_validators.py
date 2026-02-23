@@ -614,3 +614,21 @@ class TestIntraProjectImports:
         issues = validate_intra_project_imports(code, Stub())
         assert len(issues) == 1
         assert "fake" in issues[0]["message"]
+
+    def test_bare_package_import_passes(self, tmp_path: Path):
+        """Bare top-level import (from mypkg import X) always resolves via __init__.py."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        pkg = src / "mypkg"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+
+        code = "from mypkg import x\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert issues == []
