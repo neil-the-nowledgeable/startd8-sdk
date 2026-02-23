@@ -2555,3 +2555,82 @@ class TestRefineForwardingIntegration:
             })
 
         assert any("REFINE→seed chain INTACT" in m for m in caplog.messages)
+
+
+# ---------------------------------------------------------------------------
+# TestSkipArcReview
+# ---------------------------------------------------------------------------
+
+class TestSkipArcReview:
+    """Tests for the skip_arc_review flag."""
+
+    def setup_method(self):
+        self.wf = PlanIngestionWorkflow()
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_skip_arc_review_flag_skips_refine(self, mock_resolve, MockReviewWf, tmp_path):
+        """When skip_arc_review=True, ArchitecturalReviewLogWorkflow is never instantiated."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.02),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "skip_arc_review": True,
+            "review_rounds": 3,  # would normally trigger 3 rounds
+        })
+
+        assert result.success
+        MockReviewWf.assert_not_called()
+        # Cost should only include parse + assess + transform (no refine)
+        assert result.metrics.total_cost == pytest.approx(0.06, abs=0.01)
+
+    @patch("startd8.workflows.builtin.architectural_review_log_workflow.ArchitecturalReviewLogWorkflow")
+    @patch("startd8.workflows.builtin.plan_ingestion_workflow.resolve_agent_spec")
+    def test_skip_arc_review_false_runs_refine(self, mock_resolve, MockReviewWf, tmp_path):
+        """When skip_arc_review=False, the arc review runs normally."""
+        plan_file = tmp_path / "plan.md"
+        plan_file.write_text(SAMPLE_PLAN)
+
+        agent = _make_mock_agent()
+        agent.generate.side_effect = [
+            _mock_generate_return(PARSE_JSON, cost=0.01),
+            _mock_generate_return(ASSESS_JSON_PRIME, cost=0.02),
+            _mock_generate_return(TRANSFORM_YAML, cost=0.03),
+        ]
+        mock_resolve.return_value = agent
+
+        mock_review_result = MagicMock()
+        mock_review_result.success = True
+        mock_review_result.metrics = MagicMock(total_cost=0.05)
+        mock_review_result.steps = []
+        mock_review_result.error = None
+        mock_review_result.output = {}
+        mock_review_instance = MagicMock()
+        mock_review_instance.run.return_value = mock_review_result
+        MockReviewWf.return_value = mock_review_instance
+
+        result = self.wf.run({
+            "plan_path": str(plan_file),
+            "output_dir": str(tmp_path),
+            "skip_arc_review": False,
+            "review_rounds": 1,
+        })
+
+        assert result.success
+        MockReviewWf.assert_called_once()
+
+    def test_skip_arc_review_metadata_declared(self):
+        """skip_arc_review appears in workflow metadata inputs."""
+        wf = PlanIngestionWorkflow()
+        input_names = [inp.name for inp in wf.metadata.inputs]
+        assert "skip_arc_review" in input_names

@@ -1087,6 +1087,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                     description="Number of architectural review rounds (0 = skip refinement)",
                 ),
                 WorkflowInput(
+                    name="skip_arc_review",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Skip the architectural review workflow in the REFINE phase",
+                ),
+                WorkflowInput(
                     name="review_quality_tier",
                     type="string",
                     required=False,
@@ -3614,6 +3621,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         threshold = int(config.get("complexity_threshold", 40))
         force_route = config.get("force_route")
         review_rounds = int(config.get("review_rounds", 2))
+        skip_arc_review = bool(config.get("skip_arc_review", False))
         review_quality_tier = str(config.get("review_quality_tier", "flagship"))
         contextcore_export_dir = config.get("contextcore_export_dir")
         min_export_coverage = float(config.get("min_export_coverage", 0))
@@ -3922,19 +3930,24 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Refine")
             state.current_phase = IngestionPhase.REFINE
 
-            rounds_completed, refine_steps, refine_cost, review_output = self._phase_refine(
-                doc_path,
-                review_rounds,
-                review_quality_tier,
-                scope,
-                context_files,
-                list(requirements_docs.keys()) if requirements_docs else None,
-                warn_cost_usd,
-                max_cost_usd,
-                enable_apply=config.get("enable_apply"),
-                enable_prompt_caching=config.get("enable_prompt_caching"),
-                enable_triage=config.get("enable_triage"),
-            )
+            if skip_arc_review:
+                rounds_completed, refine_steps, refine_cost, review_output = (
+                    0, [], 0.0, {},
+                )
+            else:
+                rounds_completed, refine_steps, refine_cost, review_output = self._phase_refine(
+                    doc_path,
+                    review_rounds,
+                    review_quality_tier,
+                    scope,
+                    context_files,
+                    list(requirements_docs.keys()) if requirements_docs else None,
+                    warn_cost_usd,
+                    max_cost_usd,
+                    enable_apply=config.get("enable_apply"),
+                    enable_prompt_caching=config.get("enable_prompt_caching"),
+                    enable_triage=config.get("enable_triage"),
+                )
             steps.extend(refine_steps)
             state.total_cost += refine_cost
             step_costs["refine"] = refine_cost
