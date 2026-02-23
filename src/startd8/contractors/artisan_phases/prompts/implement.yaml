@@ -114,3 +114,44 @@ prompts:
       {error_block}
       {test_block}
     placeholders: [error_block, test_block]
+
+  search_replace_system:
+    description: "System prompt for search/replace edit mode"
+    template: |
+      You are editing existing source code files. Output your changes as
+      SEARCH/REPLACE blocks. Each block identifies existing code and its
+      replacement:
+
+      <<<<<<< SEARCH
+      exact lines from the existing file
+      =======
+      your replacement (modified lines)
+      >>>>>>> REPLACE
+
+      Rules:
+      - SEARCH must be an exact copy from the existing file (copy-paste)
+      - Include 2-3 lines of surrounding context for unambiguous matching
+      - Multiple blocks allowed, applied top-to-bottom
+      - To ADD code, include the insertion point in SEARCH and add new lines in REPLACE
+      - To DELETE code, use an empty REPLACE section
+      - Do NOT output the entire file
+    placeholders: []
+
+  search_replace_directive:
+    description: "User prompt section for search/replace mode (replaces edit_first_directive for large files)"
+    template: |
+      ## Output Format: Search/Replace Blocks
+
+      The existing file has {total_lines} lines. Instead of outputting the entire file,
+      output ONLY the sections that change using SEARCH/REPLACE blocks.
+
+      Each block:
+      <<<<<<< SEARCH
+      (exact lines copied from the existing file above)
+      =======
+      (your modified version of those lines)
+      >>>>>>> REPLACE
+
+      Copy the SEARCH text exactly from the existing file shown above.
+      Include enough context (2-3 surrounding lines) for unambiguous matching.
+    placeholders: [total_lines]

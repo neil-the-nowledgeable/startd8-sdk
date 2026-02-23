@@ -85,11 +85,11 @@ class TestImplementYamlLoading:
             assert f"TEST_{p}" in result
 
     def test_template_count(self):
-        """implement.yaml contains exactly 10 prompt entries."""
+        """implement.yaml contains exactly 12 prompt entries."""
         from startd8.contractors.artisan_phases.prompts import _load_file
 
         data = _load_file("implement")
-        assert len(data["prompts"]) == 10
+        assert len(data["prompts"]) == 12
 
 
 # ============================================================================

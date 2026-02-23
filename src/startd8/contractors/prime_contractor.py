@@ -6,9 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from ..logging_config import get_logger
-from ..security import sanitize_path
-from .checkpoint import CheckpointStatus, IntegrationCheckpoint
-from .gate_contracts import GateEmitter
+from .checkpoint import IntegrationCheckpoint
 from .integration_engine import IntegrationEngine
 from .protocols import (
     CheckpointFailedCallback,
@@ -22,6 +20,11 @@ from .protocols import (
 )
 from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
+
+logger = get_logger(__name__)
+
+
+_EDIT_FIRST_VALIDATED: bool = True  # F-000: Remove after edit-first pipeline validated; see lifecycle in design doc
 
 
 # ---------------------------------------------------------------------------

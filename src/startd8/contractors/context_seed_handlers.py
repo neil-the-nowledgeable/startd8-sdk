@@ -2563,12 +2563,11 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
     def __init__(
         self,
         handler_config: Optional[HandlerConfig] = None,
-        code_generator: Optional[CodeGenerator] = None,
+        code_generator: Optional[CodeGenerator] = None,  # deprecated, ignored
         enriched_seed_path: Optional[Path] = None,
         project_root: Optional[Path] = None,
     ) -> None:
         self.config = handler_config or HandlerConfig()
-        self._code_generator = code_generator
         self._enriched_seed_path = enriched_seed_path
         self._project_root = project_root
 
@@ -4312,11 +4311,11 @@ class Test{class_name}:
 
         # --- Real-mode path: delegate to DevelopmentPhase ---
         from startd8.contractors.artisan_phases.development import (
+            ArtisanChunkExecutor,
             DevelopmentPhase,
             DevelopmentPlan,
             DefaultTestRunner,
             JsonFileStateStore,
-            LeadContractorChunkExecutor,
         )
 
         # --- Resume check: load prior generation results if available ---
@@ -4536,22 +4535,12 @@ class Test{class_name}:
             staging_dir.mkdir(parents=True, exist_ok=True)
             context["_staging_dir"] = str(staging_dir)
 
-            executor = LeadContractorChunkExecutor(
-                lead_agent=self.config.lead_agent,
-                drafter_agent=self.config.drafter_agent,
+            executor = ArtisanChunkExecutor(
+                drafter_spec=self.config.drafter_agent,
                 output_dir=staging_dir,
-                max_iterations=self.config.max_iterations,
-                pass_threshold=self.config.pass_threshold,
                 max_tokens=self.config.max_tokens,
-                fail_on_truncation=self.config.fail_on_truncation,
-                check_truncation=self.config.check_truncation,
-                strict_truncation=self.config.strict_truncation,
                 project_root=project_root,
             )
-            if self._code_generator is not None:
-                # _generator is the lazy-init slot on LeadContractorChunkExecutor;
-                # setting it skips _resolve_generator() and uses our instance.
-                executor._generator = self._code_generator
 
             # Cooperative cancellation token — set on timeout to signal
             # the background thread to stop initiating new LLM calls.
@@ -4906,11 +4895,17 @@ class SeedTaskUnit:
     plus generation metadata (_generation key).
     """
 
-    __slots__ = ("_task", "_gen")
+    __slots__ = ("_task", "_gen", "_edit_mode")
 
-    def __init__(self, task: SeedTask, gen_result: GenerationResult) -> None:
+    def __init__(
+        self,
+        task: SeedTask,
+        gen_result: GenerationResult,
+        edit_mode: dict[str, Any] | None = None,
+    ) -> None:
         self._task = task
         self._gen = gen_result
+        self._edit_mode = edit_mode
 
     @property
     def id(self) -> str:
@@ -4939,6 +4934,8 @@ class SeedTaskUnit:
             "input_tokens": self._gen.input_tokens,
             "output_tokens": self._gen.output_tokens,
         }
+        if self._edit_mode is not None:
+            ctx["_edit_mode"] = self._edit_mode
         return ctx
 
 
@@ -5052,14 +5049,24 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                     "task.phase": "integrate",
                 },
             ) as _int_span:
-                unit = SeedTaskUnit(task, gr)
+                # Pass edit mode classification so the integration engine
+                # can skip merge strategy for edit-mode tasks (the staging
+                # file IS the complete file after search/replace).
+                _edit_classifications = context.get(
+                    "edit_mode_classifications", {},
+                )
+                _task_edit_mode = _edit_classifications.get(task_id)
+                unit = SeedTaskUnit(task, gr, edit_mode=_task_edit_mode)
                 listener = ArtisanIntegrationListener(task_id)
                 result = engine.integrate(unit, listener=listener)
                 integration_results[task_id] = {
                     "success": result.success,
                     "integrated_files": [str(f) for f in result.integrated_files],
                     "errors": result.errors,
+                    "warnings": result.warnings,
                     "rollback_performed": result.rollback_performed,
+                    "skipped_files": result.skipped_files,
+                    "status": result.status.value if hasattr(result.status, "value") else str(result.status),
                 }
                 _int_span.set_attribute("task.success", result.success)
 
@@ -5070,6 +5077,21 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
         # Clean staging dir
         if staging_dir.exists() and not dry_run:
             _shutil.rmtree(staging_dir, ignore_errors=True)
+
+        # Log skipped files summary for visibility
+        skipped_total = sum(
+            len(r.get("skipped_files", [])) for r in integration_results.values()
+        )
+        if skipped_total:
+            skipped_tasks = sum(
+                1 for r in integration_results.values() if r.get("skipped_files")
+            )
+            logger.error(
+                "INTEGRATE: %d file(s) skipped due to size regression "
+                "across %d task(s)",
+                skipped_total,
+                skipped_tasks,
+            )
 
         # Validate output structure before writing to context
         from startd8.contractors.context_schema import IntegratePhaseOutput
@@ -7610,7 +7632,6 @@ class ContextSeedHandlers:
             ),
             WorkflowPhase.IMPLEMENT: ImplementPhaseHandler(
                 handler_config=config,
-                code_generator=code_generator,
                 enriched_seed_path=Path(enriched_seed_path),
             ),
             WorkflowPhase.INTEGRATE: IntegratePhaseHandler(config=config),

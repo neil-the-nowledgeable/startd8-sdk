@@ -1701,6 +1701,512 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             return False, f"LeadContractor execution error: {str(e)}"
 
 
+# ── Search/replace threshold ─────────────────────────────────────────
+#: Minimum lines in an existing file to trigger search/replace mode.
+#: Files shorter than this threshold use the whole-file edit-first path.
+_SEARCH_REPLACE_LINE_THRESHOLD: int = 50
+
+#: Inline fallback for search/replace system prompt (when YAML unavailable).
+_SR_SYSTEM_FALLBACK: str = (
+    "You are editing existing source code files. Output your changes as "
+    "SEARCH/REPLACE blocks. Each block identifies existing code and its "
+    "replacement:\n\n"
+    "<<<<<<< SEARCH\n"
+    "exact lines from the existing file\n"
+    "=======\n"
+    "your replacement (modified lines)\n"
+    ">>>>>>> REPLACE\n\n"
+    "Rules:\n"
+    "- SEARCH must be an exact copy from the existing file (copy-paste)\n"
+    "- Include 2-3 lines of surrounding context for unambiguous matching\n"
+    "- Multiple blocks allowed, applied top-to-bottom\n"
+    "- To ADD code, include the insertion point in SEARCH and add new lines in REPLACE\n"
+    "- To DELETE code, use an empty REPLACE section\n"
+    "- Do NOT output the entire file"
+)
+
+
+class ArtisanChunkExecutor(LeadContractorChunkExecutor):
+    """Chunk executor using direct ``agenerate()`` calls.
+
+    Inherits all prompt-building helpers from
+    :class:`LeadContractorChunkExecutor` (``_build_task_description``,
+    ``_build_generation_context``, and ~10 section helpers).
+
+    Key differences from the parent:
+    - Calls ``drafter.agenerate()`` directly instead of routing through
+      ``LeadContractorCodeGenerator`` (no lead/drafter review loop).
+    - Adds search/replace edit block support for large existing files.
+    - Constructor takes ``drafter_spec`` instead of ``code_generator``.
+
+    Example::
+
+        executor = ArtisanChunkExecutor(
+            drafter_spec="anthropic:claude-sonnet-4-20250514",
+            output_dir=Path("staging"),
+            project_root=Path("/my/project"),
+        )
+        phase = DevelopmentPhase(executor=executor)
+        result = await phase.run(plan)
+    """
+
+    def __init__(
+        self,
+        drafter_spec: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
+        output_dir: Optional[Path] = None,
+        max_tokens: Optional[int] = None,
+        project_root: Optional[Path] = None,
+        **kwargs: Any,
+    ):
+        """Initialize the Artisan chunk executor.
+
+        Args:
+            drafter_spec: Agent spec string for the implementation drafter.
+            output_dir: Staging directory for writing generated files.
+            max_tokens: Override max_tokens for agent creation.
+            project_root: Project root for reading existing files.
+        """
+        # Initialize parent for prompt helpers; lead_agent is unused
+        # but required by the parent constructor.
+        super().__init__(
+            lead_agent=drafter_spec,  # unused, satisfies parent
+            drafter_agent=drafter_spec,
+            output_dir=output_dir,
+            max_tokens=max_tokens,
+            project_root=project_root,
+            **kwargs,
+        )
+        self._drafter_spec = drafter_spec
+        self._artisan_drafter: Optional[Any] = None
+        self._artisan_max_tokens = max_tokens or 64000
+        self.logger = get_logger("startd8.development.artisan_executor")
+
+    # ------------------------------------------------------------------
+    # Agent resolution (lazy, cached)
+    # ------------------------------------------------------------------
+
+    def _resolve_artisan_drafter(self) -> Any:
+        """Resolve the drafter agent spec to a BaseAgent (cached)."""
+        if self._artisan_drafter is not None:
+            return self._artisan_drafter
+
+        from startd8.utils.agent_resolution import resolve_agent_spec
+
+        self.logger.info("Resolving artisan drafter agent: %s", self._drafter_spec)
+        self._artisan_drafter = resolve_agent_spec(
+            self._drafter_spec,
+            name="artisan-drafter",
+            max_tokens=self._artisan_max_tokens,
+        )
+        return self._artisan_drafter
+
+    # ------------------------------------------------------------------
+    # Search/replace prompt helpers
+    # ------------------------------------------------------------------
+
+    def _build_search_replace_directive(
+        self,
+        existing: Dict[str, str],
+    ) -> List[str]:
+        """Build the search/replace directive section.
+
+        Replaces the edit-first directive when files exceed the
+        search/replace line threshold.  Uses actual file sizes from disk
+        when available (``_existing_file_contents`` may be truncated by
+        ``_MAX_EXISTING_FILE_BYTES``).
+        """
+        # Compute line count from full files on disk when possible.
+        total_lines = 0
+        for target, content in existing.items():
+            actual_content = content
+            if self._project_root is not None:
+                full_path = self._project_root / target
+                if full_path.exists():
+                    try:
+                        actual_content = full_path.read_text(encoding="utf-8")
+                    except (UnicodeDecodeError, OSError):
+                        pass  # fall back to truncated content line count
+            total_lines += len(actual_content.splitlines())
+
+        text = _format_implement_prompt(
+            "search_replace_directive",
+            total_lines=total_lines,
+        )
+        if text is None:
+            text = (
+                "## Output Format: Search/Replace Blocks\n\n"
+                f"The existing file has {total_lines} lines. Instead of "
+                "outputting the entire file, output ONLY the sections that "
+                "change using SEARCH/REPLACE blocks.\n\n"
+                "Each block:\n"
+                "<<<<<<< SEARCH\n"
+                "(exact lines copied from the existing file above)\n"
+                "=======\n"
+                "(your modified version of those lines)\n"
+                ">>>>>>> REPLACE\n\n"
+                "Copy the SEARCH text exactly from the existing file shown "
+                "above. Include enough context (2-3 surrounding lines) for "
+                "unambiguous matching."
+            )
+
+        return [text, "\n---\n"]
+
+    def _get_system_prompt(self, chunk: DevelopmentChunk) -> Optional[str]:
+        """Return the system prompt for this chunk.
+
+        Returns the search/replace system prompt when the chunk uses
+        search/replace mode; ``None`` otherwise (LLM default).
+        """
+        if chunk.metadata.get("_use_search_replace"):
+            return _format_implement_prompt("search_replace_system") or _SR_SYSTEM_FALLBACK
+        return None
+
+    # ------------------------------------------------------------------
+    # Override _build_task_description to support search/replace
+    # ------------------------------------------------------------------
+
+    def _build_task_description(
+        self,
+        chunk: DevelopmentChunk,
+        context: Dict[str, Any],
+    ) -> str:
+        """Build the task description, choosing search/replace or
+        edit-first directive based on existing file size."""
+        parts: List[str] = []
+        _existing = chunk.metadata.get("_existing_file_contents", {})
+        _edit_mode = chunk.metadata.get("_edit_mode")
+        is_edit = bool(_existing) or (
+            _edit_mode is not None and _edit_mode.get("mode") == "edit"
+        )
+
+        # Decide search/replace vs whole-file
+        use_search_replace = (
+            is_edit
+            and _existing
+            and any(
+                len(c.splitlines()) >= _SEARCH_REPLACE_LINE_THRESHOLD
+                for c in _existing.values()
+            )
+        )
+        chunk.metadata["_use_search_replace"] = use_search_replace
+
+        parts.extend(self._build_project_identity(chunk))
+        parts.extend(self._build_target_files(chunk, is_edit))
+        parts.extend(self._build_existing_files(_existing))
+
+        if _existing:
+            if use_search_replace:
+                parts.extend(self._build_search_replace_directive(_existing))
+            else:
+                parts.extend(self._build_edit_first_directive(_existing))
+
+        parts.extend(self._build_edit_mode_classification(_edit_mode))
+        parts.extend(self._build_design_framing(chunk, _existing))
+        parts.append(chunk.description)
+        parts.extend(self._build_supplementary_context(chunk))
+        parts.extend(self._build_retry_feedback(context))
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # File writing for search/replace applied content
+    # ------------------------------------------------------------------
+
+    def _write_applied_files(
+        self,
+        applied_files: Dict[str, str],
+        chunk: DevelopmentChunk,
+    ) -> List[Path]:
+        """Write search/replace-applied content to staging.
+
+        Args:
+            applied_files: Mapping of relative file path → final content.
+            chunk: The development chunk.
+
+        Returns:
+            List of paths written.
+        """
+        written: List[Path] = []
+        for target, content in applied_files.items():
+            output_path = self._output_dir / target
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(content, encoding="utf-8")
+            written.append(output_path)
+            self.logger.info(
+                "Wrote search/replace applied file: %s (%d lines)",
+                output_path,
+                len(content.splitlines()),
+            )
+        return written
+
+    # ------------------------------------------------------------------
+    # Core execute (replaces LeadContractor path with direct agenerate)
+    # ------------------------------------------------------------------
+
+    async def execute(
+        self, chunk: DevelopmentChunk, context: Dict[str, Any]
+    ) -> Tuple[bool, str]:
+        """Execute the chunk via direct ``agenerate()`` call.
+
+        Workflow:
+        1. Build enriched generation context (existing files, retry info).
+        2. Build task description (with search/replace or edit-first).
+        3. Resolve the drafter agent (lazy, cached).
+        4. Select system prompt (search/replace instructions or None).
+        5. Call ``drafter.agenerate(prompt, system_prompt=sys_prompt)``.
+        6. Process response: apply search/replace blocks or extract whole file.
+        7. Write files to staging directory.
+        8. Accumulate cost/token metrics.
+        9. Return ``(True, code)`` or ``(False, error)``.
+        """
+        # Dry-run short-circuit
+        if context.get("dry_run", False):
+            self.logger.debug("[DRY-RUN] Artisan chunk %s", chunk.chunk_id)
+            return True, "Dry-run: Artisan execution skipped"
+
+        try:
+            # Build context + description
+            gen_ctx = self._build_generation_context(chunk, context)
+
+            # Store existing file contents in chunk metadata for prompt
+            existing_files = gen_ctx.get("existing_files")
+            if existing_files:
+                chunk.metadata["_existing_file_contents"] = existing_files
+
+            task_desc = self._build_task_description(chunk, context)
+
+            # Resolve agent
+            drafter = self._resolve_artisan_drafter()
+
+            # Select system prompt
+            sys_prompt = self._get_system_prompt(chunk)
+
+            self.logger.info(
+                "Generating code for chunk %s via Artisan direct agenerate "
+                "(%d file targets, prompt %d chars, search_replace=%s)",
+                chunk.chunk_id,
+                len(chunk.file_targets),
+                len(task_desc),
+                chunk.metadata.get("_use_search_replace", False),
+            )
+
+            # Call the LLM
+            response_text, time_ms, token_usage = await drafter.agenerate(
+                task_desc, system_prompt=sys_prompt,
+            )
+
+            self.logger.info(
+                "Chunk %s: LLM responded in %dms (%d in / %d out tokens)",
+                chunk.chunk_id,
+                time_ms,
+                token_usage.input,
+                token_usage.output,
+            )
+
+            # CS4: Forensic log for implement.chunk
+            from startd8.contractors.forensic_log import emit_forensic_log
+            emit_forensic_log(
+                call_type="implement.chunk",
+                call={
+                    "prompt_length": len(task_desc),
+                    "max_tokens": self._artisan_max_tokens,
+                    "model_spec": self._drafter_spec,
+                    "response_time_ms": time_ms,
+                    "tokens_input": token_usage.input,
+                    "tokens_output": token_usage.output,
+                    "cost_usd": token_usage.cost_estimate,
+                    "attempt": context.get("_retry_attempt", 1),
+                    "mode": "search_replace" if chunk.metadata.get("_use_search_replace") else "whole_file",
+                },
+                task={
+                    "task_id": chunk.chunk_id,
+                    "title": chunk.description,
+                    "phase": "implement",
+                    "target_files": chunk.file_targets,
+                },
+                context_propagation={
+                    "domain_defaulted": context.get("_domain_defaulted"),
+                    "design_doc_present": context.get("project_context") is not None,
+                    "prompt_constraints_count": len(context.get("domain_constraints", []))
+                        if isinstance(context.get("domain_constraints"), list) else 0,
+                    "environment_checks_count": context.get("_environment_checks_count"),
+                },
+            )
+
+            # ── Process response ──────────────────────────────────────
+            use_sr = chunk.metadata.get("_use_search_replace", False)
+            existing = chunk.metadata.get("_existing_file_contents", {})
+
+            if use_sr and existing:
+                from startd8.utils.search_replace import (
+                    apply_edit_blocks,
+                    has_edit_markers,
+                    parse_edit_blocks,
+                )
+
+                if has_edit_markers(response_text):
+                    blocks = parse_edit_blocks(response_text)
+                    if blocks:
+                        applied_files: Dict[str, str] = {}
+                        all_failed: List[str] = []
+                        for target, original in existing.items():
+                            # Read full file from disk — _existing_file_contents
+                            # may be truncated by _MAX_EXISTING_FILE_BYTES (60KB).
+                            # The truncated version is fine for the LLM prompt,
+                            # but edit application must use the complete file.
+                            full_content = original
+                            if self._project_root is not None:
+                                full_path = self._project_root / target
+                                if full_path.exists():
+                                    try:
+                                        full_content = full_path.read_text(
+                                            encoding="utf-8",
+                                        )
+                                    except (UnicodeDecodeError, OSError) as exc:
+                                        self.logger.warning(
+                                            "Could not read full file %s for "
+                                            "search/replace — using truncated: %s",
+                                            full_path,
+                                            exc,
+                                        )
+                            result = apply_edit_blocks(full_content, blocks)
+                            if result.failed:
+                                for _block, reason in result.failed:
+                                    all_failed.append(f"{target}: {reason}")
+                                self.logger.warning(
+                                    "Edit blocks partially failed for %s: %d/%d applied",
+                                    target,
+                                    result.applied,
+                                    len(blocks),
+                                )
+                            applied_files[target] = result.content
+
+                        if all_failed:
+                            self.logger.warning(
+                                "Search/replace had %d failed block(s): %s",
+                                len(all_failed),
+                                "; ".join(all_failed[:3]),
+                            )
+
+                        written_files = self._write_applied_files(applied_files, chunk)
+                    else:
+                        # Markers present but no valid blocks parsed — fall through
+                        self.logger.warning(
+                            "Chunk %s: search/replace markers found but no valid "
+                            "blocks parsed — falling back to whole-file extraction",
+                            chunk.chunk_id,
+                        )
+                        from startd8.utils.code_extraction import extract_code_from_response
+                        code = extract_code_from_response(response_text)
+                        if not code or not code.strip():
+                            return False, "LLM returned empty code after extraction"
+                        written_files = self._write_generated_files(code, chunk)
+                else:
+                    # LLM ignored search/replace format — whole-file fallback
+                    self.logger.info(
+                        "Chunk %s: LLM did not use search/replace format — "
+                        "falling back to whole-file extraction",
+                        chunk.chunk_id,
+                    )
+                    from startd8.utils.code_extraction import extract_code_from_response
+                    code = extract_code_from_response(response_text)
+                    if not code or not code.strip():
+                        return False, "LLM returned empty code after extraction"
+                    written_files = self._write_generated_files(code, chunk)
+            else:
+                # Whole-file path (create mode or small edit)
+                from startd8.utils.code_extraction import extract_code_from_response
+                code = extract_code_from_response(response_text)
+                if not code or not code.strip():
+                    return False, "LLM returned empty code after extraction"
+                written_files = self._write_generated_files(code, chunk)
+
+            # ── Accumulate cost metrics ───────────────────────────────
+            cost = token_usage.cost_estimate
+            context["_llm_cost_usd"] = context.get("_llm_cost_usd", 0.0) + cost
+            context["_llm_input_tokens"] = (
+                context.get("_llm_input_tokens", 0) + token_usage.input
+            )
+            context["_llm_output_tokens"] = (
+                context.get("_llm_output_tokens", 0) + token_usage.output
+            )
+
+            # Store per-chunk cost in metadata for detailed reporting
+            chunk.metadata["llm_cost_usd"] = cost
+            chunk.metadata["llm_input_tokens"] = token_usage.input
+            chunk.metadata["llm_output_tokens"] = token_usage.output
+            chunk.metadata["llm_time_ms"] = time_ms
+            chunk.metadata["llm_model"] = getattr(drafter, "model", self._drafter_spec)
+            chunk.metadata["generated_files"] = [str(p) for p in written_files]
+            # Iterations is always 1 for direct agenerate
+            chunk.metadata["iterations"] = 1
+
+            # ── Build GenerationResult for downstream phases ──────────
+            from startd8.contractors.protocols import GenerationResult
+            gen_result = GenerationResult(
+                success=True,
+                generated_files=written_files,
+                input_tokens=token_usage.input,
+                output_tokens=token_usage.output,
+                cost_usd=cost,
+                iterations=1,
+                model=getattr(drafter, "model", self._drafter_spec),
+            )
+            chunk.metadata["_generation_result"] = gen_result
+
+            # ── Post-generation scope validation ──────────────────────
+            design_doc = chunk.metadata.get("design_document")
+            if design_doc and written_files:
+                design_lines = len(design_doc.strip().splitlines())
+                total_output_lines = 0
+                for gen_file in written_files:
+                    try:
+                        if gen_file.exists():
+                            total_output_lines += len(
+                                gen_file.read_text(encoding="utf-8")
+                                .strip()
+                                .splitlines()
+                            )
+                    except (OSError, UnicodeDecodeError):
+                        pass
+
+                scope_ratio = (
+                    total_output_lines / design_lines
+                    if design_lines > 0
+                    else 1.0
+                )
+                if scope_ratio < 0.25 and total_output_lines < 100:
+                    self.logger.warning(
+                        "SCOPE MISMATCH: chunk %s output (%d lines) is %.0f%% "
+                        "of design (%d lines) — possible partial implementation",
+                        chunk.chunk_id,
+                        total_output_lines,
+                        scope_ratio * 100,
+                        design_lines,
+                    )
+                    chunk.metadata["_scope_mismatch"] = {
+                        "design_lines": design_lines,
+                        "output_lines": total_output_lines,
+                        "ratio": round(scope_ratio, 2),
+                    }
+
+            self.logger.info(
+                "Chunk %s: generation succeeded (%d files, $%.4f)",
+                chunk.chunk_id,
+                len(written_files),
+                cost,
+            )
+            file_list = ", ".join(str(f) for f in written_files)
+            return True, f"Generated files: {file_list}"
+
+        except Exception as e:
+            self.logger.exception(
+                "Artisan execution failed for chunk %s: %s",
+                chunk.chunk_id,
+                e,
+            )
+            return False, f"Artisan execution error: {str(e)}"
+
+
 class DefaultTestRunner(TestRunner):
     """Default test runner that executes shell commands via subprocess.
 

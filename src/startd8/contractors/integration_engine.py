@@ -570,8 +570,26 @@ class IntegrationEngine:
             if attempt == 1:
                 self._snapshot_target(target_path)
 
-            # Merge
-            if self.merge_strategy.can_merge(source_path, target_path):
+            # Merge — skip merge strategy for edit-mode tasks where the
+            # staging file IS the complete file (search/replace applied).
+            # The merge strategy's duplicate-class deduplication destroys
+            # content when source and target share the same classes.
+            _unit_ctx = unit.context if hasattr(unit, "context") else {}
+            _edit_mode = _unit_ctx.get("_edit_mode")
+            _skip_merge = (
+                isinstance(_edit_mode, dict)
+                and _edit_mode.get("mode") == "edit"
+            )
+            if _skip_merge:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source_path, target_path)
+                logger.info(
+                    "Copied (edit mode — merge skipped): %s",
+                    self._rel_display(target_path),
+                    extra={"unit_id": unit.id},
+                )
+                integrated_files.append(target_path)
+            elif self.merge_strategy.can_merge(source_path, target_path):
                 result = self.merge_strategy.merge(source_path, target_path)
                 if result.status.value == "success":
                     logger.info(
