@@ -98,6 +98,29 @@ class GeminiSafetyFilterError(APIError):
         self.safety_ratings = safety_ratings or []
 
 
+class SizeRegressionError(Startd8Error):
+    """Edit-first size regression gate failure (REQ-EFE-020).
+
+    Raised when generated output is smaller than the threshold percentage
+    of the original file size, indicating a destructive rewrite instead
+    of an incremental edit.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        task_id: str = None,
+        file_path: str = None,
+        ratio: float = None,
+        threshold: float = None,
+    ):
+        super().__init__(message)
+        self.task_id = task_id
+        self.file_path = file_path
+        self.ratio = ratio
+        self.threshold = threshold
+
+
 class TruncationError(Startd8Error):
     """
     Exception raised when a response is detected as truncated.

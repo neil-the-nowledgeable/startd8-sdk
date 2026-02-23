@@ -81,6 +81,7 @@ class EventNames:
     CONTEXT_PROPAGATED = "context.propagated"
     PHASE_TIMEOUT = "phase.timeout"
     PHASE_RETRY = "phase.retry"
+    EDIT_FIRST_SIZE_REGRESSION = "edit_first.size_regression"
 
 
 class DegradationReasons:

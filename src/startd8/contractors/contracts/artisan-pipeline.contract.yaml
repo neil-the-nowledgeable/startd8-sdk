@@ -231,6 +231,15 @@ phases:
           type: dict
           severity: warning
           description: "Per-task truncation detection results from Gate 4 (empty if no issues)"
+      optional:
+        - name: edit_first_gate_results
+          type: dict
+          severity: advisory
+          description: "Per-task edit-first enforcement gate results from Gate 5 (REQ-EFE-020). Empty when all files are new."
+        - name: onboarding_schema_features
+          type: dict
+          severity: advisory
+          description: "Schema features from ContextCore onboarding for edit-first threshold resolution (REQ-EFE-021)"
 
   integrate:
     description: "Merge staged generated code into project root with validation and rollback"

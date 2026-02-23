@@ -343,6 +343,15 @@ def main() -> int:
             "When set, FINALIZE will fail if any high-severity issues exist."
         ),
     )
+    parser.add_argument(
+        "--force-rewrite", action="store_true",
+        help=(
+            "Bypass the edit-first enforcement gate (Gate 5). When set, "
+            "generated files that would normally be rejected for size "
+            "regression are accepted with action='force_overridden'. "
+            "Use when intentional full rewrites are expected."
+        ),
+    )
 
     parser.add_argument(
         "--lane-parallel", action="store_true",
@@ -780,6 +789,8 @@ def main() -> int:
         handler_kwargs["refine_design"] = True
     if args.force_review:
         handler_kwargs["force_review"] = True
+    if args.force_rewrite:
+        handler_kwargs["force_rewrite"] = True
     if args.design_agent:
         handler_kwargs["design_agent"] = args.design_agent
     if args.review_agent:
