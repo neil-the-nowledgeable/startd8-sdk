@@ -26,6 +26,35 @@ from .registry import get_registry
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Execution Mode Constants (F-004)
+# ---------------------------------------------------------------------------
+
+#: Execution mode for standalone operation — no pipeline context expected.
+MODE_STANDALONE: str = "standalone"
+
+#: Execution mode for pipeline operation — full seed context exploitation.
+MODE_PIPELINE: str = "pipeline"
+
+#: Set of all recognized execution modes.
+VALID_MODES: frozenset = frozenset({MODE_STANDALONE, MODE_PIPELINE})
+
+#: Internal: minimum number of pipeline signal keys (with non-None values)
+#: required to trigger pipeline mode during auto-detection.
+_DETECTION_THRESHOLD: int = 1
+
+__all__ = [
+    "MODE_STANDALONE",
+    "MODE_PIPELINE",
+    "VALID_MODES",
+    "ExecutionMode",
+    "ModeConfig",
+    "SeedContext",
+    "PrimeContractorWorkflow",
+    "PrimeContractorListener",
+    "FeatureSpecUnit",
+]
+
 
 # ---------------------------------------------------------------------------
 # SeedContext: Typed Container for Pipeline Seed Context (SeedContext-001)
@@ -357,6 +386,105 @@ class PrimeContractorWorkflow:
         )
         result = workflow.run()  # Emits spans to Tempo
     """
+
+    # -----------------------------------------------------------------------
+    # Mode Detection (F-004)
+    # -----------------------------------------------------------------------
+
+    #: Seed content keys whose presence signals pipeline mode.
+    #: Defined as a class attribute so subclasses can extend or override
+    #: the signal set without modifying module-level state.
+    _PIPELINE_SIGNAL_KEYS: frozenset = frozenset({
+        "onboarding_metadata",
+        "architectural_context",
+        "design_calibration",
+    })
+
+    @classmethod
+    def _detect_mode(
+        cls,
+        seed_content: Dict[str, Any],
+        mode_override: Optional[str] = None,
+    ) -> str:
+        """Infer execution mode from seed content signals.
+
+        Args:
+            seed_content: Dictionary of seed/context data passed to the workflow.
+                Must be a ``dict``. Passing ``None`` or a non-dict type raises
+                ``TypeError``.
+            mode_override: Explicit mode string. When provided and valid, bypasses
+                auto-detection entirely. An empty string is treated as an invalid
+                mode (not as "no override").
+
+        Returns:
+            One of MODE_STANDALONE or MODE_PIPELINE.
+
+        Raises:
+            TypeError: If *seed_content* is not a ``dict``.
+            ValueError: If *mode_override* is not a recognized mode.
+
+        Signal presence semantics:
+            A signal key is considered **present** when it exists in
+            *seed_content* and its value ``is not None``.  This uses an
+            explicit ``None`` check rather than a general truthy check, so
+            values like ``0``, ``False``, or ``[]`` are treated as present
+            (the signal was intentionally provided, even if empty).  Empty
+            strings and empty dicts *are* counted as present under this rule.
+            Callers who want to suppress a signal should omit the key entirely
+            or set it to ``None``.
+        """
+        # --- Input guard ---
+        if not isinstance(seed_content, dict):
+            raise TypeError(
+                f"seed_content must be a dict, got {type(seed_content).__name__}"
+            )
+
+        # --- Override path (highest priority) ---
+        if mode_override is not None:
+            normalized = mode_override.strip().lower()
+            if normalized not in VALID_MODES:
+                raise ValueError(
+                    f"Invalid mode override {mode_override!r}; "
+                    f"expected one of {sorted(VALID_MODES)}"
+                )
+            logger.info(
+                "Mode override applied",
+                extra={
+                    "detection_source": "override",
+                    "resolved_mode": normalized,
+                    "override_value": mode_override,
+                },
+            )
+            return normalized
+
+        # --- Auto-detection path ---
+        signal_keys = cls._PIPELINE_SIGNAL_KEYS
+        detected_signals = signal_keys & set(seed_content.keys())
+        # Explicit None check: a key is present if its value is not None.
+        # This intentionally counts falsy-but-non-None values (e.g., {},
+        # "", [], 0, False) as present — the signal was provided.
+        present_signals = frozenset(
+            key for key in detected_signals
+            if seed_content[key] is not None
+        )
+
+        if len(present_signals) >= _DETECTION_THRESHOLD:
+            resolved = MODE_PIPELINE
+        else:
+            resolved = MODE_STANDALONE
+
+        logger.info(
+            "Mode auto-detected",
+            extra={
+                "detection_source": "auto",
+                "resolved_mode": resolved,
+                "signals_checked": sorted(signal_keys),
+                "signals_present": sorted(present_signals),
+                "signal_count": len(present_signals),
+                "detection_threshold": _DETECTION_THRESHOLD,
+            },
+        )
+        return resolved
 
     def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True):
         """
