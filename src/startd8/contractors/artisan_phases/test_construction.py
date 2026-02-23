@@ -29,8 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
 
-import contextlib
-
+from startd8.contractors.artisan_contractor import _NoOpTracer
 from startd8.contractors.protocols import DRAFT_MODEL_CLAUDE_HAIKU
 from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
 
@@ -40,6 +39,8 @@ try:
     _HAS_OTEL = True
 except ImportError:
     _HAS_OTEL = False
+
+_test_tracer = _trace.get_tracer("startd8.artisan.test") if _HAS_OTEL else _NoOpTracer()
 
 if TYPE_CHECKING:
     from startd8.contractors.artisan_phases.design_documentation import (
@@ -1512,17 +1513,13 @@ class LLMTestGenerator:
             implementation_code is not None,
         )
 
-        _span_ctx = (
-            _trace.get_tracer("startd8.artisan.test").start_as_current_span(
-                "test.generate",
-                attributes={
-                    "test.feature_name": design.feature_name,
-                    "test.prompt_length": len(prompt),
-                    "test.has_implementation": implementation_code is not None,
-                },
-            )
-            if _HAS_OTEL
-            else contextlib.nullcontext()
+        _span_ctx = _test_tracer.start_as_current_span(
+            "test.generate",
+            attributes={
+                "test.feature_name": design.feature_name,
+                "test.prompt_length": len(prompt),
+                "test.has_implementation": implementation_code is not None,
+            },
         )
         with _span_ctx as _test_span:
             response_text, time_ms, token_usage = await agent.agenerate(

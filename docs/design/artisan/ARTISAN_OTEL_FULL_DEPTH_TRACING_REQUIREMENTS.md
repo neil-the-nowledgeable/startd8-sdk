@@ -456,7 +456,7 @@ Thread context helpers return `None` and do not raise when `OTEL_AVAILABLE is Fa
 
 #### OT-503: Semantic Conventions Module
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/otel_conventions.py` (new file)
 
 Define a centralized, version-controlled module for all OTel span names, attribute keys, event names, and degradation reason codes used across the instrumentation layers. String literals for attributes like `gate.passed`, `task.cost`, `llm.cost_usd`, `chunk.status`, etc. are currently scattered across multiple files (`artisan_contractor.py`, `context_seed_handlers.py`, `design_documentation.py`, `development.py`, `test_construction.py`). A central conventions module prevents typos, enables IDE discovery, and makes refactoring safe.
@@ -522,7 +522,7 @@ class DegradationReasons:
 
 #### OT-504: Standardized Span-Creation Degradation Pattern
 
-**Status:** planned
+**Status:** implemented
 **Source:** Cross-cutting — applies to all span-creating requirements (OT-200, OT-201, OT-301–OT-306, OT-305, OT-401–OT-405)
 
 All span-creating code must use a single, consistent degradation pattern when OpenTelemetry is unavailable. The mandated pattern is `_NoOpTracer` / `_NoOpSpan` fallback. The `contextlib.nullcontext()` pattern is prohibited for span creation.
@@ -597,7 +597,7 @@ The key insight: OTel spans (Layer 4) capture *that* an LLM call happened and it
 
 #### OT-700: Structured Log Schema for LLM Calls
 
-**Status:** planned
+**Status:** implemented
 **Target files:** All 7 LLM call sites (see OT-701..OT-707)
 
 Define a canonical structured log schema emitted at every LLM call. The log must use `get_logger()` from `startd8.logging_config` (not `logging.getLogger()`) to ensure the OTel log bridge forwards the entry to Loki. All call sites must use the `emit_forensic_log()` helper (OT-712) to construct the log entry — direct JSON assembly at call sites is not permitted.
@@ -763,7 +763,7 @@ The following table maps every schema field to its concrete source at the call s
 
 #### OT-701: Design Generate Forensic Log
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/artisan_phases/design_documentation.py` (`_generate_design`)
 
 Emit an `llm.call` structured log at `_generate_design()` (line ~1212) after the `AgentLLMBackend.generate()` call completes, using `emit_forensic_log()` (OT-712). Available context at this call site:
@@ -790,7 +790,7 @@ Emit an `llm.call` structured log at `_generate_design()` (line ~1212) after the
 
 #### OT-702: Design Review Forensic Log
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/artisan_phases/design_documentation.py` (`_review_design`)
 
 Emit an `llm.call` log at `_review_design()` (line ~1296) using `emit_forensic_log()` (OT-712). Available context includes the review role (reviewer/arbiter) and the design document being reviewed.
@@ -803,7 +803,7 @@ Emit an `llm.call` log at `_review_design()` (line ~1296) using `emit_forensic_l
 
 #### OT-703: Design Revision Forensic Log
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/artisan_phases/design_documentation.py` (`_revise_design`)
 
 Emit an `llm.call` log at `_revise_design()` (line ~1516) using `emit_forensic_log()` (OT-712). Available context includes both reviewer and arbiter verdicts that drove the revision.
@@ -816,7 +816,7 @@ Emit an `llm.call` log at `_revise_design()` (line ~1516) using `emit_forensic_l
 
 #### OT-704: Implement Chunk Forensic Log
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/artisan_phases/development.py` (`LLMChunkExecutor.execute`, line ~734)
 
 Emit an `llm.call` log at `LLMChunkExecutor.execute()` after `drafter.agenerate()` using `emit_forensic_log()` (OT-712). This call site has the richest implementation context: chunk metadata, design document reference, domain constraints, and retry state.
@@ -834,7 +834,7 @@ Emit an `llm.call` log at `LLMChunkExecutor.execute()` after `drafter.agenerate(
 
 #### OT-705: Test Generate Forensic Log
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/artisan_phases/test_construction.py` (`generate_tests`, line ~1527)
 
 Emit an `llm.call` log at `generate_tests()` after `agent.agenerate()` using `emit_forensic_log()` (OT-712).
@@ -849,7 +849,7 @@ Emit an `llm.call` log at `generate_tests()` after `agent.agenerate()` using `em
 
 #### OT-706: Test Retry Forensic Log
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/artisan_phases/test_construction.py` (`_retry_generate_tests`, line ~1586)
 
 Emit an `llm.call` log at `_retry_generate_tests()` after the retry LLM call using `emit_forensic_log()` (OT-712).
@@ -863,7 +863,7 @@ Emit an `llm.call` log at `_retry_generate_tests()` after the retry LLM call usi
 
 #### OT-707: Review Evaluate Forensic Log
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/context_seed_handlers.py` (`ReviewPhaseHandler._review_task`, line ~6250)
 
 Emit an `llm.call` log at `_review_task()` after `agent.generate()` using `emit_forensic_log()` (OT-712). This call site has the most context of any LLM call — design document, generated code, test results, truncation info, parameter sources, semantic conventions, project context, and service metadata.
@@ -879,7 +879,7 @@ Emit an `llm.call` log at `_review_task()` after `agent.generate()` using `emit_
 
 #### OT-708: Trace-Log Correlation via Exemplars
 
-**Status:** planned
+**Status:** implemented
 **Source:** All 7 call sites (OT-701..OT-707)
 
 Each forensic log entry must include OTel trace_id and span_id as exemplars, enabling Grafana's trace-to-log and log-to-trace navigation. When the OTel log bridge is active, these are automatically attached; when not, the log must explicitly extract them from `trace.get_current_span().get_span_context()`. The `emit_forensic_log()` helper (OT-712) handles exemplar extraction centrally.
@@ -895,7 +895,7 @@ Each forensic log entry must include OTel trace_id and span_id as exemplars, ena
 
 #### OT-709: Context Correctness Diagnostic Fields
 
-**Status:** planned
+**Status:** implemented
 **Source:** All 7 call sites (OT-701..OT-707)
 
 The `context_propagation` section of each log entry must make context correctness *prescriptive* — it declares what *should* be present and flags what's missing. This follows the "Prescriptive Over Descriptive" principle from `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md`.
@@ -911,7 +911,7 @@ Each boolean field (`*_present`, `*_defaulted`) is a binary diagnostic: `true` m
 
 #### OT-710: Contract State Snapshot in Forensic Log
 
-**Status:** planned
+**Status:** implemented
 **Source:** All 7 call sites (OT-701..OT-707)
 
 The `contract_state` section captures the most recent boundary validation result available to the call site. This connects the LLM call to the contract system defined in `ContextCore-context-contracts.md`, making contract violations visible alongside the LLM calls they affect.
@@ -993,7 +993,7 @@ finally:
 
 #### OT-711: Forensic Log Level and Volume Control
 
-**Status:** planned
+**Status:** implemented
 **Source:** All 7 call sites
 
 Forensic logs must be emitted at `INFO` level by default. A configuration option (`HandlerConfig.forensic_log_level`) allows raising the level to `DEBUG` for high-volume production use, or lowering to `WARNING` for cost-sensitive environments that only want logs when context is degraded.
@@ -1028,7 +1028,7 @@ When `is_degraded()` evaluates to `true`, the `degradation_reasons` field (see O
 
 #### OT-712: Forensic Log Builder Helper
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/forensic_log.py` (new file)
 
 Provide a centralized `emit_forensic_log()` helper function (or `ForensicLogBuilder` class) that constructs and emits the canonical OT-700 log schema. All 7 call sites (OT-701–OT-707) must use this helper — direct JSON assembly at call sites is prohibited. This follows the Mottainai "Forward, Don't Regenerate" principle and the document's own "correct by construction" design philosophy.
@@ -1099,7 +1099,7 @@ def emit_forensic_log(
 
 #### OT-713: Forensic Log Automated Tests
 
-**Status:** planned
+**Status:** implemented
 **Source:** `tests/unit/contractors/test_forensic_logging.py` (new file)
 
 Automated tests for the forensic log generation system, covering the `emit_forensic_log()` helper (OT-712), schema correctness, degradation evaluation, and per-call-site field population.
@@ -1122,7 +1122,7 @@ Automated tests for the forensic log generation system, covering the `emit_foren
 
 #### OT-714: Public Model Spec Accessor
 
-**Status:** planned
+**Status:** partially implemented
 **Source:** Agent interface — `AgentLLMBackend`, `LLMChunkExecutor.drafter`, test/review agent instances
 
 Provide a public `get_model_spec() -> str | None` method on all agent/LLM backend interfaces used at the 7 forensic log call sites. This replaces direct access to the private `_agent_spec` attribute and provides a consistent, stable API for model identification across all phases.
@@ -1163,7 +1163,7 @@ Provide a public `get_model_spec() -> str | None` method on all agent/LLM backen
 
 #### OT-715: Forensic Logging and Trace Sampling Interaction
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/forensic_log.py` (`emit_forensic_log`)
 
 Forensic log emission MUST be independent of the parent span's OTel trace sampling decision. This ensures 100% of LLM calls are auditable via logs, even when trace sampling is configured below 100% in production.
@@ -1179,7 +1179,7 @@ Forensic log emission MUST be independent of the parent span's OTel trace sampli
 
 #### OT-716: Forensic Log Size Management
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/forensic_log.py` (`emit_forensic_log`)
 
 List-based fields in the forensic log schema must be truncated if they exceed a configured limit, with a summary field indicating truncation. This prevents oversized log entries from being rejected by Loki or causing performance issues. The truncation logic is implemented centrally in the `emit_forensic_log()` helper (OT-712).
@@ -1303,14 +1303,14 @@ flowchart TD
 
 | Source File | Implemented | Planned |
 |-------------|-------------|---------|
-| `src/startd8/otel.py` | OT-100, OT-101, OT-102, OT-502 | OT-710 (boundary result ContextVar propagation in thread helpers) |
-| `src/startd8/otel_conventions.py` | | OT-503 |
-| `src/startd8/contractors/artisan_contractor.py` | OT-200, OT-201, OT-202, OT-500, OT-507 | OT-504, OT-710 (handler attribute + ContextVar setting) |
-| `src/startd8/contractors/context_seed_handlers.py` | OT-103, OT-104, OT-300, OT-301, OT-302, OT-303, OT-304, OT-507 | OT-306, OT-504, OT-707, OT-708, OT-709, OT-710 (boundary result ContextVar propagation in daemon thread _runner) |
-| `src/startd8/contractors/artisan_phases/design_documentation.py` | OT-400, OT-401, OT-402, OT-403, OT-404, OT-406, OT-501, OT-507 | OT-504, OT-701, OT-702, OT-703, OT-708, OT-709, OT-710, OT-714 |
-| `src/startd8/contractors/artisan_phases/development.py` | OT-305, OT-501, OT-507 | OT-504, OT-704, OT-708, OT-709, OT-710, OT-714 |
-| `src/startd8/contractors/artisan_phases/test_construction.py` | OT-405, OT-501, OT-507 | OT-504, OT-705, OT-706, OT-708, OT-709, OT-710, OT-714 |
-| `src/startd8/contractors/forensic_log.py` | | OT-700, OT-708, OT-709, OT-710 (ContextVar definition), OT-711, OT-712, OT-715, OT-716 |
+| `src/startd8/otel.py` | OT-100, OT-101, OT-102, OT-502, OT-710 | |
+| `src/startd8/otel_conventions.py` | OT-503 | |
+| `src/startd8/contractors/artisan_contractor.py` | OT-200, OT-201, OT-202, OT-500, OT-504, OT-507, OT-710 | |
+| `src/startd8/contractors/context_seed_handlers.py` | OT-103, OT-104, OT-300, OT-301, OT-302, OT-303, OT-304, OT-504, OT-507, OT-707, OT-708, OT-709, OT-710 | OT-306 |
+| `src/startd8/contractors/artisan_phases/design_documentation.py` | OT-400, OT-401, OT-402, OT-403, OT-404, OT-406, OT-501, OT-504, OT-507, OT-701, OT-702, OT-703, OT-708, OT-709, OT-710 | OT-714 (partial) |
+| `src/startd8/contractors/artisan_phases/development.py` | OT-305, OT-501, OT-504, OT-507, OT-704, OT-708, OT-709, OT-710 | OT-714 (partial) |
+| `src/startd8/contractors/artisan_phases/test_construction.py` | OT-405, OT-501, OT-504, OT-507, OT-705, OT-706, OT-708, OT-709, OT-710 | OT-714 (partial) |
+| `src/startd8/contractors/forensic_log.py` | OT-700, OT-708, OT-709, OT-710, OT-711, OT-712, OT-715, OT-716 | |
 | `scripts/configure_tempo_datasource.sh` | OT-600 | |
 
 ### Cross-Cutting Requirements → All Affected Source Files
@@ -1329,8 +1329,8 @@ flowchart TD
 | Test File | Requirements Verified (implemented) | Requirements Verified (planned — tests to be added) |
 |-----------|-------------------------------------|------------------------------------------------------|
 | `tests/unit/contractors/test_thread_context_propagation.py` | OT-100, OT-101, OT-102, OT-502 | OT-710 AC-11 (boundary result ContextVar propagation in daemon threads) |
-| `tests/unit/contractors/test_artisan_otel_spans.py` | OT-200, OT-201, OT-300, OT-301, OT-305, OT-400 (including is_recording guard), OT-405, OT-406, OT-500, OT-501, OT-507 | OT-306 (planned), OT-504 (planned) |
-| `tests/unit/contractors/test_forensic_logging.py` (planned) | | OT-700, OT-701, OT-702, OT-703, OT-704, OT-705, OT-706, OT-707, OT-708, OT-709, OT-710, OT-711, OT-712, OT-713, OT-714, OT-715, OT-716 |
+| `tests/unit/contractors/test_artisan_otel_spans.py` | OT-200, OT-201, OT-300, OT-301, OT-305, OT-400 (including is_recording guard), OT-405, OT-406, OT-500, OT-501, OT-504, OT-507 | OT-306 (planned) |
+| `tests/unit/contractors/test_forensic_logging.py` | OT-700, OT-701, OT-702, OT-703, OT-704, OT-705, OT-706, OT-707, OT-708, OT-709, OT-710, OT-711, OT-712, OT-713, OT-715, OT-716 | OT-714 (partial) |
 
 ### Upstream Requirements (extends)
 
@@ -1350,20 +1350,20 @@ flowchart TD
 
 ## 7. Status Dashboard
 
-| Layer | ID Range | Total | Implemented | Planned |
-|-------|----------|-------|-------------|---------|
-| Thread Context Propagation | OT-1xx | 5 | 5 | 0 |
-| Gate Boundary Spans | OT-2xx | 3 | 3 | 0 |
-| Per-Task Spans | OT-3xx | 7 | 6 | 1 |
-| LLM Call Spans | OT-4xx | 7 | 7 | 0 |
-| Graceful Degradation | OT-5xx | 5 | 2 | 2 + 1 partial |
-| Infrastructure | OT-6xx | 1 | 1 | 0 |
-| Forensic LLM Call Logging | OT-7xx | 17 | 0 | 17 |
-| **Total** | | **45** | **24** | **20 + 1 partial** |
+| Layer | ID Range | Total | Implemented | Partial | Planned |
+|-------|----------|-------|-------------|---------|---------|
+| Thread Context Propagation | OT-1xx | 5 | 5 | 0 | 0 |
+| Gate Boundary Spans | OT-2xx | 3 | 3 | 0 | 0 |
+| Per-Task Spans | OT-3xx | 7 | 6 | 0 | 1 |
+| LLM Call Spans | OT-4xx | 7 | 7 | 0 | 0 |
+| Graceful Degradation | OT-5xx | 5 | 5 | 0 | 0 |
+| Infrastructure | OT-6xx | 1 | 1 | 0 | 0 |
+| Forensic LLM Call Logging | OT-7xx | 17 | 15 | 1 | 1 |
+| **Total** | | **45** | **42** | **1** | **2** |
 
 > **ID gap note:** Requirement IDs are non-contiguous by design. Gaps (e.g., OT-504 is defined but OT-505, OT-506, OT-508–OT-599 are unused) are reserved for future use. No requirements have been removed. The total count is verified by enumeration: OT-1xx (100–104) = 5, OT-2xx (200–202) = 3, OT-3xx (300–306) = 7, OT-4xx (400–406) = 7, OT-5xx (500–504, 507) = 5, OT-6xx (600) = 1, OT-7xx (700–716) = 17. Total = 45.
 
-> **Partial implementation note:** OT-507 (Span Error Handling) is counted as "implemented (partial)" because it is fully implemented for all existing spans (OT-200, OT-201, OT-301–OT-305, OT-401–OT-405) but OT-306 (review.evaluate span) is planned and must implement OT-507 compliance when built.
+> **Partial implementation note:** OT-714 (Public Model Spec Accessor) is partially implemented — `AgentLLMBackend.get_model_spec()` exists but non-design call sites (OT-704–OT-707) do not yet use it. OT-507 (Span Error Handling) is fully implemented for all existing spans; OT-306 (review.evaluate span) is planned and must implement OT-507 compliance when built.
 
 > **Planned span note:** OT-306 (`review.evaluate` span) is listed as planned in Section 3 (Layer 3) and the Status Dashboard. It is part of the target span hierarchy (Section 4) and should be implemented alongside or before the OT-7xx forensic logging layer, as OT-707 (Review Evaluate Forensic Log) depends on the span being present for full trace-to-log correlation.
 

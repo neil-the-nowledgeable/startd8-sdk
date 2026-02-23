@@ -1316,6 +1316,9 @@ class _NoOpSpan:
     def get_span_context(self) -> None:
         return None
 
+    def is_recording(self) -> bool:
+        return False
+
 
 class _NoOpTracer:
     """Minimal no-op tracer for when OTel is not available."""

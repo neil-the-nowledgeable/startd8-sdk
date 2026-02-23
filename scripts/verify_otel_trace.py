@@ -1,11 +1,11 @@
 """
-Verify OpenTelemetry trace instrumentation against a Tempo instance.
+Verify Artisan pipeline OTel trace structure against a Tempo instance.
 
-This module implements a programmatic trace verification script that validates
-full-depth OTel instrumentation by querying a Tempo instance and verifying 13
-specific checks against a Phase 0 trace. The script reconstructs the span
-hierarchy and validates context propagation, span attributes, and structural
-correctness.
+This module implements the 13 pipeline-specific verification checks (V-1–V-13)
+required by REQ-PEM-000a Phase 1.  It queries a Tempo instance, reconstructs the
+span hierarchy, and validates that the Artisan 8-phase pipeline produced the
+expected span structure: workflow root, phase spans, gate spans, per-task spans,
+LLM call spans, and correct parent-child relationships.
 
 Exit codes:
   0 = All 13 checks passed
@@ -20,6 +20,7 @@ import time
 import logging
 from collections import deque
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from typing import Any
 
 import requests
@@ -265,277 +266,256 @@ def build_span_tree(trace_data: dict[str, Any]) -> dict[str, SpanInfo]:
 
 
 # ============================================================================
-# TRACE VERIFIER CLASS
+# TRACE VERIFIER CLASS — Pipeline-Specific V-1–V-13 Checks (REQ-PEM-000a)
 # ============================================================================
+
+# Expected Artisan pipeline phase span names
+_EXPECTED_PHASES = {
+    "phase.plan", "phase.scaffold", "phase.design", "phase.implement",
+    "phase.integrate", "phase.test", "phase.review", "phase.finalize",
+}
 
 
 class TraceVerifier:
-    """Orchestrates the 13 verification checks against a trace."""
-    
-    def __init__(self, spans: dict[str, SpanInfo], trace_id: str, 
+    """Orchestrates the 13 pipeline-specific verification checks (V-1–V-13).
+
+    Each check validates a structural property of the Artisan 8-phase pipeline
+    trace, not generic OTel health.  This is required by REQ-PEM-000a Phase 1.
+    """
+
+    def __init__(self, spans: dict[str, SpanInfo], trace_id: str,
                  service_name: str = DEFAULT_SERVICE_NAME):
         self.spans = spans
         self.trace_id = trace_id
         self.service_name = service_name
-        self._root_spans: list[SpanInfo] = [
-            s for s in spans.values() if not s.parent_span_id
-        ]
-    
+
+    # ------------------------------------------------------------------
+    # Utility helpers
+    # ------------------------------------------------------------------
+
+    def _get_ancestors(self, span_id: str) -> list[SpanInfo]:
+        """Walk the parent chain from *span_id* up to (and including) the root."""
+        ancestors: list[SpanInfo] = []
+        current = self.spans.get(span_id)
+        while current and current.parent_span_id:
+            parent = self.spans.get(current.parent_span_id)
+            if parent is None:
+                break
+            ancestors.append(parent)
+            current = parent
+        return ancestors
+
+    def _has_ancestor_matching(self, span_id: str, pattern: str) -> bool:
+        """Return True if any ancestor span name matches *pattern* (fnmatch)."""
+        return any(fnmatch(a.name, pattern) for a in self._get_ancestors(span_id))
+
+    # ------------------------------------------------------------------
+    # V-1 – V-13 checks
+    # ------------------------------------------------------------------
+
     def run_all_checks(self) -> VerificationReport:
-        """Run all 13 verification checks and return aggregate report."""
+        """Run all 13 pipeline-specific checks and return aggregate report."""
         report = VerificationReport(trace_id=self.trace_id)
         checks = [
-            self.check_minimum_span_count,
-            self.check_has_root_span,
-            self.check_root_span_service_name,
-            self.check_span_depth_minimum,
-            self.check_all_spans_same_trace_id,
-            self.check_parent_child_links_valid,
-            self.check_all_spans_reachable_from_root,
-            self.check_span_names_non_empty,
-            self.check_span_timing_valid,
-            self.check_status_codes_valid,
-            self.check_resource_attributes_present,
-            self.check_scope_instrumentation_present,
-            self.check_context_propagation_intact,
+            self.check_root_workflow_span,           # V-1
+            self.check_all_phase_spans,              # V-2
+            self.check_gate_entry_spans,             # V-3
+            self.check_gate_exit_spans,              # V-4
+            self.check_per_task_spans,               # V-5
+            self.check_design_iteration_spans,       # V-6
+            self.check_design_generate_span,         # V-7
+            self.check_implement_chunk_span,         # V-8
+            self.check_test_generate_span,           # V-9
+            self.check_design_review_span,           # V-10
+            self.check_no_error_spans,               # V-11
+            self.check_design_parented_by_task,      # V-12
+            self.check_chunk_parented_by_task,       # V-13
         ]
         for check_fn in checks:
             report.results.append(check_fn())
         return report
-    
-    def check_minimum_span_count(self) -> VerificationResult:
-        """Verify the trace contains at least 2 spans (meaningful instrumentation)."""
-        count = len(self.spans)
-        passed = count >= 2
+
+    def check_root_workflow_span(self) -> VerificationResult:
+        """V-1: Exactly one span whose name starts with 'workflow.'."""
+        workflow_spans = [s for s in self.spans.values() if s.name.startswith("workflow.")]
+        passed = len(workflow_spans) == 1
         return VerificationResult(
-            check_name="minimum_span_count",
+            check_name="V-1_root_workflow_span",
             passed=passed,
-            message=f"Trace contains {count} span(s)" if passed else f"Expected ≥2 spans, found {count}",
-            details={"span_count": count},
+            message=f"Found {len(workflow_spans)} workflow.* span(s), expected 1",
+            details={"workflow_span_names": [s.name for s in workflow_spans]},
         )
 
-    def check_has_root_span(self) -> VerificationResult:
-        """Verify exactly one root span exists."""
-        root_count = len(self._root_spans)
-        passed = root_count == 1
+    def check_all_phase_spans(self) -> VerificationResult:
+        """V-2: All 8 expected phase span names are present."""
+        found_phases = {s.name for s in self.spans.values() if s.name in _EXPECTED_PHASES}
+        missing = _EXPECTED_PHASES - found_phases
+        passed = len(missing) == 0
         return VerificationResult(
-            check_name="has_root_span",
+            check_name="V-2_all_phase_spans",
             passed=passed,
-            message=f"Found {root_count} root span(s)" if passed else f"Expected 1 root span, found {root_count}",
-            details={"root_span_count": root_count},
+            message="All 8 phases present" if passed else f"Missing phases: {sorted(missing)}",
+            details={"found": sorted(found_phases), "missing": sorted(missing)},
         )
 
-    def check_root_span_service_name(self) -> VerificationResult:
-        """Verify root span's resource service.name matches the expected service name."""
-        if not self._root_spans:
-            return VerificationResult(
-                check_name="root_span_service_name",
-                passed=False,
-                message="No root span found to check service name",
-            )
-        root = self._root_spans[0]
-        actual = root.resource_attributes.get("service.name", "")
-        passed = actual == self.service_name
-        return VerificationResult(
-            check_name="root_span_service_name",
-            passed=passed,
-            message=f"service.name='{actual}'" if passed else f"Expected '{self.service_name}', got '{actual}'",
-            details={"expected": self.service_name, "actual": actual},
-        )
-
-    def check_span_depth_minimum(self) -> VerificationResult:
-        """Compute tree depth via BFS from root; require >= 2.
-        
-        Uses collections.deque for O(1) popleft instead of list.pop(0).
-        """
-        children_map: dict[str, list[str]] = {}
-        for sid, span in self.spans.items():
-            parent = span.parent_span_id
-            if parent:
-                children_map.setdefault(parent, []).append(sid)
-        
-        max_depth = 0
-        if self._root_spans:
-            queue: deque[tuple[str, int]] = deque([(self._root_spans[0].span_id, 1)])
-            while queue:
-                current, depth = queue.popleft()
-                max_depth = max(max_depth, depth)
-                for child_id in children_map.get(current, []):
-                    queue.append((child_id, depth + 1))
-        
-        passed = max_depth >= 2
-        return VerificationResult(
-            check_name="span_depth_minimum",
-            passed=passed,
-            message=f"Span tree depth: {max_depth}",
-            details={"max_depth": max_depth},
-        )
-
-    def check_all_spans_same_trace_id(self) -> VerificationResult:
-        """Verify all spans share the same trace ID."""
-        trace_ids = set(s.trace_id for s in self.spans.values())
-        passed = len(trace_ids) == 1
-        return VerificationResult(
-            check_name="all_spans_same_trace_id",
-            passed=passed,
-            message=f"All spans share trace ID: {self.trace_id}" if passed else f"Found {len(trace_ids)} different trace IDs",
-            details={"unique_trace_ids": len(trace_ids)},
-        )
-
-    def check_parent_child_links_valid(self) -> VerificationResult:
-        """Verify structural link integrity: every non-root span's parentSpanId
-        references a spanId that exists within the trace.
-        
-        This catches data corruption where a span claims a parent that was never recorded.
-        Distinct from check_all_spans_reachable_from_root which validates graph connectivity.
-        """
-        invalid_links: list[dict[str, str]] = []
-        for sid, span in self.spans.items():
-            if span.parent_span_id and span.parent_span_id not in self.spans:
-                invalid_links.append({"span_id": sid, "missing_parent": span.parent_span_id})
-        passed = len(invalid_links) == 0
-        return VerificationResult(
-            check_name="parent_child_links_valid",
-            passed=passed,
-            message="All parent-child links valid" if passed else f"{len(invalid_links)} span(s) reference missing parents",
-            details={"invalid_links": invalid_links},
-        )
-
-    def check_all_spans_reachable_from_root(self) -> VerificationResult:
-        """Verify graph connectivity: every span is reachable from the root via BFS traversal.
-        
-        This catches disconnected subtrees where spans may have valid parent links
-        to each other but form an island disconnected from the root (e.g., a subtree
-        whose connecting span was dropped during collection).
-        
-        Distinct from check_parent_child_links_valid which only validates that
-        referenced parent IDs exist.
-        """
-        if not self._root_spans:
-            return VerificationResult(
-                check_name="all_spans_reachable_from_root",
-                passed=False,
-                message="No root span found; cannot verify reachability",
-            )
-        
-        children_map: dict[str, list[str]] = {}
-        for sid, span in self.spans.items():
-            if span.parent_span_id:
-                children_map.setdefault(span.parent_span_id, []).append(sid)
-        
-        visited: set[str] = set()
-        queue: deque[str] = deque([self._root_spans[0].span_id])
-        while queue:
-            current = queue.popleft()
-            visited.add(current)
-            for child_id in children_map.get(current, []):
-                if child_id not in visited:
-                    queue.append(child_id)
-        
-        unreachable = set(self.spans.keys()) - visited
-        passed = len(unreachable) == 0
-        return VerificationResult(
-            check_name="all_spans_reachable_from_root",
-            passed=passed,
-            message="All spans reachable from root" if passed else f"{len(unreachable)} span(s) not reachable from root",
-            details={"unreachable_span_ids": list(unreachable)},
-        )
-
-    def check_span_names_non_empty(self) -> VerificationResult:
-        """Verify all spans have non-empty operation names."""
-        empty_names = [
-            s.span_id for s in self.spans.values() 
-            if not s.name or not s.name.strip()
+    def check_gate_entry_spans(self) -> VerificationResult:
+        """V-3: >=8 'gate.entry' spans with gate.passed + gate.propagation_status attrs."""
+        gate_entries = [
+            s for s in self.spans.values()
+            if s.name == "gate.entry"
+            and "gate.passed" in s.attributes
+            and "gate.propagation_status" in s.attributes
         ]
-        passed = len(empty_names) == 0
+        passed = len(gate_entries) >= 8
         return VerificationResult(
-            check_name="span_names_non_empty",
+            check_name="V-3_gate_entry_spans",
             passed=passed,
-            message="All spans have non-empty names" if passed else f"{len(empty_names)} span(s) have empty names",
-            details={"empty_name_span_ids": empty_names},
+            message=f"Found {len(gate_entries)} gate.entry span(s) with required attrs (need >=8)",
+            details={"count": len(gate_entries)},
         )
 
-    def check_span_timing_valid(self) -> VerificationResult:
-        """Verify endTimeUnixNano >= startTimeUnixNano for all spans."""
-        invalid_timings = [
-            {"span_id": s.span_id, "start": s.start_time, "end": s.end_time}
-            for s in self.spans.values()
-            if s.end_time < s.start_time
+    def check_gate_exit_spans(self) -> VerificationResult:
+        """V-4: >=8 'gate.exit' spans with gate.passed attr."""
+        gate_exits = [
+            s for s in self.spans.values()
+            if s.name == "gate.exit" and "gate.passed" in s.attributes
         ]
-        passed = len(invalid_timings) == 0
+        passed = len(gate_exits) >= 8
         return VerificationResult(
-            check_name="span_timing_valid",
+            check_name="V-4_gate_exit_spans",
             passed=passed,
-            message="All spans have valid timing" if passed else f"{len(invalid_timings)} span(s) have invalid timing",
-            details={"invalid_timings": invalid_timings},
+            message=f"Found {len(gate_exits)} gate.exit span(s) with gate.passed attr (need >=8)",
+            details={"count": len(gate_exits)},
         )
 
-    def check_status_codes_valid(self) -> VerificationResult:
-        """Verify no span has STATUS_CODE_ERROR (code=2)."""
-        error_spans = [
-            s.span_id for s in self.spans.values() 
-            if s.status_code == 2
+    def check_per_task_spans(self) -> VerificationResult:
+        """V-5: >=4 'task.*' spans with task.id + task.status attrs."""
+        task_spans = [
+            s for s in self.spans.values()
+            if fnmatch(s.name, "task.*")
+            and "task.id" in s.attributes
+            and "task.status" in s.attributes
         ]
+        passed = len(task_spans) >= 4
+        return VerificationResult(
+            check_name="V-5_per_task_spans",
+            passed=passed,
+            message=f"Found {len(task_spans)} task.* span(s) with required attrs (need >=4)",
+            details={"count": len(task_spans), "task_names": [s.name for s in task_spans[:10]]},
+        )
+
+    def check_design_iteration_spans(self) -> VerificationResult:
+        """V-6: >=1 'design.iteration.*' spans."""
+        iteration_spans = [s for s in self.spans.values() if fnmatch(s.name, "design.iteration.*")]
+        passed = len(iteration_spans) >= 1
+        return VerificationResult(
+            check_name="V-6_design_iteration_spans",
+            passed=passed,
+            message=f"Found {len(iteration_spans)} design.iteration.* span(s) (need >=1)",
+            details={"count": len(iteration_spans)},
+        )
+
+    def check_design_generate_span(self) -> VerificationResult:
+        """V-7: >=1 'design.generate' spans."""
+        gen_spans = [s for s in self.spans.values() if s.name == "design.generate"]
+        passed = len(gen_spans) >= 1
+        return VerificationResult(
+            check_name="V-7_design_generate_span",
+            passed=passed,
+            message=f"Found {len(gen_spans)} design.generate span(s) (need >=1)",
+            details={"count": len(gen_spans)},
+        )
+
+    def check_implement_chunk_span(self) -> VerificationResult:
+        """V-8: >=1 'implement.chunk.*' span with chunk.status attr."""
+        chunk_spans = [
+            s for s in self.spans.values()
+            if fnmatch(s.name, "implement.chunk.*") and "chunk.status" in s.attributes
+        ]
+        passed = len(chunk_spans) >= 1
+        return VerificationResult(
+            check_name="V-8_implement_chunk_span",
+            passed=passed,
+            message=f"Found {len(chunk_spans)} implement.chunk.* span(s) with chunk.status (need >=1)",
+            details={"count": len(chunk_spans)},
+        )
+
+    def check_test_generate_span(self) -> VerificationResult:
+        """V-9: >=1 'test.generate' spans."""
+        test_spans = [s for s in self.spans.values() if s.name == "test.generate"]
+        passed = len(test_spans) >= 1
+        return VerificationResult(
+            check_name="V-9_test_generate_span",
+            passed=passed,
+            message=f"Found {len(test_spans)} test.generate span(s) (need >=1)",
+            details={"count": len(test_spans)},
+        )
+
+    def check_design_review_span(self) -> VerificationResult:
+        """V-10: >=1 'design.review.*' spans."""
+        review_spans = [s for s in self.spans.values() if fnmatch(s.name, "design.review.*")]
+        passed = len(review_spans) >= 1
+        return VerificationResult(
+            check_name="V-10_design_review_span",
+            passed=passed,
+            message=f"Found {len(review_spans)} design.review.* span(s) (need >=1)",
+            details={"count": len(review_spans)},
+        )
+
+    def check_no_error_spans(self) -> VerificationResult:
+        """V-11: No spans have status_code == 2 (ERROR)."""
+        error_spans = [s for s in self.spans.values() if s.status_code == 2]
         passed = len(error_spans) == 0
         return VerificationResult(
-            check_name="status_codes_valid",
+            check_name="V-11_no_error_spans",
             passed=passed,
-            message="No spans have error status" if passed else f"{len(error_spans)} span(s) have error status",
-            details={"error_span_ids": error_spans},
+            message="No error spans" if passed else f"{len(error_spans)} span(s) have ERROR status",
+            details={"error_span_ids": [s.span_id for s in error_spans],
+                     "error_span_names": [s.name for s in error_spans]},
         )
 
-    def check_resource_attributes_present(self) -> VerificationResult:
-        """Verify required resource attributes exist."""
-        required_attrs = {"service.name", "telemetry.sdk.language"}
-        missing_attrs = []
-        for span in self.spans.values():
-            for attr in required_attrs:
-                if attr not in span.resource_attributes or not span.resource_attributes[attr]:
-                    if attr not in [m["attr"] for m in missing_attrs if m["span_id"] == span.span_id]:
-                        missing_attrs.append({"span_id": span.span_id, "attr": attr})
-        
-        passed = len(missing_attrs) == 0
-        return VerificationResult(
-            check_name="resource_attributes_present",
-            passed=passed,
-            message="All required resource attributes present" if passed else f"Missing required attributes in {len(set(m['span_id'] for m in missing_attrs))} span(s)",
-            details={"missing_attributes": missing_attrs},
-        )
-
-    def check_scope_instrumentation_present(self) -> VerificationResult:
-        """Verify at least one span has a non-empty instrumentation scope name."""
-        instrumented_spans = [
-            s.span_id for s in self.spans.values() 
-            if s.scope_name and s.scope_name.strip()
+    def check_design_parented_by_task(self) -> VerificationResult:
+        """V-12: Every 'design.generate' span has a 'task.*' ancestor."""
+        gen_spans = [s for s in self.spans.values() if s.name == "design.generate"]
+        if not gen_spans:
+            return VerificationResult(
+                check_name="V-12_design_parented_by_task",
+                passed=False,
+                message="No design.generate spans found to verify parentage",
+            )
+        unparented = [
+            s.span_id for s in gen_spans
+            if not self._has_ancestor_matching(s.span_id, "task.*")
         ]
-        passed = len(instrumented_spans) > 0
+        passed = len(unparented) == 0
         return VerificationResult(
-            check_name="scope_instrumentation_present",
+            check_name="V-12_design_parented_by_task",
             passed=passed,
-            message=f"{len(instrumented_spans)} span(s) have instrumentation scope" if passed else "No spans have instrumentation scope",
-            details={"instrumented_span_ids": instrumented_spans},
+            message="All design.generate spans parented by task.*" if passed
+                    else f"{len(unparented)}/{len(gen_spans)} design.generate span(s) lack task.* ancestor",
+            details={"unparented_span_ids": unparented, "total": len(gen_spans)},
         )
 
-    def check_context_propagation_intact(self) -> VerificationResult:
-        """Verify context propagation: child spans share parent's trace ID."""
-        propagation_errors = []
-        for span in self.spans.values():
-            if span.parent_span_id and span.parent_span_id in self.spans:
-                parent = self.spans[span.parent_span_id]
-                if span.trace_id != parent.trace_id:
-                    propagation_errors.append({
-                        "child_span_id": span.span_id,
-                        "parent_span_id": span.parent_span_id,
-                        "child_trace_id": span.trace_id,
-                        "parent_trace_id": parent.trace_id,
-                    })
-        
-        passed = len(propagation_errors) == 0
+    def check_chunk_parented_by_task(self) -> VerificationResult:
+        """V-13: Every 'implement.chunk.*' span has a 'task.*' ancestor."""
+        chunk_spans = [s for s in self.spans.values() if fnmatch(s.name, "implement.chunk.*")]
+        if not chunk_spans:
+            return VerificationResult(
+                check_name="V-13_chunk_parented_by_task",
+                passed=False,
+                message="No implement.chunk.* spans found to verify parentage",
+            )
+        unparented = [
+            s.span_id for s in chunk_spans
+            if not self._has_ancestor_matching(s.span_id, "task.*")
+        ]
+        passed = len(unparented) == 0
         return VerificationResult(
-            check_name="context_propagation_intact",
+            check_name="V-13_chunk_parented_by_task",
             passed=passed,
-            message="Context propagation is intact" if passed else f"{len(propagation_errors)} propagation error(s)",
-            details={"propagation_errors": propagation_errors},
+            message="All implement.chunk.* spans parented by task.*" if passed
+                    else f"{len(unparented)}/{len(chunk_spans)} implement.chunk.* span(s) lack task.* ancestor",
+            details={"unparented_span_ids": unparented, "total": len(chunk_spans)},
         )
 
 

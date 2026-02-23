@@ -66,8 +66,7 @@ from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-import contextlib
-
+from startd8.contractors.artisan_contractor import _NoOpTracer
 from startd8.contractors.protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
     VALIDATE_MODEL_CLAUDE_SONNET,
@@ -80,6 +79,8 @@ try:
     _HAS_OTEL = True
 except ImportError:
     _HAS_OTEL = False
+
+_implement_tracer = _trace.get_tracer("startd8.artisan.implement") if _HAS_OTEL else _NoOpTracer()
 
 
 _log = get_logger(__name__)
@@ -3053,17 +3054,13 @@ class DevelopmentPhase:
             Updated ChunkState.
         """
         max_attempts = chunk.max_retries + 1
-        _chunk_span_cm = (
-            _trace.get_tracer("startd8.artisan.implement").start_as_current_span(
-                f"implement.chunk.{chunk.chunk_id}",
-                attributes={
-                    "chunk.id": chunk.chunk_id,
-                    "chunk.file_targets": ",".join(chunk.file_targets[:5]),
-                    "chunk.max_retries": chunk.max_retries,
-                },
-            )
-            if _HAS_OTEL
-            else contextlib.nullcontext()
+        _chunk_span_cm = _implement_tracer.start_as_current_span(
+            f"implement.chunk.{chunk.chunk_id}",
+            attributes={
+                "chunk.id": chunk.chunk_id,
+                "chunk.file_targets": ",".join(chunk.file_targets[:5]),
+                "chunk.max_retries": chunk.max_retries,
+            },
         )
         _chunk_span = _chunk_span_cm.__enter__()
 

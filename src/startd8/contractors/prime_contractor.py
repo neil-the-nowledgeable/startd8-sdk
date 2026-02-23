@@ -39,6 +39,9 @@ MODE_PIPELINE: str = "pipeline"
 #: Set of all recognized execution modes.
 VALID_MODES: frozenset = frozenset({MODE_STANDALONE, MODE_PIPELINE})
 
+#: Valid execution modes for state persistence — single source of truth for validation.
+VALID_EXECUTION_MODES: frozenset = frozenset({"standalone", "pipeline"})
+
 #: Internal: minimum number of pipeline signal keys (with non-None values)
 #: required to trigger pipeline mode during auto-detection.
 _DETECTION_THRESHOLD: int = 1
@@ -47,6 +50,7 @@ __all__ = [
     "MODE_STANDALONE",
     "MODE_PIPELINE",
     "VALID_MODES",
+    "VALID_EXECUTION_MODES",
     "ExecutionMode",
     "ModeConfig",
     "SeedContext",
@@ -486,7 +490,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None):
         """
         Initialize the Prime Contractor workflow.
 
@@ -507,6 +511,9 @@ class PrimeContractorWorkflow:
             max_lines_per_feature: Safe line limit for LLM output (default: 150)
             max_tokens_per_feature: Safe token limit for size estimation (default: 500)
             check_truncation: Validate generated files for truncation before integration (default: True)
+            resume: If True, resume from persisted state
+            cli_mode: Execution mode from CLI argument
+            force_mode: Force override of persisted execution mode
         """
         self.project_root = project_root or Path.cwd()
         self.dry_run = dry_run
@@ -565,6 +572,10 @@ class PrimeContractorWorkflow:
         self.seed_service_metadata: Dict[str, Any] = {}
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
+        # Resume state: load from disk if resuming
+        self._resume_mode: Optional[str] = None
+        if resume:
+            self._load_state_if_resuming(cli_mode=cli_mode, force_mode=force_mode)
 
     def _rel_display(self, path: Path) -> str:
         """Safe relative path for display, falling back to the full path."""
@@ -572,6 +583,204 @@ class PrimeContractorWorkflow:
             return str(path.relative_to(self.project_root))
         except ValueError:
             return str(path)
+
+    # -----------------------------------------------------------------------
+    # State Persistence: Mode Serialization/Deserialization (F-005)
+    # -----------------------------------------------------------------------
+
+    def _load_state_if_resuming(
+        self,
+        cli_mode: Optional[str] = None,
+        force_mode: Optional[str] = None,
+    ) -> None:
+        """Load persisted workflow state if resuming from checkpoint.
+
+        Reads `.prime_contractor_state.json` if it exists, extracting the
+        persisted execution_mode. Applies mode restoration policy:
+        - Default: persisted mode wins (for consistency)
+        - With --force-mode: CLI override wins
+
+        Args:
+            cli_mode: Mode string from CLI argument (if provided)
+            force_mode: Force override mode (bypasses persisted mode)
+        """
+        state_file = self.queue.state_file
+        if not state_file.exists():
+            logger.debug(
+                "No persisted state found at %s; starting fresh",
+                state_file,
+            )
+            return
+
+        try:
+            import json
+            with open(state_file, 'r') as f:
+                state_dict = json.load(f)
+            logger.debug("Loaded persisted state from %s", state_file)
+        except (OSError, ValueError) as e:
+            logger.error(
+                "Failed to load persisted state from %s: %s",
+                state_file, e,
+                exc_info=True,
+            )
+            return
+
+        # Extract and validate execution_mode
+        raw_mode = state_dict.get("execution_mode", "standalone")
+
+        # Type coercion: handle non-string values (null → None, int → "123", etc.)
+        loaded_mode = str(raw_mode) if raw_mode is not None else "standalone"
+
+        # Validate against known modes
+        if loaded_mode not in VALID_EXECUTION_MODES:
+            logger.warning(
+                "Unknown execution_mode '%s' (type: %s) in state file, defaulting to 'standalone'",
+                loaded_mode,
+                type(raw_mode).__name__,
+                extra={
+                    "persisted_mode": loaded_mode,
+                    "persisted_mode_raw_type": type(raw_mode).__name__,
+                },
+            )
+            loaded_mode = "standalone"
+
+        # Apply mode restoration policy
+        self._restore_mode(
+            loaded_mode,
+            cli_mode=cli_mode,
+            force_mode=force_mode,
+        )
+
+    def _restore_mode(
+        self,
+        loaded_mode: str,
+        cli_mode: Optional[str] = None,
+        force_mode: Optional[str] = None,
+    ) -> None:
+        """Restore execution mode from persisted state with policy handling.
+
+        This is the single point of responsibility for:
+        1. Applying the persisted mode or CLI override
+        2. Handling CLI mode override policy (persisted wins by default, CLI via --force-mode)
+        3. Propagating mode to SeedContext
+
+        Args:
+            loaded_mode: Validated mode string from state file.
+            cli_mode: Mode string from CLI arguments, if provided.
+            force_mode: Force override mode (bypasses persisted mode).
+        """
+        effective_mode = loaded_mode
+
+        # --- Force mode override (highest priority) ---
+        if force_mode:
+            if force_mode not in VALID_EXECUTION_MODES:
+                logger.error(
+                    "Invalid --force-mode '%s'; expected one of %s",
+                    force_mode,
+                    sorted(VALID_EXECUTION_MODES),
+                )
+                return
+            logger.warning(
+                "Resume: --force-mode overriding persisted execution_mode '%s' with '%s'. "
+                "Intermediate state may be inconsistent.",
+                loaded_mode,
+                force_mode,
+                extra={
+                    "persisted_mode": loaded_mode,
+                    "forced_mode": force_mode,
+                },
+            )
+            effective_mode = force_mode
+
+        # --- CLI mode override policy (persisted wins by default) ---
+        elif cli_mode and cli_mode != loaded_mode:
+            logger.warning(
+                "Resume: persisted execution_mode '%s' overrides requested mode '%s' for consistency. "
+                "Use --force-mode to override the persisted mode.",
+                loaded_mode,
+                cli_mode,
+                extra={
+                    "persisted_mode": loaded_mode,
+                    "requested_mode": cli_mode,
+                },
+            )
+            # effective_mode stays as loaded_mode (persisted wins)
+
+        # --- Propagate to SeedContext ---
+        # SeedContext is initialized during __init__ before state loading.
+        # At resume time, self._seed_context is guaranteed to exist via the
+        # seed_context property accessor.
+        self.seed_context.execution_mode = effective_mode
+
+        # Store for later use (e.g., in add_features_from_seed)
+        self._resume_mode = effective_mode
+
+        logger.info(
+            "Restored execution mode '%s' from persisted state",
+            effective_mode,
+            extra={"execution_mode": effective_mode},
+        )
+
+    def _save_state_with_mode(self, state_dict: Dict[str, Any]) -> Dict[str, Any]:
+        """Augment state dictionary with execution_mode before persistence.
+
+        This method is called by code that saves workflow state to disk.
+        It injects the current execution_mode into the state dict to enable
+        consistent resume behavior.
+
+        Args:
+            state_dict: Base state dictionary (usually from queue or workflow).
+
+        Returns:
+            Augmented state_dict with execution_mode added.
+        """
+        # execution_mode must be the string representation for JSON serialization
+        state_dict["execution_mode"] = self.execution_mode
+        return state_dict
+
+    def _save_queue_state_with_mode(self) -> None:
+        """Save queue state with execution_mode injected.
+
+        Calls queue.save_state() to persist features, then augments the state
+        file with execution_mode. This is called after features are queued
+        to ensure the mode is persisted for potential resume scenarios.
+        """
+        import json
+
+        # First, let the queue save its state normally
+        self.queue.save_state()
+
+        # Then, read it back, inject execution_mode, and write it again
+        state_file = self.queue.state_file
+        try:
+            with open(state_file, 'r') as f:
+                state_dict = json.load(f)
+        except (OSError, ValueError) as e:
+            logger.error(
+                "Failed to read state file %s for mode injection: %s",
+                state_file, e,
+                exc_info=True,
+            )
+            return
+
+        # Inject execution mode
+        state_dict["execution_mode"] = self.execution_mode
+
+        # Write back to disk
+        try:
+            with open(state_file, 'w') as f:
+                json.dump(state_dict, f, indent=2)
+            logger.debug(
+                "Saved state with execution_mode '%s' to %s",
+                self.execution_mode,
+                state_file,
+            )
+        except OSError as e:
+            logger.error(
+                "Failed to write state file %s: %s",
+                state_file, e,
+                exc_info=True,
+            )
 
     # -----------------------------------------------------------------------
     # SeedContext Lifecycle Management (SeedContext-002 through -006)
@@ -873,6 +1082,7 @@ class PrimeContractorWorkflow:
         self.on_feature_complete = saved_callback
         feature._cost_usd = parent_cost
         self.queue.complete_feature(feature.id)
+        self._save_queue_state_with_mode()
         logger.info("All %d sub-features integrated for '%s'", n, feature.name, extra={'feature_name': feature.name, 'sub_feature_count': n})
         return True
 
@@ -948,7 +1158,7 @@ class PrimeContractorWorkflow:
             simulated_files = [f'generated/{feature.id}/{Path(t).name}' for t in feature.target_files] if feature.target_files else [f'generated/{feature.id}/code.py']
             feature.generated_files = simulated_files
             feature.status = FeatureStatus.GENERATED
-            self.queue.save_state()
+            self._save_queue_state_with_mode()
             return True
         if not self.code_generator:
             logger.error("No code generator configured for feature '%s'", feature.name)
@@ -1068,7 +1278,7 @@ class PrimeContractorWorkflow:
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]
                 feature.status = FeatureStatus.GENERATED
-                self.queue.save_state()
+                self._save_queue_state_with_mode()
                 self.total_cost_usd += result.cost_usd
                 self.total_input_tokens += result.input_tokens
                 self.total_output_tokens += result.output_tokens
@@ -1190,7 +1400,8 @@ class PrimeContractorWorkflow:
         # Freeze seed context at execution boundary to prevent post-execution reconfiguration
         self.seed_context.freeze()
         logger.info(
-            'PRIME CONTRACTOR WORKFLOW started — mode=%s, auto_commit=%s, stop_on_failure=%s',
+            'PRIME CONTRACTOR WORKFLOW started — mode=%s, execution=%s, auto_commit=%s, stop_on_failure=%s',
+            self.seed_context.execution_mode,
             'DRY RUN' if self.dry_run else 'LIVE',
             self.auto_commit,
             stop_on_failure,
@@ -1235,6 +1446,7 @@ class PrimeContractorWorkflow:
             if feature.integration_attempts >= self.max_retries:
                 logger.error("Feature '%s' exceeded max integration attempts (%d)", feature.name, self.max_retries)
                 self.queue.fail_feature(feature.id, f'Max integration attempts exceeded ({self.max_retries})')
+                self._save_queue_state_with_mode()
                 features_processed += 1
                 features_failed += 1
                 if stop_on_failure:
@@ -1251,6 +1463,9 @@ class PrimeContractorWorkflow:
                 if stop_on_failure:
                     logger.error("STOPPING: Feature '%s' failed", feature.name, extra={'feature_name': feature.name})
                     break
+        # Save final state with execution_mode
+        self._save_queue_state_with_mode()
+
         logger.info(
             'WORKFLOW SUMMARY: processed=%d, succeeded=%d, failed=%d, progress=%.1f%%, cost=$%.4f, tokens=%d in / %d out',
             features_processed, features_succeeded, features_failed,
