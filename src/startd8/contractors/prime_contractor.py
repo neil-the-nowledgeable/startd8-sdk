@@ -1,3 +1,4 @@
+import dataclasses
 import enum
 import re
 import shutil
@@ -24,6 +25,133 @@ from .queue import FeatureQueue, FeatureSpec, FeatureStatus
 from .registry import get_registry
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# SeedContext: Typed Container for Pipeline Seed Context (SeedContext-001)
+# ---------------------------------------------------------------------------
+
+# Explicit set of fields included in serialization. Using an explicit set
+# rather than a naming convention to avoid silently dropping future fields.
+_SERIALIZABLE_FIELDS = frozenset({
+    "execution_mode",
+    "onboarding_metadata",
+    "architectural_context",
+    "design_calibration",
+    "generation_provenance",
+})
+
+
+@dataclasses.dataclass
+class SeedContext:
+    """Typed container for pipeline seed context.
+
+    Mutable during setup phase; call freeze() before execution begins.
+    In standalone mode, all context fields remain None.
+
+    **Shallow freeze only:** After freeze(), attribute reassignment is blocked,
+    but in-place mutation of mutable values (e.g., ``ctx.onboarding_metadata['k'] = v``)
+    is NOT prevented. If deep immutability is required in the future, property
+    accessors can return ``types.MappingProxyType`` wrappers.
+
+    **Unhashable:** This class supports ``__eq__`` for testing but is not hashable,
+    since instances are mutable before freeze.
+    """
+
+    # Execution mode
+    execution_mode: str = "standalone"
+
+    # Domain context fields — all Optional for standalone compatibility
+    onboarding_metadata: Optional[Dict[str, Any]] = None
+    architectural_context: Optional[Dict[str, Any]] = None
+    design_calibration: Optional[Dict[str, Any]] = None
+    generation_provenance: Optional[Dict[str, Any]] = None
+
+    # Lifecycle control — init=False prevents callers from constructing
+    # pre-frozen instances via SeedContext(_frozen=True).
+    _frozen: bool = dataclasses.field(default=False, init=False, repr=False, compare=False)
+
+    # Explicitly unhashable: mutable before freeze, so hashing would be unsound.
+    __hash__ = None
+
+    def freeze(self) -> None:
+        """Transition to immutable state. Called once before execution begins.
+
+        Performs consistency validation before freezing:
+        - Warns if execution_mode is 'pipeline' but all context fields are None,
+          which likely indicates misconfiguration.
+        """
+        self._check_consistency()
+        object.__setattr__(self, '_frozen', True)
+
+    def _check_consistency(self) -> None:
+        """Validate semantic consistency. Called by freeze().
+
+        Emits warnings (not errors) to catch likely misconfiguration without
+        being overly prescriptive at the dataclass level.
+        """
+        if self.execution_mode == "pipeline":
+            context_fields = [
+                self.onboarding_metadata,
+                self.architectural_context,
+                self.design_calibration,
+                self.generation_provenance,
+            ]
+            if all(f is None for f in context_fields):
+                logger.warning(
+                    "SeedContext frozen in pipeline mode with all context fields None; "
+                    "this likely indicates misconfiguration — expected at least one "
+                    "context field to be populated",
+                    extra={"seed_exec_mode": self.execution_mode},
+                )
+
+    @property
+    def is_frozen(self) -> bool:
+        return self._frozen
+
+    @property
+    def is_pipeline_mode(self) -> bool:
+        return self.execution_mode == "pipeline"
+
+    @property
+    def is_standalone_mode(self) -> bool:
+        return self.execution_mode == "standalone"
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        # Bootstrap ordering note: During dataclass-generated __init__, fields
+        # are assigned via __setattr__ in declaration order. Because _frozen has
+        # init=False, it is set in __init__ (to its default False) AFTER all
+        # init=True fields. However, even if ordering were different, the
+        # getattr(..., False) guard returns False when _frozen doesn't yet exist
+        # on the instance, allowing initial assignment to proceed. This is
+        # intentional and correct, but depends on getattr's default.
+        if getattr(self, '_frozen', False) and name != '_frozen':
+            raise AttributeError(
+                f"SeedContext is frozen; cannot set '{name}' after execution begins"
+            )
+        object.__setattr__(self, name, value)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize domain fields (excludes lifecycle internals).
+
+        Uses the explicit _SERIALIZABLE_FIELDS set rather than a naming
+        convention, so future fields must be explicitly opted in.
+        """
+        return {
+            name: getattr(self, name)
+            for name in _SERIALIZABLE_FIELDS
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "SeedContext":
+        """Construct from dictionary, ignoring unknown keys.
+
+        Only keys present in _SERIALIZABLE_FIELDS are passed to the constructor.
+        This uses an explicit allowlist rather than introspecting field names,
+        ensuring future internal fields are not accidentally deserialized.
+        """
+        filtered = {k: v for k, v in data.items() if k in _SERIALIZABLE_FIELDS}
+        return cls(**filtered)
 
 
 # ---------------------------------------------------------------------------
@@ -300,9 +428,9 @@ class PrimeContractorWorkflow:
         )
         self._domain_checklist = None  # lazy-init DomainChecklist
         self._current_enrichment = None  # per-feature enrichment cache
-        # Seed-level context — set by run_prime_workflow.py after loading
-        # the context seed.  Declared here so _generate_code can access
-        # them directly without getattr guards.
+        # SeedContext — structured container for pipeline context (replaces ad-hoc attributes)
+        self._seed_context: Optional[SeedContext] = None
+        # Backward-compat ad-hoc attributes (deprecated, use seed_context via properties instead)
         self.seed_onboarding: Dict[str, Any] = {}
         self.seed_architectural_context: Dict[str, Any] = {}
         self.seed_design_calibration: Dict[str, Any] = {}
@@ -316,6 +444,143 @@ class PrimeContractorWorkflow:
             return str(path.relative_to(self.project_root))
         except ValueError:
             return str(path)
+
+    # -----------------------------------------------------------------------
+    # SeedContext Lifecycle Management (SeedContext-002 through -006)
+    # -----------------------------------------------------------------------
+
+    def _init_seed_context(self, **kwargs: Any) -> None:
+        """Initialize seed context. Called during setup phase.
+
+        Raises RuntimeError if called after the seed context has been frozen
+        (i.e., after execution has begun), preventing accidental re-initialization.
+
+        Raises RuntimeError if a seed context already exists (including one
+        created by lazy initialization), to surface missing-init bugs early
+        rather than silently replacing context.
+
+        Args:
+            **kwargs: Fields to populate in SeedContext
+                (execution_mode, onboarding_metadata, architectural_context,
+                design_calibration, generation_provenance)
+        """
+        if self._seed_context is not None:
+            if self._seed_context.is_frozen:
+                raise RuntimeError(
+                    "Cannot re-initialize SeedContext after execution has begun "
+                    "(context is frozen)"
+                )
+            raise RuntimeError(
+                "SeedContext already initialized; cannot re-initialize. "
+                "Use update_context() to modify fields during setup phase."
+            )
+        self._seed_context = SeedContext(**kwargs)
+        logger.debug(
+            "SeedContext initialized",
+            extra={
+                "seed_exec_mode": self._seed_context.execution_mode,
+                "seed_has_onboarding": self._seed_context.onboarding_metadata is not None,
+                "seed_has_arch_ctx": self._seed_context.architectural_context is not None,
+                "seed_has_calibration": self._seed_context.design_calibration is not None,
+                "seed_has_provenance": self._seed_context.generation_provenance is not None,
+            }
+        )
+
+    @property
+    def seed_context(self) -> SeedContext:
+        """Access the full seed context container.
+
+        If _init_seed_context was never called, this lazily creates a default
+        standalone SeedContext. Note: this means a missing _init_seed_context
+        call silently degrades to standalone mode rather than failing. This is
+        intentional for backward compatibility but callers should prefer
+        explicit initialization via _init_seed_context().
+        """
+        if self._seed_context is None:
+            logger.debug(
+                "SeedContext accessed before explicit initialization; "
+                "creating default standalone context"
+            )
+            self._seed_context = SeedContext()  # standalone default
+        return self._seed_context
+
+    def update_context(self, **kwargs: Any) -> None:
+        """Update seed context fields during setup phase (before freeze).
+
+        Provides a clean write path without requiring callers to reach into
+        the private _seed_context attribute directly.
+
+        Raises AttributeError if the context is frozen.
+        Raises AttributeError if an unknown field name is provided.
+
+        Args:
+            **kwargs: Fields to update (execution_mode, onboarding_metadata,
+                architectural_context, design_calibration, generation_provenance)
+
+        Example:
+            contractor.update_context(
+                onboarding_metadata={"project": "test"},
+                architectural_context={"patterns": ["strategy"]},
+            )
+        """
+        ctx = self.seed_context  # ensure initialized
+        valid_fields = {f.name for f in dataclasses.fields(ctx) if not f.name.startswith('_')}
+        for key, value in kwargs.items():
+            if key not in valid_fields:
+                raise AttributeError(
+                    f"Unknown SeedContext field: '{key}'. "
+                    f"Valid fields: {sorted(valid_fields)}"
+                )
+            setattr(ctx, key, value)  # will raise if frozen
+
+    def _sync_legacy_attributes(self) -> None:
+        """Sync legacy ad-hoc attributes to SeedContext for backward compatibility.
+
+        Called at setup boundary to ensure any code that assigned to
+        self.seed_onboarding, self.seed_architectural_context, etc. directly
+        is reflected in the typed SeedContext container.
+
+        This is a one-time sync; post-execution updates to legacy attributes
+        are ignored (they do not affect the frozen SeedContext).
+        """
+        try:
+            if self.seed_onboarding and not self.seed_context.onboarding_metadata:
+                self.seed_context.onboarding_metadata = self.seed_onboarding
+                logger.debug("Synced legacy seed_onboarding to SeedContext")
+            if self.seed_architectural_context and not self.seed_context.architectural_context:
+                self.seed_context.architectural_context = self.seed_architectural_context
+                logger.debug("Synced legacy seed_architectural_context to SeedContext")
+            if self.seed_design_calibration and not self.seed_context.design_calibration:
+                self.seed_context.design_calibration = self.seed_design_calibration
+                logger.debug("Synced legacy seed_design_calibration to SeedContext")
+        except AttributeError:
+            # Already frozen, ignore
+            pass
+
+    @property
+    def execution_mode(self) -> str:
+        """Execution mode from seed context (via property accessor)."""
+        return self.seed_context.execution_mode
+
+    @property
+    def onboarding_metadata(self) -> Optional[Dict[str, Any]]:
+        """Onboarding metadata from seed context (via property accessor)."""
+        return self.seed_context.onboarding_metadata
+
+    @property
+    def architectural_context(self) -> Optional[Dict[str, Any]]:
+        """Architectural context from seed context (via property accessor)."""
+        return self.seed_context.architectural_context
+
+    @property
+    def design_calibration(self) -> Optional[Dict[str, Any]]:
+        """Design calibration from seed context (via property accessor)."""
+        return self.seed_context.design_calibration
+
+    @property
+    def generation_provenance(self) -> Optional[Dict[str, Any]]:
+        """Generation provenance from seed context (via property accessor)."""
+        return self.seed_context.generation_provenance
 
     def check_git_status(self) -> Tuple[bool, List[str]]:
         """
@@ -612,17 +877,17 @@ class PrimeContractorWorkflow:
             # Keys injected: project_objectives, semantic_conventions,
             # architectural_context, implement_max_output_tokens,
             # plan_context, domain_constraints (from per-task metadata).
-            if self.seed_onboarding:
-                objectives = self.seed_onboarding.get('project_objectives')
+            if self.onboarding_metadata:
+                objectives = self.onboarding_metadata.get('project_objectives')
                 if isinstance(objectives, (str, list, dict)):
                     gen_context['project_objectives'] = objectives
-                sem_conv = self.seed_onboarding.get('semantic_conventions')
+                sem_conv = self.onboarding_metadata.get('semantic_conventions')
                 if isinstance(sem_conv, (dict, list)):
                     gen_context['semantic_conventions'] = sem_conv
-            if self.seed_architectural_context:
-                gen_context['architectural_context'] = self.seed_architectural_context
+            if self.architectural_context:
+                gen_context['architectural_context'] = self.architectural_context
             # Per-task calibration: implement_max_output_tokens
-            task_cal = self.seed_design_calibration.get(feature.id, {})
+            task_cal = self.design_calibration.get(feature.id, {}) if self.design_calibration else {}
             if isinstance(task_cal, dict) and task_cal.get('implement_max_output_tokens'):
                 gen_context['implement_max_output_tokens'] = task_cal['implement_max_output_tokens']
             # Gap 13: plan document context
@@ -792,7 +1057,21 @@ class PrimeContractorWorkflow:
         Returns:
             Summary dict with results
         """
-        logger.info('PRIME CONTRACTOR WORKFLOW started — mode=%s, auto_commit=%s, stop_on_failure=%s', 'DRY RUN' if self.dry_run else 'LIVE', self.auto_commit, stop_on_failure, extra={'dry_run': self.dry_run, 'auto_commit': self.auto_commit})
+        # Sync any legacy ad-hoc attributes to SeedContext before freezing
+        self._sync_legacy_attributes()
+        # Freeze seed context at execution boundary to prevent post-execution reconfiguration
+        self.seed_context.freeze()
+        logger.info(
+            'PRIME CONTRACTOR WORKFLOW started — mode=%s, auto_commit=%s, stop_on_failure=%s',
+            'DRY RUN' if self.dry_run else 'LIVE',
+            self.auto_commit,
+            stop_on_failure,
+            extra={
+                'dry_run': self.dry_run,
+                'auto_commit': self.auto_commit,
+                'seed_exec_mode': self.seed_context.execution_mode,
+            }
+        )
         is_clean, dirty_files = self.check_git_status()
         if not is_clean:
             if self.auto_stash:
@@ -825,9 +1104,9 @@ class PrimeContractorWorkflow:
             if not feature:
                 logger.info('No more features to process')
                 break
-            if feature.integration_attempts >= MAX_INTEGRATION_ATTEMPTS:
-                logger.error("Feature '%s' exceeded max integration attempts (%d)", feature.name, MAX_INTEGRATION_ATTEMPTS)
-                self.queue.fail_feature(feature.id, 'Max integration attempts exceeded')
+            if feature.integration_attempts >= self.max_retries:
+                logger.error("Feature '%s' exceeded max integration attempts (%d)", feature.name, self.max_retries)
+                self.queue.fail_feature(feature.id, f'Max integration attempts exceeded ({self.max_retries})')
                 features_processed += 1
                 features_failed += 1
                 if stop_on_failure:
@@ -844,7 +1123,22 @@ class PrimeContractorWorkflow:
                 if stop_on_failure:
                     logger.error("STOPPING: Feature '%s' failed", feature.name, extra={'feature_name': feature.name})
                     break
-        logger.info('WORKFLOW SUMMARY: processed=%d, succeeded=%d, failed=%d, progress=%.1f%%, cost=$%.4f, tokens=%d in / %d out', features_processed, features_succeeded, features_failed, self.queue.get_progress(), self.total_cost_usd, self.total_input_tokens, self.total_output_tokens, extra={'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens})
+        logger.info(
+            'WORKFLOW SUMMARY: processed=%d, succeeded=%d, failed=%d, progress=%.1f%%, cost=$%.4f, tokens=%d in / %d out',
+            features_processed, features_succeeded, features_failed,
+            self.queue.get_progress(), self.total_cost_usd,
+            self.total_input_tokens, self.total_output_tokens,
+            extra={
+                'processed': features_processed,
+                'succeeded': features_succeeded,
+                'failed': features_failed,
+                'progress': self.queue.get_progress(),
+                'total_cost_usd': self.total_cost_usd,
+                'total_input_tokens': self.total_input_tokens,
+                'total_output_tokens': self.total_output_tokens,
+                'seed_exec_mode': self.seed_context.execution_mode,
+            }
+        )
         self.instrumentor.emit_insight(insight_type='workflow_completed', summary=f'Workflow complete: {features_succeeded}/{features_processed} succeeded', confidence=1.0, processed=features_processed, succeeded=features_succeeded, failed=features_failed, total_cost_usd=self.total_cost_usd)
         return {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
 

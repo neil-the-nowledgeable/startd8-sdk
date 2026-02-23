@@ -1823,13 +1823,15 @@ class ArtisanContractorWorkflow:
             self._logger.info("Auto-commit disabled (--no-auto-commit)")
             return
 
-        # Do not commit if any task failed review
+        # Do not commit if any task failed review.
+        # review_results structure: {"per_task": {"PI-005": {"passed": True}}, ...}
         review_results = ctx.get("review_results", {})
-        if review_results:
+        per_task = review_results.get("per_task", {}) if isinstance(review_results, dict) else {}
+        if per_task:
             any_failed = any(
-                not r.get("passed", False)
-                for r in review_results.values()
-                if isinstance(r, dict)
+                not entry.get("passed", False)
+                for entry in per_task.values()
+                if isinstance(entry, dict)
             )
             if any_failed:
                 self._logger.warning(
