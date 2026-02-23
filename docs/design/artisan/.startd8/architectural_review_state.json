@@ -1,0 +1,286 @@
+{
+  "document_path": "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/design/artisan/ARTISAN_OTEL_FULL_DEPTH_TRACING_REQUIREMENTS.md",
+  "updated_at_utc": "2026-02-23 00:48:31 UTC",
+  "applied_ids": [
+    "R1-S1",
+    "R1-S2",
+    "R1-S3",
+    "R1-S4",
+    "R1-S5",
+    "R1-S6",
+    "R1-S8",
+    "R1-S9",
+    "R2-S1",
+    "R2-S4",
+    "R2-S6",
+    "R2-S7",
+    "R1-F1",
+    "R1-F2",
+    "R1-F3",
+    "R1-F4",
+    "R1-F5",
+    "R1-F6",
+    "R2-F2",
+    "R2-F5",
+    "R3-S1",
+    "R3-S2",
+    "R3-S3",
+    "R3-S4",
+    "R3-S5",
+    "R3-S6",
+    "R3-S8",
+    "R4-S1",
+    "R4-S8",
+    "R4-S9",
+    "R1-F1",
+    "R1-F2",
+    "R1-F3",
+    "R1-F4",
+    "R2-F2",
+    "R5-S1",
+    "R5-S3",
+    "R5-S4",
+    "R5-S5",
+    "R5-S6",
+    "R5-S10",
+    "R6-S1",
+    "R6-S4"
+  ],
+  "rejected_ids": [
+    "R1-S7",
+    "R1-S10",
+    "R2-S2",
+    "R2-S3",
+    "R2-S5",
+    "R2-S8",
+    "R2-F1",
+    "R2-F3",
+    "R2-F4",
+    "R3-S7",
+    "R3-S9",
+    "R3-S10",
+    "R4-S2",
+    "R4-S3",
+    "R4-S4",
+    "R4-S5",
+    "R4-S6",
+    "R4-S7",
+    "R4-S10",
+    "R2-F1",
+    "R2-F3",
+    "R2-F4",
+    "R2-F5",
+    "R5-S2",
+    "R5-S7",
+    "R5-S8",
+    "R5-S9",
+    "R6-S2",
+    "R6-S3",
+    "R6-S5",
+    "R6-S6",
+    "R6-S7",
+    "R6-S8"
+  ],
+  "rounds": [
+    {
+      "round": 5,
+      "agent": "claude-4",
+      "model": "claude-opus-4-6",
+      "ids": [
+        "R5-S1",
+        "R5-S2",
+        "R5-S3",
+        "R5-S4",
+        "R5-S5",
+        "R5-S6",
+        "R5-S7",
+        "R5-S8",
+        "R5-S9",
+        "R5-S10"
+      ],
+      "appended_at_utc": "2026-02-23 00:38:24 UTC",
+      "cost": 0.089955
+    },
+    {
+      "round": 6,
+      "agent": "gemini-2.5",
+      "model": "gemini-2.5-pro",
+      "ids": [
+        "R6-S1",
+        "R6-S2",
+        "R6-S3",
+        "R6-S4",
+        "R6-S5",
+        "R6-S6",
+        "R6-S7",
+        "R6-S8"
+      ],
+      "appended_at_utc": "2026-02-23 00:39:13 UTC",
+      "cost": 0.043791250000000004
+    }
+  ],
+  "cumulative_cost_usd": 0.96425625,
+  "triage": {
+    "enabled": true,
+    "accepted": 8,
+    "rejected": 10,
+    "feature_accepted": 0,
+    "feature_rejected": 0,
+    "untriaged_remaining": [],
+    "substantially_addressed_areas": [
+      "consistency",
+      "feasibility",
+      "testability",
+      "ambiguity",
+      "completeness",
+      "traceability",
+      "unknown"
+    ],
+    "areas_needing_review": [],
+    "decisions": [
+      {
+        "id": "R5-S1",
+        "decision": "ACCEPT",
+        "summary": "Resolve contradiction between OT-712's `contract_state` parameter and OT-710's ContextVar-based access for boundary results.",
+        "rationale": "This is a genuine internal contradiction. OT-712 AC-9 claims to encapsulate chain_statuses construction from BoundaryResult, but the function signature requires callers to pass a pre-constructed ContractStateMetadata. This would either defeat centralization (7 call sites duplicate mapping logic) or make the parameter misleading. The resolution\u2014either removing the parameter so the helper reads the ContextVar internally, or restructuring to have the helper accept a raw BoundaryResult\u2014must be explicit. This directly impacts whether the Mottainai centralization principle is honored.",
+        "area": "consistency"
+      },
+      {
+        "id": "R5-S2",
+        "decision": "REJECT",
+        "summary": "Add requirement for capturing exit boundary results in forensic logs, not just entry results.",
+        "rationale": "Forensic logs are emitted at LLM call sites, which occur *during* phase execution\u2014between the entry and exit gates. By definition, the exit gate hasn't executed yet when these logs are emitted, so there is no exit boundary result to capture. Exit-time degradation is already observable through the gate.exit span attributes (OT-201 captures gate.passed and gate.propagation_status). Adding post-phase forensic logging would be a different feature entirely (post-mortem analysis) and is out of scope for the current LLM call forensic layer.",
+        "area": "completeness"
+      },
+      {
+        "id": "R5-S3",
+        "decision": "ACCEPT",
+        "summary": "Clarify OT-714 AC-6 by scoping whether a shared base class/Protocol exists for all agent types, or if an adapter pattern is needed.",
+        "rationale": "OT-714 AC-6 ('defined on a base class or protocol shared by all agent types') assumes a shared type hierarchy that likely doesn't exist given AgentLLMBackend is a custom wrapper and AgentFactory may produce third-party types. Without auditing the actual agent hierarchy, this AC is aspirational. The requirement should either specify a Protocol type to be introduced or acknowledge that a wrapper/adapter is needed for third-party agents, explicitly scoping any required refactoring.",
+        "area": "feasibility"
+      },
+      {
+        "id": "R5-S4",
+        "decision": "ACCEPT",
+        "summary": "Add integration-level test acceptance criteria to OT-713 verifying that each of the 7 call sites actually invokes `emit_forensic_log()` with correct arguments.",
+        "rationale": "There is a real testing gap between unit tests of the helper (OT-713) and runtime LogQL verification (Section 8). Unit tests verify the builder works correctly in isolation, but nothing verifies that the 7 call sites actually invoke it with the right parameters. Given that OT-712 explicitly prohibits direct JSON assembly at call sites, there should be automated tests enforcing this contract. Integration-level tests that mock LLM responses and patch `emit_forensic_log` to verify invocation close this gap.",
+        "area": "testability"
+      },
+      {
+        "id": "R5-S5",
+        "decision": "ACCEPT",
+        "summary": "Specify the concrete type of `PropagationChainResult.status` in the OT-700 chain_statuses construction code example to avoid `.value` AttributeError risk.",
+        "rationale": "The code example uses `chain_result.status.value` which assumes an enum type. If `PropagationChainResult.status` is already a string, this would raise AttributeError at runtime. Since this code example will be directly referenced during implementation, it should be type-safe. The fix is simple: either confirm the enum type or use a string-safe pattern like `str(chain_result.status)` or `getattr(chain_result.status, 'value', chain_result.status)`.",
+        "area": "ambiguity"
+      },
+      {
+        "id": "R5-S6",
+        "decision": "ACCEPT",
+        "summary": "Update OT-507 status to reflect that it is partially implemented since OT-306 (a listed affected requirement) is still planned.",
+        "rationale": "This is a straightforward bookkeeping issue that undermines the Status Dashboard's reliability. OT-507 claims 'implemented' status while acknowledging in its own text that OT-306 must implement this pattern 'when they are built.' The status should accurately reflect partial implementation to maintain the dashboard's utility as a tracking tool.",
+        "area": "consistency"
+      },
+      {
+        "id": "R5-S7",
+        "decision": "REJECT",
+        "summary": "Add schema evolution rules (backward compatibility, coexistence) for the OT-700 forensic log schema.",
+        "rationale": "While schema evolution will eventually be needed, this is premature process definition for a schema that hasn't shipped its first version yet (all OT-7xx are planned). OT-700 AC-6 already establishes the versioning mechanism. Defining compatibility rules, consumer handling, and migration strategies before the first consumer exists adds speculative process overhead. This should be addressed when the first schema change is actually needed, at which point the concrete constraints will be known.",
+        "area": "completeness"
+      },
+      {
+        "id": "R5-S8",
+        "decision": "REJECT",
+        "summary": "Add a traceability table mapping each OT-711 degradation condition to its applicable call sites.",
+        "rationale": "While theoretically useful, OT-711 already specifies phase-conditional logic inline (e.g., 'at IMPLEMENT, TEST, or REVIEW phases' for condition 2, 'at TEST phase' for condition 6). The `is_degraded()` function in OT-712 evaluates these conditions centrally based on the `call_type` parameter, so the mapping is implicit in the implementation. Adding another traceability table for 12 conditions \u00d7 7 call sites would create significant maintenance burden for marginal value, especially since the logic is centralized in a single function rather than distributed across call sites.",
+        "area": "traceability"
+      },
+      {
+        "id": "R5-S9",
+        "decision": "REJECT",
+        "summary": "Create a unified `propagate_to_thread()` helper that captures both OTel context and boundary result ContextVar in a single call.",
+        "rationale": "With only 2 context values to propagate (OTel context + boundary result), the generalization overhead outweighs the benefit. The suggestion itself acknowledges this: 'if only 2 vars need propagation, document the decision to defer generalization.' The current explicit capture/attach/detach pattern for each value is clear, debuggable, and follows established patterns. Premature abstraction here would add complexity for hypothetical future needs.",
+        "area": "feasibility"
+      },
+      {
+        "id": "R5-S10",
+        "decision": "ACCEPT",
+        "summary": "Add '(pending OT-504 migration)' annotation to the Design Principles table's Compliance column for the Single Span-Creation Degradation Pattern row.",
+        "rationale": "The Design Principles table reads as a compliance statement, but OT-504 is planned and OT-305/OT-405 explicitly note they still use `contextlib.nullcontext()`. Adding a parenthetical note is a minimal, non-disruptive change that maintains the table's integrity as a compliance reference.",
+        "area": "consistency"
+      },
+      {
+        "id": "R6-S1",
+        "decision": "ACCEPT",
+        "summary": "Add requirement specifying that forensic log emission is independent of OTel trace sampling decisions.",
+        "rationale": "This is a critical architectural gap. If forensic logs are only emitted for sampled traces (which is the default behavior when logs are emitted within span contexts using the OTel log bridge), a significant portion of LLM call audit data would be silently lost in production with <100% sampling. The forensic logging system's core value proposition\u2014auditing every LLM call\u2014requires explicit independence from trace sampling. This has direct implementation implications for how `emit_forensic_log()` handles the logging path.",
+        "area": "completeness"
+      },
+      {
+        "id": "R6-S2",
+        "decision": "REJECT",
+        "summary": "Promote `is_degraded()` to a first-class metric counter and span attribute.",
+        "rationale": "While conceptually appealing, this conflates the concerns of the forensic logging layer with metrics instrumentation, which is a separate observability concern. The `degradation_reasons` field in the log already provides the raw data for Loki-based alerting and dashboarding. Adding a Prometheus counter introduces a new dependency (metrics SDK) and span attributes for degradation duplicate information already available in the forensic log. This optimization can be added later when actual dashboarding needs demonstrate that log-based aggregation is insufficient.",
+        "area": "completeness"
+      },
+      {
+        "id": "R6-S3",
+        "decision": "REJECT",
+        "summary": "Enrich `chain_statuses` and `quality_violations` with detailed failure reasons, fields, and rule IDs from BoundaryResult.",
+        "rationale": "The current schema already captures the essential information: which chains are degraded and whether violations exist. The detailed failure reasons are available in the BoundaryResult's span events (which are children of gate spans per OT-200/OT-201) and are queryable via Tempo's trace waterfall. Duplicating this granular contract internals data into every forensic log entry increases log size, couples the log schema tightly to the contract validation system's internal structure, and creates a maintenance burden when contract rules change. The trace-to-log correlation (OT-708) already enables drill-down from log to trace for detailed investigation.",
+        "area": "completeness"
+      },
+      {
+        "id": "R6-S4",
+        "decision": "ACCEPT",
+        "summary": "Add a size limit and truncation strategy for unbounded list fields in the forensic log schema.",
+        "rationale": "The forensic log schema contains several unbounded list fields (`target_files`, `quality_violations`, `degradation_reasons`). While `target_files` already has 'max 5' in span attributes (OT-301 AC-2), the forensic log schema has no such limits. In edge cases (many quality violations, many target files), oversized log entries could be rejected by Loki or cause performance issues. The `emit_forensic_log()` helper (OT-712) is the ideal place to enforce this centrally, and the fix is simple: truncate with a count indicator.",
+        "area": "feasibility"
+      },
+      {
+        "id": "R6-S5",
+        "decision": "REJECT",
+        "summary": "Standardize `task.id` vs `task.task_id` naming across span attributes and forensic log schema.",
+        "rationale": "This was already addressed by previously accepted suggestion R3-S1 which deals with naming consistency in span attributes and conventions. The OT-503 conventions module (also previously accepted as a mechanism) is explicitly designed to be the single source of truth for all attribute names. Re-accepting this would duplicate prior work.",
+        "area": "consistency"
+      },
+      {
+        "id": "R6-S6",
+        "decision": "REJECT",
+        "summary": "Standardize LLM cost/token attributes across all LLM-related spans for consistent TraceQL querying.",
+        "rationale": "The document already explains the design rationale for the current differentiation. OT-400 explicitly documents why events are used instead of child spans for AgentLLMBackend calls (avoiding trace cardinality inflation). OT-306 is planned and its scope is deliberately minimal as a span wrapper. The forensic log layer (OT-7xx) is the designated home for consistent, queryable LLM cost/token data across all call types. Forcing all span types to carry identical attributes would undermine the deliberate architectural choices about span vs. event vs. log signal separation.",
+        "area": "consistency"
+      },
+      {
+        "id": "R6-S7",
+        "decision": "REJECT",
+        "summary": "Define a formal schema versioning process with a SCHEMA_REGISTRY.md, compatibility policy, and CI enforcement.",
+        "rationale": "This is essentially the same suggestion as R5-S7, which was already rejected for being premature process definition before the first schema version ships. Adding CI checks and registry files for a schema that exists only as a planned requirement is over-engineering. The `schema_version` field in OT-700 provides the necessary hook; process can be defined when evolution actually occurs.",
+        "area": "completeness"
+      },
+      {
+        "id": "R6-S8",
+        "decision": "REJECT",
+        "summary": "Add test criteria for `contextvars` propagation across `asyncio.create_task` boundaries.",
+        "rationale": "Python's `asyncio.create_task` automatically copies the current `contextvars.Context` to the new task\u2014this is part of the Python language specification (PEP 567) and asyncio's documented behavior. The actual propagation risk identified in OT-710 is with `threading.Thread`, which does NOT auto-copy context, and this is already addressed with explicit capture/set/reset in OT-710 AC-11. Adding tests for behavior guaranteed by the language runtime adds test maintenance burden without reducing risk.",
+        "area": "testability"
+      }
+    ]
+  },
+  "apply": {
+    "enabled": true,
+    "applied_count": 8,
+    "applied_ids": [
+      "R5-S1",
+      "R5-S3",
+      "R5-S4",
+      "R5-S5",
+      "R5-S6",
+      "R5-S10",
+      "R6-S1",
+      "R6-S4"
+    ],
+    "warning_ids": [],
+    "feature_applied_count": 0,
+    "error": null
+  }
+}

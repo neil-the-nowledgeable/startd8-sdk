@@ -1,0 +1,28 @@
+{
+  "requirements_path": "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/design/artisan/ARTISAN_OTEL_FULL_DEPTH_TRACING_REQUIREMENTS.md",
+  "plan_path": "/Users/neilyashinsky/.claude/plans/quirky-growing-gem.md",
+  "requirements_profile": "requirements",
+  "plan_profile": "design",
+  "reviewer_count": 2,
+  "quality_tier": "flagship",
+  "enable_triage": true,
+  "enable_apply": true,
+  "max_suggestions": 10,
+  "init_if_missing": true,
+  "context_files": [
+    "/Users/neilyashinsky/Documents/dev/ContextCore/docs/design-principles/CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md",
+    "/Users/neilyashinsky/Documents/dev/ContextCore/docs/design-principles/ContextCore-context-contracts.md",
+    "/Users/neilyashinsky/Documents/dev/ContextCore/docs/design-principles/context-propagation.md",
+    "src/startd8/contractors/artisan_contractor.py",
+    "src/startd8/contractors/context_seed_handlers.py",
+    "src/startd8/contractors/artisan_phases/design_documentation.py",
+    "src/startd8/contractors/artisan_phases/development.py",
+    "src/startd8/contractors/artisan_phases/test_construction.py",
+    "src/startd8/otel.py",
+    "docs/design/artisan/ARTISAN_REQUIREMENTS.md",
+    "docs/design/artisan/CONTRACT_VALIDATION_REQUIREMENTS.md"
+  ],
+  "max_context_chars": 300000,
+  "warn_cost_usd": 8.0,
+  "max_cost_usd": 20.0
+}
