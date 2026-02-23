@@ -159,6 +159,12 @@ class FeatureContext:
         sections: Calibrated section list (None = all 7 default sections).
         max_output_tokens: Output token cap (None = provider default).
         depth_guidance: Tier-specific guidance for system prompt.
+        prior_design: Existing design document text for the refine path.
+        requirements_text: IMP-1 requirements block from the PLAN phase.
+        edit_mode_hint: ``"edit"`` when target files already exist,
+            ``"create"`` for greenfield, or ``None`` when unclassified.
+        existing_target_files: Paths of target files that already exist on
+            disk, populated by the SCAFFOLD phase.
     """
 
     feature_name: str
@@ -170,10 +176,8 @@ class FeatureContext:
     max_output_tokens: int | None = None
     depth_guidance: str | None = None
     prior_design: str | None = None
-    # IMP-1: Verbatim requirements text from plan
     requirements_text: str = ""
-    # B-6: Edit-mode awareness for existing-file tasks
-    edit_mode_hint: str | None = None  # "edit" | "create" | None
+    edit_mode_hint: str | None = None
     existing_target_files: list[str] = field(default_factory=list)
 
 
@@ -495,6 +499,9 @@ _DEFAULT_SECTIONS = [
 ]
 
 
+_VALID_EDIT_MODE_HINTS = frozenset({"edit", "create", None})
+
+
 def _build_edit_mode_block(
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
@@ -504,7 +511,19 @@ def _build_edit_mode_block(
     When ``edit_mode_hint`` is ``"edit"``, returns instructions directing the
     LLM to describe modifications to existing files rather than greenfield
     implementations.  Returns an empty string otherwise (greenfield unchanged).
+
+    Args:
+        edit_mode_hint: ``"edit"`` for surgical modifications, ``"create"``
+            for greenfield, or ``None`` when unknown.
+        existing_target_files: Paths that already exist on disk.
+
+    Returns:
+        A multi-line instruction block, or ``""`` when not in edit mode.
     """
+    if edit_mode_hint not in _VALID_EDIT_MODE_HINTS:
+        logger.debug(
+            "Unexpected edit_mode_hint %r — treating as None", edit_mode_hint,
+        )
     if edit_mode_hint != "edit" or not existing_target_files:
         return ""
     file_list = "\n".join(f"        - `{f}`" for f in existing_target_files)
@@ -519,16 +538,31 @@ def _build_edit_mode_block(
     )
 
 
-def build_design_system_prompt(
+def _format_system_prompt(
+    template_name: str,
     sections: list[str] | None = None,
     depth_guidance: str | None = None,
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
 ) -> str:
-    """Build a dynamic system prompt with calibrated section list.
+    """Load a design system prompt from YAML and format its placeholders.
 
-    Loads the template from design.yaml and injects sections_list, depth_line,
-    and edit_mode_block.
+    Shared implementation for both fresh-design and refine system prompts.
+
+    Args:
+        template_name: YAML template key (e.g. ``"design_system"``,
+            ``"refine_system"``).
+        sections: Section list for the ``{sections_list}`` placeholder.
+            Defaults to :data:`_DEFAULT_SECTIONS`.
+        depth_guidance: Optional tier-specific scope guidance injected as
+            ``{depth_line}``.
+        edit_mode_hint: ``"edit"`` to inject surgical-modification guidance,
+            any other value (or ``None``) leaves the block empty.
+        existing_target_files: Paths of target files that already exist on
+            disk — used by the edit-mode block.
+
+    Returns:
+        The fully-formatted system prompt string.
     """
     from startd8.contractors.artisan_phases.prompts import get_template
 
@@ -542,11 +576,24 @@ def build_design_system_prompt(
 
     edit_mode_block = _build_edit_mode_block(edit_mode_hint, existing_target_files)
 
-    template = get_template("design", "design_system")
+    template = get_template("design", template_name)
     return template.format(
         sections_list=section_list,
         depth_line=depth_line,
         edit_mode_block=edit_mode_block,
+    )
+
+
+def build_design_system_prompt(
+    sections: list[str] | None = None,
+    depth_guidance: str | None = None,
+    edit_mode_hint: str | None = None,
+    existing_target_files: list[str] | None = None,
+) -> str:
+    """Build a dynamic system prompt for fresh design generation."""
+    return _format_system_prompt(
+        "design_system", sections, depth_guidance,
+        edit_mode_hint, existing_target_files,
     )
 
 
@@ -562,28 +609,10 @@ def build_refine_system_prompt(
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
 ) -> str:
-    """Build a system prompt for refining an existing design document.
-
-    Loads the template from design.yaml and injects sections_list, depth_line,
-    and edit_mode_block.
-    """
-    from startd8.contractors.artisan_phases.prompts import get_template
-
-    if sections is None:
-        sections = _DEFAULT_SECTIONS
-    section_list = "\n".join(f"- ## {s}" for s in sections)
-
-    depth_line = ""
-    if depth_guidance:
-        depth_line = f"\n\n**Scope guidance:** {depth_guidance}"
-
-    edit_mode_block = _build_edit_mode_block(edit_mode_hint, existing_target_files)
-
-    template = get_template("design", "refine_system")
-    return template.format(
-        sections_list=section_list,
-        depth_line=depth_line,
-        edit_mode_block=edit_mode_block,
+    """Build a system prompt for refining an existing design document."""
+    return _format_system_prompt(
+        "refine_system", sections, depth_guidance,
+        edit_mode_hint, existing_target_files,
     )
 
 
