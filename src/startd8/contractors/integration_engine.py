@@ -116,7 +116,18 @@ class IntegrationEngine:
             marker_str = f"/{marker}/"
             if marker_str in source_str:
                 relative = source_str.split(marker_str, 1)[1]
-                return sanitize_path(relative, base_dir=self.project_root)
+                if not relative:
+                    break  # degenerate path — fall through to filename fallback
+                try:
+                    return sanitize_path(relative, base_dir=self.project_root)
+                except (ValueError, OSError) as exc:
+                    logger.warning(
+                        "sanitize_path rejected derived relative path '%s' "
+                        "from %s: %s — falling back to filename",
+                        relative, source_path, exc,
+                        extra={"unit_id": unit.id},
+                    )
+                    return self.project_root / source_path.name
         logger.warning(
             "Could not derive relative path for %s — using filename only",
             source_path,

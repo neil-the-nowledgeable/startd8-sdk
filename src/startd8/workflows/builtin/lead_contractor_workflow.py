@@ -206,6 +206,12 @@ def _build_existing_files_section(
 
 _EDIT_MIN_PCT = 80  # Minimum percentage of original lines expected in edit output
 
+# PCA-607: Size regression gate thresholds for draft output.
+# Files smaller than _MIN_LINES are exempt; drafts below _THRESHOLD ratio
+# of the existing file size are flagged as truncated to trigger auto-retry.
+_DRAFT_SIZE_REGRESSION_THRESHOLD = 0.50   # Draft must be >= 50% of existing
+_DRAFT_SIZE_REGRESSION_MIN_LINES = 50     # Only check files larger than this
+
 
 def _build_output_format(
     target_files: Optional[List[str]] = None,
@@ -252,6 +258,8 @@ def _build_output_format(
             line_parts.append(
                 f"- `{fpath}`: {flines} lines — output MUST be AT LEAST {min_lines} lines"
             )
+        # Defensive: line_parts is always non-empty here (existing_files is
+        # non-empty when is_edit is True), but guard anyway for safety.
         existing_line_summary = (
             "\n\nCRITICAL SIZE CONSTRAINT (per file):\n"
             + "\n".join(line_parts)
@@ -1090,18 +1098,9 @@ class LeadContractorWorkflow(WorkflowBase):
 
         # PCA-607: Size regression gate for edit tasks — detect catastrophic
         # size reduction before the draft leaves this method.
-        size_regression_detected = False
-        if existing_files and implementation_code:
-            existing_total = sum(len(c.splitlines()) for c in existing_files.values())
-            extracted_lines = len(implementation_code.splitlines())
-            if existing_total > 50 and extracted_lines / existing_total < 0.50:
-                logger.warning(
-                    "Draft size regression: %d lines vs %d existing (%.0f%%)",
-                    extracted_lines, existing_total,
-                    100 * extracted_lines / existing_total,
-                )
-                size_regression_detected = True
-
+        size_regression_detected = self._detect_size_regression(
+            existing_files, implementation_code,
+        )
         was_truncated = was_truncated or size_regression_detected
         if size_regression_detected and not truncation_source:
             truncation_source = "size_regression"
@@ -1682,19 +1681,10 @@ class LeadContractorWorkflow(WorkflowBase):
 
         was_truncated = api_truncated or heuristic_truncated
 
-        # PCA-607: Size regression gate for edit tasks (async mirror)
-        size_regression_detected = False
-        if existing_files and implementation_code:
-            existing_total = sum(len(c.splitlines()) for c in existing_files.values())
-            extracted_lines = len(implementation_code.splitlines())
-            if existing_total > 50 and extracted_lines / existing_total < 0.50:
-                logger.warning(
-                    "Draft size regression: %d lines vs %d existing (%.0f%%)",
-                    extracted_lines, existing_total,
-                    100 * extracted_lines / existing_total,
-                )
-                size_regression_detected = True
-
+        # PCA-607: Size regression gate for edit tasks
+        size_regression_detected = self._detect_size_regression(
+            existing_files, implementation_code,
+        )
         was_truncated = was_truncated or size_regression_detected
         if size_regression_detected and not truncation_source:
             truncation_source = "size_regression"
@@ -1890,6 +1880,33 @@ class LeadContractorWorkflow(WorkflowBase):
         return extract_code_from_response(response)
 
     @staticmethod
+    def _detect_size_regression(
+        existing_files: Optional[Dict[str, str]],
+        implementation_code: str,
+    ) -> bool:
+        """Check if draft output is catastrophically smaller than existing files.
+
+        Returns True when the extracted code is less than
+        ``_DRAFT_SIZE_REGRESSION_THRESHOLD`` of the total existing file
+        size and the existing files exceed ``_DRAFT_SIZE_REGRESSION_MIN_LINES``.
+        """
+        if not existing_files or not implementation_code:
+            return False
+        existing_total = sum(len(c.splitlines()) for c in existing_files.values())
+        extracted_lines = len(implementation_code.splitlines())
+        if (
+            existing_total > _DRAFT_SIZE_REGRESSION_MIN_LINES
+            and extracted_lines / existing_total < _DRAFT_SIZE_REGRESSION_THRESHOLD
+        ):
+            logger.warning(
+                "Draft size regression: %d lines vs %d existing (%.0f%%)",
+                extracted_lines, existing_total,
+                100 * extracted_lines / existing_total,
+            )
+            return True
+        return False
+
+    @staticmethod
     def _build_multi_file_directive(
         target_files: Optional[List[str]] = None,
         existing_files: Optional[Dict[str, str]] = None,
@@ -1918,7 +1935,7 @@ class LeadContractorWorkflow(WorkflowBase):
             "MUST contain a SEPARATE fenced code block for EACH file:\n"
             f"{file_list}\n\n"
             "Per-file sizes:\n"
-            f"{''.join(per_file_lines) if per_file_lines else '  (no size data)'}\n\n"
+            f"{chr(10).join(per_file_lines) if per_file_lines else '  (no size data)'}\n\n"
             "Each block must begin with `# <full path>` as the first line.\n"
             "PRESERVE all existing code — do not summarize or abbreviate."
         )

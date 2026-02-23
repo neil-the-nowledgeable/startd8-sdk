@@ -14,8 +14,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # Fix 1: DraftResult.raw_response
 # ---------------------------------------------------------------------------
