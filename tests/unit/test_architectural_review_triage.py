@@ -649,24 +649,32 @@ class TestBuildPromptPriority:
         assert "**architecture**: 3 suggestions applied" in prompt
 
     def test_all_areas_covered_enters_gap_hunting_mode(self):
-        """When all 7 areas are covered, prompt switches to gap-hunting mode."""
+        """When all 7 areas are covered, prompt switches to design-principle-aware gap hunting."""
         addressed = {area: [f"R1-{area[:2]}"] for area in ALLOWED_AREAS}
         prompt = self._call(substantially_addressed_areas=addressed)
         assert f"All {len(ALLOWED_AREAS)} review areas are substantially addressed" in prompt
-        assert "genuine gaps" in prompt
-        assert "second-order" in prompt.lower()
+        assert "design-principle alignment" in prompt
+        assert "Second-order effects" in prompt
         # Should NOT use the generic focus line
         assert "architecture clarity, execution safety" not in prompt
         # Should NOT say "Priority areas NOT yet"
         assert "Priority areas NOT yet" not in prompt
 
     def test_all_areas_covered_lists_specific_gap_strategies(self):
-        """Gap-hunting mode provides concrete search strategies."""
+        """Gap-hunting mode provides concrete search strategies from YAML config."""
         addressed = {area: [f"R1-{area[:2]}"] for area in ALLOWED_AREAS}
         prompt = self._call(substantially_addressed_areas=addressed)
-        assert "Gaps *between* areas" in prompt
+        # Lens 1: gaps and cross-cutting concerns (from YAML gap_hunting_lenses)
+        assert "Contradictions between areas" in prompt
         assert "Assumptions that were never validated" in prompt
         assert "Second-order effects" in prompt
+        # Lens 2: platform leverage (from YAML gap_hunting_lenses)
+        assert "upstream pipeline stages" in prompt
+        assert "Deterministic computations" in prompt
+        # Lens 3: design principles (from YAML design_principles)
+        assert "Mottainai" in prompt
+        assert "Context Correctness by Construction" in prompt
+        assert "Context Contracts" in prompt
 
     def test_dynamic_focus_references_correct_total(self):
         """The dynamic focus line includes the correct total of applied suggestions."""

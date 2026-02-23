@@ -3,6 +3,11 @@
 Depends on :mod:`architectural_review_log_constants` (leaf) and
 :mod:`prompts` (YAML loader).  Three of the five builders delegate
 to externalized YAML templates via ``format_prompt()``.
+
+Iteration context guidance, gap-hunting lenses, and design principle
+summaries are loaded from ``prompts/architectural_review.yaml`` rather
+than hardcoded in Python.  Data assembly (area coverage computation,
+per-area detail lines) remains in Python.
 """
 
 from __future__ import annotations
@@ -19,7 +24,41 @@ from .architectural_review_log_constants import (
     _now_utc,
     _OPTIONAL_COLUMN_DEFAULT,
 )
-from .prompts import format_prompt
+from .prompts import format_prompt, format_section, get_list_section
+
+
+_PHASE = "architectural_review"
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers for YAML-driven structured data
+# ---------------------------------------------------------------------------
+
+def _render_gap_hunting_lenses(lenses: List[Dict[str, Any]]) -> str:
+    """Render gap-hunting lenses from YAML into numbered markdown sections."""
+    parts: List[str] = []
+    for i, lens in enumerate(lenses, 1):
+        parts.append(f"  **{i}. {lens.get('name', 'Untitled')}:**")
+        for item in lens.get("items", []):
+            parts.append(f"     - {item}")
+        if i < len(lenses):
+            parts.append("")  # blank line between lenses
+    return "\n".join(parts)
+
+
+def _render_design_principles(
+    principles: List[Dict[str, Any]],
+    start_number: int,
+) -> str:
+    """Render design principles from YAML into a numbered markdown section."""
+    lines: List[str] = [f"  **{start_number}. Design principle violations:**"]
+    for p in principles:
+        name = p.get("name", "")
+        slug = p.get("slug", "")
+        summary = str(p.get("summary", "")).strip()
+        label = f"**{name}** ({slug})" if slug else f"**{name}**"
+        lines.append(f"     - {label}: {summary}")
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -101,17 +140,15 @@ def _build_prompt(
 
     # Adapt iteration context based on whether prior rounds have been triaged
     if applied_list != "(none)" or rejected_list != "(none)":
-        iteration_context = f"""Prior review rounds have already been triaged:
-- Applied (incorporated into the plan): {applied_list}
-- Rejected (with rationale — do NOT re-propose): {rejected_list}
-
-Study the rejected rationale in Appendix B to understand WHY ideas were dismissed.
-Your job is to find what prior reviewers MISSED — go deeper, challenge assumptions, identify second-order risks, and surface gaps that only emerge after the obvious issues are resolved.
-If you want to revisit a rejected idea, explicitly reference its rejected ID and argue why the original rationale no longer applies."""
+        iteration_context = format_section(
+            _PHASE, "iteration_context", "has_triage",
+            applied_list=applied_list, rejected_list=rejected_list,
+        ).rstrip("\n")
     else:
-        iteration_context = f"""This is the first review pass. No prior suggestions have been triaged yet.
-- Applied IDs: {applied_list}
-- Rejected IDs: {rejected_list}"""
+        iteration_context = format_section(
+            _PHASE, "iteration_context", "first_round",
+            applied_list=applied_list, rejected_list=rejected_list,
+        ).rstrip("\n")
 
     # Substantially addressed areas — two-tier priority guidance
     focus_line = f"- Focus on: {focus}."
@@ -125,10 +162,10 @@ If you want to revisit a rejected idea, explicitly reference its rejected ID and
         total_applied = sum(len(v) for v in substantially_addressed_areas.values())
 
         if uncovered:
-            # Tier 1
-            iteration_context += (
-                f"\n\n**Priority areas NOT yet substantially addressed — start your analysis here:**\n"
-            )
+            # Tier 1: uncovered priority areas
+            iteration_context += "\n\n" + format_section(
+                _PHASE, "iteration_context", "tier1_header",
+            ).rstrip("\n") + "\n"
             if area_coverage:
                 for area in uncovered:
                     info = area_coverage.get(area, {})
@@ -148,42 +185,53 @@ If you want to revisit a rejected idea, explicitly reference its rejected ID and
                         )
             else:
                 iteration_context += f"  {', '.join(f'**{a}**' for a in uncovered)}\n"
-            iteration_context += (
-                f"Exhaust these areas first. Allocate at least {max(1, max_suggestions - 1)} of your "
-                f"{max_suggestions} suggestion slots to these priority areas before considering addressed areas."
-            )
-            # Tier 2
-            iteration_context += (
-                f"\n\nAreas already substantially addressed — only propose if you find a genuine gap "
-                f"the {total_applied} accepted suggestions missed:\n"
-            )
+            iteration_context += format_section(
+                _PHASE, "iteration_context", "tier1_allocation",
+                min_priority_slots=max(1, max_suggestions - 1),
+                max_suggestions=max_suggestions,
+            ).rstrip("\n")
+
+            # Tier 2: already-addressed areas
+            iteration_context += "\n\n" + format_section(
+                _PHASE, "iteration_context", "tier2_header",
+                total_applied=total_applied,
+            ).rstrip("\n") + "\n"
             iteration_context += "\n".join(addressed_lines)
-            focus_line = (
-                f"- Prioritize: {', '.join(uncovered)}. "
-                f"Only revisit {', '.join(sorted(covered))} if you find a gap the "
-                f"{total_applied} accepted suggestions missed."
-            )
+            focus_line = format_section(
+                _PHASE, "focus_lines", "tier1",
+                uncovered_areas=", ".join(uncovered),
+                covered_areas=", ".join(sorted(covered)),
+                total_applied=total_applied,
+            ).strip()
         else:
-            # All areas covered
-            iteration_context += (
-                f"\n\nAll {len(areas)} review areas are substantially addressed "
-                f"({total_applied} suggestions accepted). Your job is to find genuine gaps "
-                f"the prior reviewers missed — second-order risks, unstated assumptions, "
-                f"or interactions between accepted suggestions that create new issues.\n"
+            # All areas covered — design-principle-aware gap hunting
+            lenses = get_list_section(_PHASE, "gap_hunting_lenses")
+            principles = get_list_section(_PHASE, "design_principles")
+            rendered_lenses = _render_gap_hunting_lenses(lenses)
+            rendered_principles = _render_design_principles(
+                principles, start_number=len(lenses) + 1,
             )
+
+            iteration_context += "\n\n" + format_section(
+                _PHASE, "iteration_context", "all_covered_intro",
+                area_count=len(areas), total_applied=total_applied,
+            ).rstrip("\n") + "\n"
             iteration_context += "\n".join(addressed_lines)
-            iteration_context += (
-                f"\n\nDo NOT rehash areas already well-covered. Instead, look for:\n"
-                f"  1. Gaps *between* areas (e.g., an ops process that contradicts an architecture decision)\n"
-                f"  2. Assumptions that were never validated\n"
-                f"  3. Second-order effects of accepted suggestions\n"
-                f"  4. Edge cases or failure modes not yet addressed"
+            iteration_context += "\n\n" + format_section(
+                _PHASE, "iteration_context", "all_covered_guidance",
+                gap_hunting_lenses=rendered_lenses,
+                design_principle_guidance=rendered_principles,
+            ).rstrip("\n")
+
+            principle_summary = ", ".join(
+                f"{p.get('name', '')} ({p.get('slug', '')})"
+                for p in principles
             )
-            focus_line = (
-                f"- All areas have substantial coverage. Focus exclusively on genuine gaps, "
-                f"cross-cutting concerns, and second-order risks the prior {total_applied} "
-                f"accepted suggestions may have introduced or missed."
-            )
+            focus_line = format_section(
+                _PHASE, "focus_lines", "all_covered",
+                principle_summary=principle_summary,
+                total_applied=total_applied,
+            ).strip()
 
     # Context-aware instructions
     context_instruction = ""

@@ -91,3 +91,133 @@ prompts:
       6. If a suggestion's Proposed Placement is ambiguous, use your best judgment for the most logical location.
 
       Output the complete updated document body now:
+
+# ---------------------------------------------------------------------------
+# Iteration context sub-templates
+# ---------------------------------------------------------------------------
+# Selected by _build_prompt() based on review state (first round, has triage,
+# uncovered areas, all covered).  Placeholders use str.format() syntax.
+
+iteration_context:
+  first_round:
+    description: Opening context when no prior triage has occurred.
+    template: |
+      This is the first review pass. No prior suggestions have been triaged yet.
+      - Applied IDs: {applied_list}
+      - Rejected IDs: {rejected_list}
+
+  has_triage:
+    description: Opening context when prior rounds have been triaged.
+    template: |
+      Prior review rounds have already been triaged:
+      - Applied (incorporated into the plan): {applied_list}
+      - Rejected (with rationale — do NOT re-propose): {rejected_list}
+
+      Study the rejected rationale in Appendix B to understand WHY ideas were dismissed.
+      Your job is to find what prior reviewers MISSED — go deeper, challenge assumptions, identify second-order risks, and surface gaps that only emerge after the obvious issues are resolved.
+      If you want to revisit a rejected idea, explicitly reference its rejected ID and argue why the original rationale no longer applies.
+
+  tier1_header:
+    description: Header for uncovered priority areas.
+    template: |
+      **Priority areas NOT yet substantially addressed — start your analysis here:**
+
+  tier1_allocation:
+    description: Instruction for allocating suggestion slots to priority areas.
+    template: |
+      Exhaust these areas first. Allocate at least {min_priority_slots} of your {max_suggestions} suggestion slots to these priority areas before considering addressed areas.
+
+  tier2_header:
+    description: Header for already-addressed areas (secondary priority).
+    template: |
+      Areas already substantially addressed — only propose if you find a genuine gap the {total_applied} accepted suggestions missed:
+
+  all_covered_intro:
+    description: Introduction when all review areas are substantially addressed.
+    template: |
+      All {area_count} review areas are substantially addressed ({total_applied} suggestions accepted). Shift your analysis from area coverage to design-principle alignment and missed opportunities.
+
+  all_covered_guidance:
+    description: >
+      Gap-hunting guidance injected when all areas are covered.
+      Placeholders {gap_hunting_lenses} and {design_principle_guidance}
+      are rendered from the sections below.
+    template: |
+      Do NOT rehash areas already well-covered. Instead, evaluate the design against these lenses:
+
+      {gap_hunting_lenses}
+
+      {design_principle_guidance}
+
+# ---------------------------------------------------------------------------
+# Focus line templates
+# ---------------------------------------------------------------------------
+# Injected into the review prompt as {{focus_line}}.  Selected based on
+# coverage state.
+
+focus_lines:
+  tier1:
+    description: Focus line when some areas remain uncovered.
+    template: >-
+      - Prioritize: {uncovered_areas}. Only revisit {covered_areas} if you
+      find a gap the {total_applied} accepted suggestions missed.
+  all_covered:
+    description: Focus line when all areas are substantially addressed.
+    template: >-
+      - All areas have substantial coverage. Focus on design-principle
+      alignment: {principle_summary}. Flag missed platform leverage
+      opportunities and cross-cutting gaps the prior {total_applied}
+      accepted suggestions may have introduced or missed.
+
+# ---------------------------------------------------------------------------
+# Gap-hunting lenses
+# ---------------------------------------------------------------------------
+# Rendered into {gap_hunting_lenses} in all_covered_guidance.  Each lens
+# becomes a numbered section with bullet items.
+
+gap_hunting_lenses:
+  - name: Gaps and cross-cutting concerns
+    items:
+      - Contradictions between areas (e.g., an ops process that conflicts with an architecture decision)
+      - Assumptions that were never validated
+      - Second-order effects of accepted suggestions
+      - Edge cases or failure modes not yet addressed
+
+  - name: Missed opportunities to leverage platform capabilities
+    items:
+      - Data or artifacts already available from upstream pipeline stages that the design ignores
+      - Deterministic computations being deferred to stochastic LLM inference
+      - "Existing infrastructure (OTel, ContextCore contracts, capability index) that could replace hand-rolled solutions"
+      - Reusable components or shared utilities that would reduce duplication
+
+# ---------------------------------------------------------------------------
+# Design principles
+# ---------------------------------------------------------------------------
+# Rendered into {design_principle_guidance} in all_covered_guidance.
+# Each principle becomes a bullet under a numbered "Design principle
+# violations" heading.  The lens number is auto-computed as
+# len(gap_hunting_lenses) + 1.
+
+design_principles:
+  - name: Mottainai
+    slug: waste aversion
+    summary: >-
+      Are artifacts from earlier pipeline stages being discarded or regenerated
+      instead of forwarded? Is deterministic data being re-derived via LLM?
+      Does the design inventory what exists before generating?
+
+  - name: Context Correctness by Construction
+    slug: declare-and-verify
+    summary: >-
+      Does the design declare what context must flow between phases and verify
+      it at boundaries? Are there silent degradation paths where missing context
+      falls through to defaults without signaling? Are contracts prescriptive
+      (declare and verify) rather than descriptive (collect and hope)?
+
+  - name: Context Contracts
+    slug: boundary validation
+    summary: >-
+      Do phase boundaries validate required fields with appropriate severity
+      (BLOCKING/WARNING/ADVISORY)? Is provenance tracked so data can be traced
+      to its source? Can the design degrade gracefully when upstream data is
+      missing rather than failing silently?
