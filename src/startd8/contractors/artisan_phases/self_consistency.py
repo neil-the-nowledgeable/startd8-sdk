@@ -250,6 +250,117 @@ def validate_import_dependency(code: str, enrichment: Any) -> list[dict[str, Any
 
 
 # ---------------------------------------------------------------------------
+# AR-150: Intra-Project Import Path Validation (subprocess signature)
+# ---------------------------------------------------------------------------
+
+def _discover_top_level_packages(project_root: Path) -> dict[str, Path]:
+    """Discover top-level Python packages under ``src/`` (or project root).
+
+    Returns a mapping of package name → directory path for each directory
+    that contains an ``__init__.py``.
+    """
+    packages: dict[str, Path] = {}
+    src_dir = project_root / "src"
+    search_root = src_dir if src_dir.is_dir() else project_root
+    try:
+        for child in search_root.iterdir():
+            if child.is_dir() and (child / "__init__.py").exists():
+                packages[child.name] = child
+    except OSError:
+        pass
+    return packages
+
+
+def validate_intra_project_imports(code: str, enrichment: Any) -> list[dict[str, Any]]:
+    """Validate that intra-project ``from X.Y.Z import ...`` paths resolve on disk.
+
+    AST-parses the code, identifies absolute ``ImportFrom`` nodes whose
+    top-level name matches a local package under ``src/``, and checks that
+    the dotted module path maps to an existing ``.py`` file or ``__init__.py``
+    package directory.
+
+    Returns issues with ``confidence: 0.95`` for phantom imports, plus a
+    suggestion listing up to 5 sibling modules in the parent package.
+    """
+    issues: list[dict[str, Any]] = []
+
+    cwd = getattr(enrichment, "cwd", None)
+    if not cwd:
+        return issues
+
+    project_root = Path(cwd)
+    packages = _discover_top_level_packages(project_root)
+    if not packages:
+        return issues
+
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return issues
+
+    src_dir = project_root / "src"
+    search_root = src_dir if src_dir.is_dir() else project_root
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        if not node.module or (node.level and node.level > 0):
+            continue  # skip relative imports
+
+        parts = node.module.split(".")
+        top_level = parts[0]
+        if top_level not in packages:
+            continue  # not an intra-project import
+
+        # Resolve dotted path to filesystem
+        mod_path = search_root / Path(*parts)
+        mod_file = mod_path.with_suffix(".py")
+        mod_pkg = mod_path / "__init__.py"
+
+        if mod_file.exists() or mod_pkg.exists():
+            continue  # valid import
+
+        # Phantom import — build suggestion from sibling modules
+        parent_dir = mod_path.parent
+        siblings: list[str] = []
+        if parent_dir.is_dir():
+            try:
+                for f in sorted(parent_dir.iterdir()):
+                    if (
+                        f.suffix == ".py"
+                        and f.name != "__init__.py"
+                        and f.is_file()
+                    ):
+                        siblings.append(f.stem)
+                    elif f.is_dir() and (f / "__init__.py").exists():
+                        siblings.append(f.name)
+                    if len(siblings) >= 5:
+                        break
+            except OSError:
+                pass
+
+        parent_dotted = ".".join(parts[:-1])
+        suggestion = ""
+        if siblings:
+            suggestion = (
+                f" Available modules in '{parent_dotted}': "
+                + ", ".join(siblings)
+            )
+
+        issues.append({
+            "validator": "intra_project_imports",
+            "message": (
+                f"Import path '{node.module}' does not resolve to an "
+                f"existing module on disk.{suggestion}"
+            ),
+            "line": node.lineno,
+            "confidence": 0.95,
+        })
+
+    return issues
+
+
+# ---------------------------------------------------------------------------
 # AR-145: Proto Field Reference Validation (subprocess signature)
 # ---------------------------------------------------------------------------
 

@@ -179,6 +179,7 @@ class FeatureContext:
     requirements_text: str = ""
     edit_mode_hint: str | None = None
     existing_target_files: list[str] = field(default_factory=list)
+    has_plan_foundation: bool = False
 
 
 @dataclass
@@ -544,6 +545,7 @@ def _format_system_prompt(
     depth_guidance: str | None = None,
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
+    has_plan_foundation: bool = False,
 ) -> str:
     """Load a design system prompt from YAML and format its placeholders.
 
@@ -560,6 +562,8 @@ def _format_system_prompt(
             any other value (or ``None``) leaves the block empty.
         existing_target_files: Paths of target files that already exist on
             disk — used by the edit-mode block.
+        has_plan_foundation: When ``True``, injects a foundation-mode
+            instruction block via ``{foundation_block}`` (REQ-PD-005).
 
     Returns:
         The fully-formatted system prompt string.
@@ -576,11 +580,24 @@ def _format_system_prompt(
 
     edit_mode_block = _build_edit_mode_block(edit_mode_hint, existing_target_files)
 
+    # REQ-PD-005: Foundation-aware system prompt steering
+    foundation_block = ""
+    if has_plan_foundation:
+        foundation_block = (
+            "\n\n**Foundation Mode:** This task has Plan Ingestion context "
+            "(architecture, risks, verification strategy). Additional Context "
+            "contains FOUNDATION-prefixed sections — use them as your starting "
+            "point. Elaborate and add implementation detail rather than "
+            "regenerating from scratch. Preserve plan-specified API signatures "
+            "and protocol constraints exactly."
+        )
+
     template = get_template("design", template_name)
     return template.format(
         sections_list=section_list,
         depth_line=depth_line,
         edit_mode_block=edit_mode_block,
+        foundation_block=foundation_block,
     )
 
 
@@ -589,11 +606,12 @@ def build_design_system_prompt(
     depth_guidance: str | None = None,
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
+    has_plan_foundation: bool = False,
 ) -> str:
     """Build a dynamic system prompt for fresh design generation."""
     return _format_system_prompt(
         "design_system", sections, depth_guidance,
-        edit_mode_hint, existing_target_files,
+        edit_mode_hint, existing_target_files, has_plan_foundation,
     )
 
 
@@ -608,11 +626,12 @@ def build_refine_system_prompt(
     depth_guidance: str | None = None,
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
+    has_plan_foundation: bool = False,
 ) -> str:
     """Build a system prompt for refining an existing design document."""
     return _format_system_prompt(
         "refine_system", sections, depth_guidance,
-        edit_mode_hint, existing_target_files,
+        edit_mode_hint, existing_target_files, has_plan_foundation,
     )
 
 
@@ -1162,19 +1181,9 @@ class DesignDocumentationPhase:
         Returns:
             Parsed ``DesignDocument``.
         """
-        # Format additional_context preserving structure for nested values
-        if context.additional_context:
-            ctx_parts: list[str] = []
-            for k, v in context.additional_context.items():
-                if isinstance(v, str):
-                    ctx_parts.append(f"**{k}:** {v}")
-                else:
-                    ctx_parts.append(
-                        f"**{k}:**\n{json.dumps(v, indent=2, default=str)}"
-                    )
-            additional_context_str = "\n".join(ctx_parts)
-        else:
-            additional_context_str = "None"
+        # TC-300: Tiered context rendering with progressive disclosure
+        from startd8.contractors.prompt_utils import format_tiered_context
+        additional_context_str = format_tiered_context(context.additional_context)
 
         from startd8.contractors.artisan_phases.prompts import format_constraints
         constraints_str = (
@@ -1213,6 +1222,7 @@ class DesignDocumentationPhase:
                 depth_guidance=context.depth_guidance,
                 edit_mode_hint=context.edit_mode_hint,
                 existing_target_files=context.existing_target_files,
+                has_plan_foundation=context.has_plan_foundation,
             )
             logger.info(
                 "Refining existing design document for '%s' (iteration %d)",
@@ -1226,6 +1236,7 @@ class DesignDocumentationPhase:
                 depth_guidance=context.depth_guidance,
                 edit_mode_hint=context.edit_mode_hint,
                 existing_target_files=context.existing_target_files,
+                has_plan_foundation=context.has_plan_foundation,
             )
             logger.info(
                 "Generating design document for '%s' (iteration %d)",

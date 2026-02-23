@@ -1,8 +1,10 @@
 # Prime Contractor Execution Modes — Implementation Plan
 
-**Version:** 1.0.0
+**Version:** 1.1.0
 **Created:** 2026-02-20
+**Updated:** 2026-02-23
 **Implements:** `PRIME_EXECUTION_MODES_REQUIREMENTS.md` (REQ-PEM-000–018)
+**Progress:** Phase 0, 0a, 1 complete — Phase 2–5 remaining
 
 ---
 
@@ -44,29 +46,30 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 
 ## Functional Requirements
 
-| ID | Requirement | Acceptance Criteria | Phase |
-|----|-------------|---------------------|-------|
-| FR-000 | Edit-first smoke test: trivial constant addition to existing `prime_contractor.py` | `_EDIT_FIRST_VALIDATED = True` added; diff ≤10 lines; all existing tests pass; no existing code altered | 0 |
-| FR-000a | Full-depth OTel tracing verification via Phase 0 trace | All 13 TraceQL queries pass; span hierarchy matches spec; context correctness validated programmatically | 0a |
-| FR-001 | ExecutionMode enum with STANDALONE/PIPELINE values | Enum defined, string-valued, importable from prime_contractor | 1 |
-| FR-002 | ModeConfig frozen dataclass with per-mode defaults | `ModeConfig.for_mode()` returns correct config; `dataclasses.replace()` works | 1 |
-| FR-003 | SeedContext typed container replaces ad-hoc attributes | Property accessors delegate to SeedContext; backward compatibility preserved | 1 |
-| FR-004 | ContextResolutionStrategy protocol with two implementations | Both strategies are protocol-compliant; standalone produces equivalent output to current code | 1–2 |
-| FR-005 | StandaloneContextStrategy extracts current context logic | `gen_context` dict structurally equivalent to current `_generate_code()` output | 2 |
-| FR-006 | PipelineContextStrategy builds structured prompt sections | IMP-P1 through IMP-P5 sections present when seed data is enriched | 2 |
-| FR-007 | Feature queue metadata preservation | `FeatureSpec.from_dict(spec.to_dict()) == spec` for all fields including metadata | 3 |
-| FR-008 | Generation manifest with provenance (pipeline mode) | `generation-manifest.json` written with effective_config, per-feature model, source_checksum | 4 |
-| FR-009 | Staleness detection via source_checksum comparison | Matching checksum reuses; mismatch regenerates; `--force-regenerate` bypasses | 4 |
-| FR-010 | Post-generation validation hookpoint | Validators called when configured; results collected in feature metadata | 4 |
-| FR-011 | CLI --mode flag with auto-detection default | `--mode standalone`, `--mode pipeline`, or auto-detect from seed signals | 5 |
-| FR-012 | Security: path traversal prevention and prompt injection mitigation | All seed file paths validated against project root; user data wrapped in safe delimiters | 2 |
+| ID | Requirement | Acceptance Criteria | Phase | Status |
+|----|-------------|---------------------|-------|--------|
+| FR-000 | Edit-first smoke test: trivial constant addition to existing `prime_contractor.py` | `_EDIT_FIRST_VALIDATED = True` added; diff ≤10 lines; all existing tests pass; no existing code altered | 0 | ✅ Complete |
+| FR-000a | Full-depth OTel tracing verification via Phase 0 trace | All 13 TraceQL queries pass; span hierarchy matches spec; context correctness validated programmatically | 0a | ✅ Complete |
+| FR-001 | ExecutionMode enum with STANDALONE/PIPELINE values | Enum defined, string-valued, importable from prime_contractor | 1 | ✅ Complete |
+| FR-002 | ModeConfig frozen dataclass with per-mode defaults | `ModeConfig.for_mode()` returns correct config; `dataclasses.replace()` works | 1 | ✅ Complete |
+| FR-003 | SeedContext typed container replaces ad-hoc attributes | Property accessors delegate to SeedContext; backward compatibility preserved | 1 | ✅ Complete |
+| FR-004 | ContextResolutionStrategy protocol with two implementations | Both strategies are protocol-compliant; standalone produces equivalent output to current code | 1–2 | ✅ Protocol complete (Phase 1); implementations pending (Phase 2) |
+| FR-005 | StandaloneContextStrategy extracts current context logic | `gen_context` dict structurally equivalent to current `_generate_code()` output | 2 | Pending |
+| FR-006 | PipelineContextStrategy builds structured prompt sections | IMP-P1 through IMP-P5 sections present when seed data is enriched | 2 | Pending |
+| FR-007 | Feature queue metadata preservation | `FeatureSpec.from_dict(spec.to_dict()) == spec` for all fields including metadata | 3 | Pending |
+| FR-008 | Generation manifest with provenance (pipeline mode) | `generation-manifest.json` written with effective_config, per-feature model, source_checksum | 4 | Pending |
+| FR-009 | Staleness detection via source_checksum comparison | Matching checksum reuses; mismatch regenerates; `--force-regenerate` bypasses | 4 | Pending |
+| FR-010 | Post-generation validation hookpoint | Validators called when configured; results collected in feature metadata | 4 | Pending |
+| FR-011 | CLI --mode flag with auto-detection default | `--mode standalone`, `--mode pipeline`, or auto-detect from seed signals | 5 | Pending |
+| FR-012 | Security: path traversal prevention and prompt injection mitigation | All seed file paths validated against project root; user data wrapped in safe delimiters | 2 | Pending |
 
 ---
 
 ## Implementation Phases
 
-### Phase 0: Edit-First Validation (Smoke Test)
+### Phase 0: Edit-First Validation (Smoke Test) ✅ COMPLETE
 
+**Status:** Complete
 **Goal:** Prove the Artisan pipeline can surgically edit `prime_contractor.py` without rewriting it from scratch. This is a blocking prerequisite for all subsequent phases.
 
 **Motivation:** Every prior attempt to implement this plan via the Artisan 8-phase pipeline has failed because the IMPLEMENT phase generates `prime_contractor.py` from scratch (~1800 lines of production code destroyed and replaced with a partial reimplementation). The PCA-5xx edit-first requirements (PCA-500–505) and PCA-6xx enforcement requirements (PCA-600–604) exist specifically to prevent this, but have not been validated against SDK-internal target files. This phase is the smallest possible validation: a single constant addition that proves the pipeline can read, preserve, and minimally modify the existing file.
@@ -107,7 +110,7 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 - File diff is ≤10 lines
 
 **Deliverables:**
-- [ ] `src/startd8/contractors/prime_contractor.py` — contains `_EDIT_FIRST_VALIDATED = True` with only the constant added
+- [x] `src/startd8/contractors/prime_contractor.py` — contains `_EDIT_FIRST_VALIDATED = True` with only the constant added
 
 **Commit gate:** `git diff --stat` shows 1 file changed, ≤3 insertions. All existing tests pass.
 
@@ -115,8 +118,9 @@ This plan introduces a two-mode execution model for the Prime Contractor: **stan
 
 ---
 
-### Phase 0a: Full-Depth OTel Tracing Verification
+### Phase 0a: Full-Depth OTel Tracing Verification ✅ COMPLETE
 
+**Status:** Complete
 **Goal:** Use the trace produced by Phase 0's Artisan run to programmatically verify that the full-depth OTel instrumentation (OT-1xx through OT-6xx, 25 implemented requirements) produces a correct, complete span hierarchy — and that the `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md` design principle is empirically validated via trace queries.
 
 **Motivation:** Phase 0's hello world edit runs through all 8 Artisan phases (PLAN → SCAFFOLD → DESIGN → IMPLEMENT → INTEGRATE → TEST → REVIEW → FINALIZE) with a single task targeting one file. This is the simplest possible end-to-end pipeline execution, making it the ideal controlled environment for verifying that:
@@ -197,8 +201,8 @@ This validates the core claim of `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md`: *"Sil
 - The script is reusable for any Artisan run — not specific to Phase 0
 
 **Deliverables:**
-- [ ] `scripts/verify_otel_trace.py` — Programmatic trace verification script (accepts trace ID, queries Tempo, validates 13 checks, reports pass/fail)
-- [ ] Phase 0 trace passes all 13 verification checks
+- [x] `scripts/verify_otel_trace.py` — Programmatic trace verification script (accepts trace ID, queries Tempo, validates 13 checks, reports pass/fail)
+- [x] Phase 0 trace passes all 13 verification checks
 
 **Commit gate:** `verify_otel_trace.py` exits with code 0 for the Phase 0 trace. All 13 checks pass.
 
@@ -206,8 +210,9 @@ This validates the core claim of `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md`: *"Sil
 
 ---
 
-### Phase 1: Foundation (Mode + SeedContext)
+### Phase 1: Foundation (Mode + SeedContext) ✅ COMPLETE
 
+**Status:** Complete
 **Goal:** Introduce the mode abstraction and typed context without changing any behavior.
 
 **Files modified:**
@@ -317,16 +322,17 @@ This validates the core claim of `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md`: *"Sil
 - `ValidationConfig` and `ValidationResult` are importable with expected fields
 
 **Deliverables:**
-- [ ] `src/startd8/contractors/prime_contractor.py` — ExecutionMode enum, ModeConfig dataclass, SeedContext dataclass, property accessors
-- [ ] `src/startd8/contractors/protocols.py` — ContextResolutionStrategy protocol, ValidationConfig, ValidationResult
-- [ ] `tests/unit/contractors/test_execution_modes.py` — Mode enum, ModeConfig, auto-detection tests
+- [x] `src/startd8/contractors/prime_contractor.py` — ExecutionMode enum, ModeConfig dataclass, SeedContext dataclass, property accessors
+- [x] `src/startd8/contractors/protocols.py` — ContextResolutionStrategy protocol, ValidationConfig, ValidationResult
+- [x] `tests/unit/contractors/test_execution_modes.py` — Mode enum, ModeConfig, auto-detection tests
 
 **Commit gate:** All existing tests pass. No behavior change.
 
 ---
 
-### Phase 2: Context Resolution Strategies
+### Phase 2: Context Resolution Strategies ← NEXT
 
+**Status:** Pending (FR-004 protocol definition done in Phase 1; strategy implementations pending)
 **Goal:** Extract `_generate_code()`'s context-building logic into two strategy implementations.
 
 **Files modified/created:**

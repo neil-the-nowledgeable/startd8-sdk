@@ -1110,6 +1110,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
         parts.extend(self._build_project_identity(chunk))
         parts.extend(self._build_target_files(chunk, is_edit))       # B-1/B-7 fix
+        parts.extend(self._build_importable_modules(chunk))          # AR-150
         parts.extend(self._build_existing_files(_existing))
         if _existing:
             parts.extend(self._build_edit_first_directive(_existing))
@@ -1203,6 +1204,103 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                     "the PRIMARY artifact — do NOT generate test code.\n"
                 )
             text = header + file_list
+
+        return [text, "\n---\n"]
+
+    # -- helper: importable modules (AR-150) --------------------------------
+
+    _MAX_IMPORTABLE_MODULES = 50
+
+    def _build_importable_modules(
+        self, chunk: DevelopmentChunk
+    ) -> List[str]:
+        """AR-150: Ground-truth importable modules for the target packages.
+
+        Lists actual ``.py`` modules on disk for each package directory
+        that contains a target file.  This prevents the LLM from inventing
+        import paths that don't exist (e.g. from a design doc typo).
+
+        Args:
+            chunk: The development chunk whose ``file_targets`` determine
+                which package directories to scan.
+        """
+        project_root = getattr(self, "_project_root", None)
+        if project_root is None:
+            return []
+
+        py_targets = [t for t in chunk.file_targets if t.endswith(".py")]
+        if not py_targets:
+            return []
+
+        # Determine the src prefix used in the project
+        src_dir = project_root / "src"
+        search_root = src_dir if src_dir.is_dir() else project_root
+
+        # Collect unique parent package directories from target files
+        package_dirs: Dict[str, Path] = {}  # dotted_parent -> absolute path
+        for target in py_targets:
+            target_path = Path(target)
+            parent = target_path.parent
+            if str(parent) == ".":
+                continue
+            abs_parent = search_root / parent
+            if not abs_parent.is_dir():
+                # Also try under project_root directly
+                abs_parent = project_root / parent
+                if not abs_parent.is_dir():
+                    continue
+            # Convert path to dotted module prefix
+            # Strip src/ or lib/ prefix for dotted path
+            try:
+                rel = abs_parent.relative_to(search_root)
+            except ValueError:
+                try:
+                    rel = abs_parent.relative_to(project_root)
+                except ValueError:
+                    continue
+            dotted = str(rel).replace(os.sep, ".")
+            package_dirs[dotted] = abs_parent
+
+        if not package_dirs:
+            return []
+
+        # Build module list
+        module_entries: List[str] = []
+        for dotted_prefix, pkg_dir in sorted(package_dirs.items()):
+            try:
+                children = sorted(pkg_dir.iterdir())
+            except OSError:
+                continue
+            for child in children:
+                if (
+                    child.suffix == ".py"
+                    and child.name != "__init__.py"
+                    and child.is_file()
+                ):
+                    module_entries.append(f"- `{dotted_prefix}.{child.stem}`")
+                elif child.is_dir() and (child / "__init__.py").exists():
+                    module_entries.append(f"- `{dotted_prefix}.{child.name}` (package)")
+                if len(module_entries) >= self._MAX_IMPORTABLE_MODULES:
+                    break
+            if len(module_entries) >= self._MAX_IMPORTABLE_MODULES:
+                break
+
+        if not module_entries:
+            return []
+
+        module_list = "\n".join(module_entries)
+
+        text = _format_implement_prompt(
+            "importable_modules", module_list=module_list
+        )
+        if text is None:
+            text = (
+                "## Importable Modules (ground truth)\n"
+                "The following modules ACTUALLY EXIST in the project. When writing\n"
+                "import statements, ONLY use module paths from this list. Do NOT\n"
+                "invent module paths from the design document if they are not listed here.\n\n"
+                + module_list
+            )
 
         return [text, "\n---\n"]
 

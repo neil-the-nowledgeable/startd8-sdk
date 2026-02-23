@@ -2,7 +2,7 @@
 
 **Version:** 1.0.0
 **Created:** 2026-02-20
-**Status:** Draft (pending review)
+**Status:** Partially Implemented — REQ-PEM-000 through REQ-PEM-005 complete (Layers 0–1 and Layer 2 protocol/SeedContext)
 **Depends on:** `PRIME_CONTRACTOR_REQUIREMENTS.md` (REQ-PC-001–014), `PRIME_PROMPT_EXTERNALIZATION_REQUIREMENTS.md` (REQ-PPE-001–006)
 
 ---
@@ -53,6 +53,7 @@ This creates two problems:
 #### REQ-PEM-000: Edit-First Smoke Test
 
 **Priority:** P0 (prerequisite to all other phases)
+**Implementation Status:** ✅ Complete — validated via REQ-EFE-020 Edit-First Enforcement gate (commit dddb9c5)
 **Source files:** `src/startd8/contractors/prime_contractor.py`
 **Depends on:** PCA-503 (Edit-First Directive in IMPLEMENT prompt), PCA-600 (Edit-Mode Classification)
 
@@ -96,6 +97,7 @@ Before any functional changes are made to `prime_contractor.py`, the Artisan pip
 #### REQ-PEM-000a: Full-Depth OTel Tracing Verification via Phase 0 Trace
 
 **Priority:** P0 (prerequisite to all other phases)
+**Implementation Status:** ✅ Complete — OT-100 through OT-507, OT-600 verified (commits 92cb79a, b98b4c7)
 **Source files:** Grafana Tempo trace produced by Phase 0 Artisan run
 **Depends on:** REQ-PEM-000 (edit-first smoke test must pass first), OT-1xx through OT-6xx (implemented OTel instrumentation), `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md` (design principle validation)
 **Validates:** `ARTISAN_OTEL_FULL_DEPTH_TRACING_REQUIREMENTS.md` (OT-100–OT-507, OT-600), `CONTEXT_CORRECTNESS_BY_CONSTRUCTION.md` (prescriptive verification of context correctness)
@@ -214,6 +216,7 @@ This requirement validates the *implemented* OTel instrumentation (OT-1xx throug
 #### REQ-PEM-001: ExecutionMode Enum
 
 **Priority:** P1
+**Implementation Status:** ✅ Complete — `ExecutionMode` enum defined, mode persistence in state file
 **Source files:** `src/startd8/contractors/prime_contractor.py`
 
 The Prime Contractor MUST define an `ExecutionMode` enum with two values:
@@ -235,6 +238,7 @@ The Prime Contractor MUST define an `ExecutionMode` enum with two values:
 #### REQ-PEM-002: Mode Auto-Detection
 
 **Priority:** P2
+**Implementation Status:** ✅ Complete — auto-detection from seed signals (commit cf40b9b, PI-006)
 **Source files:** `src/startd8/contractors/prime_contractor.py`, `scripts/run_prime_workflow.py`
 
 When no explicit mode is provided, the system MUST auto-detect the mode from the context seed:
@@ -264,6 +268,7 @@ When no explicit mode is provided, the system MUST auto-detect the mode from the
 #### REQ-PEM-003: Mode-Specific Configuration
 
 **Priority:** P1
+**Implementation Status:** ✅ Complete — `ModeConfig` frozen dataclass with `for_mode()` factory
 **Source files:** `src/startd8/contractors/prime_contractor.py`
 
 Each execution mode MUST have a configuration profile that governs behavior differences:
@@ -338,6 +343,7 @@ class ModeConfig:
 #### REQ-PEM-004: ContextResolutionStrategy Protocol
 
 **Priority:** P1
+**Implementation Status:** ✅ Complete — protocol defined in `protocols.py` with `ValidationConfig` and `ValidationResult`
 **Source files:** `src/startd8/contractors/prime_contractor.py` (new protocol)
 
 A `ContextResolutionStrategy` protocol MUST define the interface for building generation context:
@@ -355,7 +361,14 @@ Where:
 - `resolve_task_context()` returns the `gen_context` dict that `CodeGenerator.generate()` receives
 - `resolve_validation_config()` returns a `ValidationConfig` specifying validators to run after generation
 
-**Error semantics for protocol methods:** Strategy method implementations MUST distinguish between "resolved successfully with empty data" and "resolution failed due to I/O or parsing error." On successful resolution with empty or missing source data, methods MUST return their normal return type with empty/default values (e.g., `SeedContext` with empty dicts, `ValidationConfig` with empty validator list, `gen_context` dict with only always-present sections). On resolution failure due to I/O errors, permission errors, or parsing errors (e.g., corrupt JSON in context files, unreadable plan document), methods MUST raise `ContextResolutionError` (a new exception subclass of `RuntimeError`) with a descriptive message indicating the failed resource and root cause. The workflow MUST catch `ContextResolutionError` at the call site and handle it according to mode: in standalone mode, log a warning and continue with empty defaults; in pipeline mode, log an error and — depending on which method failed — either continue with degraded context (`resolve_task_context`, `resolve_validation_config`) or abort the workflow (`resolve_seed_context`, since no seed context means no meaningful generation). This distinction enables callers to implement appropriate recovery strategies per mode.
+**Error semantics for protocol methods:** Strategy method implementations MUST distinguish between "resolved successfully with empty data" and "resolution failed due to I/O or parsing error." On successful resolution with empty or missing source data, methods MUST return their normal return type with empty/default values (e.g., `SeedContext` with empty dicts, `ValidationConfig` with empty validator list, `gen_context` dict with only always-present sections). On resolution failure due to I/O errors, permission errors, or parsing errors (e.g., corrupt JSON in context files, unreadable plan document), methods MUST raise `ContextResolutionError` (a new exception subclass of `RuntimeError`) with a descriptive message indicating the failed resource and root cause. The workflow MUST catch `ContextResolutionError` at the call site and handle it according to mode: in standalone mode, log a warning and continue with empty defaults; in pipeline mode, log an error and — depending on which method failed — either continue with degraded context (`resolve_validation_config`) or handle as specified below for `resolve_seed_context` and `resolve_task_context`.
+
+**Pipeline mode error handling by method:**
+- `resolve_seed_context` failure: abort the workflow, since no seed context means no meaningful generation.
+- `resolve_task_context` failure: the workflow MUST mark the feature as `failed` (not attempt generation with degraded context), log the error with full exception details, and continue to the next feature. Generation with incomplete context risks producing subtly wrong code that passes compilation but violates domain constraints. The feature's status in the generation manifest MUST be recorded as `"failed"` with the `ContextResolutionError` message captured in the feature's manifest entry.
+- `resolve_validation_config` failure: continue with degraded context (empty validator list), since validation is a quality gate, not a generation prerequisite.
+
+This distinction enables callers to implement appropriate recovery strategies per mode.
 
 **Strategy initialization:** Strategy implementations MAY accept configuration via `__init__`. The workflow MUST pass `project_root: Path` and `output_dir: Path` to the strategy constructor. `project_root` is required for path traversal validation (REQ-PEM-018), and `output_dir` is required for manifest reading during staleness detection (REQ-PEM-013). The protocol defines only the three resolution methods; constructor signatures are implementation-specific and not constrained by the protocol.
 
@@ -382,13 +395,15 @@ Validators MUST come from a pre-approved, code-defined registry — never from s
 - `PrimeContractorWorkflow` accepts an optional `context_strategy` parameter; defaults based on `ExecutionMode`
 - Both strategy implementations accept `project_root: Path` and `output_dir: Path` as constructor parameters
 - `ContextResolutionError` is defined and raised on I/O or parsing failures within strategy methods
-- Callers handle `ContextResolutionError` with mode-appropriate recovery (standalone: warn + defaults; pipeline: error + degrade or abort)
+- Callers handle `ContextResolutionError` with mode-appropriate recovery (standalone: warn + defaults; pipeline: error + degrade or abort as specified per method)
+- In pipeline mode, `resolve_task_context` failure marks the feature as `failed` and continues to the next feature (does not attempt generation with incomplete context)
 
 ---
 
 #### REQ-PEM-005: SeedContext Dataclass
 
 **Priority:** P1
+**Implementation Status:** ✅ Complete — `SeedContext` dataclass with property accessors, lifecycle enforcement
 **Source files:** `src/startd8/contractors/prime_contractor.py` or new `context_resolution.py`
 
 Seed-level context MUST be stored in a typed `SeedContext` dataclass, replacing the current pattern of ad-hoc instance attributes:
@@ -668,8 +683,8 @@ In pipeline mode, after all features are processed, the workflow MUST write `gen
       "model": "anthropic:claude-sonnet-4-20250514",
       "validators_run": ["import_dependency", "placeholder_detection"],
       "validator_results": {
-        "import_dependency": "pass",
-        "placeholder_detection": "warn"
+        "import_dependency": {"outcome": "pass", "findings": []},
+        "placeholder_detection": {"outcome": "warn", "findings": ["Missing import: os.path in generated auth.py"]}
       }
     }
   },
@@ -688,6 +703,14 @@ In pipeline mode, after all features are processed, the workflow MUST write `gen
 
 **Schema version compatibility:** The manifest MUST include a `schema_version` field. Consumers MUST handle manifests with unknown `schema_version` by logging a warning and skipping staleness checks (best-effort read, not hard failure). This enables forward compatibility when schema evolves.
 
+**Validator results schema:** The `validator_results` object MUST capture both the outcome and diagnostic findings for each validator. Each validator entry MUST be an object with `outcome` (string: `"pass"`, `"warn"`, or `"fail"`) and `findings` (array of strings: human-readable diagnostic messages from the `ValidationResult.findings` field). This ensures the manifest — as the only persistent record of validation results consumed by Stage 7 validators and developers — contains sufficient diagnostic detail without requiring downstream consumers to re-run validation. Example:
+```json
+"validator_results": {
+  "import_dependency": {"outcome": "pass", "findings": []},
+  "placeholder_detection": {"outcome": "warn", "findings": ["Placeholder 'TODO' found in generated auth.py line 42"]}
+}
+```
+
 **I/O error handling:** A failure to write `generation-manifest.json` due to an I/O error MUST be logged as an error but MUST NOT cause the entire workflow to fail. Generation results are preserved regardless of manifest write success.
 
 **File permissions:** The manifest MUST be written with restrictive permissions (0o600) since it contains cost data that may be sensitive in pipeline deployments.
@@ -700,6 +723,7 @@ In pipeline mode, after all features are processed, the workflow MUST write `gen
 - Manifest is machine-readable (JSON) for downstream pipeline stages
 - `effective_config` reflects final ModeConfig including CLI overrides
 - `force_regenerate` field accurately reflects whether the flag was used
+- `validator_results` per feature includes both `outcome` and `findings` (not just outcome string)
 - System MUST handle manifests with unknown schema versions by logging warning and skipping staleness check
 
 ---
@@ -872,8 +896,9 @@ All external inputs from the seed file MUST be validated and sanitized before us
 - The seed file MUST NOT be able to specify arbitrary validator class names or paths (prevents RCE)
 - Validator names in `ValidationConfig` are looked up against the registry; unknown names are logged and skipped
 
-**State file locking:**
+**State file security:**
 - `.prime_contractor_state.json` MUST use file-level locking (e.g., `fcntl.flock`) for resumability to prevent corruption from concurrent access
+- `.prime_contractor_state.json` MUST be written with restrictive permissions (0o600) to prevent tampering with execution state in pipeline deployments. The state file contains the execution mode, seed checksum, and feature queue status — tampering could skip features, change the execution mode, or corrupt the resume state.
 
 **Acceptance criteria:**
 - Path traversal attack on `context_files` raises error and is logged
@@ -882,6 +907,7 @@ All external inputs from the seed file MUST be validated and sanitized before us
 - System prompt includes instruction to treat delimited content as non-instructional
 - Arbitrary validator names from seed are rejected (not dynamically loaded)
 - Concurrent state file access does not corrupt state
+- `.prime_contractor_state.json` is written with 0o600 permissions
 
 ---
 
@@ -981,6 +1007,9 @@ All external inputs from the seed file MUST be validated and sanitized before us
 | 50 | Plan context extraction finds feature-name heading match | REQ-PEM-007 | Pipeline |
 | 51 | Plan context extraction falls back to first 2000 chars when no heading match | REQ-PEM-007 | Pipeline |
 | 52 | Spec completeness check skipped when _enrichment absent | REQ-PEM-008 | Both |
+| 53 | Pipeline mode resolve_task_context failure marks feature as failed and continues | REQ-PEM-004 | Pipeline |
+| 54 | Generation manifest validator_results includes outcome and findings per validator | REQ-PEM-012 | Pipeline |
+| 55 | `.prime_contractor_state.json` written with 0o600 permissions | REQ-PEM-018 | Both |
 
 ---
 
@@ -1120,6 +1149,9 @@ All areas have reached the substantially addressed threshold.
 | R1-F3 | Specify the plan document excerpt extraction algorithm for the plan_context section in REQ-PEM-007 |  | The requirement says 'feature-specific excerpt from plan document' without defining extraction semantics. Plan documents can be thousands of lines, and implementations will diverge significantly — some including the entire document (wasting LLM tokens), others using brittle heuristics. Specifying a concrete algorithm (feature name match in headings with fallback to first N characters) makes the requirement implementable and testable. This directly affects generation quality, which is the core purpose of pipeline mode. | 2026-02-23 03:11:56 UTC |
 | R1-F4 | Specify the data flow for resolved_parameters in find_missing_parameters() — where the dict comes from and skip conditions when enrichment is absent |  | REQ-PEM-008 defines find_missing_parameters() with a resolved_parameters parameter but no requirement specifies how this dict is populated. The function is a text-only utility, but its callers need to know the data source. Specifying that resolved_parameters is derived from feature.metadata['_enrichment'] (the canonical enrichment location per REQ-PEM-009) and that the check is skipped when enrichment is absent completes the data flow chain and makes the feature implementable. | 2026-02-23 03:11:56 UTC |
 | R1-F6 | Specify property accessor behavior when SeedContext has not yet been initialized (before seed loading) |  | REQ-PEM-017 specifies property accessors that delegate to SeedContext but doesn't address the temporal gap between workflow construction and seed loading. Code that checks seed properties during construction (a reasonable pattern for conditional setup logic) would encounter an AttributeError. Specifying that accessors return empty defaults before initialization is consistent with the standalone mode's graceful degradation principle and prevents a class of initialization-order bugs. | 2026-02-23 03:11:56 UTC |
+| R1-F1 | Specify that `resolve_task_context` failure in pipeline mode marks the feature as `failed` without attempting generation, rather than generating with undefined 'degraded context'. |  | This is the requirements-side formulation of R1-S1 and addresses the same genuine gap. The current text says 'continue with degraded context' but generating code from incomplete context risks producing subtly wrong output that passes compilation but violates domain constraints. Marking the feature as failed and moving on is the safer and more predictable behavior. This should be merged with R1-S1 during application. | 2026-02-23 17:20:43 UTC |
+| R1-F3 | Require restrictive file permissions (0o600) for `.prime_contractor_state.json` to match the manifest's permission requirements. |  | This is a genuine security gap. The state file contains the execution mode, seed checksum, and feature queue status. In a pipeline deployment, tampering with the state file could skip features, change the execution mode, or corrupt the resume state. If REQ-PEM-012 mandates 0o600 for the manifest due to cost data sensitivity, the state file warrants the same protection for execution integrity. This is a low-cost, high-value addition to REQ-PEM-018. | 2026-02-23 17:20:43 UTC |
+| R1-F4 | Expand the manifest's `validator_results` schema to include the `findings` list from `ValidationResult`, not just the summary outcome string. |  | This is a real observability gap. REQ-PEM-004 defines `ValidationResult` with `findings: List[str]` but REQ-PEM-012's manifest example only shows `"import_dependency": "pass"`. The manifest is the only persistent record of validation results and is consumed by Stage 7 validators and developers. Omitting findings forces downstream consumers to re-run validation to get diagnostic details, defeating the purpose of recording results. The expanded schema is a natural consequence of the existing ValidationResult type. | 2026-02-23 17:20:43 UTC |
 
 ### Appendix B: Rejected Suggestions (with Rationale)
 
@@ -1190,6 +1222,8 @@ All areas have reached the substantially addressed threshold.
 | R1-F4 | Acknowledge fcntl.flock advisory-only limitations and add NFS filesystem detection with warnings |  | R7-S3 (Windows compatibility for fcntl.flock) was already rejected with the rationale that the codebase targets Unix-like systems. The NFS concern is a valid operational consideration but adding filesystem type detection and NFS-specific warnings is implementation-level defensive coding, not a requirements specification concern. The existing requirement for file-level locking is sufficient; the implementation can choose an appropriate locking library. | 2026-02-22 15:35:03 UTC |
 | R1-F1 | Change resolve_task_context() return type from dict to OrderedDict or typed dataclass to enforce section ordering |  | As noted in the companion R1-S8 rejection, Python dicts preserve insertion order since 3.7. The requirements already list sections in a specific order. Changing to OrderedDict adds a type import for no behavioral change, and a TaskContext dataclass would over-constrain the interface — the number and names of sections may evolve as pipeline context grows. The current dict return type with documented section ordering is sufficient and more flexible. | 2026-02-23 03:11:56 UTC |
 | R1-F5 | Change manifest write from end-of-workflow to incremental per-feature updates for long-running workflow observability |  | The current design intentionally writes the manifest after all features are processed, producing a consistent, complete provenance record. Incremental manifest updates introduce complexity: partial manifests on disk during execution could be read by concurrent pipeline stages or monitoring tools, requiring consumers to handle incomplete data. The existing .prime_contractor_state.json already provides per-feature progress tracking and resume capability. Adding incremental manifest writes duplicates this responsibility and complicates the atomic write requirement (R1-S6). Operators needing real-time progress should use the state file or OTel spans. | 2026-02-23 03:11:56 UTC |
+| R1-F2 | Clarify whether the Prime Contractor or the lead contractor workflow owns the spec-to-draft validation integration point. |  | REQ-PEM-008 already specifies the source file as `lead_contractor_workflow.py` and states it runs 'after _create_spec() and before _create_draft()'. The lead contractor workflow is the component that orchestrates spec/draft phases — this is the correct integration point. The Prime Contractor delegates to the lead contractor workflow, which handles the validation internally. The requirement header and content are consistent. This was also addressed by the accepted R4-F3 which ensured the implementation plan includes this file. | 2026-02-23 17:20:43 UTC |
+| R1-F5 | Specify the lifecycle timing of staleness detection relative to feature queue initialization, and define that matching checksums skip all feature generation entirely. |  | The existing requirements already cover this implicitly. REQ-PEM-013 says 'before reusing cached generation results' which naturally places it before feature generation. The staleness check operates on the seed-level checksum, not per-feature — it's inherently an all-or-nothing check. The workflow lifecycle (seed loading → staleness check → feature generation) is the obvious implementation order. Additionally, test #16 already specifies 'zero LLM API calls, no file modifications' for matching checksums, which validates the skip behavior. Adding explicit lifecycle anchoring is redundant with the existing acceptance criteria. | 2026-02-23 17:20:43 UTC |
 
 ### Appendix C: Incoming Suggestions (Untriaged, append-only)
 
@@ -1510,4 +1544,19 @@ All areas have reached the substantially addressed threshold.
 | R1-F4 | validation | medium | REQ-PEM-008 `find_missing_parameters()` has no specification for what constitutes `resolved_parameters` — where does this dict come from and what keys/values does it contain? | The function signature shows `resolved_parameters: Dict[str, str]` but no requirement specifies how this dict is populated. Is it derived from `feature.metadata["_enrichment"]`? Constructed from `SeedContext` fields? The data flow from enrichment → resolved_parameters → find_missing_parameters is unspecified. | REQ-PEM-008: add: "The `resolved_parameters` dict is constructed from `feature.metadata['_enrichment']` by extracting all key-value pairs where the value is a non-empty string. If `_enrichment` is absent or empty, the spec completeness check is skipped." | Test: feature with _enrichment containing 3 parameters; verify all 3 are checked against spec text |
 | R1-F5 | ops | medium | REQ-PEM-012 specifies `generation-manifest.json` written after "all features are processed" but doesn't address incremental manifest updates for long-running workflows | A 50-feature pipeline run could take hours. If the manifest is only written at the end, operators have no visibility into progress. An incremental manifest (updated after each feature) provides real-time monitoring and enables partial result recovery. The current requirement explicitly says "after all features are processed" which prevents this. | REQ-PEM-012: consider changing to "MUST be updated after each feature completes, with a final write after all features are processed" or add a separate progress file | Test: after feature N completes, manifest on disk reflects features 1..N with accurate status |
 | R1-F6 | completeness | medium | REQ-PEM-017 property accessors delegate to SeedContext but no requirement specifies what happens when `workflow.seed_context` itself is None (e.g., before seed loading) | The property accessors assume `self.seed_context` exists, but during workflow construction before `load_seed_context()` is called, the attribute may not be set. Accessing `workflow.seed_onboarding` before initialization should have defined behavior (return empty dict, raise AttributeError, or lazy-initialize). | REQ-PEM-017: add: "Property accessors MUST return empty defaults (empty dict for dict fields, None for optional fields) if SeedContext has not yet been initialized. This supports code that checks seed properties during construction." | Test: access `workflow.seed_onboarding` before seed loading; verify returns `{}` not raises |
+
+#### Review Round R1
+
+- **Reviewer**: claude-4 (claude-opus-4-6)
+- **Date**: 2026-02-23 17:19:49 UTC
+- **Scope**: Architecture-focused review (Feature Requirements)
+
+#### Feature Requirements Suggestions
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | interfaces | high | REQ-PEM-004 error recovery in pipeline mode says `resolve_task_context` failure should "continue with degraded context" but doesn't define what degraded context looks like — is it the standalone strategy's output, an empty dict, or the partially-resolved dict up to the failure point? | The fallback behavior on per-feature context resolution failure directly affects generation quality. "Degraded context" could mean anything from "empty gen_context" (which would produce garbage) to "standalone-equivalent context" (which would produce lower-quality but functional output). Without specification, implementations will diverge. | REQ-PEM-004: add: "On `resolve_task_context` failure in pipeline mode, the workflow MUST mark the feature as `failed` (not attempt generation with degraded context), log the error, and continue to the next feature. Generation with incomplete context risks producing subtly wrong code that passes compilation but violates domain constraints." | Test: pipeline mode, resolve_task_context raises ContextResolutionError; verify feature is marked failed, no generation attempted, next feature proceeds |
+| R1-F2 | validation | high | REQ-PEM-008 spec-to-draft validation is specified for pipeline mode only, with source file `lead_contractor_workflow.py`, but the actual integration point is ambiguous — does the Prime Contractor invoke this validation, or does the lead contractor workflow invoke it independently? | The "Source files" header says `lead_contractor_workflow.py` but the requirement is under the Prime Contractor Execution Modes document. If the lead contractor workflow is a separate component that the Prime Contractor delegates to, the validation should be documented as a callback or hook point. If the Prime Contractor owns this validation, the source file is wrong. | REQ-PEM-008: clarify integration architecture: "This validation is invoked by `PrimeContractorWorkflow` during its spec-to-draft transition, regardless of which contractor workflow implementation handles the actual spec/draft generation. The Prime Contractor passes the `resolved_parameters` to the validation function and injects findings into the drafter's context." | Implementation review: verify validation is called from Prime Contractor, not embedded in lead contractor |
+| R1-F3 | security | medium | REQ-PEM-018 requires file permissions 0o600 for the manifest but doesn't specify permissions for `.prime_contractor_state.json`, which contains execution state including mode, checksum, and feature queue status | The state file contains operational data that could be exploited in a pipeline environment (e.g., modifying the state file to skip features or change the execution mode). If the manifest warrants 0o600 for cost data sensitivity, the state file warrants similar protection for integrity. | REQ-PEM-018: add: "`.prime_contractor_state.json` MUST be written with restrictive permissions (0o600) to prevent tampering with execution state in pipeline deployments." | Test: state file permissions after write are 0o600; test: state file with wrong permissions on read triggers warning |
+| R1-F4 | completeness | medium | REQ-PEM-012 manifest `validator_results` shows simple string outcomes (`"pass"`, `"warn"`) per validator, but `ValidationResult` dataclass in REQ-PEM-004 includes `findings: List[str]` — the manifest schema doesn't capture findings, losing diagnostic information for downstream consumers | Stage 7 validators and developers debugging failed runs need access to the specific findings (e.g., "Missing import: `os.path`"), not just pass/fail status. The manifest is the only persistent record of validation results, so omitting findings creates an observability gap. | REQ-PEM-012: expand `validator_results` schema to include findings: `"import_dependency": {"outcome": "warn", "findings": ["Missing import: os.path in generated auth.py"]}` | Test: validation produces findings; verify manifest includes full findings array per validator |
+| R1-F5 | ops | medium | REQ-PEM-013 staleness detection reads `generation-manifest.json` but doesn't specify the timing relative to feature queue initialization — if staleness is checked before features are loaded, the system can't do per-feature staleness; if checked after, it may have already loaded features unnecessarily | The requirement says "before reusing cached generation results" but doesn't anchor this to a specific point in the workflow lifecycle. Early staleness detection (before feature loading) enables fast skip of the entire workflow. Late detection (per-feature) enables partial reuse. The current requirement implies all-or-nothing via seed checksum, but the lifecycle position should be explicit. | REQ-PEM-013: add: "Staleness detection MUST be performed after seed loading and before feature generation begins. If the seed checksum matches the manifest, the workflow MUST skip all feature generation and exit with success, preserving the existing output files." | Test: matching checksum; verify zero features processed, existing output untouched, exit code 0 |
 

@@ -28,7 +28,8 @@ prompts:
       - When requirements or the task description specify exact parameter values (e.g., user="postgres", embedding_service=..., specific model names, system packages), carry these through verbatim into the design document. Do not substitute, generalize, or omit specific parameter values from requirements.
       - When a service explicitly does NOT use a capability (e.g., "no OpenTelemetry"), state this in the design document so the implementation phase does not add it.
       {depth_line}
-    placeholders: [sections_list, depth_line, edit_mode_block]
+      {foundation_block}
+    placeholders: [sections_list, depth_line, edit_mode_block, foundation_block]
 
   design_user:
     description: "User prompt for DESIGN generation"
@@ -75,7 +76,8 @@ prompts:
       - If you do NOT add files beyond the Target File, omit the ### Files Touched section entirely.
       {edit_mode_block}
       {depth_line}
-    placeholders: [sections_list, depth_line, edit_mode_block]
+      {foundation_block}
+    placeholders: [sections_list, depth_line, edit_mode_block, foundation_block]
 
   refine_user:
     description: "User prompt for refining an existing design document"

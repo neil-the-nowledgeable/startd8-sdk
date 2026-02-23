@@ -398,3 +398,219 @@ class TestDockerfileCoherence:
         metadata = {"transport_protocol": "grpc"}
         issues = validate_dockerfile_coherence(code, "Dockerfile", metadata)
         assert issues == []
+
+
+# ---------------------------------------------------------------------------
+# AR-150: Intra-Project Import Path Validation
+# ---------------------------------------------------------------------------
+
+class TestIntraProjectImports:
+    """Tests for ``validate_intra_project_imports`` (AR-150)."""
+
+    def test_no_cwd_returns_empty(self):
+        """When enrichment has no cwd, returns no issues."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        code = "from mypackage.foo import bar\n"
+
+        class Stub:
+            cwd = None
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert issues == []
+
+    def test_no_packages_returns_empty(self, tmp_path: Path):
+        """When no Python packages exist under src/, returns no issues."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        (tmp_path / "src").mkdir()
+        code = "from mypackage.foo import bar\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert issues == []
+
+    def test_valid_import_passes(self, tmp_path: Path):
+        """Import to an existing module produces no issues."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        pkg = src / "mypkg" / "submod"
+        pkg.mkdir(parents=True)
+        (src / "mypkg" / "__init__.py").touch()
+        (pkg / "__init__.py").touch()
+        (pkg / "real_module.py").write_text("x = 1\n", encoding="utf-8")
+
+        code = "from mypkg.submod.real_module import x\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert issues == []
+
+    def test_phantom_import_detected(self, tmp_path: Path):
+        """Import to a non-existent module is flagged."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        pkg = src / "mypkg" / "submod"
+        pkg.mkdir(parents=True)
+        (src / "mypkg" / "__init__.py").touch()
+        (pkg / "__init__.py").touch()
+        (pkg / "real_module.py").write_text("x = 1\n", encoding="utf-8")
+
+        code = "from mypkg.submod.phantom_module import x\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert len(issues) == 1
+        assert issues[0]["validator"] == "intra_project_imports"
+        assert "phantom_module" in issues[0]["message"]
+        assert issues[0]["confidence"] == 0.95
+
+    def test_phantom_import_suggests_siblings(self, tmp_path: Path):
+        """Phantom import suggestion lists sibling modules."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        pkg = src / "mypkg" / "contractors"
+        pkg.mkdir(parents=True)
+        (src / "mypkg" / "__init__.py").touch()
+        (pkg / "__init__.py").touch()
+        (pkg / "prime_contractor.py").write_text("x = 1\n", encoding="utf-8")
+        (pkg / "artisan_contractor.py").write_text("y = 2\n", encoding="utf-8")
+
+        code = "from mypkg.contractors.execution_modes import run\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert len(issues) == 1
+        assert "artisan_contractor" in issues[0]["message"]
+        assert "prime_contractor" in issues[0]["message"]
+
+    def test_package_init_import_passes(self, tmp_path: Path):
+        """Import from a package (resolved via __init__.py) passes."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        sub = src / "mypkg" / "sub"
+        sub.mkdir(parents=True)
+        (src / "mypkg" / "__init__.py").touch()
+        (sub / "__init__.py").write_text("x = 1\n", encoding="utf-8")
+
+        code = "from mypkg.sub import x\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert issues == []
+
+    def test_relative_imports_skipped(self, tmp_path: Path):
+        """Relative imports (from .foo import bar) are not checked."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        (src / "mypkg").mkdir(parents=True)
+        (src / "mypkg" / "__init__.py").touch()
+
+        code = "from .nonexistent import bar\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert issues == []
+
+    def test_external_imports_skipped(self, tmp_path: Path):
+        """Imports for non-project packages are not checked."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        (src / "mypkg").mkdir(parents=True)
+        (src / "mypkg" / "__init__.py").touch()
+
+        code = "from requests.adapters import HTTPAdapter\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert issues == []
+
+    def test_syntax_error_returns_empty(self, tmp_path: Path):
+        """Code with syntax errors returns no issues (graceful)."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        (src / "mypkg").mkdir(parents=True)
+        (src / "mypkg" / "__init__.py").touch()
+
+        code = "from mypkg.bad import (\n"  # unclosed paren
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert issues == []
+
+    def test_multiple_phantom_imports(self, tmp_path: Path):
+        """Multiple phantom imports each produce a separate issue."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        src = tmp_path / "src"
+        pkg = src / "mypkg"
+        pkg.mkdir(parents=True)
+        (pkg / "__init__.py").touch()
+        (pkg / "real.py").write_text("x = 1\n", encoding="utf-8")
+
+        code = textwrap.dedent("""\
+            from mypkg.phantom_a import foo
+            from mypkg.real import x
+            from mypkg.phantom_b import bar
+        """)
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert len(issues) == 2
+        messages = [i["message"] for i in issues]
+        assert any("phantom_a" in m for m in messages)
+        assert any("phantom_b" in m for m in messages)
+
+    def test_packages_at_project_root(self, tmp_path: Path):
+        """Packages at project root (no src/ dir) are discovered."""
+        from startd8.contractors.artisan_phases.self_consistency import (
+            validate_intra_project_imports,
+        )
+        pkg = tmp_path / "mypkg"
+        pkg.mkdir()
+        (pkg / "__init__.py").touch()
+        (pkg / "real.py").write_text("x = 1\n", encoding="utf-8")
+
+        code = "from mypkg.fake import x\n"
+
+        class Stub:
+            cwd = str(tmp_path)
+
+        issues = validate_intra_project_imports(code, Stub())
+        assert len(issues) == 1
+        assert "fake" in issues[0]["message"]

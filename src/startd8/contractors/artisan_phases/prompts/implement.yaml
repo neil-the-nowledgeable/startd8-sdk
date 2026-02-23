@@ -26,6 +26,17 @@ prompts:
       {file_list}
     placeholders: [file_list]
 
+  importable_modules:
+    description: "Ground-truth importable modules in the target package (AR-150)"
+    template: |
+      ## Importable Modules (ground truth)
+      The following modules ACTUALLY EXIST in the project. When writing
+      import statements, ONLY use module paths from this list. Do NOT
+      invent module paths from the design document if they are not listed here.
+
+      {module_list}
+    placeholders: [module_list]
+
   existing_files:
     description: "Existing file contents section (PCA-503)"
     template: |

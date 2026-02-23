@@ -24,6 +24,7 @@ from typing import Any
 import yaml
 
 from ...prompt_utils import format_constraints  # noqa: F401 (re-export)
+from ...prompt_utils import format_tiered_context  # noqa: F401 (re-export)
 
 logger = logging.getLogger(__name__)
 
