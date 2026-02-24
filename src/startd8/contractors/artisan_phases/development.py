@@ -1292,6 +1292,18 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             if len(module_entries) >= self._MAX_IMPORTABLE_MODULES:
                 break
 
+        # AR-822: Supplement with SCAFFOLD module inventory for project-wide coverage
+        scaffold_inventory = chunk.metadata.get("module_inventory", [])
+        if scaffold_inventory:
+            already_listed = {e.split("`")[1].split(".")[0] for e in module_entries if "`" in e}
+            new_entries = [
+                f"- `{m}` (package)" for m in scaffold_inventory
+                if m.split(".")[0] not in already_listed
+            ]
+            if new_entries:
+                remaining = self._MAX_IMPORTABLE_MODULES - len(module_entries)
+                module_entries.extend(new_entries[:remaining])
+
         if not module_entries:
             return []
 
@@ -1308,6 +1320,9 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "invent module paths from the design document if they are not listed here.\n\n"
                 + module_list
             )
+
+        if scaffold_inventory:
+            text += "\nImport ONLY from the modules listed above. Do not invent import paths."
 
         return [text, "\n---\n"]
 
@@ -1495,13 +1510,15 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if not design_doc:
             return []
 
-        # Single-pass: count lines and ## section headers together.
-        design_lines = 0
-        design_sections = 0
-        for line in design_doc.strip().splitlines():
-            design_lines += 1
-            if line.strip().startswith("##"):
-                design_sections += 1
+        # Read cached metrics from handoff (computed once in _tasks_to_chunks).
+        # Fallback to local parse for chunks built by older code.
+        design_lines = chunk.metadata.get("_design_lines", 0)
+        design_sections = chunk.metadata.get("_design_sections", 0)
+        if not design_lines:
+            for line in design_doc.strip().splitlines():
+                design_lines += 1
+                if line.strip().startswith("##"):
+                    design_sections += 1
 
         # B-5 fix: use edit framing when existing files are present,
         # greenfield framing ONLY when there are truly no existing files.
@@ -1747,7 +1764,9 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 # ── Layer 3: Post-generation scope validation ────────────
                 design_doc = chunk.metadata.get("design_document")
                 if design_doc and result.generated_files:
-                    design_lines = len(design_doc.strip().splitlines())
+                    design_lines = chunk.metadata.get("_design_lines") or len(
+                        design_doc.strip().splitlines()
+                    )
                     total_output_lines = 0
                     for gen_file in result.generated_files:
                         try:
@@ -2346,7 +2365,9 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             # ── Post-generation scope validation ──────────────────────
             design_doc = chunk.metadata.get("design_document")
             if design_doc and written_files:
-                design_lines = len(design_doc.strip().splitlines())
+                design_lines = chunk.metadata.get("_design_lines") or len(
+                    design_doc.strip().splitlines()
+                )
                 total_output_lines = 0
                 for gen_file in written_files:
                     try:

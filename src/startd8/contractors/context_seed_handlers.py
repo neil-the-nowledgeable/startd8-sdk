@@ -4651,25 +4651,29 @@ class Test{class_name}:
             # Defense-in-depth: per-task line-count pre-check before the
             # phase-level contract exit validator (BP-3).  Metric aligned
             # with artisan-pipeline.contract.yaml: line_count >= 50.
+            # Pre-compute design doc metrics once (used for DP-2 boundary
+            # check, scope logging, B-5 framing, and post-gen validation).
+            _design_lines = 0
+            _design_sections = 0
             if task_design.get("status") in ("designed", "adopted", "refined"):
-                _line_count = len(design_doc_text.strip().splitlines()) if design_doc_text else 0
-                if not design_doc_text or _line_count < 50:
+                if design_doc_text:
+                    for _dl in design_doc_text.strip().splitlines():
+                        _design_lines += 1
+                        if _dl.strip().startswith("##"):
+                            _design_sections += 1
+                if not design_doc_text or _design_lines < 50:
                     logger.warning(
                         "DESIGN→IMPLEMENT boundary: task %s has status '%s' but "
                         "design_document is empty/trivial (%d lines) — falling back "
                         "to task description only (DP-2: no silent defaults)",
                         task.task_id,
                         task_design.get("status"),
-                        _line_count,
+                        _design_lines,
                     )
                     design_doc_text = None
+                    _design_lines = 0
+                    _design_sections = 0
                 else:
-                    _design_lines = len(design_doc_text.strip().splitlines())
-                    _design_sections = sum(
-                        1
-                        for line in design_doc_text.splitlines()
-                        if line.strip().startswith("##")
-                    )
                     logger.info(
                         "DESIGN→IMPLEMENT boundary: task %s design document "
                         "propagated (%d chars, %d lines, %d sections)",
@@ -4869,20 +4873,13 @@ class Test{class_name}:
                         f"if any __init__.py is missing its own block."
                     )
 
-                # ── Downstream file detection (Fix 2) ────────────────────
-                # If the design doc says a file is for downstream tasks,
-                # tell the drafter explicitly to produce a minimal stub for
-                # it.  This prevents the drafter from omitting it entirely
-                # (thinking "that's someone else's job") and avoids the
-                # expensive retry that won't change its mind.
-                from startd8.contractors.generators.lead_contractor import (
-                    _detect_downstream_files,
-                )
-                downstream = _detect_downstream_files(
-                    task.target_files, design_doc_text or "",
-                )
-                if downstream:
-                    ds_list = ", ".join(downstream)
+                # ── Downstream file detection ──────────────────────────────
+                # Reuse the already-computed downstream_map from Gate 2c
+                # (via _reconcile_design_downstream) instead of re-calling
+                # _detect_downstream_files() on the same design doc text.
+                _task_downstream_prompt = downstream_map.get(task.task_id, [])
+                if _task_downstream_prompt:
+                    ds_list = ", ".join(_task_downstream_prompt)
                     prompt_constraints.append(
                         f"DOWNSTREAM FILE STUBS — the following files are marked "
                         f"as shared/downstream in the design doc: {ds_list}. "
@@ -4893,7 +4890,7 @@ class Test{class_name}:
                     )
                     logger.info(
                         "IMPLEMENT: detected %d downstream files for task %s: %s",
-                        len(downstream), task.task_id, downstream,
+                        len(_task_downstream_prompt), task.task_id, _task_downstream_prompt,
                     )
 
             # ── Gate 2c: shrink file_targets for downstream files ────────
@@ -4984,21 +4981,12 @@ class Test{class_name}:
                     "post_generation_validators": task.post_generation_validators,
                     "title": task.title,
                     "design_document": design_doc_text,
+                    "_design_lines": _design_lines,
+                    "_design_sections": _design_sections,
                     "max_output_tokens": max_output_tokens,
                     "artifact_types_addressed": task.artifact_types_addressed,
                     "downstream_files": task_downstream,
                     "original_target_files": task.target_files if task_downstream else None,
-                    # Fix 2d: parameter_sources filtered by task's artifact types
-                    # BP-5: merge sources for all artifact types (not just first)
-                    "parameter_sources": (
-                        {
-                            atype: (parameter_sources or {}).get(atype, {})
-                            for atype in task.artifact_types_addressed
-                            if atype in (parameter_sources or {})
-                        } if task.artifact_types_addressed else {}
-                    ),
-                    # Fix 3c: semantic_conventions for code generation
-                    "semantic_conventions": semantic_conventions or {},
                     # IMP-7: DESIGN→IMPLEMENT parameter completeness warning
                     "design_completeness_warning": design_completeness_warning,
                     # PCA-300: project architecture for code generation
@@ -5007,8 +4995,6 @@ class Test{class_name}:
                     "plan_context": (plan_context or "")[:4000] or None,
                     # PCA-301/400: service metadata for protocol compliance
                     "service_metadata": service_metadata if service_metadata else None,
-                    # PCA-401: per-task calibration hints
-                    "calibration_hints": (calibration_hints or {}).get(task.task_id) if calibration_hints else None,
                     # PCA-403: cross-feature context accumulation
                     "prior_implementations": (prior_impl_summaries or [])[-3:] if prior_impl_summaries else None,
                     # PCA-404: requirements text for IMPLEMENT prompt

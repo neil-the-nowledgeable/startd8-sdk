@@ -226,8 +226,8 @@ class TestParameterSources:
         assert "parameter_sources" in ac
         assert "dashboard" in ac["parameter_sources"]
 
-    def test_implement_chunk_metadata_includes_parameter_sources(self) -> None:
-        """_tasks_to_chunks should include parameter_sources in chunk metadata."""
+    def test_implement_chunk_metadata_excludes_parameter_sources(self) -> None:
+        """parameter_sources removed from chunk metadata (dead field — never read by _build_*)."""
         task = SeedTask(
             task_id="T1", title="Dashboard", task_type="task",
             story_points=3, priority="high", labels=[], depends_on=[],
@@ -248,9 +248,7 @@ class TestParameterSources:
         )
 
         assert len(chunks) == 1
-        meta = chunks[0].metadata
-        # BP-5: parameter_sources now keyed by artifact type (multi-type support)
-        assert meta["parameter_sources"] == {"dashboard": param_sources["dashboard"]}
+        assert "parameter_sources" not in chunks[0].metadata
 
 
 # ── Fix 3: semantic_conventions ──────────────────────────────────────
@@ -296,8 +294,8 @@ class TestSemanticConventions:
         assert "semantic_conventions" in ac
         assert "metric_prefix" in ac["semantic_conventions"]
 
-    def test_implement_chunk_metadata_includes_semantic_conventions(self) -> None:
-        """_tasks_to_chunks should include semantic_conventions in chunk metadata."""
+    def test_implement_chunk_metadata_excludes_semantic_conventions(self) -> None:
+        """semantic_conventions removed from chunk metadata (dead field — never read by _build_*)."""
         task = SeedTask(
             task_id="T1", title="Dashboard", task_type="task",
             story_points=3, priority="high", labels=[], depends_on=[],
@@ -316,8 +314,7 @@ class TestSemanticConventions:
         )
 
         assert len(chunks) == 1
-        meta = chunks[0].metadata
-        assert meta["semantic_conventions"] == sem_conv
+        assert "semantic_conventions" not in chunks[0].metadata
 
 
 # ── Fix 5: output_conventions ────────────────────────────────────────

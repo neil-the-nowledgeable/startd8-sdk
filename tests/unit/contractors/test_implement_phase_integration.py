@@ -878,8 +878,13 @@ class TestDownstreamFileConstraint:
                 ),
             },
         }
+        # downstream_map mirrors what _reconcile_design_downstream() would
+        # have computed in the real pipeline — _detect_downstream_files()
+        # is only called there now (no longer duplicated in _tasks_to_chunks).
+        downstream_map = {"T1": ["src/pkg/artifact_generators.py"]}
         chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
             [task], design_results=design_results,
+            downstream_map=downstream_map,
         )
         constraints = chunks[0].metadata["prompt_constraints"]
         downstream_constraints = [

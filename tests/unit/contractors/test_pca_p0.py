@@ -766,7 +766,8 @@ class TestPCA401CalibrationHints:
             target_files=["src/api.py"],
         )
 
-    def test_calibration_hint_in_chunk_metadata(self):
+    def test_calibration_hints_excluded_from_chunk_metadata(self):
+        """calibration_hints removed from chunk metadata (dead field — never read by _build_*)."""
         from startd8.contractors.context_seed_handlers import ImplementPhaseHandler
 
         hints = {"T-1": {"style": "functional", "test_first": True}}
@@ -775,9 +776,10 @@ class TestPCA401CalibrationHints:
             calibration_hints=hints,
         )
 
-        assert chunks[0].metadata["calibration_hints"] == {"style": "functional", "test_first": True}
+        assert "calibration_hints" not in chunks[0].metadata
 
-    def test_calibration_hint_none_when_not_present(self):
+    def test_calibration_hints_absent_when_none(self):
+        """calibration_hints not in chunk metadata even when param is None."""
         from startd8.contractors.context_seed_handlers import ImplementPhaseHandler
 
         chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
@@ -785,18 +787,7 @@ class TestPCA401CalibrationHints:
             calibration_hints=None,
         )
 
-        assert chunks[0].metadata["calibration_hints"] is None
-
-    def test_calibration_hint_miss_for_task_id(self):
-        from startd8.contractors.context_seed_handlers import ImplementPhaseHandler
-
-        hints = {"T-2": {"style": "OOP"}}  # Different task_id
-        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
-            [self._make_task("T-1")],
-            calibration_hints=hints,
-        )
-
-        assert chunks[0].metadata["calibration_hints"] is None
+        assert "calibration_hints" not in chunks[0].metadata
 
     def test_plan_context_section_in_task_description(self, tmp_path):
         """PCA-401: _build_task_description includes ## Plan Context section."""
