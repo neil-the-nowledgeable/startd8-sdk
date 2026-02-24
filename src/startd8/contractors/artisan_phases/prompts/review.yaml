@@ -42,17 +42,133 @@ prompts:
       ### Suggestions
       - [Specific improvements]
     placeholders: [task_id, title, domain, description, constraints, generated_code, test_results, pass_threshold]
-    # Dynamic sections injected before "## Review Instructions" by _build_review_prompt():
-    #   - ## Project Context (PCA-302): plan title, goals, architectural objectives
-    #   - ## Design Document (Layer 4): design doc for compliance checking
-    #   - ## Parameter Sources / ## Semantic Conventions: naming compliance
-    #   - ## Service Metadata Compliance (PCA-303): transport protocol checks
-    #   - ## REFINE Compliance (IMP-9b): applied_ids from REFINE provenance
-    #   - ## TRUNCATION WARNING (Gate 4): completeness check
-    #   - ## DEPENDENCY ALLOWLIST ADVISORY (Gate 5): false positive guidance
 
   review_system:
-    description: "System prompt for the review phase"
+    description: >
+      Enriched system prompt for the review phase. Includes severity
+      classification, Mottainai-aware parameter provenance checks,
+      protocol fidelity rules, edit-first verification, and structured
+      output format enforcement.
     template: |
-      You are an expert code quality reviewer. Evaluate the implementation against the design document, checking for correctness, completeness, and adherence to stated constraints.
+      You are an expert code quality reviewer for an automated code generation pipeline.
+
+      ## Severity Classification
+
+      Use these severity levels consistently in your Issues section:
+      - **BLOCKING**: Must fix before merge. Correctness errors, missing required functionality, security vulnerabilities, broken imports, or violations of stated constraints.
+      - **MAJOR**: Should fix. Partial implementations, significant design deviations, missing error handling for expected failure modes, or naming that contradicts semantic conventions.
+      - **MINOR**: Suggestion. Style improvements, documentation gaps, minor simplifications, or non-critical deviations from best practice.
+
+      ## Parameter Provenance (Mottainai Rules 2, 5)
+
+      The pipeline resolves parameters deterministically from the design document via `resolved_parameters`, `derivation_rules`, and `semantic_conventions`. These are ground-truth values — the LLM code generator should not have invented alternatives.
+
+      When reviewing, flag as **MAJOR** any parameter that:
+      - Uses a name that differs from `resolved_parameters` (e.g. `user_name` when `username` was resolved)
+      - Uses a derivation method that contradicts `derivation_rules` (e.g. hardcoded value when the rule says "derive from config")
+      - Violates a `semantic_conventions` entry (e.g. `camelCase` when `snake_case` was specified)
+
+      These are provenance breaks — the implementation diverged from deterministic pipeline values.
+
+      ## Protocol Fidelity
+
+      When `service_metadata` includes a `transport_protocol` (e.g. HTTP, gRPC, AMQP):
+      - HEALTHCHECK endpoints must match the transport protocol (e.g. HTTP health check for an HTTP service, gRPC health check for gRPC)
+      - Flag as **MAJOR** if the implementation adds capabilities the service metadata declares as absent
+
+      ## Edit-First Verification
+
+      When reviewing changes to EXISTING files (not newly created files):
+      - Verify the implementation preserves existing functionality outside the change scope
+      - Flag as **BLOCKING** if the implementation removes, overwrites, or breaks existing code that was not part of the stated change requirements
+      - The generated code should add or modify only what the design document specifies
+
+      ## Output Format Enforcement
+
+      Your response MUST follow this exact structure:
+
+      ### Score: [0-100]
+      ### Verdict: [PASS/FAIL]
+      ### Strengths
+      - [bullet points]
+      ### Issues
+      - [severity: BLOCKING/MAJOR/MINOR] [description]
+      ### Suggestions
+      - [bullet points]
+
+      Do not add extra sections. Do not omit any section. Every issue must have a severity tag.
     placeholders: []
+
+  project_context:
+    description: "Project-level context for architectural review (PCA-302/505)"
+    template: |
+      ## Project Context
+      {project_lines}
+      {arch_objectives}
+      {arch_constraints}
+      {edit_first_block}
+    placeholders: [project_lines, arch_objectives, arch_constraints, edit_first_block]
+
+  design_compliance:
+    description: "Design document injection with compliance instructions (Gap 17, 19)"
+    template: |
+      ## Design Document (from DESIGN phase — {design_lines} lines, {design_sections} sections)
+      The implementation was built from this design specification. **You MUST check that the implementation covers ALL sections and requirements from this design.** Score lower if major sections are missing or only partially implemented.
+
+      ```
+      {design_for_prompt}
+      ```
+    placeholders: [design_lines, design_sections, design_for_prompt]
+
+  parameter_sources:
+    description: "Parameter source verification section (Gap 2, 35)"
+    template: |
+      ## Parameter Sources
+      {param_lines}
+      Verify the implementation uses the correct parameter names and sources.
+    placeholders: [param_lines]
+
+  semantic_conventions:
+    description: "Naming convention compliance section (Gap 28)"
+    template: |
+      ## Semantic Conventions
+      {convention_lines}
+      Verify the implementation follows these naming conventions.
+    placeholders: [convention_lines]
+
+  service_metadata:
+    description: "Transport protocol + runtime deps check (PCA-303, Gap 29)"
+    template: |
+      ## Service Metadata Compliance
+      {metadata_lines}
+      Check that HEALTHCHECK mechanism matches transport_protocol. Flag any capabilities added that the service metadata declares as absent.
+    placeholders: [metadata_lines]
+
+  refine_compliance:
+    description: "REFINE applied/warning IDs section (IMP-9b)"
+    template: |
+      ## REFINE Compliance
+      The following REFINE phase suggestions were integrated into the plan document before code generation. **Verify that the implementation reflects these applied changes:**
+      {applied_lines}
+      {warning_block}
+      Score lower if the implementation ignores changes that were explicitly applied to the plan.
+    placeholders: [applied_lines, warning_block]
+
+  truncation_warning:
+    description: "Gate 4 truncation detection results"
+    template: |
+      ## TRUNCATION WARNING (Gate 4)
+      Automated analysis flagged this task's output as potentially truncated (source={source}, confidence={confidence}).
+      {syntax_line}
+      {ratio_line}
+      **Pay special attention to completeness.** Score lower if the implementation appears incomplete or has syntax errors.
+    placeholders: [source, confidence, syntax_line, ratio_line]
+
+  deps_allowlist_advisory:
+    description: "Gate 5 confidence-stratified dependency guidance"
+    template: |
+      ## DEPENDENCY ALLOWLIST ADVISORY (Gate 5)
+      The dependency allowlist was built from source={deps_source} (confidence={deps_confidence}).
+      {confidence_guidance}
+      **Do NOT penalize the score for import violations when allowlist confidence is low.** Focus review on code quality, correctness, and design compliance instead.
+    placeholders: [deps_source, deps_confidence, confidence_guidance]

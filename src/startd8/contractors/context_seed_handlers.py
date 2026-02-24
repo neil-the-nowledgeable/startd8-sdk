@@ -435,6 +435,8 @@ class HandlerConfig:
     design_lane_peer_token_budget: int = 8000
     # CCD-503: Collision resolution strategy ("warn" | "redesign" | "abort")
     design_collision_strategy: str = "warn"
+    # V2 modular design prompts (single-pass, no dual-review)
+    use_modular_prompts: bool = False
 
     _VALID_COLLISION_STRATEGIES = frozenset({"warn", "redesign", "abort"})
 
@@ -1776,6 +1778,11 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
                                 extension_warnings.append(msg)
                                 logger.warning("SCAFFOLD: %s", msg)
 
+        # AR-821: Collect importable Python module inventory
+        module_inventory = ScaffoldPhaseHandler._collect_module_inventory(project_root)
+        if module_inventory:
+            logger.info("SCAFFOLD: discovered %d importable packages", len(module_inventory))
+
         output = {
             "directories_needed": sorted(dirs_needed),
             "directories_exist": sorted(dirs_exist),
@@ -1786,6 +1793,7 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
             "skipped_targets": skipped_targets,
             "project_root": str(project_root),
             "extension_warnings": extension_warnings,
+            "module_inventory": module_inventory,
         }
 
         # Store scaffold results in context
@@ -1801,6 +1809,30 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
         )
 
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
+
+    @staticmethod
+    def _collect_module_inventory(project_root: Path) -> list[str]:
+        """AR-821: Collect importable Python module names under project_root.
+
+        Walks src/ (or project_root if no src/) for directories
+        containing __init__.py. Returns dotted module paths.
+        """
+        src_dir = project_root / "src"
+        search_root = src_dir if src_dir.is_dir() else project_root
+        modules: list[str] = []
+        try:
+            for init_file in search_root.rglob("__init__.py"):
+                pkg_dir = init_file.parent
+                try:
+                    rel = pkg_dir.relative_to(search_root)
+                    dotted = ".".join(rel.parts)
+                    if dotted:
+                        modules.append(dotted)
+                except ValueError:
+                    continue
+        except OSError as exc:
+            logger.warning("SCAFFOLD: module inventory walk failed: %s", exc)
+        return sorted(set(modules))
 
 
 class DesignPhaseHandler(AbstractPhaseHandler):
@@ -2557,6 +2589,70 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         return result_box["result"]
 
     @staticmethod
+    def _run_v2_generate(
+        backend: Any,
+        prompt: str,
+        system_prompt: str,
+        max_tokens: int | None = None,
+        timeout: float | None = None,
+    ) -> str:
+        """Run backend.generate() in a dedicated thread-owned event loop.
+
+        Mirrors ``_run_design_async`` but invokes a single LLM call
+        (no dual-review, no revision loop) for the v2 modular prompt path.
+        """
+        result_box: dict[str, Any] = {}
+        error_box: dict[str, BaseException] = {}
+        parent_ctx = capture_context()
+        from startd8.contractors.forensic_log import (
+            get_boundary_result,
+            set_boundary_result,
+            reset_boundary_result,
+        )
+        parent_boundary_result = get_boundary_result()
+
+        def _runner() -> None:
+            token = attach_context(parent_ctx)
+            br_token = set_boundary_result(parent_boundary_result)
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    result_box["result"] = loop.run_until_complete(
+                        backend.generate(
+                            prompt,
+                            system_prompt=system_prompt,
+                            max_tokens=max_tokens,
+                        )
+                    )
+                except BaseException as exc:
+                    error_box["error"] = exc
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
+            finally:
+                reset_boundary_result(br_token)
+                detach_context(token)
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            logger.error(
+                "v2 design generate did not complete within %.0fs — "
+                "abandoning background thread (daemon=True)",
+                timeout,
+            )
+            raise TimeoutError(
+                f"v2 design generate did not complete within {timeout}s"
+            )
+
+        if "error" in error_box:
+            raise error_box["error"]
+        return result_box["result"]
+
+    @staticmethod
     def _serialize_result(result: Any) -> dict[str, Any]:
         """Serialize a DesignDocumentResult to a checkpoint-safe dict."""
         return {
@@ -3161,33 +3257,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
             # Real-mode: run design documentation phase per task
             task_calibration = calibration_map.get(task.task_id, {})
-            feature_context = self._task_to_feature_context(
-                task,
-                plan_goals=plan_goals,
-                architectural_context=arch_context,
-                prior_design_summaries=prior_summaries,
-                calibration=task_calibration,
-                design_max_tokens_override=self.config.design_max_tokens,
-                parameter_sources=context.get("parameter_sources", {}),
-                semantic_conventions=context.get("semantic_conventions", {}),
-                prior_design_text=prior_design_text,
-                inv_derivation_rules=inv_derivation_rules,
-                inv_resolved_parameters=inv_resolved_parameters,
-                inv_output_contracts=inv_output_contracts,
-                inv_refine_suggestions=inv_refine_suggestions,
-                inv_plan_document=inv_plan_document,
-                inv_calibration_hints=inv_calibration_hints,
-                inv_open_questions=context.get("onboarding_open_questions"),
-                inv_dependency_graph=context.get("onboarding_dependency_graph"),
-                scaffold_existing_files=context.get("scaffold", {}).get("existing_target_files", []),
-                # CCD-204: Lane-aware design context
-                lane_prior_designs=lane_prior_designs,
-                shared_file_manifest=shared_file_manifest,
-                wave_index=task.wave_index,
-                lane_peer_token_budget=self.config.design_lane_peer_token_budget,
-                task_title_lookup=_task_title_lookup,
-                bridge_context=_bridge_context if _bridge_context else None,
-            )
 
             # Snapshot cost before this task
             backend = self._get_llm_backend()
@@ -3205,15 +3274,92 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
             for _attempt in range(_max_attempts):
                 try:
-                    design_phase = self._get_design_phase()
-                    result = self._run_design_async(
-                        design_phase, feature_context,
-                        timeout=self.config.development_timeout_seconds,
-                    )
-                    task_cost = backend.total_cost_usd - cost_before
-                    total_cost += task_cost
+                    if self.config.use_modular_prompts:
+                        # ── V2: modular prompt + single LLM call ──
+                        # No dual-review, no revision loop.
+                        from startd8.contractors.artisan_phases.design_prompts import (
+                            assemble_design_prompt,
+                        )
+                        _v2_system, _v2_user, _v2_max_tokens = assemble_design_prompt(
+                            task,
+                            plan_goals=plan_goals,
+                            architectural_context=arch_context,
+                            prior_design_summaries=prior_summaries,
+                            calibration=task_calibration,
+                            design_max_tokens_override=self.config.design_max_tokens,
+                            dependency_designs=_dep_designs,
+                            scaffold_existing_files=context.get(
+                                "scaffold", {},
+                            ).get("existing_target_files", []),
+                            staleness_classification=_scaffold.get(
+                                "staleness_classification",
+                            ),
+                            wave_index=task.wave_index,
+                            wave_metadata=context.get("wave_metadata"),
+                            refine_suggestions=inv_refine_suggestions,
+                            open_questions=context.get("onboarding_open_questions"),
+                            calibration_hints=inv_calibration_hints,
+                            complexity_dimensions=context.get("complexity_dimensions"),
+                            prior_design_text=prior_design_text,
+                        )
+                        _v2_raw = self._run_v2_generate(
+                            backend, _v2_user, _v2_system,
+                            max_tokens=_v2_max_tokens,
+                            timeout=self.config.development_timeout_seconds,
+                        )
+                        task_cost = backend.total_cost_usd - cost_before
+                        total_cost += task_cost
+                        serialized = {
+                            "design_document": _v2_raw,
+                            "feature_name": task.title,
+                            "agreed": True,
+                            "iterations": 1,
+                            "completed_at": datetime.datetime.now(
+                                tz=datetime.timezone.utc,
+                            ).isoformat(),
+                            "prompt_version": "v2",
+                        }
+                    else:
+                        # ── V1: monolithic context + DesignDocumentationPhase ──
+                        feature_context = self._task_to_feature_context(
+                            task,
+                            plan_goals=plan_goals,
+                            architectural_context=arch_context,
+                            prior_design_summaries=prior_summaries,
+                            calibration=task_calibration,
+                            design_max_tokens_override=self.config.design_max_tokens,
+                            parameter_sources=context.get("parameter_sources", {}),
+                            semantic_conventions=context.get("semantic_conventions", {}),
+                            prior_design_text=prior_design_text,
+                            inv_derivation_rules=inv_derivation_rules,
+                            inv_resolved_parameters=inv_resolved_parameters,
+                            inv_output_contracts=inv_output_contracts,
+                            inv_refine_suggestions=inv_refine_suggestions,
+                            inv_plan_document=inv_plan_document,
+                            inv_calibration_hints=inv_calibration_hints,
+                            inv_open_questions=context.get("onboarding_open_questions"),
+                            inv_dependency_graph=context.get("onboarding_dependency_graph"),
+                            scaffold_existing_files=context.get(
+                                "scaffold", {},
+                            ).get("existing_target_files", []),
+                            # CCD-204: Lane-aware design context
+                            lane_prior_designs=lane_prior_designs,
+                            shared_file_manifest=shared_file_manifest,
+                            wave_index=task.wave_index,
+                            lane_peer_token_budget=self.config.design_lane_peer_token_budget,
+                            task_title_lookup=_task_title_lookup,
+                            bridge_context=_bridge_context if _bridge_context else None,
+                        )
+                        design_phase = self._get_design_phase()
+                        result = self._run_design_async(
+                            design_phase, feature_context,
+                            timeout=self.config.development_timeout_seconds,
+                        )
+                        task_cost = backend.total_cost_usd - cost_before
+                        total_cost += task_cost
+                        serialized = self._serialize_result(result)
 
-                    serialized = self._serialize_result(result)
+                    # ── Shared post-processing (both v1 and v2) ──
                     serialized["status"] = "refined" if prior_design_text else "designed"
                     serialized["cost"] = task_cost
                     design_results[task.task_id] = serialized
@@ -3238,11 +3384,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         tasks_refined += 1
                     else:
                         tasks_designed += 1
-                    if result.agreed:
+                    if serialized.get("agreed"):
                         tasks_agreed += 1
 
                     # Accumulate cross-task summary for progressive context
-                    doc_text = result.design_document.raw_text
+                    doc_text = serialized["design_document"]
                     first_line = doc_text[:300].split("\n")[0]
                     summary = f"{task.task_id} ({task.title}): {first_line}"
                     prior_summaries.append(summary)
@@ -3262,52 +3408,54 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         )
                     )
 
-                    # REQ-PD-012/014: Foundation coverage + provenance
-                    _foundation_field_keys = [
-                        "plan_architecture", "plan_risks",
-                        "plan_verification_strategy", "refine_suggestions",
-                        "complexity_guidance", "api_signatures",
-                        "transport_protocol", "dependency_designs",
-                        "wave_context", "staleness_guidance",
-                    ]
-                    _fc_additional = feature_context.additional_context
-                    _fc_count = sum(
-                        1 for k in _foundation_field_keys if k in _fc_additional
-                    )
-                    # +1 for requirements_text
-                    if feature_context.requirements_text:
-                        _fc_count += 1
-                    _foundation_coverage = _fc_count / 11.0
-                    design_results[task.task_id]["foundation_coverage"] = _foundation_coverage
-                    if _foundation_coverage < 0.3:
-                        logger.warning(
-                            "DESIGN: task %s foundation_coverage=%.1f%% (<30%%)",
-                            task.task_id, _foundation_coverage * 100,
+                    # REQ-PD-012/014: Foundation coverage + provenance (v1 only —
+                    # v2 modules track their own fragment-level coverage)
+                    if not self.config.use_modular_prompts:
+                        _foundation_field_keys = [
+                            "plan_architecture", "plan_risks",
+                            "plan_verification_strategy", "refine_suggestions",
+                            "complexity_guidance", "api_signatures",
+                            "transport_protocol", "dependency_designs",
+                            "wave_context", "staleness_guidance",
+                        ]
+                        _fc_additional = feature_context.additional_context
+                        _fc_count = sum(
+                            1 for k in _foundation_field_keys if k in _fc_additional
                         )
-                    # REQ-PD-014: Foundation provenance
-                    design_results[task.task_id]["foundation_provenance"] = {
-                        "chain_status": context.get("_pi_design_chain_status", "unknown"),
-                        "fields_consumed": [
-                            k for k in _foundation_field_keys if k in _fc_additional
-                        ] + (["requirements_text"] if feature_context.requirements_text else []),
-                        "foundation_coverage": _foundation_coverage,
-                        "source_checksum_status": context.get("_source_checksum_status", "unavailable"),
-                        "complexity_composite": context.get("complexity_composite"),
-                    }
+                        # +1 for requirements_text
+                        if feature_context.requirements_text:
+                            _fc_count += 1
+                        _foundation_coverage = _fc_count / 11.0
+                        design_results[task.task_id]["foundation_coverage"] = _foundation_coverage
+                        if _foundation_coverage < 0.3:
+                            logger.warning(
+                                "DESIGN: task %s foundation_coverage=%.1f%% (<30%%)",
+                                task.task_id, _foundation_coverage * 100,
+                            )
+                        # REQ-PD-014: Foundation provenance
+                        design_results[task.task_id]["foundation_provenance"] = {
+                            "chain_status": context.get("_pi_design_chain_status", "unknown"),
+                            "fields_consumed": [
+                                k for k in _foundation_field_keys if k in _fc_additional
+                            ] + (["requirements_text"] if feature_context.requirements_text else []),
+                            "foundation_coverage": _foundation_coverage,
+                            "source_checksum_status": context.get("_source_checksum_status", "unavailable"),
+                            "complexity_composite": context.get("complexity_composite"),
+                        }
 
                     # Write design doc to output_dir if configured
                     if self.output_dir:
                         out_path = Path(self.output_dir) / f"{task.task_id}-design.md"
                         out_path.parent.mkdir(parents=True, exist_ok=True)
-                        out_path.write_text(
-                            result.design_document.raw_text, encoding="utf-8"
-                        )
+                        out_path.write_text(doc_text, encoding="utf-8")
                         design_results[task.task_id]["output_file"] = str(out_path)
                         logger.info("Wrote design doc: %s", out_path)
 
                     _task_span.set_attribute("task.cost", task_cost)
                     _task_span.set_attribute("task.attempts", _attempt + 1)
                     _task_span.set_attribute("task.status", "designed")
+                    if self.config.use_modular_prompts:
+                        _task_span.set_attribute("task.prompt_version", "v2")
                     # CCD-601: lane-peer context injection attributes
                     # Compute truncation flag: same estimation as _apply_lane_peer_token_budget
                     _peer_count = len(lane_prior_designs) - 1 if lane_prior_designs else 0
@@ -3569,7 +3717,8 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _check_environment(self, task: SeedTask) -> list[dict[str, Any]]:
+    @staticmethod
+    def _check_environment(task: SeedTask) -> list[dict[str, Any]]:
         """Check environment readiness for a task.
 
         Returns list of environment issues (fail/warn checks).
@@ -4073,6 +4222,12 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 )
             if size_regression_flag:
                 task_flag["size_regression"] = size_regression_details
+            # AR-816: Mark tasks that should be blocked at INTEGRATE
+            from startd8.truncation_detection import CONFIDENCE_IS_TRUNCATED
+            task_flag["truncation_blocked"] = (
+                task_flag["detected"]
+                and task_flag["max_confidence"] >= CONFIDENCE_IS_TRUNCATED
+            )
             # Aggregate unique indicators
             for fr in file_results:
                 task_flag["indicators"].extend(fr.get("truncation_indicators", []))
@@ -4409,6 +4564,8 @@ class Test{class_name}:
         project_root_path: str | None = None,
         # PCA-600: edit mode classification from upstream signals
         edit_mode_map: dict[str, EditModeClassification] | None = None,
+        # AR-822: module inventory from SCAFFOLD for import grounding
+        module_inventory: list[str] | None = None,
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -4863,6 +5020,8 @@ class Test{class_name}:
                     "_edit_mode": (edit_mode_map or {}).get(task.task_id, EditModeClassification(
                         mode="create", per_file={}, confidence="low",
                     )).to_dict() if edit_mode_map else None,
+                    # AR-822: module inventory from SCAFFOLD for import grounding
+                    "module_inventory": module_inventory or [],
                 },
             ))
 
@@ -5490,6 +5649,8 @@ class Test{class_name}:
                 project_root_path=str(project_root),
                 # PCA-600: edit mode classification
                 edit_mode_map=edit_mode_map,
+                # AR-822: module inventory from SCAFFOLD
+                module_inventory=context.get("scaffold", {}).get("module_inventory"),
             )
 
             # PCA-402: track onboarding field consumption
@@ -6159,17 +6320,19 @@ class SeedTaskUnit:
     plus generation metadata (_generation key).
     """
 
-    __slots__ = ("_task", "_gen", "_edit_mode")
+    __slots__ = ("_task", "_gen", "_edit_mode", "_extra_context")
 
     def __init__(
         self,
         task: SeedTask,
         gen_result: GenerationResult,
         edit_mode: dict[str, Any] | None = None,
+        extra_context: dict[str, Any] | None = None,
     ) -> None:
         self._task = task
         self._gen = gen_result
         self._edit_mode = edit_mode
+        self._extra_context = extra_context or {}
 
     @property
     def id(self) -> str:
@@ -6200,6 +6363,8 @@ class SeedTaskUnit:
         }
         if self._edit_mode is not None:
             ctx["_edit_mode"] = self._edit_mode
+        if self._extra_context:
+            ctx.update(self._extra_context)
         return ctx
 
 
@@ -6355,6 +6520,7 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
             "generation_results", {},
         )
         task_map = {t.task_id: t for t in tasks}
+        truncation_flags: dict[str, Any] = context.get("truncation_flags", {})
 
         # Build engine
         registry = get_registry()
@@ -6391,6 +6557,39 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 },
                 links=_links,
             ) as _int_span:
+                # AR-816: Skip integration for truncation-blocked tasks
+                _task_trunc = truncation_flags.get(task_id, {})
+                if _task_trunc.get("truncation_blocked"):
+                    integration_results[task_id] = {
+                        "success": False,
+                        "integrated_files": [],
+                        "errors": [
+                            f"Truncation blocked (confidence="
+                            f"{_task_trunc.get('max_confidence', 0):.2f})"
+                        ],
+                        "warnings": [],
+                        "rollback_performed": False,
+                        "skipped_files": [
+                            {"path": str(f), "reason": "truncation_blocked"}
+                            for f in gr.generated_files
+                        ],
+                        "status": "BLOCKED",
+                    }
+                    _int_span.set_attribute("task.truncation_blocked", True)
+                    _int_span.set_attribute(
+                        "truncation.confidence",
+                        _task_trunc.get("max_confidence", 0),
+                    )
+                    _int_span.add_event(
+                        "truncation.rejection",
+                        attributes={
+                            "truncation.confidence": _task_trunc.get("max_confidence", 0),
+                            "truncation.action": "rejected",
+                            "truncation.source": _task_trunc.get("source", "unknown"),
+                        },
+                    )
+                    continue
+
                 # Pass edit mode classification so the integration engine
                 # can skip merge strategy for edit-mode tasks (the staging
                 # file IS the complete file after search/replace).
@@ -6398,7 +6597,18 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                     "edit_mode_classifications", {},
                 )
                 _task_edit_mode = _edit_classifications.get(task_id)
-                unit = SeedTaskUnit(task, gr, edit_mode=_task_edit_mode)
+                # AR-818/AR-823: Thread truncation and module inventory into unit context
+                _unit_extra: dict[str, Any] = {}
+                if _task_trunc:
+                    _unit_extra["_truncation_flags"] = _task_trunc
+                _scaffold = context.get("scaffold", {})
+                _module_inv = _scaffold.get("module_inventory", [])
+                if _module_inv:
+                    _unit_extra["module_inventory"] = _module_inv
+                unit = SeedTaskUnit(
+                    task, gr, edit_mode=_task_edit_mode,
+                    extra_context=_unit_extra if _unit_extra else None,
+                )
                 listener = OTelIntegrationListener(
                     task_id=task_id,
                     task_span=_int_span,
@@ -6424,6 +6634,23 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 _int_span.set_attribute("integration.warning_count", len(result.warnings))
                 _int_span.set_attribute("integration.rollback", result.rollback_performed)
                 _int_span.set_attribute("integration.skipped_count", len(result.skipped_files))
+
+                # AR-825: Import validation OTel span attributes
+                _import_skipped = [
+                    s for s in result.skipped_files
+                    if isinstance(s, dict) and s.get("reason") == "unresolved_imports"
+                ]
+                _unresolved_modules: list[str] = []
+                for s in _import_skipped:
+                    _unresolved_modules.extend(s.get("unresolved", []))
+                _int_span.set_attribute(
+                    "task.import_validation.unresolved_count", len(_unresolved_modules),
+                )
+                _int_span.set_attribute(
+                    "task.import_validation.unresolved_modules",
+                    ", ".join(_unresolved_modules) if _unresolved_modules else "",
+                )
+
                 _sc = _capture_task_span_context(_int_span)
                 if _sc:
                     integration_results[task_id]["_span_context"] = _sc
@@ -7202,6 +7429,45 @@ class TestPhaseHandler(AbstractPhaseHandler):
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
 
+def _format_review_prompt(template_name: str, **kwargs: Any) -> str | None:
+    """Load and format a template from ``review.yaml``.
+
+    Returns the formatted string on success, or ``None`` when the YAML
+    file or template is unavailable (e.g. downstream installs that
+    haven't updated).  Failures are logged at DEBUG so they're
+    traceable without cluttering normal output.
+    """
+    try:
+        from startd8.contractors.artisan_phases.prompts import format_prompt
+
+        return format_prompt("review", template_name, **kwargs)
+    except (FileNotFoundError, KeyError) as exc:
+        logger.debug(
+            "YAML template review/%s unavailable, using inline fallback: %s",
+            template_name,
+            exc,
+        )
+        return None
+
+
+def _get_review_template(template_name: str) -> str | None:
+    """Load a raw template from ``review.yaml`` without formatting.
+
+    Returns the template string on success, or ``None`` when unavailable.
+    """
+    try:
+        from startd8.contractors.artisan_phases.prompts import get_template
+
+        return get_template("review", template_name)
+    except (FileNotFoundError, KeyError) as exc:
+        logger.debug(
+            "YAML template review/%s unavailable, using inline fallback: %s",
+            template_name,
+            exc,
+        )
+        return None
+
+
 class ReviewPhaseHandler(AbstractPhaseHandler):
     """REVIEW phase: LLM-based quality review of generated implementations.
 
@@ -7217,10 +7483,12 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
         self._review_agent: Any = None
 
     # ------------------------------------------------------------------
-    # Review prompt template
+    # Review prompt template — loaded from review.yaml
     # ------------------------------------------------------------------
 
-    REVIEW_PROMPT_TEMPLATE = """You are reviewing generated code for quality and correctness.
+    # Inline fallback used only when review.yaml is missing (e.g.
+    # downstream installs that haven't updated).
+    _REVIEW_PROMPT_TEMPLATE_FALLBACK = """You are reviewing generated code for quality and correctness.
 
 ## Task
 **ID:** {task_id}
@@ -7260,6 +7528,14 @@ PASS if score >= {pass_threshold} and no blocking issues.
 ### Suggestions
 - [Specific improvements]
 """
+
+    @staticmethod
+    def _get_review_user_template() -> str:
+        """Return the review_user template, preferring YAML over fallback."""
+        tmpl = _get_review_template("review_user")
+        if tmpl is not None:
+            return tmpl
+        return ReviewPhaseHandler._REVIEW_PROMPT_TEMPLATE_FALLBACK
 
     def _resolve_review_agent(self) -> Any:
         """Lazily resolve the review agent from config.
@@ -7306,40 +7582,111 @@ PASS if score >= {pass_threshold} and no blocking issues.
     ) -> str:
         """Build the review prompt for a single task.
 
+        Each logical section is built by a helper method that loads its
+        template from ``review.yaml`` (falling back to inline assembly
+        when the YAML file is absent).  The orchestrator builds the base
+        prompt, then inserts enrichment sections before
+        ``## Review Instructions``.
+
+        Insertion order (preserved from the original monolithic method):
+          1. project_context  (PCA-302/505)
+          2. design_document  (Layer 4 — Gap 17, 19)
+          3. parameter_sources + semantic_conventions (Gap 2, 28, 35)
+          4. service_metadata (PCA-303, Gap 29)
+          5. refine_provenance (IMP-9b)
+          6. truncation_info  (Gate 4 — Gap 32)
+          7. deps_advisory    (Gate 5)
+
         Args:
             task: The seed task.
             generated_code: The code that was generated.
             test_results: Test results from the TEST phase.
-            design_document: Optional design document from DESIGN phase
-                for compliance checking.
-            parameter_sources: Optional parameter source mappings for
-                the reviewer to verify correct parameter usage.
-            semantic_conventions: Optional semantic convention mappings
-                for the reviewer to verify naming compliance.
+            design_document: Optional design document from DESIGN phase.
+            parameter_sources: Optional parameter source mappings.
+            semantic_conventions: Optional semantic convention mappings.
             truncation_info: Optional Gate 4 truncation detection result.
-                When present, a warning is injected so the reviewer
-                scrutinizes completeness.
+            project_context: Optional project-level context.
+            service_metadata: Optional service metadata for protocol checks.
+            refine_provenance: Optional REFINE apply provenance.
 
         Returns:
             Formatted review prompt string.
+        """
+        # -- Base prompt --
+        prompt = self._build_review_base(task, generated_code, test_results)
+
+        # -- Enrichment sections (inserted before "## Review Instructions") --
+        # Each helper returns a list of strings.  Empty list = no injection.
+        sections: list[str] = []
+        sections.extend(self._build_project_context_section(project_context))
+        sections.extend(self._build_design_compliance_section(design_document))
+        sections.extend(self._build_parameter_sources_section(parameter_sources))
+        sections.extend(self._build_semantic_conventions_section(semantic_conventions))
+        sections.extend(self._build_service_metadata_section(service_metadata))
+        sections.extend(self._build_refine_compliance_section(refine_provenance))
+        sections.extend(
+            self._build_truncation_warning_section(truncation_info)
+        )
+        sections.extend(
+            self._build_deps_advisory_section(task, test_results)
+        )
+
+        if sections:
+            enrichment = "\n".join(sections)
+            if "## Review Instructions" in prompt:
+                prompt = prompt.replace(
+                    "## Review Instructions",
+                    enrichment + "\n\n## Review Instructions",
+                )
+            else:
+                logger.warning(
+                    "'## Review Instructions' heading not found in review "
+                    "prompt — appending enrichment sections at end"
+                )
+                prompt += "\n" + enrichment
+
+        return prompt
+
+    # -- helper: base prompt ------------------------------------------------
+
+    def _build_review_base(
+        self,
+        task: SeedTask,
+        generated_code: str,
+        test_results: dict[str, Any],
+    ) -> str:
+        """Format the base review prompt with task data.
+
+        Loads the ``review_user`` template from YAML when available,
+        falling back to the inline ``_REVIEW_PROMPT_TEMPLATE_FALLBACK``.
         """
         constraints_str = "\n".join(
             f"- {c}" for c in task.prompt_constraints
         ) or "None specified"
 
-        test_str = json.dumps(test_results, indent=2, default=str) if test_results else "No test results available for this task"
+        test_str = (
+            json.dumps(test_results, indent=2, default=str)
+            if test_results
+            else "No test results available for this task"
+        )
 
         max_code = self.config.review_max_code_chars
         code_for_prompt = generated_code[:max_code]
         if len(generated_code) > max_code:
-            code_for_prompt += f"\n\n# ... [truncated — {len(generated_code) - max_code} chars omitted] ..."
+            code_for_prompt += (
+                f"\n\n# ... [truncated — "
+                f"{len(generated_code) - max_code} chars omitted] ..."
+            )
 
         max_test = 2000
         test_for_prompt = test_str[:max_test]
         if len(test_str) > max_test:
-            test_for_prompt += f"\n... [truncated — {len(test_str) - max_test} chars omitted] ..."
+            test_for_prompt += (
+                f"\n... [truncated — {len(test_str) - max_test} chars omitted] ..."
+            )
 
-        prompt = self.REVIEW_PROMPT_TEMPLATE.format(
+        template = self._get_review_user_template()
+        return template.format(
             task_id=task.task_id,
             title=task.title,
             domain=task.domain,
@@ -7350,61 +7697,122 @@ PASS if score >= {pass_threshold} and no blocking issues.
             pass_threshold=self.config.pass_threshold,
         )
 
-        # PCA-302/505: project-level context for architectural review
-        if project_context:
-            _pc_parts = ["## Project Context"]
-            # PCA-505: project name in review
-            _pn = project_context.get("project_name")
-            if _pn:
-                _pc_parts.append(f"**Project:** {_pn}")
-            _pt = project_context.get("plan_title")
-            if _pt:
-                _pc_parts.append(f"**Plan:** {_pt}")
-            _pg = project_context.get("plan_goals", [])
-            for g in _pg[:5]:
-                _pc_parts.append(f"- {g}")
-            _arch = project_context.get("architectural_context", {})
-            _objs = _arch.get("objectives", [])
-            if _objs:
-                _pc_parts.append("**Architectural Objectives:**")
-                for o in (list(_objs) if isinstance(_objs, list) else [_objs])[:3]:
-                    _pc_parts.append(f"- {o}")
-            _cons = _arch.get("constraints", [])
-            if _cons:
-                _pc_parts.append("**Constraints:**")
-                for c in (list(_cons) if isinstance(_cons, list) else [_cons])[:5]:
-                    _pc_parts.append(f"- {c}")
-            # PCA-505: edit-first review check when task had existing files
-            if project_context.get("had_existing_files"):
-                _pc_parts.append("\n**Edit-First Verification:**")
-                _pc_parts.append(
-                    "This task modified EXISTING production files. Verify the "
-                    "implementation preserves existing functionality and does not "
-                    "remove or break existing code that was not part of the change scope."
-                )
-            _pc_text = "\n".join(_pc_parts)
-            if len(_pc_text) > 2000:
-                _pc_text = _pc_text[:2000] + "\n... [truncated for prompt budget]"
-            prompt = prompt.replace(
-                "## Review Instructions",
-                _pc_text + "\n\n## Review Instructions",
-            )
+    # -- helper: project context (PCA-302/505) ------------------------------
 
-        # ── Layer 4: Inject design compliance section ────────────────
-        if design_document:
-            max_design = 8000
-            design_for_prompt = design_document[:max_design]
-            if len(design_document) > max_design:
-                design_for_prompt += (
-                    f"\n\n# ... [{len(design_document) - max_design} chars truncated] ..."
-                )
-            design_lines = len(design_document.strip().splitlines())
-            design_sections = sum(
-                1
-                for line in design_document.splitlines()
-                if line.strip().startswith("##")
+    @staticmethod
+    def _build_project_context_section(
+        project_context: dict[str, Any] | None,
+    ) -> list[str]:
+        """PCA-302/505: Project-level context for architectural review.
+
+        Returns a list with a single formatted section string, or ``[]``
+        if *project_context* is None/empty.
+        """
+        if not project_context:
+            return []
+
+        # Assemble project lines
+        project_lines_parts: list[str] = []
+        _pn = project_context.get("project_name")
+        if _pn:
+            project_lines_parts.append(f"**Project:** {_pn}")
+        _pt = project_context.get("plan_title")
+        if _pt:
+            project_lines_parts.append(f"**Plan:** {_pt}")
+        _pg = project_context.get("plan_goals", [])
+        for g in _pg[:5]:
+            project_lines_parts.append(f"- {g}")
+        project_lines = "\n".join(project_lines_parts)
+
+        # Architectural objectives
+        _arch = project_context.get("architectural_context", {})
+        _objs = _arch.get("objectives", [])
+        if _objs:
+            obj_items = (list(_objs) if isinstance(_objs, list) else [_objs])[:3]
+            arch_objectives = (
+                "**Architectural Objectives:**\n"
+                + "\n".join(f"- {o}" for o in obj_items)
             )
-            design_compliance_section = (
+        else:
+            arch_objectives = ""
+
+        # Architectural constraints
+        _cons = _arch.get("constraints", [])
+        if _cons:
+            con_items = (list(_cons) if isinstance(_cons, list) else [_cons])[:5]
+            arch_constraints = (
+                "**Constraints:**\n"
+                + "\n".join(f"- {c}" for c in con_items)
+            )
+        else:
+            arch_constraints = ""
+
+        # Edit-first verification
+        if project_context.get("had_existing_files"):
+            edit_first_block = (
+                "\n**Edit-First Verification:**\n"
+                "This task modified EXISTING production files. Verify the "
+                "implementation preserves existing functionality and does not "
+                "remove or break existing code that was not part of the change scope."
+            )
+        else:
+            edit_first_block = ""
+
+        text = _format_review_prompt(
+            "project_context",
+            project_lines=project_lines,
+            arch_objectives=arch_objectives,
+            arch_constraints=arch_constraints,
+            edit_first_block=edit_first_block,
+        )
+        if text is None:
+            # Inline fallback
+            _parts = ["## Project Context"]
+            if project_lines:
+                _parts.append(project_lines)
+            if arch_objectives:
+                _parts.append(arch_objectives)
+            if arch_constraints:
+                _parts.append(arch_constraints)
+            if edit_first_block:
+                _parts.append(edit_first_block)
+            text = "\n".join(_parts)
+
+        if len(text) > 2000:
+            text = text[:2000] + "\n... [truncated for prompt budget]"
+        return [text]
+
+    # -- helper: design compliance (Layer 4 — Gap 17, 19) -------------------
+
+    @staticmethod
+    def _build_design_compliance_section(
+        design_document: str | None,
+    ) -> list[str]:
+        """Inject design document with compliance instructions."""
+        if not design_document:
+            return []
+
+        max_design = 8000
+        design_for_prompt = design_document[:max_design]
+        if len(design_document) > max_design:
+            design_for_prompt += (
+                f"\n\n# ... [{len(design_document) - max_design} chars truncated] ..."
+            )
+        design_lines = len(design_document.strip().splitlines())
+        design_sections = sum(
+            1
+            for line in design_document.splitlines()
+            if line.strip().startswith("##")
+        )
+
+        text = _format_review_prompt(
+            "design_compliance",
+            design_lines=design_lines,
+            design_sections=design_sections,
+            design_for_prompt=design_for_prompt,
+        )
+        if text is None:
+            text = (
                 f"\n## Design Document (from DESIGN phase — {design_lines} lines, "
                 f"{design_sections} sections)\n"
                 f"The implementation was built from this design specification. "
@@ -7413,159 +7821,251 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 f"sections are missing or only partially implemented.\n\n"
                 f"```\n{design_for_prompt}\n```\n"
             )
-            prompt = prompt.replace(
-                "## Review Instructions",
-                design_compliance_section + "\n## Review Instructions",
-            )
+        return [text]
 
-        # ── Inject parameter_sources / semantic_conventions ────────────
-        extra_sections: list[str] = []
-        if parameter_sources:
-            extra_sections.append(
+    # -- helper: parameter sources (Gap 2, 35) ------------------------------
+
+    @staticmethod
+    def _build_parameter_sources_section(
+        parameter_sources: dict[str, Any] | None,
+    ) -> list[str]:
+        """Inject parameter source verification section."""
+        if not parameter_sources:
+            return []
+
+        param_lines = "\n".join(
+            f"- **{k}**: {v}" for k, v in parameter_sources.items()
+        )
+        text = _format_review_prompt(
+            "parameter_sources",
+            param_lines=param_lines,
+        )
+        if text is None:
+            text = (
                 "\n## Parameter Sources\n"
-                + "\n".join(f"- **{k}**: {v}" for k, v in parameter_sources.items())
+                + param_lines
                 + "\nVerify the implementation uses the correct parameter names and sources.\n"
             )
-        if semantic_conventions:
-            extra_sections.append(
+        return [text]
+
+    # -- helper: semantic conventions (Gap 28) ------------------------------
+
+    @staticmethod
+    def _build_semantic_conventions_section(
+        semantic_conventions: dict[str, Any] | None,
+    ) -> list[str]:
+        """Inject naming convention compliance section."""
+        if not semantic_conventions:
+            return []
+
+        convention_lines = "\n".join(
+            f"- **{k}**: {v}" for k, v in semantic_conventions.items()
+        )
+        text = _format_review_prompt(
+            "semantic_conventions",
+            convention_lines=convention_lines,
+        )
+        if text is None:
+            text = (
                 "\n## Semantic Conventions\n"
-                + "\n".join(f"- **{k}**: {v}" for k, v in semantic_conventions.items())
+                + convention_lines
                 + "\nVerify the implementation follows these naming conventions.\n"
             )
-        if extra_sections:
-            extra = "\n".join(extra_sections)
-            prompt = prompt.replace(
-                "## Review Instructions",
-                extra + "\n## Review Instructions",
-            )
+        return [text]
 
-        # PCA-303: service metadata compliance check
-        if service_metadata:
+    # -- helper: service metadata (PCA-303, Gap 29) -------------------------
+
+    @staticmethod
+    def _build_service_metadata_section(
+        service_metadata: dict[str, Any] | None,
+    ) -> list[str]:
+        """Inject service metadata compliance check."""
+        if not service_metadata:
+            return []
+
+        metadata_parts: list[str] = []
+        _tp = service_metadata.get("transport_protocol")
+        if _tp:
+            metadata_parts.append(f"- Expected transport protocol: **{_tp}**")
+        _rd = service_metadata.get("runtime_dependencies")
+        if _rd and isinstance(_rd, list):
+            metadata_parts.append(
+                f"- Expected runtime dependencies: {', '.join(str(d) for d in _rd)}"
+            )
+        metadata_lines = "\n".join(metadata_parts)
+
+        text = _format_review_prompt(
+            "service_metadata",
+            metadata_lines=metadata_lines,
+        )
+        if text is None:
             _smc_parts = ["## Service Metadata Compliance"]
-            _tp = service_metadata.get("transport_protocol")
-            if _tp:
-                _smc_parts.append(f"- Expected transport protocol: **{_tp}**")
-            _rd = service_metadata.get("runtime_dependencies")
-            if _rd and isinstance(_rd, list):
-                _smc_parts.append(
-                    f"- Expected runtime dependencies: {', '.join(str(d) for d in _rd)}"
-                )
+            if metadata_lines:
+                _smc_parts.append(metadata_lines)
             _smc_parts.append(
                 "Check that HEALTHCHECK mechanism matches transport_protocol. "
                 "Flag any capabilities added that the service metadata declares as absent."
             )
-            _smc_text = "\n".join(_smc_parts)
-            prompt = prompt.replace(
-                "## Review Instructions",
-                _smc_text + "\n\n## Review Instructions",
+            text = "\n".join(_smc_parts)
+        return [text]
+
+    # -- helper: REFINE compliance (IMP-9b) ---------------------------------
+
+    @staticmethod
+    def _build_refine_compliance_section(
+        refine_provenance: dict[str, Any] | None,
+    ) -> list[str]:
+        """Inject REFINE applied/warning IDs section."""
+        if not refine_provenance:
+            return []
+
+        applied_ids = refine_provenance.get("applied_ids", [])
+        if not applied_ids:
+            return []
+
+        applied_lines = "\n".join(f"- {aid}" for aid in applied_ids[:20])
+
+        warning_ids = refine_provenance.get("warning_ids", [])
+        if warning_ids:
+            warning_block = (
+                "\nThe following suggestions had apply warnings "
+                "(may not be fully integrated):\n"
+                + "\n".join(f"- {wid} (verify manually)" for wid in warning_ids[:10])
             )
+        else:
+            warning_block = ""
 
-        # ── IMP-9b: Inject REFINE compliance section ──────────────────
-        if refine_provenance:
-            applied_ids = refine_provenance.get("applied_ids", [])
-            if applied_ids:
-                _rc_parts = [
-                    "\n## REFINE Compliance\n",
-                    "The following REFINE phase suggestions were integrated into "
-                    "the plan document before code generation. **Verify that the "
-                    "implementation reflects these applied changes:**",
-                ]
-                for aid in applied_ids[:20]:
-                    _rc_parts.append(f"- {aid}")
-                warning_ids = refine_provenance.get("warning_ids", [])
-                if warning_ids:
-                    _rc_parts.append(
-                        "\nThe following suggestions had apply warnings "
-                        "(may not be fully integrated):"
-                    )
-                    for wid in warning_ids[:10]:
-                        _rc_parts.append(f"- {wid} (verify manually)")
-                _rc_parts.append(
-                    "\nScore lower if the implementation ignores changes "
-                    "that were explicitly applied to the plan.\n"
-                )
-                _rc_text = "\n".join(_rc_parts)
-                prompt = prompt.replace(
-                    "## Review Instructions",
-                    _rc_text + "\n## Review Instructions",
-                )
+        text = _format_review_prompt(
+            "refine_compliance",
+            applied_lines=applied_lines,
+            warning_block=warning_block,
+        )
+        if text is None:
+            _rc_parts = [
+                "\n## REFINE Compliance\n",
+                "The following REFINE phase suggestions were integrated into "
+                "the plan document before code generation. **Verify that the "
+                "implementation reflects these applied changes:**",
+            ]
+            for aid in applied_ids[:20]:
+                _rc_parts.append(f"- {aid}")
+            if warning_block:
+                _rc_parts.append(warning_block)
+            _rc_parts.append(
+                "\nScore lower if the implementation ignores changes "
+                "that were explicitly applied to the plan.\n"
+            )
+            text = "\n".join(_rc_parts)
+        return [text]
 
-        # ── Gate 4: Inject truncation warning into review ────────────
-        if truncation_info:
-            source = truncation_info.get("source", "unknown")
-            confidence = truncation_info.get("max_confidence", 0.0)
-            syntax_errs = truncation_info.get("syntax_errors", [])
-            total_lines = truncation_info.get("total_lines", 0)
-            estimated = truncation_info.get("estimated_loc", 0)
+    # -- helper: truncation warning (Gate 4) --------------------------------
+
+    @staticmethod
+    def _build_truncation_warning_section(
+        truncation_info: dict[str, Any] | None,
+    ) -> list[str]:
+        """Inject Gate 4 truncation detection results."""
+        if not truncation_info:
+            return []
+
+        source = truncation_info.get("source", "unknown")
+        confidence = truncation_info.get("max_confidence", 0.0)
+        syntax_errs = truncation_info.get("syntax_errors", [])
+        total_lines = truncation_info.get("total_lines", 0)
+        estimated = truncation_info.get("estimated_loc", 0)
+
+        syntax_line = (
+            f"Syntax errors in: {', '.join(syntax_errs)}."
+            if syntax_errs
+            else ""
+        )
+        ratio_line = (
+            f"Generated {total_lines} lines vs {estimated} estimated "
+            f"({total_lines / estimated:.0%} ratio)."
+            if estimated and total_lines
+            else ""
+        )
+
+        text = _format_review_prompt(
+            "truncation_warning",
+            source=source,
+            confidence=f"{confidence:.2f}",
+            syntax_line=syntax_line,
+            ratio_line=ratio_line,
+        )
+        if text is None:
             parts = [
                 "\n## TRUNCATION WARNING (Gate 4)\n",
                 f"Automated analysis flagged this task's output as potentially truncated "
                 f"(source={source}, confidence={confidence:.2f}).",
             ]
-            if syntax_errs:
-                parts.append(f"Syntax errors in: {', '.join(syntax_errs)}.")
-            if estimated and total_lines:
-                parts.append(
-                    f"Generated {total_lines} lines vs {estimated} estimated "
-                    f"({total_lines / estimated:.0%} ratio)."
-                )
+            if syntax_line:
+                parts.append(syntax_line)
+            if ratio_line:
+                parts.append(ratio_line)
             parts.append(
                 "**Pay special attention to completeness.** "
                 "Score lower if the implementation appears incomplete or has syntax errors.\n"
             )
-            truncation_section = "\n".join(parts)
-            if "## Review Instructions" in prompt:
-                prompt = prompt.replace(
-                    "## Review Instructions",
-                    truncation_section + "\n## Review Instructions",
-                )
-            else:
-                logger.warning(
-                    "Gate 4: '## Review Instructions' heading not found in "
-                    "review prompt — appending truncation warning at end"
-                )
-                prompt += "\n" + truncation_section
+            text = "\n".join(parts)
+        return [text]
 
-        # ── Gate 5: Allowlist confidence advisory ──────────────────────
+    # -- helper: deps allowlist advisory (Gate 5) ---------------------------
+
+    @staticmethod
+    def _build_deps_advisory_section(
+        task: SeedTask,
+        test_results: dict[str, Any],
+    ) -> list[str]:
+        """Inject Gate 5 confidence-stratified dependency guidance."""
         deps_confidence = getattr(task, "deps_confidence", 1.0)
         deps_source = getattr(task, "deps_source", None)
-        if deps_confidence < 0.8 and test_results:
-            # Check if any deps_available failures exist
-            has_deps_issues = any(
-                r.get("validator") == "deps_available" and not r.get("passed", True)
-                for r in test_results.get("results", [])
-            )
-            if has_deps_issues:
-                parts = [
-                    "\n## DEPENDENCY ALLOWLIST ADVISORY (Gate 5)\n",
-                    f"The dependency allowlist was built from source={deps_source!r} "
-                    f"(confidence={deps_confidence:.2f}).",
-                ]
-                if deps_confidence <= 0.2:
-                    parts.append(
-                        "Only stdlib modules are known — third-party import "
-                        "violations are **likely false positives**."
-                    )
-                elif deps_confidence <= 0.5:
-                    parts.append(
-                        "Allowlist was built from venv scan only — some "
-                        "dependencies may be missing from the known set."
-                    )
-                parts.append(
-                    "**Do NOT penalize the score for import violations when "
-                    "allowlist confidence is low.** Focus review on code "
-                    "quality, correctness, and design compliance instead.\n"
-                )
-                advisory_section = "\n".join(parts)
-                if "## Review Instructions" in prompt:
-                    prompt = prompt.replace(
-                        "## Review Instructions",
-                        advisory_section + "\n## Review Instructions",
-                    )
-                else:
-                    prompt += "\n" + advisory_section
 
-        return prompt
+        if deps_confidence >= 0.8 or not test_results:
+            return []
+
+        # Check if any deps_available failures exist
+        has_deps_issues = any(
+            r.get("validator") == "deps_available" and not r.get("passed", True)
+            for r in test_results.get("results", [])
+        )
+        if not has_deps_issues:
+            return []
+
+        if deps_confidence <= 0.2:
+            confidence_guidance = (
+                "Only stdlib modules are known — third-party import "
+                "violations are **likely false positives**."
+            )
+        elif deps_confidence <= 0.5:
+            confidence_guidance = (
+                "Allowlist was built from venv scan only — some "
+                "dependencies may be missing from the known set."
+            )
+        else:
+            confidence_guidance = ""
+
+        text = _format_review_prompt(
+            "deps_allowlist_advisory",
+            deps_source=repr(deps_source),
+            deps_confidence=f"{deps_confidence:.2f}",
+            confidence_guidance=confidence_guidance,
+        )
+        if text is None:
+            parts = [
+                "\n## DEPENDENCY ALLOWLIST ADVISORY (Gate 5)\n",
+                f"The dependency allowlist was built from source={deps_source!r} "
+                f"(confidence={deps_confidence:.2f}).",
+            ]
+            if confidence_guidance:
+                parts.append(confidence_guidance)
+            parts.append(
+                "**Do NOT penalize the score for import violations when "
+                "allowlist confidence is low.** Focus review on code "
+                "quality, correctness, and design compliance instead.\n"
+            )
+            text = "\n".join(parts)
+        return [text]
 
     def _parse_review_response(self, response: str) -> dict[str, Any]:
         """Parse score, verdict, and issues from the LLM review response.
@@ -7633,11 +8133,19 @@ PASS if score >= {pass_threshold} and no blocking issues.
             "suggestions": extract_section("Suggestions"),
         }
 
-    _REVIEW_PHASE_SYSTEM_PROMPT = (
+    _REVIEW_PHASE_SYSTEM_PROMPT_FALLBACK = (
         "You are an expert code quality reviewer. Evaluate the implementation "
         "against the design document, checking for correctness, completeness, "
         "and adherence to stated constraints."
     )
+
+    @staticmethod
+    def _get_review_system_prompt() -> str:
+        """Return the review system prompt, preferring YAML over fallback."""
+        tmpl = _format_review_prompt("review_system")
+        if tmpl is not None:
+            return tmpl.strip()
+        return ReviewPhaseHandler._REVIEW_PHASE_SYSTEM_PROMPT_FALLBACK
 
     def _review_task(
         self,
@@ -7706,7 +8214,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 ) as _eval_span:
                     try:
                         response_text, _time_ms, token_usage = agent.generate(
-                            prompt, system_prompt=self._REVIEW_PHASE_SYSTEM_PROMPT,
+                            prompt, system_prompt=self._get_review_system_prompt(),
                         )
                         review = self._parse_review_response(response_text)
                         review["task_id"] = task.task_id
@@ -8544,7 +9052,8 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
         return artifacts
 
-    def _build_cost_summary(self, context: dict[str, Any]) -> dict[str, Any]:
+    @staticmethod
+    def _build_cost_summary(context: dict[str, Any]) -> dict[str, Any]:
         """Aggregate costs across all phases.
 
         Args:
@@ -8665,16 +9174,26 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
         task_status: dict[str, dict[str, Any]] = {}
         for task_id, gen_result in generation_results.items():
-            test_info = test_results_map.get(task_id, {})
-            review_info = review_results_map.get(task_id, {})
-            task_status[task_id] = {
-                "generated": gen_result.success,
-                "files_count": len(gen_result.generated_files),
-                "generation_cost_usd": gen_result.cost_usd,
-                "tests_passed": test_info.get("passed", None),
-                "review_score": review_info.get("score", None),
-                "review_passed": review_info.get("passed", None),
-            }
+            try:
+                test_info = test_results_map.get(task_id, {})
+                review_info = review_results_map.get(task_id, {})
+                task_status[task_id] = {
+                    "generated": gen_result.success,
+                    "files_count": len(gen_result.generated_files),
+                    "generation_cost_usd": gen_result.cost_usd,
+                    "tests_passed": test_info.get("passed", None),
+                    "review_score": review_info.get("score", None),
+                    "review_passed": review_info.get("passed", None),
+                }
+            except Exception as exc:
+                logger.warning(
+                    "FINALIZE: error building status for task %s: %s",
+                    task_id, exc, exc_info=True,
+                )
+                task_status[task_id] = {
+                    "generated": False,
+                    "error": str(exc),
+                }
 
         manifest = {
             "workflow_version": "0.4.0",
@@ -8906,19 +9425,23 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         # Task 11a: Gate 3b content validation summary
         gate3b_data: dict[str, Any] = implementation.get("_gate3b_content_validation", {})
         if gate3b_data:
-            severity_counts = FinalizePhaseHandler._count_gate3b_by_severity(gate3b_data)
-            total_issues = sum(len(v) for v in gate3b_data.values())
-            summary["gate3b_validation"] = {
-                "tasks_with_issues": len(gate3b_data),
-                "total_issues": total_issues,
-                "by_severity": severity_counts,
-                "flagged_task_ids": sorted(gate3b_data.keys()),
-            }
-            logger.info(
-                "FINALIZE: Gate 3b summary — %d task(s), %d issue(s) (high=%d, medium=%d, low=%d)",
-                len(gate3b_data), total_issues,
-                severity_counts["high"], severity_counts["medium"], severity_counts["low"],
-            )
+            try:
+                severity_counts = FinalizePhaseHandler._count_gate3b_by_severity(gate3b_data)
+                total_issues = sum(len(v) for v in gate3b_data.values())
+                summary["gate3b_validation"] = {
+                    "tasks_with_issues": len(gate3b_data),
+                    "total_issues": total_issues,
+                    "by_severity": severity_counts,
+                    "flagged_task_ids": sorted(gate3b_data.keys()),
+                }
+                logger.info(
+                    "FINALIZE: Gate 3b summary — %d task(s), %d issue(s) (high=%d, medium=%d, low=%d)",
+                    len(gate3b_data), total_issues,
+                    severity_counts["high"], severity_counts["medium"], severity_counts["low"],
+                )
+            except Exception as exc:
+                logger.warning("FINALIZE: Gate 3b summary failed: %s", exc, exc_info=True)
+                summary["gate3b_validation"] = {"error": str(exc)}
 
         # Task 11b: Strict validation blocking check
         strict_mode = context.get("strict_validation", False)
@@ -8939,18 +9462,43 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
         # Write report and manifest
         if self.output_dir and not dry_run:
-            output_path = Path(self.output_dir) / "workflow-execution-report.json"
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            atomic_write_json(output_path, summary, indent=2, default=str)
-            logger.info("Wrote execution report to %s", output_path)
-            summary["report_path"] = str(output_path)
+            output_dir = Path(self.output_dir)
+            try:
+                output_path = output_dir / "workflow-execution-report.json"
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write_json(output_path, summary, indent=2, default=str)
+                logger.info("Wrote execution report to %s", output_path)
+                summary["report_path"] = str(output_path)
 
-            # Write manifest of generated files
-            manifest_path = self._write_manifest(
-                artifacts, summary, context, Path(self.output_dir),
-            )
-            if manifest_path:
-                summary["manifest_path"] = str(manifest_path)
+                # Write manifest of generated files
+                manifest_path = self._write_manifest(
+                    artifacts, summary, context, output_dir,
+                )
+                if manifest_path:
+                    summary["manifest_path"] = str(manifest_path)
+            except Exception as exc:
+                logger.error(
+                    "FINALIZE: crash during report/manifest write: %s",
+                    exc, exc_info=True,
+                )
+                # AR-815: Write partial manifest so prior phases' work is not lost
+                try:
+                    partial = {
+                        "workflow_version": "0.4.0",
+                        "incomplete": True,
+                        "error": str(exc),
+                        "artifacts": artifacts,
+                        "task_status": {},
+                        "summary": {"status": "incomplete"},
+                    }
+                    partial_path = output_dir / "generation-manifest.json"
+                    partial_path.parent.mkdir(parents=True, exist_ok=True)
+                    atomic_write_json(partial_path, partial, indent=2, default=str)
+                    logger.info("Wrote partial manifest: %s", partial_path)
+                    summary["manifest_path"] = str(partial_path)
+                    summary["manifest_incomplete"] = True
+                except OSError as write_exc:
+                    logger.error("Failed to write partial manifest: %s", write_exc)
 
         context["workflow_summary"] = summary
 
