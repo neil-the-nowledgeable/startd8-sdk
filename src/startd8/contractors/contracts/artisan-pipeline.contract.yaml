@@ -515,6 +515,66 @@ propagation_chains:
       field: implementation.metadata.design_mode_summary
     severity: warning
 
+  - chain_id: structural_delta_to_implement
+    description: >
+      Per-task structural delta (add/modify/preserve element lists) flows
+      from DESIGN to IMPLEMENT for element-level code generation guidance.
+    source:
+      phase: design
+      field: design_structural_delta
+    destination:
+      phase: implement
+      field: implementation.metadata._design_structural_delta
+    severity: advisory
+
+  - chain_id: referenced_elements_to_implement
+    description: >
+      Per-task manifest-validated element references flow from DESIGN to
+      IMPLEMENT for phantom-element cross-validation.
+    source:
+      phase: design
+      field: design_referenced_elements
+    destination:
+      phase: implement
+      field: implementation.metadata._phantom_element_warnings
+    severity: advisory
+
+  - chain_id: manifest_checksums_to_implement
+    description: >
+      Per-file SHA-256 checksums at design time flow from DESIGN to IMPLEMENT
+      for manifest staleness detection between split runs.
+    source:
+      phase: design
+      field: manifest_file_checksums
+    destination:
+      phase: implement
+      field: _manifest_stale_files
+    severity: advisory
+
+  - chain_id: design_mode_evidence_to_implement
+    description: >
+      Per-task design mode evidence (reasoning + signals) flows from DESIGN
+      to IMPLEMENT to elevate edit-mode classification confidence.
+    source:
+      phase: design
+      field: design_mode_evidence
+    destination:
+      phase: implement
+      field: implementation.metadata._design_mode_evidence
+    severity: advisory
+
+  - chain_id: truncation_tier_to_implement
+    description: >
+      Per-file manifest truncation tier used during DESIGN flows to IMPLEMENT
+      so it can account for potentially missing structural context.
+    source:
+      phase: design
+      field: manifest_truncation_tier
+    destination:
+      phase: implement
+      field: implementation.metadata._manifest_truncation_tier
+    severity: advisory
+
   - chain_id: onboarding_context_to_implement
     description: >
       Project-level onboarding context flows from plan through implement

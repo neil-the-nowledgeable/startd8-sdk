@@ -25,7 +25,9 @@ from typing import Any, Iterator, TypedDict
 
 from startd8.logging_config import get_logger
 from startd8.utils.code_manifest import (
+    CallGraphInfo,
     Element,
+    ElementKind,
     FileManifest,
     SCHEMA_VERSION,
     Visibility,
@@ -242,6 +244,8 @@ class ManifestRegistry:
         self._manifests = dict(manifests)  # defensive copy
         self._fqn_index: dict[str, tuple[str, Element]] = {}
         self._dep_graph: dict[str, set[str]] | None = None
+        self._call_graph: dict[str, set[str]] | None = None
+        self._reverse_call_graph: dict[str, set[str]] | None = None
         self._mtimes: dict[str, float] = {}  # relative_path → mtime at load time
         self._build_fqn_index()
         logger.info("manifest.load", extra={"files": len(manifests)})
@@ -569,6 +573,107 @@ class ManifestRegistry:
         """
         new_manifests = {**self._manifests, **updates}
         return ManifestRegistry(new_manifests)
+
+    # ───────────────────────────────────────────────────────────────────
+    # Phase 6: call graph queries
+    # ───────────────────────────────────────────────────────────────────
+
+    def call_graph(self) -> dict[str, set[str]]:
+        """Full project call graph: caller_fqn → {callee_fqns}.
+
+        Lazy-computed from element call_graph data. Invalidated by
+        with_updated_files() (new instance gets None caches).
+        """
+        if self._call_graph is not None:
+            return self._call_graph
+
+        graph: dict[str, set[str]] = {}
+        for _rel_path, manifest in self._manifests.items():
+            self._collect_call_graph_from_elements(manifest.elements, graph)
+
+        self._call_graph = graph
+        return graph
+
+    def _collect_call_graph_from_elements(
+        self, elements: list[Element], graph: dict[str, set[str]],
+    ) -> None:
+        """Recursively collect call graph edges from elements."""
+        for elem in elements:
+            if elem.call_graph is not None:
+                for call in elem.call_graph.calls:
+                    if call.target_fqn is not None:
+                        graph.setdefault(elem.fqn, set()).add(call.target_fqn)
+            self._collect_call_graph_from_elements(elem.children, graph)
+            self._collect_call_graph_from_elements(elem.class_variables, graph)
+
+    def reverse_call_graph(self) -> dict[str, set[str]]:
+        """Reverse call graph: callee_fqn → {caller_fqns}.
+
+        Lazy-computed transpose of call_graph().
+        """
+        if self._reverse_call_graph is not None:
+            return self._reverse_call_graph
+
+        forward = self.call_graph()
+        reverse: dict[str, set[str]] = {}
+        for caller, callees in forward.items():
+            for callee in callees:
+                reverse.setdefault(callee, set()).add(caller)
+
+        self._reverse_call_graph = reverse
+        return reverse
+
+    def blast_radius(self, fqn: str, max_depth: int = 10) -> set[str]:
+        """Compute all transitive callers of a FQN (reverse reachability).
+
+        BFS from ``fqn`` through reverse_call_graph edges, limited by
+        ``max_depth`` to prevent unbounded traversal.
+        """
+        reverse = self.reverse_call_graph()
+        visited: set[str] = set()
+        frontier = {fqn}
+        for _ in range(max_depth):
+            next_frontier: set[str] = set()
+            for node in frontier:
+                for caller in reverse.get(node, set()):
+                    if caller not in visited and caller != fqn:
+                        visited.add(caller)
+                        next_frontier.add(caller)
+            if not next_frontier:
+                break
+            frontier = next_frontier
+        return visited
+
+    def dead_candidates(self) -> list[str]:
+        """Public callables with zero inbound call edges.
+
+        These are candidate dead code — public functions/methods that
+        are never called from within the project. Sorted alphabetically.
+        """
+        reverse = self.reverse_call_graph()
+        callable_kinds = frozenset({
+            ElementKind.FUNCTION,
+            ElementKind.ASYNC_FUNCTION,
+            ElementKind.METHOD,
+            ElementKind.ASYNC_METHOD,
+        })
+        candidates: list[str] = []
+        for fqn, (_path, elem) in self._fqn_index.items():
+            if (
+                elem.kind in callable_kinds
+                and elem.visibility == Visibility.PUBLIC
+                and fqn not in reverse
+            ):
+                candidates.append(fqn)
+        return sorted(candidates)
+
+    def callers_of(self, fqn: str) -> set[str]:
+        """Direct (1-hop) callers of the given FQN."""
+        return self.reverse_call_graph().get(fqn, set())
+
+    def callees_of(self, fqn: str) -> set[str]:
+        """Direct (1-hop) callees of the given FQN."""
+        return self.call_graph().get(fqn, set())
 
 
 # ═══════════════════════════════════════════════════════════════════════════

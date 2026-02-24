@@ -144,6 +144,16 @@ class HandoffData:
         completed_phases: Phase values completed by the first half.
         design_results: Per-task design output (task_id → result dict).
         scaffold: Scaffold phase summary dict.
+        design_structural_delta: Per-task element-level intent from design
+            docs (Gap 3: add/modify/preserve per file).
+        design_referenced_elements: Per-task element names cross-validated
+            against the manifest for phantom-element detection (Gap 1).
+        manifest_file_checksums: Per-file SHA-256 at design time for
+            staleness detection between split runs (Gap 2).
+        design_mode_evidence: Per-task design mode reasoning with
+            corroborating signals for weight elevation (Gap 4).
+        manifest_truncation_tier: Per-file manifest fidelity tier used
+            during DESIGN (full/compact/public_only/fqn_only/unavailable) (Gap 5).
         created_at: ISO-8601 timestamp when the handoff was written.
         schema_version: Version for forward compatibility (currently 1).
     """
@@ -171,6 +181,21 @@ class HandoffData:
     source_checksum: str | None = None
     # Phase 4: Manifest summary for handoff (ManifestSummarySchema typed dict)
     project_manifest_summary: dict[str, Any] | None = None
+    # Gap 3: Per-task structural delta extracted from design docs
+    # {task_id: {filepath: [{"element": "...", "action": "add|modify|preserve", "detail": "..."}]}}
+    design_structural_delta: dict[str, dict[str, list[dict[str, str]]]] = field(default_factory=dict)
+    # Gap 1: Per-task referenced element names for phantom-element cross-validation
+    # {task_id: {filepath: ["ClassName", "func_name", ...]}}
+    design_referenced_elements: dict[str, dict[str, list[str]]] = field(default_factory=dict)
+    # Gap 2: Per-file SHA-256 checksums of target files at design time
+    # {filepath: checksum_hex}
+    manifest_file_checksums: dict[str, str] = field(default_factory=dict)
+    # Gap 4: Extended design mode with reasoning evidence
+    # {task_id: {"mode": "create|update", "evidence": [...], "reasoning": "..."}}
+    design_mode_evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Gap 5: Per-file manifest truncation tier used during DESIGN
+    # {filepath: "full|compact|public_only|fqn_only|unavailable"}
+    manifest_truncation_tier: dict[str, str] = field(default_factory=dict)
     created_at: str = ""
     schema_version: int = SCHEMA_VERSION
     schema_version_str: str = ARTISAN_SCHEMA_VERSION
@@ -373,6 +398,11 @@ def write_design_handoff(
     design_mode_summary: dict[str, str] | None = None,
     shared_file_manifest: dict[str, list[str]] | None = None,
     project_manifest_summary: dict[str, Any] | None = None,
+    design_structural_delta: dict[str, dict[str, list[dict[str, str]]]] | None = None,
+    design_referenced_elements: dict[str, dict[str, list[str]]] | None = None,
+    manifest_file_checksums: dict[str, str] | None = None,
+    design_mode_evidence: dict[str, dict[str, Any]] | None = None,
+    manifest_truncation_tier: dict[str, str] | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -423,6 +453,11 @@ def write_design_handoff(
         shared_file_manifest=shared_file_manifest or {},
         source_checksum=source_checksum,
         project_manifest_summary=project_manifest_summary,
+        design_structural_delta=design_structural_delta or {},
+        design_referenced_elements=design_referenced_elements or {},
+        manifest_file_checksums=manifest_file_checksums or {},
+        design_mode_evidence=design_mode_evidence or {},
+        manifest_truncation_tier=manifest_truncation_tier or {},
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,
         schema_version_str=ARTISAN_SCHEMA_VERSION,
@@ -523,6 +558,11 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         design_mode_summary=raw.get("design_mode_summary", {}),
         source_checksum=raw.get("source_checksum"),
         project_manifest_summary=raw.get("project_manifest_summary"),
+        design_structural_delta=raw.get("design_structural_delta", {}),
+        design_referenced_elements=raw.get("design_referenced_elements", {}),
+        manifest_file_checksums=raw.get("manifest_file_checksums", {}),
+        design_mode_evidence=raw.get("design_mode_evidence", {}),
+        manifest_truncation_tier=raw.get("manifest_truncation_tier", {}),
         created_at=raw.get("created_at", ""),
         schema_version=version,
         schema_version_str=raw.get("schema_version_str")

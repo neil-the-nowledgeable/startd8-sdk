@@ -442,6 +442,7 @@ class TestReviewerProjectContext:
         """Reviewer user prompt template accepts project_context."""
         result = REVIEWER_USER_PROMPT_TEMPLATE.format(
             project_context="**Goals:** Build X\n\n",
+            manifest_context="",
             design_document="## Overview\nSome design",
         )
         assert "**Goals:** Build X" in result
@@ -450,6 +451,7 @@ class TestReviewerProjectContext:
         """Arbiter user prompt template accepts project_context."""
         result = ARBITER_USER_PROMPT_TEMPLATE.format(
             project_context="**Constraints:** No breaking changes\n\n",
+            manifest_context="",
             design_document="## Overview\nSome design",
         )
         assert "**Constraints:** No breaking changes" in result
@@ -458,6 +460,7 @@ class TestReviewerProjectContext:
         """Empty project_context doesn't break template."""
         result = REVIEWER_USER_PROMPT_TEMPLATE.format(
             project_context="",
+            manifest_context="",
             design_document="## Overview\nSome design",
         )
         assert result.startswith("Review this design document:")

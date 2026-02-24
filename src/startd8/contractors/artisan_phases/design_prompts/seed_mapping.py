@@ -160,6 +160,70 @@ def extract_guidance(
     return result
 
 
+def extract_manifest_context(
+    task: SeedTask,
+    *,
+    manifest_registry: Any = None,
+    manifest_context_budget: int = 2000,
+) -> dict[str, Any] | None:
+    """Extract structural context from the code manifest registry.
+
+    For each target file in the task, queries the manifest registry for
+    element summaries (classes, functions, imports). Returns None when
+    no registry is available or no files have manifest entries.
+
+    Args:
+        task: The seed task with target_files.
+        manifest_registry: A ManifestRegistry instance (or None).
+        manifest_context_budget: Max chars per file element summary.
+
+    Returns:
+        Dict with ``file_summaries`` and optional ``dependency_context``,
+        or None if no manifest data is available.
+    """
+    if manifest_registry is None:
+        return None
+
+    file_summaries: dict[str, str] = {}
+    for tf in getattr(task, "target_files", []) or []:
+        try:
+            summary = manifest_registry.file_element_summary(
+                tf, manifest_context_budget,
+            )
+            if summary:
+                file_summaries[tf] = summary
+        except Exception:
+            logger.debug(
+                "extract_manifest_context: lookup failed for %s",
+                tf, exc_info=True,
+            )
+
+    if not file_summaries:
+        logger.debug(
+            "extract_manifest_context: no manifest data for task %s",
+            task.task_id,
+        )
+        return None
+
+    result: dict[str, Any] = {"file_summaries": file_summaries}
+
+    # Optionally extract dependency context
+    try:
+        dep_graph = manifest_registry.dependency_graph()
+        if dep_graph and isinstance(dep_graph, dict):
+            task_deps = {
+                f: dep_graph[f]
+                for f in file_summaries
+                if f in dep_graph
+            }
+            if task_deps:
+                result["dependency_context"] = task_deps
+    except Exception:
+        pass  # dependency_graph() is optional
+
+    return result
+
+
 def extract_enrichment(
     task: SeedTask,
     *,

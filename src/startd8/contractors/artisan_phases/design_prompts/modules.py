@@ -297,6 +297,53 @@ class ScopeModule:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Manifest: What's the structural shape of target files?
+# ---------------------------------------------------------------------------
+
+
+class ManifestModule:
+    """Renders structural context from code manifests (classes, functions, imports).
+
+    Non-droppable — structural context is critical for design accuracy,
+    especially in edit-mode tasks where the LLM must reference exact FQNs.
+    """
+
+    category = "manifest"
+
+    def render(self, data: dict[str, Any]) -> PromptFragment:
+        file_summaries = data.get("file_summaries", {})
+        if not file_summaries:
+            return PromptFragment(
+                category=self.category,
+                text="",
+                token_estimate=0,
+                droppable=False,
+            )
+
+        lines = ["## Structural Context (Code Manifest)"]
+        for filepath, summary in file_summaries.items():
+            lines.append(f"### {filepath}")
+            lines.append(summary)
+
+        dep_context = data.get("dependency_context")
+        if dep_context:
+            lines.append("\n**File Dependencies:**")
+            if isinstance(dep_context, dict):
+                for src, deps in list(dep_context.items())[:10]:
+                    lines.append(f"- `{src}` imports: {', '.join(deps[:5])}")
+            elif isinstance(dep_context, str):
+                lines.append(dep_context)
+
+        text = "\n".join(lines)
+        return PromptFragment(
+            category=self.category,
+            text=text,
+            token_estimate=_estimate_tokens(text),
+            droppable=False,
+        )
+
+
 class GuidanceModule:
     """Renders advisory guidance: domain, goals, refine suggestions, open questions."""
 

@@ -880,6 +880,12 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     #: Used in Edit-First Directive and Edit Mode Classification guidance.
     _MIN_OUTPUT_FRACTION: float = 0.80
 
+    #: Maximum phantom element warnings shown in structural delta section.
+    _MAX_PHANTOM_WARNINGS_SHOWN: int = 5
+
+    #: Maximum truncated file paths shown in structural delta section.
+    _MAX_TRUNCATED_FILES_SHOWN: int = 3
+
     #: File extension → human-readable format hint for Target Files section.
     _EXT_FORMAT_HINTS: Dict[str, str] = {
         "yaml": "Valid YAML configuration",
@@ -1127,6 +1133,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         parts.extend(self._build_target_files(chunk, is_edit))       # B-1/B-7 fix
         parts.extend(self._build_importable_modules(chunk))          # AR-150
         parts.extend(self._build_manifest_context(chunk))            # Phase 4
+        parts.extend(self._build_structural_delta(chunk))            # Gap 3
         parts.extend(self._build_existing_files(_existing))
         if _existing:
             parts.extend(self._build_edit_first_directive(_existing))
@@ -1443,6 +1450,68 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             + manifest_ctx,
             "\n---\n",
         ]
+
+    # -- helper: structural delta (Gap 3) ------------------------------------
+
+    @staticmethod
+    def _build_structural_delta(
+        chunk: DevelopmentChunk,
+    ) -> List[str]:
+        """Gap 3: Element-level structural intent from DESIGN phase.
+
+        Renders the ``_design_structural_delta`` metadata as a structured
+        section that tells the LLM exactly which elements to add, modify,
+        or preserve per file.
+        """
+        delta = chunk.metadata.get("_design_structural_delta")
+        if not delta:
+            return []
+
+        parts: List[str] = [
+            "## Structural Intent (from DESIGN phase)\n"
+            "The following element-level actions were specified in the design. "
+            "Adhere to these precisely — do NOT add, modify, or remove elements "
+            "beyond what is listed.\n",
+        ]
+        for fpath, elements in delta.items():
+            parts.append(f"\n### `{fpath}`")
+            for elem in elements:
+                action = elem.get("action", "modify")
+                name = elem.get("element", "")
+                detail = elem.get("detail", "")
+                prefix = {"add": "+", "modify": "~", "preserve": "="}.get(action, "?")
+                if name:
+                    parts.append(f"  {prefix} `{name}`: {detail}")
+                else:
+                    parts.append(f"  {prefix} {detail}")
+        parts.append("\n---\n")
+
+        # Gap 1: Phantom element warnings
+        phantom_warnings = chunk.metadata.get("_phantom_element_warnings")
+        if phantom_warnings:
+            parts.append(
+                "**WARNING:** The design references elements not found in the "
+                "current code manifest. These may be new elements to create, or "
+                "may indicate stale design references:\n"
+            )
+            for ref in phantom_warnings[:LeadContractorChunkExecutor._MAX_PHANTOM_WARNINGS_SHOWN]:
+                parts.append(f"  - `{ref}`")
+            parts.append("")
+
+        # Gap 5: Truncation tier awareness
+        trunc_tiers = chunk.metadata.get("_manifest_truncation_tier", {})
+        truncated_files = [
+            f for f, tier in trunc_tiers.items()
+            if tier not in ("full", "unavailable")
+        ]
+        if truncated_files:
+            parts.append(
+                "**Note:** Structural context was truncated for some files "
+                f"({', '.join(f'`{f}`' for f in truncated_files[:LeadContractorChunkExecutor._MAX_TRUNCATED_FILES_SHOWN])}). "
+                "The actual file may contain additional elements not shown.\n"
+            )
+
+        return parts
 
     # -- helper: existing file contents ------------------------------------
 
@@ -2199,6 +2268,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
 
         parts.extend(self._build_project_identity(chunk))
         parts.extend(self._build_target_files(chunk, is_edit))
+        parts.extend(self._build_structural_delta(chunk))            # Gap 3
         parts.extend(self._build_existing_files(_existing))
 
         if _existing:

@@ -298,18 +298,18 @@ class TestRegistryCompleteness:
 
     def test_t1_count(self):
         t1 = [k for k, v in CONTEXT_FIELD_TIERS.items() if v == 1]
-        assert len(t1) == 11
+        assert len(t1) == 13
 
     def test_t2_count(self):
         t2 = [k for k, v in CONTEXT_FIELD_TIERS.items() if v == 2]
-        assert len(t2) == 10
+        assert len(t2) == 11
 
     def test_t3_count(self):
         t3 = [k for k, v in CONTEXT_FIELD_TIERS.items() if v == 3]
         assert len(t3) == 10
 
     def test_total_fields(self):
-        assert len(CONTEXT_FIELD_TIERS) == 38
+        assert len(CONTEXT_FIELD_TIERS) == 41
 
     def test_default_budget_constant(self):
         assert _ADDITIONAL_CONTEXT_TOKEN_BUDGET == 4000

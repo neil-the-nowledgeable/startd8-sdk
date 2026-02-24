@@ -195,6 +195,7 @@ class FeatureContext:
     edit_mode_hint: str | None = None
     existing_target_files: list[str] = field(default_factory=list)
     has_plan_foundation: bool = False
+    manifest_summary: str = ""
 
 
 @dataclass
@@ -521,6 +522,9 @@ _VALID_EDIT_MODE_HINTS = frozenset({"edit", "create", None})
 def _build_edit_mode_block(
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
+    manifest_summaries: dict[str, str] | None = None,
+    dependency_consumers: dict[str, list[str]] | None = None,
+    manifest_budget: int = 2000,
 ) -> str:
     """Build the edit-mode instruction block for design system prompts.
 
@@ -532,6 +536,15 @@ def _build_edit_mode_block(
         edit_mode_hint: ``"edit"`` for surgical modifications, ``"create"``
             for greenfield, or ``None`` when unknown.
         existing_target_files: Paths that already exist on disk.
+        manifest_summaries: Optional mapping of filepath to structural
+            element summary (classes, functions, imports) from the code
+            manifest.  When provided, file entries include structural
+            detail instead of path-only listings.
+        dependency_consumers: Optional mapping of filepath to list of files
+            that import from it (EM-3).  Computed as the inverse of
+            ``dependency_graph()``.
+        manifest_budget: Character budget for manifest content in the
+            edit-mode block (EM-5).  Defaults to 2000.
 
     Returns:
         A multi-line instruction block, or ``""`` when not in edit mode.
@@ -542,7 +555,38 @@ def _build_edit_mode_block(
         )
     if edit_mode_hint != "edit" or not existing_target_files:
         return ""
-    file_list = "\n".join(f"        - `{f}`" for f in existing_target_files)
+    summaries = manifest_summaries or {}
+    consumers = dependency_consumers or {}
+
+    # EM-5: Per-file budget division
+    n_files = len(existing_target_files)
+    per_file_budget = manifest_budget // n_files if n_files > 0 else manifest_budget
+
+    file_lines: list[str] = []
+    total_manifest_chars = 0
+    for f in existing_target_files:
+        summary = summaries.get(f, "")
+        # EM-5: Truncate per-file summary to budget
+        if summary and len(summary) > per_file_budget:
+            summary = summary[:per_file_budget]
+        if summary:
+            total_manifest_chars += len(summary)
+            # EM-2: file_element_summary() already includes public elements
+            # at default budget tiers (L0/L1), so summaries naturally
+            # prioritize public API surface.
+            indented = "\n".join(
+                f"          {line}" for line in summary.splitlines()
+            )
+            file_lines.append(f"        - `{f}`:\n{indented}")
+        else:
+            file_lines.append(f"        - `{f}`")
+        # EM-3: Append import consumers if available
+        file_consumers = consumers.get(f, [])
+        if file_consumers:
+            file_lines.append(
+                f"          Imported by: {', '.join(file_consumers)}"
+            )
+    file_list = "\n".join(file_lines)
     return (
         "\n      Edit-Mode Guidance (IMPORTANT — this task modifies existing code):\n"
         "      - The following target files ALREADY EXIST in the project:\n"
@@ -554,6 +598,67 @@ def _build_edit_mode_block(
     )
 
 
+def _build_structural_awareness_block(has_manifest: bool) -> str:
+    """Build the structural awareness instruction block for design system prompts.
+
+    When manifest context is present, injects directives for structural
+    accuracy (DS-1 through DS-4).
+
+    Args:
+        has_manifest: Whether manifest structural context is available.
+
+    Returns:
+        Instruction block text, or ``""`` when no manifest context.
+    """
+    if not has_manifest:
+        return ""
+    return (
+        "\n      Structural Awareness (code manifest available):\n"
+        "      - A code manifest with file element summaries (classes, functions, "
+        "imports) is provided in the user prompt. Use it as ground truth for "
+        "existing code structure.\n"
+        "      - Reference exact fully-qualified names (FQNs) from the manifest "
+        "when describing modifications to existing elements.\n"
+        "      - For edit-mode tasks, your design MUST be structurally consistent "
+        "with the manifest — do not rename, move, or remove elements unless "
+        "explicitly required.\n"
+        "      - When adding new classes, functions, or methods, declare them "
+        "explicitly so the IMPLEMENT phase knows they are intentional additions "
+        "rather than references to existing elements.\n"
+    )
+
+
+def _build_structural_validation_block(has_manifest: bool) -> str:
+    """Build the structural validation block for reviewer system prompts (DR-1, DR-2, DR-5)."""
+    if not has_manifest:
+        return ""
+    return (
+        "\n      Structural Validation (code manifest provided):\n"
+        "      - Verify that the design references existing classes, functions, and "
+        "imports correctly per the structural context provided.\n"
+        "      - Flag any modifications that would break existing public APIs or "
+        "remove elements depended on by other modules.\n"
+        "      - If the design removes or renames public elements, flag as a potential "
+        "breaking change. Reference the Dependencies section to identify which "
+        "consumer modules would be affected.\n"
+        "      - Include structural accuracy as a review dimension — designs that "
+        "reference non-existent elements or misspell FQNs should be flagged.\n"
+    )
+
+
+def _build_structural_ground_truth_block(has_manifest: bool) -> str:
+    """Build the structural ground-truth block for arbiter system prompts (DR-4, DR-5)."""
+    if not has_manifest:
+        return ""
+    return (
+        "\n      Structural Ground Truth (code manifest provided):\n"
+        "      - When reviewer and arbiter disagree on structural feasibility, "
+        "use the code manifest as the tiebreaker — it reflects actual file contents.\n"
+        "      - Weight structural accuracy alongside feasibility and simplicity "
+        "when scoring the design.\n"
+    )
+
+
 def _format_system_prompt(
     template_name: str,
     sections: list[str] | None = None,
@@ -561,6 +666,10 @@ def _format_system_prompt(
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
     has_plan_foundation: bool = False,
+    manifest_summaries: dict[str, str] | None = None,
+    has_manifest_context: bool = False,
+    dependency_consumers: dict[str, list[str]] | None = None,
+    manifest_budget: int = 2000,
 ) -> str:
     """Load a design system prompt from YAML and format its placeholders.
 
@@ -579,6 +688,14 @@ def _format_system_prompt(
             disk — used by the edit-mode block.
         has_plan_foundation: When ``True``, injects a foundation-mode
             instruction block via ``{foundation_block}`` (REQ-PD-005).
+        manifest_summaries: Per-file structural summaries for edit-mode block
+            enhancement.
+        has_manifest_context: When ``True``, injects structural awareness
+            directives (DS-1 through DS-4).
+        dependency_consumers: Inverse dependency graph — maps filepath to
+            files that import from it (EM-3).
+        manifest_budget: Character budget for manifest content in the
+            edit-mode block (EM-5).
 
     Returns:
         The fully-formatted system prompt string.
@@ -593,7 +710,11 @@ def _format_system_prompt(
     if depth_guidance:
         depth_line = f"\n\n**Scope guidance:** {depth_guidance}"
 
-    edit_mode_block = _build_edit_mode_block(edit_mode_hint, existing_target_files)
+    edit_mode_block = _build_edit_mode_block(
+        edit_mode_hint, existing_target_files, manifest_summaries,
+        dependency_consumers=dependency_consumers,
+        manifest_budget=manifest_budget,
+    )
 
     # REQ-PD-005: Foundation-aware system prompt steering
     foundation_block = ""
@@ -607,12 +728,15 @@ def _format_system_prompt(
             "and protocol constraints exactly."
         )
 
+    structural_awareness_block = _build_structural_awareness_block(has_manifest_context)
+
     template = get_template("design", template_name)
     return template.format(
         sections_list=section_list,
         depth_line=depth_line,
         edit_mode_block=edit_mode_block,
         foundation_block=foundation_block,
+        structural_awareness_block=structural_awareness_block,
     )
 
 
@@ -622,11 +746,18 @@ def build_design_system_prompt(
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
     has_plan_foundation: bool = False,
+    manifest_summaries: dict[str, str] | None = None,
+    has_manifest_context: bool = False,
+    dependency_consumers: dict[str, list[str]] | None = None,
+    manifest_budget: int = 2000,
 ) -> str:
     """Build a dynamic system prompt for fresh design generation."""
     return _format_system_prompt(
         "design_system", sections, depth_guidance,
         edit_mode_hint, existing_target_files, has_plan_foundation,
+        manifest_summaries, has_manifest_context,
+        dependency_consumers=dependency_consumers,
+        manifest_budget=manifest_budget,
     )
 
 
@@ -642,20 +773,32 @@ def build_refine_system_prompt(
     edit_mode_hint: str | None = None,
     existing_target_files: list[str] | None = None,
     has_plan_foundation: bool = False,
+    manifest_summaries: dict[str, str] | None = None,
+    has_manifest_context: bool = False,
+    dependency_consumers: dict[str, list[str]] | None = None,
+    manifest_budget: int = 2000,
 ) -> str:
     """Build a system prompt for refining an existing design document."""
     return _format_system_prompt(
         "refine_system", sections, depth_guidance,
         edit_mode_hint, existing_target_files, has_plan_foundation,
+        manifest_summaries, has_manifest_context,
+        dependency_consumers=dependency_consumers,
+        manifest_budget=manifest_budget,
     )
 
 
 # Backward-compatible prompt constants — single source of truth is design.yaml.
 # Internal methods use format_prompt()/get_template() directly.
 # format_prompt() resolves {{ → { in YAML templates with escaped braces.
-REVIEWER_SYSTEM_PROMPT = format_prompt("design", "reviewer_system")
+# Pass empty defaults for new structural placeholders to avoid KeyError.
+REVIEWER_SYSTEM_PROMPT = format_prompt(
+    "design", "reviewer_system", structural_validation_block="",
+)
 REVIEWER_USER_PROMPT_TEMPLATE = get_template("design", "reviewer_user")
-ARBITER_SYSTEM_PROMPT = format_prompt("design", "arbiter_system")
+ARBITER_SYSTEM_PROMPT = format_prompt(
+    "design", "arbiter_system", structural_ground_truth_block="",
+)
 ARBITER_USER_PROMPT_TEMPLATE = get_template("design", "arbiter_user")
 REVISION_SYSTEM_PROMPT = format_prompt("design", "revision_system")
 REVISION_USER_PROMPT_TEMPLATE = get_template("design", "revision_user")
@@ -1218,6 +1361,9 @@ class DesignDocumentationPhase:
 
         is_refine = context.prior_design is not None
 
+        # Manifest context rendering (DU-1 through DU-7)
+        manifest_context_str = context.manifest_summary or ""
+
         # Shared parameters for both fresh and refine user prompts
         prompt_params = dict(
             feature_name=context.feature_name,
@@ -1225,9 +1371,12 @@ class DesignDocumentationPhase:
             target_file=context.target_file,
             constraints=constraints_str,
             additional_context=additional_context_str,
+            manifest_context=manifest_context_str,
             requirements_block=requirements_block,
             revision_guidance=revision_guidance,
         )
+
+        _has_manifest = bool(manifest_context_str)
 
         if is_refine:
             prompt_params["prior_design"] = context.prior_design
@@ -1238,6 +1387,7 @@ class DesignDocumentationPhase:
                 edit_mode_hint=context.edit_mode_hint,
                 existing_target_files=context.existing_target_files,
                 has_plan_foundation=context.has_plan_foundation,
+                has_manifest_context=_has_manifest,
             )
             logger.info(
                 "Refining existing design document for '%s' (iteration %d)",
@@ -1252,6 +1402,7 @@ class DesignDocumentationPhase:
                 edit_mode_hint=context.edit_mode_hint,
                 existing_target_files=context.existing_target_files,
                 has_plan_foundation=context.has_plan_foundation,
+                has_manifest_context=_has_manifest,
             )
             logger.info(
                 "Generating design document for '%s' (iteration %d)",
@@ -1357,11 +1508,38 @@ class DesignDocumentationPhase:
                     + "\n\n"
                 )
 
-        system_prompt = format_prompt("design", f"{role_key}_system")
+        # Manifest context for reviewer/arbiter (DR-1 through DR-5)
+        manifest_context = ""
+        _has_manifest = False
+        if feature_context and feature_context.manifest_summary:
+            manifest_context = (
+                "**Structural Context (code manifest):**\n"
+                + feature_context.manifest_summary
+                + "\n\n"
+            )
+            _has_manifest = True
+
+        # Build structural blocks for reviewer vs arbiter
+        if role == ReviewRole.REVIEWER:
+            structural_block = _build_structural_validation_block(_has_manifest)
+        else:
+            structural_block = _build_structural_ground_truth_block(_has_manifest)
+
+        # Dynamic format with structural blocks
+        structural_key = (
+            "structural_validation_block"
+            if role == ReviewRole.REVIEWER
+            else "structural_ground_truth_block"
+        )
+        system_prompt = format_prompt(
+            "design", f"{role_key}_system",
+            **{structural_key: structural_block},
+        )
         prompt = format_prompt(
             "design", f"{role_key}_user",
             design_document=design.raw_text,
             project_context=project_context,
+            manifest_context=manifest_context,
         )
 
         logger.info(

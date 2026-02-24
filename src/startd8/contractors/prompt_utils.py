@@ -25,6 +25,8 @@ CONTEXT_FIELD_TIERS: dict[str, int] = {
     "contested_files": 0,
     "collision_resolution": 0,
     # T1 — High: frames scope and constraints
+    "manifest_context": 1,
+    "manifest_edit_context": 1,
     "project_goals": 1,
     "constraints_from_manifest": 1,
     "shared_modules": 1,
@@ -37,6 +39,7 @@ CONTEXT_FIELD_TIERS: dict[str, int] = {
     "artifact_dependencies": 1,
     "staleness_guidance": 1,
     # T2 — Medium: informational, collapsed rendering
+    "manifest_dependencies": 2,
     "parameter_sources": 2,
     "derivation_rules": 2,
     "resolved_parameters": 2,

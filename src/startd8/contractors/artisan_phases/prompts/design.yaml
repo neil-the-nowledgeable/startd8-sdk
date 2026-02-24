@@ -29,7 +29,8 @@ prompts:
       - When a service explicitly does NOT use a capability (e.g., "no OpenTelemetry"), state this in the design document so the implementation phase does not add it.
       {depth_line}
       {foundation_block}
-    placeholders: [sections_list, depth_line, edit_mode_block, foundation_block]
+      {structural_awareness_block}
+    placeholders: [sections_list, depth_line, edit_mode_block, foundation_block, structural_awareness_block]
 
   design_user:
     description: "User prompt for DESIGN generation"
@@ -46,8 +47,10 @@ prompts:
 
       **Additional Context:** {additional_context}
 
+      {manifest_context}
+
       {revision_guidance}
-    placeholders: [feature_name, requirements_block, description, target_file, constraints, additional_context, revision_guidance]
+    placeholders: [feature_name, requirements_block, description, target_file, constraints, additional_context, manifest_context, revision_guidance]
 
   refine_system:
     description: "System prompt for refining an existing design document (dynamic: sections_list, depth_line)"
@@ -77,7 +80,8 @@ prompts:
       {edit_mode_block}
       {depth_line}
       {foundation_block}
-    placeholders: [sections_list, depth_line, edit_mode_block, foundation_block]
+      {structural_awareness_block}
+    placeholders: [sections_list, depth_line, edit_mode_block, foundation_block, structural_awareness_block]
 
   refine_user:
     description: "User prompt for refining an existing design document"
@@ -93,6 +97,8 @@ prompts:
       **Constraints:** {constraints}
 
       **Additional Context:** {additional_context}
+
+      {manifest_context}
 
       ---
 
@@ -110,7 +116,7 @@ prompts:
       - Maintain the same section structure (## headers).
 
       {revision_guidance}
-    placeholders: [feature_name, requirements_block, description, target_file, constraints, additional_context, prior_design, revision_guidance]
+    placeholders: [feature_name, requirements_block, description, target_file, constraints, additional_context, manifest_context, prior_design, revision_guidance]
 
   review_json_schema:
     description: "JSON schema for reviewer/arbiter verdicts (helper, not a prompt)"
@@ -143,14 +149,14 @@ prompts:
       - Completeness of all required sections
       - Alignment with established best practices
       - Missing important considerations
-
+      {structural_validation_block}
       Output ONLY valid JSON, no additional text.
-    placeholders: []
+    placeholders: [structural_validation_block]
 
   reviewer_user:
     description: "User prompt for design document review"
-    template: "{project_context}Review this design document:\n\n{design_document}\n\nProvide your verdict as JSON matching the specified schema."
-    placeholders: [project_context, design_document]
+    template: "{project_context}{manifest_context}Review this design document:\n\n{design_document}\n\nProvide your verdict as JSON matching the specified schema."
+    placeholders: [project_context, manifest_context, design_document]
 
   arbiter_system:
     description: "System prompt for the pragmatic arbiter role"
@@ -171,14 +177,14 @@ prompts:
       - Simplicity vs. over-engineering
       - Alignment with project constraints and timeline
       - Practical concerns and real-world considerations
-
+      {structural_ground_truth_block}
       Output ONLY valid JSON, no additional text.
-    placeholders: []
+    placeholders: [structural_ground_truth_block]
 
   arbiter_user:
     description: "User prompt for arbiter review"
-    template: "{project_context}Review this design document:\n\n{design_document}\n\nProvide your verdict as JSON matching the specified schema."
-    placeholders: [project_context, design_document]
+    template: "{project_context}{manifest_context}Review this design document:\n\n{design_document}\n\nProvide your verdict as JSON matching the specified schema."
+    placeholders: [project_context, manifest_context, design_document]
 
   revision_system:
     description: "System prompt for design document revision"

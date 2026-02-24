@@ -889,6 +889,183 @@ def _extract_design_target_files(
 
 
 # ============================================================================
+# Handoff enrichment helpers — Gaps 1-5
+# ============================================================================
+
+# Regex for file-level action annotations: `path/to/file.py` (modify)
+_FILE_ACTION_RE = re.compile(
+    r'-\s*`([^`]+\.\w{1,5})`\s*(?:\((\w+)\))?',
+)
+
+# Regex for element-level references: backtick-quoted identifiers
+_ELEMENT_REF_RE = re.compile(
+    r'`(\w[\w.]*(?:\([^)]*\))?)`',
+)
+
+# Common element action verbs in design docs
+_ACTION_VERB_RE = re.compile(
+    r'^(add|create|new|introduce|modify|update|change|alter|preserve|keep|retain)',
+    re.IGNORECASE,
+)
+
+
+def _extract_structural_delta(
+    design_doc: str,
+) -> dict[str, list[dict[str, str]]]:
+    """Extract per-file structural intent from a design document.
+
+    Parses the ``### Files Touched`` section for file-level create/modify
+    annotations and element-level action descriptions.
+
+    Args:
+        design_doc: The raw design document text.
+
+    Returns:
+        ``{filepath: [{"element": "...", "action": "add|modify|preserve",
+        "detail": "..."}]}``  Empty dict if no ``### Files Touched`` section
+        is found or the section has no parseable entries.
+    """
+    delta: dict[str, list[dict[str, str]]] = {}
+    section_match = _FILES_TOUCHED_SECTION_RE.search(design_doc)
+    if not section_match:
+        return delta
+
+    section_text = section_match.group(1)
+    current_file: str | None = None
+    current_action = "modify"
+
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        # File entry: - `path/to/file.py` (modify)
+        file_match = _FILE_ACTION_RE.match(stripped)
+        if file_match:
+            current_file = file_match.group(1)
+            action_hint = (file_match.group(2) or "modify").lower()
+            if action_hint in ("create", "new"):
+                current_action = "add"
+            elif action_hint in ("modify", "update", "change"):
+                current_action = "modify"
+            elif action_hint in ("preserve", "keep"):
+                current_action = "preserve"
+            else:
+                current_action = action_hint
+            delta.setdefault(current_file, [])
+            continue
+
+        # Sub-item under a file (indented bullet or description)
+        if current_file and stripped.startswith("-"):
+            element_text = stripped.lstrip("- ").strip()
+            element_action = current_action
+            element_name = ""
+
+            # Detect action verb at start of line
+            verb_match = _ACTION_VERB_RE.match(element_text)
+            if verb_match:
+                verb = verb_match.group(1).lower()
+                if verb in ("add", "create", "new", "introduce"):
+                    element_action = "add"
+                elif verb in ("modify", "update", "change", "alter"):
+                    element_action = "modify"
+                elif verb in ("preserve", "keep", "retain"):
+                    element_action = "preserve"
+
+            # Extract element name from backtick references
+            elem_refs = _ELEMENT_REF_RE.findall(element_text)
+            if elem_refs:
+                element_name = elem_refs[0]
+
+            delta[current_file].append({
+                "element": element_name,
+                "action": element_action,
+                "detail": element_text,
+            })
+
+    return delta
+
+
+def _extract_referenced_elements(
+    design_doc: str,
+    manifest_elements: dict[str, list[str]] | None = None,
+) -> dict[str, list[str]]:
+    """Extract element names referenced in a design document.
+
+    Scans the entire design doc for backtick-quoted identifiers that look
+    like code elements (class names, function names, FQNs).  When a manifest
+    is provided, only elements that match known manifest entries are included
+    (reducing noise from prose references like ``True`` or ``None``).
+
+    Args:
+        design_doc: The raw design document text.
+        manifest_elements: Optional ``{filepath: [element_name, ...]}`` from
+            the manifest registry for cross-validation.
+
+    Returns:
+        ``{filepath: [element_name, ...]}`` of elements referenced in the
+        design doc that correspond to manifest entries.  Empty dict when
+        no manifest is provided or no cross-references are found.
+    """
+    if not manifest_elements:
+        return {}
+
+    # Build reverse lookup: element_name → filepath
+    elem_to_file: dict[str, str] = {}
+    for fpath, elements in manifest_elements.items():
+        for elem in elements:
+            # Store both full FQN and simple name
+            elem_to_file[elem] = fpath
+            if "." in elem:
+                simple = elem.rsplit(".", 1)[-1]
+                elem_to_file.setdefault(simple, fpath)
+
+    # Scan design doc for backtick-quoted references
+    referenced: dict[str, list[str]] = {}
+    for ref in _ELEMENT_REF_RE.findall(design_doc):
+        # Strip trailing parentheses for matching
+        clean_ref = ref.rstrip(")")
+        if "(" in clean_ref:
+            clean_ref = clean_ref[:clean_ref.index("(")]
+        fpath = elem_to_file.get(clean_ref) or elem_to_file.get(ref)
+        if fpath:
+            referenced.setdefault(fpath, [])
+            if clean_ref not in referenced[fpath]:
+                referenced[fpath].append(clean_ref)
+
+    return referenced
+
+
+def _compute_manifest_file_checksums(
+    target_files: list[str],
+    project_root: str,
+) -> dict[str, str]:
+    """Compute SHA-256 checksums for target files at design time.
+
+    Args:
+        target_files: List of file paths (relative to project_root).
+        project_root: Absolute path to the project root.
+
+    Returns:
+        ``{filepath: sha256_hex}`` for files that exist and are readable.
+    """
+    checksums: dict[str, str] = {}
+    root = Path(project_root) if project_root else None
+    if not root:
+        return checksums
+
+    for fpath in target_files:
+        full = root / fpath
+        if full.exists() and full.is_file():
+            try:
+                content = full.read_bytes()
+                checksums[fpath] = hashlib.sha256(content).hexdigest()
+            except OSError as exc:
+                logger.debug("Checksum computation failed for %s: %s", fpath, exc)
+    return checksums
+
+
+# ============================================================================
 # CCD: Context Correctness by Design helpers
 # ============================================================================
 
@@ -1936,6 +2113,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         lane_collision_context: str | None = None,
         # REQ-PD-002/007/008/009: Bridge context from Plan Ingestion
         bridge_context: dict[str, Any] | None = None,
+        # Phase 5: Manifest context for DESIGN phase (CS-1 through CS-6)
+        manifest_registry: Any = None,
+        manifest_context_budget: int = 2000,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -2398,6 +2578,62 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             _foundation_keys & set(additional_context.keys())
         )
 
+        # Phase 5: Manifest context injection (CS-1 through CS-6)
+        # Mirror the IMPLEMENT manifest pattern (lines 5658-5680)
+        _manifest_summary = ""
+        if manifest_registry is not None and task.target_files:
+            _mc_parts: list[str] = []
+            for tf in task.target_files:
+                try:
+                    summary = manifest_registry.file_element_summary(
+                        tf, manifest_context_budget,
+                    )
+                    if summary:
+                        _mc_parts.append(f"### {tf}\n{summary}")
+                except Exception:
+                    logger.debug(
+                        "DESIGN: manifest lookup failed for %s", tf,
+                        exc_info=True,
+                    )
+            if _mc_parts:
+                _manifest_summary = "\n\n".join(_mc_parts)
+                additional_context["manifest_context"] = _manifest_summary
+                logger.debug(
+                    "DESIGN: manifest context injected for %d/%d target files",
+                    len(_mc_parts), len(task.target_files),
+                )
+
+            # CS-4: Cross-task dependency extraction via dependency_graph()
+            try:
+                dep_graph = manifest_registry.dependency_graph()
+                if dep_graph and isinstance(dep_graph, dict):
+                    dep_lines: list[str] = []
+                    for tf in task.target_files:
+                        if tf in dep_graph:
+                            dep_lines.append(
+                                f"- {tf} imports from: "
+                                f"{', '.join(dep_graph[tf])}"
+                            )
+                    if dep_lines:
+                        additional_context["manifest_dependencies"] = (
+                            "\n".join(dep_lines)
+                        )
+            except Exception:
+                logger.debug(
+                    "DESIGN: dependency_graph() failed", exc_info=True,
+                )
+
+        # CS-3: Edit-mode manifest context key — provides manifest summary
+        # specifically scoped for edit-mode tasks so the LLM has structural
+        # awareness of what it is modifying.
+        if _edit_mode_hint == "edit" and _manifest_summary:
+            additional_context["manifest_edit_context"] = _manifest_summary
+
+        # DU-4 (Tier 2): ManifestDiff for redesign iterations
+        # When prior manifest snapshot is available, compute diff here
+        # via ManifestDiff.diff(old_manifest, new_manifest) and render as
+        # "### Structural Changes Since Last Design" in additional_context.
+
         return FeatureContext(
             feature_name=task.title,
             description=task.description,
@@ -2412,6 +2648,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             edit_mode_hint=_edit_mode_hint,
             existing_target_files=_existing_targets,
             has_plan_foundation=_has_plan_foundation,
+            manifest_summary=_manifest_summary,
         )
 
     @staticmethod
@@ -2821,6 +3058,28 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             "DESIGN: failed to auto-load handoff from %s: %s",
                             handoff_path, exc,
                         )
+
+        # Phase 5: Manifest registry resolution for DESIGN (CS-1)
+        _design_manifest_registry = None
+        if self.config.manifest_consumption_enabled:
+            _design_manifest_registry = (
+                self.config.manifest_registry
+                or context.get("project_manifests")
+            )
+        if _design_manifest_registry is not None:
+            logger.info("DESIGN: manifest registry available for structural context")
+        else:
+            logger.info(
+                "manifest.fallback",
+                extra={
+                    "surface": "design_enrichment",
+                    "reason": (
+                        "registry_unavailable"
+                        if not self.config.manifest_consumption_enabled
+                        else "no_registry"
+                    ),
+                },
+            )
 
         # Extract shared context for cross-task design quality
         plan_goals = context.get("plan_goals", [])
@@ -3309,6 +3568,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             calibration_hints=inv_calibration_hints,
                             complexity_dimensions=context.get("complexity_dimensions"),
                             prior_design_text=prior_design_text,
+                            # Phase 5: Manifest context for V2 path
+                            manifest_registry=_design_manifest_registry,
+                            manifest_context_budget=self.config.manifest_context_budget,
                         )
                         _v2_raw = self._run_v2_generate(
                             backend, _v2_user, _v2_system,
@@ -3357,6 +3619,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             lane_peer_token_budget=self.config.design_lane_peer_token_budget,
                             task_title_lookup=_task_title_lookup,
                             bridge_context=_bridge_context if _bridge_context else None,
+                            # Phase 5: Manifest context for DESIGN
+                            manifest_registry=_design_manifest_registry,
+                            manifest_context_budget=self.config.manifest_context_budget,
                         )
                         design_phase = self._get_design_phase()
                         result = self._run_design_async(
@@ -3591,6 +3856,154 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             else:
                 context["design_mode_summary"][tid] = "create"
 
+        # ── Gaps 1-5: Handoff enrichment extraction ────────────────────
+        _design_structural_delta: dict[str, dict[str, list[dict[str, str]]]] = {}
+        _design_referenced_elements: dict[str, dict[str, list[str]]] = {}
+        _manifest_file_checksums: dict[str, str] = {}
+        _design_mode_evidence: dict[str, dict[str, Any]] = {}
+        _manifest_truncation_tier: dict[str, str] = {}
+
+        _project_root = context.get("project_root", "")
+
+        # Build manifest element index for cross-validation (Gap 1)
+        _manifest_elements: dict[str, list[str]] = {}
+        if _design_manifest_registry is not None:
+            try:
+                for _task in tasks:
+                    for _tf in _task.target_files:
+                        if _tf not in _manifest_elements:
+                            _summary = _design_manifest_registry.file_element_summary(
+                                _tf, 500,
+                            )
+                            if _summary:
+                                # Extract element names from summary lines
+                                _elems: list[str] = []
+                                for _sl in _summary.splitlines():
+                                    _sl = _sl.strip()
+                                    # Lines like "  ClassName(Base)" or "  func_name(x, y)"
+                                    _em = re.match(r'^(\w[\w.]*)', _sl)
+                                    if _em and _em.group(1) not in (
+                                        "Classes", "Functions", "Imports", "Lines",
+                                    ):
+                                        _elems.append(_em.group(1))
+                                _manifest_elements[_tf] = _elems
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.warning(
+                    "DESIGN: manifest element index build failed: %s", exc,
+                    exc_info=True,
+                )
+
+        for tid, entry in design_results.items():
+            if not isinstance(entry, dict):
+                continue
+            doc_text = entry.get("design_document", "")
+            if not doc_text or entry.get("status") in (
+                "design_failed", "env_blocked", "dry_run_skipped",
+            ):
+                continue
+
+            # Gap 3: Structural delta from ### Files Touched section
+            try:
+                delta = _extract_structural_delta(doc_text)
+                if delta:
+                    _design_structural_delta[tid] = delta
+            except (re.error, ValueError, KeyError) as exc:
+                logger.debug("DESIGN Gap 3: delta extraction failed for %s: %s", tid, exc)
+
+            # Gap 1: Referenced elements cross-validated against manifest
+            _task_manifest_elems = {}
+            _task_obj = _task_by_id.get(tid)
+            if _task_obj:
+                for _tf in _task_obj.target_files:
+                    if _tf in _manifest_elements:
+                        _task_manifest_elems[_tf] = _manifest_elements[_tf]
+            try:
+                refs = _extract_referenced_elements(doc_text, _task_manifest_elems)
+                if refs:
+                    _design_referenced_elements[tid] = refs
+            except (re.error, ValueError, KeyError) as exc:
+                logger.debug("DESIGN Gap 1: element extraction failed for %s: %s", tid, exc)
+
+            # Gap 4: Design mode evidence — collect signals that informed the mode
+            mode = context["design_mode_summary"].get(tid, "create")
+            evidence: list[str] = []
+            if _task_obj:
+                if any(f in _scaffold_existing for f in _task_obj.target_files):
+                    evidence.append("scaffold.existing_target_files")
+                if getattr(_task_obj, "existing_content_hash", None) is not None:
+                    evidence.append("existing_content_hash")
+            if entry.get("status") == "refined":
+                evidence.append("design_status=refined")
+            # Check design doc for edit signals
+            doc_lower = doc_text.lower()
+            if "(modify)" in doc_lower or "(update)" in doc_lower:
+                evidence.append("design_doc_modify_annotation")
+            if "(create)" in doc_lower or "(new)" in doc_lower:
+                evidence.append("design_doc_create_annotation")
+            _design_mode_evidence[tid] = {
+                "mode": mode,
+                "evidence": evidence,
+                "reasoning": (
+                    f"{len(evidence)} signal(s): {', '.join(evidence)}"
+                    if evidence else "no upstream signals"
+                ),
+            }
+
+        # Gap 2: Manifest file checksums for all target files at design time
+        _all_target_files = list(dict.fromkeys(
+            f for _task in tasks for f in _task.target_files
+        ))
+        _manifest_file_checksums = _compute_manifest_file_checksums(
+            _all_target_files, _project_root,
+        )
+
+        # Gap 5: Record manifest truncation tier per file
+        # Threshold fractions for classifying truncation fidelity
+        _TIER_FULL_THRESHOLD = 0.95
+        _TIER_COMPACT_THRESHOLD = 0.50
+        if _design_manifest_registry is not None:
+            # Ensure the "full" probe budget always exceeds the design budget
+            _full_probe_budget = max(10_000, self.config.manifest_context_budget * 5)
+            for _tf in _all_target_files:
+                try:
+                    full_summary = _design_manifest_registry.file_element_summary(
+                        _tf, _full_probe_budget,
+                    )
+                    if not full_summary:
+                        _manifest_truncation_tier[_tf] = "unavailable"
+                        continue
+                    budget_summary = _design_manifest_registry.file_element_summary(
+                        _tf, self.config.manifest_context_budget,
+                    )
+                    if budget_summary and len(budget_summary) >= len(full_summary) * _TIER_FULL_THRESHOLD:
+                        _manifest_truncation_tier[_tf] = "full"
+                    elif budget_summary and len(budget_summary) >= len(full_summary) * _TIER_COMPACT_THRESHOLD:
+                        _manifest_truncation_tier[_tf] = "compact"
+                    elif budget_summary:
+                        _manifest_truncation_tier[_tf] = "public_only"
+                    else:
+                        _manifest_truncation_tier[_tf] = "fqn_only"
+                except (AttributeError, TypeError, ValueError):
+                    _manifest_truncation_tier[_tf] = "unavailable"
+
+        # Persist enrichment data in context for downstream consumption
+        context["design_structural_delta"] = _design_structural_delta
+        context["design_referenced_elements"] = _design_referenced_elements
+        context["manifest_file_checksums"] = _manifest_file_checksums
+        context["design_mode_evidence"] = _design_mode_evidence
+        context["manifest_truncation_tier"] = _manifest_truncation_tier
+
+        logger.info(
+            "DESIGN enrichment: delta=%d, refs=%d, checksums=%d, "
+            "evidence=%d, truncation=%d (of %d tasks)",
+            len(_design_structural_delta),
+            len(_design_referenced_elements),
+            len(_manifest_file_checksums),
+            len(_design_mode_evidence),
+            len(_manifest_truncation_tier),
+            len(design_results),
+        )
+
         # CCD-500: Post-lane compatibility check
         _lane_conflicts: list[dict[str, Any]] = []
         if _design_lanes is not None and shared_file_manifest:
@@ -3659,6 +4072,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     source_checksum=context.get("source_checksum"),
                     design_mode_summary=context.get("design_mode_summary", {}),
                     shared_file_manifest=shared_file_manifest,
+                    design_structural_delta=_design_structural_delta,
+                    design_referenced_elements=_design_referenced_elements,
+                    manifest_file_checksums=_manifest_file_checksums,
+                    design_mode_evidence=_design_mode_evidence,
+                    manifest_truncation_tier=_manifest_truncation_tier,
                 )
                 logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
             except (OSError, ValueError, TypeError) as exc:
@@ -4442,15 +4860,22 @@ class Test{class_name}:
         task: SeedTask,
         scaffold: dict[str, Any],
         design_mode_summary: dict[str, str],
+        design_mode_evidence: dict[str, dict[str, Any]] | None = None,
     ) -> EditModeClassification:
         """Classify each target file as 'create' or 'edit' using upstream signals.
 
-        Consumes 5 signals computed but previously unconsumed by IMPLEMENT:
+        Consumes 5+ signals computed but previously unconsumed by IMPLEMENT:
           - scaffold["existing_target_files"] (Tier 1, weight 2)
           - task.existing_content_hash (Tier 1, weight 2)
-          - design_mode_summary[task_id] (Tier 2, weight 1)
+          - design_mode_summary[task_id] (Tier 2, weight 1; elevated to
+            weight 2 when design_mode_evidence has >=2 corroborating signals)
           - scaffold["staleness_classification"] (Tier 2, weight 1)
           - task.file_scope (Tier 2, weight 1)
+
+        Args:
+            design_mode_evidence: Gap 4 enrichment — when provided with >=2
+                evidence signals, the design_mode_summary weight is elevated
+                from Tier 2 (1) to Tier 1 (2), reflecting higher confidence.
 
         Returns EditModeClassification with typed fields for mode, per_file,
         confidence, and signal_conflicts.
@@ -4458,6 +4883,13 @@ class Test{class_name}:
         existing_targets = set(scaffold.get("existing_target_files", []))
         staleness_map = scaffold.get("staleness_classification", {})
         design_mode = design_mode_summary.get(task.task_id, "")
+
+        # Gap 4: Determine design mode weight based on evidence strength
+        _evidence = (design_mode_evidence or {}).get(task.task_id, {})
+        _evidence_signals = _evidence.get("evidence", [])
+        # Elevate from Tier 2 (weight 1) to Tier 1 (weight 2) when DESIGN
+        # has >=2 corroborating signals (e.g. scaffold + doc annotation)
+        _design_mode_weight = 2 if len(_evidence_signals) >= 2 else 1
 
         per_file: dict[str, PerFileMode] = {}
         signal_conflicts: list[str] = []
@@ -4482,13 +4914,17 @@ class Test{class_name}:
                 edit_weight += 2
                 file_signals_edit.append("scaffold.existing_target_files")
 
-            # Tier 2 (weight 1): design_mode_summary
+            # Tier 2 (weight 1, elevated to 2 with evidence): design_mode_summary
             if design_mode == "update":
-                edit_weight += 1
-                file_signals_edit.append("design_mode_summary=update")
+                edit_weight += _design_mode_weight
+                file_signals_edit.append(
+                    f"design_mode_summary=update(w={_design_mode_weight})"
+                )
             elif design_mode == "create":
-                create_weight += 1
-                file_signals_create.append("design_mode_summary=create")
+                create_weight += _design_mode_weight
+                file_signals_create.append(
+                    f"design_mode_summary=create(w={_design_mode_weight})"
+                )
 
             # Tier 2 (weight 1): staleness_classification
             staleness = staleness_map.get(fpath, "")
@@ -5612,10 +6048,12 @@ class Test{class_name}:
             # PCA-600: Build per-task edit mode classification from upstream signals
             scaffold = context.get("scaffold", {})
             design_mode_summary = context.get("design_mode_summary", {})
+            _mode_evidence = context.get("design_mode_evidence", {})
             edit_mode_map: dict[str, EditModeClassification] = {}
             for task in tasks:
                 edit_mode_map[task.task_id] = self._classify_edit_mode(
                     task, scaffold, design_mode_summary,
+                    design_mode_evidence=_mode_evidence,
                 )
             edit_tasks = sum(1 for v in edit_mode_map.values() if v.mode == "edit")
             conflict_tasks = sum(1 for v in edit_mode_map.values() if v.signal_conflicts)
@@ -5629,6 +6067,61 @@ class Test{class_name}:
                 task_id: classification.to_dict()
                 for task_id, classification in edit_mode_map.items()
             }
+
+            # Gap 2: Manifest staleness check — compare design-time checksums
+            # against current file state to detect drift between split runs.
+            _design_checksums = context.get("manifest_file_checksums", {})
+            if _design_checksums and project_root:
+                _current_checksums = _compute_manifest_file_checksums(
+                    list(_design_checksums.keys()), str(project_root),
+                )
+                _stale_files = [
+                    fpath for fpath, expected in _design_checksums.items()
+                    if fpath in _current_checksums
+                    and _current_checksums[fpath] != expected
+                ]
+                if _stale_files:
+                    logger.warning(
+                        "IMPLEMENT Gap 2: %d target file(s) changed since DESIGN — "
+                        "design docs may reference stale structure: %s",
+                        len(_stale_files),
+                        ", ".join(_stale_files[:5]),
+                    )
+                    context["_manifest_stale_files"] = _stale_files
+
+            # Gap 1: Phantom element warnings — elements referenced in design
+            # but not found in manifest at IMPLEMENT time.
+            _phantom_warnings: dict[str, list[str]] = {}
+            _impl_manifest_registry = None
+            if self.config.manifest_consumption_enabled:
+                _impl_manifest_registry = (
+                    self.config.manifest_registry
+                    or context.get("project_manifests")
+                )
+            _design_refs = context.get("design_referenced_elements", {})
+            if _design_refs and _impl_manifest_registry is not None:
+                for tid, file_refs in _design_refs.items():
+                    for fpath, elements in file_refs.items():
+                        try:
+                            _current_summary = _impl_manifest_registry.file_element_summary(
+                                fpath, 5000,
+                            )
+                        except (AttributeError, TypeError, OSError):
+                            _current_summary = None
+                        if not _current_summary:
+                            continue
+                        for elem in elements:
+                            if elem not in _current_summary:
+                                _phantom_warnings.setdefault(tid, []).append(
+                                    f"{fpath}:{elem}"
+                                )
+                if _phantom_warnings:
+                    logger.warning(
+                        "IMPLEMENT Gap 1: phantom element references in %d task(s): %s",
+                        len(_phantom_warnings),
+                        {tid: refs[:3] for tid, refs in _phantom_warnings.items()},
+                    )
+                    context["_phantom_element_warnings"] = _phantom_warnings
 
             chunks, skipped_reports = self._tasks_to_chunks(
                 tasks,
@@ -5678,6 +6171,30 @@ class Test{class_name}:
                     "manifest.fallback",
                     extra={"surface": "implement_enrichment", "reason": "registry_unavailable" if not self.config.manifest_consumption_enabled else "no_registry"},
                 )
+
+            # Gaps 3/4/5: Enrich chunks with handoff improvement data
+            _structural_delta = context.get("design_structural_delta", {})
+            _mode_evidence = context.get("design_mode_evidence", {})
+            _trunc_tier = context.get("manifest_truncation_tier", {})
+            _phantom_warns = context.get("_phantom_element_warnings", {})
+            for chunk in chunks:
+                tid = chunk.chunk_id
+                # Gap 3: structural delta for element-level guidance
+                if tid in _structural_delta:
+                    chunk.metadata["_design_structural_delta"] = _structural_delta[tid]
+                # Gap 4: design mode evidence
+                if tid in _mode_evidence:
+                    chunk.metadata["_design_mode_evidence"] = _mode_evidence[tid]
+                # Gap 5: truncation tier per target file
+                _chunk_trunc = {}
+                for tf in getattr(chunk, "target_files", []):
+                    if tf in _trunc_tier:
+                        _chunk_trunc[tf] = _trunc_tier[tf]
+                if _chunk_trunc:
+                    chunk.metadata["_manifest_truncation_tier"] = _chunk_trunc
+                # Gap 1: phantom element warnings
+                if tid in _phantom_warns:
+                    chunk.metadata["_phantom_element_warnings"] = _phantom_warns[tid]
 
             # PCA-402: track onboarding field consumption
             if context.get("service_metadata") is not None:

@@ -28,6 +28,7 @@ from .modules import (
     IdentityModule,
     ConstraintsModule,
     EnrichmentModule,
+    ManifestModule,
     PriorArtModule,
     ScopeModule,
     GuidanceModule,
@@ -36,6 +37,7 @@ from .seed_mapping import (
     extract_identity,
     extract_constraints,
     extract_enrichment,
+    extract_manifest_context,
     extract_prior_art,
     extract_scope,
     extract_guidance,
@@ -79,12 +81,13 @@ def _get_user_template(*, refine: bool = False) -> str:
     return templates[key]["template"]
 
 
-# The 6 module instances (stateless, reusable)
+# The 7 module instances (stateless, reusable)
 _MODULES = [
     IdentityModule(),
     ConstraintsModule(),
     EnrichmentModule(),
     ScopeModule(),
+    ManifestModule(),
     PriorArtModule(),
     GuidanceModule(),
 ]
@@ -115,6 +118,9 @@ def assemble_design_prompt(
     prior_design_text: str | None = None,
     # Budget
     token_budget: int = DEFAULT_PROMPT_TOKEN_BUDGET,
+    # Phase 5: Manifest context (CS-7)
+    manifest_registry: Any = None,
+    manifest_context_budget: int = 2000,
 ) -> tuple[str, str, int | None]:
     """Assemble the v2 design phase system prompt and user prompt.
 
@@ -176,12 +182,18 @@ def assemble_design_prompt(
         calibration_hints=calibration_hints,
         complexity_dimensions=complexity_dimensions,
     )
+    manifest_data = extract_manifest_context(
+        task,
+        manifest_registry=manifest_registry,
+        manifest_context_budget=manifest_context_budget,
+    )
 
     # 2. Map categories to extracted data
     category_data: dict[str, dict[str, Any] | None] = {
         "identity": identity_data,
         "constraints": constraints_data,
         "enrichment": enrichment_data,
+        "manifest": manifest_data,
         "prior_art": prior_art_data,
         "scope": scope_data,
         "guidance": guidance_data,
