@@ -1008,10 +1008,53 @@ def validate_pytest_collection(
 
 
 # ============================================================================
-# LLM PROMPT TEMPLATES
+# LLM PROMPT TEMPLATES — loaded from test_construction.yaml
 # ============================================================================
 
-_LLM_TEST_SYSTEM_PROMPT = """\
+_log = get_logger(__name__)
+
+
+def _format_test_prompt(template_name: str, **kwargs: Any) -> Optional[str]:
+    """Load and format a template from ``test_construction.yaml``.
+
+    Returns the formatted string on success, or ``None`` when the YAML
+    file or template is unavailable (e.g. downstream installs that
+    haven't updated).
+    """
+    try:
+        from startd8.contractors.artisan_phases.prompts import format_prompt
+
+        return format_prompt("test_construction", template_name, **kwargs)
+    except (FileNotFoundError, KeyError) as exc:
+        _log.debug(
+            "YAML template test_construction/%s unavailable, using inline fallback: %s",
+            template_name,
+            exc,
+        )
+        return None
+
+
+def _get_test_template(template_name: str) -> Optional[str]:
+    """Load a raw template from ``test_construction.yaml`` without formatting.
+
+    Returns the template string on success, or ``None`` when unavailable.
+    """
+    try:
+        from startd8.contractors.artisan_phases.prompts import get_template
+
+        return get_template("test_construction", template_name)
+    except (FileNotFoundError, KeyError) as exc:
+        _log.debug(
+            "YAML template test_construction/%s unavailable, using inline fallback: %s",
+            template_name,
+            exc,
+        )
+        return None
+
+
+# -- Inline fallbacks (used only when test_construction.yaml is missing) ------
+
+_LLM_TEST_SYSTEM_PROMPT_FALLBACK = """\
 You are an expert Python test engineer. You write thorough, production-quality
 pytest test suites.
 
@@ -1033,7 +1076,7 @@ Rules:
 - Do NOT include explanatory prose outside the code fence.
 """
 
-_LLM_TEST_FROM_DESIGN_PROMPT = """\
+_LLM_TEST_FROM_DESIGN_PROMPT_FALLBACK = """\
 Generate a comprehensive pytest test suite for the following feature.
 
 ## Feature: {feature_name}
@@ -1059,7 +1102,7 @@ Generate a comprehensive pytest test suite for the following feature.
 6. Standalone function tests are top-level ``def test_…()`` functions.
 """
 
-_LLM_TEST_FROM_IMPL_PROMPT = """\
+_LLM_TEST_FROM_IMPL_PROMPT_FALLBACK = """\
 Generate a comprehensive pytest test suite that verifies the following
 implementation meets its design specification.
 
@@ -1094,7 +1137,7 @@ implementation meets its design specification.
 6. Group tests by class using ``class Test<ClassName>:`` blocks.
 """
 
-_LLM_TEST_RETRY_PROMPT = """\
+_LLM_TEST_RETRY_PROMPT_FALLBACK = """\
 The previously generated test code failed pytest collection with the
 following errors.  Please fix the issues and regenerate the complete test
 file.
@@ -1115,6 +1158,14 @@ file.
 - Preserve the test intent — do not remove tests, only fix problems.
 - Output the complete, corrected test file inside a single ```python fence.
 """
+
+
+def _get_test_system_prompt() -> str:
+    """Return the test system prompt, preferring YAML over fallback."""
+    tmpl = _get_test_template("test_system")
+    if tmpl is not None:
+        return tmpl.rstrip("\n")
+    return _LLM_TEST_SYSTEM_PROMPT_FALLBACK
 
 
 # ============================================================================
@@ -1335,20 +1386,37 @@ class LLMTestGenerator:
         extra_context = "\n".join(extra_sections)
 
         if implementation_code:
-            prompt = _LLM_TEST_FROM_IMPL_PROMPT.format(
+            prompt = _format_test_prompt(
+                "test_from_impl",
                 feature_name=design.feature_name,
                 feature_description=design.description or "(no description)",
                 design_content=design_content,
                 implementation_code=implementation_code,
                 module_paths=module_paths,
             )
+            if prompt is None:
+                prompt = _LLM_TEST_FROM_IMPL_PROMPT_FALLBACK.format(
+                    feature_name=design.feature_name,
+                    feature_description=design.description or "(no description)",
+                    design_content=design_content,
+                    implementation_code=implementation_code,
+                    module_paths=module_paths,
+                )
         else:
-            prompt = _LLM_TEST_FROM_DESIGN_PROMPT.format(
+            prompt = _format_test_prompt(
+                "test_from_design",
                 feature_name=design.feature_name,
                 feature_description=design.description or "(no description)",
                 design_content=design_content,
                 module_paths=module_paths,
             )
+            if prompt is None:
+                prompt = _LLM_TEST_FROM_DESIGN_PROMPT_FALLBACK.format(
+                    feature_name=design.feature_name,
+                    feature_description=design.description or "(no description)",
+                    design_content=design_content,
+                    module_paths=module_paths,
+                )
         if extra_context:
             prompt += extra_context
         return prompt
@@ -1359,7 +1427,14 @@ class LLMTestGenerator:
         collection_errors: List[str],
     ) -> str:
         """Build the retry prompt when pytest collection fails."""
-        return _LLM_TEST_RETRY_PROMPT.format(
+        prompt = _format_test_prompt(
+            "test_retry",
+            previous_code=previous_code,
+            collection_errors="\n".join(collection_errors),
+        )
+        if prompt is not None:
+            return prompt
+        return _LLM_TEST_RETRY_PROMPT_FALLBACK.format(
             previous_code=previous_code,
             collection_errors="\n".join(collection_errors),
         )
@@ -1523,7 +1598,7 @@ class LLMTestGenerator:
         )
         with _span_ctx as _test_span:
             response_text, time_ms, token_usage = await agent.agenerate(
-                prompt, system_prompt=_LLM_TEST_SYSTEM_PROMPT,
+                prompt, system_prompt=_get_test_system_prompt(),
             )
 
             # Accumulate cost metrics
@@ -1605,7 +1680,7 @@ class LLMTestGenerator:
         )
 
         response_text, time_ms, token_usage = await agent.agenerate(
-            prompt, system_prompt=_LLM_TEST_SYSTEM_PROMPT,
+            prompt, system_prompt=_get_test_system_prompt(),
         )
 
         self.total_cost_usd += token_usage_cost(token_usage)
