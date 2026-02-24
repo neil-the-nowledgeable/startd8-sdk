@@ -111,7 +111,6 @@ HANDOFF_SCHEMA: dict[str, Any] = {
 
 class HandoffContextDriftError(Exception):
     """Raised when context files have changed since handoff creation."""
-    pass
 
 
 def _validate_handoff(data: dict[str, Any]) -> None:
@@ -223,7 +222,7 @@ def compute_context_checksums(context_files: list[dict[str, Any]]) -> list[dict[
                     content = path.read_bytes()
                     checksum = hashlib.sha256(content).hexdigest()
                     new_item["checksum"] = checksum
-                except Exception as exc:
+                except OSError as exc:
                     logger.warning("Failed to compute checksum for %s: %s", path, exc)
         
         enriched.append(new_item)
@@ -239,6 +238,10 @@ def verify_context_checksums(context_files: list[dict[str, Any]], strict: bool =
 
     Returns:
         List of warning messages describing mismatches or missing files.
+
+    Raises:
+        HandoffContextDriftError: When ``strict=True`` and a checksum
+            mismatch, missing file, or read error is detected.
     """
     warnings = []
     
@@ -260,15 +263,15 @@ def verify_context_checksums(context_files: list[dict[str, Any]], strict: bool =
         try:
             content = path.read_bytes()
             actual_checksum = hashlib.sha256(content).hexdigest()
-            
-            if actual_checksum != expected_checksum:
-                msg = f"Context drift detected for {path}: expected {expected_checksum[:8]}, got {actual_checksum[:8]}"
-                warnings.append(msg)
-                if strict:
-                    raise HandoffContextDriftError(msg)
-                    
-        except Exception as exc:
+        except OSError as exc:
             msg = f"Failed to verify checksum for {path}: {exc}"
+            warnings.append(msg)
+            if strict:
+                raise HandoffContextDriftError(msg) from exc
+            continue
+
+        if actual_checksum != expected_checksum:
+            msg = f"Context drift detected for {path}: expected {expected_checksum[:8]}, got {actual_checksum[:8]}"
             warnings.append(msg)
             if strict:
                 raise HandoffContextDriftError(msg)
@@ -294,7 +297,8 @@ def verify_source_checksum(handoff: HandoffData) -> str | None:
 
     try:
         current = hashlib.sha256(seed_path.read_bytes()).hexdigest()
-    except OSError:
+    except OSError as exc:
+        logger.debug("Failed to read %s for checksum verification: %s", seed_path, exc)
         return None
 
     if current != handoff.source_checksum:
@@ -371,7 +375,7 @@ def wrap_handoff_in_contract(
                 status=HandoffContractStatus.PENDING,
                 created_at=contract_data["created_at"]
             )
-        except Exception as e:
+        except (ValueError, TypeError) as e:
             logger.warning("Failed to create HandoffContract object: %s. Returning dict.", e)
             contract_data["created_at"] = contract_data["created_at"].isoformat()
             return contract_data
@@ -414,7 +418,20 @@ def write_design_handoff(
         completed_phases: List of completed phase value strings.
         design_results: Per-task design results dict.
         scaffold: Scaffold phase summary dict.
+        artifact_manifest_path: Path to the artifact manifest (if any).
+        project_context_path: Path to the project context file (if any).
+        context_files: Context files the design was based on.
+        example_artifacts: Example artifacts per type for IMPLEMENT (Item 9).
+        coverage_gaps: Artifact types to generate first (Item 11).
         source_checksum: SHA-256 of the enriched seed file for provenance.
+        design_mode_summary: Per-task edit mode classification (B-6).
+        shared_file_manifest: Shared-file manifest (CCD-301).
+        project_manifest_summary: Manifest summary stats (Phase 4).
+        design_structural_delta: Per-task structural delta (Gap 3).
+        design_referenced_elements: Per-task referenced elements (Gap 1).
+        manifest_file_checksums: Per-file design-time checksums (Gap 2).
+        design_mode_evidence: Per-task mode evidence (Gap 4).
+        manifest_truncation_tier: Per-file truncation tiers (Gap 5).
 
     Returns:
         Path to the written handoff file.
@@ -487,7 +504,7 @@ def write_design_handoff(
             atomic_write_json(contract_path, contract_dict, indent=2, default=str)
             logger.debug("Wrote design handoff contract: %s", contract_path)
             
-    except Exception as e:
+    except (OSError, ValueError, TypeError) as e:
         logger.warning("Failed to write handoff contract: %s", e)
 
     return out_path
@@ -528,6 +545,10 @@ def load_design_handoff(path: str | Path) -> HandoffData:
     version = raw.get("schema_version")
     if version is None:
         raise ValueError(f"Handoff file missing 'schema_version': {path}")
+    if not isinstance(version, int):
+        raise ValueError(
+            f"Handoff 'schema_version' must be int, got {type(version).__name__}: {path}"
+        )
     if version > SCHEMA_VERSION:
         raise ValueError(
             f"Handoff schema version {version} is newer than supported "
