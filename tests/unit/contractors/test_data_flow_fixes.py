@@ -226,8 +226,8 @@ class TestParameterSources:
         assert "parameter_sources" in ac
         assert "dashboard" in ac["parameter_sources"]
 
-    def test_implement_chunk_metadata_excludes_parameter_sources(self) -> None:
-        """parameter_sources removed from chunk metadata (dead field — never read by _build_*)."""
+    def test_implement_chunk_metadata_includes_parameter_sources(self) -> None:
+        """parameter_sources stored in chunk metadata for _build_supplementary_context rendering."""
         task = SeedTask(
             task_id="T1", title="Dashboard", task_type="task",
             story_points=3, priority="high", labels=[], depends_on=[],
@@ -248,7 +248,7 @@ class TestParameterSources:
         )
 
         assert len(chunks) == 1
-        assert "parameter_sources" not in chunks[0].metadata
+        assert chunks[0].metadata["parameter_sources"] == param_sources
 
 
 # ── Fix 3: semantic_conventions ──────────────────────────────────────
@@ -294,8 +294,8 @@ class TestSemanticConventions:
         assert "semantic_conventions" in ac
         assert "metric_prefix" in ac["semantic_conventions"]
 
-    def test_implement_chunk_metadata_excludes_semantic_conventions(self) -> None:
-        """semantic_conventions removed from chunk metadata (dead field — never read by _build_*)."""
+    def test_implement_chunk_metadata_includes_semantic_conventions(self) -> None:
+        """semantic_conventions stored in chunk metadata for _build_supplementary_context rendering."""
         task = SeedTask(
             task_id="T1", title="Dashboard", task_type="task",
             story_points=3, priority="high", labels=[], depends_on=[],
@@ -314,7 +314,7 @@ class TestSemanticConventions:
         )
 
         assert len(chunks) == 1
-        assert "semantic_conventions" not in chunks[0].metadata
+        assert chunks[0].metadata["semantic_conventions"] == sem_conv
 
 
 # ── Fix 5: output_conventions ────────────────────────────────────────

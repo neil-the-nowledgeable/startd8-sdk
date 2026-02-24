@@ -1648,6 +1648,28 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             parts.append("\n## Constraints")
             parts.append(format_constraints(constraints))
 
+        # Mottainai Rule 5: parameter provenance
+        param_sources = chunk.metadata.get("parameter_sources")
+        if param_sources and isinstance(param_sources, dict):
+            parts.append("\n## Parameter Sources (use these names exactly)")
+            for name, source in list(param_sources.items())[:20]:
+                if isinstance(source, dict):
+                    origin = source.get("origin", source.get("source", ""))
+                    parts.append(f"- `{name}`: {origin}")
+                else:
+                    parts.append(f"- `{name}`: {source}")
+
+        # Mottainai Rule 5: semantic naming conventions
+        sem_conv = chunk.metadata.get("semantic_conventions")
+        if sem_conv and isinstance(sem_conv, dict):
+            parts.append("\n## Semantic Conventions")
+            for key, value in list(sem_conv.items())[:10]:
+                if isinstance(value, dict):
+                    rule = value.get("rule", value.get("convention", str(value)))
+                    parts.append(f"- {key}: {rule}")
+                else:
+                    parts.append(f"- {key}: {value}")
+
         return parts
 
     # -- helper: retry feedback --------------------------------------------
@@ -1833,7 +1855,10 @@ _SEARCH_REPLACE_LINE_THRESHOLD: int = 50
 
 #: Inline fallback for search/replace system prompt (when YAML unavailable).
 _SR_SYSTEM_FALLBACK: str = (
-    "You are editing existing source code files. Output your changes as "
+    "You are an expert Python engineer editing existing source code files.\n"
+    "When Parameter Sources or Semantic Conventions are provided, use those "
+    "names and conventions exactly.\n\n"
+    "Output your changes as "
     "SEARCH/REPLACE blocks. Each block identifies existing code and its "
     "replacement:\n\n"
     "<<<<<<< SEARCH\n"
@@ -1848,6 +1873,35 @@ _SR_SYSTEM_FALLBACK: str = (
     "- To ADD code, include the insertion point in SEARCH and add new lines in REPLACE\n"
     "- To DELETE code, use an empty REPLACE section\n"
     "- Do NOT output the entire file"
+)
+
+#: Inline fallback for CREATE mode system prompt (when YAML unavailable).
+_CREATE_SYSTEM_FALLBACK: str = (
+    "You are an expert Python engineer generating production-quality source code.\n\n"
+    "Code quality expectations:\n"
+    "- Complete implementations only — no stubs, no TODO placeholders, no pass bodies\n"
+    "- Proper type hints on all public functions and methods\n"
+    "- Follow PEP 8 and project naming conventions\n\n"
+    "Provenance rules (Mottainai Rule 5):\n"
+    "- When Parameter Sources are listed, use those parameter names EXACTLY as specified\n"
+    "- When Semantic Conventions are listed, follow those naming rules\n"
+    "- Do NOT rename or abbreviate names from upstream design documents\n\n"
+    "Output the complete Python file inside a single fenced code block."
+)
+
+#: Inline fallback for EDIT mode system prompt (when YAML unavailable).
+_EDIT_SYSTEM_FALLBACK: str = (
+    "You are an expert Python engineer editing existing source code.\n\n"
+    "Edit-first discipline:\n"
+    "- PRESERVE all existing functions, classes, imports, and logic not being changed\n"
+    "- ADD or MODIFY only what the design document specifies\n"
+    "- NEVER remove existing code unless the design explicitly requires it\n"
+    "- Your output MUST be at least 80% the size of the input\n\n"
+    "Provenance rules (Mottainai Rule 5):\n"
+    "- When Parameter Sources are listed, use those parameter names EXACTLY as specified\n"
+    "- When Semantic Conventions are listed, follow those naming rules\n"
+    "- Do NOT rename or abbreviate names from upstream design documents\n\n"
+    "Output the complete modified Python file inside a single fenced code block."
 )
 
 
@@ -1977,14 +2031,24 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         return [text, "\n---\n"]
 
     def _get_system_prompt(self, chunk: DevelopmentChunk) -> Optional[str]:
-        """Return the system prompt for this chunk.
+        """Return a mode-aware system prompt for this chunk.
 
-        Returns the search/replace system prompt when the chunk uses
-        search/replace mode; ``None`` otherwise (LLM default).
+        Returns the appropriate system prompt based on the chunk's mode:
+        - search/replace mode → search_replace_system
+        - whole-file edit mode → edit_system
+        - greenfield create mode → create_system
         """
         if chunk.metadata.get("_use_search_replace"):
             return _format_implement_prompt("search_replace_system") or _SR_SYSTEM_FALLBACK
-        return None
+        # Detect edit vs create (same logic as _build_task_description)
+        _existing = chunk.metadata.get("_existing_file_contents", {})
+        _edit_mode = chunk.metadata.get("_edit_mode")
+        is_edit = bool(_existing) or (
+            _edit_mode is not None and _edit_mode.get("mode") == "edit"
+        )
+        if is_edit:
+            return _format_implement_prompt("edit_system") or _EDIT_SYSTEM_FALLBACK
+        return _format_implement_prompt("create_system") or _CREATE_SYSTEM_FALLBACK
 
     # ------------------------------------------------------------------
     # Override _build_task_description to support search/replace

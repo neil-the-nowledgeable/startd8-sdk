@@ -5012,6 +5012,9 @@ class Test{class_name}:
                     )).to_dict() if edit_mode_map else None,
                     # AR-822: module inventory from SCAFFOLD for import grounding
                     "module_inventory": module_inventory or [],
+                    # Mottainai Rule 5: parameter provenance for IMPLEMENT prompt
+                    "parameter_sources": parameter_sources or {},
+                    "semantic_conventions": semantic_conventions or {},
                 },
             ))
 
