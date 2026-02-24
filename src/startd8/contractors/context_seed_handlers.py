@@ -3296,6 +3296,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             ),
                             wave_index=task.wave_index,
                             wave_metadata=context.get("wave_metadata"),
+                            parameter_sources=context.get("parameter_sources", {}),
+                            semantic_conventions=context.get(
+                                "semantic_conventions", {},
+                            ),
                             refine_suggestions=inv_refine_suggestions,
                             open_questions=context.get("onboarding_open_questions"),
                             calibration_hints=inv_calibration_hints,

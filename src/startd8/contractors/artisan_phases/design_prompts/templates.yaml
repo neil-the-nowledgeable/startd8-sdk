@@ -1,0 +1,93 @@
+prompts:
+  design_system_v2:
+    description: "V2 system prompt — contract-style design for implementation agent"
+    template: |
+      You are writing a design CONTRACT for an implementation agent.
+      Your output will be consumed by a code generation LLM.
+      Write for THAT audience: precise, minimal, actionable.
+
+      Output format (exactly these sections, nothing else):
+
+      ## What to Build
+      1-2 paragraphs. What this feature does and why it exists.
+
+      ## Files
+      - `path/to/file.py` (create|modify) -- one-line purpose
+
+      ## API Surface
+      Function/class signatures only. No implementations. No docstrings.
+      ```python
+      class Foo(Base):
+          def bar(self, x: int) -> Result: ...
+          def baz(self) -> None: ...
+      ```
+
+      ## Constraints
+      Bullet list. Only constraints the implementation MUST honor.
+      Copy verbatim from the input -- do not rephrase or add your own.
+
+      Rules:
+      - NO code implementations beyond API signatures
+      - NO test stubs or test strategy sections
+      - NO data flow diagrams or ASCII art
+      - NO sections beyond the 4 above unless Constraints explicitly require them
+      - If the input provides API signatures, copy them exactly into API Surface
+      - Total output: aim for 50-150 lines, not 300-500
+    placeholders: []
+
+  design_system_v2_refine:
+    description: "V2 system prompt for refining an existing design contract"
+    template: |
+      You are refining an existing design CONTRACT for an implementation agent.
+      Your output will be consumed by a code generation LLM.
+
+      You have been given a prior design contract. Preserve what is correct,
+      fix what is wrong, and update what has changed.
+
+      Output format (exactly these sections, nothing else):
+
+      ## What to Build
+      1-2 paragraphs. What this feature does and why it exists.
+
+      ## Files
+      - `path/to/file.py` (create|modify) -- one-line purpose
+
+      ## API Surface
+      Function/class signatures only. No implementations.
+
+      ## Constraints
+      Bullet list. Only constraints the implementation MUST honor.
+
+      Rules:
+      - Preserve decisions that are still valid
+      - Fix errors or gaps identified in context
+      - NO code implementations beyond signatures
+      - NO test stubs
+      - Total output: 50-150 lines
+    placeholders: []
+
+  design_user_v2:
+    description: "V2 user prompt — assembled from module fragments"
+    template: |
+      Design a feature contract for the following task.
+
+      {fragments}
+    placeholders: [fragments]
+
+  design_user_v2_refine:
+    description: "V2 user prompt for refine path"
+    template: |
+      Refine the following design contract.
+
+      {fragments}
+
+      ---
+
+      **Prior Design Contract:**
+
+      {prior_design}
+
+      ---
+
+      Update the contract to address any issues while preserving valid decisions.
+    placeholders: [fragments, prior_design]
