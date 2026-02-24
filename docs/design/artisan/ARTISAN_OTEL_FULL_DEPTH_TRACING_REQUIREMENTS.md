@@ -278,7 +278,7 @@ Wrap each chunk's execution in an `implement.chunk.{chunk_id}` span. Must use th
 
 #### OT-306: Review Evaluate Span
 
-**Status:** planned
+**Status:** implemented
 **Source:** `src/startd8/contractors/context_seed_handlers.py` (`ReviewPhaseHandler._review_task`)
 
 Wrap each task's review evaluation LLM call in a `review.evaluate` span as a child of the `task.{task_id}` span (OT-304). This span corresponds to the inner LLM call within the review phase, distinct from the outer per-task span.
@@ -1354,12 +1354,12 @@ flowchart TD
 |-------|----------|-------|-------------|---------|---------|
 | Thread Context Propagation | OT-1xx | 5 | 5 | 0 | 0 |
 | Gate Boundary Spans | OT-2xx | 3 | 3 | 0 | 0 |
-| Per-Task Spans | OT-3xx | 7 | 6 | 0 | 1 |
+| Per-Task Spans | OT-3xx | 7 | 7 | 0 | 0 |
 | LLM Call Spans | OT-4xx | 7 | 7 | 0 | 0 |
 | Graceful Degradation | OT-5xx | 5 | 5 | 0 | 0 |
 | Infrastructure | OT-6xx | 1 | 1 | 0 | 0 |
 | Forensic LLM Call Logging | OT-7xx | 17 | 15 | 1 | 1 |
-| **Total** | | **45** | **42** | **1** | **2** |
+| **Total** | | **45** | **43** | **1** | **1** |
 
 > **ID gap note:** Requirement IDs are non-contiguous by design. Gaps (e.g., OT-504 is defined but OT-505, OT-506, OT-508–OT-599 are unused) are reserved for future use. No requirements have been removed. The total count is verified by enumeration: OT-1xx (100–104) = 5, OT-2xx (200–202) = 3, OT-3xx (300–306) = 7, OT-4xx (400–406) = 7, OT-5xx (500–504, 507) = 5, OT-6xx (600) = 1, OT-7xx (700–716) = 17. Total = 45.
 

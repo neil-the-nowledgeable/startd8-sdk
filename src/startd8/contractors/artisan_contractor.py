@@ -66,6 +66,7 @@ from startd8.contractors.protocols import (
     REVIEW_MODEL_CLAUDE_OPUS,
     VALIDATE_MODEL_CLAUDE_SONNET,
 )
+from startd8.otel import attach_context, capture_context, detach_context
 
 __all__ = [
     "WorkflowPhase",
@@ -2289,10 +2290,26 @@ class ArtisanContractorWorkflow:
         if timeout is None:
             return handler.execute(phase, context, dry_run=self.config.dry_run)
 
+        # OT-103/OT-104: Propagate OTel context + boundary result to worker thread
+        parent_ctx = capture_context()
+        from startd8.contractors.forensic_log import (
+            get_boundary_result as _get_br,
+            set_boundary_result as _set_br,
+            reset_boundary_result as _reset_br,
+        )
+        parent_br = _get_br()
+
+        def _handler_with_context() -> dict[str, Any]:
+            token = attach_context(parent_ctx)
+            br_token = _set_br(parent_br)
+            try:
+                return handler.execute(phase, context, dry_run=self.config.dry_run)
+            finally:
+                _reset_br(br_token)
+                detach_context(token)
+
         with ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                handler.execute, phase, context, self.config.dry_run
-            )
+            future = executor.submit(_handler_with_context)
             try:
                 return future.result(timeout=timeout)
             except FuturesTimeoutError:
@@ -2966,6 +2983,15 @@ class ArtisanContractorWorkflow:
 
         def _run_lane(lane_idx: int) -> bool:
             """Execute a single lane's tasks feature-serially. Returns success."""
+            _token = attach_context(_parent_ctx)
+            _br_token = _set_br(_parent_br)
+            try:
+                return _run_lane_inner(lane_idx)
+            finally:
+                _reset_br(_br_token)
+                detach_context(_token)
+
+        def _run_lane_inner(lane_idx: int) -> bool:
             if cancel_event.is_set():
                 return False
 
@@ -3055,6 +3081,15 @@ class ArtisanContractorWorkflow:
             i for i in range(len(lanes))
             if i not in completed_lanes_set
         ]
+
+        # OT-103/OT-104: Capture OTel context + boundary result for lane threads
+        _parent_ctx = capture_context()
+        from startd8.contractors.forensic_log import (
+            get_boundary_result as _get_br,
+            set_boundary_result as _set_br,
+            reset_boundary_result as _reset_br,
+        )
+        _parent_br = _get_br()
 
         if not lanes_to_run:
             self._logger.info("Lane-parallel: all lanes already completed")
@@ -3382,6 +3417,19 @@ class ArtisanContractorWorkflow:
 
                 Returns True on success, False on failure.
                 """
+                # OT-103/OT-104: Attach parent OTel context + boundary result
+                _token = attach_context(_wl_parent_ctx)
+                _br_token = _wl_set_br(_wl_parent_br)
+                try:
+                    return _run_wave_lane_inner(lane_idx, _wave_idx)
+                finally:
+                    _wl_reset_br(_br_token)
+                    detach_context(_token)
+
+            def _run_wave_lane_inner(
+                lane_idx: int,
+                _wave_idx: int = wave_idx,
+            ) -> bool:
                 if cancel_event.is_set():
                     return False
 
@@ -3483,6 +3531,15 @@ class ArtisanContractorWorkflow:
                 i for i in range(len(lanes))
                 if i not in wave_completed_set
             ]
+
+            # OT-103/OT-104: Capture OTel context + boundary result for wave lane threads
+            _wl_parent_ctx = capture_context()
+            from startd8.contractors.forensic_log import (
+                get_boundary_result as _wl_get_br,
+                set_boundary_result as _wl_set_br,
+                reset_boundary_result as _wl_reset_br,
+            )
+            _wl_parent_br = _wl_get_br()
 
             if not lanes_to_run:
                 self._logger.info(
