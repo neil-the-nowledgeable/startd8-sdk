@@ -23,7 +23,7 @@ from startd8.utils.code_manifest import (
     ParamKind,
     Visibility,
 )
-from startd8.utils.manifest_registry import ManifestRegistry
+from startd8.utils.manifest_registry import ManifestDiff, ManifestRegistry
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -330,3 +330,299 @@ class TestCrossFileCallGraph:
         rev = reg.reverse_call_graph()
         assert "pkg2.b" in rev
         assert "pkg.a" in rev["pkg2.b"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# callers_of_file
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestCallersOfFile:
+    def test_cross_file_callers(self):
+        """Cross-file callers are returned; intra-file callers are not."""
+        a = _func_element("a", "pkg.a", calls=[_call("b", "pkg2.b")])
+        b = _func_element("b", "pkg2.b")
+        m1 = _manifest("pkg/a.py", "pkg", [a])
+        m2 = _manifest("pkg2/b.py", "pkg2", [b])
+        reg = ManifestRegistry({"pkg/a.py": m1, "pkg2/b.py": m2})
+
+        result = reg.callers_of_file("pkg2/b.py")
+        assert "pkg2.b" in result
+        assert "pkg.a" in result["pkg2.b"]
+
+    def test_no_callers(self):
+        """File with no external callers returns empty dict."""
+        a = _func_element("a", "mod.a")
+        m = _manifest("a.py", "mod", [a])
+        reg = ManifestRegistry({"a.py": m})
+
+        assert reg.callers_of_file("a.py") == {}
+
+    def test_intra_file_excluded(self):
+        """Callers within the same file are excluded."""
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b")
+        m = _manifest("a.py", "mod", [a, b])
+        reg = ManifestRegistry({"a.py": m})
+
+        result = reg.callers_of_file("a.py")
+        # b is called by a, but both are in a.py — excluded
+        assert result == {}
+
+    def test_nonexistent_file(self):
+        reg = ManifestRegistry({})
+        assert reg.callers_of_file("nonexistent.py") == {}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# call_graph_summary
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestCallGraphSummary:
+    def test_basic_summary(self):
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b")
+        m = _manifest("a.py", "mod", [a, b])
+        reg = ManifestRegistry({"a.py": m})
+
+        summary = reg.call_graph_summary("a.py", budget=2000)
+        assert "mod.a" in summary
+        assert "mod.b" in summary
+        assert "called by" in summary
+        assert "calls" in summary
+
+    def test_budget_truncation(self):
+        """Very small budget triggers truncation."""
+        elements = [
+            _func_element(f"f{i}", f"mod.f{i}", calls=[_call(f"f{i+1}", f"mod.f{i+1}")])
+            for i in range(20)
+        ]
+        elements.append(_func_element("f20", "mod.f20"))
+        m = _manifest("a.py", "mod", elements)
+        reg = ManifestRegistry({"a.py": m})
+
+        summary = reg.call_graph_summary("a.py", budget=50)
+        assert len(summary) <= 60  # Allow some margin for count-only tier
+
+    def test_empty_file(self):
+        m = _manifest("a.py", "mod", [])
+        reg = ManifestRegistry({"a.py": m})
+
+        assert reg.call_graph_summary("a.py") == ""
+
+    def test_nonexistent_file(self):
+        reg = ManifestRegistry({})
+        assert reg.call_graph_summary("nonexistent.py") == ""
+
+    def test_no_connections(self):
+        """File with elements but no call edges returns empty."""
+        a = _func_element("a", "mod.a")
+        m = _manifest("a.py", "mod", [a])
+        reg = ManifestRegistry({"a.py": m})
+
+        assert reg.call_graph_summary("a.py") == ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# max_blast_radius
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMaxBlastRadius:
+    def test_multiple_fqns(self):
+        """Returns FQN with the most transitive callers."""
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b", calls=[_call("c", "mod.c")])
+        c = _func_element("c", "mod.c")
+        d = _func_element("d", "mod.d")
+        m = _manifest("a.py", "mod", [a, b, c, d])
+        reg = ManifestRegistry({"a.py": m})
+
+        fqn, count = reg.max_blast_radius(["mod.c", "mod.b", "mod.d"])
+        assert fqn == "mod.c"  # c has callers a, b (transitive)
+        assert count == 2
+
+    def test_empty_list(self):
+        reg = ManifestRegistry({})
+        assert reg.max_blast_radius([]) == ("", 0)
+
+    def test_nonexistent_fqns(self):
+        reg = ManifestRegistry({})
+        fqn, count = reg.max_blast_radius(["nonexistent.a", "nonexistent.b"])
+        assert count == 0
+
+    def test_single_fqn(self):
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b")
+        m = _manifest("a.py", "mod", [a, b])
+        reg = ManifestRegistry({"a.py": m})
+
+        fqn, count = reg.max_blast_radius(["mod.b"])
+        assert fqn == "mod.b"
+        assert count == 1  # a calls b
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# call_graph_cycles
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestCallGraphCycles:
+    def test_simple_cycle(self):
+        """A→B→A is detected."""
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b", calls=[_call("a", "mod.a")])
+        m = _manifest("a.py", "mod", [a, b])
+        reg = ManifestRegistry({"a.py": m})
+
+        cycles = reg.call_graph_cycles()
+        assert len(cycles) >= 1
+        # At least one cycle should contain both a and b
+        found = any(
+            "mod.a" in c and "mod.b" in c
+            for c in cycles
+        )
+        assert found
+
+    def test_longer_cycle(self):
+        """A→B→C→A is detected."""
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b", calls=[_call("c", "mod.c")])
+        c = _func_element("c", "mod.c", calls=[_call("a", "mod.a")])
+        m = _manifest("a.py", "mod", [a, b, c])
+        reg = ManifestRegistry({"a.py": m})
+
+        cycles = reg.call_graph_cycles()
+        assert len(cycles) >= 1
+        found = any(
+            "mod.a" in c and "mod.b" in c and "mod.c" in c
+            for c in cycles
+        )
+        assert found
+
+    def test_no_cycles(self):
+        """Linear chain has no cycles."""
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b", calls=[_call("c", "mod.c")])
+        c = _func_element("c", "mod.c")
+        m = _manifest("a.py", "mod", [a, b, c])
+        reg = ManifestRegistry({"a.py": m})
+
+        assert reg.call_graph_cycles() == []
+
+    def test_depth_bound(self):
+        """Cycle deeper than max_depth is not detected."""
+        # Chain: f0→f1→f2→...→f15→f0 (cycle at depth 16)
+        elements = []
+        for i in range(16):
+            next_i = (i + 1) % 16
+            elements.append(
+                _func_element(f"f{i}", f"mod.f{i}", calls=[_call(f"f{next_i}", f"mod.f{next_i}")])
+            )
+        m = _manifest("a.py", "mod", elements)
+        reg = ManifestRegistry({"a.py": m})
+
+        # With depth=5, should not find the 16-node cycle
+        cycles = reg.call_graph_cycles(max_depth=5)
+        # The cycle is longer than 5, so it should be missed
+        long_cycle = [c for c in cycles if len(c) > 7]
+        assert len(long_cycle) == 0
+
+    def test_empty_graph(self):
+        reg = ManifestRegistry({})
+        assert reg.call_graph_cycles() == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ManifestDiff call edge fields
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestManifestDiffCallEdges:
+    def test_added_edges(self):
+        """New call edges appear in added_call_edges."""
+        a = _func_element("a", "mod.a")
+        b = _func_element("b", "mod.b")
+        old = _manifest("a.py", "mod", [a, b])
+
+        a_new = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        new = _manifest("a.py", "mod", [a_new, b])
+
+        diff = ManifestDiff.diff(old, new)
+        assert len(diff.added_call_edges) == 1
+        assert diff.added_call_edges[0].caller_fqn == "mod.a"
+        assert diff.added_call_edges[0].callee_fqn == "mod.b"
+        assert diff.removed_call_edges == []
+
+    def test_removed_edges(self):
+        """Removed call edges appear in removed_call_edges."""
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b")
+        old = _manifest("a.py", "mod", [a, b])
+
+        a_new = _func_element("a", "mod.a")
+        new = _manifest("a.py", "mod", [a_new, b])
+
+        diff = ManifestDiff.diff(old, new)
+        assert len(diff.removed_call_edges) == 1
+        assert diff.removed_call_edges[0].caller_fqn == "mod.a"
+        assert diff.removed_call_edges[0].callee_fqn == "mod.b"
+        assert diff.added_call_edges == []
+
+    def test_no_changes(self):
+        """Identical call graphs produce empty edge diffs."""
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b")
+        m = _manifest("a.py", "mod", [a, b])
+
+        diff = ManifestDiff.diff(m, m)
+        assert diff.removed_call_edges == []
+        assert diff.added_call_edges == []
+
+    def test_call_edge_diff_standalone(self):
+        """call_edge_diff static method works independently."""
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b")
+        old = _manifest("a.py", "mod", [a, b])
+
+        a_new = _func_element("a", "mod.a", calls=[_call("c", "mod.c")])
+        c = _func_element("c", "mod.c")
+        new = _manifest("a.py", "mod", [a_new, b, c])
+
+        removed, added = ManifestDiff.call_edge_diff(old, new)
+        assert len(removed) == 1
+        assert removed[0].caller_fqn == "mod.a"
+        assert removed[0].callee_fqn == "mod.b"
+        assert len(added) == 1
+        assert added[0].caller_fqn == "mod.a"
+        assert added[0].callee_fqn == "mod.c"
+
+    def test_signature_changes_with_callers(self):
+        """When registry is provided, sig changes include callers."""
+        # Build a registry with a → b (a calls b)
+        a = _func_element("a", "mod.a", calls=[_call("b", "mod.b")])
+        b = _func_element("b", "mod.b")
+        m = _manifest("a.py", "mod", [a, b])
+        reg = ManifestRegistry({"a.py": m})
+
+        # Old b has no params, new b has a param
+        b_new = Element(
+            kind=ElementKind.FUNCTION,
+            name="b",
+            fqn="mod.b",
+            span=_span(),
+            signature=Signature(params=[
+                Param(name="self", kind=ParamKind.POSITIONAL),
+                Param(name="x", kind=ParamKind.POSITIONAL, annotation="int"),
+            ]),
+            visibility=Visibility.PUBLIC,
+        )
+        new_m = _manifest("a.py", "mod", [a, b_new])
+
+        diff = ManifestDiff.diff(m, new_m, registry=reg)
+        assert len(diff.changed_signatures) == 1
+        assert len(diff.signature_changes_with_callers) == 1
+        fqn, _, _, callers = diff.signature_changes_with_callers[0]
+        assert fqn == "mod.b"
+        assert "mod.a" in callers

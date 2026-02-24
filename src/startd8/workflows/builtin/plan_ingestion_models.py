@@ -64,6 +64,12 @@ class ParsedFeature:
     runtime_dependencies: List[str] = field(default_factory=list)
     # IMP-4: Things this feature explicitly does NOT do
     negative_scope: List[str] = field(default_factory=list)
+    # Phase 6: CG-PI-2 — union of callers across all target FQNs
+    affected_callers: List[str] = field(default_factory=list)
+    # Phase 6: CG-PI-3 — True when max blast radius exceeds threshold
+    high_impact: bool = False
+    # Phase 6: CG-PI-4 — True when all FQNs target dead code (zero callers)
+    targets_dead_code: bool = False
 
 
 @dataclass
@@ -101,6 +107,9 @@ class ParsedPlan:
                     "protocol": f.protocol,
                     "runtime_dependencies": list(f.runtime_dependencies),
                     "negative_scope": list(f.negative_scope),
+                    "affected_callers": list(f.affected_callers),
+                    "high_impact": f.high_impact,
+                    "targets_dead_code": f.targets_dead_code,
                 }
                 for f in self.features
             ],
@@ -120,6 +129,7 @@ class ComplexityScore:
     integration_depth: int = 0
     domain_novelty: int = 0
     ambiguity: int = 0
+    call_graph_impact: int = 0  # Phase 6: CG-PI-1
 
     # Composite
     composite: int = 0
@@ -143,6 +153,7 @@ class ComplexityScore:
                 "integration_depth": self.integration_depth,
                 "domain_novelty": self.domain_novelty,
                 "ambiguity": self.ambiguity,
+                "call_graph_impact": self.call_graph_impact,
             },
             "reasoning": self.reasoning,
             "route": self.route.value if self.route else None,

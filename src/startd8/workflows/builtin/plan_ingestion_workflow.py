@@ -726,13 +726,95 @@ def _heuristic_assess_complexity(
     integration_depth = min(100, max(10, cross_file_deps * 10))
     domain_novelty = 40
     ambiguity = 45
-    composite = int(
-        (api_surface + test_complexity + integration_depth + domain_novelty + ambiguity) / 5
-    )
+
+    # Phase 6: CG-PI-1 — call graph impact dimension
+    call_graph_impact = 0
+    if manifest_registry is not None:
+        try:
+            mentioned_fqns: list[str] = []
+            for f in parsed_plan.features:
+                for tf in f.target_files:
+                    manifest = manifest_registry.get(tf)
+                    if manifest is not None:
+                        from startd8.utils.manifest_registry import _flatten_elements
+                        for elem in _flatten_elements(manifest.elements):
+                            if elem.fqn:
+                                mentioned_fqns.append(elem.fqn)
+            if mentioned_fqns:
+                _max_fqn, max_count = manifest_registry.max_blast_radius(mentioned_fqns)
+                # Normalize to 0-100 scale
+                call_graph_impact = min(100, max(0, max_count * 5))
+                logger.debug(
+                    "CG-PI-1: max blast radius = %d (fqn=%s), score=%d",
+                    max_count, _max_fqn, call_graph_impact,
+                )
+        except Exception:
+            logger.debug("CG-PI-1: blast radius computation failed", exc_info=True)
+
+    # Composite: 6 dimensions when call graph available, 5 when not
+    if call_graph_impact > 0:
+        composite = int(
+            (api_surface + test_complexity + integration_depth
+             + domain_novelty + ambiguity + call_graph_impact) / 6
+        )
+    else:
+        composite = int(
+            (api_surface + test_complexity + integration_depth + domain_novelty + ambiguity) / 5
+        )
+
     if force_route:
         route = ContractorRoute(force_route)
     else:
         route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
+
+    # Phase 6: CG-PI-2,3,4 — feature-level annotations
+    if manifest_registry is not None:
+        try:
+            dead_set = set(manifest_registry.dead_candidates())
+        except Exception:
+            dead_set = set()
+        _blast_threshold = 20  # CG-PI-3 threshold
+
+        for feature in parsed_plan.features:
+            try:
+                feature_fqns: list[str] = []
+                for tf in feature.target_files:
+                    fmanifest = manifest_registry.get(tf)
+                    if fmanifest is not None:
+                        from startd8.utils.manifest_registry import _flatten_elements
+                        for elem in _flatten_elements(fmanifest.elements):
+                            if elem.fqn:
+                                feature_fqns.append(elem.fqn)
+
+                # CG-PI-2: affected_callers
+                all_callers: set[str] = set()
+                for fqn in feature_fqns:
+                    all_callers.update(manifest_registry.callers_of(fqn))
+                feature.affected_callers = sorted(all_callers)
+
+                # CG-PI-3: high_impact
+                if feature_fqns:
+                    _fqn, _count = manifest_registry.max_blast_radius(feature_fqns)
+                    if _count > _blast_threshold:
+                        feature.high_impact = True
+                        logger.warning(
+                            "CG-PI-3: feature %s has high blast radius (%d > %d, fqn=%s)",
+                            feature.feature_id, _count, _blast_threshold, _fqn,
+                        )
+
+                # CG-PI-4: targets_dead_code
+                if feature_fqns and all(fqn in dead_set for fqn in feature_fqns):
+                    feature.targets_dead_code = True
+                    logger.info(
+                        "CG-PI-4: feature %s targets dead code only",
+                        feature.feature_id,
+                    )
+            except Exception:
+                logger.debug(
+                    "CG-PI: feature annotation failed for %s",
+                    feature.feature_id, exc_info=True,
+                )
+
     return ComplexityScore(
         feature_count=feature_count,
         cross_file_deps=cross_file_deps,
@@ -741,6 +823,7 @@ def _heuristic_assess_complexity(
         integration_depth=integration_depth,
         domain_novelty=domain_novelty,
         ambiguity=ambiguity,
+        call_graph_impact=call_graph_impact,
         composite=composite,
         reasoning="Heuristic fallback complexity used after assess failure",
         route=route,

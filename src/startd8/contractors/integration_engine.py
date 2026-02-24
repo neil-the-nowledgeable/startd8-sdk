@@ -188,6 +188,69 @@ class IntegrationEngine:
                         rel_path, ratio, self.element_retention_threshold,
                     )
 
+            # CG-IN-1: Escalate breaking changes based on caller count
+            try:
+                for fqn in diff.removed_public:
+                    callers = self.manifest_registry.callers_of(fqn)
+                    if callers:
+                        logger.error(
+                            "manifest.diff: removed public element %s has %d callers — "
+                            "downstream breakage likely",
+                            fqn, len(callers),
+                        )
+                    else:
+                        logger.info(
+                            "manifest.diff: removed public element %s has no callers",
+                            fqn,
+                        )
+                for fqn, old_sig, new_sig in diff.changed_signatures:
+                    callers = self.manifest_registry.callers_of(fqn)
+                    if callers:
+                        logger.error(
+                            "manifest.diff: changed signature of %s has %d callers — "
+                            "downstream breakage likely (old=%s, new=%s)",
+                            fqn, len(callers), old_sig, new_sig,
+                        )
+                    else:
+                        logger.info(
+                            "manifest.diff: changed signature of %s has no callers",
+                            fqn,
+                        )
+            except Exception as exc:
+                logger.debug("manifest.diff: CG-IN-1 caller check failed: %s", exc)
+
+            # CG-IN-2: Call edge diff
+            try:
+                removed_edges, added_edges = ManifestDiff.call_edge_diff(existing, staged)
+                if removed_edges or added_edges:
+                    logger.debug(
+                        "manifest.diff: call edge changes in %s — "
+                        "%d removed, %d added",
+                        rel_path, len(removed_edges), len(added_edges),
+                    )
+            except Exception as exc:
+                logger.debug("manifest.diff: CG-IN-2 edge diff failed: %s", exc)
+
+            # CG-IN-3: Cross-file caller impact
+            try:
+                callers_map = self.manifest_registry.callers_of_file(rel_path)
+                if callers_map:
+                    affected_files: set[str] = set()
+                    for _fqn, callers in callers_map.items():
+                        for caller_fqn in callers:
+                            resolved = self.manifest_registry.resolve_fqn(caller_fqn)
+                            if resolved:
+                                affected_files.add(resolved[0])
+                    if affected_files:
+                        logger.info(
+                            "manifest.diff: modified file %s has callers in %d files — "
+                            "consider re-testing: %s",
+                            rel_path, len(affected_files),
+                            ", ".join(sorted(affected_files)[:5]),
+                        )
+            except Exception as exc:
+                logger.debug("manifest.diff: CG-IN-3 caller impact failed: %s", exc)
+
         except Exception as exc:
             logger.debug(
                 "manifest.diff: diff failed for %s: %s", rel_path, exc,

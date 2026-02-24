@@ -221,6 +221,18 @@ def extract_manifest_context(
     except Exception:
         pass  # dependency_graph() is optional
 
+    # Phase 6: Call graph context per file
+    try:
+        cg_parts: list[str] = []
+        for tf in file_summaries:
+            cg_summary = manifest_registry.call_graph_summary(tf, manifest_context_budget)
+            if cg_summary:
+                cg_parts.append(f"### {tf}\n{cg_summary}")
+        if cg_parts:
+            result["call_graph_context"] = "\n\n".join(cg_parts)
+    except Exception:
+        pass  # call_graph_summary() is optional
+
     return result
 
 

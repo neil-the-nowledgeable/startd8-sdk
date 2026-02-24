@@ -1133,6 +1133,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         parts.extend(self._build_target_files(chunk, is_edit))       # B-1/B-7 fix
         parts.extend(self._build_importable_modules(chunk))          # AR-150
         parts.extend(self._build_manifest_context(chunk))            # Phase 4
+        parts.extend(self._build_call_graph_context(chunk))          # Phase 6
         parts.extend(self._build_structural_delta(chunk))            # Gap 3
         parts.extend(self._build_existing_files(_existing))
         if _existing:
@@ -1418,6 +1419,28 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                     rel_path
                 ] = diff.removed_public
 
+            # CG-IM-5: Post-generation caller compatibility check
+            try:
+                for fqn, old_sig, new_sig in diff.changed_signatures:
+                    callers = registry.callers_of(fqn)
+                    if callers:
+                        self.logger.warning(
+                            "manifest.post_generate: chunk %s changed signature of %s "
+                            "(%d callers may break) — old=%s, new=%s",
+                            chunk.chunk_id, fqn, len(callers), old_sig, new_sig,
+                        )
+                        chunk.metadata.setdefault("_sig_change_caller_warnings", []).append({
+                            "fqn": fqn,
+                            "callers": len(callers),
+                            "old_sig": old_sig,
+                            "new_sig": new_sig,
+                        })
+            except Exception as exc:
+                self.logger.debug(
+                    "manifest.post_generate: CG-IM-5 caller check failed for %s: %s",
+                    gen_file, exc,
+                )
+
     # -- helper: manifest context (Phase 4) ---------------------------------
 
     @staticmethod
@@ -1450,6 +1473,51 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             + manifest_ctx,
             "\n---\n",
         ]
+
+    # -- helper: call graph context (Phase 6) ---------------------------------
+
+    @staticmethod
+    def _build_call_graph_context(
+        chunk: DevelopmentChunk,
+    ) -> List[str]:
+        """Phase 6: Function call dependency context from call graph data.
+
+        Reads ``_call_graph_context`` and ``_call_graph_callers`` from chunk
+        metadata (injected by ImplementPhaseHandler) and formats as a
+        ``## Function Call Dependencies`` section.
+        """
+        cg_ctx = chunk.metadata.get("_call_graph_context")
+        cg_callers = chunk.metadata.get("_call_graph_callers")
+        if not cg_ctx and not cg_callers:
+            return []
+
+        parts: List[str] = [
+            "## Function Call Dependencies\n"
+            "The following shows call relationships for the target files. "
+            "Functions with many callers have high blast radius — changes to "
+            "their signatures require updating all callers.\n",
+        ]
+
+        if cg_ctx:
+            parts.append(cg_ctx)
+
+        if cg_callers:
+            high_impact = [c for c in cg_callers if c.get("blast_radius", 0) > 5]
+            if high_impact:
+                parts.append("\n**High-impact functions** (blast radius > 5):")
+                for entry in high_impact[:10]:
+                    parts.append(
+                        f"- `{entry['fqn']}`: {len(entry.get('direct_callers', []))} "
+                        f"direct callers, blast radius {entry.get('blast_radius', 0)}"
+                    )
+
+        parts.append("\n---\n")
+
+        _log.debug(
+            "IMPLEMENT: call graph context included (%d chars)",
+            sum(len(p) for p in parts),
+        )
+        return parts
 
     # -- helper: structural delta (Gap 3) ------------------------------------
 

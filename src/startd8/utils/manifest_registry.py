@@ -25,6 +25,7 @@ from typing import Any, Iterator, TypedDict
 
 from startd8.logging_config import get_logger
 from startd8.utils.code_manifest import (
+    CallEdge,
     CallGraphInfo,
     Element,
     ElementKind,
@@ -173,6 +174,11 @@ class ManifestDiff:
     added_public: list[str] = field(default_factory=list)       # FQNs added
     changed_signatures: list[tuple[str, str, str]] = field(default_factory=list)  # (fqn, old_sig, new_sig)
     element_count_delta: int = 0                                # new - old
+    # Phase 6: Call edge diff fields
+    removed_call_edges: list[CallEdge] = field(default_factory=list)  # edges in old, not in new
+    added_call_edges: list[CallEdge] = field(default_factory=list)    # edges in new, not in old
+    # (fqn, old_sig, new_sig, callers) — populated only when registry is provided
+    signature_changes_with_callers: list[tuple[str, str, str, frozenset[str]]] = field(default_factory=list)
 
     @property
     def has_breaking_changes(self) -> bool:
@@ -180,7 +186,31 @@ class ManifestDiff:
         return bool(self.removed_public) or bool(self.changed_signatures)
 
     @staticmethod
-    def diff(old: FileManifest, new: FileManifest) -> ManifestDiff:
+    def call_edge_diff(
+        old: FileManifest, new: FileManifest,
+    ) -> tuple[list[CallEdge], list[CallEdge]]:
+        """Compute call edge differences between two manifests.
+
+        Returns:
+            ``(removed_edges, added_edges)`` as lists of :class:`CallEdge`.
+        """
+        def _collect_edges(manifest: FileManifest) -> set[tuple[str, str]]:
+            edges: set[tuple[str, str]] = set()
+            for elem in _flatten_elements(manifest.elements):
+                if elem.call_graph is not None and elem.fqn:
+                    for call in elem.call_graph.calls:
+                        if call.target_fqn is not None:
+                            edges.add((elem.fqn, call.target_fqn))
+            return edges
+
+        old_edges = _collect_edges(old)
+        new_edges = _collect_edges(new)
+        removed = [CallEdge(caller_fqn=c, callee_fqn=t) for c, t in sorted(old_edges - new_edges)]
+        added = [CallEdge(caller_fqn=c, callee_fqn=t) for c, t in sorted(new_edges - old_edges)]
+        return removed, added
+
+    @staticmethod
+    def diff(old: FileManifest, new: FileManifest, registry: ManifestRegistry | None = None) -> ManifestDiff:
         """Compute diff between two manifests.
 
         Defensive handling (plan R1-S10): elements with None fqn or missing
@@ -208,11 +238,33 @@ class ManifestDiff:
             old_count = _count_all_elements(old.elements)
             new_count = _count_all_elements(new.elements)
 
+            # Phase 6: Call edge diff
+            try:
+                removed_edges, added_edges = ManifestDiff.call_edge_diff(old, new)
+            except Exception:
+                removed_edges, added_edges = [], []
+
+            # Phase 6: signature changes with callers (when registry available)
+            sig_with_callers: list[tuple[str, str, str, frozenset[str]]] = []
+            if registry is not None and changed:
+                for fqn, old_sig, new_sig in changed:
+                    try:
+                        callers = registry.callers_of(fqn)
+                        if callers:
+                            sig_with_callers.append(
+                                (fqn, old_sig, new_sig, frozenset(callers))
+                            )
+                    except Exception:
+                        pass
+
             return ManifestDiff(
                 removed_public=removed,
                 added_public=added,
                 changed_signatures=changed,
                 element_count_delta=new_count - old_count,
+                removed_call_edges=removed_edges,
+                added_call_edges=added_edges,
+                signature_changes_with_callers=sig_with_callers,
             )
 
 
@@ -674,6 +726,185 @@ class ManifestRegistry:
     def callees_of(self, fqn: str) -> set[str]:
         """Direct (1-hop) callees of the given FQN."""
         return self.call_graph().get(fqn, set())
+
+    # ───────────────────────────────────────────────────────────────────
+    # Phase 6 pipeline: higher-level call graph queries
+    # ───────────────────────────────────────────────────────────────────
+
+    def callers_of_file(self, relative_path: str) -> dict[str, set[str]]:
+        """For each element in the file, return callers from *other* files.
+
+        Returns:
+            Dict mapping element FQN → set of caller FQNs from other files.
+            Only elements with at least one cross-file caller are included.
+        """
+        with _timer("manifest.callers_of_file", level=logging.DEBUG, path=relative_path):
+            try:
+                manifest = self._manifests.get(relative_path)
+                if manifest is None:
+                    return {}
+
+                file_elements = _flatten_elements(manifest.elements)
+                file_fqns = {e.fqn for e in file_elements if e.fqn}
+
+                reverse = self.reverse_call_graph()
+                result: dict[str, set[str]] = {}
+                for fqn in file_fqns:
+                    callers = reverse.get(fqn, set())
+                    # Filter to callers from OTHER files
+                    cross_file_callers = set()
+                    for caller in callers:
+                        resolved = self._fqn_index.get(caller)
+                        if resolved is not None:
+                            caller_path, _ = resolved
+                            if caller_path != relative_path:
+                                cross_file_callers.add(caller)
+                    if cross_file_callers:
+                        result[fqn] = cross_file_callers
+                return result
+            except Exception as exc:
+                logger.debug("manifest.callers_of_file failed for %s: %s", relative_path, exc)
+                return {}
+
+    def call_graph_summary(self, relative_path: str, budget: int = 2000) -> str:
+        """Budget-aware text summary of call relationships for a file.
+
+        3-tier truncation: full → top-N → count-only.
+
+        Args:
+            relative_path: File to summarize.
+            budget: Maximum character budget.
+
+        Returns:
+            Formatted summary string, or ``""`` if no data.
+        """
+        with _timer("manifest.call_graph_summary", level=logging.DEBUG, path=relative_path, budget=budget):
+            try:
+                manifest = self._manifests.get(relative_path)
+                if manifest is None:
+                    return ""
+
+                file_elements = _flatten_elements(manifest.elements)
+                forward = self.call_graph()
+                reverse = self.reverse_call_graph()
+
+                entries: list[tuple[str, int, int]] = []  # (name, callers, callees)
+                for elem in file_elements:
+                    if not elem.fqn:
+                        continue
+                    n_callers = len(reverse.get(elem.fqn, set()))
+                    n_callees = len(forward.get(elem.fqn, set()))
+                    if n_callers > 0 or n_callees > 0:
+                        entries.append((elem.fqn, n_callers, n_callees))
+
+                if not entries:
+                    return ""
+
+                # Sort by total connections descending for truncation priority
+                entries.sort(key=lambda e: e[1] + e[2], reverse=True)
+
+                # Tier 1: Full detail
+                lines = [
+                    f"- {name}: called by {callers}, calls {callees}"
+                    for name, callers, callees in entries
+                ]
+                result = "\n".join(lines)
+                if len(result) <= budget:
+                    return result
+
+                # Tier 2: Top-N by connection count
+                for n in range(len(entries) - 1, 0, -1):
+                    lines = [
+                        f"- {name}: called by {callers}, calls {callees}"
+                        for name, callers, callees in entries[:n]
+                    ]
+                    lines.append(f"  ... and {len(entries) - n} more")
+                    result = "\n".join(lines)
+                    if len(result) <= budget:
+                        return result
+
+                # Tier 3: Count-only
+                return f"{len(entries)} functions with call relationships"
+
+            except Exception as exc:
+                logger.debug("manifest.call_graph_summary failed for %s: %s", relative_path, exc)
+                return ""
+
+    def max_blast_radius(self, fqns: list[str]) -> tuple[str, int]:
+        """Return the FQN with the largest blast radius and its count.
+
+        Args:
+            fqns: List of FQNs to evaluate.
+
+        Returns:
+            ``(fqn_with_max, count)`` or ``("", 0)`` if empty.
+        """
+        with _timer("manifest.max_blast_radius", level=logging.DEBUG, count=len(fqns)):
+            try:
+                if not fqns:
+                    return ("", 0)
+
+                max_fqn = ""
+                max_count = 0
+                for fqn in fqns:
+                    radius = self.blast_radius(fqn, max_depth=3)
+                    if len(radius) > max_count:
+                        max_count = len(radius)
+                        max_fqn = fqn
+                return (max_fqn, max_count)
+            except Exception as exc:
+                logger.debug("manifest.max_blast_radius failed: %s", exc)
+                return ("", 0)
+
+    def call_graph_cycles(self, max_depth: int = 10) -> list[list[str]]:
+        """DFS cycle detection on the call graph.
+
+        Returns cycle paths as ``[a, b, c, a]`` (last element repeats first).
+        Bounded by ``max_depth`` to prevent unbounded traversal.
+
+        Args:
+            max_depth: Maximum DFS depth.
+
+        Returns:
+            List of cycle paths found.
+        """
+        with _timer("manifest.call_graph_cycles", level=logging.DEBUG, max_depth=max_depth):
+            try:
+                graph = self.call_graph()
+                if not graph:
+                    return []
+
+                cycles: list[list[str]] = []
+                visited: set[str] = set()
+                seen_cycles: set[frozenset[str]] = set()  # dedup
+
+                def _dfs(node: str, path: list[str], depth: int) -> None:
+                    if depth > max_depth:
+                        return
+                    for neighbor in graph.get(node, set()):
+                        if neighbor in path:
+                            # Found a cycle — extract it
+                            idx = path.index(neighbor)
+                            cycle = path[idx:] + [neighbor]
+                            cycle_key = frozenset(cycle[:-1])
+                            if cycle_key not in seen_cycles:
+                                seen_cycles.add(cycle_key)
+                                cycles.append(cycle)
+                            continue
+                        if neighbor not in visited:
+                            path.append(neighbor)
+                            _dfs(neighbor, path, depth + 1)
+                            path.pop()
+
+                for start in sorted(graph.keys()):
+                    if start not in visited:
+                        _dfs(start, [start], 0)
+                        visited.add(start)
+
+                return cycles
+            except Exception as exc:
+                logger.debug("manifest.call_graph_cycles failed: %s", exc)
+                return []
 
 
 # ═══════════════════════════════════════════════════════════════════════════

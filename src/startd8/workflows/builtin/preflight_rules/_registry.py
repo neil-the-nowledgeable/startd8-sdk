@@ -110,6 +110,7 @@ class PreflightRuleRegistry:
             NoRelativeImportsValidatorRule, DepsAvailableValidatorRule,
             DefinitionOrderingValidatorRule, MergeDamageDetectorRule,
         )
+        from .call_graph_validator import CallGraphValidator
 
         builtin_classes = [
             ParentDirExistsRule, LoggerReservedFieldsRule, ServiceMetadataPreflightRule,
@@ -123,6 +124,7 @@ class PreflightRuleRegistry:
             ConfigFileValidRule, EntryPointReinstallRule, ConfigConstraintsRule,
             NoRelativeImportsValidatorRule, DepsAvailableValidatorRule,
             DefinitionOrderingValidatorRule, MergeDamageDetectorRule,
+            CallGraphValidator,
         ]
         for rule_cls in builtin_classes:
             cls.register(rule_cls())

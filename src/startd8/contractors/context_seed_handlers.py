@@ -441,6 +441,12 @@ class HandlerConfig:
     manifest_consumption_enabled: bool = True  # Kill switch (req R1-S10)
     manifest_context_budget: int = 4000  # Max chars for element summary in prompts
     manifest_registry: Any = None  # ManifestRegistry instance (avoid import)
+    # Phase 6: Call graph pipeline control
+    call_graph_context_budget: int = 2000  # Max chars for call graph in IMPLEMENT prompts
+    call_graph_review_budget: int = 1500  # Max chars for call graph in REVIEW prompts
+    blast_radius_warning_threshold: int = 20  # Blast radius count triggering WARNING
+    blast_radius_max_depth: int = 3  # Max BFS depth for blast radius computation
+    enable_call_graph_preflight: bool = True  # Enable call graph preflight rule
 
     _VALID_COLLISION_STRATEGIES = frozenset({"warn", "redesign", "abort"})
 
@@ -2621,6 +2627,38 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             except Exception:
                 logger.debug(
                     "DESIGN: dependency_graph() failed", exc_info=True,
+                )
+
+            # Phase 6: CG-DS-1,2,3 — call graph context for DESIGN
+            _cg_budget = self.config.call_graph_context_budget // 2  # CG-DS-4: share budget
+            try:
+                _cg_parts: list[str] = []
+                for tf in task.target_files:
+                    cg_summary = manifest_registry.call_graph_summary(tf, _cg_budget)
+                    if cg_summary:
+                        _cg_parts.append(f"### {tf}\n{cg_summary}")
+                    # CG-DS-2: For edit-mode tasks, annotate with caller counts
+                    if _edit_mode_hint == "edit":
+                        callers_map = manifest_registry.callers_of_file(tf)
+                        if callers_map:
+                            caller_lines: list[str] = []
+                            for fqn, callers in sorted(callers_map.items()):
+                                caller_lines.append(
+                                    f"- `{fqn}`: {len(callers)} external callers"
+                                )
+                            _cg_parts.append(
+                                f"**External callers of {tf}:**\n"
+                                + "\n".join(caller_lines[:10])
+                            )
+                if _cg_parts:
+                    additional_context["call_graph_context"] = "\n\n".join(_cg_parts)
+                    logger.debug(
+                        "DESIGN: call graph context injected for %d/%d target files",
+                        len(_cg_parts), len(task.target_files),
+                    )
+            except Exception:
+                logger.debug(
+                    "DESIGN: call graph context failed", exc_info=True,
                 )
 
         # CS-3: Edit-mode manifest context key — provides manifest summary
@@ -6166,6 +6204,38 @@ class Test{class_name}:
                     "IMPLEMENT: manifest context injected into %d chunks",
                     sum(1 for c in chunks if c.metadata.get("_manifest_context")),
                 )
+
+                # Phase 6: Enrich chunks with call graph context (CG-IM-1,2,3,4)
+                _cg_budget = self.config.call_graph_context_budget
+                for chunk in chunks:
+                    try:
+                        _cg_parts: list[str] = []
+                        _cg_callers: list[dict[str, Any]] = []
+                        for tf in getattr(chunk, "target_files", []):
+                            cg_summary = _manifest_registry.call_graph_summary(tf, _cg_budget)
+                            if cg_summary:
+                                _cg_parts.append(f"### {tf}\n{cg_summary}")
+                            callers_map = _manifest_registry.callers_of_file(tf)
+                            for fqn, callers in callers_map.items():
+                                br = _manifest_registry.blast_radius(fqn, max_depth=self.config.blast_radius_max_depth)
+                                _cg_callers.append({
+                                    "fqn": fqn,
+                                    "direct_callers": sorted(callers),
+                                    "blast_radius": len(br),
+                                })
+                        if _cg_parts:
+                            chunk.metadata["_call_graph_context"] = "\n\n".join(_cg_parts)
+                        if _cg_callers:
+                            chunk.metadata["_call_graph_callers"] = _cg_callers
+                    except Exception:
+                        logger.debug(
+                            "IMPLEMENT: call graph enrichment failed for chunk %s",
+                            getattr(chunk, "chunk_id", "?"), exc_info=True,
+                        )
+                logger.debug(
+                    "IMPLEMENT: call graph context injected into %d chunks",
+                    sum(1 for c in chunks if c.metadata.get("_call_graph_context")),
+                )
             else:
                 logger.info(
                     "manifest.fallback",
@@ -8217,6 +8287,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
         sections.extend(
             self._build_deps_advisory_section(task, test_results)
         )
+        sections.extend(
+            self._build_call_graph_section(task, generated_code)
+        )
 
         if sections:
             enrichment = "\n".join(sections)
@@ -8596,6 +8669,83 @@ PASS if score >= {pass_threshold} and no blocking issues.
             )
             text = "\n".join(parts)
         return [text]
+
+    # -- helper: call graph blast radius (Phase 6, CG-RV-1,2,3,4,5) --------
+
+    def _build_call_graph_section(
+        self,
+        task: SeedTask,
+        generated_code: str,
+    ) -> list[str]:
+        """Phase 6: Call graph context for review prompt.
+
+        CG-RV-1: For each target file, list modified functions with caller counts.
+        CG-RV-2: Flag generated functions with zero callers (dead code candidates).
+        CG-RV-3: Combine signature changes + callers for high-priority review.
+        Budget-constrained by ``call_graph_review_budget``.
+        """
+        if not self.config.manifest_consumption_enabled:
+            return []
+        registry = self.config.manifest_registry
+        if registry is None:
+            return []
+
+        try:
+            budget = self.config.call_graph_review_budget
+            parts: list[str] = ["\n## CALL GRAPH IMPACT (Phase 6)\n"]
+            current_len = len(parts[0])
+
+            # CG-RV-1: Caller counts for target files
+            for tf in getattr(task, "target_files", []) or []:
+                try:
+                    callers_map = registry.callers_of_file(tf)
+                    if callers_map:
+                        section = f"**{tf}** — functions with external callers:\n"
+                        for fqn, callers in sorted(callers_map.items()):
+                            br = registry.blast_radius(fqn, max_depth=self.config.blast_radius_max_depth)
+                            line = f"- `{fqn}`: {len(callers)} direct callers, blast radius {len(br)}\n"
+                            if current_len + len(section) + len(line) > budget:
+                                break
+                            section += line
+                        parts.append(section)
+                        current_len += len(section)
+                except Exception:
+                    logger.debug(
+                        "REVIEW: CG-RV-1 callers_of_file failed for %s",
+                        tf, exc_info=True,
+                    )
+
+            # CG-RV-2: Dead code candidates in generated output
+            try:
+                dead = set(registry.dead_candidates())
+                if dead and task.target_files:
+                    dead_in_task: list[str] = []
+                    for tf in task.target_files:
+                        manifest = registry.get(tf)
+                        if manifest is None:
+                            continue
+                        from startd8.utils.manifest_registry import _flatten_elements
+                        for elem in _flatten_elements(manifest.elements):
+                            if elem.fqn and elem.fqn in dead:
+                                dead_in_task.append(elem.fqn)
+                    if dead_in_task:
+                        dead_section = (
+                            "**Dead code candidates** (public, zero callers):\n"
+                            + "".join(f"- `{fqn}`\n" for fqn in dead_in_task[:10])
+                        )
+                        if current_len + len(dead_section) <= budget:
+                            parts.append(dead_section)
+                            current_len += len(dead_section)
+            except Exception:
+                logger.debug("REVIEW: CG-RV-2 dead candidates failed", exc_info=True)
+
+            if len(parts) <= 1:
+                return []  # Only header, no content
+            return parts
+
+        except Exception:
+            logger.debug("REVIEW: call graph section failed", exc_info=True)
+            return []
 
     # -- helper: deps allowlist advisory (Gate 5) ---------------------------
 
