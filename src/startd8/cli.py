@@ -1040,6 +1040,175 @@ workflow_app = typer.Typer(
 app.add_typer(workflow_app, name="workflow")
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Manifest commands
+# ──────────────────────────────────────────────────────────────────────────
+manifest_app = typer.Typer(
+    name="manifest",
+    help="Code manifest generation and inspection commands"
+)
+app.add_typer(manifest_app, name="manifest")
+
+
+@manifest_app.command("generate")
+def manifest_generate(
+    path: Optional[str] = typer.Argument(None, help="Source path to scan (default: src/)"),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Cache/output directory"),
+    fmt: str = typer.Option("json", "--format", help="Output format: json or yaml"),
+    check: bool = typer.Option(False, "--check", help="Exit non-zero if manifests are stale"),
+    strict: bool = typer.Option(False, "--strict", help="Treat parse errors as hard failures"),
+    verbose: bool = typer.Option(False, "--verbose", help="Print per-file status"),
+):
+    """Generate code manifests for Python files."""
+    from pathlib import Path as P
+    from rich.console import Console
+    from startd8.utils.manifest_cache import generate_project_manifests, check_manifests_fresh
+
+    console = Console()
+    project_root = P.cwd()
+    source_root = P(path) if path else None
+    cache_dir = P(output_dir) if output_dir else None
+
+    if check:
+        fresh, stale = check_manifests_fresh(project_root, source_root, cache_dir)
+        if fresh:
+            console.print("[green]All manifests are up to date.[/green]")
+            raise SystemExit(0)
+        else:
+            console.print(f"[yellow]{len(stale)} stale manifest(s):[/yellow]")
+            for f in stale:
+                console.print(f"  {f}")
+            raise SystemExit(1)
+
+    manifests = generate_project_manifests(project_root, source_root, cache_dir)
+
+    error_count = sum(1 for m in manifests.values() if m.errors)
+    if strict and error_count > 0:
+        console.print(f"[red]--strict: {error_count} file(s) had parse errors[/red]")
+        raise SystemExit(1)
+
+    if verbose:
+        for rel_path, m in sorted(manifests.items()):
+            status = "[red]ERROR[/red]" if m.errors else "[green]OK[/green]"
+            console.print(f"  {status} {rel_path} ({len(m.elements)} elements)")
+
+    console.print(
+        f"[green]Generated manifests for {len(manifests)} file(s)[/green]"
+        + (f" ({error_count} with errors)" if error_count else "")
+    )
+
+
+@manifest_app.command("check")
+def manifest_check(
+    path: Optional[str] = typer.Argument(None, help="Source path to check"),
+    output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Cache directory"),
+):
+    """Check if cached manifests are up to date (no regeneration)."""
+    from pathlib import Path as P
+    from rich.console import Console
+    from startd8.utils.manifest_cache import check_manifests_fresh
+
+    console = Console()
+    project_root = P.cwd()
+    source_root = P(path) if path else None
+    cache_dir = P(output_dir) if output_dir else None
+
+    fresh, stale = check_manifests_fresh(project_root, source_root, cache_dir)
+    if fresh:
+        console.print("[green]All manifests are up to date.[/green]")
+        raise SystemExit(0)
+    else:
+        console.print(f"[yellow]{len(stale)} stale manifest(s):[/yellow]")
+        for f in stale:
+            console.print(f"  {f}")
+        raise SystemExit(1)
+
+
+@manifest_app.command("show")
+def manifest_show(
+    file: str = typer.Argument(..., help="Python file to show manifest for"),
+    fqn: Optional[str] = typer.Option(None, "--fqn", help="Show specific element by FQN"),
+    fmt: str = typer.Option("tree", "--format", help="Output format: json, yaml, or tree"),
+):
+    """Show the manifest for a single Python file."""
+    import json
+    from pathlib import Path as P
+    from rich.console import Console
+    from rich.tree import Tree
+    from startd8.utils.code_manifest import generate_file_manifest, lookup_element
+
+    console = Console()
+    project_root = P.cwd()
+    file_path = P(file)
+
+    if not file_path.exists():
+        console.print(f"[red]File not found: {file}[/red]")
+        raise SystemExit(1)
+
+    manifest = generate_file_manifest(file_path, project_root)
+
+    if fqn:
+        elem = lookup_element(manifest, fqn)
+        if elem is None:
+            console.print(f"[red]Element not found: {fqn}[/red]")
+            raise SystemExit(1)
+        console.print_json(json.dumps(elem.model_dump(), indent=2, default=str))
+        return
+
+    if fmt == "json":
+        console.print_json(json.dumps(manifest.model_dump(), indent=2, default=str))
+    elif fmt == "yaml":
+        console.print(manifest.to_yaml())
+    else:
+        # Tree view
+        tree = Tree(f"[bold]{manifest.module}[/bold] ({manifest.file})")
+        tree.add(f"digest: {manifest.digest[:20]}...")
+        tree.add(f"schema: {manifest.schema_version}")
+
+        if manifest.imports:
+            imp_branch = tree.add(f"[cyan]imports[/cyan] ({len(manifest.imports)})")
+            for imp in manifest.imports:
+                flags = []
+                if imp.is_conditional:
+                    flags.append("conditional")
+                if imp.is_reexport:
+                    flags.append("reexport")
+                flag_str = f" [{', '.join(flags)}]" if flags else ""
+                imp_branch.add(f"{imp.module}{flag_str}")
+
+        if manifest.elements:
+            elem_branch = tree.add(f"[green]elements[/green] ({len(manifest.elements)})")
+            _add_elements_to_tree(elem_branch, manifest.elements)
+
+        if manifest.errors:
+            err_branch = tree.add(f"[red]errors[/red] ({len(manifest.errors)})")
+            for err in manifest.errors:
+                err_branch.add(f"{err.kind.value}: {err.message}")
+
+        console.print(tree)
+
+
+def _add_elements_to_tree(branch, elements):
+    """Recursively add elements to a Rich tree."""
+    for elem in elements:
+        sig_str = ""
+        if elem.signature:
+            params = ", ".join(
+                f"{p.name}: {p.annotation}" if p.annotation else p.name
+                for p in elem.signature.params
+            )
+            ret = f" -> {elem.signature.return_annotation}" if elem.signature.return_annotation else ""
+            sig_str = f"({params}){ret}"
+
+        label = f"[bold]{elem.kind.value}[/bold] {elem.name}{sig_str}"
+        if elem.scope_guard:
+            label += f" [dim][{elem.scope_guard}][/dim]"
+
+        child_branch = branch.add(label)
+        if elem.children:
+            _add_elements_to_tree(child_branch, elem.children)
+
+
 def _load_workflow_registry():
     """Load workflow registry module"""
     try:

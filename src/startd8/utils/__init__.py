@@ -21,6 +21,16 @@ from .code_extraction import extract_code_from_response, extract_multi_file_code
 
 from .token_usage import token_usage_input, token_usage_output, token_usage_cost
 
+from .code_manifest import (
+    generate_file_manifest,
+    lookup_element,
+    ScopeKind,
+    SymbolEntry,
+    SymbolInfo,
+)
+
+from .manifest_cache import generate_project_manifests, check_manifests_fresh
+
 __all__ = [
     # Retry utilities
     "RetryConfig",
@@ -40,6 +50,14 @@ __all__ = [
     "token_usage_input",
     "token_usage_output",
     "token_usage_cost",
+    # Code manifest
+    "generate_file_manifest",
+    "lookup_element",
+    "ScopeKind",
+    "SymbolEntry",
+    "SymbolInfo",
+    "generate_project_manifests",
+    "check_manifests_fresh",
 ]
 
 
