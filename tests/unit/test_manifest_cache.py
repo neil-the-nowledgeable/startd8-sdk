@@ -91,12 +91,19 @@ class TestIndexRoundTrip:
         assert loaded == index
 
     def test_save_includes_meta(self, tmp_path: Path):
-        """Saved index contains _meta with schema and python versions."""
+        """Saved index contains _meta with schema, python version, and mode."""
         _save_index(tmp_path, {"a.py": "sha256:abc"})
         raw = json.loads((tmp_path / "_index.json").read_text())
         assert "_meta" in raw
         assert "schema_version" in raw["_meta"]
         assert "python_version" in raw["_meta"]
+        assert raw["_meta"]["mode"] == "static"
+
+    def test_save_includes_mode(self, tmp_path: Path):
+        """Mode is stored in _meta."""
+        _save_index(tmp_path, {"a.py": "sha256:abc"}, mode="introspect")
+        raw = json.loads((tmp_path / "_index.json").read_text())
+        assert raw["_meta"]["mode"] == "introspect"
 
     def test_load_nonexistent(self, tmp_path: Path):
         loaded = _load_index(tmp_path)
@@ -114,6 +121,19 @@ class TestIndexRoundTrip:
         )
         loaded = _load_index(tmp_path)
         assert loaded == {}
+
+    def test_mode_mismatch_invalidates(self, tmp_path: Path):
+        """Cache built with one mode is discarded when loaded with another."""
+        _save_index(tmp_path, {"a.py": "sha256:abc"}, mode="static")
+        loaded = _load_index(tmp_path, mode="introspect")
+        assert loaded == {}
+
+    def test_mode_match_loads(self, tmp_path: Path):
+        """Cache built with same mode loads successfully."""
+        index = {"a.py": "sha256:abc"}
+        _save_index(tmp_path, index, mode="introspect")
+        loaded = _load_index(tmp_path, mode="introspect")
+        assert loaded == index
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -373,7 +373,7 @@ class TestSummaryStats:
         self, sample_registry: ManifestRegistry
     ) -> None:
         stats = sample_registry.summary_stats()
-        assert stats["schema_version"] == "1.2.0"
+        assert stats["schema_version"] == "1.4.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -463,7 +463,7 @@ class TestFromCache:
         cache_dir.mkdir(parents=True)
 
         index = {
-            "_meta": {"schema_version": "1.2.0", "python_version": "3.14"},
+            "_meta": {"schema_version": "1.4.0", "python_version": "3.14"},
             "big.py": "sha256:bigdigest",
         }
         (cache_dir / "_index.json").write_text(json.dumps(index), encoding="utf-8")
@@ -496,7 +496,7 @@ class TestFromCache:
 
         digest = "sha256:testdigest"
         index = {
-            "_meta": {"schema_version": "1.2.0", "python_version": "3.14"},
+            "_meta": {"schema_version": "1.4.0", "python_version": "3.14"},
             "src/test.py": digest,
         }
         (cache_dir / "_index.json").write_text(json.dumps(index), encoding="utf-8")
@@ -771,7 +771,7 @@ class TestSchemaCompatibility:
         old = FileManifest.model_validate(old_data)
 
         new = _make_manifest(elements=[_make_element("func", "mod.func")])
-        assert new.schema_version == "1.2.0"
+        assert new.schema_version == "1.4.0"
 
         # Should diff without errors
         diff = ManifestDiff.diff(old, new)

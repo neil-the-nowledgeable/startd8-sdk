@@ -92,12 +92,16 @@ def _compute_file_digest(file_path: Path) -> str:
     return "sha256:" + hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def _load_index(cache_dir: Path) -> dict[str, str]:
+def _load_index(
+    cache_dir: Path,
+    mode: str = "static",
+) -> dict[str, str]:
     """Load the cache index mapping file paths to digests.
 
-    The index stores a ``_meta`` key with ``schema_version`` and
-    ``python_version``.  If either differs from the current runtime,
-    the entire index is discarded so that all manifests are regenerated.
+    The index stores a ``_meta`` key with ``schema_version``,
+    ``python_version``, and ``mode``.  If any differs from the current
+    runtime, the entire index is discarded so that all manifests are
+    regenerated.
     """
     index_path = cache_dir / _INDEX_FILE
     if not index_path.exists():
@@ -127,11 +131,22 @@ def _load_index(cache_dir: Path) -> dict[str, str]:
             _PYTHON_VERSION_TAG,
         )
         return {}
+    if meta.get("mode", "static") != mode:
+        logger.info(
+            "Mode changed (%s -> %s); rebuilding cache",
+            meta.get("mode", "static"),
+            mode,
+        )
+        return {}
 
     return data
 
 
-def _save_index(cache_dir: Path, index: dict[str, str]) -> None:
+def _save_index(
+    cache_dir: Path,
+    index: dict[str, str],
+    mode: str = "static",
+) -> None:
     """Save the cache index with version metadata."""
     cache_dir.mkdir(parents=True, exist_ok=True)
     index_path = cache_dir / _INDEX_FILE
@@ -139,6 +154,7 @@ def _save_index(cache_dir: Path, index: dict[str, str]) -> None:
         "_meta": {
             "schema_version": SCHEMA_VERSION,
             "python_version": _PYTHON_VERSION_TAG,
+            "mode": mode,
         },
         **index,
     }
@@ -180,6 +196,7 @@ def generate_project_manifests(
     project_root: Union[Path, str],
     source_root: Union[Path, str, None] = None,
     cache_dir: Union[Path, str, None] = None,
+    mode: str = "static",
 ) -> dict[str, FileManifest]:
     """
     Generate manifests for all Python files in a project.
@@ -188,6 +205,9 @@ def generate_project_manifests(
         project_root: Project root directory.
         source_root: Source directory to scan (default: project_root/src or project_root).
         cache_dir: Cache directory (default: project_root/.startd8/manifests).
+        mode: Analysis mode — ``"static"`` (default), ``"ast_only"``,
+            ``"introspect"`` (adds runtime introspection), or
+            ``"bytecode"`` (adds call graph extraction).
 
     Returns:
         Dict mapping relative file paths to FileManifest instances.
@@ -235,7 +255,7 @@ def generate_project_manifests(
 
         # Generate fresh
         try:
-            manifest = generate_file_manifest(file_path, project_root)
+            manifest = generate_file_manifest(file_path, project_root, mode=mode)
             manifests[relative] = manifest
             index[relative] = manifest.digest
             _save_cached_manifest(cache_dir_path, manifest)
@@ -245,7 +265,7 @@ def generate_project_manifests(
             continue
 
     # Save index
-    _save_index(cache_dir_path, index)
+    _save_index(cache_dir_path, index, mode=mode)
 
     logger.info(
         "Manifest generation complete: %d files (%d cached, %d generated)",
@@ -260,6 +280,7 @@ def check_manifests_fresh(
     project_root: Union[Path, str],
     source_root: Union[Path, str, None] = None,
     cache_dir: Union[Path, str, None] = None,
+    mode: str = "static",
 ) -> tuple[bool, list[str]]:
     """
     Check if cached manifests are up-to-date.
@@ -278,7 +299,7 @@ def check_manifests_fresh(
         Path(cache_dir).resolve() if cache_dir else _default_cache_dir(project_root)
     )
 
-    index = _load_index(cache_dir_path)
+    index = _load_index(cache_dir_path, mode=mode)
     py_files = _scan_python_files(source_root_path)
     stale_files: list[str] = []
 

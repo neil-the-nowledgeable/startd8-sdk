@@ -27,6 +27,15 @@ from .code_manifest import (
     ScopeKind,
     SymbolEntry,
     SymbolInfo,
+    InspectInfo,
+    ResolvedParam,
+    ResolvedSignature,
+    CallEntry,
+    AttributeAccess,
+    CallGraphInfo,
+    CallEdge,
+    CallKind,
+    AttributeAccessKind,
 )
 
 from .manifest_cache import generate_project_manifests, check_manifests_fresh
@@ -58,6 +67,17 @@ __all__ = [
     "ScopeKind",
     "SymbolEntry",
     "SymbolInfo",
+    # Phase 5: inspect-based runtime introspection
+    "InspectInfo",
+    "ResolvedParam",
+    "ResolvedSignature",
+    # Phase 6: bytecode call graph
+    "CallEntry",
+    "AttributeAccess",
+    "CallGraphInfo",
+    "CallEdge",
+    "CallKind",
+    "AttributeAccessKind",
     "generate_project_manifests",
     "check_manifests_fresh",
     # Manifest registry (Phase 4)

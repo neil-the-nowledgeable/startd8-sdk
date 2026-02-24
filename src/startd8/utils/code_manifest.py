@@ -14,14 +14,23 @@ See docs/design/CODE_MANIFEST_REQUIREMENTS.md for the full specification.
 from __future__ import annotations
 
 import ast
+import dis
 import hashlib
+import importlib
+import importlib.util
+import inspect
+import platform
 import symtable
 import sys
+import threading
+import types
+import typing
 from collections import Counter
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
-from typing import Any, Literal, Optional, Union
+from typing import Any, Generator, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
@@ -29,9 +38,11 @@ from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Schema version — 1.2.0 = Phase 3 (symtable augmentation)
+# Schema version — 1.4.0 = Phase 5 (inspect-based runtime introspection)
 # Version 1.1.0 is reserved for Phase 2 (docstring/decorator enrichment).
-SCHEMA_VERSION = "1.2.0"
+# Version 1.2.0 = Phase 3 (symtable augmentation).
+# Version 1.3.0 = Phase 6 (bytecode call graph analysis).
+SCHEMA_VERSION = "1.4.0"
 
 # Maximum value_repr lengths per requirements Section 3.2.3
 _VALUE_REPR_STRING_MAX = 80
@@ -88,6 +99,7 @@ class ParseErrorKind(str, Enum):
     ENCODING_ERROR = "encoding_error"
     IO_ERROR = "io_error"
     PARTIAL_PARSE = "partial_parse"
+    IMPORT_ERROR = "import_error"
 
 
 class ScopeKind(str, Enum):
@@ -108,6 +120,23 @@ class ScopeKind(str, Enum):
     FREE = "free"
     IMPORTED = "imported"
     PARAMETER = "parameter"
+
+
+class CallKind(str, Enum):
+    """Classification of outbound calls extracted from bytecode."""
+
+    FUNCTION_CALL = "function_call"
+    METHOD_CALL = "method_call"
+    BUILTIN_CALL = "builtin_call"
+    DYNAMIC_CALL = "dynamic_call"
+
+
+class AttributeAccessKind(str, Enum):
+    """Classification of self-attribute access patterns."""
+
+    READ = "read"
+    WRITE = "write"
+    DELETE = "delete"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -179,6 +208,12 @@ class Element(BaseModel):
 
     # Phase 3: symtable augmentation
     symbol_info: Optional[SymbolInfo] = None
+
+    # Phase 5: inspect-based runtime introspection
+    inspect_info: Optional[InspectInfo] = None
+
+    # Phase 6: bytecode call graph
+    call_graph: Optional[CallGraphInfo] = None
 
     @model_validator(mode="after")
     def _validate_kind_fields(self) -> Element:
@@ -271,6 +306,88 @@ class SymbolInfo(BaseModel):
     is_closure: bool = False
 
 
+class ResolvedParam(BaseModel):
+    """A resolved function parameter from runtime introspection."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    annotation: Optional[str] = None
+    default: Optional[str] = None
+    kind: ParamKind = ParamKind.POSITIONAL
+    has_default: bool = False
+
+
+class ResolvedSignature(BaseModel):
+    """Resolved callable signature from runtime introspection."""
+
+    model_config = ConfigDict(frozen=True)
+
+    params: list[ResolvedParam] = []
+    return_annotation: Optional[str] = None
+
+
+class InspectInfo(BaseModel):
+    """Runtime introspection data from inspect module.
+
+    Attached to elements when mode="introspect" is used.
+    Provides resolved type annotations, MRO, and runtime attributes
+    that cannot be determined from static analysis alone.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    resolved_signature: Optional[ResolvedSignature] = None
+    mro: list[str] = []
+    resolved_annotations: dict[str, str] = {}
+    runtime_attributes: list[str] = []
+    is_callable: bool = False
+    qualname: Optional[str] = None
+
+
+class CallEntry(BaseModel):
+    """A single outbound call from a callable element."""
+
+    model_config = ConfigDict(frozen=True)
+
+    target: str
+    target_fqn: Optional[str] = None
+    kind: CallKind
+    receiver: Optional[str] = None
+    line: Optional[int] = None
+
+
+class AttributeAccess(BaseModel):
+    """An attribute read/write/delete on self within a method."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    access: AttributeAccessKind
+    line: Optional[int] = None
+
+
+class CallGraphInfo(BaseModel):
+    """Per-element call graph summary derived from bytecode analysis."""
+
+    model_config = ConfigDict(frozen=True)
+
+    calls: list[CallEntry] = []
+    attribute_reads: list[str] = []
+    attribute_writes: list[str] = []
+    has_dynamic_dispatch: bool = False
+    unresolved_calls: list[str] = []
+
+
+class CallEdge(BaseModel):
+    """A single caller→callee edge in the project call graph."""
+
+    model_config = ConfigDict(frozen=True)
+
+    caller_fqn: str
+    callee_fqn: str
+
+
 class FileManifest(BaseModel):
     """Complete manifest for a single Python file."""
 
@@ -286,6 +403,13 @@ class FileManifest(BaseModel):
     dependencies: Dependencies = Dependencies()
     errors: list[ParseError] = []
     generated_at: str = ""
+
+    # Phase 5: module-level metadata from runtime introspection
+    module_all: Optional[list[str]] = None
+    module_version: Optional[str] = None
+
+    # Phase 6: file-level call edges
+    call_graph_edges: Optional[list[CallEdge]] = None
 
     def to_yaml(self) -> str:
         """Serialize the manifest to YAML format."""
@@ -1179,6 +1303,499 @@ def _classify_imports(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 6: bytecode call graph analysis
+# ═══════════════════════════════════════════════════════════════════════════
+
+_BYTECODE_SUPPORTED = (
+    platform.python_implementation() == "CPython"
+    and sys.version_info >= (3, 12)
+)
+
+# Builtin names to filter from call graphs
+_BUILTIN_NAMES: frozenset[str] = frozenset(
+    __builtins__.keys() if isinstance(__builtins__, dict) else dir(__builtins__)
+)
+
+# Names that indicate dynamic dispatch
+_DYNAMIC_DISPATCH_NAMES: frozenset[str] = frozenset({
+    "getattr", "setattr", "delattr", "eval", "exec",
+})
+
+# Call opcodes in CPython 3.12+
+_CALL_OPCODES: frozenset[str] = frozenset({
+    "CALL", "CALL_KW", "CALL_FUNCTION_EX",
+})
+
+# Opcodes that load a name (preceding CALL)
+_LOAD_OPCODES: frozenset[str] = frozenset({
+    "LOAD_GLOBAL", "LOAD_ATTR", "LOAD_FAST", "LOAD_FAST_BORROW",
+    "LOAD_DEREF", "LOAD_NAME", "LOAD_SUPER_ATTR",
+})
+
+# Callable element kinds for bytecode enrichment
+_CALLABLE_ELEMENT_KINDS = frozenset({
+    ElementKind.FUNCTION,
+    ElementKind.ASYNC_FUNCTION,
+    ElementKind.METHOD,
+    ElementKind.ASYNC_METHOD,
+    ElementKind.PROPERTY,
+})
+
+
+def _extract_code_objects(
+    code: types.CodeType, max_depth: int = 20,
+) -> dict[str, types.CodeType]:
+    """Walk code.co_consts recursively to map co_qualname → code object."""
+    if max_depth <= 0:
+        return {}
+    result: dict[str, types.CodeType] = {}
+    for const in code.co_consts:
+        if isinstance(const, types.CodeType):
+            result[const.co_qualname] = const
+            result.update(_extract_code_objects(const, max_depth - 1))
+    return result
+
+
+def _resolve_call_target(
+    instructions: list[dis.Instruction],
+    call_idx: int,
+) -> tuple[str, CallKind, Optional[str]]:
+    """Scan backwards from call_idx to find the callee.
+
+    Uses a two-pass approach:
+    1. First, look for high-priority callee indicators (LOAD_GLOBAL+NULL,
+       LOAD_ATTR+method, LOAD_SUPER_ATTR) — these unambiguously identify
+       the callable even when followed by argument-loading instructions.
+    2. Fall back to LOAD_FAST/LOAD_DEREF/LOAD_NAME for local calls.
+
+    Returns:
+        (target_name, call_kind, receiver_name)
+    """
+    scan_start = max(call_idx - 30, 0)
+
+    # Pass 1: Look for definitive callee indicators (highest priority)
+    for i in range(call_idx - 1, scan_start - 1, -1):
+        inst = instructions[i]
+
+        # Stop scanning at boundaries
+        if inst.opname in _CALL_OPCODES:
+            break
+        if inst.opname in (
+            "STORE_FAST", "STORE_FAST_MAYBE_NULL", "STORE_NAME",
+            "STORE_GLOBAL", "STORE_DEREF", "STORE_ATTR",
+            "POP_TOP", "RETURN_VALUE", "RETURN_CONST",
+            "JUMP_FORWARD", "JUMP_BACKWARD",
+            "POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE",
+            "POP_JUMP_IF_NONE", "POP_JUMP_IF_NOT_NONE",
+        ):
+            break
+
+        # LOAD_SUPER_ATTR — super().method()
+        if inst.opname == "LOAD_SUPER_ATTR":
+            return (str(inst.argval), CallKind.METHOD_CALL, "super()")
+
+        # LOAD_ATTR with method flag — obj.method()
+        if inst.opname == "LOAD_ATTR" and inst.arg is not None and inst.arg & 1:
+            target = str(inst.argval)
+            receiver = None
+            for j in range(i - 1, max(i - 10, scan_start - 1), -1):
+                prev = instructions[j]
+                if prev.opname in ("LOAD_FAST", "LOAD_FAST_BORROW", "LOAD_DEREF"):
+                    receiver = str(prev.argval)
+                    break
+                elif prev.opname == "LOAD_ATTR":
+                    receiver = str(prev.argval)
+                    break
+                elif prev.opname == "LOAD_GLOBAL":
+                    receiver = str(prev.argval)
+                    break
+            return (target, CallKind.METHOD_CALL, receiver)
+
+        # LOAD_GLOBAL with NULL push — function call setup
+        if inst.opname == "LOAD_GLOBAL" and inst.arg is not None and inst.arg & 1:
+            target = str(inst.argval)
+            if target in _BUILTIN_NAMES:
+                return (target, CallKind.BUILTIN_CALL, None)
+            if target in _DYNAMIC_DISPATCH_NAMES:
+                return (target, CallKind.DYNAMIC_CALL, None)
+            return (target, CallKind.FUNCTION_CALL, None)
+
+        # LOAD_NAME — module-level call
+        if inst.opname == "LOAD_NAME":
+            target = str(inst.argval)
+            if target in _BUILTIN_NAMES:
+                return (target, CallKind.BUILTIN_CALL, None)
+            return (target, CallKind.FUNCTION_CALL, None)
+
+    # Pass 2: Fall back to LOAD_FAST/LOAD_DEREF (local callable)
+    # Only match the instruction immediately before CALL (or before PUSH_NULL)
+    for i in range(call_idx - 1, scan_start - 1, -1):
+        inst = instructions[i]
+        if inst.opname in _CALL_OPCODES:
+            break
+        if inst.opname in (
+            "STORE_FAST", "STORE_FAST_MAYBE_NULL", "STORE_NAME",
+            "STORE_GLOBAL", "STORE_DEREF", "STORE_ATTR",
+            "POP_TOP", "RETURN_VALUE", "RETURN_CONST",
+            "JUMP_FORWARD", "JUMP_BACKWARD",
+            "POP_JUMP_IF_TRUE", "POP_JUMP_IF_FALSE",
+            "POP_JUMP_IF_NONE", "POP_JUMP_IF_NOT_NONE",
+        ):
+            break
+        if inst.opname in ("LOAD_FAST", "LOAD_FAST_BORROW"):
+            return (str(inst.argval), CallKind.FUNCTION_CALL, None)
+        if inst.opname == "LOAD_DEREF":
+            return (str(inst.argval), CallKind.FUNCTION_CALL, None)
+
+    return ("<unknown>", CallKind.DYNAMIC_CALL, None)
+
+
+def _analyze_bytecode(code_obj: types.CodeType) -> CallGraphInfo:
+    """Analyze a single code object's bytecode for calls and attribute access.
+
+    Returns a CallGraphInfo with deduplicated calls, attribute patterns,
+    and dynamic dispatch flag.
+
+    Strategy: collect all instructions, then for each CALL opcode scan
+    backwards to find the callable load.  For attribute access, detect
+    LOAD_FAST 'self' → STORE_ATTR / LOAD_ATTR / DELETE_ATTR patterns.
+    """
+    calls: list[CallEntry] = []
+    attr_reads: set[str] = set()
+    attr_writes: set[str] = set()
+    has_dynamic = False
+    seen_calls: set[tuple[str, CallKind]] = set()
+
+    all_insts = list(dis.get_instructions(code_obj))
+
+    # Pass 1: extract attribute access on self
+    for i, inst in enumerate(all_insts):
+        if inst.opname not in ("LOAD_FAST", "LOAD_FAST_BORROW"):
+            continue
+        if inst.argval != "self":
+            continue
+        # Check next instruction
+        if i + 1 >= len(all_insts):
+            continue
+        nxt = all_insts[i + 1]
+        if nxt.opname == "LOAD_ATTR" and nxt.arg is not None and not (nxt.arg & 1):
+            attr_reads.add(str(nxt.argval))
+        elif nxt.opname == "STORE_ATTR":
+            attr_writes.add(str(nxt.argval))
+        elif nxt.opname == "DELETE_ATTR":
+            attr_writes.add(str(nxt.argval))
+
+    # Pass 2: extract calls
+    for i, inst in enumerate(all_insts):
+        if inst.opname not in _CALL_OPCODES:
+            continue
+        target, kind, receiver = _resolve_call_target(all_insts, i)
+
+        # Check for dynamic dispatch
+        if target in _DYNAMIC_DISPATCH_NAMES:
+            has_dynamic = True
+
+        # Deduplicate by (target, kind)
+        key = (target, kind)
+        if key not in seen_calls:
+            seen_calls.add(key)
+            calls.append(CallEntry(
+                target=target,
+                kind=kind,
+                receiver=receiver,
+                line=inst.positions.lineno if inst.positions else None,
+            ))
+
+    return CallGraphInfo(
+        calls=calls,
+        attribute_reads=sorted(attr_reads),
+        attribute_writes=sorted(attr_writes),
+        has_dynamic_dispatch=has_dynamic,
+    )
+
+
+def _qualname_to_fqn(qualname: str, module_path: str) -> str:
+    """Convert co_qualname to a full FQN using the module path."""
+    return f"{module_path}.{qualname}"
+
+
+def _enrich_with_callgraph(
+    elements: list[Element],
+    code_objects: dict[str, types.CodeType],
+    module_path: str,
+) -> list[Element]:
+    """Attach CallGraphInfo to callable elements by matching co_qualname."""
+    enriched: list[Element] = []
+    for elem in elements:
+        try:
+            if elem.kind in _CALLABLE_ELEMENT_KINDS:
+                # Compute the qualname that would match the code object
+                # Element FQN = module.path.ClassName.method_name
+                # co_qualname = ClassName.method_name (no module prefix)
+                qualname = elem.fqn
+                if qualname.startswith(module_path + "."):
+                    qualname = qualname[len(module_path) + 1:]
+                # Strip disambiguation suffixes
+                for suffix in ("@getter", "@setter", "@deleter"):
+                    if qualname.endswith(suffix):
+                        qualname = qualname[: -len(suffix)]
+                        break
+                # Strip @overload[N] and @branch[N]
+                if "@overload[" in qualname:
+                    qualname = qualname[: qualname.index("@overload[")]
+                if "@branch[" in qualname:
+                    qualname = qualname[: qualname.index("@branch[")]
+
+                co = code_objects.get(qualname)
+                if co is not None:
+                    info = _analyze_bytecode(co)
+                    # Recurse into children
+                    enriched_children = (
+                        _enrich_with_callgraph(elem.children, code_objects, module_path)
+                        if elem.children else elem.children
+                    )
+                    enriched_class_vars = elem.class_variables
+                    enriched.append(
+                        elem.model_copy(update={
+                            "call_graph": info,
+                            "children": enriched_children,
+                            "class_variables": enriched_class_vars,
+                        })
+                    )
+                else:
+                    # No matching code object — enrich children only
+                    enriched_children = (
+                        _enrich_with_callgraph(elem.children, code_objects, module_path)
+                        if elem.children else elem.children
+                    )
+                    enriched.append(
+                        elem.model_copy(update={"children": enriched_children})
+                        if enriched_children is not elem.children else elem
+                    )
+            elif elem.kind == ElementKind.CLASS:
+                # Recurse into class children and class_variables
+                enriched_children = (
+                    _enrich_with_callgraph(elem.children, code_objects, module_path)
+                    if elem.children else elem.children
+                )
+                enriched_class_vars = elem.class_variables  # non-callable, skip
+                enriched.append(
+                    elem.model_copy(update={
+                        "children": enriched_children,
+                        "class_variables": enriched_class_vars,
+                    })
+                )
+            else:
+                enriched.append(elem)
+        except Exception:
+            logger.warning(
+                "Failed to enrich %s '%s' with call graph; skipping",
+                elem.kind.value, elem.name, exc_info=True,
+            )
+            enriched.append(elem)
+    return enriched
+
+
+def _resolve_intra_file_fqns(
+    elements: list[Element],
+    module_path: str,
+    imports: list[ImportEntry],
+) -> list[Element]:
+    """Resolve call target FQNs for intra-file calls.
+
+    For each element with call_graph, resolve target_fqn for:
+    1. Global function calls → {module_path}.{name} if name exists in file
+    2. Method calls on self → {enclosing_class_fqn}.{method_name}
+    3. Imported names → cross-reference against imports list
+    """
+    # Build name→FQN index for all elements in the file
+    file_names: dict[str, str] = {}
+    _collect_element_names(elements, file_names)
+
+    # Build imported name → module mapping
+    import_names: dict[str, str] = {}
+    for imp in imports:
+        if imp.kind == "from":
+            for name in imp.names:
+                import_names[name] = f"{imp.module}.{name}"
+        elif imp.kind == "import":
+            name = imp.alias or imp.module.split(".")[-1]
+            import_names[name] = imp.module
+
+    return _resolve_elements(elements, module_path, file_names, import_names)
+
+
+def _collect_element_names(elements: list[Element], names: dict[str, str]) -> None:
+    """Collect name → FQN mappings for all elements recursively."""
+    for elem in elements:
+        names[elem.name] = elem.fqn
+        _collect_element_names(elem.children, names)
+        _collect_element_names(elem.class_variables, names)
+
+
+def _resolve_elements(
+    elements: list[Element],
+    module_path: str,
+    file_names: dict[str, str],
+    import_names: dict[str, str],
+) -> list[Element]:
+    """Recursively resolve call target FQNs in elements."""
+    resolved: list[Element] = []
+    for elem in elements:
+        if elem.call_graph is not None and elem.call_graph.calls:
+            new_calls: list[CallEntry] = []
+            unresolved: list[str] = list(elem.call_graph.unresolved_calls)
+            for call in elem.call_graph.calls:
+                if call.target_fqn is not None:
+                    # Already resolved
+                    new_calls.append(call)
+                    continue
+                fqn = _try_resolve_fqn(
+                    call, elem, module_path, file_names, import_names,
+                )
+                if fqn is not None:
+                    new_calls.append(call.model_copy(update={"target_fqn": fqn}))
+                else:
+                    new_calls.append(call)
+                    if call.kind not in (CallKind.BUILTIN_CALL, CallKind.DYNAMIC_CALL):
+                        if call.target not in unresolved:
+                            unresolved.append(call.target)
+            new_cg = elem.call_graph.model_copy(update={
+                "calls": new_calls,
+                "unresolved_calls": sorted(set(unresolved)),
+            })
+            # Recurse
+            children = (
+                _resolve_elements(elem.children, module_path, file_names, import_names)
+                if elem.children else elem.children
+            )
+            resolved.append(elem.model_copy(update={
+                "call_graph": new_cg,
+                "children": children,
+            }))
+        else:
+            # Recurse into children/class children even without call_graph
+            children = (
+                _resolve_elements(elem.children, module_path, file_names, import_names)
+                if elem.children else elem.children
+            )
+            if children is not elem.children:
+                resolved.append(elem.model_copy(update={"children": children}))
+            else:
+                resolved.append(elem)
+    return resolved
+
+
+def _try_resolve_fqn(
+    call: CallEntry,
+    elem: Element,
+    module_path: str,
+    file_names: dict[str, str],
+    import_names: dict[str, str],
+) -> Optional[str]:
+    """Attempt to resolve a single call target to an FQN."""
+    target = call.target
+
+    # 1. Method call on self → resolve to enclosing class
+    if call.kind == CallKind.METHOD_CALL and call.receiver == "self":
+        # Find enclosing class from the element's FQN
+        # e.g. module.ClassName.method -> module.ClassName
+        parts = elem.fqn.rsplit(".", 1)
+        if len(parts) == 2:
+            class_fqn = parts[0]
+            candidate = f"{class_fqn}.{target}"
+            if candidate in file_names.values():
+                return candidate
+            # Even if not in file, still resolve to expected FQN
+            return candidate
+        return None
+
+    # 2. Global function call → check file elements
+    if call.kind == CallKind.FUNCTION_CALL:
+        # Check local file names
+        if target in file_names:
+            return file_names[target]
+        # Check imports
+        if target in import_names:
+            return import_names[target]
+
+    # 3. Method call on non-self receiver
+    if call.kind == CallKind.METHOD_CALL and call.receiver == "super()":
+        # Best-effort: resolve to parent class method
+        parts = elem.fqn.rsplit(".", 1)
+        if len(parts) == 2:
+            return f"{parts[0]}.{target}"
+        return None
+
+    return None
+
+
+def _collect_call_edges(elements: list[Element]) -> list[CallEdge]:
+    """Walk all elements recursively and collect resolved call edges."""
+    edges: list[CallEdge] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _walk(elems: list[Element]) -> None:
+        for elem in elems:
+            if elem.call_graph is not None:
+                for call in elem.call_graph.calls:
+                    if call.target_fqn is not None:
+                        key = (elem.fqn, call.target_fqn)
+                        if key not in seen:
+                            seen.add(key)
+                            edges.append(CallEdge(
+                                caller_fqn=elem.fqn,
+                                callee_fqn=call.target_fqn,
+                            ))
+            _walk(elem.children)
+            _walk(elem.class_variables)
+
+    _walk(elements)
+    return edges
+
+
+def _augment_with_bytecode(
+    source: str,
+    filename: str,
+    elements: list[Element],
+    module_path: str,
+    imports: list[ImportEntry],
+) -> tuple[list[Element], list[CallEdge]]:
+    """Augment elements with bytecode-derived call graph information.
+
+    Follows the same defensive pattern as _augment_with_symtable().
+    Returns (enriched_elements, call_edges). On failure, returns
+    (unenriched_elements, []).
+    """
+    if not _BYTECODE_SUPPORTED:
+        logger.info("Bytecode analysis skipped: requires CPython 3.12+")
+        return elements, []
+    try:
+        code_obj = compile(source, filename, "exec")
+    except SyntaxError:
+        logger.warning("compile() failed on %s; skipping bytecode", filename)
+        return elements, []
+    except Exception:
+        logger.error(
+            "Unexpected compile() error on %s", filename, exc_info=True,
+        )
+        return elements, []
+
+    try:
+        code_objects = _extract_code_objects(code_obj)
+        enriched = _enrich_with_callgraph(elements, code_objects, module_path)
+        enriched = _resolve_intra_file_fqns(enriched, module_path, imports)
+        call_edges = _collect_call_edges(enriched)
+        return enriched, call_edges
+    except Exception:
+        logger.error(
+            "Bytecode enrichment failed on %s; returning unenriched elements",
+            filename, exc_info=True,
+        )
+        return elements, []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Phase 3: symtable augmentation
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1442,6 +2059,424 @@ def _augment_with_symtable(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Phase 5: inspect-based runtime introspection
+# ═══════════════════════════════════════════════════════════════════════════
+
+_GUARDED_IMPORT_TIMEOUT = 10  # seconds
+
+
+@contextmanager
+def _guarded_import(
+    module_path: str,
+    project_root: Path,
+    file_path: Path,
+) -> Generator[Optional[types.ModuleType], None, None]:
+    """Import a module in-process with isolation and a timeout guard.
+
+    Saves and restores ``sys.path`` and ``sys.modules`` to prevent
+    side-effects from leaking. Uses a daemon thread with a timeout
+    to guard against modules that hang during import.
+
+    Yields the imported module on success, ``None`` on failure.
+    """
+    saved_path = sys.path[:]
+    saved_modules = set(sys.modules.keys())
+
+    # Inject project paths so the target module's own imports resolve
+    project_str = str(project_root)
+    src_str = str(project_root / "src")
+    for p in (src_str, project_str):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    result: list[Optional[types.ModuleType]] = [None]
+    error: list[Optional[Exception]] = [None]
+    done = threading.Event()
+
+    def _do_import() -> None:
+        try:
+            mod = importlib.import_module(module_path)
+            result[0] = mod
+        except Exception:
+            # Fallback: spec_from_file_location for non-package files
+            try:
+                spec = importlib.util.spec_from_file_location(
+                    module_path, str(file_path),
+                )
+                if spec and spec.loader:
+                    mod = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+                    result[0] = mod
+                else:
+                    error[0] = ImportError(
+                        f"Cannot create spec for {module_path}"
+                    )
+            except Exception as exc2:
+                error[0] = exc2
+        finally:
+            done.set()
+
+    thread = threading.Thread(target=_do_import, daemon=True)
+    thread.start()
+
+    try:
+        if not done.wait(timeout=_GUARDED_IMPORT_TIMEOUT):
+            logger.warning(
+                "Import of %s timed out after %ds",
+                module_path,
+                _GUARDED_IMPORT_TIMEOUT,
+            )
+            yield None
+            return
+
+        if result[0] is not None:
+            yield result[0]
+        else:
+            if error[0] is not None:
+                logger.debug(
+                    "Failed to import %s: %s", module_path, error[0],
+                )
+            yield None
+    finally:
+        # Restore sys.path
+        sys.path[:] = saved_path
+        # Remove any modules added during import
+        new_modules = set(sys.modules.keys()) - saved_modules
+        for mod_name in new_modules:
+            sys.modules.pop(mod_name, None)
+
+
+_INSPECT_PARAM_KIND_MAP: dict[inspect._ParameterKind, ParamKind] = {
+    inspect.Parameter.POSITIONAL_ONLY: ParamKind.POSITIONAL_ONLY,
+    inspect.Parameter.POSITIONAL_OR_KEYWORD: ParamKind.POSITIONAL,
+    inspect.Parameter.VAR_POSITIONAL: ParamKind.VAR_POSITIONAL,
+    inspect.Parameter.KEYWORD_ONLY: ParamKind.KEYWORD_ONLY,
+    inspect.Parameter.VAR_KEYWORD: ParamKind.VAR_KEYWORD,
+}
+
+
+def _inspect_param_kind(kind: inspect._ParameterKind) -> ParamKind:
+    """Map ``inspect.Parameter.kind`` to ``ParamKind``."""
+    return _INSPECT_PARAM_KIND_MAP.get(kind, ParamKind.POSITIONAL)
+
+
+def _format_type(tp: Any) -> str:
+    """Convert a type object to its string representation."""
+    if tp is type(None):
+        return "None"
+    module = getattr(tp, "__module__", None)
+    qualname = getattr(tp, "__qualname__", None)
+    if qualname and module:
+        if module == "builtins":
+            return qualname
+        return f"{module}.{qualname}"
+    return str(tp)
+
+
+def _introspect_signature(obj: Any) -> Optional[ResolvedSignature]:
+    """Extract a ``ResolvedSignature`` from a live callable.
+
+    Uses ``inspect.signature()`` for parameters and return annotation,
+    merged with ``typing.get_type_hints()`` for fully-resolved annotations.
+    Returns ``None`` if the signature cannot be determined.
+    """
+    try:
+        sig = inspect.signature(obj)
+    except (ValueError, TypeError):
+        return None
+
+    # Try to get resolved type hints (handles forward refs)
+    try:
+        hints = typing.get_type_hints(obj)
+    except Exception:
+        hints = {}
+
+    params: list[ResolvedParam] = []
+    for name, param in sig.parameters.items():
+        annotation: Optional[str] = None
+        if name in hints:
+            annotation = _format_type(hints[name])
+        elif param.annotation is not inspect.Parameter.empty:
+            annotation = str(param.annotation)
+
+        default: Optional[str] = None
+        has_default = param.default is not inspect.Parameter.empty
+        if has_default:
+            default_repr = repr(param.default)
+            if len(default_repr) > _VALUE_REPR_ABSOLUTE_MAX:
+                default_repr = default_repr[:_VALUE_REPR_ABSOLUTE_MAX] + "..."
+            default = default_repr
+
+        params.append(ResolvedParam(
+            name=name,
+            annotation=annotation,
+            default=default,
+            kind=_inspect_param_kind(param.kind),
+            has_default=has_default,
+        ))
+
+    return_annotation: Optional[str] = None
+    if "return" in hints:
+        return_annotation = _format_type(hints["return"])
+    elif sig.return_annotation is not inspect.Signature.empty:
+        return_annotation = str(sig.return_annotation)
+
+    return ResolvedSignature(
+        params=params,
+        return_annotation=return_annotation,
+    )
+
+
+def _introspect_element(
+    obj: Any,
+    elem: Element,
+    parent_obj: Any = None,
+) -> InspectInfo:
+    """Build an ``InspectInfo`` for a single live object.
+
+    For classes: extracts MRO, runtime attributes (diff against AST children),
+    and the ``__init__`` signature.
+    For callables: extracts resolved signature and type hints.
+    For variables: checks callable status and qualname.
+    """
+    mro: list[str] = []
+    resolved_annotations: dict[str, str] = {}
+    runtime_attributes: list[str] = []
+    resolved_signature: Optional[ResolvedSignature] = None
+    qualname: Optional[str] = getattr(obj, "__qualname__", None)
+    is_callable_flag = callable(obj)
+
+    if inspect.isclass(obj):
+        # MRO — sorted for determinism (excluding object and the class itself)
+        try:
+            raw_mro = inspect.getmro(obj)
+            mro = sorted(
+                _format_type(c)
+                for c in raw_mro
+                if c is not obj and c is not object
+            )
+        except Exception:
+            pass
+
+        # Runtime attributes — diff against AST children
+        try:
+            ast_names = {c.name for c in elem.children}
+            ast_names.update(cv.name for cv in elem.class_variables)
+            members = inspect.getmembers(obj)
+            runtime_attributes = sorted(
+                name
+                for name, _ in members
+                if name not in ast_names and not name.startswith("__")
+            )
+        except Exception:
+            pass
+
+        # Class signature reflects __init__
+        resolved_signature = _introspect_signature(obj)
+
+        # Resolved annotations
+        try:
+            hints = typing.get_type_hints(obj)
+            resolved_annotations = {
+                k: _format_type(v) for k, v in sorted(hints.items())
+            }
+        except Exception:
+            pass
+
+    elif callable(obj):
+        resolved_signature = _introspect_signature(obj)
+
+        # Resolved annotations
+        try:
+            hints = typing.get_type_hints(obj)
+            resolved_annotations = {
+                k: _format_type(v) for k, v in sorted(hints.items())
+            }
+        except Exception:
+            pass
+
+    return InspectInfo(
+        resolved_signature=resolved_signature,
+        mro=mro,
+        resolved_annotations=resolved_annotations,
+        runtime_attributes=runtime_attributes,
+        is_callable=is_callable_flag,
+        qualname=qualname,
+    )
+
+
+def _resolve_runtime_object(
+    elem: Element,
+    module: types.ModuleType,
+    parent_obj: Any = None,
+) -> Optional[Any]:
+    """Map an Element to its live object via ``getattr()``.
+
+    Handles property triads, overloaded methods, and nested functions.
+    Returns ``None`` when the object cannot be resolved at runtime.
+    """
+    # Skip overload variants — not individually resolvable
+    if elem.overload_index is not None:
+        return None
+
+    name = elem.name
+
+    # For children of a class, look up on the class object
+    target = parent_obj if parent_obj is not None else module
+
+    # Property triads: extract fget/fset/fdel based on FQN suffix
+    if elem.kind == ElementKind.PROPERTY and parent_obj is not None:
+        prop = getattr(parent_obj, name, None)
+        if isinstance(prop, property):
+            if elem.fqn.endswith(".getter") or not elem.fqn.endswith(
+                (".setter", ".deleter")
+            ):
+                return prop.fget
+            elif elem.fqn.endswith(".setter"):
+                return prop.fset
+            elif elem.fqn.endswith(".deleter"):
+                return prop.fdel
+        return prop
+
+    obj = getattr(target, name, None)
+    if obj is None and parent_obj is None:
+        # Nested functions are not resolvable at module level
+        return None
+
+    return obj
+
+
+def _enrich_with_inspect(
+    elements: list[Element],
+    module: types.ModuleType,
+    parent_obj: Any = None,
+) -> list[Element]:
+    """Recursively enrich elements with runtime introspection data.
+
+    Bottom-up traversal: children are enriched before parents.
+    Per-element try/except ensures one failure doesn't block siblings.
+    """
+    enriched: list[Element] = []
+
+    for elem in elements:
+        try:
+            obj = _resolve_runtime_object(elem, module, parent_obj)
+
+            # Enrich children first (bottom-up)
+            enriched_children = elem.children
+            enriched_class_vars = elem.class_variables
+            if obj is not None and elem.kind == ElementKind.CLASS:
+                enriched_children = _enrich_with_inspect(
+                    elem.children, module, parent_obj=obj,
+                )
+                # Class variables get minimal InspectInfo
+                enriched_class_vars = []
+                for cv in elem.class_variables:
+                    try:
+                        cv_obj = getattr(obj, cv.name, None)
+                        cv_info = InspectInfo(
+                            is_callable=callable(cv_obj) if cv_obj is not None else False,
+                            qualname=getattr(cv_obj, "__qualname__", None),
+                        )
+                        enriched_class_vars.append(
+                            cv.model_copy(update={"inspect_info": cv_info})
+                        )
+                    except Exception:
+                        enriched_class_vars.append(cv)
+            elif elem.children:
+                enriched_children = _enrich_with_inspect(
+                    elem.children, module, parent_obj=parent_obj,
+                )
+
+            if obj is not None:
+                info = _introspect_element(obj, elem, parent_obj)
+                enriched.append(
+                    elem.model_copy(
+                        update={
+                            "inspect_info": info,
+                            "children": enriched_children,
+                            "class_variables": enriched_class_vars,
+                        }
+                    )
+                )
+            else:
+                enriched.append(
+                    elem.model_copy(
+                        update={
+                            "children": enriched_children,
+                            "class_variables": enriched_class_vars,
+                        }
+                    )
+                )
+        except Exception:
+            logger.warning(
+                "Failed to introspect %s '%s'; using unenriched element",
+                elem.kind.value,
+                elem.name,
+                exc_info=True,
+            )
+            enriched.append(elem)
+
+    return enriched
+
+
+def _augment_with_inspect(
+    module_path: str,
+    project_root: Path,
+    file_path: Path,
+    elements: list[Element],
+    errors: list[ParseError],
+) -> tuple[list[Element], list[ParseError], Optional[list[str]], Optional[str]]:
+    """Top-level entry point for runtime introspection enrichment.
+
+    Mirrors ``_augment_with_symtable()`` defensive pattern: catches any
+    ``Exception`` and returns unenriched elements on failure.
+
+    Returns:
+        (elements, errors, module_all, module_version)
+    """
+    module_all: Optional[list[str]] = None
+    module_version: Optional[str] = None
+
+    try:
+        with _guarded_import(module_path, project_root, file_path) as mod:
+            if mod is None:
+                errors = errors + [
+                    ParseError(
+                        kind=ParseErrorKind.IMPORT_ERROR,
+                        message=f"Failed to import {module_path} for introspection",
+                    )
+                ]
+                return elements, errors, module_all, module_version
+
+            # Extract module-level metadata
+            raw_all = getattr(mod, "__all__", None)
+            if isinstance(raw_all, (list, tuple)):
+                module_all = sorted(str(x) for x in raw_all)
+
+            raw_version = getattr(mod, "__version__", None)
+            if isinstance(raw_version, str):
+                module_version = raw_version
+
+            # Enrich elements
+            elements = _enrich_with_inspect(elements, mod)
+
+    except Exception:
+        logger.error(
+            "Unexpected error during introspection of %s; returning unenriched",
+            module_path,
+            exc_info=True,
+        )
+        return elements, errors, module_all, module_version
+
+    return elements, errors, module_all, module_version
+
+
+# Valid analysis modes
+_VALID_MODES = frozenset({"ast_only", "static", "introspect", "bytecode"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Public API
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1460,14 +2495,21 @@ def generate_file_manifest(
         source: Optional pre-read source code. If None, reads from file_path.
         mode: Analysis depth — ``"static"`` (default) includes symtable
             augmentation; ``"ast_only"`` skips symtable for faster AST-only
-            analysis. Other modes raise ``NotImplementedError``.
+            analysis; ``"introspect"`` adds runtime introspection via
+            ``inspect`` module (resolves forward refs, MRO, runtime attrs);
+            ``"bytecode"`` adds call graph extraction via ``dis`` module
+            (CPython 3.12+ only). ``"full"`` raises ``NotImplementedError``.
 
     Returns:
         FileManifest with all structural elements, imports, and dependencies.
         On parse errors, returns a manifest with empty elements and populated errors.
     """
-    if mode not in ("static", "ast_only"):
-        raise NotImplementedError(f"Mode '{mode}' requires Phase 5+ implementation")
+    if mode == "full":
+        raise NotImplementedError(
+            "Mode 'full' requires combined introspect + bytecode implementation"
+        )
+    if mode not in _VALID_MODES:
+        raise ValueError(f"Unknown mode: '{mode}'")
 
     file_path = Path(file_path)
     project_root = Path(project_root)
@@ -1559,10 +2601,26 @@ def generate_file_manifest(
         stdlib_set=_STDLIB_MODULES,
     )
 
-    # Phase 3: symtable augmentation (mode="static" only, skip on parse errors)
+    # Phase 3: symtable augmentation (mode="static", "bytecode", or "introspect")
     elements = visitor.elements
-    if mode == "static" and not errors:
+    if mode in ("static", "bytecode", "introspect") and not errors:
         elements = _augment_with_symtable(source, str(file_path), elements)
+
+    # Phase 5: inspect-based runtime introspection (mode="introspect" only)
+    module_all: Optional[list[str]] = None
+    module_version: Optional[str] = None
+    if mode == "introspect" and not errors:
+        elements, errors, module_all, module_version = _augment_with_inspect(
+            module_path, project_root, file_path, elements, errors,
+        )
+
+    # Phase 6: bytecode call graph (mode="bytecode" only)
+    call_graph_edges: Optional[list[CallEdge]] = None
+    if mode == "bytecode" and not errors:
+        elements, call_graph_edges_list = _augment_with_bytecode(
+            source, str(file_path), elements, module_path, visitor.imports,
+        )
+        call_graph_edges = call_graph_edges_list if call_graph_edges_list else None
 
     return FileManifest(
         schema_version=SCHEMA_VERSION,
@@ -1575,6 +2633,9 @@ def generate_file_manifest(
         dependencies=dependencies,
         errors=errors,
         generated_at=datetime.now(timezone.utc).isoformat(),
+        module_all=module_all,
+        module_version=module_version,
+        call_graph_edges=call_graph_edges,
     )
 
 

@@ -220,7 +220,7 @@ class TestModelValidation:
             digest="sha256:abc",
             generated_at="2026-01-01T00:00:00Z",
         )
-        assert m.schema_version == "1.2.0"
+        assert m.schema_version == "1.4.0"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -965,17 +965,24 @@ class TestModeParameter:
         for elem in m.elements:
             assert elem.symbol_info is None
 
-    def test_mode_introspect_raises(self):
+    def test_mode_introspect_accepted(self):
+        """Mode 'introspect' is now accepted (Phase 5 implemented)."""
         project_root = Path("/fake/project")
         file_path = project_root / "src/mypackage/module.py"
-        with pytest.raises(NotImplementedError, match="Phase 5"):
-            generate_file_manifest(file_path, project_root, source=SIMPLE_MODULE, mode="introspect")
+        m = generate_file_manifest(file_path, project_root, source=SIMPLE_MODULE, mode="introspect")
+        assert isinstance(m, FileManifest)
 
     def test_mode_full_raises(self):
         project_root = Path("/fake/project")
         file_path = project_root / "src/mypackage/module.py"
-        with pytest.raises(NotImplementedError, match="Phase 5"):
+        with pytest.raises(NotImplementedError, match="combined introspect"):
             generate_file_manifest(file_path, project_root, source=SIMPLE_MODULE, mode="full")
+
+    def test_mode_unknown_raises_value_error(self):
+        project_root = Path("/fake/project")
+        file_path = project_root / "src/mypackage/module.py"
+        with pytest.raises(ValueError, match="Unknown mode"):
+            generate_file_manifest(file_path, project_root, source=SIMPLE_MODULE, mode="bogus")
 
 
 class TestSelfReferential:
@@ -1214,11 +1221,11 @@ class TestSymtableRecursiveEnrichment:
 
 
 class TestSymtableSchemaVersion:
-    """AC-8: Schema version bumped to 1.2.0."""
+    """AC-8: Schema version bumped."""
 
     def test_schema_version(self):
         m = _make_manifest(SIMPLE_MODULE)
-        assert m.schema_version == "1.2.0"
+        assert m.schema_version == "1.4.0"
 
 
 class TestSymtableBackwardCompat:
