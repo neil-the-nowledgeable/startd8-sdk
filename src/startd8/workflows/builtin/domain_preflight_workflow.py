@@ -388,9 +388,19 @@ class DomainPreflightWorkflow(WorkflowBase):
         target_file: str,
         project_root: Path,
         available_deps: AvailableDeps,
+        manifest_registry: Any = None,
     ) -> List[EnvironmentCheck]:
         """Run per-domain environment readiness checks via the rule registry."""
         target_path = project_root / target_file
+
+        # Phase 4: Inject per-file manifest and project-wide registry
+        per_file_manifest = None
+        if manifest_registry is not None:
+            try:
+                per_file_manifest = manifest_registry.get(target_file)
+            except Exception:
+                pass
+
         ctx = RuleContext(
             target_file=target_file,
             target_path=target_path,
@@ -398,6 +408,8 @@ class DomainPreflightWorkflow(WorkflowBase):
             project_root=project_root,
             domain=domain,
             available_deps=available_deps,
+            manifest=per_file_manifest,
+            manifest_registry=manifest_registry,
         )
         contribution = PreflightRuleRegistry.evaluate_all(ctx)
         return contribution.checks

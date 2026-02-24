@@ -85,6 +85,155 @@ class IntegrationEngine:
         self.check_truncation = check_truncation
         self.strict_checkpoints = strict_checkpoints
         self._pre_integration_snapshots: Dict[str, Optional[Path]] = {}
+        # Phase 4: Manifest-based pre-merge diff
+        self.manifest_registry: Any = None
+        self.element_retention_threshold: float = 0.80
+
+    # ------------------------------------------------------------------
+    # Phase 4: Manifest diff (IN-1 through IN-3)
+    # ------------------------------------------------------------------
+
+    def _manifest_pre_merge_diff(
+        self, rel_path: str, staged_path: Path
+    ) -> None:
+        """Run manifest diff between existing and staged file (IN-1 through IN-3).
+
+        Logs diff at INFO (IN-1). Emits WARNING on breaking changes (IN-2)
+        and element regression below retention threshold (IN-3).
+
+        Graceful: never blocks integration. All errors caught and logged.
+        """
+        if self.manifest_registry is None:
+            return
+
+        existing = self.manifest_registry.get(rel_path)
+        if existing is None:
+            return
+
+        # Check staleness — skip diff for files modified after cache load
+        try:
+            if self.manifest_registry.is_stale(rel_path):
+                logger.debug(
+                    "manifest.diff: skipping stale file %s", rel_path,
+                )
+                return
+        except Exception as exc:
+            logger.debug("manifest.diff: staleness check failed for %s: %s", rel_path, exc)
+
+        try:
+            from startd8.utils.code_manifest import generate_file_manifest
+            staged = generate_file_manifest(staged_path, self.project_root)
+        except Exception as exc:
+            logger.debug(
+                "manifest.diff: failed to parse staged file %s: %s",
+                rel_path, exc,
+            )
+            return
+
+        try:
+            from startd8.utils.manifest_registry import ManifestDiff
+            diff = ManifestDiff.diff(existing, staged)
+
+            logger.info(
+                "manifest.diff",
+                extra={
+                    "path": rel_path,
+                    "removed": len(diff.removed_public),
+                    "added": len(diff.added_public),
+                    "changed_sigs": len(diff.changed_signatures),
+                    "delta": diff.element_count_delta,
+                },
+            )
+
+            # IN-2: Breaking changes warning
+            if diff.has_breaking_changes:
+                logger.warning(
+                    "manifest.diff: breaking changes detected in %s — "
+                    "%d removed, %d changed signatures "
+                    "(note: renames appear as removal+addition)",
+                    rel_path,
+                    len(diff.removed_public),
+                    len(diff.changed_signatures),
+                )
+                try:
+                    gate = GateEmitter.quality_gate_result(
+                        gate_name="manifest_breaking_change",
+                        passed=False,
+                        details={
+                            "path": rel_path,
+                            "removed_fqns": diff.removed_public[:10],
+                            "changed_sigs": [
+                                {"fqn": fqn, "old": old, "new": new}
+                                for fqn, old, new in diff.changed_signatures[:10]
+                            ],
+                        },
+                    )
+                    GateEmitter.emit(gate)
+                except Exception as exc:
+                    logger.debug(
+                        "manifest.diff: GateEmitter failed: %s", exc,
+                    )
+
+            # IN-3: Element retention check
+            from startd8.utils.manifest_registry import _count_all_elements
+            old_count = _count_all_elements(existing.elements)
+            if old_count > 0:
+                new_count = old_count + diff.element_count_delta
+                ratio = new_count / old_count
+                if ratio < self.element_retention_threshold:
+                    logger.warning(
+                        "manifest.diff: element regression in %s — "
+                        "ratio %.2f < threshold %.2f "
+                        "(note: file splits/refactors may produce per-file false positives)",
+                        rel_path, ratio, self.element_retention_threshold,
+                    )
+
+        except Exception as exc:
+            logger.debug(
+                "manifest.diff: diff failed for %s: %s", rel_path, exc,
+            )
+
+    def _manifest_post_merge_refresh(
+        self, merged_files: List[str], context: Dict[str, Any]
+    ) -> None:
+        """Refresh manifest registry after successful merges (IN-4).
+
+        Creates a NEW ManifestRegistry instance (immutable-per-phase, req R1-S1).
+        Per-file parse failures are tolerated (excluded from update).
+        """
+        if self.manifest_registry is None:
+            return
+
+        try:
+            from startd8.utils.code_manifest import generate_file_manifest
+            from startd8.utils.manifest_registry import ManifestRegistry
+
+            staged_updates = {}
+            for rel_path in merged_files:
+                try:
+                    full_path = self.project_root / rel_path
+                    if full_path.exists():
+                        fresh = generate_file_manifest(full_path, self.project_root)
+                        staged_updates[rel_path] = fresh
+                except Exception as exc:
+                    logger.warning(
+                        "manifest.refresh_file_failed",
+                        extra={"path": rel_path, "error": str(exc)},
+                    )
+
+            if staged_updates:
+                new_registry = self.manifest_registry.with_updated_files(staged_updates)
+                context["project_manifests"] = new_registry
+                self.manifest_registry = new_registry
+                logger.debug(
+                    "manifest.refresh",
+                    extra={
+                        "files_refreshed": len(staged_updates),
+                        "files_failed": len(merged_files) - len(staged_updates),
+                    },
+                )
+        except Exception as exc:
+            logger.warning("manifest.refresh: failed: %s", exc)
 
     # ------------------------------------------------------------------
     # Path display helper

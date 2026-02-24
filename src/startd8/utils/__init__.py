@@ -31,6 +31,8 @@ from .code_manifest import (
 
 from .manifest_cache import generate_project_manifests, check_manifests_fresh
 
+from .manifest_registry import ManifestRegistry, ManifestDiff, ManifestSummarySchema
+
 __all__ = [
     # Retry utilities
     "RetryConfig",
@@ -58,6 +60,10 @@ __all__ = [
     "SymbolInfo",
     "generate_project_manifests",
     "check_manifests_fresh",
+    # Manifest registry (Phase 4)
+    "ManifestRegistry",
+    "ManifestDiff",
+    "ManifestSummarySchema",
 ]
 
 

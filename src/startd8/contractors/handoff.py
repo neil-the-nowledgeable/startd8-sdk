@@ -90,6 +90,17 @@ HANDOFF_SCHEMA: dict[str, Any] = {
         "coverage_gaps": {"type": "array", "items": {"type": "string"}},
         "design_mode_summary": {"type": "object"},
         "source_checksum": {"type": ["string", "null"]},
+        "project_manifest_summary": {
+            "type": ["object", "null"],
+            "description": "Manifest summary with keys: file_count, total_elements, public_elements, schema_version, generated_at",
+            "properties": {
+                "file_count": {"type": "integer"},
+                "total_elements": {"type": "integer"},
+                "public_elements": {"type": "integer"},
+                "schema_version": {"type": "string"},
+                "generated_at": {"type": "string"},
+            },
+        },
         "created_at": {"type": "string"},
         "schema_version": {"type": "integer"},
         "schema_version_str": {"type": "string"},
@@ -158,6 +169,8 @@ class HandoffData:
     shared_file_manifest: dict[str, list[str]] = field(default_factory=dict)
     # SHA-256 of the enriched seed file at design time (provenance chain)
     source_checksum: str | None = None
+    # Phase 4: Manifest summary for handoff (ManifestSummarySchema typed dict)
+    project_manifest_summary: dict[str, Any] | None = None
     created_at: str = ""
     schema_version: int = SCHEMA_VERSION
     schema_version_str: str = ARTISAN_SCHEMA_VERSION
@@ -359,6 +372,7 @@ def write_design_handoff(
     source_checksum: str | None = None,
     design_mode_summary: dict[str, str] | None = None,
     shared_file_manifest: dict[str, list[str]] | None = None,
+    project_manifest_summary: dict[str, Any] | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -408,6 +422,7 @@ def write_design_handoff(
         design_mode_summary=design_mode_summary or {},
         shared_file_manifest=shared_file_manifest or {},
         source_checksum=source_checksum,
+        project_manifest_summary=project_manifest_summary,
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,
         schema_version_str=ARTISAN_SCHEMA_VERSION,
@@ -507,6 +522,7 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         coverage_gaps=raw.get("coverage_gaps", []),
         design_mode_summary=raw.get("design_mode_summary", {}),
         source_checksum=raw.get("source_checksum"),
+        project_manifest_summary=raw.get("project_manifest_summary"),
         created_at=raw.get("created_at", ""),
         schema_version=version,
         schema_version_str=raw.get("schema_version_str")

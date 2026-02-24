@@ -1209,6 +1209,126 @@ def _add_elements_to_tree(branch, elements):
             _add_elements_to_tree(child_branch, elem.children)
 
 
+@manifest_app.command("validate-capabilities")
+def manifest_validate_capabilities(
+    capability_file: str = typer.Argument(
+        ..., help="Path to capability index YAML file"
+    ),
+    enrich: bool = typer.Option(
+        False, "--enrich", help="Enrich evidence with manifest data (dry-run by default)"
+    ),
+    write: bool = typer.Option(
+        False, "--write", help="Write enriched YAML (requires --enrich)"
+    ),
+):
+    """Validate capability index evidence refs against manifest data (CI-1..CI-4).
+
+    Checks that each evidence[].ref with type: "code" exists in the manifest registry.
+    Reports drift when refs are missing from manifests.
+
+    When --enrich is used, shows a diff of what would change (dry-run default).
+    Use --enrich --write to actually modify the file.
+    """
+    import yaml
+    from rich.console import Console
+    from startd8.utils.manifest_registry import ManifestRegistry, _flatten_elements
+
+    console = Console()
+    project_root = Path.cwd()
+
+    # Load manifest registry
+    registry = ManifestRegistry.from_cache(project_root)
+
+    cap_path = Path(capability_file)
+    if not cap_path.exists():
+        console.print(f"[red]Capability file not found: {capability_file}[/red]")
+        raise SystemExit(1)
+
+    try:
+        cap_data = yaml.safe_load(cap_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        console.print(f"[red]Failed to parse YAML: {exc}[/red]")
+        raise SystemExit(1)
+
+    if not isinstance(cap_data, dict):
+        console.print("[red]Invalid capability YAML: expected a mapping[/red]")
+        raise SystemExit(1)
+
+    errors: list[str] = []
+    enrichments: dict[str, int] = {}  # ref → element_count
+
+    capabilities = cap_data.get("capabilities", [])
+    if not isinstance(capabilities, list):
+        capabilities = []
+
+    for cap in capabilities:
+        cap_id = cap.get("id", cap.get("name", "<unknown>"))
+        evidence_list = cap.get("evidence", [])
+        if not isinstance(evidence_list, list):
+            continue
+
+        for ev in evidence_list:
+            if not isinstance(ev, dict):
+                continue
+            if ev.get("type") != "code":
+                continue
+
+            ref = ev.get("ref", "")
+            if not ref:
+                continue
+
+            # Path traversal sanitization (req R1-S8)
+            ref_path = Path(ref)
+            if ref_path.is_absolute() or ".." in ref_path.parts:
+                errors.append(
+                    f"SECURITY: {cap_id} evidence ref '{ref}' "
+                    f"contains path traversal (absolute path or '..' component)"
+                )
+                continue
+
+            # Path normalization (plan R1-S9): normalize to POSIX
+            normalized_ref = ref.replace("\\", "/")
+
+            if registry is not None:
+                # Registry-first validation (plan R2-S7)
+                manifest = registry.get(normalized_ref)
+                if manifest is None:
+                    errors.append(
+                        f"DRIFT: {cap_id} evidence ref '{ref}' not found in manifests"
+                    )
+                else:
+                    enrichments[ref] = len(_flatten_elements(manifest.elements))
+            else:
+                # No registry loaded — fall back to disk check
+                full_path = project_root / normalized_ref
+                if not full_path.exists():
+                    errors.append(
+                        f"DRIFT: {cap_id} evidence ref '{ref}' not found on disk"
+                    )
+
+    if errors:
+        for err in errors:
+            if err.startswith("SECURITY"):
+                console.print(f"[red]{err}[/red]")
+            else:
+                console.print(f"[yellow]{err}[/yellow]")
+        console.print(f"\n[red]{len(errors)} issue(s) found[/red]")
+        raise SystemExit(1)
+    else:
+        console.print(
+            f"[green]All evidence refs validated ({len(enrichments)} code refs checked)[/green]"
+        )
+
+    if enrich and enrichments:
+        if write:
+            # TODO(phase4): implement ruamel.yaml round-trip writing per req R3-S9
+            console.print("[yellow]--write: enrichment writing not yet implemented[/yellow]")
+        else:
+            console.print("\n[cyan]Enrichment preview (--dry-run):[/cyan]")
+            for ref, count in sorted(enrichments.items()):
+                console.print(f"  {ref}: manifest_element_count={count}")
+
+
 def _load_workflow_registry():
     """Load workflow registry module"""
     try:

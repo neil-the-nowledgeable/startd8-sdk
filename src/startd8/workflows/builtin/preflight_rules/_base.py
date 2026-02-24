@@ -10,7 +10,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, FrozenSet, List, Optional
+from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
 from ..domain_preflight_models import (
     AvailableDeps,
@@ -52,6 +52,10 @@ class RuleContext:
     project_root: Path
     domain: TaskDomain
     available_deps: AvailableDeps
+    # Phase 4: per-file FileManifest (None when manifest unavailable)
+    manifest: Any = None
+    # Phase 4: project-wide ManifestRegistry for cross-file rules (PF-3)
+    manifest_registry: Any = None
 
 
 @dataclass

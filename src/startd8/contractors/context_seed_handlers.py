@@ -437,6 +437,10 @@ class HandlerConfig:
     design_collision_strategy: str = "warn"
     # V2 modular design prompts (single-pass, no dual-review)
     use_modular_prompts: bool = False
+    # Phase 4: Manifest consumption control
+    manifest_consumption_enabled: bool = True  # Kill switch (req R1-S10)
+    manifest_context_budget: int = 4000  # Max chars for element summary in prompts
+    manifest_registry: Any = None  # ManifestRegistry instance (avoid import)
 
     _VALID_COLLISION_STRATEGIES = frozenset({"warn", "redesign", "abort"})
 
@@ -5650,6 +5654,30 @@ class Test{class_name}:
                 # AR-822: module inventory from SCAFFOLD
                 module_inventory=context.get("scaffold", {}).get("module_inventory"),
             )
+
+            # Phase 4: Enrich chunks with manifest context (IM-1 through IM-4)
+            _manifest_registry = None
+            if self.config.manifest_consumption_enabled:
+                _manifest_registry = self.config.manifest_registry or context.get("project_manifests")
+            if _manifest_registry is not None:
+                _manifest_budget = self.config.manifest_context_budget
+                for chunk in chunks:
+                    _mc_parts = []
+                    for tf in getattr(chunk, "target_files", []):
+                        summary = _manifest_registry.file_element_summary(tf, _manifest_budget)
+                        if summary:
+                            _mc_parts.append(f"### {tf}\n{summary}")
+                    if _mc_parts:
+                        chunk.metadata["_manifest_context"] = "\n\n".join(_mc_parts)
+                logger.debug(
+                    "IMPLEMENT: manifest context injected into %d chunks",
+                    sum(1 for c in chunks if c.metadata.get("_manifest_context")),
+                )
+            else:
+                logger.info(
+                    "manifest.fallback",
+                    extra={"surface": "implement_enrichment", "reason": "registry_unavailable" if not self.config.manifest_consumption_enabled else "no_registry"},
+                )
 
             # PCA-402: track onboarding field consumption
             if context.get("service_metadata") is not None:

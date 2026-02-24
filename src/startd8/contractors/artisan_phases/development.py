@@ -1126,6 +1126,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         parts.extend(self._build_project_identity(chunk))
         parts.extend(self._build_target_files(chunk, is_edit))       # B-1/B-7 fix
         parts.extend(self._build_importable_modules(chunk))          # AR-150
+        parts.extend(self._build_manifest_context(chunk))            # Phase 4
         parts.extend(self._build_existing_files(_existing))
         if _existing:
             parts.extend(self._build_edit_first_directive(_existing))
@@ -1340,6 +1341,108 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             text += "\nImport ONLY from the modules listed above. Do not invent import paths."
 
         return [text, "\n---\n"]
+
+    # -- helper: post-generation manifest diff (Phase 4, IM-5) ---------------
+
+    def _manifest_post_generate_diff(
+        self,
+        written_files: List[Path],
+        chunk: DevelopmentChunk,
+        context: Dict[str, Any],
+    ) -> None:
+        """Compare generated files against original manifests (IM-5).
+
+        After _write_generated_files(), if a manifest registry is available,
+        parse the generated file and diff it against the original manifest.
+        If public elements were removed, emit a WARNING log.
+
+        This is best-effort — parse failures are logged and swallowed.
+        """
+        registry = context.get("project_manifests")
+        if registry is None:
+            return
+
+        try:
+            from startd8.utils.code_manifest import generate_file_manifest
+            from startd8.utils.manifest_registry import ManifestDiff
+        except ImportError:
+            return
+
+        project_root = self._project_root or self._output_dir
+        for gen_file in written_files:
+            # Determine relative path for registry lookup
+            try:
+                rel_path = str(gen_file.relative_to(self._output_dir))
+            except ValueError:
+                continue
+
+            original = registry.get(rel_path)
+            if original is None:
+                continue  # New file, no comparison
+
+            try:
+                fresh = generate_file_manifest(gen_file, project_root)
+            except Exception as exc:
+                self.logger.debug(
+                    "manifest.post_generate: parse failed for %s: %s",
+                    gen_file, exc,
+                )
+                continue
+
+            try:
+                diff = ManifestDiff.diff(original, fresh)
+            except Exception as exc:
+                self.logger.debug(
+                    "manifest.post_generate: diff failed for %s: %s",
+                    gen_file, exc,
+                )
+                continue
+
+            if diff.removed_public:
+                self.logger.warning(
+                    "manifest.post_generate: chunk %s removed %d public "
+                    "element(s) from %s: %s",
+                    chunk.chunk_id,
+                    len(diff.removed_public),
+                    rel_path,
+                    diff.removed_public[:5],
+                )
+                chunk.metadata.setdefault("_manifest_removed_public", {})[
+                    rel_path
+                ] = diff.removed_public
+
+    # -- helper: manifest context (Phase 4) ---------------------------------
+
+    @staticmethod
+    def _build_manifest_context(
+        chunk: DevelopmentChunk,
+    ) -> List[str]:
+        """Phase 4: Code structure context from manifest data.
+
+        Reads ``_manifest_context`` from chunk metadata (injected by
+        ImplementPhaseHandler) and formats as a ``## Code Structure`` section.
+
+        Prompt injection risk note (req R2-S7): manifest summaries contain
+        user-authored strings (FQNs, docstrings, signatures) that sit alongside
+        LLM instruction text. This is an accepted risk — manifest data is
+        AST-extracted (not raw file content), limiting the attack surface.
+        """
+        manifest_ctx = chunk.metadata.get("_manifest_context")
+        if not manifest_ctx:
+            return []
+
+        _log.debug(
+            "IMPLEMENT: manifest context included (%d chars)", len(manifest_ctx)
+        )
+
+        return [
+            "## Code Structure\n"
+            "The following shows the existing code structure (classes, functions, "
+            "signatures) for the target files. Preserve existing public APIs unless "
+            "the design document explicitly requires changes.\n\n"
+            + manifest_ctx,
+            "\n---\n",
+        ]
 
     # -- helper: existing file contents ------------------------------------
 
@@ -2455,6 +2558,9 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 model=getattr(drafter, "model", self._drafter_spec),
             )
             chunk.metadata["_generation_result"] = gen_result
+
+            # ── Post-generation manifest comparison (IM-5) ─────────────
+            self._manifest_post_generate_diff(written_files, chunk, context)
 
             # ── Post-generation scope validation ──────────────────────
             design_doc = chunk.metadata.get("design_document")

@@ -68,6 +68,8 @@ class OrchestratorContext(BaseModel):
     reviewer_model: str
     task_filter: Optional[List[str]] = None
     abort_on_preflight_fail: bool = False
+    # Phase 4: ManifestRegistry instance (Optional[Any] to avoid circular import)
+    project_manifests: Optional[Any] = None
 
 
 # ============================================================================
@@ -108,6 +110,8 @@ class PlanPhaseOutput(BaseModel):
     # Mottainai B2+B3: plan document text for DESIGN fallback when
     # artifact inventory (run-provenance.json) is unavailable.
     plan_document_text: Optional[str] = None
+    # Phase 4: Aggregate manifest stats for handoff (ManifestSummarySchema)
+    project_manifest_summary: Optional[Dict[str, Any]] = None
 
     @field_validator("tasks")
     @classmethod

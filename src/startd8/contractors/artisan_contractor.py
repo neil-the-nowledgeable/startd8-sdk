@@ -1564,6 +1564,29 @@ class ArtisanContractorWorkflow:
         else:
             context.setdefault("project_root", str(Path.cwd()))
 
+        # Phase 4: Load ManifestRegistry from cache (never blocking)
+        try:
+            from startd8.utils.manifest_registry import ManifestRegistry
+            registry = ManifestRegistry.from_cache(Path(context["project_root"]))
+            context["project_manifests"] = registry
+            if registry:
+                logger.info(
+                    "manifest.load",
+                    extra={"files": len(registry.files()), "surface": "artisan_contractor"},
+                )
+            else:
+                logger.info(
+                    "manifest.fallback",
+                    extra={"surface": "artisan_contractor", "reason": "cache_miss"},
+                )
+        except Exception as exc:
+            context["project_manifests"] = None
+            logger.info(
+                "manifest.fallback",
+                extra={"surface": "artisan_contractor", "reason": "load_error",
+                       "error": str(exc)},
+            )
+
         config = self.config
         cost_tracker = _CostTracker(budget=config.cost_budget)
         phase_results: list[PhaseResult] = []

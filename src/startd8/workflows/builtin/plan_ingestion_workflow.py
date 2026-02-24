@@ -659,11 +659,69 @@ def _heuristic_assess_complexity(
     *,
     threshold: int,
     force_route: Optional[str],
+    manifest_registry: Any = None,
 ) -> ComplexityScore:
-    """Deterministic fallback complexity assessment."""
+    """Deterministic fallback complexity assessment.
+
+    When manifest_registry is available (Phase 4 PI-1 through PI-3):
+    - PI-1: api_surface uses manifest public_element_count instead of feature_count * 8
+    - PI-2: cross_file_deps uses manifest dependency_graph for transitive deps
+    - PI-3: (future) modification_type classification via fqn_exists
+    """
     feature_count = len(parsed_plan.features)
-    cross_file_deps = sum(len(f.dependencies) for f in parsed_plan.features)
-    api_surface = min(100, max(10, feature_count * 8))
+
+    # PI-2: Use manifest dependency graph when available
+    if manifest_registry is not None:
+        try:
+            dep_graph = manifest_registry.dependency_graph()
+            # Count unique cross-file dependencies from mentioned files
+            mentioned_files = set()
+            for f in parsed_plan.features:
+                for tf in f.target_files:
+                    mentioned_files.add(tf)
+            cross_file_deps = sum(
+                len(dep_graph.get(mf, set()))
+                for mf in mentioned_files
+            )
+            logger.debug(
+                "PI-2: manifest dependency graph used — %d files, %d edges",
+                len(mentioned_files),
+                cross_file_deps,
+            )
+        except Exception:
+            cross_file_deps = sum(len(f.dependencies) for f in parsed_plan.features)
+    else:
+        cross_file_deps = sum(len(f.dependencies) for f in parsed_plan.features)
+
+    # PI-1: Use manifest public_element_count when available
+    if manifest_registry is not None:
+        try:
+            mentioned_files = set()
+            for f in parsed_plan.features:
+                for tf in f.target_files:
+                    mentioned_files.add(tf)
+            api_surface = min(
+                100,
+                max(10, sum(
+                    manifest_registry.public_element_count(mf)
+                    for mf in mentioned_files
+                )),
+            )
+            logger.debug(
+                "PI-1: manifest element count used — api_surface=%d",
+                api_surface,
+            )
+        except Exception:
+            api_surface = min(100, max(10, feature_count * 8))
+    else:
+        api_surface = min(100, max(10, feature_count * 8))
+
+    if manifest_registry is None:
+        logger.info(
+            "manifest.fallback",
+            extra={"surface": "plan_ingestion", "reason": "registry_unavailable"},
+        )
+    api_surface = min(100, max(10, api_surface))  # ensure bounds
     test_complexity = min(100, max(10, feature_count * 6))
     integration_depth = min(100, max(10, cross_file_deps * 10))
     domain_novelty = 40

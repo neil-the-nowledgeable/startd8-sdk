@@ -90,6 +90,14 @@ phases:
           type: dict
           severity: advisory
           description: "Operational project metadata (criticality, risks, SLOs) from .contextcore.yaml"
+        - name: project_manifests
+          type: object
+          severity: advisory
+          description: "ManifestRegistry instance (never blocking)"
+        - name: project_manifest_summary
+          type: dict
+          severity: advisory
+          description: "Aggregate manifest stats for handoff (ManifestSummarySchema)"
 
   scaffold:
     description: "Lessons discovery and project scaffolding"
