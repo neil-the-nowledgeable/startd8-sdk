@@ -9,7 +9,7 @@
 # NAMESPACE: RV-xxx (Review Requirements)
 # STATUS: Each requirement tagged as implemented | partial | planned
 #
-# INPUT: docs/ARCHITECTURAL_REVIEW_WORKFLOW_PLAN.md,
+# INPUT: docs/design/arc-review/ARCHITECTURAL_REVIEW_WORKFLOW_PLAN.md,
 #        src/startd8/workflows/builtin/architectural_review_log_workflow.py,
 #        tests/unit/test_architectural_review_triage.py, code audit 2026-02-14
 # OUTPUT: Traceable requirements for the Convergent Review Protocol covering:

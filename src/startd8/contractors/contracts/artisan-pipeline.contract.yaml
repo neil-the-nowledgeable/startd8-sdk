@@ -254,6 +254,12 @@ phases:
           severity: advisory
           source_phase: implement
           description: "Per-file existing production code read from project_root (PCA-502/503)"
+        - name: scaffold.module_inventory
+          type: list
+          severity: warning
+          default: []
+          source_phase: scaffold
+          description: "Importable Python package names from SCAFFOLD directory walk (AR-821). Prevents LLM from hallucinating imports."
     exit:
       required:
         - name: implementation
@@ -270,7 +276,10 @@ phases:
         - name: truncation_flags
           type: dict
           severity: warning
-          description: "Per-task truncation detection results from Gate 4 (empty if no issues)"
+          description: >-
+            Per-task truncation detection results from Gate 4.
+            Tasks with truncation_blocked=true are blocking at INTEGRATE
+            (AR-816: file merge skipped for those tasks).
       optional:
         - name: edit_first_gate_results
           type: dict

@@ -42,6 +42,7 @@ if _src not in sys.path:
 
 from startd8.contractors.artisan_contractor import (  # noqa: E402
     ArtisanContractorWorkflow,
+    QualityGateError,
     WorkflowConfig,
     WorkflowPhase,
     WorkflowResult,
@@ -113,6 +114,19 @@ def print_phase_results(result: WorkflowResult) -> None:
             "timed_out": "!",
         }.get(pr.status.value, "?")
 
+        # Override icon for quality failures (completed but tests/review failed)
+        if icon == "+" and pr.output and isinstance(pr.output, dict):
+            if pr.phase == WorkflowPhase.TEST and pr.output.get("total_failed", 0) > 0:
+                icon = "!"
+            elif pr.phase == WorkflowPhase.REVIEW and pr.output.get("total_failed", 0) > 0:
+                icon = "!"
+            elif pr.phase == WorkflowPhase.INTEGRATE and any(
+                isinstance(ir, dict) and ir.get("_missing_files")
+                for ir in pr.output.values()
+                if isinstance(ir, dict)
+            ):
+                icon = "!"
+
         print(f"\n  [{icon}] {pr.phase.value:10s}  status={pr.status.value}  "
               f"cost=${pr.cost:.4f}  duration={pr.duration_seconds:.2f}s")
 
@@ -147,14 +161,39 @@ def print_phase_results(result: WorkflowResult) -> None:
                     print(f"      By domain: {db}")
 
             elif pr.phase == WorkflowPhase.INTEGRATE:
-                print(f"      Merged: {pr.output.get('passed', '?')}/{pr.output.get('total', '?')}")
+                meta = pr.metadata if pr.metadata else {}
+                print(f"      Merged: {meta.get('passed', '?')}/{meta.get('total', '?')}")
+                # Surface missing files from reconciliation
+                if isinstance(pr.output, dict):
+                    for tid, ir in pr.output.items():
+                        if isinstance(ir, dict) and ir.get("_missing_files"):
+                            print(f"      LOST {tid}: {', '.join(ir['_missing_files'])}")
 
             elif pr.phase == WorkflowPhase.TEST:
                 print(f"      Validators: {pr.output.get('total_validators', '?')}")
                 print(f"      Tasks with tests: {pr.output.get('tasks_with_tests', '?')}")
+                tp = pr.output.get('total_passed', 0)
+                tf = pr.output.get('total_failed', 0)
+                total = tp + tf
+                if total > 0:
+                    print(f"      Passed: {tp}/{total}")
+                    if tf > 0:
+                        per_task = pr.output.get('per_task', {})
+                        for tid, info in per_task.items():
+                            if not info.get('passed'):
+                                failures = info.get('failures', [])
+                                print(f"      FAIL {tid}: {', '.join(failures[:3])}")
 
             elif pr.phase == WorkflowPhase.REVIEW:
                 print(f"      Env issues: {pr.output.get('tasks_with_env_issues', '?')}")
+                tp = pr.output.get('total_passed', 0)
+                tf = pr.output.get('total_failed', 0)
+                if tp + tf > 0:
+                    per_task = pr.output.get('per_task', {})
+                    for tid, info in per_task.items():
+                        score = info.get('score', '?')
+                        verdict = info.get('verdict', '?')
+                        print(f"      {tid}: score={score} verdict={verdict}")
 
             elif pr.phase == WorkflowPhase.FINALIZE:
                 if "report_path" in pr.output:
@@ -162,6 +201,31 @@ def print_phase_results(result: WorkflowResult) -> None:
 
         if pr.error_message:
             print(f"      ERROR: {pr.error_message}")
+
+    # Quality gate summary
+    test_phase = next(
+        (pr for pr in result.phase_results if pr.phase == WorkflowPhase.TEST), None
+    )
+    review_phase = next(
+        (pr for pr in result.phase_results if pr.phase == WorkflowPhase.REVIEW), None
+    )
+    quality_ok = True
+    if (
+        test_phase
+        and test_phase.output
+        and isinstance(test_phase.output, dict)
+        and test_phase.output.get("total_failed", 0) > 0
+    ):
+        quality_ok = False
+    if (
+        review_phase
+        and review_phase.output
+        and isinstance(review_phase.output, dict)
+        and review_phase.output.get("total_failed", 0) > 0
+    ):
+        quality_ok = False
+    if not quality_ok:
+        print("\n  *** QUALITY GATE FAILED — see TEST/REVIEW details above ***")
 
     print("\n" + "=" * 70)
 
@@ -341,6 +405,14 @@ def main() -> int:
         help=(
             "Treat Gate 3b content validation issues as blocking errors. "
             "When set, FINALIZE will fail if any high-severity issues exist."
+        ),
+    )
+    parser.add_argument(
+        "--quality-gate", choices=["skip", "warn", "block"],
+        default="warn",
+        help=(
+            "Quality gate behavior on TEST/REVIEW failure. "
+            "skip=no check, warn=log warning (default), block=halt pipeline."
         ),
     )
     parser.add_argument(
@@ -755,7 +827,9 @@ def main() -> int:
         logger.info("Stop-after: running phases %s", [p.value for p in phases])
 
     # Create workflow and register handlers
-    workflow = ArtisanContractorWorkflow(config=config, phases=phases)
+    workflow = ArtisanContractorWorkflow(
+        config=config, phases=phases, quality_gate=args.quality_gate,
+    )
 
     handler_kwargs: dict = {
         "enriched_seed_path": str(seed_path.resolve()),

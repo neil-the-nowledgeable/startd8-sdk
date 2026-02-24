@@ -807,6 +807,21 @@ class LLMChunkExecutor(ChunkExecutor):
             # Write generated files
             written_files = self._write_generated_files(code, chunk)
 
+            # Check for missing target files
+            if written_files and chunk.file_targets:
+                generated_names = {f.name for f in written_files}
+                expected_names = {Path(t).name for t in chunk.file_targets}
+                missing = expected_names - generated_names
+                if missing:
+                    chunk.metadata["_missing_targets"] = sorted(missing)
+                    self.logger.warning(
+                        "IMPLEMENT: chunk %s missing %d of %d target files: %s",
+                        chunk.chunk_id,
+                        len(missing),
+                        len(expected_names),
+                        sorted(missing),
+                    )
+
             # Accumulate cost metrics in context for DevelopmentPhase
             cost = token_usage.cost_estimate
             context["_llm_cost_usd"] = context.get("_llm_cost_usd", 0.0) + cost
@@ -2392,6 +2407,21 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 if not code or not code.strip():
                     return False, "LLM returned empty code after extraction"
                 written_files = self._write_generated_files(code, chunk)
+
+            # ── Check for missing target files ────────────────────────
+            if written_files and chunk.file_targets:
+                generated_names = {f.name for f in written_files}
+                expected_names = {Path(t).name for t in chunk.file_targets}
+                missing = expected_names - generated_names
+                if missing:
+                    chunk.metadata["_missing_targets"] = sorted(missing)
+                    self.logger.warning(
+                        "IMPLEMENT: chunk %s missing %d of %d target files: %s",
+                        chunk.chunk_id,
+                        len(missing),
+                        len(expected_names),
+                        sorted(missing),
+                    )
 
             # ── Accumulate cost metrics ───────────────────────────────
             cost = token_usage.cost_estimate

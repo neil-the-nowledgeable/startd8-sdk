@@ -5080,6 +5080,11 @@ class Test{class_name}:
                 "had_existing_files": bool(meta.get("_existing_file_contents")),
             }
 
+            # Surface missing target files (Fix 3: missing file detection)
+            missing_targets = meta.get("_missing_targets")
+            if missing_targets:
+                task_report["missing_targets"] = missing_targets
+
             if state.status == ChunkStatus.PASSED and gen_result is not None:
                 task_report["status"] = "generated"
                 task_report["cost"] = gen_result.cost_usd
@@ -6651,6 +6656,50 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 # Update generation_results paths: staging → project_root
                 if result.success:
                     gr.generated_files = [Path(f) for f in result.integrated_files]
+
+        # ── Reconcile expected vs merged files ─────────────────────
+        # Detect files that IMPLEMENT generated but INTEGRATE didn't
+        # merge (silent file loss). This catches the gap where a
+        # multi-file generation produces N files but only N-1 appear
+        # in the merged output.
+        _total_missing = 0
+        for task_id, gr in generation_results.items():
+            if not gr.success:
+                continue
+            ir = integration_results.get(task_id, {})
+            if ir.get("status") == "BLOCKED":
+                continue
+
+            integrated = {Path(f).name for f in ir.get("integrated_files", [])}
+            expected = {f.name for f in gr.generated_files}
+
+            # Also count skipped files as "accounted for"
+            skipped_paths = ir.get("skipped_files", [])
+            for sf in skipped_paths:
+                if isinstance(sf, dict):
+                    sp = sf.get("path", "")
+                    if sp:
+                        integrated.add(Path(sp).name)
+                elif isinstance(sf, str):
+                    integrated.add(Path(sf).name)
+
+            missing = expected - integrated
+            if missing:
+                _total_missing += len(missing)
+                ir["_missing_files"] = sorted(missing)
+                logger.warning(
+                    "INTEGRATE: task %s — %d file(s) generated but not merged: %s",
+                    task_id,
+                    len(missing),
+                    sorted(missing),
+                )
+
+        if _total_missing:
+            logger.error(
+                "INTEGRATE: %d file(s) lost during merge across all tasks "
+                "— check integration warnings above",
+                _total_missing,
+            )
 
         # Clean staging dir
         if staging_dir.exists() and not dry_run:
@@ -9170,7 +9219,13 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             try:
                 test_info = test_results_map.get(task_id, {})
                 review_info = review_results_map.get(task_id, {})
-                task_status[task_id] = {
+                # Surface missing target files if IMPLEMENT flagged them
+                _impl_reports = context.get("implementation", {}).get("task_reports", [])
+                _task_report = next(
+                    (r for r in _impl_reports if r.get("task_id") == task_id),
+                    {},
+                )
+                _entry: dict[str, Any] = {
                     "generated": gen_result.success,
                     "files_count": len(gen_result.generated_files),
                     "generation_cost_usd": gen_result.cost_usd,
@@ -9178,6 +9233,10 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                     "review_score": review_info.get("score", None),
                     "review_passed": review_info.get("passed", None),
                 }
+                _missing = _task_report.get("missing_targets")
+                if _missing:
+                    _entry["missing_targets"] = _missing
+                task_status[task_id] = _entry
             except Exception as exc:
                 logger.warning(
                     "FINALIZE: error building status for task %s: %s",
@@ -9343,8 +9402,15 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             1 for r in generation_results.values() if not r.success
         )
 
+        # Consider test/review outcomes in status rollup
+        tests_failed = test_results.get("total_failed", 0)
+        reviews_failed = review_results.get("total_failed", 0)
+
         if generated_fail == 0 and generated_ok == total_tasks:
-            overall_status = "success"
+            if tests_failed > 0 or reviews_failed > 0:
+                overall_status = "quality_failed"
+            else:
+                overall_status = "success"
         elif generated_ok == 0:
             overall_status = "failed"
         else:

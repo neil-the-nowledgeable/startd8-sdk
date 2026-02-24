@@ -268,6 +268,77 @@ class IntegrationEngine:
             )
 
     # ------------------------------------------------------------------
+    # AR-823: Import validation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _validate_imports(
+        source_path: Path,
+        module_inventory: List[str],
+    ) -> List[str]:
+        """AR-823: Validate first-party imports against known project modules.
+
+        Parses the source file's AST, extracts all import statements, and
+        checks that any import whose top-level name matches a project
+        package actually resolves to a known module in the inventory.
+
+        Returns list of unresolved first-party import dotted names.
+        """
+        import ast
+        import sys
+
+        if source_path.suffix != ".py" or not module_inventory:
+            return []
+
+        try:
+            tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        except SyntaxError:
+            return []  # Syntax errors caught elsewhere
+
+        # Collect full dotted import names
+        imported_modules: set = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    imported_modules.add(alias.name)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_modules.add(node.module)
+
+        # Build lookup sets
+        stdlib = set(getattr(sys, "stdlib_module_names", set()))
+        project_top_level = {m.split(".")[0] for m in module_inventory}
+        inventory_set = set(module_inventory)
+
+        unresolved = []
+        for full_mod in sorted(imported_modules):
+            top = full_mod.split(".")[0]
+            # Skip stdlib
+            if top in stdlib:
+                continue
+            # Not a project module at all → third-party, skip
+            if top not in project_top_level:
+                continue
+            # It's a project import — verify the module path resolves:
+            # 1. Exact match: full_mod is in inventory
+            if full_mod in inventory_set:
+                continue
+            # 2. Parent exists: full_mod is a .py module inside a known
+            #    package (e.g. "startd8.agents.base" where "startd8.agents"
+            #    is in inventory — base.py is a module, not a sub-package)
+            parts = full_mod.split(".")
+            parent = ".".join(parts[:-1])
+            if parent and parent in inventory_set:
+                continue
+            # 3. Descendant exists: full_mod is a package prefix of a known
+            #    deeper package (e.g. importing "startd8" when "startd8.agents"
+            #    is in inventory)
+            if any(inv.startswith(full_mod + ".") for inv in inventory_set):
+                continue
+            unresolved.append(full_mod)
+
+        return unresolved
+
+    # ------------------------------------------------------------------
     # Git commit
     # ------------------------------------------------------------------
 
@@ -447,6 +518,7 @@ class IntegrationEngine:
                 from ..truncation_detection import (
                     CONFIDENCE_HIGH,
                     CONFIDENCE_HIGH_PROSE,
+                    CONFIDENCE_IS_TRUNCATED,
                     detect_truncation,
                     get_expected_sections_for_code,
                     log_truncation_result,
@@ -465,9 +537,14 @@ class IntegrationEngine:
                         step_name="pre_integration",
                     )
                     code_mode_active = trunc_result.details.get("code_mode", False)
-                    reject_threshold = (
-                        CONFIDENCE_HIGH if code_mode_active else CONFIDENCE_HIGH_PROSE
-                    )
+                    target_exists = target_path.is_file()
+                    if target_exists:
+                        # AR-819: stricter threshold when overwriting existing code
+                        reject_threshold = CONFIDENCE_IS_TRUNCATED  # 0.5
+                    else:
+                        reject_threshold = (
+                            CONFIDENCE_HIGH if code_mode_active else CONFIDENCE_HIGH_PROSE
+                        )
                     if trunc_result.confidence >= reject_threshold:
                         logger.error(
                             "REJECTED %s: appears truncated "
@@ -526,6 +603,27 @@ class IntegrationEngine:
                     extra={"unit_id": unit.id},
                 )
 
+            # AR-823: Import validation against module inventory
+            _unit_ctx = unit.context if hasattr(unit, "context") else {}
+            _module_inventory = (
+                _unit_ctx.get("module_inventory", []) if isinstance(_unit_ctx, dict) else []
+            )
+            if source_path.suffix == ".py" and _module_inventory:
+                unresolved = self._validate_imports(source_path, _module_inventory)
+                if unresolved:
+                    msg = (
+                        f"Import validation failed for {source_path.name}: "
+                        f"unresolved first-party imports: {', '.join(unresolved)}"
+                    )
+                    logger.error(msg, extra={"unit_id": unit.id})
+                    warnings.append(msg)
+                    skipped_files.append({
+                        "path": str(source_path),
+                        "reason": "unresolved_imports",
+                        "unresolved": unresolved,
+                    })
+                    continue
+
             # PCA-604: Size regression guard — block overwrites that would lose significant code
             if target_path.is_file() and source_path.exists():
                 try:
@@ -548,9 +646,20 @@ class IntegrationEngine:
                         else None
                     )
 
+                    # AR-818: Stricter threshold when truncation is also detected
+                    _task_trunc_conf = 0.0
+                    _tf = ctx.get("_truncation_flags", {})
+                    if isinstance(_tf, dict):
+                        _task_trunc_conf = _tf.get("max_confidence", 0.0)
+
+                    from ..truncation_detection import CONFIDENCE_IS_TRUNCATED as _CIT
+                    effective_threshold = _INTEGRATION_SIZE_REGRESSION_THRESHOLD  # 0.60
+                    if _task_trunc_conf >= _CIT:  # 0.5
+                        effective_threshold = 0.70  # AR-818: stricter when truncation detected
+
                     if (
                         target_lines > _INTEGRATION_MIN_LINES
-                        and source_lines / target_lines < _INTEGRATION_SIZE_REGRESSION_THRESHOLD
+                        and source_lines / target_lines < effective_threshold
                     ):
                         ratio = source_lines / target_lines
                         if allow_override:
@@ -575,7 +684,7 @@ class IntegrationEngine:
                                 f"Size regression blocked: {source_path.name} has "
                                 f"{source_lines} lines but target has {target_lines} "
                                 f"lines ({ratio:.0%} < "
-                                f"{_INTEGRATION_SIZE_REGRESSION_THRESHOLD:.0%} threshold). "
+                                f"{effective_threshold:.0%} threshold). "
                                 f"Use --allow-size-regression to override."
                             )
                             logger.error(msg, extra={"unit_id": unit.id})

@@ -172,6 +172,8 @@ class ScaffoldPhaseOutput(BaseModel):
     """Output of the SCAFFOLD phase."""
 
     scaffold: Dict[str, Any]
+    # AR-821: importable Python packages discovered during SCAFFOLD
+    module_inventory: List[str] = []
 
     @field_validator("scaffold")
     @classmethod

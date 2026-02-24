@@ -56,6 +56,8 @@ def _get_design_tracer():
 __all__ = [
     # Enums
     "DesignSection",
+    "DesignSectionV2",
+    "V2_DESIGN_SECTIONS",
     "ReviewRole",
     "DisagreementType",
     "ResolutionAction",
@@ -97,7 +99,7 @@ logger = get_logger(__name__)
 
 
 class DesignSection(Enum):
-    """Sections of a design document."""
+    """Sections of a design document (v1 — 7 sections)."""
 
     OVERVIEW = "Overview"
     ARCHITECTURE = "Architecture"
@@ -106,6 +108,19 @@ class DesignSection(Enum):
     ERROR_HANDLING = "Error Handling"
     SECURITY = "Security Considerations"
     TESTING_STRATEGY = "Testing Strategy"
+
+
+class DesignSectionV2(Enum):
+    """Sections of a v2 design contract (4 sections — shorter, directive)."""
+
+    WHAT_TO_BUILD = "What to Build"
+    FILES = "Files"
+    API_SURFACE = "API Surface"
+    CONSTRAINTS = "Constraints"
+
+
+#: Section names for v2 design contracts.
+V2_DESIGN_SECTIONS = [s.value for s in DesignSectionV2]
 
 
 class ReviewRole(Enum):

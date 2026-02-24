@@ -508,7 +508,7 @@ capabilities:
     user_benefit: "Automated multi-round design review that converges toward full domain coverage with persistent acceptance/rejection tracking"
     delivers_benefit: workflow.execution.validated_run
     protocol: "Convergent Review Protocol (CRP)"
-    requirements_doc: docs/ARCHITECTURAL_REVIEW_REQUIREMENTS.md
+    requirements_doc: docs/design/arc-review/ARCHITECTURAL_REVIEW_REQUIREMENTS.md
     requirements_yaml: docs/capability-index/startd8.architectural-review.functional-requirements.yaml
     description:
       developer: |
@@ -519,12 +519,16 @@ capabilities:
         Security), and inserts "Areas Substantially Addressed" + "Areas Needing Further Review"
         sections. Two-tier prompt steering prioritizes uncovered areas with quantified gap data.
         Process converges as areas cross the substantially-addressed threshold; enters
-        gap-hunting mode when all areas are covered.
+        design-principle-aware gap-hunting mode when all areas are covered, evaluating against
+        3 lenses: cross-cutting gaps, missed platform leverage, and design principle violations
+        (Mottainai, Context Correctness by Construction, Context Contracts).
+        Iteration context guidance externalized to YAML templates (architectural_review.yaml)
+        with generic section accessors (get_section_template, format_section, get_list_section).
         v2.6.0: Dual-document mode when feature_requirements points to a .md file — reviewers
         produce Requirements Coverage mappings and split suggestions: S-prefix IDs for plan doc,
         F-prefix IDs for feature doc. Triage routes to appropriate document appendices. Feature
         doc auto-initialized with Appendix A/B/C structure if missing.
-        See docs/ARCHITECTURAL_REVIEW_REQUIREMENTS.md for 76 formal requirements (RV-xxx).
+        See docs/design/arc-review/ARCHITECTURAL_REVIEW_REQUIREMENTS.md for 76 formal requirements (RV-xxx).
       user: |
         Run iterative architectural review with automated triage:
         startd8 workflow run architectural-review-log --document_path plan.md --reviewer_count 2
@@ -539,6 +543,9 @@ capabilities:
       - type: code
         ref: src/startd8/workflows/builtin/architectural_review_log_workflow.py
         description: "ArchitecturalReviewLogWorkflow with automated triage, two-tier prompt steering, and dual-document mode"
+      - type: code
+        ref: src/startd8/workflows/builtin/prompts/architectural_review.yaml
+        description: "YAML templates for iteration context, focus lines, gap-hunting lenses, and design principles"
       - type: test
         ref: tests/unit/test_architectural_review_triage.py
         description: "87 unit tests covering triage helpers, area coverage, prompt priority, dual-document mode, integration"

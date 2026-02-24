@@ -79,6 +79,7 @@ __all__ = [
     "InvalidTaskIdError",
     "UnresolvedDependencyError",
     "WaveMergeCollisionError",
+    "QualityGateError",
     "WorkflowConfig",
     "PhaseResult",
     "InnerPhaseResult",
@@ -327,6 +328,15 @@ class PhaseExecutionError(WorkflowError):
         super().__init__(message, checkpoint)
         self.phase = phase
         self.original_error = original_error
+
+
+class QualityGateError(Exception):
+    """Raised when a quality gate check fails in block mode."""
+
+    def __init__(self, message: str, phase: WorkflowPhase, details: dict):
+        super().__init__(message)
+        self.phase = phase
+        self.details = details
 
 
 # ============================================================================
@@ -1368,6 +1378,7 @@ class ArtisanContractorWorkflow:
         checkpoint_store: Optional[CheckpointStore] = None,
         phases: Optional[list[WorkflowPhase]] = None,
         contract_path: Optional[Path] = None,
+        quality_gate: str = "warn",
     ) -> None:
         """Initialize the workflow orchestrator.
 
@@ -1387,8 +1398,13 @@ class ArtisanContractorWorkflow:
                            When ``None`` (default), auto-discovers
                            ``contracts/artisan-pipeline.contract.yaml`` adjacent
                            to this module if it exists.
+            quality_gate: Behavior on TEST/REVIEW quality failures.
+                          ``"skip"`` = no check (legacy behavior).
+                          ``"warn"`` = log WARNING, continue (default).
+                          ``"block"`` = raise :class:`QualityGateError`.
         """
         self.config = config or WorkflowConfig()
+        self._quality_gate = quality_gate
         self.phases = phases or WorkflowPhase.ordered()
         self.handlers: dict[WorkflowPhase, AbstractPhaseHandler] = dict(handlers or {})
         self._default_handler = DefaultPhaseHandler()
@@ -2576,6 +2592,67 @@ class ArtisanContractorWorkflow:
                 checkpoint=checkpoint,
             )
 
+    def _check_quality_gate(
+        self,
+        phase: WorkflowPhase,
+        phase_result: "PhaseResult",
+    ) -> None:
+        """Check quality gate after TEST or REVIEW phases.
+
+        Compares ``total_failed`` in the phase output dict against zero.
+        Behavior depends on ``self._quality_gate``:
+
+        * ``"skip"`` — no-op.
+        * ``"warn"`` — log WARNING with details.
+        * ``"block"`` — raise :class:`QualityGateError`.
+
+        Args:
+            phase: The workflow phase that just completed.
+            phase_result: Result from the completed phase.
+
+        Raises:
+            QualityGateError: When ``quality_gate == "block"`` and failures
+                              are detected.
+        """
+        if self._quality_gate == "skip":
+            return
+        if not phase_result.output or not isinstance(phase_result.output, dict):
+            return
+
+        total_failed = phase_result.output.get("total_failed", 0)
+        if total_failed == 0:
+            return
+
+        details: dict[str, Any] = {
+            "total_failed": total_failed,
+            "total_passed": phase_result.output.get("total_passed", 0),
+        }
+
+        if phase == WorkflowPhase.TEST:
+            per_task = phase_result.output.get("per_task", {})
+            failed_tasks = [
+                tid for tid, info in per_task.items() if not info.get("passed")
+            ]
+            details["failed_tasks"] = failed_tasks
+            msg = f"TEST quality gate: {total_failed} task(s) failed validation"
+        elif phase == WorkflowPhase.REVIEW:
+            per_task = phase_result.output.get("per_task", {})
+            failed_reviews = {
+                tid: info.get("score", "?")
+                for tid, info in per_task.items()
+                if not info.get("passed")
+            }
+            details["failed_reviews"] = failed_reviews
+            msg = f"REVIEW quality gate: {total_failed} task(s) failed review"
+        else:
+            return
+
+        if self._quality_gate == "block":
+            self._logger.error("QUALITY GATE BLOCKED: %s", msg)
+            raise QualityGateError(msg, phase=phase, details=details)
+        else:  # "warn"
+            self._logger.warning("QUALITY GATE WARNING: %s — %s", msg, details)
+
     def _execute_phase_serial_mode(
         self,
         context: dict[str, Any],
@@ -2646,6 +2723,10 @@ class ArtisanContractorWorkflow:
 
             # Track cost
             cost_tracker.add(phase_result.cost)
+
+            # Quality gate check for TEST and REVIEW phases
+            if phase in (WorkflowPhase.TEST, WorkflowPhase.REVIEW):
+                self._check_quality_gate(phase, phase_result)
 
             # Warn when cost approaches the budget (once only)
             if (

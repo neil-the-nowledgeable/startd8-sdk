@@ -10,6 +10,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..logging_config import get_logger
 from .checkpoint import IntegrationCheckpoint
+from .context_strategy import (
+    ContextResolutionStrategy,
+    StandaloneContextStrategy,
+)
 from .integration_engine import IntegrationEngine
 from .protocols import (
     CheckpointFailedCallback,
@@ -490,7 +494,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False):
         """
         Initialize the Prime Contractor workflow.
 
@@ -514,6 +518,8 @@ class PrimeContractorWorkflow:
             resume: If True, resume from persisted state
             cli_mode: Execution mode from CLI argument
             force_mode: Force override of persisted execution mode
+            context_strategy: Custom context resolution strategy (default: StandaloneContextStrategy)
+            strict_mode: If True, raise on strategy resolution failures (default: False for production, True for CI/testing)
         """
         self.project_root = project_root or Path.cwd()
         self.dry_run = dry_run
@@ -572,6 +578,14 @@ class PrimeContractorWorkflow:
         self.seed_service_metadata: Dict[str, Any] = {}
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
+        # Context strategy injection (F-007)
+        if context_strategy is not None and not isinstance(context_strategy, ContextResolutionStrategy):
+            raise TypeError(
+                f"context_strategy must implement ContextResolutionStrategy, "
+                f"got {type(context_strategy).__name__}"
+            )
+        self._context_strategy = context_strategy or StandaloneContextStrategy()
+        self._strict_mode = strict_mode
         # Resume state: load from disk if resuming
         self._resume_mode: Optional[str] = None
         if resume:
@@ -583,6 +597,112 @@ class PrimeContractorWorkflow:
             return str(path.relative_to(self.project_root))
         except ValueError:
             return str(path)
+
+    # -----------------------------------------------------------------------
+    # Context Strategy: Resolution and Validation (F-007)
+    # -----------------------------------------------------------------------
+
+    def _resolve_context(
+        self,
+        base_context: Dict[str, Any],
+        pipeline_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Resolve context via strategy, with fallback and validation.
+
+        Attempts strategy resolution, falls back to StandaloneContextStrategy
+        on failure (unless strict_mode is enabled), and validates the result
+        before returning.
+
+        Args:
+            base_context: Base context dict with existing keys/values.
+            pipeline_context: Optional enrichment data from pipeline.
+
+        Returns:
+            Resolved context dict from the strategy.
+
+        Raises:
+            Exception: If strategy fails and strict_mode is True.
+            ValueError: If resolved context is invalid and strict_mode is True.
+        """
+        try:
+            resolved = self._context_strategy.resolve_context(
+                base_context=base_context,
+                pipeline_context=pipeline_context,
+            )
+        except Exception as exc:
+            if self._strict_mode:
+                raise  # In strict mode, propagate the error
+            logger.error(
+                "Context strategy resolution failed, falling back to standalone",
+                extra={
+                    "strategy_type": type(self._context_strategy).__name__,
+                    "error_detail": str(exc),
+                    "fallback_event": True,
+                },
+            )
+            self._emit_fallback_metric(
+                strategy_type=type(self._context_strategy).__name__
+            )
+            resolved = StandaloneContextStrategy().resolve_context(
+                base_context=base_context,
+                pipeline_context=pipeline_context,
+            )
+
+        # Validate the resolved context before using it
+        if not self._is_valid_resolved_context(resolved):
+            if self._strict_mode:
+                raise ValueError(
+                    f"Strategy returned invalid resolved context: "
+                    f"not a dict or empty (type={type(resolved).__name__})"
+                )
+            logger.error(
+                "Strategy returned invalid resolved context, falling back to standalone",
+                extra={
+                    "strategy_type": type(self._context_strategy).__name__,
+                    "fallback_event": True,
+                },
+            )
+            self._emit_fallback_metric(
+                strategy_type=type(self._context_strategy).__name__
+            )
+            resolved = StandaloneContextStrategy().resolve_context(
+                base_context=base_context,
+                pipeline_context=pipeline_context,
+            )
+
+        return resolved
+
+    @staticmethod
+    def _is_valid_resolved_context(resolved: Any) -> bool:
+        """Validate that a resolved context is a non-empty dict.
+
+        Args:
+            resolved: Result from strategy.resolve_context().
+
+        Returns:
+            True if valid, False otherwise.
+        """
+        return isinstance(resolved, dict)
+
+    @staticmethod
+    def _emit_fallback_metric(strategy_type: str) -> None:
+        """Emit a structured metric/log for strategy fallback events.
+
+        This function is the single point for observability on fallback
+        occurrences. Integrate with your metrics system (e.g., StatsD,
+        Prometheus counter) as appropriate.
+
+        Args:
+            strategy_type: Name of the strategy that failed
+        """
+        logger.warning(
+            "METRIC: context_strategy_fallback",
+            extra={
+                "metric_name": "context_strategy_fallback_total",
+                "strategy_type": strategy_type,
+                "fallback_event": True,
+            },
+        )
 
     # -----------------------------------------------------------------------
     # State Persistence: Mode Serialization/Deserialization (F-005)
@@ -918,6 +1038,36 @@ class PrimeContractorWorkflow:
     def generation_provenance(self) -> Optional[Dict[str, Any]]:
         """Generation provenance from seed context (via property accessor)."""
         return self.seed_context.generation_provenance
+
+    # -----------------------------------------------------------------------
+    # NOTE: _generate_code() method exists below. When encountered,
+    # it will be modified to use self._resolve_context() instead of
+    # inline context building. The modification pattern is:
+    #
+    # BEFORE (inline context assembly):
+    #   system_prompt = <... existing logic ...>
+    #   user_prompt = <... existing logic ...>
+    #
+    # AFTER (strategy delegation):
+    #   resolved = self._resolve_context(
+    #       base_context=context_seed,
+    #       pipeline_context=pipeline_context,
+    #   )
+    #   # resolved is a dict — extract prompts from it
+    #   generation_metadata["strategy_mode"] = self._context_strategy.mode
+    #
+    # Post-generation validation (after LLM call completes):
+    #   warnings = self._context_strategy.post_generation_validate(
+    #       generated_code=generated_code,
+    #       resolved_context=resolved,
+    #   )
+    #   if warnings:
+    #       logger.warning(
+    #           "Post-generation validation: %d warning(s)",
+    #           len(warnings),
+    #           extra={"warnings": warnings},
+    #       )
+    # -----------------------------------------------------------------------
 
     def check_git_status(self) -> Tuple[bool, List[str]]:
         """
