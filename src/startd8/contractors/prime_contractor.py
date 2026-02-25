@@ -1048,7 +1048,12 @@ class PrimeContractorWorkflow:
         service_metadata = seed_data.get("service_metadata") or {}
 
         # Determine execution mode
-        if cli_mode:
+        if cli_mode is not None:
+            if cli_mode not in VALID_EXECUTION_MODES:
+                raise ValueError(
+                    f"Invalid cli_mode {cli_mode!r}; "
+                    f"expected one of {sorted(VALID_EXECUTION_MODES)}"
+                )
             mode = cli_mode
         else:
             has_pipeline_signals = bool(
@@ -1082,14 +1087,22 @@ class PrimeContractorWorkflow:
         )
         self.plan_document_text = None
         if plan_doc_path:
-            try:
-                _text = Path(plan_doc_path).read_text(encoding="utf-8")
-                # Cap at 60KB to avoid blowing up LLM context (Leg 11 #48)
-                self.plan_document_text = _text[:61440]
-            except OSError as exc:
+            resolved = Path(plan_doc_path).resolve()
+            # Validate against project_root to prevent path traversal [O11Y Leg 8 #5]
+            if not str(resolved).startswith(str(self.project_root.resolve())):
                 logger.warning(
-                    "Could not load plan document %s: %s", plan_doc_path, exc,
+                    "Plan document path %s is outside project root %s — skipping",
+                    plan_doc_path, self.project_root,
                 )
+            else:
+                try:
+                    _text = resolved.read_text(encoding="utf-8")
+                    # Cap at 60KB to avoid blowing up LLM context (Leg 11 #48)
+                    self.plan_document_text = _text[:61440]
+                except OSError as exc:
+                    logger.warning(
+                        "Could not load plan document %s: %s", plan_doc_path, exc,
+                    )
 
     @property
     def execution_mode(self) -> str:
@@ -1438,6 +1451,19 @@ class PrimeContractorWorkflow:
         logger.info("All %d sub-features integrated for '%s'", n, feature.name, extra={'feature_name': feature.name, 'sub_feature_count': n})
         return True
 
+    def _resolve_output_dir(self) -> Path:
+        """Resolve the code generator's output_dir to an absolute path.
+
+        Falls back to ``self.project_root / 'generated'`` when no code
+        generator is configured or it has no ``output_dir``.
+        """
+        if self.code_generator and hasattr(self.code_generator, 'output_dir'):
+            od = self.code_generator.output_dir
+            if od is not None:
+                p = Path(od)
+                return p if p.is_absolute() else self.project_root / p
+        return self.project_root / 'generated'
+
     def _check_file_provenance(
         self,
         file_paths: List[str],
@@ -1464,8 +1490,12 @@ class PrimeContractorWorkflow:
         except OSError:
             pass
 
+        resolved_output_dir = self._resolve_output_dir()
+
         for fpath_str in file_paths:
             fpath = Path(fpath_str)
+            if not fpath.is_absolute():
+                fpath = resolved_output_dir.parent / fpath
             try:
                 file_stat = fpath.stat()
             except OSError:
@@ -1690,10 +1720,14 @@ class PrimeContractorWorkflow:
 
         # Domain post-validation — advisory only, before engine runs
         if not self.dry_run and self._current_enrichment is not None:
-            gen_paths = [
-                Path(f) for f in feature.generated_files
-                if Path(f).exists() and Path(f).suffix == '.py'
-            ]
+            resolved_output_dir = self._resolve_output_dir()
+            gen_paths = []
+            for f in feature.generated_files:
+                p = Path(f)
+                if not p.is_absolute():
+                    p = resolved_output_dir.parent / p
+                if p.exists() and p.suffix == '.py':
+                    gen_paths.append(p)
             for gen_path in gen_paths:
                 code = gen_path.read_text(encoding='utf-8')
                 from .artisan_phases.domain_checklist import validate_generated_code
@@ -1909,11 +1943,7 @@ class PrimeContractorWorkflow:
             Count of items removed.
         """
         removed = 0
-        output_dir = self.project_root / 'generated'
-        if self.code_generator and hasattr(self.code_generator, 'output_dir') and (self.code_generator.output_dir is not None):
-            output_dir = Path(self.code_generator.output_dir)
-            if not output_dir.is_absolute():
-                output_dir = self.project_root / output_dir
+        output_dir = self._resolve_output_dir()
         if output_dir.exists() and output_dir.is_dir():
             shutil.rmtree(output_dir)
             logger.info('Removed directory: %s', output_dir)

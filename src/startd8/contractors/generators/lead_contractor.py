@@ -115,7 +115,7 @@ class LeadContractorCodeGenerator:
         self.drafter_agent = drafter_agent
         self.max_iterations = max_iterations
         self.pass_threshold = pass_threshold
-        self.output_dir = output_dir or Path("generated")
+        self.output_dir = Path(output_dir).resolve() if output_dir else Path("generated")
         self.max_tokens = max_tokens
         self.fail_on_truncation = fail_on_truncation
         self.check_truncation = check_truncation

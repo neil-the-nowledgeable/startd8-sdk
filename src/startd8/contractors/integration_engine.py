@@ -639,11 +639,13 @@ class IntegrationEngine:
 
         # 3. Pre-validate generated .py files
         if not self.dry_run and self.checkpoint is not None:
-            gen_paths = [
-                Path(f)
-                for f in unit.generated_files
-                if Path(f).exists() and Path(f).suffix == ".py"
-            ]
+            gen_paths = []
+            for f in unit.generated_files:
+                p = Path(f)
+                if not p.is_absolute():
+                    p = p.resolve()
+                if p.exists() and p.suffix == ".py":
+                    gen_paths.append(p)
             if gen_paths:
                 pre_result = self.checkpoint.pre_validate(gen_paths)
                 # Emit GateResult
@@ -682,6 +684,8 @@ class IntegrationEngine:
         integrated_files: List[Path] = []
         for i, source_file in enumerate(unit.generated_files):
             source_path = Path(source_file)
+            if not source_path.is_absolute():
+                source_path = source_path.resolve()
 
             # Resolve target path
             if i < len(unit.target_files):

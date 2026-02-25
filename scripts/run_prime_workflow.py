@@ -204,7 +204,7 @@ def main() -> int:
         return 1
 
     # Determine output dir
-    output_dir = Path(args.output_dir) if args.output_dir else seed_path.parent
+    output_dir = Path(args.output_dir).resolve() if args.output_dir else seed_path.parent.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
 
     project_root = Path(args.project_root).resolve()
@@ -398,7 +398,8 @@ def main() -> int:
     for fid, feature in workflow.queue.features.items():
         if feature.status in (FeatureStatus.FAILED, FeatureStatus.BLOCKED):
             has_files = feature.generated_files and all(
-                Path(f).exists() for f in feature.generated_files
+                (Path(f) if Path(f).is_absolute() else Path(f).resolve()).exists()
+                for f in feature.generated_files
             )
             if has_files:
                 feature.status = FeatureStatus.GENERATED
@@ -435,7 +436,7 @@ def main() -> int:
     logger.info("Seed: %s", seed_path)
     logger.info("Project root: %s", project_root)
     logger.info("Output dir: %s", output_dir)
-    logger.info("Execution mode: %s", workflow.execution_mode)
+    logger.debug("Execution mode: %s (also logged by load_seed_context)", workflow.execution_mode)
     logger.info("Dry run: %s", args.dry_run)
     if workflow._validation_override is not None:
         logger.info("Validation override: %s", workflow._validation_override)
