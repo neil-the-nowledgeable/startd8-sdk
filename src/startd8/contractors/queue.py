@@ -129,6 +129,7 @@ class FeatureQueue:
         description: str = "",
         dependencies: Optional[List[str]] = None,
         target_files: Optional[List[str]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> FeatureSpec:
         """
         Add a feature to the queue, preserving loaded state.
@@ -140,6 +141,16 @@ class FeatureQueue:
 
         This allows workflow scripts to declare their full feature queue on
         every invocation without destroying resume state.
+
+        Args:
+            feature_id: Unique identifier for the feature.
+            name: Human-readable feature name.
+            description: Feature description for code generation prompts.
+            dependencies: List of feature IDs this feature depends on.
+            target_files: List of target file paths for code generation.
+            metadata: Optional dict of enrichment metadata (requirements_text,
+                _enrichment, artifact_types_addressed, etc.). Merged into
+                existing metadata on update, set directly on new features.
         """
         existing = self.features.get(feature_id)
         if existing and existing.status != FeatureStatus.PENDING:
@@ -148,6 +159,9 @@ class FeatureQueue:
             existing.description = description
             existing.dependencies = dependencies or []
             existing.target_files = target_files or []
+            # Merge new metadata into existing (additive, not destructive)
+            if metadata:
+                existing.metadata.update(metadata)
             if feature_id not in self.order:
                 self.order.append(feature_id)
             if self.auto_save:
@@ -161,6 +175,7 @@ class FeatureQueue:
             description=description,
             dependencies=dependencies or [],
             target_files=target_files or [],
+            metadata=metadata or {},
         )
 
         self.features[feature_id] = spec

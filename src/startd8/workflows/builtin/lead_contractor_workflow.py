@@ -585,10 +585,12 @@ class LeadContractorWorkflow(WorkflowBase):
 
             # =================================================================
             # IMP-P6: Spec-to-draft validation — check for missing parameters
+            # REQ-PEM-008: Mode-conditional — skipped when _run_validators=False
             # =================================================================
             spec_validation_warning = ""
+            run_validators = context.get("_run_validators", True)
             resolved_params = context.get("resolved_parameters", [])
-            if resolved_params:
+            if run_validators and resolved_params:
                 from ...contractors.prompt_utils import find_missing_parameters
                 missing = find_missing_parameters(spec.raw_spec, resolved_params)
                 if missing:

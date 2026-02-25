@@ -14,15 +14,39 @@ while maintaining stable internals.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Callable, Protocol, Sequence
+from typing import Any, Callable, Dict, List, Optional, Protocol, Sequence
 
-from .forensic_log import log_event
+from .context_formatters import (
+    SCOPE_BOUNDARY_INSTRUCTION,
+    format_architectural_context,
+    format_critical_parameters,
+    format_domain_constraints,
+    format_plan_context,
+    format_project_objectives,
+    format_protocol_guidance,
+    format_requirements_context,
+    format_semantic_conventions,
+    wrap_user_content,
+)
+
+# forensic_log.emit_forensic_log uses a different schema (OT-700);
+# context_resolution uses standard structured logging instead.
+
+logger = logging.getLogger(__name__)
+
+# Pipeline signal keys used for auto-detection (shared with prime_contractor)
+PIPELINE_SIGNAL_KEYS: frozenset[str] = frozenset({
+    "onboarding_metadata",
+    "architectural_context",
+    "design_calibration",
+})
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -546,7 +570,15 @@ class ValidatorRegistry:
 # ──────────────────────────────────────────────────────────────────────────
 
 class ContextStrategy(ABC):
-    """Abstract base for context resolution strategies."""
+    """Abstract base for context resolution strategies.
+
+    Subclasses must implement:
+    - mode (property): Return "standalone" or "pipeline"
+    - resolve(seed): Resolve seed into structured ResolvedContext (IMP-P sections)
+    - resolve_task_context(feature_data, seed_data, ...): Build flat gen_context
+      dict for code generation. This is the primary method called per-feature
+      by PrimeContractorWorkflow.develop_feature().
+    """
 
     @property
     @abstractmethod
@@ -559,12 +591,46 @@ class ContextStrategy(ABC):
         """Resolve seed context into structured output."""
         ...
 
+    @abstractmethod
+    def resolve_task_context(
+        self,
+        feature_data: Dict[str, Any],
+        seed_data: Dict[str, Any],
+        *,
+        domain_constraints: Optional[List[str]] = None,
+        output_constraint: Optional[str] = None,
+        prior_error_feedback: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build the gen_context dict for a single feature's code generation.
+
+        This extracts the context-building logic from develop_feature() into
+        the strategy, allowing standalone and pipeline modes to produce
+        different context shapes from the same inputs.
+
+        Args:
+            feature_data: Dict with keys: name, id, target_files, description,
+                metadata (from FeatureSpec).
+            seed_data: Dict with keys: onboarding_metadata, architectural_context,
+                design_calibration, plan_document_text, service_metadata.
+            domain_constraints: Pre-computed domain constraints from
+                DomainChecklist (optional).
+            output_constraint: Fallback output constraint template when no
+                domain constraints are available (standalone mode).
+            prior_error_feedback: Pre-formatted error feedback from a prior
+                failed attempt (optional).
+
+        Returns:
+            gen_context dict ready for code_generator.generate(context=...).
+        """
+        ...
+
 
 class StandaloneContextStrategy(ContextStrategy):
-    """Zero-change default — passes context through unmodified.
+    """Zero-change default — preserves exact current develop_feature() behavior.
 
-    This strategy preserves exact current behavior, returning no structured
-    sections and making the raw context available as-is.
+    resolve_task_context() reproduces the inline context-building logic from
+    PrimeContractorWorkflow.develop_feature() lines 1350-1426 (as of Phase 1).
+    This is a pure extraction: same logic, same output, different home.
     """
 
     @property
@@ -579,6 +645,117 @@ class StandaloneContextStrategy(ContextStrategy):
             raw_context=MappingProxyType(seed),
             is_pipeline=False,
         )
+
+    def resolve_task_context(
+        self,
+        feature_data: Dict[str, Any],
+        seed_data: Dict[str, Any],
+        *,
+        domain_constraints: Optional[List[str]] = None,
+        output_constraint: Optional[str] = None,
+        prior_error_feedback: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build gen_context preserving exact current standalone behavior.
+
+        This is a line-for-line extraction of the inline context building
+        from develop_feature(). Dict equality with the original output is
+        the acceptance criterion.
+        """
+        gen_context: Dict[str, Any] = {"feature_name": feature_data.get("name", "")}
+
+        # Target file + domain constraints
+        target_files = feature_data.get("target_files") or []
+        if target_files:
+            gen_context["target_file"] = target_files[0]
+
+        if domain_constraints is not None:
+            gen_context["domain_constraints"] = domain_constraints
+        elif output_constraint is not None:
+            gen_context["output_constraint"] = output_constraint
+
+        # Seed-level context injection (Mottainai Gaps 9-13)
+        onboarding = seed_data.get("onboarding_metadata")
+        if onboarding:
+            objectives = onboarding.get("project_objectives")
+            if isinstance(objectives, (str, list, dict)):
+                gen_context["project_objectives"] = objectives
+            sem_conv = onboarding.get("semantic_conventions")
+            if isinstance(sem_conv, (dict, list)):
+                gen_context["semantic_conventions"] = sem_conv
+
+        arch_ctx = seed_data.get("architectural_context")
+        if arch_ctx:
+            gen_context["architectural_context"] = arch_ctx
+
+        # Per-task calibration: implement_max_output_tokens
+        feature_id = feature_data.get("id", "")
+        calibration = seed_data.get("design_calibration")
+        task_cal = calibration.get(feature_id, {}) if calibration else {}
+        if isinstance(task_cal, dict) and task_cal.get("implement_max_output_tokens"):
+            gen_context["implement_max_output_tokens"] = task_cal[
+                "implement_max_output_tokens"
+            ]
+
+        # Plan document context
+        plan_text = seed_data.get("plan_document_text")
+        if plan_text:
+            gen_context["plan_context"] = plan_text
+
+        # IMP-P2: requirements text passthrough
+        metadata = feature_data.get("metadata") or {}
+        if metadata.get("requirements_text"):
+            gen_context["requirements_text"] = metadata["requirements_text"]
+
+        # REQ-PC-014: inject service metadata
+        service_meta = seed_data.get("service_metadata")
+        if service_meta:
+            gen_context["service_metadata"] = service_meta
+
+        # Gap 9: per-task metadata from seed enrichment
+        self._inject_enrichment(gen_context, metadata)
+
+        # Prior error feedback
+        if prior_error_feedback:
+            gen_context["prior_error_feedback"] = prior_error_feedback
+
+        return gen_context
+
+    @staticmethod
+    def _inject_enrichment(
+        gen_context: Dict[str, Any], metadata: Dict[str, Any]
+    ) -> None:
+        """Inject per-task enrichment from feature metadata into gen_context.
+
+        Extracted as a static method for reuse by both strategies.
+        """
+        if not metadata:
+            return
+        meta_enrichment = metadata.get("_enrichment", {})
+        if not isinstance(meta_enrichment, dict) or not meta_enrichment:
+            return
+
+        gen_context.setdefault("domain_constraints", [])
+        if isinstance(gen_context["domain_constraints"], list):
+            gen_context["domain_constraints"].extend(
+                meta_enrichment.get("prompt_constraints", [])
+            )
+
+        # IMP-P3: Critical parameter elevation
+        resolved_params = meta_enrichment.get("resolved_parameters", [])
+        param_sources = meta_enrichment.get("parameter_sources", [])
+        if resolved_params or param_sources:
+            cp_lines: list[str] = []
+            for rp in resolved_params:
+                kv = rp.get("key_value", "")
+                if kv:
+                    cp_lines.append(kv)
+            for ps in param_sources:
+                kv = ps.get("key_value", "")
+                if kv and kv not in cp_lines:
+                    cp_lines.append(kv)
+            if cp_lines:
+                gen_context["critical_parameters"] = cp_lines
+                gen_context["resolved_parameters"] = resolved_params
 
 
 class PipelineContextStrategy(ContextStrategy):
@@ -603,7 +780,7 @@ class PipelineContextStrategy(ContextStrategy):
             sanitization_mode: Controls whether security violations raise (STRICT)
                              or log-and-skip (LENIENT). Default: STRICT.
         """
-        self._registry = validator_registry or ValidatorRegistry()
+        self._registry = validator_registry if validator_registry is not None else ValidatorRegistry()
         self._sanitization_mode = sanitization_mode
 
     @property
@@ -619,6 +796,137 @@ class PipelineContextStrategy(ContextStrategy):
     def sanitization_mode(self) -> SanitizationMode:
         """Access the sanitization mode."""
         return self._sanitization_mode
+
+    def resolve_task_context(
+        self,
+        feature_data: Dict[str, Any],
+        seed_data: Dict[str, Any],
+        *,
+        domain_constraints: Optional[List[str]] = None,
+        output_constraint: Optional[str] = None,
+        prior_error_feedback: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Build enriched gen_context with structured pipeline sections.
+
+        Starts with the same base context as standalone, then replaces
+        raw passthrough fields with formatted Markdown sections.
+        Empty source data ({} or []) produces no section (omitted from context).
+
+        User-controlled data is wrapped in safe XML delimiters to mitigate
+        prompt injection (REQ-PEM-018).
+        """
+        gen_context: Dict[str, Any] = {
+            "feature_name": feature_data.get("name", ""),
+        }
+
+        # Target file (same as standalone)
+        target_files = feature_data.get("target_files") or []
+        if target_files:
+            gen_context["target_file"] = target_files[0]
+
+        # Domain constraints (same base logic, formatted for pipeline)
+        if domain_constraints is not None:
+            formatted = format_domain_constraints(domain_constraints)
+            if formatted:
+                gen_context["domain_constraints"] = formatted
+        elif output_constraint is not None:
+            gen_context["output_constraint"] = output_constraint
+
+        # --- Pipeline-enriched sections (IMP-P1 through IMP-P5) ---
+
+        # Log missing pipeline signal keys (REQ-PEM-007: warn on absent keys)
+        for signal_key in PIPELINE_SIGNAL_KEYS:
+            if signal_key not in seed_data or seed_data[signal_key] is None:
+                logger.warning(
+                    "Pipeline mode: seed missing '%s' — section will be omitted",
+                    signal_key,
+                    extra={"missing_key": signal_key, "mode": "pipeline"},
+                )
+
+        # IMP-P1: Onboarding metadata → project objectives + semantic conventions
+        onboarding = seed_data.get("onboarding_metadata")
+        if onboarding:
+            objectives = onboarding.get("project_objectives")
+            if isinstance(objectives, (str, list, dict)):
+                formatted = format_project_objectives(objectives)
+                if formatted:
+                    gen_context["project_objectives"] = wrap_user_content(
+                        formatted, "project_objectives"
+                    )
+            sem_conv = onboarding.get("semantic_conventions")
+            if isinstance(sem_conv, (dict, list)):
+                formatted = format_semantic_conventions(sem_conv)
+                if formatted:
+                    gen_context["semantic_conventions"] = wrap_user_content(
+                        formatted, "semantic_conventions"
+                    )
+
+        # IMP-P2: Architectural context → formatted Markdown (not raw JSON)
+        arch_ctx = seed_data.get("architectural_context")
+        if arch_ctx:
+            formatted = format_architectural_context(arch_ctx)
+            if formatted:
+                gen_context["architectural_context"] = wrap_user_content(
+                    formatted, "architectural_context"
+                )
+
+        # Per-task calibration (same as standalone — numeric, not user-controlled)
+        feature_id = feature_data.get("id", "")
+        calibration = seed_data.get("design_calibration")
+        task_cal = calibration.get(feature_id, {}) if calibration else {}
+        if isinstance(task_cal, dict) and task_cal.get("implement_max_output_tokens"):
+            gen_context["implement_max_output_tokens"] = task_cal[
+                "implement_max_output_tokens"
+            ]
+
+        # Plan context → formatted section
+        plan_text = seed_data.get("plan_document_text")
+        if plan_text:
+            formatted = format_plan_context(plan_text)
+            if formatted:
+                gen_context["plan_context"] = wrap_user_content(
+                    formatted, "plan_context"
+                )
+
+        # IMP-P2: Requirements text → formatted section
+        metadata = feature_data.get("metadata") or {}
+        req_text = metadata.get("requirements_text")
+        if req_text:
+            formatted = format_requirements_context(req_text)
+            if formatted:
+                gen_context["requirements_context"] = wrap_user_content(
+                    formatted, "requirements"
+                )
+
+        # IMP-P4: Protocol guidance from service metadata
+        service_meta = seed_data.get("service_metadata")
+        if service_meta:
+            formatted = format_protocol_guidance(service_meta)
+            if formatted:
+                gen_context["protocol_guidance"] = wrap_user_content(
+                    formatted, "protocol_guidance"
+                )
+            # Also pass raw for backward compat
+            gen_context["service_metadata"] = service_meta
+
+        # IMP-P3: Per-task enrichment (critical parameters, domain constraints)
+        StandaloneContextStrategy._inject_enrichment(gen_context, metadata)
+
+        # Format critical_parameters if present
+        cp = gen_context.get("critical_parameters")
+        if cp and isinstance(cp, list):
+            formatted = format_critical_parameters(cp)
+            if formatted:
+                gen_context["critical_parameters"] = formatted
+
+        # Prior error feedback
+        if prior_error_feedback:
+            gen_context["prior_error_feedback"] = prior_error_feedback
+
+        # IMP-P5: Scope boundary instruction (pipeline only)
+        gen_context["scope_boundary"] = SCOPE_BOUNDARY_INSTRUCTION
+
+        return gen_context
 
     def resolve(self, seed: dict[str, Any]) -> ResolvedContext:
         """Resolve seed into structured sections with security validation.
@@ -644,9 +952,12 @@ class PipelineContextStrategy(ContextStrategy):
         validation_results = self._registry.run_all(sections, sanitized)
 
         # 4. Log provenance
-        log_event(
-            "pipeline_context_resolved",
-            {
+        logger.info(
+            "Pipeline context resolved: %d populated sections, validation=%s",
+            len([s for s in sections if s.is_populated]),
+            all(v.passed for v in validation_results),
+            extra={
+                "event": "pipeline_context_resolved",
                 "populated_sections": [
                     s.section_id for s in sections if s.is_populated
                 ],
@@ -688,9 +999,12 @@ class PipelineContextStrategy(ContextStrategy):
             ) as exc:
                 if self._sanitization_mode == SanitizationMode.STRICT:
                     raise
-                log_event(
-                    "sanitization_field_skipped",
-                    {
+                logger.warning(
+                    "Sanitization: skipping field '%s': %s",
+                    key,
+                    exc,
+                    extra={
+                        "event": "sanitization_field_skipped",
                         "field": key,
                         "reason": str(exc),
                     },
@@ -741,6 +1055,7 @@ def create_strategy(
 
 __all__ = [
     # Constants
+    "PIPELINE_SIGNAL_KEYS",
     "SECTION_IMP_P1",
     "SECTION_IMP_P2",
     "SECTION_IMP_P3",

@@ -1,5 +1,8 @@
 import dataclasses
 import enum
+import hashlib
+import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,9 +13,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..logging_config import get_logger
 from .checkpoint import IntegrationCheckpoint
-from .context_strategy import (
-    ContextResolutionStrategy,
+from .context_resolution import (
+    ContextStrategy as ContextResolutionStrategy,
     StandaloneContextStrategy,
+    PipelineContextStrategy,
+    create_strategy,
 )
 from .integration_engine import IntegrationEngine
 from .protocols import (
@@ -578,6 +583,9 @@ class PrimeContractorWorkflow:
         self.seed_service_metadata: Dict[str, Any] = {}
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
+        # Validation overrides (Phase 5: --validate / --no-validate / --strict-validation)
+        self._validation_override: Optional[bool] = None  # None = use mode default
+        self.strict_validation: bool = False
         # Context strategy injection (F-007)
         if context_strategy is not None and not isinstance(context_strategy, ContextResolutionStrategy):
             raise TypeError(
@@ -604,34 +612,32 @@ class PrimeContractorWorkflow:
 
     def _resolve_context(
         self,
-        base_context: Dict[str, Any],
-        pipeline_context: Optional[Dict[str, Any]] = None,
+        feature_data: Dict[str, Any],
+        seed_data: Dict[str, Any],
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Resolve context via strategy, with fallback and validation.
 
-        Attempts strategy resolution, falls back to StandaloneContextStrategy
-        on failure (unless strict_mode is enabled), and validates the result
-        before returning.
+        Delegates to self._context_strategy.resolve_task_context() with
+        fallback to StandaloneContextStrategy on failure (unless strict_mode).
 
         Args:
-            base_context: Base context dict with existing keys/values.
-            pipeline_context: Optional enrichment data from pipeline.
+            feature_data: Feature dict (name, id, target_files, etc.).
+            seed_data: Seed dict (onboarding_metadata, architectural_context, etc.).
+            **kwargs: Passed through to resolve_task_context().
 
         Returns:
-            Resolved context dict from the strategy.
-
-        Raises:
-            Exception: If strategy fails and strict_mode is True.
-            ValueError: If resolved context is invalid and strict_mode is True.
+            gen_context dict from the strategy.
         """
         try:
-            resolved = self._context_strategy.resolve_context(
-                base_context=base_context,
-                pipeline_context=pipeline_context,
+            resolved = self._context_strategy.resolve_task_context(
+                feature_data=feature_data,
+                seed_data=seed_data,
+                **kwargs,
             )
         except Exception as exc:
             if self._strict_mode:
-                raise  # In strict mode, propagate the error
+                raise
             logger.error(
                 "Context strategy resolution failed, falling back to standalone",
                 extra={
@@ -643,12 +649,12 @@ class PrimeContractorWorkflow:
             self._emit_fallback_metric(
                 strategy_type=type(self._context_strategy).__name__
             )
-            resolved = StandaloneContextStrategy().resolve_context(
-                base_context=base_context,
-                pipeline_context=pipeline_context,
+            resolved = StandaloneContextStrategy().resolve_task_context(
+                feature_data=feature_data,
+                seed_data=seed_data,
+                **kwargs,
             )
 
-        # Validate the resolved context before using it
         if not self._is_valid_resolved_context(resolved):
             if self._strict_mode:
                 raise ValueError(
@@ -665,9 +671,10 @@ class PrimeContractorWorkflow:
             self._emit_fallback_metric(
                 strategy_type=type(self._context_strategy).__name__
             )
-            resolved = StandaloneContextStrategy().resolve_context(
-                base_context=base_context,
-                pipeline_context=pipeline_context,
+            resolved = StandaloneContextStrategy().resolve_task_context(
+                feature_data=feature_data,
+                seed_data=seed_data,
+                **kwargs,
             )
 
         return resolved
@@ -1014,6 +1021,76 @@ class PrimeContractorWorkflow:
             # Already frozen, ignore
             pass
 
+    def load_seed_context(
+        self,
+        seed_data: Dict[str, Any],
+        cli_mode: Optional[str] = None,
+    ) -> None:
+        """Load seed context from raw seed data with mode auto-detection.
+
+        Extracts context fields from the seed dictionary, auto-detects
+        execution mode from seed signals (unless cli_mode overrides), and
+        initializes the SeedContext container. Also populates backward-compat
+        legacy attributes and loads plan document text if referenced.
+
+        This replaces the ad-hoc pattern of assigning workflow.seed_onboarding,
+        workflow.seed_architectural_context, etc. in runner scripts.
+
+        Args:
+            seed_data: Raw seed JSON dictionary (from prime-context-seed.json).
+            cli_mode: CLI-specified execution mode override ('standalone' or
+                'pipeline'). When None, mode is auto-detected from seed signals.
+        """
+        # Extract context fields
+        onboarding = seed_data.get("onboarding") or {}
+        architectural_context = seed_data.get("architectural_context") or {}
+        design_calibration = seed_data.get("design_calibration") or {}
+        service_metadata = seed_data.get("service_metadata") or {}
+
+        # Determine execution mode
+        if cli_mode:
+            mode = cli_mode
+        else:
+            has_pipeline_signals = bool(
+                onboarding or architectural_context or design_calibration
+            )
+            mode = "pipeline" if has_pipeline_signals else "standalone"
+
+        logger.info(
+            "Execution mode: %s%s",
+            mode,
+            " (CLI override)" if cli_mode else " (auto-detected)",
+        )
+
+        # Initialize SeedContext (typed container)
+        self._init_seed_context(
+            execution_mode=mode,
+            onboarding_metadata=onboarding or None,
+            architectural_context=architectural_context or None,
+            design_calibration=design_calibration or None,
+        )
+
+        # Backward-compat legacy attributes (deprecated)
+        self.seed_onboarding = onboarding
+        self.seed_architectural_context = architectural_context
+        self.seed_design_calibration = design_calibration
+        self.seed_service_metadata = service_metadata
+
+        # Plan document text (not part of SeedContext — load if referenced)
+        plan_doc_path = (seed_data.get("artifacts") or {}).get(
+            "plan_document_path"
+        )
+        self.plan_document_text = None
+        if plan_doc_path:
+            try:
+                _text = Path(plan_doc_path).read_text(encoding="utf-8")
+                # Cap at 60KB to avoid blowing up LLM context (Leg 11 #48)
+                self.plan_document_text = _text[:61440]
+            except OSError as exc:
+                logger.warning(
+                    "Could not load plan document %s: %s", plan_doc_path, exc,
+                )
+
     @property
     def execution_mode(self) -> str:
         """Execution mode from seed context (via property accessor)."""
@@ -1040,34 +1117,159 @@ class PrimeContractorWorkflow:
         return self.seed_context.generation_provenance
 
     # -----------------------------------------------------------------------
-    # NOTE: _generate_code() method exists below. When encountered,
-    # it will be modified to use self._resolve_context() instead of
-    # inline context building. The modification pattern is:
-    #
-    # BEFORE (inline context assembly):
-    #   system_prompt = <... existing logic ...>
-    #   user_prompt = <... existing logic ...>
-    #
-    # AFTER (strategy delegation):
-    #   resolved = self._resolve_context(
-    #       base_context=context_seed,
-    #       pipeline_context=pipeline_context,
-    #   )
-    #   # resolved is a dict — extract prompts from it
-    #   generation_metadata["strategy_mode"] = self._context_strategy.mode
-    #
-    # Post-generation validation (after LLM call completes):
-    #   warnings = self._context_strategy.post_generation_validate(
-    #       generated_code=generated_code,
-    #       resolved_context=resolved,
-    #   )
-    #   if warnings:
-    #       logger.warning(
-    #           "Post-generation validation: %d warning(s)",
-    #           len(warnings),
-    #           extra={"warnings": warnings},
-    #       )
+    # Context building is now delegated to self._context_strategy via
+    # resolve_task_context() — see develop_feature(). Phase 2 wiring.
     # -----------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------
+    # Phase 4: Generation Manifest, Staleness Detection, Validation Hookpoint
+    # -----------------------------------------------------------------------
+
+    _MANIFEST_SCHEMA_VERSION = "1.0.0"
+    _MANIFEST_FILENAME = "generation-manifest.json"
+
+    def _compute_source_checksum(self) -> str:
+        """Compute SHA-256 of canonical seed JSON for staleness detection.
+
+        Uses sorted keys for canonical representation so that logically
+        identical seeds produce the same checksum regardless of dict ordering.
+        """
+        seed_dict = self.seed_context.to_dict() if self._seed_context else {}
+        canonical = json.dumps(seed_dict, sort_keys=True, default=str)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def _manifest_path(self) -> Path:
+        """Return the path to the generation manifest file."""
+        return self.project_root / ".startd8" / self._MANIFEST_FILENAME
+
+    def _read_existing_manifest(self) -> Optional[Dict[str, Any]]:
+        """Read existing generation manifest, returning None if absent or corrupt."""
+        path = self._manifest_path()
+        if not path.exists():
+            return None
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            logger.warning(
+                "Could not read generation manifest at %s: %s",
+                path, exc,
+            )
+            return None
+
+    def _check_staleness(self, feature: FeatureSpec) -> bool:
+        """Check if a feature can be reused from a previous generation.
+
+        Returns True if the feature should be regenerated, False if cached
+        results can be reused.
+
+        Conditions for reuse (all must hold):
+        - Pipeline mode active
+        - force_regenerate is False
+        - Existing manifest exists and is parsable
+        - source_checksum matches current seed's checksum
+        - Feature ID appears in the manifest's feature list
+
+        Returns:
+            True if feature needs regeneration, False if cache is valid.
+        """
+        if self.force_regenerate:
+            logger.info(
+                "Staleness check: forced regeneration for '%s'", feature.name,
+            )
+            return True
+
+        if self.execution_mode != ExecutionMode.PIPELINE.value:
+            return True  # Standalone always regenerates
+
+        manifest = self._read_existing_manifest()
+        if manifest is None:
+            logger.info("Staleness check: no provenance — regenerating '%s'", feature.name)
+            return True
+
+        manifest_checksum = manifest.get("source_checksum")
+        if not manifest_checksum:
+            logger.info("Staleness check: no checksum in manifest — regenerating '%s'", feature.name)
+            return True
+
+        current_checksum = self._compute_source_checksum()
+        if manifest_checksum != current_checksum:
+            logger.info(
+                "Staleness check: stale (checksum mismatch) — regenerating '%s'",
+                feature.name,
+            )
+            return True
+
+        # Check if feature was previously generated
+        features_in_manifest = manifest.get("features", {})
+        if feature.id not in features_in_manifest:
+            logger.info(
+                "Staleness check: feature '%s' not in manifest — regenerating",
+                feature.name,
+            )
+            return True
+
+        logger.info("Staleness check: current — reusing cached '%s'", feature.name)
+        return False
+
+    def _write_generation_manifest(self, result_dict: Dict[str, Any]) -> None:
+        """Write generation manifest to disk (pipeline mode only).
+
+        The manifest captures provenance for staleness detection and
+        reproducibility. Written with 0o600 permissions since it contains
+        cost data.
+
+        I/O errors are logged but do not fail the workflow.
+        """
+        if self.execution_mode != ExecutionMode.PIPELINE.value:
+            return
+
+        manifest = {
+            "schema_version": self._MANIFEST_SCHEMA_VERSION,
+            "source_checksum": self._compute_source_checksum(),
+            "execution_mode": self.execution_mode,
+            "effective_config": {
+                "mode": self.execution_mode,
+                "strategy": self._context_strategy.mode,
+                "dry_run": self.dry_run,
+                "max_retries": self.max_retries,
+                "check_truncation": self.check_truncation,
+            },
+            "features": {},
+            "total_cost_usd": self.total_cost_usd,
+            "total_input_tokens": self.total_input_tokens,
+            "total_output_tokens": self.total_output_tokens,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # Per-feature entries from integration history
+        for entry in self.integration_history:
+            fid = entry.get("feature_id", "")
+            if fid:
+                manifest["features"][fid] = {
+                    "name": entry.get("feature_name", ""),
+                    "success": entry.get("success", False),
+                    "cost_usd": entry.get("cost_usd", 0.0),
+                    "model": entry.get("model", "unknown"),
+                }
+
+        path = self._manifest_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(manifest, indent=2, default=str),
+                encoding="utf-8",
+            )
+            # Restrict permissions: cost data is sensitive
+            os.chmod(path, 0o600)
+            logger.info(
+                "Generation manifest written to %s (checksum=%s)",
+                path, manifest["source_checksum"][:12],
+            )
+        except OSError as exc:
+            logger.warning(
+                "Failed to write generation manifest to %s: %s",
+                path, exc,
+            )
 
     def check_git_status(self) -> Tuple[bool, List[str]]:
         """
@@ -1347,83 +1549,86 @@ class PrimeContractorWorkflow:
                         len(missing), feature.name, missing[:3],
                     )
 
-            gen_context: dict = {'feature_name': feature.name}
+            # Build gen_context via strategy (Phase 2: FR-004/FR-005/FR-006)
             self._current_enrichment = None
+            domain_constraints_list = None
+            output_constraint_str = None
             if feature.target_files:
-                gen_context['target_file'] = feature.target_files[0]
-                # Try domain-aware constraints via DomainChecklist
                 enrichment = self._get_domain_enrichment(feature)
                 if enrichment is not None:
                     self._current_enrichment = enrichment
-                    gen_context['domain_constraints'] = enrichment.prompt_constraints
+                    domain_constraints_list = enrichment.prompt_constraints
                     logger.info("Domain constraints applied for '%s': %d constraints (domain=%s)", feature.name, len(enrichment.prompt_constraints), enrichment.domain.value, extra={'feature_name': feature.name, 'domain': enrichment.domain.value})
                 else:
                     from startd8.workflows.builtin.prompts import get_template as _get_ctx_template
-                    gen_context['output_constraint'] = _get_ctx_template("prime_context", "output_constraint").strip()
+                    output_constraint_str = _get_ctx_template("prime_context", "output_constraint").strip()
 
-            # Mottainai Gaps 9-13: inject seed-level context into gen_context.
-            # Keys injected: project_objectives, semantic_conventions,
-            # architectural_context, implement_max_output_tokens,
-            # plan_context, domain_constraints (from per-task metadata).
-            if self.onboarding_metadata:
-                objectives = self.onboarding_metadata.get('project_objectives')
-                if isinstance(objectives, (str, list, dict)):
-                    gen_context['project_objectives'] = objectives
-                sem_conv = self.onboarding_metadata.get('semantic_conventions')
-                if isinstance(sem_conv, (dict, list)):
-                    gen_context['semantic_conventions'] = sem_conv
-            if self.architectural_context:
-                gen_context['architectural_context'] = self.architectural_context
-            # Per-task calibration: implement_max_output_tokens
-            task_cal = self.design_calibration.get(feature.id, {}) if self.design_calibration else {}
-            if isinstance(task_cal, dict) and task_cal.get('implement_max_output_tokens'):
-                gen_context['implement_max_output_tokens'] = task_cal['implement_max_output_tokens']
-            # Gap 13: plan document context
-            if self.plan_document_text:
-                gen_context['plan_context'] = self.plan_document_text
-            # IMP-P2: requirements text passthrough
-            if feature.metadata.get("requirements_text"):
-                gen_context["requirements_text"] = feature.metadata["requirements_text"]
-            # REQ-PC-014: inject service metadata for protocol/dep validation
-            if self.seed_service_metadata:
-                gen_context['service_metadata'] = self.seed_service_metadata
+            # Pre-format prior error feedback (prompt template dependency stays here)
+            prior_error_feedback = None
+            if prior_error:
+                from startd8.workflows.builtin.prompts import format_prompt as _fmt_ctx
+                prior_error_feedback = _fmt_ctx(
+                    "prime_context", "prior_error_feedback", prior_error=prior_error,
+                ).strip()
+
+            # Assemble seed data dict for strategy (avoids SeedContext import cycle)
+            seed_data = {
+                "onboarding_metadata": self.onboarding_metadata,
+                "architectural_context": self.architectural_context,
+                "design_calibration": self.design_calibration,
+                "plan_document_text": self.plan_document_text,
+                "service_metadata": self.seed_service_metadata,
+            }
+            feature_data = {
+                "name": feature.name,
+                "id": feature.id,
+                "target_files": feature.target_files,
+                "description": feature.description,
+                "metadata": feature.metadata,
+            }
+
+            gen_context = self._context_strategy.resolve_task_context(
+                feature_data=feature_data,
+                seed_data=seed_data,
+                domain_constraints=domain_constraints_list,
+                output_constraint=output_constraint_str,
+                prior_error_feedback=prior_error_feedback,
+            )
+
+            # REQ-PEM-008: Thread validation flag to LeadContractorWorkflow
+            # for spec-to-draft validation gating. Pipeline mode enables it;
+            # standalone skips (consistent with ModeConfig.enable_post_validation).
+            # CLI --validate/--no-validate override the mode default.
+            if self._validation_override is not None:
+                gen_context["_run_validators"] = self._validation_override
+            else:
+                gen_context["_run_validators"] = (
+                    self.execution_mode == ExecutionMode.PIPELINE.value
+                )
+
+            # Log service metadata injection (kept at workflow level for observability)
+            if self.seed_service_metadata and "service_metadata" in gen_context:
                 logger.info(
                     "Context injection: service_metadata for '%s' (transport=%s, deps=%d)",
                     feature.name,
                     self.seed_service_metadata.get('transport_protocol', 'unset'),
                     len(self.seed_service_metadata.get('runtime_dependencies', [])),
                 )
-            # Gap 9: per-task metadata from seed enrichment
-            if feature.metadata:
-                meta_enrichment = feature.metadata.get('_enrichment', {})
-                if isinstance(meta_enrichment, dict) and meta_enrichment:
-                    gen_context.setdefault('domain_constraints', [])
-                    if isinstance(gen_context['domain_constraints'], list):
-                        gen_context['domain_constraints'].extend(
-                            meta_enrichment.get('prompt_constraints', [])
-                        )
-                    # IMP-P3: Critical parameter elevation
-                    resolved_params = meta_enrichment.get('resolved_parameters', [])
-                    param_sources = meta_enrichment.get('parameter_sources', [])
-                    if resolved_params or param_sources:
-                        cp_lines = []
-                        for rp in resolved_params:
-                            kv = rp.get('key_value', '')
-                            if kv:
-                                cp_lines.append(kv)
-                        for ps in param_sources:
-                            kv = ps.get('key_value', '')
-                            if kv and kv not in cp_lines:
-                                cp_lines.append(kv)
-                        if cp_lines:
-                            gen_context['critical_parameters'] = cp_lines
-                            gen_context['resolved_parameters'] = resolved_params
 
-            if prior_error:
-                from startd8.workflows.builtin.prompts import format_prompt as _fmt_ctx
-                gen_context['prior_error_feedback'] = _fmt_ctx(
-                    "prime_context", "prior_error_feedback", prior_error=prior_error,
-                ).strip()
+            logger.info(
+                "Context resolved via %s strategy for '%s' (%d keys)",
+                self._context_strategy.mode,
+                feature.name,
+                len(gen_context),
+                extra={"strategy_mode": self._context_strategy.mode, "context_keys": list(gen_context.keys())},
+            )
+
+            # Phase 4: Staleness detection — skip generation if cached result is current
+            if not self._check_staleness(feature):
+                feature.status = FeatureStatus.GENERATED
+                self._save_queue_state_with_mode()
+                return gen_context
+
             result: GenerationResult = self.code_generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]
@@ -1633,7 +1838,10 @@ class PrimeContractorWorkflow:
             }
         )
         self.instrumentor.emit_insight(insight_type='workflow_completed', summary=f'Workflow complete: {features_succeeded}/{features_processed} succeeded', confidence=1.0, processed=features_processed, succeeded=features_succeeded, failed=features_failed, total_cost_usd=self.total_cost_usd)
-        return {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
+        # Phase 4: Write generation manifest (pipeline mode only)
+        result_dict = {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
+        self._write_generation_manifest(result_dict)
+        return result_dict
 
     def run_single_feature(self, feature_id: str) -> bool:
         """Run integration for a single specific feature."""

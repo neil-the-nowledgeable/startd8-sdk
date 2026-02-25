@@ -281,7 +281,18 @@ class IntegrationResult:
 
 
 class ModelRole(str, Enum):
-    """Role a model plays in the contractor pipeline."""
+    """Role a model plays in the contractor pipeline.
+
+    Tier mapping (numerical aliases for the 3-tier Artisan architecture):
+
+    | Tier | Alias       | Role     | Purpose                                |
+    |------|-------------|----------|----------------------------------------|
+    | T1   | Economy     | DRAFT    | Fast draft generation, cheap retries   |
+    | T2   | Standard    | VALIDATE | Refinement, validation, quality gating |
+    | T3   | Premium     | REVIEW   | Final review, arbitration, design      |
+
+    See ``T1_ECONOMY``, ``T2_STANDARD``, ``T3_PREMIUM`` module-level aliases.
+    """
     DRAFT = 'draft'
     VALIDATE = 'validate'
     REVIEW = 'review'
@@ -729,6 +740,11 @@ MODEL_CATALOG: Dict[str, ModelCatalogEntry] = {
     ]
 }
 
+# ── Tier aliases (3-tier Artisan architecture) ──────────────────────
+T1_ECONOMY = DRAFT_MODEL_CLAUDE_HAIKU
+T2_STANDARD = VALIDATE_MODEL_CLAUDE_SONNET
+T3_PREMIUM = REVIEW_MODEL_CLAUDE_OPUS
+
 __all__ = [
     'ModelRole', 'LessonCategory', 'LessonSeverity', 'SortOrder',
     'LessonQuery', 'Lesson', 'LessonResult', 'ModelCatalogEntry',
@@ -737,6 +753,7 @@ __all__ = [
     'IntegrationStatus', 'EXIT_SIZE_REGRESSION',
     'DRAFT_MODEL_CLAUDE_HAIKU', 'VALIDATE_MODEL_CLAUDE_SONNET',
     'REVIEW_MODEL_CLAUDE_OPUS',
+    'T1_ECONOMY', 'T2_STANDARD', 'T3_PREMIUM',
     'MODEL_CATALOG',
     'get_models_by_role', 'get_draft_models', 'get_validate_models',
     'get_review_models', 'get_model_by_id',

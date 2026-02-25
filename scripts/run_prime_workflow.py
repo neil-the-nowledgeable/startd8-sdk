@@ -148,8 +148,27 @@ def main() -> int:
         "--force-regenerate", action="store_true",
         help=(
             "Force regeneration of all features, ignoring cached/existing generated files. "
-            "Overrides Mottainai reuse logic."
+            "Overrides Mottainai reuse logic and staleness detection."
         ),
+    )
+    parser.add_argument(
+        "--mode", choices=["standalone", "pipeline"], default=None,
+        help=(
+            "Execution mode: 'standalone' (zero-change default) or 'pipeline' "
+            "(exploit rich pipeline context). Default: auto-detect from seed content."
+        ),
+    )
+    parser.add_argument(
+        "--validate", action="store_true", default=None,
+        help="Enable post-generation validation (overrides mode default)",
+    )
+    parser.add_argument(
+        "--no-validate", action="store_true",
+        help="Disable post-generation validation (overrides mode default)",
+    )
+    parser.add_argument(
+        "--strict-validation", action="store_true",
+        help="Non-zero exit on validation failures (implies --validate)",
     )
     parser.add_argument(
         "--verbose", "-v", action="store_true",
@@ -157,6 +176,13 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+
+    # Conflict detection for validation flags
+    if args.validate and args.no_validate:
+        parser.error("--validate and --no-validate are mutually exclusive")
+    if args.strict_validation and args.no_validate:
+        parser.error("--strict-validation and --no-validate are mutually exclusive")
+
     setup_logging(verbose=args.verbose)
 
     logger = logging.getLogger("run_prime_workflow")
@@ -332,6 +358,7 @@ def main() -> int:
         allow_dirty=args.allow_dirty,
         auto_stash=args.auto_stash,
         code_generator=code_generator,
+        cli_mode=args.mode,
     )
 
     # Load features from seed
@@ -339,26 +366,21 @@ def main() -> int:
     added = workflow.queue.add_features_from_seed(seed_path)
     logger.info("Loaded %d features from seed", len(added))
 
-    # Mottainai Gap 10-13: stash seed-level context on the workflow so
-    # _generate_code can inject it into gen_context.
+    # Load seed context into the workflow (replaces ad-hoc attribute stashing).
     # Re-read required: seed_path may have changed to an enriched version
     # after the auto-enrichment block above.
     seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
-    workflow.seed_onboarding = seed_data.get("onboarding") or {}
-    workflow.seed_architectural_context = seed_data.get("architectural_context") or {}
-    workflow.seed_design_calibration = seed_data.get("design_calibration") or {}
-    workflow.seed_service_metadata = seed_data.get("service_metadata") or {}
+    workflow.load_seed_context(seed_data, cli_mode=args.mode)
     workflow.force_regenerate = args.force_regenerate
-    # Load plan document text for REFINE suggestion injection (Gap 13)
-    plan_doc_path = (seed_data.get("artifacts") or {}).get("plan_document_path")
-    workflow.plan_document_text = None
-    if plan_doc_path:
-        try:
-            _text = Path(plan_doc_path).read_text(encoding="utf-8")
-            # Cap at 60KB to avoid blowing up LLM context (Leg 11 #48)
-            workflow.plan_document_text = _text[:61440]
-        except OSError as exc:
-            logger.warning("Could not load plan document %s: %s", plan_doc_path, exc)
+
+    # Wire validation overrides from CLI flags (Phase 5: REQ-PEM-014)
+    if args.strict_validation:
+        workflow._validation_override = True  # --strict-validation implies --validate
+        workflow.strict_validation = True
+    elif args.validate:
+        workflow._validation_override = True
+    elif args.no_validate:
+        workflow._validation_override = False
 
     # Reset failed and blocked features so they are retried.
     # The state file persists FAILED/BLOCKED from prior runs, but the
@@ -413,7 +435,12 @@ def main() -> int:
     logger.info("Seed: %s", seed_path)
     logger.info("Project root: %s", project_root)
     logger.info("Output dir: %s", output_dir)
+    logger.info("Execution mode: %s", workflow.execution_mode)
     logger.info("Dry run: %s", args.dry_run)
+    if workflow._validation_override is not None:
+        logger.info("Validation override: %s", workflow._validation_override)
+    if workflow.strict_validation:
+        logger.info("Strict validation: enabled (non-zero exit on failures)")
     if args.cost_budget is not None:
         logger.info("Cost budget: $%.2f", args.cost_budget)
 
@@ -454,6 +481,7 @@ def main() -> int:
         "aborted": result.get("aborted", False),
         "abort_reason": result.get("abort_reason"),
         "dry_run": args.dry_run,
+        "execution_mode": workflow.execution_mode,
         "seed_path": str(seed_path),
         "task_filter": task_filter,
         "history": result.get("history", []),
@@ -472,6 +500,18 @@ def main() -> int:
         return 1
     if result.get("failed", 0) > 0:
         return 1
+
+    # --strict-validation: non-zero exit if any feature has validation failures
+    if args.strict_validation:
+        for entry in result.get("history", []):
+            validation = entry.get("validation", {})
+            if validation.get("failures"):
+                logger.error(
+                    "Strict validation: feature '%s' has validation failures",
+                    entry.get("feature_name", entry.get("feature_id", "?")),
+                )
+                return 1
+
     return 0
 
 
