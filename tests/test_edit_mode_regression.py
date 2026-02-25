@@ -903,3 +903,238 @@ class TestPI001Regression:
         assert result.skipped_files[0]["reason"] == "size_regression"
         ratio = result.skipped_files[0]["ratio"]
         assert 0.39 < ratio < 0.42  # ~40.3%
+
+
+# ===========================================================================
+# REQ-EMM-001..010: Manifest-backed edit/create mode classification
+# ===========================================================================
+
+class TestManifestBackedEditMode:
+    """Tests for manifest_registry integration in _classify_edit_mode().
+
+    Validates REQ-EMM-001 through REQ-EMM-010.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _import_handler(self):
+        from startd8.contractors.context_seed_handlers import (
+            EditModeClassification,
+            ImplementPhaseHandler,
+            PerFileMode,
+        )
+        self.classify = ImplementPhaseHandler._classify_edit_mode
+        self.EditModeClassification = EditModeClassification
+        self.PerFileMode = PerFileMode
+
+    @staticmethod
+    def _mock_registry(element_counts=None, fqn_set=None):
+        """Build a mock ManifestRegistry with configurable returns."""
+        registry = MagicMock()
+        _counts = element_counts or {}
+        _fqns = fqn_set or set()
+        registry.public_element_count.side_effect = lambda fpath: _counts.get(fpath, 0)
+        registry.fqn_exists.side_effect = lambda fqn: fqn in _fqns
+        return registry
+
+    # --- REQ-EMM-001: public_element_count signal ---
+
+    def test_manifest_signal_consumed_when_available(self):
+        """REQ-EMM-001: manifest with elements > 0 adds weight >= 2, mode=edit."""
+        task = FakeSeedTask(target_files=["src/module.py"])
+        registry = self._mock_registry(element_counts={"src/module.py": 5})
+        result = self.classify(
+            task, scaffold={}, design_mode_summary={},
+            manifest_registry=registry,
+        )
+        assert result.mode == "edit"
+        pf = result.per_file["src/module.py"]
+        assert pf.edit_weight >= 2
+        assert pf.manifest_element_count == 5
+
+    def test_manifest_element_count_zero_no_contribution(self):
+        """Zero element count adds no weight."""
+        task = FakeSeedTask(target_files=["src/module.py"])
+        registry = self._mock_registry(element_counts={"src/module.py": 0})
+        result = self.classify(
+            task, scaffold={}, design_mode_summary={},
+            manifest_registry=registry,
+        )
+        assert result.mode == "create"
+        pf = result.per_file["src/module.py"]
+        assert pf.manifest_element_count == 0
+        assert pf.edit_weight == 0
+
+    # --- REQ-EMM-002: fqn_exists signal (PI-3) ---
+
+    def test_fqn_exists_with_api_signatures(self):
+        """REQ-EMM-002: matching FQNs add +2 edit weight."""
+        task = FakeSeedTask(
+            target_files=["src/module.py"],
+            api_signatures=["mypackage.MyClass.my_method"],
+        )
+        registry = self._mock_registry(
+            fqn_set={"mypackage.MyClass.my_method"},
+        )
+        result = self.classify(
+            task, scaffold={}, design_mode_summary={},
+            manifest_registry=registry,
+        )
+        assert result.mode == "edit"
+        pf = result.per_file["src/module.py"]
+        assert pf.edit_weight >= 2
+
+    def test_fqn_exists_no_match(self):
+        """Non-matching FQN adds no contribution."""
+        task = FakeSeedTask(
+            target_files=["src/module.py"],
+            api_signatures=["nonexistent.Function"],
+        )
+        registry = self._mock_registry(fqn_set=set())
+        result = self.classify(
+            task, scaffold={}, design_mode_summary={},
+            manifest_registry=registry,
+        )
+        assert result.mode == "create"
+        pf = result.per_file["src/module.py"]
+        assert pf.edit_weight == 0
+
+    # --- REQ-EMM-003: graceful degradation when manifest_registry=None ---
+
+    def test_graceful_degradation_manifest_none(self):
+        """REQ-EMM-003: manifest_registry=None produces identical results to 5-signal system."""
+        task = FakeSeedTask(
+            existing_content_hash="abc123",
+            target_files=["src/module.py"],
+        )
+        scaffold = {"existing_target_files": ["src/module.py"]}
+        # Without manifest
+        result_without = self.classify(
+            task, scaffold=scaffold, design_mode_summary={},
+        )
+        # With manifest=None explicitly
+        result_with_none = self.classify(
+            task, scaffold=scaffold, design_mode_summary={},
+            manifest_registry=None,
+        )
+        assert result_without.mode == result_with_none.mode
+        assert result_without.confidence == result_with_none.confidence
+        pf_without = result_without.per_file["src/module.py"]
+        pf_with_none = result_with_none.per_file["src/module.py"]
+        assert pf_without.edit_weight == pf_with_none.edit_weight
+        assert pf_without.manifest_element_count == 0
+        assert pf_with_none.manifest_element_count == 0
+
+    # --- REQ-EMM-005: PerFileMode serialization ---
+
+    def test_per_file_mode_serialization_with_manifest_field(self):
+        """REQ-EMM-005: round-trip to_dict/from_dict includes manifest_element_count."""
+        pf = self.PerFileMode(
+            mode="edit", staleness="fresh", has_hash=True,
+            edit_weight=4, manifest_element_count=7,
+        )
+        d = pf.to_dict()
+        assert d["manifest_element_count"] == 7
+        restored = self.PerFileMode.from_dict(d)
+        assert restored.manifest_element_count == 7
+        assert restored.mode == "edit"
+
+    def test_per_file_mode_from_dict_missing_manifest_field(self):
+        """Backward compat: old data without manifest_element_count defaults to 0."""
+        old_data = {
+            "mode": "edit", "staleness": "", "has_hash": True, "edit_weight": 2,
+        }
+        restored = self.PerFileMode.from_dict(old_data)
+        assert restored.manifest_element_count == 0
+
+    # --- REQ-EMM-009: classification round-trip with manifest ---
+
+    def test_classification_round_trip_with_manifest(self):
+        """Full EditModeClassification JSON round-trip with manifest_element_count."""
+        import json
+        original = self.EditModeClassification(
+            mode="edit",
+            per_file={
+                "src/a.py": self.PerFileMode(
+                    mode="edit", staleness="fresh", has_hash=True,
+                    edit_weight=6, manifest_element_count=12,
+                ),
+            },
+            confidence="high",
+            signal_conflicts=[],
+        )
+        serialized = json.dumps(original.to_dict())
+        restored = self.EditModeClassification.from_dict(json.loads(serialized))
+        assert restored.per_file["src/a.py"].manifest_element_count == 12
+
+    # --- Exception handling ---
+
+    def test_manifest_exception_handling(self):
+        """AttributeError on manifest → graceful fallback, count=0."""
+        registry = MagicMock()
+        registry.public_element_count.side_effect = AttributeError("no such method")
+        registry.fqn_exists.side_effect = AttributeError("no such method")
+        task = FakeSeedTask(
+            target_files=["src/module.py"],
+            api_signatures=["some.Fqn"],
+        )
+        result = self.classify(
+            task, scaffold={}, design_mode_summary={},
+            manifest_registry=registry,
+        )
+        # Should not raise — graceful degradation
+        assert result.mode == "create"
+        pf = result.per_file["src/module.py"]
+        assert pf.manifest_element_count == 0
+        assert pf.edit_weight == 0
+
+    # --- Signal conflict: manifest T1 edit vs design T2 create ---
+
+    def test_signal_conflict_manifest_edit_design_create(self):
+        """Manifest T1 edit vs design T2 create → conflict logged, T1 wins."""
+        task = FakeSeedTask(
+            target_files=["src/module.py"],
+        )
+        registry = self._mock_registry(element_counts={"src/module.py": 3})
+        result = self.classify(
+            task, scaffold={}, design_mode_summary={task.task_id: "create"},
+            manifest_registry=registry,
+        )
+        assert result.mode == "edit"
+        assert len(result.signal_conflicts) > 0
+        assert "Signal conflict" in result.signal_conflicts[0]
+
+    # --- Confidence stacking ---
+
+    def test_high_confidence_with_manifest_signal(self):
+        """Manifest + hash → weight >= 4 → confidence=high."""
+        task = FakeSeedTask(
+            existing_content_hash="abc123",
+            target_files=["src/module.py"],
+        )
+        registry = self._mock_registry(element_counts={"src/module.py": 8})
+        result = self.classify(
+            task, scaffold={}, design_mode_summary={},
+            manifest_registry=registry,
+        )
+        assert result.confidence == "high"
+        pf = result.per_file["src/module.py"]
+        assert pf.edit_weight >= 4
+
+    # --- Existing tests unchanged ---
+
+    def test_existing_tests_unchanged(self):
+        """All original 5-signal behavior preserved when manifest_registry defaults to None."""
+        # Greenfield — no signals → create
+        task = FakeSeedTask()
+        result = self.classify(task, scaffold={}, design_mode_summary={})
+        assert result.mode == "create"
+
+        # Full edit signals — high confidence
+        task2 = FakeSeedTask(
+            existing_content_hash="abc123",
+            target_files=["src/module.py"],
+        )
+        scaffold = {"existing_target_files": ["src/module.py"]}
+        result2 = self.classify(task2, scaffold=scaffold, design_mode_summary={})
+        assert result2.mode == "edit"
+        assert result2.confidence == "high"

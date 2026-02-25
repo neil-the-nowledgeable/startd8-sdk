@@ -230,6 +230,7 @@ class PerFileMode:
     staleness: str  # "fresh", "stale", or ""
     has_hash: bool
     edit_weight: int = 0
+    manifest_element_count: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -237,6 +238,7 @@ class PerFileMode:
             "staleness": self.staleness,
             "has_hash": self.has_hash,
             "edit_weight": self.edit_weight,
+            "manifest_element_count": self.manifest_element_count,
         }
 
     @classmethod
@@ -246,6 +248,7 @@ class PerFileMode:
             staleness=data.get("staleness", ""),
             has_hash=data.get("has_hash", False),
             edit_weight=data.get("edit_weight", 0),
+            manifest_element_count=data.get("manifest_element_count", 0),
         )
 
 
@@ -4899,21 +4902,29 @@ class Test{class_name}:
         scaffold: dict[str, Any],
         design_mode_summary: dict[str, str],
         design_mode_evidence: dict[str, dict[str, Any]] | None = None,
+        manifest_registry: Any = None,
     ) -> EditModeClassification:
         """Classify each target file as 'create' or 'edit' using upstream signals.
 
-        Consumes 5+ signals computed but previously unconsumed by IMPLEMENT:
+        Consumes 6+ signals computed but previously unconsumed by IMPLEMENT:
           - scaffold["existing_target_files"] (Tier 1, weight 2)
           - task.existing_content_hash (Tier 1, weight 2)
+          - manifest_registry.public_element_count (Tier 1, weight 2) [REQ-EMM-001]
+          - manifest_registry.fqn_exists for api_signatures (Tier 1, weight 2) [REQ-EMM-002]
           - design_mode_summary[task_id] (Tier 2, weight 1; elevated to
             weight 2 when design_mode_evidence has >=2 corroborating signals)
           - scaffold["staleness_classification"] (Tier 2, weight 1)
           - task.file_scope (Tier 2, weight 1)
 
+        When manifest_registry is None, produces identical results to the
+        original 5-signal system (REQ-EMM-003).
+
         Args:
             design_mode_evidence: Gap 4 enrichment — when provided with >=2
                 evidence signals, the design_mode_summary weight is elevated
                 from Tier 2 (1) to Tier 1 (2), reflecting higher confidence.
+            manifest_registry: Optional ManifestRegistry instance providing
+                AST-based code intelligence (fqn_exists, public_element_count).
 
         Returns EditModeClassification with typed fields for mode, per_file,
         confidence, and signal_conflicts.
@@ -4976,6 +4987,43 @@ class Test{class_name}:
                 edit_weight += 1
                 file_signals_edit.append("file_scope=primary")
 
+            # Tier 1 (weight 2): manifest.public_element_count (REQ-EMM-001)
+            _manifest_elem_count = 0
+            if manifest_registry is not None:
+                try:
+                    _manifest_elem_count = manifest_registry.public_element_count(fpath)
+                    if _manifest_elem_count > 0:
+                        edit_weight += 2
+                        file_signals_edit.append(
+                            f"manifest.public_element_count={_manifest_elem_count}"
+                        )
+                        logger.info(
+                            "Edit-mode manifest signal: %s has %d public elements",
+                            fpath, _manifest_elem_count,
+                        )
+                except (AttributeError, TypeError, OSError):
+                    pass  # graceful degradation
+
+            # Tier 1 (weight 2): manifest.fqn_exists for api_signatures (REQ-EMM-002, PI-3)
+            if manifest_registry is not None and task.api_signatures:
+                try:
+                    _matched_fqns = [
+                        s for s in task.api_signatures
+                        if manifest_registry.fqn_exists(s)
+                    ]
+                    if _matched_fqns:
+                        edit_weight += 2
+                        file_signals_edit.append(
+                            f"manifest.fqn_exists={len(_matched_fqns)}/{len(task.api_signatures)}"
+                        )
+                        logger.info(
+                            "Edit-mode manifest signal: %d/%d FQNs confirmed for task %s: %s",
+                            len(_matched_fqns), len(task.api_signatures),
+                            task.task_id, _matched_fqns[:3],
+                        )
+                except (AttributeError, TypeError):
+                    pass  # graceful degradation
+
             # Classify this file
             if edit_weight >= 1:
                 file_mode = "edit"
@@ -4983,7 +5031,7 @@ class Test{class_name}:
                 file_mode = "create"
 
             # Detect Tier 1 vs Tier 2 conflicts
-            tier1_edit = has_hash or in_existing
+            tier1_edit = has_hash or in_existing or _manifest_elem_count > 0
             tier2_create = design_mode == "create"
             if tier1_edit and tier2_create:
                 conflict = (
@@ -5000,6 +5048,7 @@ class Test{class_name}:
                 staleness=staleness,
                 has_hash=has_hash,
                 edit_weight=edit_weight,
+                manifest_element_count=_manifest_elem_count,
             )
 
         # Task-level aggregation: "edit" if ANY per_file is "edit"
@@ -6083,6 +6132,15 @@ class Test{class_name}:
             # PCA-501: derive project name from plan_title with fallback
             _project_name = context.get("plan_title") or project_root.name
 
+            # REQ-EMM-007: Resolve manifest registry BEFORE classification
+            # so it is available as the 6th signal in _classify_edit_mode().
+            _impl_manifest_registry = None
+            if self.config.manifest_consumption_enabled:
+                _impl_manifest_registry = (
+                    self.config.manifest_registry
+                    or context.get("project_manifests")
+                )
+
             # PCA-600: Build per-task edit mode classification from upstream signals
             scaffold = context.get("scaffold", {})
             design_mode_summary = context.get("design_mode_summary", {})
@@ -6092,13 +6150,15 @@ class Test{class_name}:
                 edit_mode_map[task.task_id] = self._classify_edit_mode(
                     task, scaffold, design_mode_summary,
                     design_mode_evidence=_mode_evidence,
+                    manifest_registry=_impl_manifest_registry,
                 )
             edit_tasks = sum(1 for v in edit_mode_map.values() if v.mode == "edit")
             conflict_tasks = sum(1 for v in edit_mode_map.values() if v.signal_conflicts)
+            _signal_count = 6 if _impl_manifest_registry is not None else 5
             logger.info(
                 "IMPLEMENT: edit mode classification: %d edit, %d create "
-                "(%d with signal conflicts) (from 5 upstream signals, 2-tier weighted consensus)",
-                edit_tasks, len(tasks) - edit_tasks, conflict_tasks,
+                "(%d with signal conflicts) (from %d upstream signals, 2-tier weighted consensus)",
+                edit_tasks, len(tasks) - edit_tasks, conflict_tasks, _signal_count,
             )
             # PCA-600 AC 9: Persist structured classifications for post-hoc debugging
             context["edit_mode_classifications"] = {
@@ -6129,13 +6189,8 @@ class Test{class_name}:
 
             # Gap 1: Phantom element warnings — elements referenced in design
             # but not found in manifest at IMPLEMENT time.
+            # NOTE: _impl_manifest_registry was resolved above (REQ-EMM-007).
             _phantom_warnings: dict[str, list[str]] = {}
-            _impl_manifest_registry = None
-            if self.config.manifest_consumption_enabled:
-                _impl_manifest_registry = (
-                    self.config.manifest_registry
-                    or context.get("project_manifests")
-                )
             _design_refs = context.get("design_referenced_elements", {})
             if _design_refs and _impl_manifest_registry is not None:
                 for tid, file_refs in _design_refs.items():

@@ -666,7 +666,7 @@ def _heuristic_assess_complexity(
     When manifest_registry is available (Phase 4 PI-1 through PI-3):
     - PI-1: api_surface uses manifest public_element_count instead of feature_count * 8
     - PI-2: cross_file_deps uses manifest dependency_graph for transitive deps
-    - PI-3: (future) modification_type classification via fqn_exists
+    - PI-3: modification_type classification via fqn_exists (ImplementPhaseHandler._classify_edit_mode, REQ-EMM-001/002)
     """
     feature_count = len(parsed_plan.features)
 
