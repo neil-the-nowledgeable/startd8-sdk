@@ -5733,50 +5733,55 @@ class Test{class_name}:
                 )
 
             if len(task.target_files) > 1:
-                file_list = ", ".join(task.target_files)
-                prompt_constraints.append(
-                    f"MULTI-FILE OUTPUT REQUIRED — you MUST produce a SEPARATE fenced "
-                    f"code block for EACH of these {len(task.target_files)} target files: "
-                    f"{file_list}. "
-                    f"First line of each block MUST be a comment with the full path "
-                    f"(e.g. # src/package/__init__.py). "
-                    f"If a file is a shared module implemented by downstream tasks, "
-                    f"produce a minimal stub (imports, docstring, empty registrations). "
-                    f"Every target file MUST have its own code block — omitting any "
-                    f"file will cause the build to fail."
-                )
-                # Layer 3 (defense-in-depth): dedicated __init__.py constraint.
-                # Models commonly skip __init__.py because it's "just imports".
-                # This makes the requirement explicit and impossible to miss.
-                init_files = [f for f in task.target_files if f.endswith("__init__.py")]
-                if init_files:
-                    init_list = ", ".join(init_files)
-                    prompt_constraints.append(
-                        f"PACKAGE __init__.py REQUIRED — {init_list} MUST have "
-                        f"its own separate code block. Even a minimal file with "
-                        f"imports and __all__ is required. The build will FAIL "
-                        f"if any __init__.py is missing its own block."
-                    )
+                _task_mode = "create"
+                if edit_mode_map and task.task_id in edit_mode_map:
+                    _task_mode = edit_mode_map[task.task_id].mode
 
-                # ── Downstream file detection ──────────────────────────────
-                # Reuse the already-computed downstream_map from Gate 2c
-                # (via _reconcile_design_downstream) instead of re-calling
-                # _detect_downstream_files() on the same design doc text.
-                _task_downstream_prompt = downstream_map.get(task.task_id, [])
-                if _task_downstream_prompt:
-                    ds_list = ", ".join(_task_downstream_prompt)
+                if _task_mode != "edit":
+                    file_list = ", ".join(task.target_files)
                     prompt_constraints.append(
-                        f"DOWNSTREAM FILE STUBS — the following files are marked "
-                        f"as shared/downstream in the design doc: {ds_list}. "
-                        f"You MUST still produce a code block for each one, but "
-                        f"it can be a MINIMAL stub: module docstring, imports, "
-                        f"empty __all__, and placeholder functions/classes. "
-                        f"A 5-line stub is acceptable — omitting the file is NOT."
+                        f"MULTI-FILE OUTPUT REQUIRED — you MUST produce a SEPARATE fenced "
+                        f"code block for EACH of these {len(task.target_files)} target files: "
+                        f"{file_list}. "
+                        f"First line of each block MUST be a comment with the full path "
+                        f"(e.g. # src/package/__init__.py). "
+                        f"If a file is a shared module implemented by downstream tasks, "
+                        f"produce a minimal stub (imports, docstring, empty registrations). "
+                        f"Every target file MUST have its own code block — omitting any "
+                        f"file will cause the build to fail."
                     )
-                    logger.info(
-                        "IMPLEMENT: detected %d downstream files for task %s: %s",
-                        len(_task_downstream_prompt), task.task_id, _task_downstream_prompt,
-                    )
+                    # Layer 3 (defense-in-depth): dedicated __init__.py constraint.
+                    # Models commonly skip __init__.py because it's "just imports".
+                    # This makes the requirement explicit and impossible to miss.
+                    init_files = [f for f in task.target_files if f.endswith("__init__.py")]
+                    if init_files:
+                        init_list = ", ".join(init_files)
+                        prompt_constraints.append(
+                            f"PACKAGE __init__.py REQUIRED — {init_list} MUST have "
+                            f"its own separate code block. Even a minimal file with "
+                            f"imports and __all__ is required. The build will FAIL "
+                            f"if any __init__.py is missing its own block."
+                        )
+
+                    # ── Downstream file detection ──────────────────────────────
+                    # Reuse the already-computed downstream_map from Gate 2c
+                    # (via _reconcile_design_downstream) instead of re-calling
+                    # _detect_downstream_files() on the same design doc text.
+                    _task_downstream_prompt = downstream_map.get(task.task_id, [])
+                    if _task_downstream_prompt:
+                        ds_list = ", ".join(_task_downstream_prompt)
+                        prompt_constraints.append(
+                            f"DOWNSTREAM FILE STUBS — the following files are marked "
+                            f"as shared/downstream in the design doc: {ds_list}. "
+                            f"You MUST still produce a code block for each one, but "
+                            f"it can be a MINIMAL stub: module docstring, imports, "
+                            f"empty __all__, and placeholder functions/classes. "
+                            f"A 5-line stub is acceptable — omitting the file is NOT."
+                        )
+                        logger.info(
+                            "IMPLEMENT: detected %d downstream files for task %s: %s",
+                            len(_task_downstream_prompt), task.task_id, _task_downstream_prompt,
+                        )
 
             # ── Gate 2c: shrink file_targets for downstream files ────────
             # If Gate 2c pre-stubbed some files, remove them from the
@@ -6856,7 +6861,7 @@ class Test{class_name}:
             # back, every task failed (e.g. API overloaded, auth error).
             # Raise so the orchestrator marks the phase FAILED instead of
             # silently passing empty results to INTEGRATE/TEST/REVIEW.
-            if chunks and not generation_results:
+            if chunks and not generation_results and not self.config.walkthrough:
                 failed_reports = [
                     r for r in output.get("task_reports", [])
                     if r.get("status") == "generation_failed"
@@ -9912,6 +9917,43 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     review["truncation_confidence"] = task_truncation.get("max_confidence", 0.0)
                     review["truncation_source"] = task_truncation.get("source", "unknown")
 
+                # Phase 5: Run ForwardManifest Validator if applicable
+                if self.config.manifest_consumption_enabled:
+                    registry = self.config.manifest_registry
+                    forward_manifest = context.get("forward_manifest")
+                    if registry is not None and forward_manifest is not None:
+                        from startd8.forward_manifest_validator import validate_forward_manifest
+                        
+                        try:
+                            fm_violations = validate_forward_manifest(forward_manifest, registry)
+                            
+                            error_violations = [v for v in fm_violations if v.severity == "error"]
+                            warning_violations = [v for v in fm_violations if v.severity == "warning"]
+                            
+                            if error_violations:
+                                review["passed"] = False
+                                review["verdict"] = "FAIL"
+                                review.setdefault("issues", []).extend([
+                                    f"[BLOCKING] Contract Violation: {v.violation_type} ({v.contract_id}) - Expected: {v.expected}, Actual: {v.actual}" 
+                                    for v in error_violations
+                                ])
+                                logger.warning(
+                                    "REVIEW: task %s failed ForwardManifest validation with %d error(s)", 
+                                    task.task_id, len(error_violations)
+                                )
+                                
+                            if warning_violations:
+                                review.setdefault("issues", []).extend([
+                                    f"[MINOR] Contract Advisory: {v.violation_type} ({v.contract_id}) - {v.expected}" 
+                                    for v in warning_violations
+                                ])
+                                
+                        except Exception as val_error:
+                            logger.error(
+                                "REVIEW: ForwardManifest validation engine failed for %s: %s", 
+                                task.task_id, val_error, exc_info=True
+                            )
+                
                 total_cost += review.get("cost", 0.0)
                 if review.get("passed", False):
                     total_passed += 1
