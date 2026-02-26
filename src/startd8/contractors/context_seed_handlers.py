@@ -2212,6 +2212,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         manifest_context_budget: int = 2000,
         # Phase 6: Call graph context budget for DESIGN (CG-DS-4)
         call_graph_context_budget: int = 2000,
+        # Phase 5: Introspect enrichment toggle for DESIGN (DS-1..DS-4)
+        enable_introspect: bool = False,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -3821,6 +3823,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             manifest_context_budget=self.config.manifest_context_budget,
                             # Phase 6: Call graph budget for DESIGN
                             call_graph_context_budget=self.config.call_graph_context_budget,
+                            # Phase 5: Introspect enrichment toggle for DESIGN
+                            enable_introspect=self.config.enable_introspect,
                         )
                         _wt_capture_dir: Optional[Path] = None
                         if self.config.walkthrough:
