@@ -324,6 +324,40 @@ def main() -> int:
         "--walkthrough", action="store_true",
         help="Build and persist all LLM prompts to .startd8/walkthrough/ without calling LLMs",
     )
+    complexity_routing_group = parser.add_mutually_exclusive_group()
+    complexity_routing_group.add_argument(
+        "--complexity-routing", dest="complexity_routing_enabled", action="store_true",
+        help="Enable complexity-driven model routing (CMR) for IMPLEMENT chunks",
+    )
+    complexity_routing_group.add_argument(
+        "--no-complexity-routing", dest="complexity_routing_enabled", action="store_false",
+        help="Disable complexity-driven model routing (force all chunks to tier_2)",
+    )
+    parser.set_defaults(complexity_routing_enabled=None)
+    parser.add_argument(
+        "--tier3-agent", default=None,
+        help="Tier 3 drafter agent spec override (defaults to Opus)",
+    )
+    parser.add_argument(
+        "--complexity-blast-radius-tier3", type=int, default=None,
+        help="Blast radius threshold to trigger Tier 3",
+    )
+    parser.add_argument(
+        "--complexity-loc-tier1-max", type=int, default=None,
+        help="Maximum estimated LOC for Tier 1 eligibility",
+    )
+    parser.add_argument(
+        "--complexity-loc-tier3-min", type=int, default=None,
+        help="Minimum estimated LOC to trigger Tier 3",
+    )
+    parser.add_argument(
+        "--complexity-caller-tier3", type=int, default=None,
+        help="Caller-count threshold to trigger Tier 3 in edit mode",
+    )
+    parser.add_argument(
+        "--complexity-tier2-gate-escalation", action="store_true",
+        help="Tier 2 gate mode: skip T2 by default and escalate once only on gate issues",
+    )
     parser.add_argument(
         "--enable-prompt-caching", action="store_true",
         help="Enable Anthropic prompt caching (90%% input cost reduction on cache hits)",
@@ -506,9 +540,17 @@ def main() -> int:
     )
 
     # Post-mortem evaluation
+    parser.set_defaults(run_postmortem=True)
     parser.add_argument(
-        "--postmortem", action="store_true",
-        help="Run post-mortem evaluation after workflow completes",
+        "--postmortem", dest="run_postmortem", action="store_true",
+        help=(
+            "Run post-mortem evaluation after workflow finalizes. "
+            "Default behavior (kept for backward compatibility)."
+        ),
+    )
+    parser.add_argument(
+        "--no-postmortem", dest="run_postmortem", action="store_false",
+        help="Disable automatic post-mortem evaluation after FINALIZE.",
     )
     parser.add_argument(
         "--postmortem-llm", type=str, default=None,
@@ -521,8 +563,18 @@ def main() -> int:
         "--postmortem-sync", action="store_true",
         help="Wait for post-mortem to finish before exiting (default: async)",
     )
+    parser.add_argument(
+        "--walkthrough-postmortem",
+        action="store_true",
+        help=(
+            "Also run walkthrough post-mortem: evaluate persisted walkthrough "
+            "prompts against task requirements after FINALIZE."
+        ),
+    )
 
     args = parser.parse_args()
+    if args.postmortem_llm and not args.run_postmortem:
+        parser.error("--postmortem-llm cannot be used with --no-postmortem")
     setup_logging(verbose=args.verbose)
 
     logger = logging.getLogger("run_artisan_workflow")
@@ -933,6 +985,20 @@ def main() -> int:
         handler_kwargs["skip_refinement"] = True
     if args.walkthrough:
         handler_kwargs["walkthrough"] = True
+    if args.complexity_routing_enabled is not None:
+        handler_kwargs["complexity_routing_enabled"] = args.complexity_routing_enabled
+    if args.tier3_agent:
+        handler_kwargs["tier3_agent"] = args.tier3_agent
+    if args.complexity_blast_radius_tier3 is not None:
+        handler_kwargs["complexity_blast_radius_tier3"] = args.complexity_blast_radius_tier3
+    if args.complexity_loc_tier1_max is not None:
+        handler_kwargs["complexity_loc_tier1_max"] = args.complexity_loc_tier1_max
+    if args.complexity_loc_tier3_min is not None:
+        handler_kwargs["complexity_loc_tier3_min"] = args.complexity_loc_tier3_min
+    if args.complexity_caller_tier3 is not None:
+        handler_kwargs["complexity_caller_tier3"] = args.complexity_caller_tier3
+    if args.complexity_tier2_gate_escalation:
+        handler_kwargs["complexity_tier2_gate_escalation"] = True
 
     handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():
@@ -1029,7 +1095,9 @@ def main() -> int:
         logger.info("Dry run — skipping result file write")
 
     # Post-mortem evaluation (advisory — does not affect exit code)
-    if args.postmortem or args.postmortem_llm:
+    # Always run after FINALIZE unless explicitly disabled.
+    has_finalize_phase = any(pr.phase == WorkflowPhase.FINALIZE for pr in result.phase_results)
+    if args.run_postmortem and has_finalize_phase:
         import copy as _copy
 
         from startd8.contractors.postmortem import launch_postmortem_async
@@ -1049,6 +1117,32 @@ def main() -> int:
             pm_thread.join(timeout=timeout)
             if pm_thread.is_alive():
                 logger.warning("Post-mortem did not finish within timeout")
+    elif args.run_postmortem and not has_finalize_phase:
+        logger.info("Skipping post-mortem because FINALIZE phase was not executed.")
+
+    # Walkthrough prompt-quality post-mortem (optional)
+    if args.walkthrough_postmortem and has_finalize_phase:
+        from startd8.contractors.postmortem import launch_walkthrough_postmortem_async
+
+        wt_root = str(Path(args.project_root).resolve() / ".startd8" / "walkthrough")
+        wt_thread = launch_walkthrough_postmortem_async(
+            seed_path=str(seed_path),
+            workflow_result=result_data,
+            walkthrough_root=wt_root,
+            output_dir=output_dir,
+            filter_slug="-".join(sorted(task_filter)) if task_filter else None,
+        )
+        if args.postmortem_sync:
+            timeout = 300.0
+            logger.info(
+                "Waiting up to %.0fs for walkthrough post-mortem to finish...",
+                timeout,
+            )
+            wt_thread.join(timeout=timeout)
+            if wt_thread.is_alive():
+                logger.warning("Walkthrough post-mortem did not finish within timeout")
+    elif args.walkthrough_postmortem and not has_finalize_phase:
+        logger.info("Skipping walkthrough post-mortem because FINALIZE phase was not executed.")
 
     # Return code based on status
     if result.status == WorkflowStatus.COMPLETED:

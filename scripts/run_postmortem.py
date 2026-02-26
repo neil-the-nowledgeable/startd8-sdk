@@ -58,6 +58,17 @@ def main() -> int:
         help="Agent spec for LLM-as-judge (e.g., anthropic:claude-haiku-4-5-20251001)",
     )
     parser.add_argument(
+        "--walkthrough", action="store_true",
+        help="Also run walkthrough prompt-quality post-mortem.",
+    )
+    parser.add_argument(
+        "--walkthrough-root", default=None,
+        help=(
+            "Path to walkthrough prompt directory "
+            "(defaults to <project-root>/.startd8/walkthrough)."
+        ),
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable debug logging",
     )
@@ -69,7 +80,10 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    from startd8.contractors.postmortem import PostMortemEvaluator  # noqa: E402
+    from startd8.contractors.postmortem import (  # noqa: E402
+        PostMortemEvaluator,
+        WalkthroughPromptEvaluator,
+    )
 
     # Load seed
     seed_path = Path(args.seed)
@@ -117,6 +131,24 @@ def main() -> int:
     if report.lessons:
         print(f"  Lessons:  {len(report.lessons)} extracted")
     print(f"  Output:   {args.output_dir}")
+
+    if args.walkthrough:
+        default_root = Path(args.output_dir).resolve().parent / ".startd8" / "walkthrough"
+        walkthrough_root = Path(args.walkthrough_root).resolve() if args.walkthrough_root else default_root
+        wt_eval = WalkthroughPromptEvaluator()
+        wt_report = wt_eval.evaluate(
+            seed_tasks=seed_tasks,
+            walkthrough_root=str(walkthrough_root),
+            workflow_result=workflow_result,
+            output_dir=args.output_dir,
+        )
+        print("\nWalkthrough Prompt Post-Mortem Complete")
+        print(
+            "  Verdict:  "
+            f"{wt_report.aggregate_verdict} (score: {wt_report.aggregate_score:.2f})"
+        )
+        print(f"  Tasks:    {wt_report.tasks_evaluated}/{wt_report.total_tasks} evaluated")
+        print(f"  Root:     {walkthrough_root}")
 
     return 0
 

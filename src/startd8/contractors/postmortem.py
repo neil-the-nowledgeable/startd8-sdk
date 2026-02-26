@@ -129,6 +129,59 @@ class PostMortemReport:
         return json.dumps(self.to_dict(), indent=indent, default=str)
 
 
+@dataclasses.dataclass
+class WalkthroughTaskPostMortem:
+    """Per-task walkthrough prompt quality result."""
+
+    task_id: str
+    title: str
+    prompt_files: List[str] = dataclasses.field(default_factory=list)
+    requirements_considered: List[str] = dataclasses.field(default_factory=list)
+    requirements_matched: List[str] = dataclasses.field(default_factory=list)
+    requirements_missed: List[str] = dataclasses.field(default_factory=list)
+    constraints_considered: List[str] = dataclasses.field(default_factory=list)
+    constraints_matched: List[str] = dataclasses.field(default_factory=list)
+    constraints_missed: List[str] = dataclasses.field(default_factory=list)
+    requirement_coverage_score: float = 0.0
+    constraint_coverage_score: float = 0.0
+    prompt_quality_score: float = 0.0
+    verdict: str = _VERDICT_FAIL
+
+    def to_dict(self) -> Dict[str, Any]:
+        return dataclasses.asdict(self)
+
+
+@dataclasses.dataclass
+class WalkthroughPostMortemReport:
+    """Aggregate walkthrough prompt-quality report."""
+
+    report_id: str
+    workflow_id: str
+    timestamp: str
+    walkthrough_root: str
+    total_tasks: int = 0
+    tasks_evaluated: int = 0
+    aggregate_score: float = 0.0
+    aggregate_verdict: str = _VERDICT_FAIL
+    tasks: List[WalkthroughTaskPostMortem] = dataclasses.field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "report_id": self.report_id,
+            "workflow_id": self.workflow_id,
+            "timestamp": self.timestamp,
+            "walkthrough_root": self.walkthrough_root,
+            "total_tasks": self.total_tasks,
+            "tasks_evaluated": self.tasks_evaluated,
+            "aggregate_score": self.aggregate_score,
+            "aggregate_verdict": self.aggregate_verdict,
+            "tasks": [t.to_dict() for t in self.tasks],
+        }
+
+    def to_json(self, indent: int = 2) -> str:
+        return json.dumps(self.to_dict(), indent=indent, default=str)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -207,6 +260,31 @@ def _extract_requirement_keywords(task_dict: Dict[str, Any]) -> List[str]:
             seen.add(kw)
             result.append(kw)
     return result
+
+
+def _extract_prompt_constraints(task_dict: Dict[str, Any]) -> List[str]:
+    """Extract normalized prompt constraints from seed task dict."""
+    constraints: List[str] = []
+
+    top_level = task_dict.get("prompt_constraints", []) or []
+    if isinstance(top_level, list):
+        constraints.extend(str(c).strip().lower() for c in top_level if str(c).strip())
+    elif isinstance(top_level, str) and top_level.strip():
+        constraints.append(top_level.strip().lower())
+
+    enrichment = task_dict.get("_enrichment", {}) or {}
+    enr = enrichment.get("prompt_constraints", []) or []
+    if isinstance(enr, list):
+        constraints.extend(str(c).strip().lower() for c in enr if str(c).strip())
+
+    # Deduplicate preserving order.
+    seen: set[str] = set()
+    deduped: List[str] = []
+    for item in constraints:
+        if item not in seen:
+            seen.add(item)
+            deduped.append(item)
+    return deduped
 
 
 # ---------------------------------------------------------------------------
@@ -813,6 +891,166 @@ class PostMortemEvaluator:
 
 
 # ---------------------------------------------------------------------------
+# Walkthrough Prompt Evaluator
+# ---------------------------------------------------------------------------
+
+
+class WalkthroughPromptEvaluator:
+    """Evaluate saved walkthrough prompts against task requirements."""
+
+    def evaluate(
+        self,
+        seed_tasks: List[Dict[str, Any]],
+        walkthrough_root: str,
+        workflow_result: Dict[str, Any],
+        output_dir: str,
+        filter_slug: Optional[str] = None,
+    ) -> WalkthroughPostMortemReport:
+        wt_root = Path(walkthrough_root)
+        task_results: List[WalkthroughTaskPostMortem] = []
+
+        for task_dict in seed_tasks:
+            task_results.append(self._evaluate_task(task_dict, wt_root))
+
+        scored = [t for t in task_results if t.prompt_files]
+        if task_results:
+            agg_score = sum(t.prompt_quality_score for t in task_results) / len(task_results)
+        else:
+            agg_score = 0.0
+
+        report = WalkthroughPostMortemReport(
+            report_id=str(uuid.uuid4()),
+            workflow_id=workflow_result.get("workflow_id", "unknown"),
+            timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            walkthrough_root=str(wt_root),
+            total_tasks=len(seed_tasks),
+            tasks_evaluated=len(scored),
+            aggregate_score=round(agg_score, 4),
+            aggregate_verdict=_compute_verdict(agg_score),
+            tasks=task_results,
+        )
+        self._write_outputs(report, output_dir, filter_slug)
+        return report
+
+    def _evaluate_task(
+        self,
+        task_dict: Dict[str, Any],
+        walkthrough_root: Path,
+    ) -> WalkthroughTaskPostMortem:
+        task_id = task_dict.get("task_id", "unknown")
+        title = task_dict.get("title", "")
+
+        prompt_texts: List[Tuple[str, str]] = []
+        implement_dir = walkthrough_root / "implement" / task_id
+        design_dir = walkthrough_root / "design" / task_id
+
+        prompt_texts.extend(self._read_prompt_files(implement_dir))
+        prompt_texts.extend(self._read_prompt_files(design_dir))
+
+        combined = "\n\n".join(content for _, content in prompt_texts).lower()
+        prompt_files = [rel for rel, _ in prompt_texts]
+
+        reqs = _extract_requirement_keywords(task_dict)
+        req_matched, req_missed = self._match_phrases(reqs, combined)
+
+        constraints = _extract_prompt_constraints(task_dict)
+        c_matched, c_missed = self._match_phrases(constraints, combined)
+
+        req_score = len(req_matched) / len(reqs) if reqs else (1.0 if prompt_files else 0.0)
+        c_score = len(c_matched) / len(constraints) if constraints else (1.0 if prompt_files else 0.0)
+        quality = (req_score + c_score) / 2.0 if prompt_files else 0.0
+
+        return WalkthroughTaskPostMortem(
+            task_id=task_id,
+            title=title,
+            prompt_files=prompt_files,
+            requirements_considered=reqs,
+            requirements_matched=req_matched,
+            requirements_missed=req_missed,
+            constraints_considered=constraints,
+            constraints_matched=c_matched,
+            constraints_missed=c_missed,
+            requirement_coverage_score=round(req_score, 4),
+            constraint_coverage_score=round(c_score, 4),
+            prompt_quality_score=round(quality, 4),
+            verdict=_compute_verdict(quality),
+        )
+
+    def _read_prompt_files(self, directory: Path) -> List[Tuple[str, str]]:
+        if not directory.is_dir():
+            return []
+        result: List[Tuple[str, str]] = []
+        for fp in sorted(directory.glob("*.md")):
+            try:
+                result.append((str(fp), fp.read_text(encoding="utf-8", errors="replace")))
+            except OSError:
+                logger.debug("Walkthrough postmortem: failed reading prompt file %s", fp)
+        return result
+
+    def _match_phrases(
+        self,
+        phrases: List[str],
+        haystack: str,
+    ) -> Tuple[List[str], List[str]]:
+        matched: List[str] = []
+        missed: List[str] = []
+
+        for phrase in phrases:
+            words = [w for w in re.findall(r"[a-z0-9_]+", phrase.lower()) if len(w) > 2]
+            if not words:
+                continue
+            present = sum(1 for w in words if w in haystack)
+            if present / len(words) >= 0.5:
+                matched.append(phrase)
+            else:
+                missed.append(phrase)
+        return matched, missed
+
+    def _write_outputs(
+        self,
+        report: WalkthroughPostMortemReport,
+        output_dir: str,
+        filter_slug: Optional[str] = None,
+    ) -> None:
+        out = Path(output_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        suffix = f"-{filter_slug}" if filter_slug else ""
+
+        json_path = out / f"walkthrough-postmortem-report{suffix}.json"
+        json_path.write_text(report.to_json(), encoding="utf-8")
+        logger.info("Wrote walkthrough postmortem report: %s", json_path)
+
+        md_path = out / f"walkthrough-postmortem-summary{suffix}.md"
+        md_path.write_text(self._render_markdown(report), encoding="utf-8")
+        logger.info("Wrote walkthrough postmortem summary: %s", md_path)
+
+    def _render_markdown(self, report: WalkthroughPostMortemReport) -> str:
+        lines: List[str] = []
+        lines.append("# Walkthrough Prompt Post-Mortem Report")
+        lines.append("")
+        lines.append(f"- **Report ID:** {report.report_id}")
+        lines.append(f"- **Workflow ID:** {report.workflow_id}")
+        lines.append(f"- **Walkthrough Root:** `{report.walkthrough_root}`")
+        lines.append(f"- **Aggregate Score:** {report.aggregate_score:.2f} ({report.aggregate_verdict})")
+        lines.append(f"- **Tasks Evaluated:** {report.tasks_evaluated}/{report.total_tasks}")
+        lines.append("")
+        lines.append(
+            "| Task | Verdict | Prompt Score | Req Coverage | Constraint Coverage | Prompt Files |"
+        )
+        lines.append(
+            "|------|---------|--------------|--------------|---------------------|--------------|"
+        )
+        for t in report.tasks:
+            lines.append(
+                f"| {t.task_id} | {t.verdict} | {t.prompt_quality_score:.2f} | "
+                f"{t.requirement_coverage_score:.2f} | {t.constraint_coverage_score:.2f} | "
+                f"{len(t.prompt_files)} |"
+            )
+        lines.append("")
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Async Launcher
 # ---------------------------------------------------------------------------
 
@@ -880,5 +1118,55 @@ def launch_postmortem_async(
             logger.exception("Postmortem evaluation failed")
 
     thread = threading.Thread(target=_run, name="postmortem-evaluator", daemon=True)
+    thread.start()
+    return thread
+
+
+def launch_walkthrough_postmortem_async(
+    seed_path: str,
+    workflow_result: Dict[str, Any],
+    walkthrough_root: str,
+    output_dir: str,
+    filter_slug: Optional[str] = None,
+) -> threading.Thread:
+    """Launch walkthrough prompt-quality postmortem in a daemon thread."""
+
+    def _run() -> None:
+        try:
+            seed = Path(seed_path)
+            if not seed.exists():
+                logger.error("Walkthrough postmortem: seed file not found: %s", seed_path)
+                return
+
+            with open(seed, "r", encoding="utf-8") as fh:
+                seed_data = json.load(fh)
+
+            seed_tasks = seed_data.get("tasks", [])
+            if not seed_tasks:
+                logger.warning("Walkthrough postmortem: no tasks in seed file")
+                return
+
+            evaluator = WalkthroughPromptEvaluator()
+            report = evaluator.evaluate(
+                seed_tasks=seed_tasks,
+                walkthrough_root=walkthrough_root,
+                workflow_result=workflow_result,
+                output_dir=output_dir,
+                filter_slug=filter_slug,
+            )
+            logger.info(
+                "Walkthrough postmortem complete: %s (score=%.2f, verdict=%s)",
+                report.report_id,
+                report.aggregate_score,
+                report.aggregate_verdict,
+            )
+        except Exception:
+            logger.exception("Walkthrough postmortem evaluation failed")
+
+    thread = threading.Thread(
+        target=_run,
+        name="walkthrough-postmortem-evaluator",
+        daemon=True,
+    )
     thread.start()
     return thread
