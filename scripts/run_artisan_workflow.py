@@ -313,6 +313,18 @@ def main() -> int:
         help="Review phase agent spec (default: falls back to --lead-agent)",
     )
     parser.add_argument(
+        "--tier2-agent", default=None,
+        help="T2 refinement agent spec (default: anthropic:claude-sonnet-4-5-20250929)",
+    )
+    parser.add_argument(
+        "--skip-refinement", action="store_true",
+        help="Skip T2 refinement pass (use T1 draft directly)",
+    )
+    parser.add_argument(
+        "--walkthrough", action="store_true",
+        help="Build and persist all LLM prompts to .startd8/walkthrough/ without calling LLMs",
+    )
+    parser.add_argument(
         "--enable-prompt-caching", action="store_true",
         help="Enable Anthropic prompt caching (90%% input cost reduction on cache hits)",
     )
@@ -486,6 +498,23 @@ def main() -> int:
             "from <output-dir>/.dress-rehearsal/. "
             "Example: --adopt-prior  (auto)  or  --adopt-prior /path/to/handoff-dir"
         ),
+    )
+
+    # Post-mortem evaluation
+    parser.add_argument(
+        "--postmortem", action="store_true",
+        help="Run post-mortem evaluation after workflow completes",
+    )
+    parser.add_argument(
+        "--postmortem-llm", type=str, default=None,
+        help=(
+            "Agent spec for LLM-as-judge post-mortem scoring "
+            "(e.g., anthropic:claude-haiku-4-5-20251001). Implies --postmortem."
+        ),
+    )
+    parser.add_argument(
+        "--postmortem-sync", action="store_true",
+        help="Wait for post-mortem to finish before exiting (default: async)",
     )
 
     args = parser.parse_args()
@@ -871,6 +900,12 @@ def main() -> int:
         handler_kwargs["review_agent"] = args.review_agent
     if args.enable_prompt_caching:
         handler_kwargs["enable_prompt_caching"] = True
+    if args.tier2_agent:
+        handler_kwargs["tier2_agent"] = args.tier2_agent
+    if args.skip_refinement:
+        handler_kwargs["skip_refinement"] = True
+    if args.walkthrough:
+        handler_kwargs["walkthrough"] = True
 
     handlers = ContextSeedHandlers.create_all(**handler_kwargs)
     for wp_phase, handler in handlers.items():
@@ -965,6 +1000,28 @@ def main() -> int:
         logger.info("Wrote result to %s", result_path)
     else:
         logger.info("Dry run — skipping result file write")
+
+    # Post-mortem evaluation (advisory — does not affect exit code)
+    if args.postmortem or args.postmortem_llm:
+        import copy as _copy
+
+        from startd8.contractors.postmortem import launch_postmortem_async
+
+        pm_thread = launch_postmortem_async(
+            seed_path=str(args.seed),
+            workflow_result=result_data,
+            context=_copy.deepcopy(initial_context),
+            output_dir=output_dir,
+            use_llm_judge=bool(args.postmortem_llm),
+            judge_agent_spec=args.postmortem_llm,
+            filter_slug="-".join(sorted(task_filter)) if task_filter else None,
+        )
+        if args.postmortem_sync:
+            timeout = 600.0 if args.postmortem_llm else 300.0
+            logger.info("Waiting up to %.0fs for post-mortem to finish...", timeout)
+            pm_thread.join(timeout=timeout)
+            if pm_thread.is_alive():
+                logger.warning("Post-mortem did not finish within timeout")
 
     # Return code based on status
     if result.status == WorkflowStatus.COMPLETED:

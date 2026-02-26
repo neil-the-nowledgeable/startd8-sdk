@@ -297,6 +297,10 @@ phases:
           type: dict
           severity: advisory
           description: "Schema features from ContextCore onboarding for edit-first threshold resolution (REQ-EFE-021)"
+        - name: _complexity_tier
+          type: str
+          severity: advisory
+          description: "Per-chunk complexity tier from CMR classification (REQ-CMR-043). Values: tier_1, tier_2, tier_3."
 
   integrate:
     description: "Merge staged generated code into project root with validation and rollback"

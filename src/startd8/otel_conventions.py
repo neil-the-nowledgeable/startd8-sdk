@@ -61,6 +61,12 @@ class AttributeKeys:
     TASK_COST = "task.cost"
     TASK_ATTEMPTS = "task.attempts"
 
+    # Complexity-Driven Model Router (CMR) — REQ-CMR-031
+    TASK_COMPLEXITY_TIER = "task.complexity_tier"
+    TASK_BLAST_RADIUS = "task.blast_radius"
+    TASK_CALLER_COUNT = "task.caller_count"
+    TASK_HAS_DYNAMIC_DISPATCH = "task.has_dynamic_dispatch"
+
     # LLM call
     LLM_PROMPT_LENGTH = "llm.prompt_length"
     LLM_MAX_TOKENS = "llm.max_tokens"
@@ -87,7 +93,7 @@ class EventNames:
 class DegradationReasons:
     """Reason codes for the ``degradation_reasons`` field in forensic logs.
 
-    Each constant maps to one of the 12 conditions evaluated by
+    Each constant maps to one of the 13 conditions evaluated by
     ``is_degraded()`` in ``forensic_log.py`` (OT-711).
     """
 
@@ -103,6 +109,7 @@ class DegradationReasons:
     BOUNDARY_SEVERITY_HIGH = "BOUNDARY_SEVERITY_HIGH"
     CHAIN_DEGRADED = "CHAIN_DEGRADED"
     QUALITY_VIOLATIONS_PRESENT = "QUALITY_VIOLATIONS_PRESENT"
+    COMPLEXITY_MANIFEST_MISSING = "COMPLEXITY_MANIFEST_MISSING"
 
 
 # Valid call_type values for emit_forensic_log().
@@ -114,6 +121,7 @@ VALID_CALL_TYPES = frozenset({
     "design.review",
     "design.revise",
     "implement.chunk",
+    "implement.chunk.refine",
     "test.generate",
     "test.retry",
     "review.evaluate",
