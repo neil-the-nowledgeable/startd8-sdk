@@ -55,6 +55,9 @@ def wrap_user_content(content: str, content_type: str) -> str:
 # JSON → Markdown transformation helpers
 # ---------------------------------------------------------------------------
 
+_MAX_HEADING_DEPTH = 10  # Prevent unbounded recursion on deep/malicious input
+
+
 def _dict_to_markdown(data: Dict[str, Any], *, heading_level: int = 3) -> str:
     """Convert a dict to Markdown with headers and nested formatting.
 
@@ -67,6 +70,9 @@ def _dict_to_markdown(data: Dict[str, Any], *, heading_level: int = 3) -> str:
     """
     if not data:
         return ""
+    if heading_level > _MAX_HEADING_DEPTH:
+        # Flatten remaining levels to avoid unbounded recursion
+        return "\n".join(f"- **{k}**: {v}" for k, v in data.items())
 
     parts: list[str] = []
     prefix = "#" * heading_level
@@ -91,11 +97,12 @@ def _dict_to_markdown(data: Dict[str, Any], *, heading_level: int = 3) -> str:
     return "\n\n".join(parts)
 
 
-def _list_to_bullets(items: Sequence[Any]) -> str:
+def _list_to_bullets(items: Sequence[Any], indent: int = 0) -> str:
     """Convert a list to a Markdown bullet list.
 
     Args:
         items: List items (strings, dicts, or other types).
+        indent: Number of spaces to indent the bullets.
 
     Returns:
         Bullet-list formatted string.
@@ -104,15 +111,26 @@ def _list_to_bullets(items: Sequence[Any]) -> str:
         return ""
 
     lines: list[str] = []
+    space = " " * indent
     for item in items:
         if isinstance(item, dict):
-            # Compact dict rendering: key=value pairs
-            pairs = ", ".join(f"{k}={v}" for k, v in item.items())
-            lines.append(f"- {pairs}")
-        elif isinstance(item, str):
-            lines.append(f"- {item}")
+            if "name" in item:
+                lines.append(f"{space}- **{item['name']}**")
+                for k, v in item.items():
+                    if k == "name":
+                        continue
+                    readable_k = k.replace("_", " ").title()
+                    if isinstance(v, list) and v and isinstance(v[0], dict):
+                        lines.append(f"{space}  - {readable_k}:")
+                        lines.append(_list_to_bullets(v, indent + 4))
+                    else:
+                        lines.append(f"{space}  - {readable_k}: {v}")
+            else:
+                # Compact dict rendering: key=value pairs
+                pairs = ", ".join(f"{k}={v}" for k, v in item.items() if not isinstance(v, (dict, list)))
+                lines.append(f"{space}- {pairs}")
         else:
-            lines.append(f"- {item}")
+            lines.append(f"{space}- {item}")
 
     return "\n".join(lines)
 
@@ -165,8 +183,6 @@ def format_domain_constraints(
         return ""
     if isinstance(constraints, str):
         return f"## Constraints\n\n{constraints}"
-    if not isinstance(constraints, list) or len(constraints) == 0:
-        return ""
     bullets = "\n".join(f"- {c}" for c in constraints if c)
     if not bullets:
         return ""
@@ -299,7 +315,7 @@ def format_project_objectives(
     if isinstance(objectives, str):
         parts.append(f"\n{objectives}")
     elif isinstance(objectives, list):
-        bullets = "\n".join(f"- {o}" for o in objectives if o)
+        bullets = _list_to_bullets(objectives)
         parts.append(f"\n{bullets}")
     elif isinstance(objectives, dict):
         formatted = _dict_to_markdown(objectives)
