@@ -4,15 +4,18 @@
 
 ## Problem
 
-The Explore phase has two inputs:
+The Explore phase has two deterministic inputs:
 1. A **bug report / issue description** (unstructured natural language)
 2. A **codebase map** (structured output from Eagle + ContextCore extract)
 
-Nothing currently bridges the gap: mapping the issue's description to specific files, functions, and components in the capability map. Without this, the agent loop in `ToolUsingPhaseHandler` starts from scratch — reading the issue, then blindly exploring.
+And one optional structural input:
+3. A **Code Manifest** (`ManifestRegistry` — AST-derived element inventory with FQNs, signatures, call graph, and symbol table data)
+
+Nothing currently bridges the gap: mapping the issue's description to specific files, functions, and components in the codebase maps. Without this, the agent loop in `ToolUsingPhaseHandler` starts from scratch — reading the issue, then blindly exploring.
 
 ## Goal
 
-A pre-exploration step that uses the capability map to **narrow the search space** before the agent loop begins. Given an issue and a codebase map, produce a ranked list of likely-affected components, so the agent can start its exploration from the most relevant files instead of wandering the repo.
+A pre-exploration step that uses the capability map (and optionally the Code Manifest) to **narrow the search space** before the agent loop begins. Given an issue and a codebase map, produce a ranked list of likely-affected components, so the agent can start its exploration from the most relevant files instead of wandering the repo.
 
 This is the "aim before you fire" step that makes the agent loop surgical.
 
@@ -20,6 +23,7 @@ This is the "aim before you fire" step that makes the agent loop surgical.
 
 ```
 Context Bridge (01)           → project_structure + capability_map
+Code Manifest (optional)      → ManifestRegistry (FQNs, call graph, all elements)
 Issue-to-Localization (this)  → candidate_components (narrowed search space)
 Tool-Using Phase Handler (02) → localization (confirmed fault files + root cause)
 ```
@@ -46,7 +50,14 @@ issue_description: str
 
 project_structure: dict   # From Eagle (services, files, dependencies)
 capability_map: dict      # From ContextCore extract (functions, classes, APIs, tests)
+manifest_registry: ManifestRegistry | None  # From Code Manifest (FQNs, signatures, call graph)
 ```
+
+When `manifest_registry` is available, the mapper gains:
+- **Complete element coverage** — includes private functions (e.g., `_validate_token`) that ContextCore's `CapabilityExtractor` skips
+- **FQN-based matching** — fully-qualified names enable precise element identification
+- **Call graph context** — caller/callee relationships inform relevance ranking
+- **Blast radius data** — transitive caller counts quantify change impact
 
 ### Output
 
@@ -62,6 +73,8 @@ class CandidateComponent:
     line_number: Optional[int]
     signature: Optional[str]
     docstring: Optional[str]
+    fqn: Optional[str]            # Fully-qualified name (manifest-enriched, when available)
+    caller_count: Optional[int]   # Number of direct callers (manifest-enriched, when available)
 
 @dataclass
 class LocalizationCandidates:
@@ -95,8 +108,15 @@ Fast, deterministic filtering using the issue text:
    - Service names containing keywords
    - File paths containing keywords
 
-4. **Score each match**:
+4. **Match against ManifestRegistry** (when available):
+   - Search element FQNs for keyword overlap (includes private functions)
+   - Search element signatures for parameter names
+   - Use `manifest_registry.file_element_summary()` for file-level context
+   - Enrich candidates with FQN, caller count, and blast radius data
+
+5. **Score each match**:
    - Name exact match: 1.0
+   - FQN match (manifest): 1.0
    - Name substring match: 0.7
    - Docstring keyword match: 0.5
    - File path keyword match: 0.3
@@ -146,6 +166,11 @@ Also output:
 
 This single LLM call costs ~$0.01-0.05 (small prompt, small response). It transforms lexical matches into **semantically ranked** candidates with explanations.
 
+When `ManifestRegistry` is available, Pass 2's prompt is enriched with call graph context for each candidate:
+- **Caller count**: "This function is called by 7 other functions" — helps the LLM assess importance
+- **Key callers**: Top callers listed by FQN — helps the LLM understand dependency chains
+- **Blast radius**: Transitive caller count — helps the LLM prioritize high-impact candidates
+
 ### Why Two Passes
 
 | | Pass 1 (Lexical) | Pass 2 (Semantic) |
@@ -193,12 +218,14 @@ class ExplorePhaseHandler(ToolUsingPhaseHandler):
             return {"output": None, "cost": 0.0, "metadata": {"dry_run": True}}
 
         # Step 1: Context Bridge (01) — already populated by pipeline
-        # context["project_structure"] and context["capability_map"] exist
+        # context["bridge_context"] contains project_structure + capability_map
 
         # Step 2: Issue-to-Localization Mapper (THIS)
+        bridge = context.get("bridge_context") or {}
         mapper = IssueToLocalizationMapper(
-            project_structure=context["project_structure"],
-            capability_map=context["capability_map"],
+            project_structure=bridge.get("project_structure", {}),
+            capability_map=bridge.get("capability_map", {}),
+            manifest_registry=self.manifest_registry,  # ManifestRegistry | None
         )
         candidates = mapper.map(
             issue_description=context["issue_description"],
@@ -239,9 +266,11 @@ class IssueToLocalizationMapper:
         self,
         project_structure: dict,
         capability_map: dict,
+        manifest_registry=None,  # ManifestRegistry | None
     ):
         self.project_structure = project_structure
         self.capability_map = capability_map
+        self.manifest_registry = manifest_registry
 
     def map(
         self,
@@ -287,14 +316,18 @@ class IssueToLocalizationMapper:
     def _lexical_match(
         self, keywords: list[str], max_results: int
     ) -> list[CandidateComponent]:
-        """Match keywords against capability_map entries.
+        """Match keywords against capability_map and manifest entries.
 
-        Searches:
+        Searches (in order):
+        - manifest_registry elements (FQNs, signatures — when available)
         - capability_map.by_type.functions[].name
         - capability_map.by_type.classes[].name
         - capability_map.by_type.api_endpoints[].name
         - capability_map.by_type.*.docstring
         - project_structure.services[].files[].path
+
+        When manifest_registry is available, candidates are enriched
+        with fqn and caller_count fields.
         """
         ...
 
@@ -350,6 +383,32 @@ Eagle's service dependency map identifies: `paymentservice → emailservice (gRP
 
 Fall back to Eagle's project_structure only. Pass 1 matches against file paths and service names. Pass 2 does its best with file-level information. The agent loop in Step 3 will need to read more files manually.
 
+**Note**: When `ManifestRegistry` is available but `capability_map` is empty (Python project without ContextCore), the manifest provides a superior fallback — it includes all elements with FQNs, signatures, and call graph data. In this case, Pass 1 uses manifest elements as the primary data source rather than falling back to file-level-only matching.
+
+### ManifestRegistry available without capability_map
+
+When `manifest_registry` is present but `capability_map` is empty, the mapper uses manifest elements directly for Pass 1 matching. This provides richer candidates than file-level-only matching because the manifest includes function/class names, signatures, and FQNs. Pass 2 (LLM) proceeds normally since manifest-sourced candidates have sufficient metadata for semantic ranking.
+
+## Relationship to Code Manifest
+
+The mapper may have both a Code Manifest (`ManifestRegistry` instance, from `context["project_manifests"]`) and Context Bridge output (`context["bridge_context"]`) available simultaneously. These are **complementary, not conflicting** data sources for candidate discovery:
+
+| Dimension | Code Manifest (ManifestRegistry) | Context Bridge (capability_map + project_structure) |
+|-----------|--------------------------------|-----------------------------------------------------|
+| **Granularity** | Per-element: FQNs, signatures, spans, call graph, symbol table | Per-file/per-service: capability inventory, service dependencies, LOC |
+| **Element coverage** | All elements including private functions (`_validate_token`) | Public functions only (CapabilityExtractor skips `_`-prefixed and undocumented) |
+| **Mapper usage** | Pass 1 FQN/signature matching + Pass 2 caller context enrichment | Pass 1 name/docstring/path matching + Pass 2 service topology |
+| **Output enrichment** | `fqn`, `caller_count` on CandidateComponent | `service_name` on CandidateComponent |
+| **Cost** | Zero (in-memory lookup of pre-computed static analysis) | Zero (deterministic transformation) |
+| **Availability** | Requires `startd8 manifest generate` or cache from prior run | Requires Eagle + ContextCore installed |
+
+**Design guidelines for the mapper:**
+- Prefer `ManifestRegistry` for element-level matching (FQN resolution, signature matching, caller context) — it has deeper analysis and complete coverage
+- Prefer `capability_map` for cross-source matching (docstrings, API endpoints, test associations) — it captures metadata from ContextCore's multi-type extraction
+- Prefer `project_structure` for service-level matching (service names, service dependencies, file paths) — it provides the macro architecture view
+- When both provide overlapping data (e.g., function names), `ManifestRegistry` is authoritative (deeper analysis, complete coverage)
+- Both follow the same **graceful degradation** pattern: absent = skip enrichment, no behavioral change. The mapper MUST produce valid `LocalizationCandidates` with any combination of available sources (all three, any two, any one, or none)
+
 ## Estimated Effort
 
 ~1 day:
@@ -368,17 +427,29 @@ Fall back to Eagle's project_structure only. Pass 1 matches against file paths a
 
 ```
 01_CONTEXT_BRIDGE.md
-  → Produces project_structure + capability_map
+  → Produces project_structure + capability_map (via context["bridge_context"])
   → Consumed by this mapper as input
+
+Code Manifest (ManifestRegistry)
+  → Produces per-element structural data (via context["project_manifests"])
+  → Consumed by this mapper as optional enrichment source
+  → Provides FQNs, call graph, private function coverage
 
 02_TOOL_USING_PHASE_HANDLER.md
   → Consumes this mapper's output (localization_candidates)
   → Uses candidates to focus the agent loop
+  → Also consumes ManifestRegistry directly (query_code_structure tool)
 
 Together:
-  Context Bridge ($0, 5s) → Mapper ($0.005, 2s) → Agent Loop ($0.05-0.50, 1-3min)
+  Context Bridge ($0, 5s) + Manifest ($0, cached) → Mapper ($0.005, 2s) → Agent Loop ($0.05-0.50, 1-3min)
   Total Explore phase: ~$0.06-0.51, ~1-4 minutes
 ```
+
+**Context key namespace** (non-overlapping by design):
+- `context["bridge_context"]` → Context Bridge output (project_structure, capability_map, codebase_summary)
+- `context["project_manifests"]` → Code Manifest output (ManifestRegistry)
+- `context["localization_candidates"]` → This mapper's output (consumed by agent loop system prompt)
+- `context["localization"]` → EXPLORE phase output (consumed by DESIGN, IMPLEMENT)
 
 ---
 

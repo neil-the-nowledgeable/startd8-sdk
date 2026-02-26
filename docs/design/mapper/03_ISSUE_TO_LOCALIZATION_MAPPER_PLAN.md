@@ -6,6 +6,8 @@ The `IssueToLocalizationMapper` is a two-pass component that narrows the codebas
 
 The mapper runs **inside** `ExplorePhaseHandler.execute()`, after the Context Bridge populates `project_structure` + `capability_map`, but **before** the agent loop begins tool use.
 
+When a `ManifestRegistry` is available (from `context["project_manifests"]`), the mapper gains a third data source: AST-derived element inventory with FQNs, signatures, call graph, and symbol table data. This provides complete element coverage (including private functions), FQN-based matching, and caller/callee context for Pass 2 enrichment. The manifest is optional — the mapper functions identically without it.
+
 ---
 
 ## 2. File-by-File Breakdown
@@ -63,6 +65,8 @@ class CandidateComponent:
     service_name: Optional[str] = None  # Eagle service it belongs to
     lexical_score: Optional[float] = None
     llm_score: Optional[float] = None
+    fqn: Optional[str] = None           # Fully-qualified name (manifest-enriched)
+    caller_count: Optional[int] = None  # Direct callers (manifest-enriched)
 ```
 
 ### `LocalizationCandidates`
@@ -120,6 +124,15 @@ From `project_structure` (Eagle output):
 - `project_structure["services"]` — list of dicts with `name`, `language`, `files`
 - `project_structure["service_dependencies"]` — list of `{"from", "to", "protocol", "evidence"}`
 
+From `manifest_registry` (Code Manifest, when available):
+- `manifest_registry.files()` — all registered file paths
+- `manifest_registry.get(path).elements` — per-file element list with FQNs, signatures, spans, visibility
+- `manifest_registry.resolve_fqn(fqn)` — look up element by fully-qualified name
+- `manifest_registry.callers_of(fqn)` — direct callers of a function (Phase 6 call graph)
+- `manifest_registry.blast_radius(fqn)` — transitive callers for impact assessment
+
+**Priority order**: When the same element appears in both `capability_map` and `manifest_registry`, prefer the manifest version (deeper analysis, includes private functions). Deduplicate by `(file_path, component_name)` tuple, keeping the higher-scoring entry.
+
 ### Scoring Algorithm
 
 ```
@@ -128,11 +141,17 @@ score = 0.0
 # Tier 1: Name exact match (strongest signal)
 if entry.name in keywords.identifiers: score = max(score, 1.0)
 
+# Tier 1b: FQN exact match (manifest-backed, equally strong)
+if manifest_registry and entry.fqn in keywords.identifiers: score = max(score, 1.0)
+
 # Tier 2: File path match (explicit mention)
 if file_path in keywords.file_paths: score = max(score, 0.8)
 
 # Tier 3: Name substring match
 if keyword in entry.name.lower(): score = max(score, 0.7)
+
+# Tier 3b: FQN substring match (manifest-backed)
+if manifest_registry and keyword in entry.fqn.lower(): score = max(score, 0.7)
 
 # Tier 4: Docstring keyword match
 matching_words = [w for w in keywords.constituent_words if w in docstring]
@@ -141,7 +160,7 @@ if matching_words: score = max(score, min(0.5 + 0.1 * len(matching_words), 0.7))
 # Tier 5: File path partial match
 if path_part in entry.file_path: score = max(score, 0.5)
 
-# Tier 6: Signature match
+# Tier 6: Signature match (including manifest-resolved signatures)
 if keyword in entry.signature.lower(): score = max(score, 0.4)
 
 # Tier 7: Error fragment match in docstring
@@ -232,10 +251,13 @@ def execute(self, phase, context, dry_run=False):
         return {"output": None, "cost": 0.0, "metadata": {"dry_run": True}}
 
     # Step 1: Context Bridge (already populated)
+    bridge = context.get("bridge_context") or {}
+
     # Step 2: Issue-to-Localization Mapper
     mapper = IssueToLocalizationMapper(
-        project_structure=context.get("project_structure", {}),
-        capability_map=context.get("capability_map", {}),
+        project_structure=bridge.get("project_structure", {}),
+        capability_map=bridge.get("capability_map", {}),
+        manifest_registry=self.manifest_registry,  # ManifestRegistry | None
     )
     candidates = mapper.map(
         issue_description=context.get("issue_description", ""),
@@ -247,6 +269,8 @@ def execute(self, phase, context, dry_run=False):
     # Step 3: Agent loop (parent class)
     return super().execute(phase, context, dry_run)
 ```
+
+**ManifestRegistry wiring**: The mapper receives the `ManifestRegistry` from `ExplorePhaseHandler`, which itself receives it via constructor injection (see `02_TOOL_USING_PHASE_HANDLER_PLAN.md` §8). The mapper does NOT attempt to generate or load manifests itself — it is a pure consumer.
 
 ### System Prompt Injection
 
@@ -283,6 +307,8 @@ These are fundamentally different data structures with different filter criteria
 
 However, the `ExtractedCapability` field naming convention (`name`, `source_type`, `file_path`, `line_number`, `docstring`, `signature`) should be the reference for `CandidateComponent` field names.
 
+**Note**: The Code Manifest's `ManifestRegistry` is a *third* distinct data source — it provides AST-derived structural data (FQNs, signatures, spans, call graph) at element granularity. Unlike both the capability index query (product-level) and the extraction result (code-level), the manifest provides the deepest static analysis including private functions and call relationships. See §12 for the complementarity design.
+
 ---
 
 ## 10. Unit Test Plan
@@ -314,6 +340,10 @@ However, the `ExtractedCapability` field naming convention (`name`, `source_type
 | `test_multi_keyword_boost` | Multi-keyword match gets bonus |
 | `test_sorting_and_truncation` | Only top N returned |
 | `test_project_structure_fallback` | File-level candidates when capability_map is empty |
+| `test_manifest_fqn_match` | Manifest FQN exact match gets score 1.0 |
+| `test_manifest_private_function_found` | `_validate_token` found via manifest when missing from capability_map |
+| `test_manifest_enriches_fqn_and_caller_count` | Candidates from manifest have `fqn` and `caller_count` populated |
+| `test_manifest_dedup_with_capability_map` | Same element from both sources → single candidate with higher score |
 
 ### `test_semantic_ranker.py`
 
@@ -326,6 +356,8 @@ However, the `ExtractedCapability` field naming convention (`name`, `source_type
 | `test_should_explore_filter` | `should_explore: false` halves score |
 | `test_search_keywords_extracted` | LLM keywords populate result |
 | `test_empty_candidates_skips_llm` | LLM not called for empty input |
+| `test_manifest_caller_context_in_prompt` | When manifest available, prompt includes caller count and key callers |
+| `test_manifest_context_budget_truncation` | Manifest enrichment truncated at 2000 chars |
 
 ### `test_mapper_integration.py`
 
@@ -336,12 +368,17 @@ However, the `ExtractedCapability` field naming convention (`name`, `source_type
 | `test_no_issue_description` | Returns empty candidates, confidence 0.0 |
 | `test_max_candidates_respected` | Returns at most N candidates |
 | `test_confidence_threshold` | Candidates below 0.4 filtered out |
+| `test_manifest_only_no_capability_map` | ManifestRegistry provides candidates when capability_map is empty |
+| `test_manifest_enriches_candidates_with_fqn` | Candidates have `fqn` field populated when manifest present |
+| `test_all_sources_combined` | All three sources (manifest + capability_map + project_structure) produce merged, deduplicated candidates |
 
 ### Mocking Strategy
 
 - Mock `anthropic.Anthropic` via `unittest.mock.patch` for semantic ranker tests
 - Use in-memory `capability_map` / `project_structure` dicts for lexical matcher tests
-- No filesystem access needed — all inputs are dicts
+- Mock `ManifestRegistry` via constructor injection (`manifest_registry=mock_registry`) — duck-type with `files()`, `get()`, `resolve_fqn()`, `callers_of()`, `blast_radius()` methods
+- Test both `manifest_registry=None` (2-source mode) and `manifest_registry=mock` (3-source mode) paths
+- No filesystem access needed — all inputs are dicts or mock objects
 
 ---
 
@@ -351,9 +388,10 @@ However, the `ExtractedCapability` field naming convention (`name`, `source_type
 Mapper depends on exact shapes from `01_CONTEXT_BRIDGE.md`. Since Context Bridge is also "Not Built", the mapper must define its own test fixtures matching the planned schema. If the Bridge's actual output differs, the matcher will break.
 **Mitigation**: Define expected schemas as TypedDict in `models.py` for type checking.
 
-### Risk 2: CapabilityExtractor Skips Private Functions (HIGH)
+### Risk 2: CapabilityExtractor Skips Private Functions (HIGH → LOW with Manifest)
 `_check_public_function()` in ContextCore skips functions starting with `_` or lacking docstrings. The design doc's example (`_validate_token`) would NOT appear in `functions` list.
-**Mitigation**: Mapper's lexical matching should also search `capability_map["by_file"]` which may include all items. The agent loop's `search_codebase` tool compensates for gaps.
+**Mitigation (primary)**: When `ManifestRegistry` is available, the manifest includes ALL elements regardless of visibility — private functions, undocumented functions, nested functions. This is the authoritative source for element coverage and fully resolves this risk for Python projects with manifests.
+**Mitigation (fallback)**: When no manifest is available, mapper's lexical matching also searches `capability_map["by_file"]` which may include all items. The agent loop's `search_codebase` tool compensates for remaining gaps.
 
 ### Risk 3: Model ID Mismatch (LOW)
 Design doc says `claude-haiku-4-5-20251001`, SDK's `HARDCODED_MODELS` lists `claude-haiku-4-5-20251008`. Likely the same model.
@@ -369,7 +407,38 @@ Global `existing_names` set in extractor means a function named `get` won't be c
 
 ---
 
-## 12. Implementation Sequencing
+## 12. Relationship to Code Manifest
+
+The startd8-sdk pipeline may have both a Code Manifest (`context["project_manifests"]`, a `ManifestRegistry` instance) and Context Bridge output (`context["bridge_context"]`, a `ContextBridgeResult` dict) present simultaneously. These are **complementary, not conflicting** data sources for the mapper:
+
+| Dimension | Code Manifest (ManifestRegistry) | Context Bridge (ContextBridgeResult) |
+|-----------|--------------------------------|--------------------------------------|
+| **Granularity** | Per-element: FQNs, signatures, spans, call graph, symbol table | Per-file/per-service: capability inventory, service dependencies, LOC |
+| **Element coverage** | All elements including private functions (`_validate_token`) | Public functions only (CapabilityExtractor skips `_`-prefixed) |
+| **Mapper usage** | Pass 1: FQN/signature matching. Pass 2: caller context enrichment | Pass 1: name/docstring/path matching. Pass 2: service topology |
+| **Output enrichment** | `fqn`, `caller_count` on CandidateComponent | `service_name` on CandidateComponent |
+| **Cost** | Zero (in-memory lookup of pre-computed static analysis) | Zero (deterministic transformation) |
+| **Availability** | Requires `startd8 manifest generate` or cache from prior run | Requires Eagle + ContextCore installed |
+
+**Design guidelines for the mapper:**
+- Prefer `ManifestRegistry` for element-level matching (FQN resolution, signature matching, caller context) — deeper analysis, complete coverage
+- Prefer `capability_map` for cross-source matching (docstrings, API endpoints, test associations) — multi-type extraction metadata
+- Prefer `project_structure` for service-level matching (service names, service dependencies, file paths) — macro architecture view
+- When both provide overlapping data (e.g., function names), `ManifestRegistry` is authoritative (deeper analysis, includes private functions)
+- Both follow the same **graceful degradation** pattern: absent = skip enrichment, no behavioral change
+- The mapper MUST produce valid `LocalizationCandidates` with any combination of available sources (all three, any two, any one, or none)
+
+**Manifest-specific enrichment in Pass 2 prompt:**
+When `ManifestRegistry` is available and has call graph data (Phase 6), the Pass 2 LLM prompt is enriched with:
+- **Caller count** per candidate: "Called by {N} functions" — importance signal
+- **Key callers** per candidate: Top 3 callers by FQN — dependency chain context
+- **Blast radius** per candidate: Transitive caller count — impact assessment
+
+This enrichment is budget-capped at 2000 chars to avoid bloating the Pass 2 prompt (which targets ~500-1000 tokens total). Progressive truncation: full caller detail → caller count only → omit.
+
+---
+
+## 13. Implementation Sequencing
 
 ### Phase 1: Data Models (1 hour)
 1. Create `models.py` with `ExtractedKeywords`, `CandidateComponent`, `LocalizationCandidates`
@@ -381,23 +450,25 @@ Global `existing_names` set in extractor means a function named `get` won't be c
 5. Write `test_keyword_extractor.py` (10 tests)
 
 ### Phase 3: Lexical Matching (3 hours)
-6. Implement `lexical_matcher.py` with 7-tier scoring
+6. Implement `lexical_matcher.py` with 7-tier scoring (+ manifest tiers when available)
 7. Implement multi-keyword boost
 8. Implement service-level matching from `project_structure`
-9. Implement fuzzy path matching with `difflib.SequenceMatcher`
-10. Write `test_lexical_matcher.py` (8 tests)
+9. Implement manifest-backed matching from `ManifestRegistry` (FQN, signature, element traversal)
+10. Implement fuzzy path matching with `difflib.SequenceMatcher`
+11. Implement deduplication across data sources (manifest vs capability_map)
+12. Write `test_lexical_matcher.py` (8 + 4 manifest tests)
 
 ### Phase 4: Semantic Ranking (2 hours)
-11. Implement `semantic_ranker.py` with Anthropic SDK call
-12. Implement prompt formatting and response parsing
-13. Implement score blending (0.4 lexical + 0.6 LLM)
-14. Implement failure fallback
-15. Write `test_semantic_ranker.py` (7 tests)
+13. Implement `semantic_ranker.py` with Anthropic SDK call
+14. Implement prompt formatting and response parsing (including manifest caller context enrichment)
+15. Implement score blending (0.4 lexical + 0.6 LLM)
+16. Implement failure fallback
+17. Write `test_semantic_ranker.py` (7 + 2 manifest enrichment tests)
 
 ### Phase 5: Orchestration + Integration (2 hours)
-16. Implement `mapper.py` (IssueToLocalizationMapper with `.map()` method)
-17. Write `test_mapper_integration.py` (5 tests)
-18. Wire into `ExplorePhaseHandler.execute()`
+18. Implement `mapper.py` (IssueToLocalizationMapper with `.map()` method, accepting optional `manifest_registry`)
+19. Write `test_mapper_integration.py` (5 + 3 manifest integration tests)
+20. Wire into `ExplorePhaseHandler.execute()` with `manifest_registry` pass-through
 
 ---
 
@@ -408,6 +479,8 @@ Global `existing_names` set in extractor means a function named `get` won't be c
 | `src/contextcore/utils/capability_extractor.py` | Defines `ExtractionResult` + `ExtractedCapability` field shapes that `capability_map` dict contains |
 | `Processes/eagle/models.py` | Defines `ProjectMetadata`, `ServiceMetadata`, `FileInfo`, `ServiceDependency` structures in `project_structure` dict |
 | `design/01_CONTEXT_BRIDGE.md` | Specifies exact output schema (`capability_map["by_type"]`, `by_file`, `project_structure`) — the mapper's input contract |
+| `startd8-sdk/src/startd8/utils/manifest_registry.py` | `ManifestRegistry` API — the mapper's optional manifest consumer interface |
+| `startd8-sdk/src/startd8/utils/code_manifest.py` | `FileManifest`, `Element` models — data shapes for manifest-backed matching |
 | `startd8-sdk/contractors/artisan_contractor.py` | `AbstractPhaseHandler`, `WorkflowPhase` — the mapper integrates via ExplorePhaseHandler |
 | `startd8-sdk/agents/claude.py` | Reference for Anthropic API call patterns (client init, error handling, token usage) |
 
