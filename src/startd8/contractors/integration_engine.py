@@ -294,8 +294,8 @@ class IntegrationEngine:
                             },
                         )
                         GateEmitter.emit(gate)
-                    except Exception:
-                        pass
+                    except Exception as exc:  # E2: GateEmitter is advisory, never block
+                        logger.debug("manifest.diff: IN-2 GateEmitter failed for %s: %s", fqn, exc)
             except Exception as exc:
                 logger.debug("manifest.diff: IN-2 MRO change check failed: %s", exc)
 

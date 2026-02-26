@@ -289,36 +289,36 @@ class ManifestDiff:
                     except Exception:
                         pass
 
-            # Phase 5: Resolved signature diff (IN-1) — catch type changes invisible to AST
+            # Phase 5 introspect: IN-1 (resolved type diff) + IN-2 (MRO diff) — single pass
+            # [O11Y Leg 8 #3] Defensive: check existence before attribute access.
             changed_resolved: list[tuple[str, str, str]] = []
-            try:
-                for fqn in sorted(old_fqns & new_fqns):
-                    old_el = old_public[fqn]
-                    new_el = new_public[fqn]
-                    old_rs = getattr(getattr(old_el, "inspect_info", None), "resolved_signature", None)
-                    new_rs = getattr(getattr(new_el, "inspect_info", None), "resolved_signature", None)
-                    if old_rs is not None and new_rs is not None:
-                        old_str = str(old_rs)
-                        new_str = str(new_rs)
-                        if old_str != new_str:
-                            changed_resolved.append((fqn, old_str, new_str))
-            except Exception:
-                pass
-
-            # Phase 5: MRO change diff (IN-2)
             mro_changes: list[tuple[str, list[str], list[str]]] = []
             try:
                 for fqn in sorted(old_fqns & new_fqns):
                     old_el = old_public[fqn]
                     new_el = new_public[fqn]
-                    old_mro = getattr(getattr(old_el, "inspect_info", None), "mro", None)
-                    new_mro = getattr(getattr(new_el, "inspect_info", None), "mro", None)
+
+                    # IN-1: Resolved signature change (type-level, invisible to AST diff)
+                    old_info = getattr(old_el, "inspect_info", None)
+                    new_info = getattr(new_el, "inspect_info", None)
+                    old_rs = getattr(old_info, "resolved_signature", None)
+                    new_rs = getattr(new_info, "resolved_signature", None)
+                    if old_rs is not None and new_rs is not None:
+                        old_str = str(old_rs)
+                        new_str = str(new_rs)
+                        if old_str != new_str:
+                            changed_resolved.append((fqn, old_str, new_str))
+
+                    # IN-2: MRO restructuring
+                    old_mro = getattr(old_info, "mro", None)
+                    new_mro = getattr(new_info, "mro", None)
                     if old_mro is not None and new_mro is not None and old_mro != new_mro:
                         mro_changes.append((fqn, list(old_mro), list(new_mro)))
-            except Exception:
-                pass
 
-            # Phase 5: __all__ diff (IN-3)
+            except Exception as exc:  # E1 [SDK Leg 9 #1]
+                logger.debug("manifest.diff: IN-1/IN-2 introspect pass failed: %s", exc)
+
+            # Phase 5 introspect: IN-3 (__all__ exported surface diff)
             module_all_diff: tuple[list[str], list[str]] | None = None
             try:
                 old_all = getattr(old, "module_all", None)
@@ -329,8 +329,8 @@ class ManifestDiff:
                     added_exports = sorted(new_set - old_set)
                     removed_exports = sorted(old_set - new_set)
                     module_all_diff = (added_exports, removed_exports)
-            except Exception:
-                pass
+            except Exception as exc:  # E1
+                logger.debug("manifest.diff: IN-3 __all__ diff failed: %s", exc)
 
             return ManifestDiff(
                 removed_public=removed,
@@ -782,7 +782,12 @@ class ManifestRegistry:
                     if not mro:
                         continue
                     # Filter out builtins.object, keep only non-trivial chains
-                    filtered = [m for m in mro if m != "builtins.object"]
+                    # [O11Y Leg 8 #3] P1: guard against non-string MRO items (runtime
+                    # introspect may return class objects instead of dotted-name strings).
+                    filtered = [
+                        m for m in mro
+                        if isinstance(m, str) and m != "builtins.object"
+                    ]
                     if len(filtered) > 1:
                         result[elem.fqn] = filtered
                 return result
@@ -839,7 +844,9 @@ class ManifestRegistry:
             if manifest is None:
                 return None
             val = getattr(manifest, "module_all", None)
-            return list(val) if val else None
+            # P2: use `is not None` so that __all__ = [] (empty explicit list) is
+            # preserved as an empty list rather than being collapsed to None.
+            return list(val) if val is not None else None
         except Exception as exc:
             logger.debug("manifest.module_all_for failed for %s: %s", relative_path, exc)
             return None

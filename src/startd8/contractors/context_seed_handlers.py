@@ -2751,14 +2751,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "DESIGN: call graph context failed", exc_info=True,
                 )
 
-        # CS-3: Edit-mode manifest context key — provides manifest summary
-        # specifically scoped for edit-mode tasks so the LLM has structural
-        # awareness of what it is modifying.
+        # CS-3: Edit-mode manifest context key
         if _edit_mode_hint == "edit" and _manifest_summary:
             additional_context["manifest_edit_context"] = _manifest_summary
 
-            # Phase 5 DS-1: resolved types for edit-mode (type changes are highest risk)
-            if enable_introspect and manifest_registry is not None:
+        # Phase 5: Introspect enrichment for DESIGN context (DS-1..DS-4)
+        if enable_introspect and manifest_registry is not None and task.target_files:
+
+            # DS-1: Resolved types (T1 context). Built once; edit-mode registers
+            # manifest_edit_context separately below via its own key.
+            # C2: collapsed from two near-identical loops (edit vs non-edit path).
+            if "manifest_resolved_types" not in additional_context:
                 _rts_parts: list[str] = []
                 for tf in task.target_files:
                     try:
@@ -2769,22 +2772,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         pass
                 if _rts_parts:
                     additional_context["manifest_resolved_types"] = "\n\n".join(_rts_parts)
-
-        # Phase 5: Introspect enrichment for DESIGN context (DS-1..DS-4)
-        if enable_introspect and manifest_registry is not None and task.target_files:
-
-            # DS-1: Resolved types (non-edit path — edit path handled above)
-            if "manifest_resolved_types" not in additional_context:
-                _rts_parts_design: list[str] = []
-                for tf in task.target_files:
-                    try:
-                        rts = manifest_registry.file_resolved_type_summary(tf)
-                        if rts:
-                            _rts_parts_design.append(f"### {tf}\n{rts}")
-                    except Exception:
-                        pass
-                if _rts_parts_design:
-                    additional_context["manifest_resolved_types"] = "\n\n".join(_rts_parts_design)
 
             # DS-2: MRO chains as supplemental manifest_context annotation
             _mro_lines: list[str] = []
