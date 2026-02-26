@@ -102,6 +102,7 @@ class ToolUsingPhaseHandler(AbstractPhaseHandler):
         Should include:
         - Task description (e.g., "Localize the bug described in this issue")
         - Available context summaries (Eagle structure, capability map)
+        - Code manifest structural context (element summaries, call graph) when available
         - Output format instructions
         """
         ...
@@ -197,9 +198,10 @@ class ToolUsingPhaseHandler(AbstractPhaseHandler):
 class ExplorePhaseHandler(ToolUsingPhaseHandler):
     """SWE-Agent-style exploration bounded by Eagle + ContextCore maps."""
 
-    def __init__(self, project_root: Path, **kwargs):
+    def __init__(self, project_root: Path, manifest_registry=None, **kwargs):
         super().__init__(**kwargs)
         self.project_root = project_root
+        self.manifest_registry = manifest_registry  # ManifestRegistry | None
 
     def get_tools(self) -> list[dict]:
         return [
@@ -253,33 +255,93 @@ class ExplorePhaseHandler(ToolUsingPhaseHandler):
                     "required": ["command"],
                 },
             },
-        ]
+        ] + (self._manifest_tools() if self.manifest_registry else [])
 
     def handle_tool_use(self, tool_name: str, tool_input: dict) -> str:
         """Execute tools against the local filesystem."""
         # Implementation routes to actual file I/O, subprocess, etc.
         # Each tool is sandboxed to project_root
+        # query_code_structure routes to self.manifest_registry methods
         ...
+
+    def _manifest_tools(self) -> list[dict]:
+        """Conditional manifest-backed tools. Only registered when ManifestRegistry is available."""
+        return [
+            {
+                "name": "query_code_structure",
+                "description": "Query the pre-computed code manifest for structural information. "
+                    "Use this BEFORE reading files — it instantly answers questions about "
+                    "function signatures, callers, callees, and change impact without file I/O.",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": ["element_summary", "lookup", "callers_of", "blast_radius"],
+                            "description": "element_summary: list all elements in a file. "
+                                "lookup: get details for a specific FQN. "
+                                "callers_of: find direct callers of a function. "
+                                "blast_radius: find all transitive callers (change impact).",
+                        },
+                        "target": {
+                            "type": "string",
+                            "description": "File path (for element_summary) or fully-qualified name (for lookup/callers_of/blast_radius). "
+                                "Example FQN: 'startd8.auth._validate_token'",
+                        },
+                        "max_depth": {
+                            "type": "integer",
+                            "description": "For blast_radius: max caller chain depth (default 3)",
+                        },
+                    },
+                    "required": ["action", "target"],
+                },
+            },
+        ]
 
     def get_system_prompt(self, context: dict[str, Any]) -> str:
         codebase_summary = context.get("codebase_summary", "No codebase summary available.")
+        manifest_context = self._render_manifest_context(context)
         return f"""You are a code exploration agent. Your task is to localize a bug or
 understand a codebase issue well enough to write a fix specification.
 
 You have access to a pre-computed codebase map:
 
 {codebase_summary}
-
+{manifest_context}
 Use the tools to read specific files, search for patterns, and run tests.
 Focus your exploration — the codebase map already tells you what exists and where.
-
+{self._manifest_tool_guidance()}
 When you have enough information, respond with a structured localization report containing:
 - fault_files: list of files that need changes
+- target_fqns: (if manifest available) fully-qualified names of fault elements
 - root_cause: description of the underlying problem
 - relevant_code: key code snippets with file paths and line numbers
 - affected_tests: tests that should pass after the fix
 - fix_approach: high-level description of the fix strategy
+- blast_radius: (if manifest available) dict of target FQN → transitive caller count
 """
+
+    def _render_manifest_context(self, context: dict[str, Any]) -> str:
+        """Render manifest structural context for the system prompt.
+
+        Budget: 4000 chars max (manifest_context_budget). Progressive truncation:
+        full element summaries → top-N by caller count → count-only.
+        When ManifestRegistry is absent, returns empty string.
+        """
+        if not self.manifest_registry:
+            return ""
+        # Render element summaries + call graph summaries for issue-referenced files
+        ...
+
+    def _manifest_tool_guidance(self) -> str:
+        """Additional system prompt guidance when manifest tools are available."""
+        if not self.manifest_registry:
+            return ""
+        return (
+            "\nYou also have the `query_code_structure` tool for instant structural queries. "
+            "Use it to look up function signatures, find callers, and assess blast radius "
+            "BEFORE reading full files — it's faster and more precise than grep.\n"
+        )
 
     def parse_final_output(self, messages, context) -> dict:
         """Extract the localization report from the final assistant message."""
@@ -300,6 +362,7 @@ All tools are restricted to `project_root`:
 - `search_codebase`: Only searches within `project_root`.
 - `list_directory`: Only lists within `project_root`.
 - `run_test`: Runs in a subprocess with `cwd=project_root`, timeout enforced, no network access.
+- `query_code_structure`: (conditional) Reads from in-memory `ManifestRegistry`. No file I/O, no subprocess calls. Pure data lookup — inherently safe.
 
 ### Resource Limits
 
@@ -308,6 +371,7 @@ All tools are restricted to `project_root`:
 - `tool_timeout_seconds`: Per-tool execution timeout (default 30s)
 - `run_test` has an additional hard timeout (default 60s)
 - File reads are capped at 10,000 lines per call
+- `manifest_context_budget`: Caps manifest context injected into system prompt (default 4,000 chars). Progressive truncation: full element summaries → top-N by caller count → count-only summary
 
 ### No Destructive Operations
 
@@ -317,6 +381,7 @@ The tool set is **read-only + test-only**:
 - No git operations
 - No network calls (beyond what tests may internally do)
 - `run_test` only runs commands matching a whitelist pattern (`pytest`, `unittest`, `npm test`, etc.)
+- `query_code_structure` performs zero I/O — pure in-memory lookups against pre-computed manifest data
 
 ## OTel Instrumentation
 
@@ -379,11 +444,51 @@ EXPLORE output:
       },
       "affected_tests": ["tests/test_auth.py::test_token_expiry"],
       "fix_approach": "Add expiry check to both _validate_token and _refresh_token",
+
+      # --- Manifest-enriched fields (present only when ManifestRegistry available) ---
+      "target_fqns": [                          # FQN-precise localization
+          "startd8.auth._validate_token",
+          "startd8.auth_utils._refresh_token",
+      ],
+      "blast_radius": {                         # Transitive caller impact per target
+          "startd8.auth._validate_token": 7,
+          "startd8.auth_utils._refresh_token": 3,
+      },
   }
 
 DESIGN phase reads context["localization"] and generates a design document.
 IMPLEMENT phase reads context["localization"] + context["design_results"].
+
+Manifest-enriched fields are optional — downstream phases MUST tolerate their absence
+(graceful degradation: absent = skip enrichment, no behavioral change).
 ```
+
+## Relationship to Code Manifest
+
+The EXPLORE phase may have both a Code Manifest (`ManifestRegistry` instance, from `context["project_manifests"]`) and Context Bridge output (`context["bridge_context"]`) available simultaneously. These are **complementary, not conflicting** data sources:
+
+| Dimension | Code Manifest (ManifestRegistry) | Context Bridge (ContextBridgeResult) |
+|-----------|--------------------------------|--------------------------------------|
+| **Granularity** | Per-element: FQNs, signatures, spans, call graph | Per-file/per-service: capability inventory, service dependencies, LOC |
+| **EXPLORE usage** | `query_code_structure` tool + system prompt structural context | `codebase_summary` in system prompt |
+| **Output enrichment** | `target_fqns`, `blast_radius` in localization report | `fault_files`, `relevant_code` (file-level) |
+| **Cost** | Zero (in-memory lookup of pre-computed static analysis) | Zero (deterministic transformation) |
+| **Availability** | Requires `startd8 manifest generate` or cache from prior run | Requires Eagle + ContextCore installed |
+
+**Design guidelines for ExplorePhaseHandler:**
+- Prefer `ManifestRegistry` for element-level queries (signature lookup, FQN resolution, call graph traversal, blast radius)
+- Prefer `bridge_context` for project-level queries (service topology, language mix, total LOC, codebase summary)
+- When both provide overlapping data (e.g., function signatures), `ManifestRegistry` is authoritative (deeper analysis)
+- Both follow the same **graceful degradation** pattern: absent = skip enrichment, no behavioral change to the phase. The `ExplorePhaseHandler` MUST function identically with 4 tools (no manifest) or 5 tools (with manifest) — the 5th tool is additive, never required
+
+**Context key namespace:**
+- `context["bridge_context"]` → Context Bridge output (project_structure, capability_map, codebase_summary)
+- `context["project_manifests"]` → Code Manifest output (ManifestRegistry)
+- `context["localization"]` → EXPLORE phase output (consumed by DESIGN, IMPLEMENT)
+
+These keys are non-overlapping by design. No merge or precedence logic is needed at the context dict level.
+
+---
 
 ## Estimated Effort
 

@@ -15,7 +15,7 @@ The implementation sits within the startd8-sdk codebase.
 | File | Purpose |
 |---|---|
 | `src/startd8/contractors/tool_using_handler.py` | `ToolUsingPhaseHandler` base class, `ToolExecutionError`, agent loop, OTel descriptors |
-| `src/startd8/contractors/explore_handler.py` | `ExplorePhaseHandler` concrete implementation, 4 tools, sandboxing, prompt builder, output parser |
+| `src/startd8/contractors/explore_handler.py` | `ExplorePhaseHandler` concrete implementation, 4 core tools + conditional `query_code_structure` (manifest), sandboxing, prompt builder, output parser |
 | `tests/unit/contractors/test_tool_using_handler.py` | Unit tests for abstract agent loop |
 | `tests/unit/contractors/test_explore_handler.py` | Unit tests for tools, sandboxing, output parsing |
 | `tests/integration/contractors/test_explore_integration.py` | Integration tests with workflow |
@@ -121,6 +121,40 @@ All must be implemented by subclasses:
 - Return combined stdout + stderr, truncated to 5,000 chars
 - On timeout: return descriptive error message
 
+### `_query_code_structure(action, target, max_depth=3) -> str` (conditional — requires `ManifestRegistry`)
+
+Only registered when `self.manifest_registry is not None`. Pure in-memory lookup, no I/O.
+
+- **`element_summary`**: `self.manifest_registry.file_element_summary(target)` → formatted list of FQNs, signatures, line spans for all elements in the file
+- **`lookup`**: `self.manifest_registry.lookup(target)` → element details (signature, docstring, line span, decorators)
+- **`callers_of`**: `self.manifest_registry.callers_of(target)` → list of direct callers with FQN + call site line
+- **`blast_radius`**: `self.manifest_registry.blast_radius(target, max_depth=max_depth)` → transitive caller tree with count summary
+- On unknown action: return error string listing valid actions
+- On FQN not found: return descriptive message (not an exception — LLM should see the miss and adjust)
+
+### `_manifest_tools() -> list[dict]` (conditional tool registration)
+
+Returns the `query_code_structure` tool schema when `ManifestRegistry` is available, empty list otherwise. Called by `get_tools()`:
+
+```python
+def get_tools(self):
+    return [read_file, search_codebase, list_directory, run_test] + self._manifest_tools()
+
+def _manifest_tools(self):
+    if not self.manifest_registry:
+        return []
+    return [{"name": "query_code_structure", ...}]
+```
+
+### `_render_manifest_context(context) -> str` (system prompt helper)
+
+Renders manifest structural context for the system prompt with a budget of `manifest_context_budget` (default 4,000 chars). Progressive truncation strategy:
+1. Full element summaries for issue-referenced files
+2. Top-N elements by caller count (if budget exceeded)
+3. Count-only summary (if still exceeded)
+
+Returns empty string when `ManifestRegistry` is absent.
+
 ---
 
 ## 6. Sandboxing and Safety
@@ -201,10 +235,45 @@ Handler writes directly to context dict: `context["localization"] = output`
 
 This matches existing patterns — handlers mutate `context` directly (e.g., `context["design_results"]`).
 
+**ManifestRegistry wiring**: The `ExplorePhaseHandler` constructor accepts an optional `manifest_registry` parameter. The caller (typically `ArtisanContractorWorkflow` or a script) is responsible for constructing the `ManifestRegistry` and passing it in:
+
+```python
+# In workflow setup or script
+from startd8.observability.manifest import ManifestRegistry
+
+manifest = ManifestRegistry.from_cache(project_root)  # None if no cache
+explore_handler = ExplorePhaseHandler(
+    project_root=project_root,
+    manifest_registry=manifest,  # None = 4-tool mode, present = 5-tool mode
+    model="claude-sonnet-4-20250514",
+)
+```
+
+The handler does NOT attempt to generate or load manifests itself — it is a pure consumer.
+
+**Enriched output schema**: When `ManifestRegistry` is available, `parse_final_output()` includes manifest-enriched fields:
+
+```python
+context["localization"] = {
+    # Core fields (always present)
+    "fault_files": [...],
+    "root_cause": "...",
+    "relevant_code": {...},
+    "affected_tests": [...],
+    "fix_approach": "...",
+
+    # Manifest-enriched fields (present only when ManifestRegistry available)
+    "target_fqns": ["startd8.auth._validate_token", ...],      # FQN-precise localization
+    "blast_radius": {"startd8.auth._validate_token": 7, ...},  # Transitive caller count
+}
+```
+
+Downstream phases MUST tolerate absent manifest-enriched fields (graceful degradation).
+
 ### Context Validation
 
 - **Entry requirements** for `"explore"`: `["project_root"]`
-- **Exit model** `ExplorePhaseOutput`: validates `localization` has `fault_files`, `root_cause`, `fix_approach`
+- **Exit model** `ExplorePhaseOutput`: validates `localization` has `fault_files`, `root_cause`, `fix_approach`. Fields `target_fqns` and `blast_radius` are `Optional` — not validated as required
 - **Exit keys**: `["localization"]`
 - Downstream DESIGN phase receives localization as additive context — no changes to DESIGN entry requirements needed
 
@@ -245,15 +314,27 @@ This matches existing patterns — handlers mutate `context` directly (e.g., `co
 | `test_run_test_non_whitelisted_rejected` | `rm -rf /` rejected |
 | `test_run_test_timeout_enforced` | Timeout message returned |
 | `test_run_test_hard_cap_60s` | 120s request → 60s actual |
-| `test_get_tools_returns_four_tools` | Correct tool schemas |
+| `test_get_tools_returns_four_tools` | Correct tool schemas (no manifest) |
+| `test_get_tools_returns_five_tools_with_manifest` | Includes `query_code_structure` when `ManifestRegistry` provided |
+| `test_query_code_structure_element_summary` | Routes to `manifest_registry.file_element_summary()` |
+| `test_query_code_structure_callers_of` | Routes to `manifest_registry.callers_of()` |
+| `test_query_code_structure_blast_radius` | Routes to `manifest_registry.blast_radius()` with `max_depth` |
+| `test_query_code_structure_unknown_fqn` | Returns descriptive error, not exception |
 | `test_system_prompt_includes_codebase_summary` | Summary in prompt |
+| `test_system_prompt_includes_manifest_context` | Manifest structural context rendered when registry present |
+| `test_system_prompt_omits_manifest_when_absent` | No manifest content when registry is None |
+| `test_manifest_context_budget_truncation` | Progressive truncation at 4000 char budget |
 | `test_parse_final_output_extracts_localization` | Dict extraction works |
+| `test_parse_final_output_includes_target_fqns` | FQN fields extracted when present |
+| `test_parse_final_output_tolerates_missing_fqns` | Graceful when manifest fields absent |
 
 ### Mocking Strategy
 
 - Mock Anthropic client via `unittest.mock.patch` or constructor injection
 - Mock `subprocess.run` for `_run_test`
+- Mock `ManifestRegistry` via constructor injection (`manifest_registry=mock_registry`) — duck-type with `file_element_summary()`, `callers_of()`, `blast_radius()`, `lookup()` methods
 - Use `tmp_path` fixture for filesystem tests
+- Test both `manifest_registry=None` (4-tool mode) and `manifest_registry=mock` (5-tool mode) paths
 
 ---
 
@@ -267,6 +348,8 @@ This matches existing patterns — handlers mutate `context` directly (e.g., `co
 | `test_explore_timeout_respected` | `PhaseStatus.TIMED_OUT` returned |
 | `test_explore_context_available_to_design_phase` | DESIGN receives localization |
 | `test_checkpoint_includes_explore_results` | Checkpoint JSON has explore output |
+| `test_explore_with_manifest_enriches_output` | `target_fqns` and `blast_radius` present when `ManifestRegistry` provided |
+| `test_explore_without_manifest_still_succeeds` | Graceful degradation: 4-tool mode produces valid localization |
 
 ---
 
@@ -306,7 +389,9 @@ Design doc only defines it on `ExplorePhaseHandler`. Should be abstract on `Tool
 ### Phase 2: Tools (Day 1, PM)
 5. Implement `ExplorePhaseHandler`:
    - `_validate_path()` sandboxing
-   - 4 tool implementations
+   - 4 core tool implementations
+   - Conditional `_query_code_structure()` + `_manifest_tools()` (routes to `ManifestRegistry`)
+   - `_render_manifest_context()` with progressive truncation (4000 char budget)
    - `get_system_prompt()`, `_build_initial_message()`
 
 ### Phase 3: Output Parsing (Day 2, AM)
@@ -326,6 +411,30 @@ Design doc only defines it on `ExplorePhaseHandler`. Should be abstract on `Tool
 
 ---
 
+## 13. Relationship to Code Manifest
+
+The EXPLORE phase may have both a Code Manifest (`ManifestRegistry` instance) and Context Bridge output (`context["bridge_context"]`) available simultaneously. These are **complementary, not conflicting** data sources:
+
+| Dimension | Code Manifest (ManifestRegistry) | Context Bridge (ContextBridgeResult) |
+|-----------|--------------------------------|--------------------------------------|
+| **Granularity** | Per-element: FQNs, signatures, spans, call graph | Per-file/per-service: capability inventory, service dependencies, LOC |
+| **EXPLORE usage** | `query_code_structure` tool (interactive) + system prompt structural context (static) | `codebase_summary` in system prompt (static) |
+| **Output enrichment** | `target_fqns`, `blast_radius` in localization report | `fault_files`, `relevant_code` (file-level) |
+| **Cost** | Zero (in-memory lookup of pre-computed static analysis) | Zero (deterministic transformation) |
+| **Availability** | Requires `startd8 manifest generate` or cache from prior run | Requires Eagle + ContextCore installed |
+
+**Implementation guidelines:**
+
+1. **Constructor injection**: `ExplorePhaseHandler.__init__(manifest_registry=None)` — caller provides, handler consumes. Handler never generates or loads manifests.
+2. **Conditional tool registration**: `get_tools()` returns 4 tools when `manifest_registry is None`, 5 tools when present. The `_manifest_tools()` helper encapsulates this.
+3. **System prompt enrichment**: `_render_manifest_context()` injects element summaries and call graph data into the system prompt within a `manifest_context_budget` (default 4000 chars). Returns empty string when absent.
+4. **Graceful degradation**: All manifest-dependent paths are guarded by `if self.manifest_registry:`. The handler MUST function identically in 4-tool mode — the 5th tool and enriched output fields are additive, never required.
+5. **Context key namespace**: `context["project_manifests"]` (Code Manifest), `context["bridge_context"]` (Context Bridge), `context["localization"]` (EXPLORE output) — non-overlapping, no merge logic needed.
+
+This mirrors the pattern established in the Context Bridge Plan (Section 12) and the Code Manifest Phase 4/6 pipeline requirements (GD-1 through GD-5 graceful degradation clauses).
+
+---
+
 ## Critical Files
 
 | File | Why |
@@ -335,6 +444,7 @@ Design doc only defines it on `ExplorePhaseHandler`. Should be abstract on `Tool
 | `src/startd8/mcp/gateway.py` (line 623-698) | Reference pattern for Anthropic SDK tool_use |
 | `src/startd8/agents/claude.py` | Reference for client init, cost tracking |
 | `src/startd8/costs/pricing.py` | PricingService to reuse for cost calculation |
+| `src/startd8/observability/manifest.py` | `ManifestRegistry` — optional dependency for `query_code_structure` tool and system prompt enrichment |
 
 ---
 
