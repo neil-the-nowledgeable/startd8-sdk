@@ -346,6 +346,11 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--max-tasks", "--max-features", "--limit", type=int, default=None,
+        dest="max_tasks",
+        help="Maximum number of tasks to process (default: all). Aliased as --limit and --max-features.",
+    )
+    parser.add_argument(
         "--abort-on-preflight-fail", action="store_true",
         help="Abort PLAN phase if preflight checks report any failures",
     )
@@ -726,6 +731,28 @@ def main() -> int:
         task_filter = [t.strip() for t in args.task_filter.split(",") if t.strip()]
         if not task_filter:
             parser.error("--task-filter requires at least one non-empty task ID")
+            
+    # Apply max-tasks limit if specified (must happen after retry-incomplete filters the list)
+    if args.max_tasks is not None:
+        if args.task_filter:
+            # Note: task_filter takes precedence, but if both are provided, we limit the filter list
+            if args.max_tasks < len(task_filter):
+                logger.info("Applying --max-tasks=%d to --task-filter list (originally %d tasks)", args.max_tasks, len(task_filter))
+                task_filter = task_filter[:args.max_tasks]
+                # Re-synthesize the comma-joined string so the rest of the script sees only the truncated list
+                args.task_filter = ",".join(task_filter)
+        else:
+            # If no task_filter is set (all tasks), we need to read the seed to determine which tasks to keep
+            try:
+                all_tasks = json.loads(seed_path.read_text(encoding="utf-8")).get("tasks", [])
+                if args.max_tasks < len(all_tasks):
+                    logger.info("Applying --max-tasks=%d to all seed tasks (originally %d tasks)", args.max_tasks, len(all_tasks))
+                    # We create a task filter of the first N tasks to cleanly restrict the run without modifying the seed file
+                    task_filter = [t["task_id"] for t in all_tasks[:args.max_tasks]]
+                    args.task_filter = ",".join(task_filter)
+            except (json.JSONDecodeError, OSError) as exc:
+                logger.error("Cannot read seed to apply --max-tasks limit: %s", exc)
+                return 1
 
     # ------------------------------------------------------------------
     # Auto-enrich: prefer existing enriched seed, else run preflight
