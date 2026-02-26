@@ -85,11 +85,11 @@ class TestImplementYamlLoading:
             assert f"TEST_{p}" in result
 
     def test_template_count(self):
-        """implement.yaml contains exactly 15 prompt entries."""
+        """implement.yaml contains exactly 18 prompt entries (15 original + 2 T2 refine + 1 AR-410 disambiguation)."""
         from startd8.contractors.artisan_phases.prompts import _load_file
 
         data = _load_file("implement")
-        assert len(data["prompts"]) == 15
+        assert len(data["prompts"]) == 18
 
 
 # ============================================================================
@@ -308,3 +308,195 @@ class TestEditFirstDirective:
         chunk = _FakeChunk(metadata={})
         result = executor._build_task_description(chunk, {})
         assert "Edit-First Directive" not in result
+
+
+# ============================================================================
+# Part 5: Design doc target-file filtering (DF-1)
+# ============================================================================
+
+
+class TestDesignDocTargetFiltering:
+    """DF-1: Design doc code blocks are filtered to only include target files.
+
+    _filter_design_doc_for_targets() redacts fenced code blocks in
+    ``### <filepath>`` sections when the file is not in file_targets, while
+    preserving all prose context.
+    """
+
+    @staticmethod
+    def _filter(doc: str, targets: List[str]) -> str:
+        from startd8.contractors.artisan_phases.development import (
+            LeadContractorChunkExecutor,
+        )
+        return LeadContractorChunkExecutor._filter_design_doc_for_targets(doc, targets)
+
+    # -- basic filtering behaviour ------------------------------------------
+
+    def test_non_target_code_block_replaced_with_placeholder(self):
+        """Code block under ### <non-target-file> is replaced."""
+        doc = (
+            "## Overview\nSome prose.\n"
+            "### src/target.py\n"
+            "```python\ndef target(): pass\n```\n"
+            "### src/other.py\n"
+            "```python\ndef other(): pass\n```\n"
+        )
+        result = self._filter(doc, ["src/target.py"])
+        # Target file's code is preserved
+        assert "def target(): pass" in result
+        # Non-target file's code is redacted
+        assert "def other(): pass" not in result
+        assert "not a target file" in result
+        assert "`src/other.py`" in result
+
+    def test_target_code_block_preserved(self):
+        """Code block under ### <target-file> is kept verbatim."""
+        doc = (
+            "### pyproject.toml\n"
+            "```toml\n[build-system]\nrequires = [\"setuptools\"]\n```\n"
+        )
+        result = self._filter(doc, ["pyproject.toml"])
+        assert "[build-system]" in result
+        assert "not a target file" not in result
+
+    def test_all_targets_match_no_filtering(self):
+        """When every ### file section is a target, doc is returned unchanged."""
+        doc = (
+            "### src/a.py\n```python\npass\n```\n"
+            "### src/b.py\n```python\npass\n```\n"
+        )
+        result = self._filter(doc, ["src/a.py", "src/b.py"])
+        assert result == doc
+
+    def test_empty_targets_returns_unchanged(self):
+        """Empty file_targets list means no filtering."""
+        doc = "### src/x.py\n```python\ncode\n```\n"
+        assert self._filter(doc, []) == doc
+
+    # -- prose preservation -------------------------------------------------
+
+    def test_prose_in_non_target_section_preserved(self):
+        """Prose under a non-target ### section is kept; only code is redacted."""
+        doc = (
+            "### tests/__init__.py\n"
+            "This file marks the test package.\n"
+            "```python\n# empty\n```\n"
+            "It should be committed.\n"
+        )
+        result = self._filter(doc, ["src/main.py"])
+        assert "marks the test package" in result
+        assert "should be committed" in result
+        assert "# empty" not in result
+
+    def test_top_level_sections_always_preserved(self):
+        """## sections (non-file) are never filtered."""
+        doc = (
+            "## Architecture\nImportant design context.\n"
+            "```\ndiagram here\n```\n"
+            "### src/other.py\n"
+            "```python\ndef x(): pass\n```\n"
+        )
+        result = self._filter(doc, ["src/main.py"])
+        assert "Important design context" in result
+        assert "diagram here" in result
+        # Non-target file section code is redacted
+        assert "def x(): pass" not in result
+
+    def test_non_file_subsections_preserved(self):
+        """### headings that don't look like file paths are kept intact."""
+        doc = (
+            "### Build System & Dependencies\n"
+            "```toml\n[build-system]\nrequires = [\"setuptools\"]\n```\n"
+            "### Developer Setup\n"
+            "```bash\npip install -e .\n```\n"
+        )
+        result = self._filter(doc, ["src/main.py"])
+        # These aren't file-path headings, so nothing is filtered
+        assert "[build-system]" in result
+        assert "pip install -e ." in result
+
+    # -- normalisation and edge cases ---------------------------------------
+
+    def test_basename_matching(self):
+        """Target 'src/hybrid_scaffold.py' matches heading 'src/hybrid_scaffold.py'."""
+        doc = "### src/hybrid_scaffold.py\n```python\ncode\n```\n"
+        result = self._filter(doc, ["src/hybrid_scaffold.py"])
+        assert "code" in result
+        assert "not a target file" not in result
+
+    def test_leading_dot_slash_stripped(self):
+        """./src/x.py in targets matches src/x.py in heading."""
+        doc = "### src/x.py\n```python\ncode\n```\n"
+        result = self._filter(doc, ["./src/x.py"])
+        assert "code" in result
+        assert "not a target file" not in result
+
+    def test_backtick_wrapped_heading(self):
+        """### `src/x.py` (backtick-wrapped) is recognised as a file path."""
+        doc = "### `src/x.py`\n```python\ncode\n```\n"
+        result = self._filter(doc, ["src/other.py"])
+        assert "code" not in result
+        assert "not a target file" in result
+
+    def test_multiple_code_blocks_in_non_target_section(self):
+        """All code blocks within a non-target section are redacted."""
+        doc = (
+            "### tests/test_main.py\n"
+            "First block:\n"
+            "```python\ndef test_a(): pass\n```\n"
+            "Second block:\n"
+            "```python\ndef test_b(): pass\n```\n"
+        )
+        result = self._filter(doc, ["src/main.py"])
+        assert "def test_a" not in result
+        assert "def test_b" not in result
+        assert "First block:" in result
+        assert "Second block:" in result
+
+    def test_section_reset_at_h2(self):
+        """## heading resets the non-target state."""
+        doc = (
+            "### src/other.py\n"
+            "```python\nhidden\n```\n"
+            "## Testing Strategy\n"
+            "```python\n# test example - should survive\n```\n"
+        )
+        result = self._filter(doc, ["src/main.py"])
+        assert "hidden" not in result
+        assert "# test example - should survive" in result
+
+    # -- integration with _build_design_framing ----------------------------
+
+    def test_build_design_framing_uses_filtered_doc(self):
+        """_build_design_framing injects the filtered doc, not the raw one."""
+        executor = _make_executor()
+        doc = (
+            "## Overview\nContext.\n"
+            "### src/widget.py\n```python\ndef widget(): pass\n```\n"
+            "### tests/test_widget.py\n```python\ndef test_it(): pass\n```\n"
+        )
+        chunk = _FakeChunk(
+            file_targets=["src/widget.py"],
+            metadata={"design_document": doc},
+        )
+        result = executor._build_task_description(chunk, {})
+        assert "def widget(): pass" in result
+        assert "def test_it(): pass" not in result
+        assert "not a target file" in result
+
+    def test_scope_metrics_reflect_filtered_doc(self):
+        """Design Scope line counts reflect the filtered doc, not the raw one."""
+        executor = _make_executor()
+        # 2-line code block in non-target section will be replaced by 1 placeholder line
+        doc = (
+            "## Overview\nLine.\n"
+            "### src/removed.py\n"
+            "```python\nline1\nline2\nline3\nline4\nline5\n```\n"
+        )
+        chunk = _FakeChunk(
+            file_targets=["src/other.py"],
+            metadata={"design_document": doc},
+        )
+        result = executor._build_task_description(chunk, {})
+        # The raw doc has 10 lines; filtered should be fewer
+        assert "Design Scope:" in result

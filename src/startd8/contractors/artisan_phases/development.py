@@ -55,6 +55,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -85,6 +86,15 @@ _implement_tracer = _trace.get_tracer("startd8.artisan.implement") if _HAS_OTEL 
 
 _log = get_logger(__name__)
 
+# AR-411: template-default placeholders that indicate stale .contextcore.yaml fields.
+# When ALL non-empty sub-fields of a section match these markers, the entire section
+# is suppressed to avoid wasting tokens and injecting contradictory constraints.
+_STALE_CONTEXT_MARKERS: Dict[str, List[str]] = {
+    "objectives": ["Example objective", "update with real business goal"],
+    "constraints": ["Do NOT proceed to Phase 1"],
+    "service_metadata": ["HEALTHCHECK type MUST match transport_protocol"],
+}
+
 
 def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]:
     """Load and format a template from ``implement.yaml``.
@@ -110,6 +120,49 @@ def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]
 # ============================================================================
 # ENUMS
 # ============================================================================
+
+
+class TaskComplexityTier(str, Enum):
+    """Complexity-Driven Model Router tier classification (REQ-CMR-000).
+
+    Determines which model architecture is used per IMPLEMENT chunk:
+        TIER_1: Haiku only — T2 refinement skipped (simple greenfield tasks)
+        TIER_2: Haiku + T2 Sonnet — current default behavior
+        TIER_3: Opus as T1 drafter — highest-capability model for complex edits
+    """
+
+    TIER_1 = "tier_1"
+    TIER_2 = "tier_2"
+    TIER_3 = "tier_3"
+
+
+@dataclass(frozen=True)
+class TaskComplexitySignals:
+    """Per-task complexity signals extracted from manifest data (REQ-CMR-001).
+
+    All fields use primitive types with safe defaults that classify as TIER_2
+    (the current default behavior) when no manifest data is available.
+    """
+
+    blast_radius: int = 0
+    caller_count: int = 0
+    has_dynamic_dispatch: bool = False
+    is_closure: bool = False
+    estimated_loc: int = 0
+    target_file_count: int = 1
+    edit_mode: str = "unknown"
+    mro_depth: int = 0
+    unresolved_call_count: int = 0
+    has_cross_file_edges: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize to dict for JSON storage and forensic logging.
+
+        Uses ``dataclasses.asdict`` so new fields are automatically included.
+        """
+        from dataclasses import asdict
+
+        return asdict(self)
 
 
 class ChunkStatus(str, Enum):
@@ -1753,6 +1806,107 @@ class LeadContractorChunkExecutor(ChunkExecutor):
 
         return [text, "\n---\n"]
 
+    # -- helper: design doc target-file filtering (DF-1) -------------------
+
+    # File extension pattern for recognising file paths in ### headings.
+    _DESIGN_FILE_EXT_RE = re.compile(
+        r"\.(?:py|toml|yaml|yml|json|md|txt|cfg|ini|typed|html|css|"
+        r"js|ts|tsx|jsx|go|rs|java|rb|sh|sql|xml|env|bat|csv)\s*$"
+    )
+
+    @staticmethod
+    def _filter_design_doc_for_targets(
+        design_doc: str,
+        file_targets: List[str],
+    ) -> str:
+        """Filter design doc to redact code blocks belonging to non-target files.
+
+        When a ``### <filepath>`` heading names a file that is **not** in
+        *file_targets*, every fenced code block within that section is replaced
+        with a short placeholder note.  Prose is preserved so the drafter still
+        gets the architectural context without being tempted to generate code
+        for files it is not responsible for.
+
+        Args:
+            design_doc: Raw markdown text from the DESIGN phase.
+            file_targets: Paths the current chunk must generate.
+
+        Returns:
+            Filtered markdown with non-target code blocks replaced.
+        """
+        if not file_targets:
+            return design_doc
+
+        # Build a normalised set for flexible matching (full path + basename).
+        target_set: Set[str] = set()
+        for t in file_targets:
+            clean = t.lstrip("./")
+            target_set.add(clean)
+            target_set.add(os.path.basename(clean))
+
+        ext_re = LeadContractorChunkExecutor._DESIGN_FILE_EXT_RE
+
+        lines = design_doc.splitlines(keepends=True)
+        result: List[str] = []
+
+        # State: the non-target file detected for the current ### section,
+        # or None when we are in prose / a target-file section.
+        section_file: Optional[str] = None
+        in_fence = False
+        skip_fence = False
+
+        for line in lines:
+            stripped = line.strip()
+
+            # --- section boundary tracking (only outside fences) -----------
+            if not in_fence and stripped.startswith("### "):
+                heading = stripped[4:].strip().strip("`")
+                if ext_re.search(heading):
+                    clean = heading.lstrip("./")
+                    basename = os.path.basename(clean)
+                    if clean not in target_set and basename not in target_set:
+                        section_file = clean
+                    else:
+                        section_file = None
+                else:
+                    section_file = None
+                result.append(line)
+                continue
+
+            # Reset at ## level (broader sections are always preserved).
+            if not in_fence and stripped.startswith("## ") and not stripped.startswith("### "):
+                section_file = None
+                result.append(line)
+                continue
+
+            # --- fenced code block boundaries ------------------------------
+            if stripped.startswith("```"):
+                if not in_fence:
+                    in_fence = True
+                    if section_file is not None:
+                        skip_fence = True
+                        result.append(
+                            f"> *[Code for `{section_file}` omitted — "
+                            f"not a target file for this task]*\n\n"
+                        )
+                    else:
+                        skip_fence = False
+                        result.append(line)
+                else:
+                    in_fence = False
+                    if not skip_fence:
+                        result.append(line)
+                    skip_fence = False
+                continue
+
+            # Inside a skipped fence — drop the line silently.
+            if in_fence and skip_fence:
+                continue
+
+            result.append(line)
+
+        return "".join(result)
+
     # -- helper: design document framing (B-5 fix) -------------------------
 
     @staticmethod
@@ -1765,15 +1919,21 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if not design_doc:
             return []
 
-        # Read cached metrics from handoff (computed once in _tasks_to_chunks).
-        # Fallback to local parse for chunks built by older code.
-        design_lines = chunk.metadata.get("_design_lines", 0)
-        design_sections = chunk.metadata.get("_design_sections", 0)
-        if not design_lines:
-            for line in design_doc.strip().splitlines():
-                design_lines += 1
-                if line.strip().startswith("##"):
-                    design_sections += 1
+        # DF-1: Filter the design doc so code blocks for non-target files
+        # are replaced with placeholders.  This prevents the drafter from
+        # generating code for files outside its responsibility.
+        filtered_doc = LeadContractorChunkExecutor._filter_design_doc_for_targets(
+            design_doc, getattr(chunk, "file_targets", []),
+        )
+
+        # Compute scope metrics from the *filtered* doc so the framing
+        # line-count matches what the drafter actually sees.
+        design_lines = 0
+        design_sections = 0
+        for line in filtered_doc.strip().splitlines():
+            design_lines += 1
+            if line.strip().startswith("##"):
+                design_sections += 1
 
         # B-5 fix: use edit framing when existing files are present,
         # greenfield framing ONLY when there are truly no existing files.
@@ -1821,7 +1981,33 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 "above for full scope)\n"
             )
 
-        return [framing, design_doc, "\n---\n", summary_label]
+        # AR-410: disambiguate when design doc contains S/R specification blocks
+        _has_sr = "<<<<<<< SEARCH" in filtered_doc or ">>>>>>> REPLACE" in filtered_doc
+        sr_note = ""
+        if _has_sr and template_name == "design_doc_edit":
+            sr_note = _format_implement_prompt("design_doc_sr_disambiguation") or (
+                "**NOTE:** The design document below uses SEARCH/REPLACE notation "
+                "to specify the changes to apply. These blocks describe WHAT to "
+                "change in the existing code \u2014 they are NOT your output format. "
+                "Follow the output format instructions in your system prompt.\n"
+            )
+
+        parts = [framing]
+        if sr_note:
+            parts.append(sr_note)
+        parts.extend([filtered_doc, "\n---\n", summary_label])
+        return parts
+
+    # -- helper: stale context detection (AR-411) --------------------------
+
+    @staticmethod
+    def _is_stale_context(field: str, values: Any) -> bool:
+        """Return True if *values* contain template-default placeholders."""
+        markers = _STALE_CONTEXT_MARKERS.get(field, [])
+        if not markers:
+            return False
+        text = str(values) if not isinstance(values, str) else values
+        return any(m in text for m in markers)
 
     # -- helper: supplementary context sections ----------------------------
 
@@ -1836,23 +2022,28 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             parts.append("\n## Design Completeness Warning")
             parts.append(completeness_warning)
 
-        # PCA-300: project architecture section
+        # PCA-300: project architecture section (AR-411: suppress stale template defaults)
         arch_ctx = chunk.metadata.get("architectural_context")
         if arch_ctx and isinstance(arch_ctx, dict):
-            _arch_parts: List[str] = []
             objectives = arch_ctx.get("objectives")
-            if objectives:
-                _arch_parts.append("**Objectives:**")
-                for obj in (objectives if isinstance(objectives, list) else [objectives])[:3]:
-                    _arch_parts.append(f"- {obj}")
             arch_constraints = arch_ctx.get("constraints")
-            if arch_constraints:
-                _arch_parts.append("**Constraints:**")
-                for con in (arch_constraints if isinstance(arch_constraints, list) else [arch_constraints])[:5]:
-                    _arch_parts.append(f"- {con}")
-            if _arch_parts:
-                parts.append("\n## Project Architecture")
-                parts.extend(_arch_parts)
+            _obj_stale = LeadContractorChunkExecutor._is_stale_context("objectives", objectives) if objectives else True
+            _con_stale = LeadContractorChunkExecutor._is_stale_context("constraints", arch_constraints) if arch_constraints else True
+            if _obj_stale and _con_stale:
+                _log.debug("AR-411: suppressed stale architectural_context (template defaults)")
+            else:
+                _arch_parts: List[str] = []
+                if objectives and not _obj_stale:
+                    _arch_parts.append("**Objectives:**")
+                    for obj in (objectives if isinstance(objectives, list) else [objectives])[:3]:
+                        _arch_parts.append(f"- {obj}")
+                if arch_constraints and not _con_stale:
+                    _arch_parts.append("**Constraints:**")
+                    for con in (arch_constraints if isinstance(arch_constraints, list) else [arch_constraints])[:5]:
+                        _arch_parts.append(f"- {con}")
+                if _arch_parts:
+                    parts.append("\n## Project Architecture")
+                    parts.extend(_arch_parts)
 
         plan_goals = chunk.metadata.get("plan_goals")
         if plan_goals and isinstance(plan_goals, list):
@@ -1860,20 +2051,26 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             for goal in plan_goals[:5]:
                 parts.append(f"- {goal}")
 
-        # PCA-301: service metadata section
+        # PCA-301: service metadata section (AR-411: suppress stale boilerplate)
         svc_meta = chunk.metadata.get("service_metadata")
         if svc_meta and isinstance(svc_meta, dict):
-            parts.append("\n## Service Metadata")
             tp = svc_meta.get("transport_protocol")
-            if tp:
-                parts.append(f"- Transport protocol: {tp}")
             rd = svc_meta.get("runtime_dependencies")
-            if rd and isinstance(rd, list):
-                parts.append(f"- Runtime dependencies: {', '.join(str(d) for d in rd)}")
-            parts.append(
-                "HEALTHCHECK type MUST match transport_protocol. "
-                "Do NOT add capabilities the service does not use."
-            )
+            _has_useful_svc = bool(tp) or (rd and isinstance(rd, list) and len(rd) > 0)
+            if not _has_useful_svc:
+                # AR-411: dict has no transport_protocol and no runtime_dependencies
+                # — the section would only contain the hardcoded boilerplate constraint.
+                _log.debug("AR-411: suppressed stale service_metadata (no transport_protocol, no runtime_dependencies)")
+            else:
+                parts.append("\n## Service Metadata")
+                if tp:
+                    parts.append(f"- Transport protocol: {tp}")
+                if rd and isinstance(rd, list):
+                    parts.append(f"- Runtime dependencies: {', '.join(str(d) for d in rd)}")
+                parts.append(
+                    "HEALTHCHECK type MUST match transport_protocol. "
+                    "Do NOT add capabilities the service does not use."
+                )
 
         # PCA-401: plan context section
         plan_context = chunk.metadata.get("plan_context")
@@ -2187,6 +2384,8 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
     def __init__(
         self,
         drafter_spec: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
+        refiner_spec: Optional[str] = None,
+        tier3_drafter_spec: Optional[str] = None,
         output_dir: Optional[Path] = None,
         max_tokens: Optional[int] = None,
         project_root: Optional[Path] = None,
@@ -2195,7 +2394,11 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         """Initialize the Artisan chunk executor.
 
         Args:
-            drafter_spec: Agent spec string for the implementation drafter.
+            drafter_spec: Agent spec string for the T1 implementation drafter.
+            refiner_spec: Agent spec string for the T2 refiner. When ``None``,
+                T2 refinement is skipped and T1 output is used directly.
+            tier3_drafter_spec: Agent spec for Tier 3 Opus drafter (REQ-CMR-021).
+                When ``None``, Tier 3 chunks fall back to the default drafter_spec.
             output_dir: Staging directory for writing generated files.
             max_tokens: Override max_tokens for agent creation.
             project_root: Project root for reading existing files.
@@ -2211,7 +2414,11 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             **kwargs,
         )
         self._drafter_spec = drafter_spec
+        self._refiner_spec = refiner_spec
+        self._tier3_drafter_spec = tier3_drafter_spec
         self._artisan_drafter: Optional[Any] = None
+        self._artisan_refiner: Optional[Any] = None
+        self._artisan_tier3_drafter: Optional[Any] = None
         self._artisan_max_tokens = max_tokens or 64000
         self.logger = get_logger("startd8.development.artisan_executor")
 
@@ -2233,6 +2440,350 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             max_tokens=self._artisan_max_tokens,
         )
         return self._artisan_drafter
+
+    def _resolve_artisan_refiner(self) -> Optional[Any]:
+        """Resolve the T2 refiner agent spec to a BaseAgent (cached).
+
+        Returns ``None`` when ``refiner_spec`` is not configured.
+        """
+        if self._refiner_spec is None:
+            return None
+        if self._artisan_refiner is not None:
+            return self._artisan_refiner
+
+        from startd8.utils.agent_resolution import resolve_agent_spec
+
+        self.logger.info("Resolving artisan T2 refiner agent: %s", self._refiner_spec)
+        self._artisan_refiner = resolve_agent_spec(
+            self._refiner_spec,
+            name="artisan-refiner-t2",
+            max_tokens=self._artisan_max_tokens,
+        )
+        return self._artisan_refiner
+
+    def _resolve_tier3_drafter(self) -> Optional[Any]:
+        """Resolve the Tier 3 Opus drafter agent spec (lazy, cached) (REQ-CMR-021).
+
+        Returns ``None`` when ``tier3_drafter_spec`` is not configured.
+        """
+        if self._tier3_drafter_spec is None:
+            return None
+        if self._artisan_tier3_drafter is not None:
+            return self._artisan_tier3_drafter
+
+        from startd8.utils.agent_resolution import resolve_agent_spec
+
+        self.logger.info("Resolving Tier 3 Opus drafter agent: %s", self._tier3_drafter_spec)
+        self._artisan_tier3_drafter = resolve_agent_spec(
+            self._tier3_drafter_spec,
+            name="artisan-drafter-tier3",
+            max_tokens=self._artisan_max_tokens,
+        )
+        return self._artisan_tier3_drafter
+
+    # ------------------------------------------------------------------
+    # T2 condensed context (AR-412)
+    # ------------------------------------------------------------------
+
+    def _build_t2_context(self, chunk: "DevelopmentChunk", context: Dict[str, Any]) -> str:
+        """Build condensed context for T2 refinement (AR-412).
+
+        Includes: project name (1-line), target files, design document,
+        task description, key constraints (parameter_sources, semantic_conventions,
+        prompt_constraints).
+        Excludes: existing file content, S/R instructions, edit-first directive,
+        full project identity, plan goals/context.
+        """
+        parts: List[str] = []
+
+        # 1-line project summary
+        proj_name = chunk.metadata.get("project_name", "")
+        if proj_name:
+            parts.append(f"**Project:** {proj_name}")
+
+        # Target files
+        if chunk.file_targets:
+            parts.append("**Target files:** " + ", ".join(f"`{f}`" for f in chunk.file_targets))
+
+        # Design document (the core specification T2 must match)
+        design_doc = chunk.metadata.get("design_document")
+        if design_doc:
+            parts.append("\n## Design Document")
+            parts.append(design_doc)
+
+        # Task description (chunk.description only, NOT the full assembled T1 prompt)
+        parts.append("\n## Task Description")
+        parts.append(chunk.description)
+
+        # Key constraints (reuse relevant parts from _build_supplementary_context)
+        constraints = chunk.metadata.get("prompt_constraints", [])
+        if constraints:
+            from startd8.contractors.artisan_phases.prompts import format_constraints
+            parts.append("\n## Constraints")
+            parts.append(format_constraints(constraints))
+
+        param_sources = chunk.metadata.get("parameter_sources")
+        if param_sources and isinstance(param_sources, dict):
+            parts.append("\n## Parameter Sources (use these names exactly)")
+            for name, source in list(param_sources.items())[:20]:
+                if isinstance(source, dict):
+                    origin = source.get("origin", source.get("source", ""))
+                    parts.append(f"- `{name}`: {origin}")
+                else:
+                    parts.append(f"- `{name}`: {source}")
+
+        sem_conv = chunk.metadata.get("semantic_conventions")
+        if sem_conv and isinstance(sem_conv, dict):
+            parts.append("\n## Semantic Conventions")
+            for key, value in list(sem_conv.items())[:10]:
+                if isinstance(value, dict):
+                    rule = value.get("rule", value.get("convention", str(value)))
+                    parts.append(f"- {key}: {rule}")
+                else:
+                    parts.append(f"- {key}: {value}")
+
+        return "\n".join(parts)
+
+    # ------------------------------------------------------------------
+    # T2 refinement pass
+    # ------------------------------------------------------------------
+
+    async def _refine_written_files(
+        self,
+        written_files: List[Path],
+        task_desc: str,
+        chunk: "DevelopmentChunk",
+        context: Dict[str, Any],
+    ) -> Optional[Tuple[List[Path], Dict[str, Any]]]:
+        """Run T2 refinement on files produced by the T1 drafter.
+
+        Reads back written files, builds a refinement prompt, calls T2,
+        and overwrites staging files with refined content.
+
+        Returns:
+            ``(updated_written_files, refine_info)`` on success, or ``None``
+            if refinement fails (caller keeps T1 output).
+        """
+        refiner = self._resolve_artisan_refiner()
+        if refiner is None:
+            return None
+
+        try:
+            # 1. Read back the T1-written files
+            draft_blocks: List[str] = []
+            for fpath in written_files:
+                try:
+                    content = fpath.read_text(encoding="utf-8")
+                    # Use relative path from output_dir for clean markers
+                    rel = fpath.relative_to(self._output_dir) if self._output_dir else fpath
+                    draft_blocks.append(
+                        f"```python\n# {rel}\n{content}\n```"
+                    )
+                except (OSError, UnicodeDecodeError) as exc:
+                    self.logger.warning(
+                        "T2 refine: could not read %s: %s", fpath, exc,
+                    )
+
+            if not draft_blocks:
+                self.logger.warning("T2 refine: no readable draft files — skipping")
+                return None
+
+            draft_code = "\n\n".join(draft_blocks)
+
+            # 2. Build refinement prompt from YAML templates (with fallback)
+            refine_sys = _format_implement_prompt("refine_system")
+            if refine_sys is None:
+                refine_sys = (
+                    "You are a senior software engineer performing code refinement. "
+                    "Fix bugs, improve types, match the design, follow conventions. "
+                    "Output the complete refined file(s) in fenced code blocks."
+                )
+
+            # AR-412: use condensed T2 context instead of full T1 prompt
+            t2_context = self._build_t2_context(chunk, context)
+            refine_user = _format_implement_prompt(
+                "refine_directive",
+                task_description=t2_context,
+                draft_code=draft_code,
+            )
+            if refine_user is None:
+                refine_user = (
+                    f"## T2 Refinement Pass\n\n"
+                    f"### Task Context\n{t2_context}\n\n"
+                    f"### Draft Code (T1 output)\n{draft_code}\n\n"
+                    f"Emit the complete refined file(s)."
+                )
+
+            # 3. Call T2
+            self.logger.info(
+                "T2 refinement for chunk %s (%d draft files, prompt %d chars)",
+                chunk.chunk_id,
+                len(written_files),
+                len(refine_user),
+            )
+            refine_text, refine_time_ms, refine_usage = await refiner.agenerate(
+                refine_user, system_prompt=refine_sys,
+            )
+
+            self.logger.info(
+                "T2 chunk %s: responded in %dms (%d in / %d out tokens)",
+                chunk.chunk_id,
+                refine_time_ms,
+                refine_usage.input,
+                refine_usage.output,
+            )
+
+            # 4. Extract refined code
+            from startd8.utils.code_extraction import (
+                extract_code_from_response,
+                extract_multi_file_code,
+            )
+
+            targets = chunk.file_targets or [str(f.relative_to(self._output_dir)) for f in written_files]
+            refined_files: Dict[str, str] = {}
+
+            if len(targets) > 1:
+                refined_files = extract_multi_file_code(refine_text, targets)
+
+            # Fallback: single-file or multi-file extraction failed
+            if not refined_files:
+                single_code = extract_code_from_response(refine_text)
+                if single_code and single_code.strip():
+                    refined_files[targets[0]] = single_code
+
+            if not refined_files:
+                self.logger.warning(
+                    "T2 refine: empty extraction for chunk %s — keeping T1 output",
+                    chunk.chunk_id,
+                )
+                return None
+
+            # 5. Overwrite staging files with refined content
+            updated_files: List[Path] = []
+            for target in targets:
+                if target in refined_files:
+                    out_path = self._output_dir / target if self._output_dir else Path(target)
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(refined_files[target], encoding="utf-8")
+                    updated_files.append(out_path)
+                    self.logger.info("T2 refined file: %s", out_path)
+                else:
+                    # Keep T1 version for files not in refined output
+                    orig = self._output_dir / target if self._output_dir else Path(target)
+                    if orig.exists():
+                        updated_files.append(orig)
+
+            # 6. Build refine info for cost accumulation
+            refine_info: Dict[str, Any] = {
+                "refine_cost_usd": refine_usage.cost_estimate,
+                "refine_input_tokens": refine_usage.input,
+                "refine_output_tokens": refine_usage.output,
+                "refine_time_ms": refine_time_ms,
+                "refine_model": getattr(refiner, "model", self._refiner_spec),
+                "refine_files_count": len(refined_files),
+            }
+
+            # CS4-T2: Forensic log for implement.chunk.refine
+            from startd8.contractors.forensic_log import emit_forensic_log
+            emit_forensic_log(
+                call_type="implement.chunk.refine",
+                call={
+                    "prompt_length": len(refine_user),
+                    "max_tokens": self._artisan_max_tokens,
+                    "model_spec": self._refiner_spec,
+                    "response_time_ms": refine_time_ms,
+                    "tokens_input": refine_usage.input,
+                    "tokens_output": refine_usage.output,
+                    "cost_usd": refine_usage.cost_estimate,
+                },
+                task={
+                    "task_id": chunk.chunk_id,
+                    "title": chunk.description,
+                    "phase": "implement",
+                    "target_files": chunk.file_targets,
+                },
+                context_propagation={
+                    "tier": "T2",
+                    "refined_files": list(refined_files.keys()),
+                },
+            )
+
+            return updated_files or written_files, refine_info
+
+        except Exception as exc:
+            self.logger.warning(
+                "T2 refinement failed for chunk %s (non-fatal, keeping T1): %s",
+                chunk.chunk_id,
+                exc,
+            )
+            return None
+
+    # ------------------------------------------------------------------
+    # Walkthrough prompt persistence
+    # ------------------------------------------------------------------
+
+    def _persist_walkthrough_prompts(
+        self,
+        chunk: "DevelopmentChunk",
+        task_desc: str,
+        sys_prompt: Optional[str],
+        context: Dict[str, Any],
+    ) -> None:
+        """Persist IMPLEMENT prompts to walkthrough directory (no LLM call)."""
+        project_root = self._project_root or Path(".")
+        wt_dir = project_root / ".startd8" / "walkthrough" / "implement" / chunk.chunk_id
+        wt_dir.mkdir(parents=True, exist_ok=True)
+
+        # T1 prompts
+        (wt_dir / "t1_system_prompt.md").write_text(
+            sys_prompt or "(no system prompt)", encoding="utf-8",
+        )
+        (wt_dir / "t1_user_prompt.md").write_text(task_desc, encoding="utf-8")
+
+        # T2 prompts (AR-412: condensed context instead of full T1 prompt)
+        t2_context = ""
+        if self._refiner_spec:
+            t2_context = self._build_t2_context(chunk, context)
+            refine_sys = _format_implement_prompt("refine_system") or (
+                "You are a senior software engineer performing code refinement."
+            )
+            refine_user = _format_implement_prompt(
+                "refine_directive",
+                task_description=t2_context,
+                draft_code="{draft_code}",
+            ) or (
+                f"## T2 Refinement Pass\n\n"
+                f"### Task Context\n{t2_context}\n\n"
+                f"### Draft Code (T1 output)\n{{draft_code}}\n\n"
+                f"Emit the complete refined file(s)."
+            )
+            (wt_dir / "t2_refine_system_prompt.md").write_text(
+                refine_sys, encoding="utf-8",
+            )
+            (wt_dir / "t2_refine_user_prompt.md").write_text(
+                refine_user, encoding="utf-8",
+            )
+
+        # Metadata
+        metadata = {
+            "chunk_id": chunk.chunk_id,
+            "description": chunk.description,
+            "target_files": chunk.file_targets,
+            "drafter_spec": self._drafter_spec,
+            "refiner_spec": self._refiner_spec,
+            "t1_system_prompt_chars": len(sys_prompt) if sys_prompt else 0,
+            "t1_user_prompt_chars": len(task_desc),
+            "estimated_t1_tokens": len(task_desc) // 4,
+            "estimated_t2_context_chars": len(t2_context) if self._refiner_spec else 0,
+        }
+        (wt_dir / "metadata.json").write_text(
+            json.dumps(metadata, indent=2), encoding="utf-8",
+        )
+        self.logger.info(
+            "Walkthrough: persisted IMPLEMENT prompts for chunk %s → %s",
+            chunk.chunk_id,
+            wt_dir,
+        )
 
     # ------------------------------------------------------------------
     # Search/replace prompt helpers
@@ -2503,19 +3054,37 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
 
             task_desc = self._build_task_description(chunk, context)
 
-            # Resolve agent
-            drafter = self._resolve_artisan_drafter()
+            # CMR: Select drafter based on complexity tier (REQ-CMR-020/021)
+            _complexity_tier = chunk.metadata.get(
+                "_complexity_tier", TaskComplexityTier.TIER_2.value,
+            )
+            if _complexity_tier == TaskComplexityTier.TIER_3.value:
+                tier3 = self._resolve_tier3_drafter()
+                drafter = tier3 if tier3 is not None else self._resolve_artisan_drafter()
+                _effective_drafter_spec = self._tier3_drafter_spec or self._drafter_spec
+            else:
+                drafter = self._resolve_artisan_drafter()
+                _effective_drafter_spec = self._drafter_spec
 
             # Select system prompt
             sys_prompt = self._get_system_prompt(chunk)
 
+            # ── Walkthrough short-circuit ────────────────────────────
+            if context.get("walkthrough"):
+                self._persist_walkthrough_prompts(chunk, task_desc, sys_prompt, context)
+                return True, "Walkthrough: prompts persisted, LLM call skipped"
+
             self.logger.info(
                 "Generating code for chunk %s via Artisan direct agenerate "
-                "(%d file targets, prompt %d chars, search_replace=%s)",
+                "(%d file targets, prompt %d chars, search_replace=%s, "
+                "tier=%s, drafter=%s, t2_skip=%s)",
                 chunk.chunk_id,
                 len(chunk.file_targets),
                 len(task_desc),
                 chunk.metadata.get("_use_search_replace", False),
+                _complexity_tier,
+                _effective_drafter_spec,
+                _complexity_tier == "tier_1",
             )
 
             # Call the LLM
@@ -2531,26 +3100,29 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 token_usage.output,
             )
 
-            # CS4: Forensic log for implement.chunk
+            # CS4: Forensic log for implement.chunk (REQ-CMR-032)
             from startd8.contractors.forensic_log import emit_forensic_log
             emit_forensic_log(
                 call_type="implement.chunk",
                 call={
                     "prompt_length": len(task_desc),
                     "max_tokens": self._artisan_max_tokens,
-                    "model_spec": self._drafter_spec,
+                    "model_spec": _effective_drafter_spec,
                     "response_time_ms": time_ms,
                     "tokens_input": token_usage.input,
                     "tokens_output": token_usage.output,
                     "cost_usd": token_usage.cost_estimate,
                     "attempt": context.get("_retry_attempt", 1),
                     "mode": "search_replace" if chunk.metadata.get("_use_search_replace") else "whole_file",
+                    "complexity_tier": _complexity_tier,
+                    "drafter_model": _effective_drafter_spec,
                 },
                 task={
                     "task_id": chunk.chunk_id,
                     "title": chunk.description,
                     "phase": "implement",
                     "target_files": chunk.file_targets,
+                    "complexity_signals": chunk.metadata.get("_complexity_signals", {}),
                 },
                 context_propagation={
                     "domain_defaulted": context.get("_domain_defaulted"),
@@ -2649,6 +3221,23 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                     return False, "LLM returned empty code after extraction"
                 written_files = self._write_generated_files(code, chunk)
 
+            # ── T2 Refinement pass (REQ-CMR-020) ──────────────────
+            # Tier 1: skip T2 (simple greenfield tasks)
+            # Tier 2/3: run T2 as before
+            refine_info: Dict[str, Any] = {}
+            _skip_t2 = _complexity_tier == TaskComplexityTier.TIER_1.value
+            if written_files and self._refiner_spec and not _skip_t2:
+                refined_result = await self._refine_written_files(
+                    written_files, task_desc, chunk, context,
+                )
+                if refined_result is not None:
+                    written_files, refine_info = refined_result
+            if _skip_t2:
+                self.logger.info(
+                    "CMR: Tier 1 — skipping T2 refinement for chunk %s",
+                    chunk.chunk_id,
+                )
+
             # ── Check for missing target files ────────────────────────
             if written_files and chunk.file_targets:
                 generated_names = {f.name for f in written_files}
@@ -2664,14 +3253,21 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                         sorted(missing),
                     )
 
-            # ── Accumulate cost metrics ───────────────────────────────
-            cost = token_usage.cost_estimate
+            # ── Accumulate cost metrics (T1 + T2) ────────────────────
+            t1_cost = token_usage.cost_estimate
+            t2_cost = refine_info.get("refine_cost_usd", 0.0)
+            cost = t1_cost + t2_cost
+
             context["_llm_cost_usd"] = context.get("_llm_cost_usd", 0.0) + cost
             context["_llm_input_tokens"] = (
-                context.get("_llm_input_tokens", 0) + token_usage.input
+                context.get("_llm_input_tokens", 0)
+                + token_usage.input
+                + refine_info.get("refine_input_tokens", 0)
             )
             context["_llm_output_tokens"] = (
-                context.get("_llm_output_tokens", 0) + token_usage.output
+                context.get("_llm_output_tokens", 0)
+                + token_usage.output
+                + refine_info.get("refine_output_tokens", 0)
             )
 
             # Store per-chunk cost in metadata for detailed reporting
@@ -2679,20 +3275,31 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             chunk.metadata["llm_input_tokens"] = token_usage.input
             chunk.metadata["llm_output_tokens"] = token_usage.output
             chunk.metadata["llm_time_ms"] = time_ms
-            chunk.metadata["llm_model"] = getattr(drafter, "model", self._drafter_spec)
+            chunk.metadata["llm_model"] = getattr(drafter, "model", _effective_drafter_spec)
             chunk.metadata["generated_files"] = [str(p) for p in written_files]
-            # Iterations is always 1 for direct agenerate
-            chunk.metadata["iterations"] = 1
+            # CMR: record effective drafter and T2 decision (REQ-CMR-032)
+            chunk.metadata["drafter_model"] = _effective_drafter_spec
+            chunk.metadata["t2_skipped"] = _skip_t2
+            # T2 refinement metadata
+            if refine_info:
+                chunk.metadata["refine_cost_usd"] = t2_cost
+                chunk.metadata["refine_input_tokens"] = refine_info.get("refine_input_tokens", 0)
+                chunk.metadata["refine_output_tokens"] = refine_info.get("refine_output_tokens", 0)
+                chunk.metadata["refine_time_ms"] = refine_info.get("refine_time_ms", 0)
+                chunk.metadata["refine_model"] = refine_info.get("refine_model", "")
+            # iterations = 2 when T2 ran, 1 otherwise
+            iterations = 2 if refine_info else 1
+            chunk.metadata["iterations"] = iterations
 
             # ── Build GenerationResult for downstream phases ──────────
             from startd8.contractors.protocols import GenerationResult
             gen_result = GenerationResult(
                 success=True,
                 generated_files=written_files,
-                input_tokens=token_usage.input,
-                output_tokens=token_usage.output,
+                input_tokens=token_usage.input + refine_info.get("refine_input_tokens", 0),
+                output_tokens=token_usage.output + refine_info.get("refine_output_tokens", 0),
                 cost_usd=cost,
-                iterations=1,
+                iterations=iterations,
                 model=getattr(drafter, "model", self._drafter_spec),
             )
             chunk.metadata["_generation_result"] = gen_result
@@ -3266,6 +3873,7 @@ class DevelopmentPhase:
         context: Dict[str, Any] = {
             "plan_id": plan.plan_id,
             "dry_run": plan.config.get("dry_run", False),
+            "walkthrough": plan.config.get("walkthrough", False),
             "example_artifacts": plan.config.get("example_artifacts", {}),
             "_dev_phase_started_mono": phase_started_mono,
         }
