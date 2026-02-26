@@ -57,6 +57,29 @@ def _make_workflow(quality_gate: str = "warn") -> ArtisanContractorWorkflow:
 class TestQualityGateBlock:
     """Block mode raises QualityGateError on failures."""
 
+    def test_design_phase_failures_raise(self):
+        wf = _make_workflow("block")
+        pr = _make_phase_result(
+            WorkflowPhase.DESIGN,
+            output={
+                "total_failed": 2,
+                "total_passed": 1,
+                "agreement_rate": 1 / 3,
+                "per_task": {
+                    "T-1": {"passed": True, "status": "designed"},
+                    "T-2": {"passed": False, "status": "designed", "reason": "DUAL_REJECTION"},
+                    "T-3": {"passed": False, "status": "design_failed", "reason": "DESIGN_FAILED"},
+                },
+            },
+        )
+        with pytest.raises(QualityGateError) as exc_info:
+            wf._check_quality_gate(WorkflowPhase.DESIGN, pr)
+
+        assert exc_info.value.phase == WorkflowPhase.DESIGN
+        assert exc_info.value.details["total_failed"] == 2
+        assert "T-2" in exc_info.value.details["failed_designs"]
+        assert exc_info.value.details["agreement_rate"] == pytest.approx(1 / 3)
+
     def test_test_phase_failures_raise(self):
         wf = _make_workflow("block")
         pr = _make_phase_result(
@@ -117,6 +140,27 @@ class TestQualityGateBlock:
 class TestQualityGateWarn:
     """Warn mode logs but does not raise."""
 
+    def test_design_phase_failures_log_warning(self, caplog):
+        wf = _make_workflow("warn")
+        pr = _make_phase_result(
+            WorkflowPhase.DESIGN,
+            output={
+                "total_failed": 1,
+                "total_passed": 2,
+                "agreement_rate": 2 / 3,
+                "per_task": {
+                    "T-1": {"passed": True},
+                    "T-2": {"passed": False, "reason": "DUAL_REJECTION"},
+                    "T-3": {"passed": True},
+                },
+            },
+        )
+        with caplog.at_level(logging.WARNING):
+            wf._check_quality_gate(WorkflowPhase.DESIGN, pr)
+
+        assert "QUALITY GATE WARNING" in caplog.text
+        assert "DESIGN quality gate: 1 task(s) failed design quality" in caplog.text
+
     def test_test_phase_failures_log_warning(self, caplog):
         wf = _make_workflow("warn")
         pr = _make_phase_result(
@@ -173,6 +217,14 @@ class TestQualityGateWarn:
 
 class TestQualityGateSkip:
     """Skip mode does nothing regardless of failures."""
+
+    def test_design_phase_failures_ignored(self):
+        wf = _make_workflow("skip")
+        pr = _make_phase_result(
+            WorkflowPhase.DESIGN,
+            output={"total_failed": 4, "total_passed": 0},
+        )
+        wf._check_quality_gate(WorkflowPhase.DESIGN, pr)
 
     def test_test_phase_failures_ignored(self):
         wf = _make_workflow("skip")

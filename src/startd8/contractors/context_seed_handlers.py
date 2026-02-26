@@ -465,6 +465,8 @@ class HandlerConfig:
     complexity_loc_tier1_max: int = 150         # Max LOC for Tier 1 eligibility
     complexity_loc_tier3_min: int = 500         # Min LOC to trigger Tier 3
     complexity_caller_tier3: int = 3            # Caller count threshold for Tier 3 (edit mode)
+    # REQ-CMR-022: Gate-driven Tier 2 escalation mode (bounded to one T2 pass)
+    complexity_tier2_gate_escalation: bool = False
 
     _VALID_COLLISION_STRATEGIES = frozenset({"warn", "redesign", "abort"})
 
@@ -580,6 +582,8 @@ class SeedTask:
     negative_scope: list[str] = field(default_factory=list)
     # Wave+Lane execution: dependency-depth wave assignment
     wave_index: Optional[int] = None
+    # REQ-CMR-042: Optional seed override of complexity tier
+    complexity_tier_override: Optional[str] = None
 
     @classmethod
     def from_seed_entry(cls, entry: dict[str, Any]) -> SeedTask:
@@ -663,6 +667,23 @@ class SeedTask:
                 raw_wave = None
         wave_index = raw_wave
 
+        _override_raw = (
+            context.get("complexity_tier_override")
+            or config.get("complexity_tier_override")
+            or entry.get("complexity_tier_override")
+        )
+        complexity_tier_override: Optional[str] = None
+        if isinstance(_override_raw, str):
+            _normalized = _override_raw.strip().lower()
+            if _normalized in {"tier_1", "tier_2", "tier_3"}:
+                complexity_tier_override = _normalized
+            elif _normalized:
+                logger.warning(
+                    "Task %s: invalid complexity_tier_override %r (expected tier_1|tier_2|tier_3) — ignoring",
+                    entry.get("task_id", "?"),
+                    _override_raw,
+                )
+
         task = cls(
             task_id=entry.get("task_id", ""),
             title=entry.get("title", ""),
@@ -695,6 +716,7 @@ class SeedTask:
             runtime_dependencies=context.get("runtime_dependencies", []),
             negative_scope=context.get("negative_scope", []),
             wave_index=wave_index,
+            complexity_tier_override=complexity_tier_override,
         )
         if not task.task_id:
             raise ValueError(f"Seed entry missing required field 'task_id': {entry}")
@@ -3092,15 +3114,110 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         return result_box["result"]
 
     @staticmethod
+    def _run_v2_reviews_async(
+        design_phase: Any,
+        design_document: Any,
+        *,
+        feature_context: Any | None = None,
+        timeout: float | None = None,
+    ) -> tuple[Any, Any, list[Any]]:
+        """Run reviewer+arbiter evaluation for v2 design output in one async loop.
+
+        Enforces the same review envelope semantics as the canonical v1 path:
+        v2 output cannot be accepted without reviewer and arbiter evidence.
+        """
+        result_box: dict[str, Any] = {}
+        error_box: dict[str, BaseException] = {}
+        parent_ctx = capture_context()
+        from startd8.contractors.forensic_log import (
+            get_boundary_result,
+            set_boundary_result,
+            reset_boundary_result,
+        )
+        parent_boundary_result = get_boundary_result()
+
+        async def _run_pair() -> tuple[Any, Any, list[Any]]:
+            reviewer = await design_phase._review_design(  # noqa: SLF001
+                design_document, ReviewRole.REVIEWER, feature_context=feature_context,
+            )
+            arbiter = await design_phase._review_design(  # noqa: SLF001
+                design_document, ReviewRole.ARBITER, feature_context=feature_context,
+            )
+            disagreements = design_phase._detect_disagreements(  # noqa: SLF001
+                reviewer, arbiter,
+            )
+            return reviewer, arbiter, disagreements
+
+        def _runner() -> None:
+            token = attach_context(parent_ctx)
+            br_token = set_boundary_result(parent_boundary_result)
+            try:
+                loop = asyncio.new_event_loop()
+                try:
+                    asyncio.set_event_loop(loop)
+                    result_box["result"] = loop.run_until_complete(_run_pair())
+                except BaseException as exc:
+                    error_box["error"] = exc
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
+            finally:
+                reset_boundary_result(br_token)
+                detach_context(token)
+
+        thread = threading.Thread(target=_runner, daemon=True)
+        thread.start()
+        thread.join(timeout=timeout)
+
+        if thread.is_alive():
+            logger.error(
+                "v2 design review did not complete within %.0fs — "
+                "abandoning background thread (daemon=True)",
+                timeout,
+            )
+            raise TimeoutError(
+                f"v2 design review did not complete within {timeout}s"
+            )
+
+        if "error" in error_box:
+            raise error_box["error"]
+        return result_box["result"]
+
+    @staticmethod
     def _serialize_result(result: Any) -> dict[str, Any]:
         """Serialize a DesignDocumentResult to a checkpoint-safe dict."""
-        return {
+        payload = {
             "design_document": result.design_document.raw_text,
             "feature_name": result.design_document.feature_name,
             "agreed": result.agreed,
             "iterations": result.iterations,
             "completed_at": result.completed_at.isoformat(),
         }
+        reason_code = getattr(result, "non_agreement_reason_code", None)
+        if reason_code:
+            payload["non_agreement_reason_code"] = reason_code
+        final_iteration = getattr(result, "final_iteration", None)
+        if final_iteration is not None:
+            payload["final_iteration"] = final_iteration
+        return payload
+
+    @staticmethod
+    def _evaluate_high_signal_floor(feature_context: Any) -> list[str]:
+        """Return missing high-signal context fields for design quality floor."""
+        missing: list[str] = []
+        requirements_text = (getattr(feature_context, "requirements_text", "") or "")
+        if not requirements_text.strip():
+            missing.append("requirements_text")
+        additional_context = getattr(feature_context, "additional_context", {}) or {}
+        has_arch_or_goals = bool(
+            additional_context.get("plan_architecture")
+            or additional_context.get("project_goals")
+        )
+        if not has_arch_or_goals:
+            missing.append("plan_architecture_or_project_goals")
+        if not additional_context.get("critical_parameters_checklist"):
+            missing.append("critical_parameters_checklist")
+        return missing
 
     # ------------------------------------------------------------------
     # Public execute
@@ -3117,6 +3234,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         tasks: list[SeedTask] = _ensure_context_loaded(context)
 
         logger.info("DESIGN phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
+        if self.config.use_modular_prompts:
+            logger.warning(
+                "DESIGN: modular prompt path explicitly enabled "
+                "(use_modular_prompts=True)"
+            )
 
         # REQ-PD-010: Source checksum drift detection (advisory only)
         _source_checksum = context.get("source_checksum")
@@ -3735,11 +3857,25 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
             for _attempt in range(_max_attempts):
                 try:
+                    _wt_capture_dir: Optional[Path] = None
+                    if self.config.walkthrough:
+                        _wt_root = (
+                            Path(context.get("project_root", ""))
+                            if context.get("project_root")
+                            else Path(".")
+                        )
+                        _wt_capture_dir = (
+                            _wt_root / ".startd8" / "walkthrough"
+                            / "design" / task.task_id
+                        )
                     if self.config.use_modular_prompts:
                         # ── V2: modular prompt + single LLM call ──
-                        # No dual-review, no revision loop.
+                        # Dual-review envelope is still required for acceptance.
                         from startd8.contractors.artisan_phases.design_prompts import (
                             assemble_design_prompt,
+                        )
+                        from startd8.contractors.artisan_phases.design_documentation import (
+                            DesignDocument,
                         )
                         _v2_system, _v2_user, _v2_max_tokens = assemble_design_prompt(
                             task,
@@ -3771,23 +3907,77 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             manifest_context_budget=self.config.manifest_context_budget,
                             enable_introspect=self.config.enable_introspect,
                         )
+                        _high_signal_missing: list[str] = []
+                        if not (
+                            (task.requirements_text or "").strip()
+                            or (context.get("plan_document_text") or "").strip()
+                        ):
+                            _high_signal_missing.append("requirements_text")
+                        if not (arch_context or plan_goals):
+                            _high_signal_missing.append("plan_architecture_or_project_goals")
+                        if not context.get("parameter_sources"):
+                            _high_signal_missing.append("critical_parameters_checklist")
+                        if _high_signal_missing:
+                            logger.warning(
+                                "DESIGN task %s high-signal floor degraded (v2): %s",
+                                task.task_id,
+                                ", ".join(_high_signal_missing),
+                            )
                         _v2_raw = self._run_v2_generate(
                             backend, _v2_user, _v2_system,
                             max_tokens=_v2_max_tokens,
                             timeout=self.config.development_timeout_seconds,
+                        )
+                        _v2_design = DesignDocument(
+                            feature_name=task.title,
+                            sections={},
+                            raw_text=_v2_raw,
+                            generated_at=datetime.datetime.now(
+                                tz=datetime.timezone.utc,
+                            ),
+                            iteration=1,
+                        )
+                        _v2_design_phase = self._get_design_phase(
+                            prompt_capture_dir=_wt_capture_dir,
+                        )
+                        _reviewer_verdict, _arbiter_verdict, _v2_disagreements = (
+                            self._run_v2_reviews_async(
+                                _v2_design_phase,
+                                _v2_design,
+                                timeout=self.config.development_timeout_seconds,
+                            )
+                        )
+                        _v2_agreed = (
+                            not _v2_disagreements
+                            and _reviewer_verdict.approved
+                            and _arbiter_verdict.approved
                         )
                         task_cost = backend.total_cost_usd - cost_before
                         total_cost += task_cost
                         serialized = {
                             "design_document": _v2_raw,
                             "feature_name": task.title,
-                            "agreed": True,
+                            "agreed": _v2_agreed,
                             "iterations": 1,
                             "completed_at": datetime.datetime.now(
                                 tz=datetime.timezone.utc,
                             ).isoformat(),
                             "prompt_version": "v2",
+                            "reviewer_summary": _reviewer_verdict.summary,
+                            "arbiter_summary": _arbiter_verdict.summary,
+                            "review_disagreement_count": len(_v2_disagreements),
                         }
+                        if not _v2_agreed:
+                            serialized["non_agreement_reason_code"] = (
+                                "DISAGREEMENT_UNRESOLVED"
+                                if _v2_disagreements
+                                else "DUAL_REJECTION"
+                            )
+                        serialized["high_signal_floor_status"] = (
+                            "degraded" if _high_signal_missing else "ok"
+                        )
+                        if _high_signal_missing:
+                            serialized["high_signal_floor_missing"] = _high_signal_missing
                     else:
                         # ── V1: monolithic context + DesignDocumentationPhase ──
                         feature_context = self._task_to_feature_context(
@@ -3826,12 +4016,14 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             # Phase 5: Introspect enrichment toggle for DESIGN
                             enable_introspect=self.config.enable_introspect,
                         )
-                        _wt_capture_dir: Optional[Path] = None
-                        if self.config.walkthrough:
-                            _wt_root = Path(_project_root) if _project_root else Path(".")
-                            _wt_capture_dir = (
-                                _wt_root / ".startd8" / "walkthrough"
-                                / "design" / task.task_id
+                        _high_signal_missing = self._evaluate_high_signal_floor(
+                            feature_context
+                        )
+                        if _high_signal_missing:
+                            logger.warning(
+                                "DESIGN task %s high-signal floor degraded (v1): %s",
+                                task.task_id,
+                                ", ".join(_high_signal_missing),
                             )
                         design_phase = self._get_design_phase(
                             prompt_capture_dir=_wt_capture_dir,
@@ -3843,6 +4035,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         task_cost = backend.total_cost_usd - cost_before
                         total_cost += task_cost
                         serialized = self._serialize_result(result)
+                        serialized.setdefault("prompt_version", "v1")
+                        serialized["high_signal_floor_status"] = (
+                            "degraded" if _high_signal_missing else "ok"
+                        )
+                        if _high_signal_missing:
+                            serialized["high_signal_floor_missing"] = _high_signal_missing
 
                     # ── Shared post-processing (both v1 and v2) ──
                     serialized["status"] = "refined" if prior_design_text else "designed"
@@ -4298,6 +4496,34 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             1 for r in design_results.values()
             if r.get("status") == "env_blocked"
         )
+        # REQ-PAQ-400: deterministic DESIGN quality metrics for gate policy.
+        quality_per_task: dict[str, dict[str, Any]] = {}
+        quality_failed = 0
+        quality_passed = 0
+        for tid, entry in design_results.items():
+            status = entry.get("status", "")
+            if status in ("dry_run_skipped", "env_blocked"):
+                continue
+            passed = bool(entry.get("agreed")) and status in (
+                "designed", "refined", "adopted",
+            )
+            reason = entry.get("non_agreement_reason_code")
+            if status == "design_failed":
+                passed = False
+                reason = reason or "DESIGN_FAILED"
+            if passed:
+                quality_passed += 1
+            else:
+                quality_failed += 1
+            quality_per_task[tid] = {
+                "passed": passed,
+                "status": status,
+                "reason": reason,
+            }
+        quality_total = quality_passed + quality_failed
+        agreement_rate = (
+            quality_passed / quality_total if quality_total > 0 else 0.0
+        )
         output: dict[str, Any] = {
             "tasks_designed": tasks_designed,
             "tasks_refined": tasks_refined,
@@ -4305,6 +4531,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "tasks_agreed": tasks_agreed,
             "tasks_failed": tasks_failed,
             "tasks_skipped": len(tasks) - tasks_designed - tasks_refined - tasks_adopted - tasks_failed - env_blocked,
+            "total_passed": quality_passed,
+            "total_failed": quality_failed,
+            "agreement_rate": agreement_rate,
+            "per_task": quality_per_task,
             "total_cost": total_cost,
         }
         if self.output_dir:
@@ -4390,6 +4620,8 @@ def _extract_complexity_signals(
     blast_radius = 0
     caller_count = 0
     has_cross_file_edges = False
+    manifest_coverage = "none"
+    cg_callers = []
 
     try:
         cg_callers = meta.get("_call_graph_callers", [])
@@ -4433,6 +4665,7 @@ def _extract_complexity_signals(
     mro_depth = 0
     unresolved_call_count = 0
 
+    manifests_found = 0
     if manifest_registry is not None:
         # Single import of _flatten_elements for reuse (R1)
         try:
@@ -4447,6 +4680,7 @@ def _extract_complexity_signals(
                     manifest = manifest_registry.get(tf)
                     if manifest is None:
                         continue
+                    manifests_found += 1
                     try:
                         elements = _flatten_elements(manifest.elements)
                     except (TypeError, AttributeError) as exc:
@@ -4490,6 +4724,16 @@ def _extract_complexity_signals(
             except Exception:
                 logger.debug("CMR: manifest signal extraction failed for %s", _chunk_id, exc_info=True)
 
+    # REQ-CMR-013 confidence signal: how much manifest/call-graph data was available.
+    if manifest_registry is None:
+        manifest_coverage = "none"
+    elif target_files and manifests_found == len(target_files) and bool(cg_callers):
+        manifest_coverage = "full"
+    elif manifests_found > 0 or bool(cg_callers):
+        manifest_coverage = "partial"
+    else:
+        manifest_coverage = "none"
+
     return TaskComplexitySignals(
         blast_radius=blast_radius,
         caller_count=caller_count,
@@ -4501,6 +4745,7 @@ def _extract_complexity_signals(
         mro_depth=mro_depth,
         unresolved_call_count=unresolved_call_count,
         has_cross_file_edges=has_cross_file_edges,
+        manifest_coverage=manifest_coverage,
     )
 
 
@@ -4546,7 +4791,8 @@ def _classify_complexity_tier(
 
     # --- Tier 1: all must pass ---
     if (
-        signals.blast_radius == 0
+        signals.manifest_coverage == "full"
+        and signals.blast_radius == 0
         and signals.edit_mode == "create"
         and signals.caller_count == 0
         and not signals.has_dynamic_dispatch
@@ -5571,6 +5817,7 @@ class Test{class_name}:
                     "task_id": task.task_id,
                     "title": task.title,
                     "status": "env_blocked",
+                    "complexity_tier": "tier_2",
                     "environment_issues": [
                         c for c in task.environment_checks
                         if c.get("status") in ("fail", "warn")
@@ -5593,6 +5840,7 @@ class Test{class_name}:
                     "task_id": task.task_id,
                     "title": task.title,
                     "status": "dep_blocked_env",
+                    "complexity_tier": "tier_2",
                     "blocked_dependencies": blocked_deps,
                     "depends_on": task.depends_on,
                 })
@@ -5993,6 +6241,8 @@ class Test{class_name}:
                     "semantic_conventions": semantic_conventions or {},
                     # Phase 5: Forward interface contracts
                     "forward_contracts": _forward_contracts,
+                    # REQ-CMR-042: per-task override from seed JSON
+                    "complexity_tier_override": task.complexity_tier_override,
                 },
             ))
 
@@ -6049,6 +6299,7 @@ class Test{class_name}:
                 "feature_id": meta.get("feature_id", ""),
                 "title": meta.get("title", ""),
                 "domain": meta.get("domain", "unknown"),
+                "complexity_tier": meta.get("_complexity_tier", "tier_2"),
                 "target_files": chunk.file_targets,
                 "estimated_loc": meta.get("estimated_loc", 0),
                 "depends_on": chunk.dependencies,
@@ -6361,9 +6612,17 @@ class Test{class_name}:
     @staticmethod
     def _build_implementation_metadata(context: dict[str, Any]) -> dict[str, Any]:
         """Build the metadata sub-dict mirroring propagation chain fields."""
+        tier_distribution = context.get("_tier_distribution")
+        if not isinstance(tier_distribution, dict):
+            tier_distribution = {"tier_1": 0, "tier_2": 0, "tier_3": 0}
+            for report in context.get("implementation", {}).get("task_reports", []):
+                tier = report.get("complexity_tier", "tier_2")
+                if tier in tier_distribution:
+                    tier_distribution[tier] += 1
         return {
             "design_mode_summary": context.get("design_mode_summary", {}),
             "service_metadata": context.get("service_metadata"),
+            "_tier_distribution": tier_distribution,
         }
 
     # ------------------------------------------------------------------
@@ -6398,6 +6657,7 @@ class Test{class_name}:
                     "feature_id": task.feature_id,
                     "title": task.title,
                     "domain": task.domain,
+                    "complexity_tier": "tier_2",
                     "target_files": task.target_files,
                     "estimated_loc": task.estimated_loc,
                     "depends_on": task.depends_on,
@@ -6506,6 +6766,7 @@ class Test{class_name}:
                             "feature_id": task.feature_id,
                             "title": task.title,
                             "domain": task.domain,
+                            "complexity_tier": "tier_2",
                             "target_files": task.target_files,
                             "estimated_loc": task.estimated_loc,
                             "depends_on": task.depends_on,
@@ -6782,17 +7043,42 @@ class Test{class_name}:
             # Classification runs after Phase 6 call graph enrichment, before
             # executor construction.
             _tier_distribution = {"tier_1": 0, "tier_2": 0, "tier_3": 0}
-            if self.config.complexity_routing_enabled and chunks:
+            if chunks:
                 from startd8.contractors.artisan_phases.development import (
+                    TaskComplexitySignals,
                     TaskComplexityTier,
                 )
 
                 for chunk in chunks:
                     try:
+                        if not self.config.complexity_routing_enabled:
+                            chunk.metadata["_complexity_tier"] = TaskComplexityTier.TIER_2.value
+                            chunk.metadata["_complexity_signals"] = TaskComplexitySignals().to_dict()
+                            _tier_distribution["tier_2"] += 1
+                            continue
+
                         signals = _extract_complexity_signals(
                             chunk, _manifest_registry,
                         )
-                        tier = _classify_complexity_tier(signals, self.config)
+                        override_raw = chunk.metadata.get("complexity_tier_override")
+                        if isinstance(override_raw, str):
+                            override_norm = override_raw.strip().lower()
+                            try:
+                                tier = TaskComplexityTier(override_norm)
+                                logger.info(
+                                    "CMR: chunk=%s using complexity_tier_override=%s",
+                                    getattr(chunk, "chunk_id", "?"),
+                                    tier.value,
+                                )
+                            except ValueError:
+                                logger.warning(
+                                    "CMR: invalid complexity_tier_override=%r for chunk %s; using classifier",
+                                    override_raw,
+                                    getattr(chunk, "chunk_id", "?"),
+                                )
+                                tier = _classify_complexity_tier(signals, self.config)
+                        else:
+                            tier = _classify_complexity_tier(signals, self.config)
                         chunk.metadata["_complexity_tier"] = tier.value
                         chunk.metadata["_complexity_signals"] = signals.to_dict()
                         _tier_distribution[tier.value] += 1
@@ -6808,6 +7094,10 @@ class Test{class_name}:
                     except Exception:
                         # Graceful degradation — default to Tier 2
                         chunk.metadata.setdefault("_complexity_tier", "tier_2")
+                        chunk.metadata.setdefault(
+                            "_complexity_signals",
+                            TaskComplexitySignals().to_dict(),
+                        )
                         _tier_distribution["tier_2"] += 1
                         logger.warning(
                             "CMR: classification failed for chunk %s, defaulting to tier_2",
@@ -6874,6 +7164,7 @@ class Test{class_name}:
                     if self.config.complexity_routing_enabled
                     else None
                 ),
+                tier2_gate_escalation=self.config.complexity_tier2_gate_escalation,
                 output_dir=staging_dir,
                 max_tokens=self.config.max_tokens,
                 project_root=project_root,
@@ -11033,6 +11324,13 @@ class ContextSeedHandlers:
         tier2_agent: Optional[str] = None,
         skip_refinement: Optional[bool] = None,
         walkthrough: Optional[bool] = None,
+        complexity_routing_enabled: Optional[bool] = None,
+        tier3_agent: Optional[str] = None,
+        complexity_blast_radius_tier3: Optional[int] = None,
+        complexity_loc_tier1_max: Optional[int] = None,
+        complexity_loc_tier3_min: Optional[int] = None,
+        complexity_caller_tier3: Optional[int] = None,
+        complexity_tier2_gate_escalation: Optional[bool] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all eight workflow phases.
@@ -11064,6 +11362,13 @@ class ContextSeedHandlers:
             tier2_agent: T2 refinement agent spec (default: Sonnet).
             skip_refinement: Skip T2 refinement (use T1 draft directly).
             walkthrough: Build and persist all LLM prompts without calling LLMs.
+            complexity_routing_enabled: Enable/disable complexity routing.
+            tier3_agent: Tier 3 drafter agent spec override.
+            complexity_blast_radius_tier3: Tier 3 blast radius threshold.
+            complexity_loc_tier1_max: Tier 1 maximum estimated LOC.
+            complexity_loc_tier3_min: Tier 3 minimum estimated LOC.
+            complexity_caller_tier3: Tier 3 caller threshold (edit mode).
+            complexity_tier2_gate_escalation: Gate-driven T2 escalation for Tier 2.
             code_generator: Optional pre-configured CodeGenerator instance.
 
         Returns:
@@ -11100,6 +11405,13 @@ class ContextSeedHandlers:
             ("tier2_agent", tier2_agent),
             ("skip_refinement", skip_refinement),
             ("walkthrough", walkthrough),
+            ("complexity_routing_enabled", complexity_routing_enabled),
+            ("tier3_agent", tier3_agent),
+            ("complexity_blast_radius_tier3", complexity_blast_radius_tier3),
+            ("complexity_loc_tier1_max", complexity_loc_tier1_max),
+            ("complexity_loc_tier3_min", complexity_loc_tier3_min),
+            ("complexity_caller_tier3", complexity_caller_tier3),
+            ("complexity_tier2_gate_escalation", complexity_tier2_gate_escalation),
         ]:
             if val is not None:
                 cli_overrides[name] = val

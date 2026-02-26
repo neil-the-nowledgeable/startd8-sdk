@@ -24,6 +24,10 @@ from startd8.contractors.context_seed_handlers import (
     HandlerConfig,
     SeedTask,
 )
+from startd8.contractors.artisan_phases.design_documentation import (
+    ReviewRole,
+    ReviewVerdict,
+)
 
 
 # ============================================================================
@@ -321,6 +325,228 @@ class TestDesignPhaseHandlerRealMode:
         assert context["design_results"]["T1"]["status"] == "env_blocked"
         assert result["output"]["tasks_designed"] == 0
 
+    def test_design_output_includes_quality_gate_metrics(self):
+        handler = DesignPhaseHandler(handler_config=HandlerConfig())
+        context = {"tasks": [_seed_task("T1"), _seed_task("T2")]}
+        mock_backend = MagicMock(total_cost_usd=0.0)
+        fake_ok = _make_fake_result(feature_name="Feature T1", agreed=True)
+        fake_bad = _make_fake_result(feature_name="Feature T2", agreed=False)
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", side_effect=[fake_ok, fake_bad]
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        out = result["output"]
+        assert out["total_passed"] == 1
+        assert out["total_failed"] == 1
+        assert out["agreement_rate"] == pytest.approx(0.5)
+        assert out["per_task"]["T1"]["passed"] is True
+        assert out["per_task"]["T2"]["passed"] is False
+
+    def test_default_path_uses_v1_not_modular_v2(self):
+        handler = DesignPhaseHandler(handler_config=HandlerConfig())
+        context = {"tasks": [_seed_task("T1")]}
+        fake_result = _make_fake_result()
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ) as mock_v1, patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value="## v2"
+        ) as mock_v2, patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        assert mock_v1.called
+        assert not mock_v2.called
+        assert context["design_results"]["T1"]["prompt_version"] == "v1"
+
+    def test_modular_path_requires_explicit_opt_in(self):
+        handler = DesignPhaseHandler(
+            handler_config=HandlerConfig(use_modular_prompts=True)
+        )
+        context = {"tasks": [_seed_task("T1")]}
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        reviewer = ReviewVerdict(
+            role=ReviewRole.REVIEWER,
+            approved=True,
+            confidence=0.9,
+            concerns=[],
+            suggestions=[],
+            summary="ok",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+        arbiter = ReviewVerdict(
+            role=ReviewRole.ARBITER,
+            approved=True,
+            confidence=0.9,
+            concerns=[],
+            suggestions=[],
+            summary="ok",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value="## Overview\nv2"
+        ) as mock_v2, patch.object(
+            DesignPhaseHandler,
+            "_run_v2_reviews_async",
+            return_value=(reviewer, arbiter, []),
+        ), patch.object(
+            DesignPhaseHandler, "_get_design_phase", return_value=MagicMock()
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        assert mock_v2.called
+        assert context["design_results"]["T1"]["prompt_version"] == "v2"
+
+    def test_variant_path_cannot_auto_agree_without_review_envelope(self):
+        handler = DesignPhaseHandler(
+            handler_config=HandlerConfig(use_modular_prompts=True)
+        )
+        context = {"tasks": [_seed_task("T1")]}
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        reviewer = ReviewVerdict(
+            role=ReviewRole.REVIEWER,
+            approved=False,
+            confidence=0.8,
+            concerns=["missing"],
+            suggestions=[],
+            summary="reject",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+        arbiter = ReviewVerdict(
+            role=ReviewRole.ARBITER,
+            approved=False,
+            confidence=0.85,
+            concerns=["missing"],
+            suggestions=[],
+            summary="reject",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value="## Overview\nv2"
+        ), patch.object(
+            DesignPhaseHandler,
+            "_run_v2_reviews_async",
+            return_value=(reviewer, arbiter, []),
+        ), patch.object(
+            DesignPhaseHandler, "_get_design_phase", return_value=MagicMock()
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        assert context["design_results"]["T1"]["agreed"] is False
+        assert (
+            context["design_results"]["T1"]["non_agreement_reason_code"]
+            == "DUAL_REJECTION"
+        )
+
+    def test_variant_path_review_failure_propagates_status(self):
+        handler = DesignPhaseHandler(
+            handler_config=HandlerConfig(use_modular_prompts=True)
+        )
+        context = {"tasks": [_seed_task("T1")]}
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        reviewer = ReviewVerdict(
+            role=ReviewRole.REVIEWER,
+            approved=False,
+            confidence=0.9,
+            concerns=["x"],
+            suggestions=[],
+            summary="reject",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+        arbiter = ReviewVerdict(
+            role=ReviewRole.ARBITER,
+            approved=True,
+            confidence=0.9,
+            concerns=["y"],
+            suggestions=[],
+            summary="approve",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+        disagreements = [{"type": "approval_conflict"}]
+
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value="## Overview\nv2"
+        ), patch.object(
+            DesignPhaseHandler,
+            "_run_v2_reviews_async",
+            return_value=(reviewer, arbiter, disagreements),
+        ), patch.object(
+            DesignPhaseHandler, "_get_design_phase", return_value=MagicMock()
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        assert context["design_results"]["T1"]["agreed"] is False
+        assert (
+            context["design_results"]["T1"]["non_agreement_reason_code"]
+            == "DISAGREEMENT_UNRESOLVED"
+        )
+        assert result["output"]["tasks_agreed"] == 0
+
+    def test_design_generation_marks_degraded_when_high_signal_floor_missing(self):
+        handler = DesignPhaseHandler(handler_config=HandlerConfig())
+        context = {"tasks": [_seed_task("T1")]}
+        fake_result = _make_fake_result()
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        entry = context["design_results"]["T1"]
+        assert entry["high_signal_floor_status"] == "degraded"
+        assert "requirements_text" in entry["high_signal_floor_missing"]
+
+    def test_design_generation_marks_ok_when_high_signal_floor_present(self):
+        handler = DesignPhaseHandler(handler_config=HandlerConfig())
+        task = _seed_task("T1")
+        task.requirements_text = "REQ: must preserve endpoint contract."
+        context = {
+            "tasks": [task],
+            "plan_goals": ["Preserve existing API behavior"],
+        }
+        fake_result = _make_fake_result()
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        entry = context["design_results"]["T1"]
+        assert entry["high_signal_floor_status"] == "ok"
+        assert "high_signal_floor_missing" not in entry
+
 
 # ============================================================================
 # Serialization tests
@@ -332,6 +558,8 @@ class TestSerializeResult:
 
     def test_serializes_all_fields(self):
         fake_result = _make_fake_result(agreed=False)
+        fake_result.non_agreement_reason_code = "DISAGREEMENT_UNRESOLVED"
+        fake_result.final_iteration = 3
         serialized = DesignPhaseHandler._serialize_result(fake_result)
 
         assert serialized["agreed"] is False
@@ -339,6 +567,8 @@ class TestSerializeResult:
         assert serialized["feature_name"] == "Feature T1"
         assert "## Overview" in serialized["design_document"]
         assert "completed_at" in serialized
+        assert serialized["non_agreement_reason_code"] == "DISAGREEMENT_UNRESOLVED"
+        assert serialized["final_iteration"] == 3
 
 
 # ============================================================================

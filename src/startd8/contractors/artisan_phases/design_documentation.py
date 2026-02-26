@@ -310,6 +310,10 @@ class DesignDocumentResult:
         agreed: Whether the reviewers ultimately agreed.
         iterations: Total number of iterations performed.
         completed_at: UTC timestamp of completion.
+        non_agreement_reason_code: Machine-readable reason when
+            ``agreed=False`` (e.g. ``"DISAGREEMENT_UNRESOLVED"``).
+        final_iteration: Iteration index that produced the returned
+            ``design_document`` and verdicts.
     """
 
     design_document: DesignDocument
@@ -320,6 +324,8 @@ class DesignDocumentResult:
     agreed: bool
     iterations: int
     completed_at: datetime
+    non_agreement_reason_code: str | None = None
+    final_iteration: int | None = None
 
 
 # ============================================================================
@@ -1341,9 +1347,19 @@ class DesignDocumentationPhase:
         Returns:
             Parsed ``DesignDocument``.
         """
-        # TC-300: Tiered context rendering with progressive disclosure
-        from startd8.contractors.prompt_utils import format_tiered_context
-        additional_context_str = format_tiered_context(context.additional_context)
+        # TC-300 + PAQ-100/101: tiered rendering with required critical markers.
+        from startd8.contractors.prompt_utils import (
+            DESIGN_CONTEXT_SECTION_BUDGETS,
+            format_tiered_context,
+        )
+        additional_context_str = format_tiered_context(
+            context.additional_context,
+            required_t0_keys=(
+                "critical_parameters_checklist",
+                "plan_architecture",
+                "api_signatures",
+            ),
+        )
 
         from startd8.contractors.artisan_phases.prompts import format_constraints
         constraints_str = (
@@ -1355,10 +1371,22 @@ class DesignDocumentationPhase:
         # IMP-1: Build requirements block from plan requirements
         requirements_block = ""
         if context.requirements_text:
+            requirements_text = context.requirements_text
+            req_budget = DESIGN_CONTEXT_SECTION_BUDGETS["requirements_text"]
+            if len(requirements_text) > req_budget:
+                requirements_text = (
+                    requirements_text[:req_budget]
+                    + "\n... [truncated to requirements_text budget]"
+                )
+                logger.warning(
+                    "DESIGN requirements_text truncated for '%s' to %d chars",
+                    context.feature_name,
+                    req_budget,
+                )
             requirements_block = (
                 "**Requirements (verbatim — authoritative for "
                 "parameter details):**\n"
-                f"{context.requirements_text}\n\n"
+                f"{requirements_text}\n\n"
             )
 
         is_refine = context.prior_design is not None
@@ -1918,6 +1946,7 @@ class DesignDocumentationPhase:
         design: DesignDocument | None = None
         reviewer_verdict: ReviewVerdict | None = None
         arbiter_verdict: ReviewVerdict | None = None
+        last_disagreements: list[Disagreement] = []
 
         _tracer = _get_design_tracer()
         for iteration in range(1, self.max_iterations + 1):
@@ -1952,11 +1981,32 @@ class DesignDocumentationPhase:
                 disagreements = self._detect_disagreements(
                     reviewer_verdict, arbiter_verdict
                 )
+                last_disagreements = disagreements
 
                 if not disagreements:
-                    logger.info(
-                        "Design for '%s' converged at iteration %d "
-                        "(both reviewers agree)",
+                    if reviewer_verdict.approved and arbiter_verdict.approved:
+                        logger.info(
+                            "Design for '%s' converged at iteration %d "
+                            "(both reviewers approve)",
+                            context.feature_name,
+                            iteration,
+                        )
+                        return DesignDocumentResult(
+                            design_document=design,
+                            reviewer_verdict=reviewer_verdict,
+                            arbiter_verdict=arbiter_verdict,
+                            escalation_report=None,
+                            resolution_decision=None,
+                            agreed=True,
+                            iterations=iteration,
+                            completed_at=datetime.now(timezone.utc),
+                            final_iteration=iteration,
+                        )
+
+                    # Agreement without approval is a converged rejection.
+                    logger.warning(
+                        "Design for '%s' converged to rejection at iteration %d "
+                        "(both reviewers reject)",
                         context.feature_name,
                         iteration,
                     )
@@ -1966,9 +2016,11 @@ class DesignDocumentationPhase:
                         arbiter_verdict=arbiter_verdict,
                         escalation_report=None,
                         resolution_decision=None,
-                        agreed=True,
+                        agreed=False,
                         iterations=iteration,
                         completed_at=datetime.now(timezone.utc),
+                        non_agreement_reason_code="DUAL_REJECTION",
+                        final_iteration=iteration,
                     )
 
                 # --- Disagreement detected — escalate ---
@@ -1997,18 +2049,69 @@ class DesignDocumentationPhase:
 
                 # Non-RE_REVIEW resolutions: revise once then return
                 if resolution_decision.action != ResolutionAction.RE_REVIEW:
-                    actual_iterations = iteration
-                    if iteration < self.max_iterations:
-                        design = await self._revise_design(
-                            design,
-                            reviewer_verdict,
-                            arbiter_verdict,
-                            resolution_decision.guidance,
-                            iteration + 1,
-                            expected_sections=context.sections,
+                    if iteration >= self.max_iterations:
+                        return DesignDocumentResult(
+                            design_document=design,
+                            reviewer_verdict=reviewer_verdict,
+                            arbiter_verdict=arbiter_verdict,
+                            escalation_report=escalation_report,
+                            resolution_decision=resolution_decision,
+                            agreed=False,
+                            iterations=iteration,
+                            completed_at=datetime.now(timezone.utc),
+                            non_agreement_reason_code="MAX_ITERATIONS_EXCEEDED",
+                            final_iteration=iteration,
                         )
-                        actual_iterations = iteration + 1
 
+                    # REQ-PAQ-200: any revised design MUST be re-reviewed by
+                    # reviewer and arbiter before acceptance/return.
+                    revised_iteration = iteration + 1
+                    design = await self._revise_design(
+                        design,
+                        reviewer_verdict,
+                        arbiter_verdict,
+                        resolution_decision.guidance,
+                        revised_iteration,
+                        expected_sections=context.sections,
+                    )
+                    reviewer_verdict = await self._review_design(
+                        design, ReviewRole.REVIEWER, feature_context=context
+                    )
+                    arbiter_verdict = await self._review_design(
+                        design, ReviewRole.ARBITER, feature_context=context
+                    )
+                    post_disagreements = self._detect_disagreements(
+                        reviewer_verdict, arbiter_verdict
+                    )
+
+                    if (
+                        not post_disagreements
+                        and reviewer_verdict.approved
+                        and arbiter_verdict.approved
+                    ):
+                        logger.info(
+                            "Design for '%s' converged after revision at "
+                            "iteration %d",
+                            context.feature_name,
+                            revised_iteration,
+                        )
+                        return DesignDocumentResult(
+                            design_document=design,
+                            reviewer_verdict=reviewer_verdict,
+                            arbiter_verdict=arbiter_verdict,
+                            escalation_report=escalation_report,
+                            resolution_decision=resolution_decision,
+                            agreed=True,
+                            iterations=revised_iteration,
+                            completed_at=datetime.now(timezone.utc),
+                            final_iteration=revised_iteration,
+                        )
+
+                    reason_code = (
+                        "DISAGREEMENT_UNRESOLVED"
+                        if post_disagreements
+                        else "DUAL_REJECTION"
+                    )
                     return DesignDocumentResult(
                         design_document=design,
                         reviewer_verdict=reviewer_verdict,
@@ -2016,8 +2119,10 @@ class DesignDocumentationPhase:
                         escalation_report=escalation_report,
                         resolution_decision=resolution_decision,
                         agreed=False,
-                        iterations=actual_iterations,
+                        iterations=revised_iteration,
                         completed_at=datetime.now(timezone.utc),
+                        non_agreement_reason_code=reason_code,
+                        final_iteration=revised_iteration,
                     )
 
                 # RE_REVIEW — continue to next iteration
@@ -2088,4 +2193,10 @@ class DesignDocumentationPhase:
             agreed=False,
             iterations=self.max_iterations,
             completed_at=datetime.now(timezone.utc),
+            non_agreement_reason_code=(
+                "DISAGREEMENT_UNRESOLVED"
+                if last_disagreements
+                else "MAX_ITERATIONS_EXCEEDED"
+            ),
+            final_iteration=self.max_iterations,
         )

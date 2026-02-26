@@ -2620,7 +2620,7 @@ class ArtisanContractorWorkflow:
         phase: WorkflowPhase,
         phase_result: "PhaseResult",
     ) -> None:
-        """Check quality gate after TEST or REVIEW phases.
+        """Check quality gate after DESIGN, TEST, or REVIEW phases.
 
         Compares ``total_failed`` in the phase output dict against zero.
         Behavior depends on ``self._quality_gate``:
@@ -2651,7 +2651,15 @@ class ArtisanContractorWorkflow:
             "total_passed": phase_result.output.get("total_passed", 0),
         }
 
-        if phase == WorkflowPhase.TEST:
+        if phase == WorkflowPhase.DESIGN:
+            per_task = phase_result.output.get("per_task", {})
+            failed_designs = [
+                tid for tid, info in per_task.items() if not info.get("passed")
+            ]
+            details["failed_designs"] = failed_designs
+            details["agreement_rate"] = phase_result.output.get("agreement_rate", 0.0)
+            msg = f"DESIGN quality gate: {total_failed} task(s) failed design quality"
+        elif phase == WorkflowPhase.TEST:
             per_task = phase_result.output.get("per_task", {})
             failed_tasks = [
                 tid for tid, info in per_task.items() if not info.get("passed")
@@ -2747,8 +2755,8 @@ class ArtisanContractorWorkflow:
             # Track cost
             cost_tracker.add(phase_result.cost)
 
-            # Quality gate check for TEST and REVIEW phases
-            if phase in (WorkflowPhase.TEST, WorkflowPhase.REVIEW):
+            # Quality gate check for DESIGN, TEST, and REVIEW phases
+            if phase in (WorkflowPhase.DESIGN, WorkflowPhase.TEST, WorkflowPhase.REVIEW):
                 self._check_quality_gate(phase, phase_result)
 
             # Warn when cost approaches the budget (once only)
@@ -3926,6 +3934,15 @@ class ArtisanContractorWorkflow:
 
                     # Track cost
                     cost_tracker.add(phase_result.cost)
+
+                    # Quality gate check for design/test/review in
+                    # feature-serial and wave-parallel modes.
+                    if inner_phase in (
+                        WorkflowPhase.DESIGN,
+                        WorkflowPhase.TEST,
+                        WorkflowPhase.REVIEW,
+                    ):
+                        self._check_quality_gate(inner_phase, phase_result)
 
                     # Check for phase failure
                     if phase_result.status == PhaseStatus.FAILED:

@@ -29,6 +29,7 @@ from .modules import (
     ConstraintsModule,
     EnrichmentModule,
     ManifestModule,
+    PriorArtModule,
     ScopeModule,
     GuidanceModule,
     ContractModule,
@@ -38,6 +39,7 @@ from .seed_mapping import (
     extract_constraints,
     extract_enrichment,
     extract_manifest_context,
+    extract_prior_art,
     extract_scope,
     extract_guidance,
     map_forward_contracts_for_task,
@@ -88,6 +90,7 @@ _MODULES = [
     EnrichmentModule(),
     ManifestModule(),
     PriorArtModule(),
+    ScopeModule(),
     GuidanceModule(),
     ContractModule(),
 ]

@@ -12,6 +12,7 @@ import pytest
 
 from startd8.contractors.prompt_utils import (
     CONTEXT_FIELD_TIERS,
+    DESIGN_CONTEXT_SECTION_BUDGETS,
     format_tiered_context,
     _render_full,
     _render_collapsed,
@@ -170,6 +171,34 @@ class TestUnknownFieldDefault:
         assert "completely_new_field" not in CONTEXT_FIELD_TIERS
 
 
+class TestRequiredT0Markers:
+    """PAQ-101: required critical fields emit explicit missing markers."""
+
+    def test_missing_t0_marker_emitted(self):
+        ctx = {
+            "critical_parameters_checklist": "present",
+            # plan_architecture and api_signatures intentionally missing
+        }
+        result = format_tiered_context(
+            ctx,
+            required_t0_keys=("critical_parameters_checklist", "plan_architecture", "api_signatures"),
+        )
+        assert "MISSING_T0:plan_architecture" in result
+        assert "MISSING_T0:api_signatures" in result
+
+    def test_missing_marker_not_emitted_when_field_present(self):
+        ctx = {
+            "critical_parameters_checklist": "present",
+            "plan_architecture": "present",
+            "api_signatures": "GET /health",
+        }
+        result = format_tiered_context(
+            ctx,
+            required_t0_keys=("critical_parameters_checklist", "plan_architecture", "api_signatures"),
+        )
+        assert "MISSING_T0:" not in result
+
+
 # ── TC-506: Empty tier omission ──────────────────────────────────────────
 
 
@@ -298,7 +327,7 @@ class TestRegistryCompleteness:
 
     def test_t1_count(self):
         t1 = [k for k, v in CONTEXT_FIELD_TIERS.items() if v == 1]
-        assert len(t1) == 13
+        assert len(t1) == 14
 
     def test_t2_count(self):
         t2 = [k for k, v in CONTEXT_FIELD_TIERS.items() if v == 2]
@@ -306,13 +335,17 @@ class TestRegistryCompleteness:
 
     def test_t3_count(self):
         t3 = [k for k, v in CONTEXT_FIELD_TIERS.items() if v == 3]
-        assert len(t3) == 10
+        assert len(t3) == 11
 
     def test_total_fields(self):
-        assert len(CONTEXT_FIELD_TIERS) == 41
+        assert len(CONTEXT_FIELD_TIERS) == 43
 
     def test_default_budget_constant(self):
         assert _ADDITIONAL_CONTEXT_TOKEN_BUDGET == 4000
+
+    def test_design_section_budget_registry_present(self):
+        assert DESIGN_CONTEXT_SECTION_BUDGETS["requirements_text"] > 0
+        assert DESIGN_CONTEXT_SECTION_BUDGETS["critical_parameters"] > 0
 
 
 # ── Helper unit tests ─────────────────────────────────────────────────────

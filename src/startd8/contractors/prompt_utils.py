@@ -82,6 +82,26 @@ _T1_EMERGENCY_TRUNCATE = 500
 _T3_VALUE_TRUNCATE = 60
 _T2_ONELINE_TRUNCATE = 80
 
+# PAQ-100: explicit section budget registry for design prompt assembly.
+DESIGN_CONTEXT_SECTION_BUDGETS: dict[str, int] = {
+    "requirements_text": 4000,
+    "architectural_context": 3000,
+    "critical_parameters": 2000,
+    "dependency_designs": 2000,
+    "supporting_metadata": 1500,
+}
+
+
+def _has_signal(value: Any) -> bool:
+    """Return True when a value contains meaningful signal."""
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict, tuple, set)):
+        return len(value) > 0
+    return bool(value)
+
 
 def _render_full(key: str, value: Any) -> str:
     """Render a field with full fidelity (T0/T1 default)."""
@@ -153,6 +173,7 @@ def format_tiered_context(
     additional_context: dict[str, Any] | None,
     *,
     token_budget: int = _ADDITIONAL_CONTEXT_TOKEN_BUDGET,
+    required_t0_keys: tuple[str, ...] | None = None,
 ) -> str:
     """Render additional_context with tier-based progressive disclosure.
 
@@ -177,6 +198,14 @@ def format_tiered_context(
     for key, value in additional_context.items():
         tier = CONTEXT_FIELD_TIERS.get(key, 2)  # TC-405: unknown → T2
         tier_groups[tier][key] = value
+
+    # PAQ-101: required critical fields emit explicit missing markers.
+    if required_t0_keys:
+        for key in required_t0_keys:
+            if not _has_signal(additional_context.get(key)):
+                tier_groups[0][f"MISSING_T0:{key}"] = (
+                    "NOT PROVIDED. Treat as unresolved critical context."
+                )
 
     # --- Initial render (full fidelity per tier) ---
     def _render_all(
