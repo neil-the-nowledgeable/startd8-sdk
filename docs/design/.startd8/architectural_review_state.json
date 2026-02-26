@@ -1,0 +1,248 @@
+{
+  "document_path": "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/design/CODE_MANIFEST_PHASE4_REQUIREMENTS.md",
+  "updated_at_utc": "2026-02-24 20:23:47 UTC",
+  "applied_ids": [
+    "R1-S1",
+    "R1-S2",
+    "R1-S3",
+    "R1-S5",
+    "R1-S6",
+    "R1-S7",
+    "R1-S8",
+    "R1-S9",
+    "R1-S10",
+    "R2-S1",
+    "R2-S2",
+    "R2-S3",
+    "R2-S4",
+    "R2-S6",
+    "R2-S7",
+    "R2-S8",
+    "R2-S10",
+    "R3-S3",
+    "R3-S7",
+    "R3-S8",
+    "R3-S9"
+  ],
+  "rejected_ids": [
+    "R1-S4",
+    "R2-S5",
+    "R2-S9",
+    "R3-S1",
+    "R3-S2",
+    "R3-S4",
+    "R3-S5",
+    "R3-S6",
+    "R3-S10"
+  ],
+  "rounds": [
+    {
+      "round": 2,
+      "agent": "claude-4",
+      "model": "claude-opus-4-6",
+      "ids": [
+        "R2-S1",
+        "R2-S2",
+        "R2-S3",
+        "R2-S4",
+        "R2-S5",
+        "R2-S6",
+        "R2-S7",
+        "R2-S8",
+        "R2-S9",
+        "R2-S10"
+      ],
+      "appended_at_utc": "2026-02-24 20:13:05 UTC",
+      "cost": 0.07375499999999999
+    },
+    {
+      "round": 3,
+      "agent": "gemini-2.5",
+      "model": "gemini-2.5-pro",
+      "ids": [
+        "R3-S1",
+        "R3-S2",
+        "R3-S3",
+        "R3-S4",
+        "R3-S5",
+        "R3-S6",
+        "R3-S7",
+        "R3-S8",
+        "R3-S9",
+        "R3-S10"
+      ],
+      "appended_at_utc": "2026-02-24 20:13:40 UTC",
+      "cost": 0.02002
+    }
+  ],
+  "cumulative_cost_usd": 0.8369249999999999,
+  "triage": {
+    "enabled": true,
+    "accepted": 12,
+    "rejected": 8,
+    "feature_accepted": 0,
+    "feature_rejected": 0,
+    "untriaged_remaining": [],
+    "substantially_addressed_areas": [
+      "data",
+      "interfaces",
+      "ops",
+      "risks",
+      "validation",
+      "architecture"
+    ],
+    "areas_needing_review": [
+      "security"
+    ],
+    "decisions": [
+      {
+        "id": "R2-S1",
+        "decision": "ACCEPT",
+        "summary": "Specify exact types, semantics, and mixed-version behavior for the `project_manifest_summary` dict in CT-2.",
+        "rationale": "CT-2 defines a summary that crosses a process boundary (handoff file JSON). Ambiguous types and counting semantics will cause silent misinterpretation by the implementation half. Defining exact key types (e.g., schema_version as str, total_imports as int counting unique modules) and mixed-version behavior (minimum common version) is essential for deterministic deserialization. This is a concrete gap in a cross-process data contract.",
+        "area": "data"
+      },
+      {
+        "id": "R2-S2",
+        "decision": "ACCEPT",
+        "summary": "Define ManifestDiff cross-version comparison behavior and signature normalization rules.",
+        "rationale": "GD-4 explicitly allows mixed schema versions in the registry, and IN-1 diffs pre-merge vs post-merge files. Without specifying that diff operates on common fields only and that signatures are whitespace-normalized before comparison, implementers will produce spurious diffs in real-world scenarios where a 1.0.0 cached manifest is compared against a freshly-generated 1.2.0 manifest. This is a concrete correctness gap at a defined interface boundary.",
+        "area": "data"
+      },
+      {
+        "id": "R2-S3",
+        "decision": "ACCEPT",
+        "summary": "Define error handling contract for `ManifestRegistry.from_cache()` covering corrupt files, I/O errors, and concurrent writes.",
+        "rationale": "from_cache() is the single entry point for all six consumers. The document specifies graceful degradation for absent caches but not for corrupt caches (truncated JSON, invalid schema). A corrupt cache raising an unhandled exception would crash the pipeline instead of falling back. The factory must explicitly specify: returns None or empty registry on any load failure, logs at WARNING, and never raises to callers. This is a critical reliability gap.",
+        "area": "interfaces"
+      },
+      {
+        "id": "R2-S4",
+        "decision": "ACCEPT",
+        "summary": "Define IN-4 cache refresh as synchronous, incremental, and partial-failure-tolerant.",
+        "rationale": "IN-4 says 'regenerate manifests for merged files' but leaves critical operational questions unanswered: blocking vs async, behavior on syntax errors in generated code (common with LLM output), and whether partial refresh failure invalidates the registry. Combined with R1-S1's immutable-per-phase model, IN-4 needs to specify that it creates a new registry instance with refreshed entries, that per-file parse failures are logged and treated as manifest-absent per GD-2, and that refresh is synchronous and completes before downstream phases execute.",
+        "area": "ops"
+      },
+      {
+        "id": "R2-S5",
+        "decision": "REJECT",
+        "summary": "Add a `startd8 manifest stats` CLI command for querying manifest consumption telemetry.",
+        "rationale": "R1-S5 (accepted) already requires structured observability counters. Adding a dedicated CLI command is a nice-to-have UX convenience, not a requirements-level gap. The counters are available in structured logs and can be surfaced through existing pipeline reporting mechanisms. A separate CLI command for post-hoc stats querying is an implementation detail better suited to a feature request or backlog item, not a Phase 4 requirements document. The existing logging + counter infrastructure is sufficient for operational needs.",
+        "area": "ops"
+      },
+      {
+        "id": "R2-S6",
+        "decision": "ACCEPT",
+        "summary": "Document ManifestDiff false negative limitations: body-only changes, decorator changes, and default parameter value changes are invisible to structural diff.",
+        "rationale": "IN-2 and IN-3 position ManifestDiff as a regression guard. If operators believe it catches all meaningful changes, they will develop false confidence. Body rewrites, decorator additions/removals, and default value changes are common breaking changes that are invisible to FQN+signature comparison. This is a known-limitation disclosure that costs nothing to document and significantly improves operator understanding. Analogous to R1-S7 (rename false positives), which was accepted.",
+        "area": "risks"
+      },
+      {
+        "id": "R2-S7",
+        "decision": "ACCEPT",
+        "summary": "Add risk entry for prompt injection via manifest-derived strings (FQNs, docstrings, signatures) injected into LLM prompts.",
+        "rationale": "Phase 4 creates a new, structured injection vector by moving from raw file content to curated manifest summaries where user-authored strings (function names, docstrings) sit alongside LLM instruction text in a formatted template. While prompt injection is a general LLM risk, the specific vector through manifest summaries is new and Phase 4-specific. R1-S8 addressed path traversal but this is a distinct attack surface. At minimum, the risk must be documented; a sanitization requirement for IM-1/IM-2 would be stronger but documenting the accepted risk is the floor.",
+        "area": "risks"
+      },
+      {
+        "id": "R2-S8",
+        "decision": "ACCEPT",
+        "summary": "Add risk entry for IN-3 element-count regression guard false positives on legitimate file splits/refactors.",
+        "rationale": "File splitting is a common refactoring pattern, and IN-3's per-file element-count comparison will generate noisy false positives for every resulting file. This trains operators to ignore the guard, undermining its value for catching actual catastrophic overwrites. Documenting this known limitation is low-cost and important for operational trust. The suggestion to consider a project-level aggregate check as a secondary measure is a reasonable direction to note without mandating.",
+        "area": "risks"
+      },
+      {
+        "id": "R2-S9",
+        "decision": "REJECT",
+        "summary": "Require HMAC or checksum-based integrity verification on cached manifest files.",
+        "rationale": "The `.startd8/manifests/` directory is within the project's trust boundary \u2014 it's in the project root alongside the source code itself. An attacker with write access to .startd8/ also has write access to the source code, making manifest tampering a strictly weaker attack than direct code modification. R1-S8 (path traversal) addressed the case where manifest data could reference files outside the project root, which is a meaningful boundary. But integrity verification against same-trust-level tampering adds cryptographic complexity (key management for HMAC, or content-hash verification that GD-3's digest check already partially provides) for minimal security benefit. This should be documented as an accepted risk rather than a requirement.",
+        "area": "security"
+      },
+      {
+        "id": "R2-S10",
+        "decision": "ACCEPT",
+        "summary": "Add dedicated acceptance criteria for PF-3 CrossFileImportValidator specifying behavior for circular imports and non-existent FQN references.",
+        "rationale": "PF-3 introduces a fundamentally new validator but has no corresponding acceptance criteria \u2014 AC-8 only tests the RuleContext field, not the validation logic. Circular imports and missing FQN references have different severity characteristics (circular imports may be intentional in Python; missing FQNs are likely errors). Without specifying whether each is WARNING vs ERROR and blocking vs advisory, implementers must guess. This is a concrete validation gap for a requirement that has specific behavioral implications.",
+        "area": "validation"
+      },
+      {
+        "id": "R3-S1",
+        "decision": "REJECT",
+        "summary": "Distinguish between manifest absence and parse failure with a sentinel value in the cache.",
+        "rationale": "While the distinction is conceptually valid, introducing a parse-failure sentinel adds schema complexity to the cache format without clear consumer benefit in Phase 4. GD-2 already specifies that a missing manifest for a file is treated as manifest-absent regardless of cause, and GD-5 logs fallback at INFO level. The root cause (new file vs syntax error) is better surfaced through the manifest generation phase (Phases 1-2) logging, not through the consumer-side cache format. Adding sentinel values to the cache would require a cache format change, which contradicts Phase 4's 'pure consumer, no schema bump' principle.",
+        "area": "data"
+      },
+      {
+        "id": "R3-S2",
+        "decision": "REJECT",
+        "summary": "Add a risk for prompt injection via malicious source code identifiers or signatures.",
+        "rationale": "This is a duplicate of R2-S7, which is being accepted. R2-S7 covers the same attack surface (manifest-derived strings injected into LLM prompts) with equivalent rationale and proposed placement. Accepting both would create redundant risk entries.",
+        "area": "security"
+      },
+      {
+        "id": "R3-S3",
+        "decision": "ACCEPT",
+        "summary": "Add deserialization guards with per-file size limits to `ManifestRegistry.from_cache()` to prevent resource exhaustion from oversized manifest files.",
+        "rationale": "This complements R2-S3 (error handling contract for from_cache). PB-7 sets a 50MB memory budget for a 200-file registry, but a single maliciously or accidentally large manifest file could exhaust memory before the budget check applies. A per-file size limit (e.g., 5MB) checked before deserialization is a trivial guard that prevents both malicious and accidental resource exhaustion. This is a standard defensive loading practice and directly supports the graceful degradation philosophy.",
+        "area": "security"
+      },
+      {
+        "id": "R3-S4",
+        "decision": "REJECT",
+        "summary": "Add `find_references_to_fqn(fqn: str) -> list[str]` inverse lookup to ManifestRegistry.",
+        "rationale": "Phase 4 is explicitly a pure consumer phase wiring existing manifest data into defined integration surfaces. None of the six integration points require inverse FQN lookup \u2014 the identified consumers need forward lookups (fqn_exists, resolve_fqn) and file-level queries. Adding an inverse index is a feature expansion that increases the ManifestRegistry API surface without a concrete Phase 4 consumer. If a future phase or validator needs this, it can be added then. YAGNI applies.",
+        "area": "interfaces"
+      },
+      {
+        "id": "R3-S5",
+        "decision": "REJECT",
+        "summary": "Add a risk of 'summary over-reliance' where users trust manifest structure and miss logic bugs.",
+        "rationale": "This is a general epistemological concern about any abstraction layer, not a specific Phase 4 risk. The manifest has never been positioned as a replacement for code review or testing \u2014 it's a structural query layer. R2-S6 (accepted) already covers the specific case where ManifestDiff false negatives could create false confidence in structural guards. A generic 'abstraction can be misleading' risk entry adds no actionable insight beyond what R2-S6 already provides.",
+        "area": "risks"
+      },
+      {
+        "id": "R3-S6",
+        "decision": "REJECT",
+        "summary": "Add a cooldown/allowlist mechanism for breaking change warnings (IN-2) to prevent alert fatigue from expected refactors.",
+        "rationale": "IN-2 is explicitly designed as non-blocking (severity=WARNING, next_action='proceed') precisely because legitimate refactors will trigger it. R1-S7 (accepted) documents the rename false-positive limitation, and R2-S8 (accepted) documents file-split false positives. The current design correctly treats these warnings as informational. Adding an allowlist mechanism introduces configuration complexity and a maintenance burden (who manages the allowlist? when is it cleared?) that is disproportionate to the problem. Operators can filter WARNING-level logs by source. If alert fatigue becomes a real operational problem post-rollout, an allowlist can be designed with actual usage data.",
+        "area": "ops"
+      },
+      {
+        "id": "R3-S7",
+        "decision": "ACCEPT",
+        "summary": "Require debug-level logging of specific manifest data used in calculations across all integration points.",
+        "rationale": "GD-5 logs when fallback occurs, and R1-S5 adds structured counters, but neither provides visibility into the manifest data used in the success path. When PI-1's complexity score or IN-2's breaking-change detection produces an unexpected result, operators need to see which files, element counts, and FQNs contributed to the calculation. DEBUG-level logging of input data is a standard observability practice that costs nothing at default log levels and is invaluable for troubleshooting. This directly complements the existing observability requirements.",
+        "area": "ops"
+      },
+      {
+        "id": "R3-S8",
+        "decision": "ACCEPT",
+        "summary": "Address intra-pipeline manifest staleness: after IN-4 cache refresh, replace the in-memory ManifestRegistry so subsequent tasks see updated data.",
+        "rationale": "This is a critical correctness gap. R1-S1 (accepted) established immutable-per-phase registries with new instances on refresh. But the document never specifies that IN-4's cache refresh must also update the context['project_manifests'] registry instance. In a multi-task pipeline run, Task 2's preflight would use the stale pipeline-start registry and incorrectly report that functions created by Task 1 don't exist. This directly impacts PF-3 (CrossFileImportValidator) and PI-3 (existing element detection). The fix is straightforward: IN-4 creates a new ManifestRegistry from the refreshed cache and updates the context dict.",
+        "area": "ops"
+      },
+      {
+        "id": "R3-S9",
+        "decision": "ACCEPT",
+        "summary": "Add acceptance criteria for CI-3 --enrich verifying preservation of YAML comments and key order.",
+        "rationale": "CI-3 modifies human-maintained YAML files. Standard YAML serializers (PyYAML, json) strip comments and reorder keys. R1-S9 (accepted) added --dry-run/--diff mode, but even with --write, the tool must preserve YAML structure. Without this criterion, an implementation using naive YAML dump would pass all existing tests while destroying file readability. This is a concrete, testable quality requirement for an accepted feature (CI-3).",
+        "area": "validation"
+      },
+      {
+        "id": "R3-S10",
+        "decision": "REJECT",
+        "summary": "Add `get_schema_version(relative_path: str) -> str | None` to ManifestRegistry.",
+        "rationale": "GD-4 explicitly requires Phase 4 to operate on common fields across all schema versions, making version-conditional logic an anti-pattern for Phase 4 consumers. Adding a schema version accessor encourages consumers to branch on version, creating the tight coupling that GD-4 was designed to prevent. Phase 3 fields should be accessed via existence checks on the FileManifest model (standard Pydantic optional field patterns), not via version-gated logic. If a future phase needs version-aware behavior, the accessor can be added then.",
+        "area": "data"
+      }
+    ]
+  },
+  "apply": {
+    "enabled": true,
+    "applied_count": 0,
+    "applied_ids": [],
+    "warning_ids": [],
+    "feature_applied_count": 0,
+    "error": "Retry also failed: Missing 7 heading(s): ['## Appendix: Iterative Review Log', '### Reviewer Instructions (for humans + models)', '### Areas Substantially Addressed']"
+  }
+}

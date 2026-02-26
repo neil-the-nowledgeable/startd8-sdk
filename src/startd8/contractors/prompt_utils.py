@@ -27,6 +27,7 @@ CONTEXT_FIELD_TIERS: dict[str, int] = {
     # T1 — High: frames scope and constraints
     "manifest_context": 1,
     "manifest_edit_context": 1,
+    "manifest_resolved_types": 1,   # Phase 5 PR-1: resolved type signatures (drop before manifest_context)
     "project_goals": 1,
     "constraints_from_manifest": 1,
     "shared_modules": 1,
@@ -61,6 +62,7 @@ CONTEXT_FIELD_TIERS: dict[str, int] = {
     "calibration_override_source": 3,
     "plan_delta": 3,
     "design_doc_sections": 3,
+    "public_api_surface": 3,        # Phase 5 PR-3: module __all__ list
 }
 
 # TC-200: Soft token budget (tokens ≈ chars // 4).

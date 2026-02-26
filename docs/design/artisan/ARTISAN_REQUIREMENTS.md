@@ -302,13 +302,128 @@ Defines the 3-tier model architecture, budget enforcement, and cost reporting.
 
 ### Model Tier Architecture
 
-| Role | Catalog Entry | Default Agent | Purpose |
-|------|--------------|---------------|---------|
-| Drafter | `DRAFT_MODEL_CLAUDE_HAIKU` | `anthropic:claude-haiku-4-5-20251001` | Fast, cheap generation | 
-| Validator | `VALIDATE_MODEL_CLAUDE_SONNET` | `anthropic:claude-sonnet-4-5-20250929` | Balanced quality gating |
-| Reviewer | `REVIEW_MODEL_CLAUDE_OPUS` | `anthropic:claude-opus-4-6` | Flagship independent review |
+| Tier | Alias | Role | Catalog Entry | Default Agent | Purpose | Cost/1M |
+|------|-------|------|--------------|---------------|---------|---------|
+| T1 | Economy | Drafter | `DRAFT_MODEL_CLAUDE_HAIKU` / `T1_ECONOMY` | `anthropic:claude-haiku-4-5-20251001` | Fast draft generation, cheap retries | ~$1 |
+| T2 | Standard | Validator | `VALIDATE_MODEL_CLAUDE_SONNET` / `T2_STANDARD` | `anthropic:claude-sonnet-4-5-20250929` | Refinement, validation, quality gating | ~$3 |
+| T3 | Premium | Reviewer | `REVIEW_MODEL_CLAUDE_OPUS` / `T3_PREMIUM` | `anthropic:claude-opus-4-6` | Final review, arbitration, complex design | ~$15 |
 
-> **Runtime note:** `HandlerConfig.lead_agent` defaults to Opus, making the default artisan runtime 2-tier (Haiku + Opus). Sonnet is the validator default for standalone `LeadContractorCodeGenerator`. Set `--lead-agent` to Sonnet for the full 3-tier split.
+> **Runtime note:** `HandlerConfig.lead_agent` defaults to Opus (T3), `drafter_agent` to Haiku (T1), and `tier2_agent` to Sonnet (T2). The default IMPLEMENT flow is now T1 draft → T2 refine. Use `--skip-refinement` to bypass T2 and use T1 output directly.
+
+### Phase-to-Tier Mapping
+
+| Phase | T1 (Economy) | T2 (Standard) | T3 (Premium) |
+|-------|-------------|---------------|--------------|
+| DESIGN | — | — | Generate + review |
+| IMPLEMENT | Draft code | Refine draft (AR-408) | — |
+| TEST | Generate tests | — | — |
+| REVIEW | — | — | Evaluate quality |
+
+### T2 Refinement in IMPLEMENT (AR-408)
+
+After T1 generates draft code, T2 refines it:
+1. T1 writes files to staging
+2. T2 reads back the complete files (not search/replace blocks)
+3. T2 receives a refinement prompt with task context + draft code
+4. T2 outputs refined complete files
+5. Refined code overwrites T1 output in staging
+
+**Non-fatal**: If T2 fails, returns empty code, or throws an exception, the T1 draft is preserved as final output. T2 is purely additive.
+
+**Opt-out**: `--skip-refinement` or `HandlerConfig(skip_refinement=True)`.
+
+**Acceptance criteria:**
+- AC-1: T2 refiner is called after T1 drafter when `tier2_agent` is set and `skip_refinement=False`
+- AC-2: T2 failure preserves T1 output (non-fatal)
+- AC-3: Cost metrics include both T1 and T2 (`chunk.metadata["refine_cost_usd"]`)
+- AC-4: `iterations=2` in `GenerationResult` when T2 runs
+- AC-5: Forensic log emits `implement.chunk.refine` event
+
+### Walk-Through Mode (AR-409)
+
+A zero-cost execution mode that builds and persists all LLM prompts (DESIGN + IMPLEMENT) without making LLM calls. Useful for prompt analysis and debugging.
+
+**Output structure:**
+```
+.startd8/walkthrough/
+├── design/<task-id>/
+│   ├── generate_system_prompt.md
+│   ├── generate_user_prompt.md
+│   ├── review_system_prompt.md
+│   ├── review_user_prompt.md
+│   ├── arbiter_system_prompt.md
+│   └── arbiter_user_prompt.md
+├── implement/<task-id>/
+│   ├── t1_system_prompt.md
+│   ├── t1_user_prompt.md
+│   ├── t2_refine_system_prompt.md  (if T2 enabled)
+│   ├── t2_refine_user_prompt.md    (template with {draft_code})
+│   └── metadata.json
+```
+
+**Activation**: `--walkthrough` or `HandlerConfig(walkthrough=True)`.
+
+**Acceptance criteria:**
+- AC-1: IMPLEMENT walkthrough persists T1 prompts and skips LLM call
+- AC-2: DESIGN walkthrough persists generate + review prompts and returns synthetic results
+- AC-3: T2 prompt template contains `{draft_code}` placeholder
+- AC-4: No LLM API calls are made in walkthrough mode
+
+### IMPLEMENT Prompt Quality (AR-410 — AR-412)
+
+Improvements identified via AR-409 walkthrough evaluation of the IMPLEMENT phase T1/T2 prompts. These address prompt clarity, context hygiene, and T2 token efficiency.
+
+#### Existing-File vs Design-Doc Section Disambiguation (AR-410)
+
+The "Existing Files" section in the T1 user prompt currently embeds the design document's proposed SEARCH/REPLACE blocks inline with the existing file content. This creates semantic ambiguity: the drafter sees nested SEARCH/REPLACE blocks (the design doc's changes inside the "existing file" fence, plus the output format instructions telling it to produce its own SEARCH/REPLACE blocks).
+
+**Required change:** Separate the existing file content from the design document's change instructions into distinct, clearly labeled sections:
+- **"Existing Files"** — Contains only the current file content as-is (raw source, no change blocks)
+- **"Design Document"** — Contains the design doc's proposed changes (SEARCH/REPLACE blocks or prose), clearly labeled as the authoritative change specification
+
+**Acceptance criteria:**
+- AC-1: The "Existing Files" section contains only raw source code, not SEARCH/REPLACE blocks from the design document
+- AC-2: Design document content appears in a separate section (e.g., "AUTHORITATIVE Design Changes" or "AUTHORITATIVE Design Document") that is visually and semantically distinct from the existing file listing
+- AC-3: The drafter prompt contains no nested SEARCH/REPLACE blocks (the only SEARCH/REPLACE format instructions are for the drafter's own output)
+
+#### Stale Context Filtering (AR-411)
+
+Upstream context fields (`architectural_context`, `service_metadata`, `onboarding_calibration_hints`) may contain template defaults from `.contextcore.yaml` that are not project-specific. When these placeholders propagate to the T1/T2 prompts, they waste tokens and can actively contradict the task (e.g., "Do NOT proceed to Phase 1" as a blocking constraint).
+
+**Required change:** Filter or suppress context sections that contain recognizable template defaults before injecting them into prompts.
+
+**Detection heuristics** (at least one must match to suppress):
+- `architectural_context.objectives` contains "Example objective" or "update with real business goal"
+- `architectural_context.constraints` contains "Do NOT proceed to Phase 1"
+- `service_metadata` contains "HEALTHCHECK type MUST match transport_protocol" without an actual `transport_protocol` value
+
+**Acceptance criteria:**
+- AC-1: When `architectural_context` contains template-default placeholders, the "Project Architecture" section is omitted from the T1 user prompt
+- AC-2: When `service_metadata` contains only generic boilerplate, the "Service Metadata" section is omitted from the T1 user prompt
+- AC-3: Legitimate (non-template) values in these fields are preserved and rendered normally
+- AC-4: Filtered sections are logged at DEBUG level for diagnostic visibility
+
+#### T2 Refine Prompt Token Efficiency (AR-412)
+
+The T2 refine user prompt currently duplicates the entire T1 user prompt (~28K chars) as "Task Context" before appending `{draft_code}`. Since T2 receives the already-applied draft code (complete files, not search/replace blocks), the existing-file listing and output format instructions from T1 are redundant. This can double the T2 input token count unnecessarily.
+
+**Required change:** Build a condensed T2 context that includes only information the refiner needs:
+1. **Task description** — The chunk description and target files
+2. **Design document** — The authoritative design specification (if present)
+3. **Key constraints** — Project conventions, import rules, parameter sources
+4. **Draft code** — The `{draft_code}` placeholder (injected at runtime)
+
+**Excluded from T2 context** (already applied by T1):
+- Raw existing file content (T2 sees the draft which incorporates these)
+- SEARCH/REPLACE output format instructions (T2 emits complete files)
+- Edit-First Directive and size regression thresholds (T2 output is always complete files)
+- Redundant project identity / goals (condensed to a single-line summary)
+
+**Acceptance criteria:**
+- AC-1: T2 refine user prompt is at most 40% of the T1 user prompt size (measured in chars), excluding the `{draft_code}` placeholder
+- AC-2: T2 refine user prompt includes: task description, design document (if present), key constraints, and `{draft_code}` placeholder
+- AC-3: T2 refine user prompt does NOT include: raw existing file content, SEARCH/REPLACE format instructions, or Edit-First Directive
+- AC-4: Walkthrough metadata.json includes `estimated_t2_context_chars` (T2 prompt size excluding `{draft_code}`)
 
 ### Budget Enforcement (AR-404)
 
@@ -1034,6 +1149,8 @@ Phase 3 (P1 — Completeness):
 | AR-212 | `src/startd8/contractors/artisan_contractor.py` | `scripts/run_artisan_workflow.py`, `handoff.py` |
 | AR-300..AR-311 | `src/startd8/contractors/context_seed_handlers.py` | `workflows/builtin/plan_ingestion_workflow.py` |
 | AR-400..AR-407 | `src/startd8/contractors/protocols.py` | `artisan_contractor.py`, `context_seed_handlers.py` |
+| AR-408 | `src/startd8/contractors/artisan_phases/development.py` | `context_seed_handlers.py`, `run_artisan_workflow.py` |
+| AR-409 | `src/startd8/contractors/artisan_phases/development.py`, `design_documentation.py` | `context_seed_handlers.py`, `run_artisan_workflow.py` |
 | AR-500..AR-511 | `src/startd8/contractors/handoff.py` | `artisan_contractor.py` |
 | AR-600..AR-607 | `src/startd8/contractors/artisan_contractor.py` | `context_seed_handlers.py` |
 | AR-700..AR-708 | `src/startd8/contractors/context_seed_handlers.py` | `scripts/run_artisan_workflow.py` |
@@ -1092,6 +1209,8 @@ Phase 3 (P1 — Completeness):
 | AR-206 | `tests/unit/contractors/test_feature_serial_checkpoint.py` |
 | AR-310..AR-311 | `tests/unit/test_plan_ingestion_workflow.py` |
 | AR-400..AR-401 | `tests/unit/contractors/test_artisan_models.py`, `tests/unit/test_artisan_config.py` |
+| AR-408 | `tests/unit/contractors/test_tier2_refinement.py` |
+| AR-409 | `tests/unit/contractors/test_walkthrough_mode.py` |
 | AR-402..AR-404 | `tests/e2e/contractors/test_artisan_resume.py`, `test_artisan_e2e.py` |
 | AR-500..AR-504 | `tests/unit/contractors/test_handoff.py` |
 | AR-505..AR-506 | `tests/e2e/contractors/test_artisan_resume.py` |

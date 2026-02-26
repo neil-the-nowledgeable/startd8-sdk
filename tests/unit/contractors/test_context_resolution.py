@@ -307,6 +307,39 @@ class TestStandaloneContextStrategy:
         )
         assert "target_file" not in ctx
 
+    def test_resolve_task_context_forward_manifest_dict_hydration(
+        self, standalone_strategy, minimal_feature_data, minimal_seed_data
+    ):
+        """REQ-PC-FM-004: forward_manifest dict is hydrated and bindings injected."""
+        # Minimal feature has id "F-001" but Prime uses PI-001; use F-001 for task_id match
+        feature = {"name": "logger", "id": "PI-001", "target_files": ["src/logger.py"], "description": "", "metadata": {}}
+        seed_data = {
+            **minimal_seed_data,
+            "forward_manifest": {
+                "contracts": [
+                    {
+                        "contract_id": "flcm-fn-getJSONLogger",
+                        "category": "function_name",
+                        "confidence": "inferred",
+                        "description": "Use getJSONLogger",
+                        "binding_text": "[BINDING] function=getJSONLogger | Use getJSONLogger",
+                        "function_name": "getJSONLogger",
+                        "applicable_task_ids": ["PI-001"],
+                        "source_reference": "deterministic",
+                    }
+                ],
+                "file_specs": {},
+                "stages_completed": ["EXTRACT"],
+            },
+        }
+        ctx = standalone_strategy.resolve_task_context(
+            feature_data=feature, seed_data=seed_data,
+        )
+        assert "domain_constraints" in ctx
+        constraints = ctx["domain_constraints"]
+        assert isinstance(constraints, list)
+        assert any("[BINDING] function=getJSONLogger" in c for c in constraints)
+
 
 # ============================================================================
 # TestPipelineContextStrategy
@@ -981,8 +1014,8 @@ class TestConstants:
     """Validate module-level constants for consistency."""
 
     def test_valid_section_ids_count(self):
-        """Five section IDs: IMP-P1 through IMP-P5."""
-        assert len(VALID_SECTION_IDS) == 5
+        """Six section IDs: IMP-P1 through IMP-P6."""
+        assert len(VALID_SECTION_IDS) == 6
 
     def test_section_field_map_covers_all_ids(self):
         """SECTION_FIELD_MAP keys match VALID_SECTION_IDS."""

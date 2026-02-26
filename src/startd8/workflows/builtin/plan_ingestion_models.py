@@ -190,6 +190,8 @@ class ArtisanContextSeed:
     lane_assignments: Optional[Dict[str, int]] = None
     # Operational project metadata (criticality, risks, SLOs, observability)
     project_metadata: Optional[Dict[str, Any]] = None
+    # Phase 4: Forward-looking code manifest contracts
+    forward_manifest: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         d: Dict[str, Any] = {
@@ -220,6 +222,8 @@ class ArtisanContextSeed:
             d["lane_assignments"] = self.lane_assignments
         if self.project_metadata is not None:
             d["project_metadata"] = self.project_metadata
+        if self.forward_manifest is not None:
+            d["forward_manifest"] = self.forward_manifest
         return d
 
 

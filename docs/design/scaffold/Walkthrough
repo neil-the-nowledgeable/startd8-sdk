@@ -1,0 +1,53 @@
+# Walkthrough: Hybrid Project Scaffolder
+
+We have successfully implemented and verified the Hybrid Project Scaffolder designed to eliminate LLM-induced structural errors (such as those seen in `PI-001`).
+
+### Changes Made
+
+1. **`ProjectScaffolder` Foundation:**
+   - Created `src/startd8/project/scaffolder.py` taking inspiration from the existing `WorkflowScaffolder`.
+   - Utilizes Jinja2 string rendering to evaluate directory trees recursively.
+2. **Hybrid State Manifeset:**
+   - Introduced `src/startd8/project/manifest.py` to maintain a `.startd8-scaffold.json` at the root of any new project.
+   - Computes SHA-256 hashes of generated files.
+3. **Smart Overwriting Logic:**
+   - If scaffolding is re-run over an existing project, it detects file modifications.
+   - If a file's current hash matches what was originally scaffolded, the file is safely overwritten (allowing seamless upstream template upgrades).
+   - If a file has been customized by an LLM or user, the scaffolder explicitly skips it to preserve custom logic.
+4. **CLI Integration:**
+   - Added `startd8 project new <name> --template <template>` and `-f/--force` flags.
+5. **Base Template:**
+   - Created `src/startd8/project/templates/basic-python` containing a modern Python package structure.
+
+### Validation Details
+
+We ran our tests using the CLI directly in the `out/` directory.
+
+- Initial creation perfectly sets up a module structure resolving the module name from kebab-case string input:
+
+  ```bash
+  $ startd8 project new my-hybrid-test
+  Successfully scaffolded project: my-hybrid-test
+  Scaffolded 3 new file(s)
+  ```
+
+- **Testing LLM-Modification Preservation:** We then manually modified `pyproject.toml` and re-ran the scaffolding. The system correctly recognized the delta and skipped the file:
+
+  ```bash
+  $ startd8 project new my-hybrid-test
+  Skipped overwriting customized file (hash mismatch): pyproject.toml
+  Scaffolded 0 new file(s)
+  Skipped 1 modified file(s) to protect custom logic
+  ```
+
+- **Testing Force Mode:** Adding `--force` deliberately overpowered the hash protections, restoring the file.
+
+  ```bash
+  $ startd8 project new my-hybrid-test --force
+  Forcibly overwrote file: pyproject.toml
+  Safely updated 3 file(s)
+  ```
+
+### Conclusion
+
+The new `ProjectScaffolder` is ready to replace manual LLM tasks for `pyproject.toml` generation and directory scaffolding, dramatically reducing the structural problems encountered in the Artisan contractor.

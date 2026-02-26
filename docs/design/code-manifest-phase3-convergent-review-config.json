@@ -1,0 +1,21 @@
+{
+  "requirements_path": "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/design/CODE_MANIFEST_PHASE3_REQUIREMENTS.md",
+  "plan_path": "/Users/neilyashinsky/.claude/plans/harmonic-frolicking-flame.md",
+  "requirements_profile": "requirements",
+  "plan_profile": "design",
+  "reviewer_count": 2,
+  "quality_tier": "flagship",
+  "enable_triage": true,
+  "enable_apply": true,
+  "max_suggestions": 10,
+  "init_if_missing": true,
+  "context_files": [
+    "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/design/CODE_MANIFEST_REQUIREMENTS.md",
+    "/Users/neilyashinsky/Documents/dev/startd8-sdk/docs/design/CODE_MANIFEST_PLAN.md",
+    "/Users/neilyashinsky/Documents/dev/startd8-sdk/src/startd8/utils/code_manifest.py",
+    "/Users/neilyashinsky/Documents/dev/startd8-sdk/tests/unit/test_code_manifest.py"
+  ],
+  "max_context_chars": 300000,
+  "warn_cost_usd": 8.0,
+  "max_cost_usd": 20.0
+}

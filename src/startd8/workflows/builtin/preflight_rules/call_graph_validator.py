@@ -129,7 +129,72 @@ class CallGraphValidator(PreflightRule):
             except Exception as exc:
                 logger.debug("call_graph_validator: CG-PF-3 failed: %s", exc)
 
+        # Phase 5 PF-1: Validate __all__ against manifest elements
+        checks.extend(self._validate_module_all(ctx))
+
         if not checks:
             return None
 
         return RuleContribution(checks=checks)
+
+    def _validate_module_all(self, ctx: RuleContext) -> list[EnvironmentCheck]:
+        """Phase 5 PF-1: Validate that module __all__ exports exist in the manifest.
+
+        When enable_introspect is True and module_all_for() returns a non-None
+        list, flags any export name that is not found as an element in the manifest.
+
+        Gracefully degrades to an empty list when:
+        - registry is unavailable
+        - enable_introspect is False on the config
+        - manifest or path is unavailable
+        """
+        checks: list[EnvironmentCheck] = []
+        if ctx.manifest_registry is None:
+            return checks
+        if ctx.manifest is None:
+            return checks
+
+        # Only run when introspect is enabled
+        config = getattr(ctx, "config", None)
+        enable_introspect = getattr(config, "enable_introspect", False) if config else False
+        if not enable_introspect:
+            return checks
+
+        relative_path = getattr(ctx, "relative_path", None)
+        if not relative_path:
+            return checks
+
+        try:
+            mod_all = ctx.manifest_registry.module_all_for(relative_path)
+            if mod_all is None:
+                return checks  # No __all__ — nothing to validate
+
+            from startd8.utils.manifest_registry import _flatten_elements
+            element_names = {
+                elem.fqn.split(".")[-1] if elem.fqn and "." in elem.fqn else elem.fqn
+                for elem in _flatten_elements(ctx.manifest.elements)
+                if elem.fqn
+            }
+
+            for export_name in mod_all:
+                if export_name not in element_names:
+                    checks.append(
+                        EnvironmentCheck(
+                            check_name="module_all_missing_element",
+                            status="warn",
+                            message=(
+                                f"Module exports '{export_name}' in __all__ but no "
+                                f"element '{export_name}' found in {relative_path}"
+                            ),
+                            detail=(
+                                f"'{export_name}' is listed in __all__ but does not "
+                                f"correspond to any known element in the manifest. "
+                                f"This may indicate a missing import, renamed element, "
+                                f"or stale __all__ list."
+                            ),
+                        )
+                    )
+        except Exception as exc:
+            logger.debug("call_graph_validator: PF-1 module_all validation failed: %s", exc)
+
+        return checks

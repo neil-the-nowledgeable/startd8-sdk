@@ -87,8 +87,183 @@ MULTI_FILE_EDIT_OUTPUT_FORMAT = _get_prime_template("lead_contractor", "multi_fi
 # PCA-605: Edit-mode draft template (existing files BEFORE spec)
 DRAFT_EDIT_PROMPT_TEMPLATE = _get_prime_template("lead_contractor", "draft_edit")
 
-# PCA-601: Budget for existing file content in draft prompt
-_EXISTING_FILES_BUDGET_BYTES = 80 * 1024  # 80 KB
+# PC-M3: Mode-aware drafter system prompts (Phase 3) — load with fallback
+def _get_draft_system_template(name: str) -> Optional[str]:
+    """Load drafter system prompt template; return None when YAML unavailable (PC-M4)."""
+    try:
+        return _get_prime_template("lead_contractor", name)
+    except (FileNotFoundError, KeyError):
+        return None
+
+
+# PC-Y2: Format helper with fallback when YAML unavailable (Phase 4)
+def _format_lead_prompt(template_name: str, fallback: str, **kwargs: Any) -> str:
+    """Format prompt from YAML template; use fallback when YAML missing (PC-Y2, AC-5).
+
+    Args:
+        template_name: Key in lead_contractor.yaml prompts section.
+        fallback: String to use when template unavailable (e.g. downstream installs).
+        **kwargs: Placeholders for template.format().
+
+    Returns:
+        Formatted string (from YAML or fallback).
+    """
+    try:
+        template = _get_prime_template("lead_contractor", template_name)
+        return template.format(**kwargs)
+    except (FileNotFoundError, KeyError):
+        try:
+            return fallback.format(**kwargs)
+        except KeyError:
+            return fallback
+
+# PC-M2: Threshold for search/replace vs whole-file edit (Artisan alignment)
+_SEARCH_REPLACE_LINE_THRESHOLD: int = 50
+
+# PC-Y3/Y4: Inline fallbacks for Phase 2 framing (when YAML unavailable)
+_PLAN_CONTEXT_EDIT_FRAMING_FALLBACK: str = (
+    "The following plan excerpt describes CHANGES to apply to existing code. "
+    "Do NOT treat it as a greenfield specification."
+)
+_PLAN_CONTEXT_CREATE_FRAMING_FALLBACK: str = (
+    "The following plan excerpt provides context for this task. "
+    "The design document (if present) is authoritative."
+)
+_ARCH_CONTEXT_EDIT_FRAMING_FALLBACK: str = (
+    "Apply these architectural constraints to the existing file(s). "
+    "Do not redesign from scratch."
+)
+_SPEC_EDIT_PREAMBLE_BASE_FALLBACK: str = (
+    "## EDIT MODE — Existing Code Modification\n"
+    "**Task type: {task_verb}** existing code.\n\n"
+    "This task MODIFIES an existing file. The existing code is shown "
+    "below in the task description.\n"
+    "Your specification must:\n"
+    "- Describe ONLY the additions and modifications needed\n"
+    "- List which existing functions/classes to keep unchanged\n"
+    "- NOT redesign or restructure existing code\n"
+    "- Specify exact insertion points (e.g., 'Add after class X' "
+    "or 'Modify method Y')\n"
+)
+_SPEC_EDIT_QUANTITATIVE_FALLBACK: str = (
+    "\n**The existing file(s) total {total_lines} lines.** "
+    "Your spec must result in a draft that is AT LEAST "
+    "{min_lines} lines ({edit_min_pct}% of existing).\n"
+)
+_SPEC_COMPLETENESS_WARNING_FALLBACK: str = (
+    "\n## Spec Completeness Warning\n"
+    "The following parameters from requirements are NOT mentioned in the spec.\n"
+    "Ensure these are included in your implementation:\n"
+    "{missing_lines}\n"
+)
+
+# PC-M4: Inline fallbacks when YAML unavailable
+_DRAFT_SYSTEM_CREATE_FALLBACK: str = (
+    "You are an expert Python engineer generating production-quality source code from a specification. "
+    "Implement the spec exactly. Emit complete implementations — no stubs or TODO placeholders."
+)
+_DRAFT_SYSTEM_EDIT_FALLBACK: str = (
+    "You are an expert Python engineer editing existing source code. "
+    "PRESERVE all existing code not being changed. ADD or MODIFY only what the spec specifies. "
+    "Your output MUST include the complete modified file — not just the changed sections."
+)
+_DRAFT_SYSTEM_SEARCH_REPLACE_FALLBACK: str = (
+    "You are an expert Python engineer editing large existing source files. "
+    "Make minimal, targeted changes. Preserve all unchanged code. "
+    "Your output MUST be the complete modified file — include every line, changing only what the spec requires."
+)
+
+
+def _get_drafter_system_prompt(
+    existing_files: Optional[Dict[str, str]] = None,
+) -> str:
+    """Return mode-specific drafter system prompt (PC-M2).
+
+    When existing_files and any file ≥50 lines → search_replace_system.
+    When existing_files → edit_system.
+    Else → create_system.
+    """
+    if existing_files and any(
+        len((c or "").splitlines()) >= _SEARCH_REPLACE_LINE_THRESHOLD
+        for c in existing_files.values()
+    ):
+        return _get_draft_system_template("draft_system_search_replace") or _DRAFT_SYSTEM_SEARCH_REPLACE_FALLBACK
+    if existing_files:
+        return _get_draft_system_template("draft_system_edit") or _DRAFT_SYSTEM_EDIT_FALLBACK
+    return _get_draft_system_template("draft_system_create") or _DRAFT_SYSTEM_CREATE_FALLBACK
+
+# PCA-601: Budget for existing file content in draft prompt (PC-B3: reduced from 80KB)
+_EXISTING_FILES_BUDGET_BYTES = 40 * 1024  # 40 KB
+
+# PC-B1, PC-B2, PC-B4: Spec prompt truncation budgets
+_PLAN_CONTEXT_MAX_CHARS: int = 16_384
+_ARCH_CONTEXT_MAX_CHARS: int = 4_096
+_SPEC_CONTEXT_BUDGET_CHARS: int = 12_000
+_TRUNCATION_MARKER: str = "... [truncated; full plan in artifacts]"
+
+
+def _truncate_with_marker(text: str, max_chars: int, marker: str) -> str:
+    """Truncate text to max_chars, appending marker if truncated (PC-B1, PC-B4).
+
+    Args:
+        text: The text to truncate.
+        max_chars: Maximum length of the result (including marker).
+        marker: Suffix to append when truncation occurs.
+
+    Returns:
+        Original text if within limit; otherwise truncated text + marker.
+        If max_chars <= 0, returns empty string.
+        If max_chars <= len(marker), returns marker truncated to max_chars.
+    """
+    if max_chars <= 0:
+        return ""
+    if not text or len(text) <= max_chars:
+        return text
+    if max_chars <= len(marker):
+        return marker[:max_chars]
+    return text[: max_chars - len(marker)] + marker
+
+
+def _truncate_arch_context(arch_ctx: Any, max_chars: int) -> str:
+    """Truncate or summarize architectural context (PC-B2).
+
+    When dict: keep objectives (first 3), constraints (first 5), drop verbose nested.
+    When str: truncate with marker.
+    List items are stringified via str() for robustness (dicts, objects).
+
+    Args:
+        arch_ctx: Architectural context as dict, str, or other (stringified).
+        max_chars: Maximum length of the result.
+
+    Returns:
+        Summarized or truncated string; empty if arch_ctx is falsy.
+    """
+    if not arch_ctx:
+        return ""
+    if isinstance(arch_ctx, str):
+        return _truncate_with_marker(arch_ctx, max_chars, _TRUNCATION_MARKER)
+    if isinstance(arch_ctx, dict):
+        # Summarize: objectives first 3, constraints first 5
+        summary_parts: List[str] = []
+        obj = arch_ctx.get("objectives") or arch_ctx.get("project_objectives")
+        if isinstance(obj, list):
+            summary_parts.append(
+                "### Objectives\n" + "\n".join(f"- {str(o)}" for o in obj[:3])
+            )
+        elif isinstance(obj, str):
+            # Str path: truncate at 500 chars (no marker; summary is advisory)
+            summary_parts.append(f"### Objectives\n{obj[:500]}")
+        constraints = arch_ctx.get("constraints")
+        if isinstance(constraints, list):
+            summary_parts.append(
+                "### Constraints\n"
+                + "\n".join(f"- {str(c)}" for c in constraints[:5])
+            )
+        result = "\n\n".join(summary_parts)
+        if len(result) > max_chars:
+            return _truncate_with_marker(result, max_chars, _TRUNCATION_MARKER)
+        return result
+    return _truncate_with_marker(str(arch_ctx), max_chars, _TRUNCATION_MARKER)
 
 
 def _build_existing_files_section(
@@ -98,7 +273,7 @@ def _build_existing_files_section(
     """Build the existing files section for the draft prompt (PCA-601).
 
     Returns empty string for greenfield tasks. For edit tasks, includes
-    file contents within an 80KB budget with defined overflow behavior.
+    file contents within a 40KB budget (PC-B3) with defined overflow behavior.
     """
     if not existing_files:
         return ""
@@ -205,6 +380,24 @@ def _build_existing_files_section(
 
 
 _EDIT_MIN_PCT = 80  # Minimum percentage of original lines expected in edit output
+_EDIT_MIN_PCT_RANGE = (1, 100)  # Valid range for edit_min_pct
+
+
+def _resolve_edit_min_pct(value: Any) -> int:
+    """Resolve edit_min_pct from context/config with defensive parsing.
+
+    Handles None, invalid types, and out-of-range values. Falls back to
+    _EDIT_MIN_PCT on any error. [O11Y Leg 8 #3]
+    """
+    if value is None:
+        return _EDIT_MIN_PCT
+    try:
+        pct = int(value)
+    except (TypeError, ValueError):
+        return _EDIT_MIN_PCT
+    lo, hi = _EDIT_MIN_PCT_RANGE
+    return max(lo, min(hi, pct))
+
 
 # PCA-607: Size regression gate thresholds for draft output.
 # Files smaller than _MIN_LINES are exempt; drafts below _THRESHOLD ratio
@@ -216,6 +409,7 @@ _DRAFT_SIZE_REGRESSION_MIN_LINES = 50     # Only check files larger than this
 def _build_output_format(
     target_files: Optional[List[str]] = None,
     existing_files: Optional[Dict[str, str]] = None,
+    edit_min_pct: Optional[int] = None,
 ) -> str:
     """Build the output format section for the draft prompt.
 
@@ -224,20 +418,23 @@ def _build_output_format(
     verification checklist (Layer 2 defense-in-depth).
     When existing_files are present (PCA-602), selects edit-mode templates.
     PCA-605: Edit templates now include quantitative line-count constraints.
+    PC-Q3: edit_min_pct overrides default (80) when provided.
     """
     is_edit = bool(existing_files)
+    pct = _resolve_edit_min_pct(edit_min_pct)
 
     if not target_files or len(target_files) <= 1:
         if is_edit:
             # PCA-605: Compute total line count across all existing files
             total_lines = sum(
-                len(content.splitlines()) for content in existing_files.values()
+                len((content or "").splitlines())
+                for content in existing_files.values()
             )
-            min_output_lines = int(total_lines * _EDIT_MIN_PCT / 100)
+            min_output_lines = int(total_lines * pct / 100)
             return SINGLE_FILE_EDIT_OUTPUT_FORMAT.format(
                 existing_line_count=total_lines,
                 min_output_lines=min_output_lines,
-                min_pct=_EDIT_MIN_PCT,
+                min_pct=pct,
             )
         return SINGLE_FILE_OUTPUT_FORMAT
 
@@ -253,8 +450,8 @@ def _build_output_format(
         # PCA-607: Per-file line counts + minimum output constraint
         line_parts = []
         for fpath, content in existing_files.items():
-            flines = len(content.splitlines())
-            min_lines = int(flines * _EDIT_MIN_PCT / 100)
+            flines = len((content or "").splitlines())
+            min_lines = int(flines * pct / 100)
             line_parts.append(
                 f"- `{fpath}`: {flines} lines — output MUST be AT LEAST {min_lines} lines"
             )
@@ -490,7 +687,9 @@ class LeadContractorWorkflow(WorkflowBase):
 
         # Parse configuration
         task_description = config["task_description"]
-        context = config.get("context", {})
+        context = dict(config.get("context", {}))
+        if "edit_min_pct" not in context and config.get("edit_min_pct") is not None:
+            context["edit_min_pct"] = _resolve_edit_min_pct(config["edit_min_pct"])
         lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
         drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
@@ -598,12 +797,11 @@ class LeadContractorWorkflow(WorkflowBase):
                         f"- {p.get('key_value', '')} (from requirements)"
                         for p in missing
                     )
-                    spec_validation_warning = (
-                        f"\n## Spec Completeness Warning\n"
-                        f"The following parameters from requirements are NOT mentioned in the spec.\n"
-                        f"Ensure these are included in your implementation:\n"
-                        f"{missing_lines}\n"
-                    )
+                    spec_validation_warning = "\n" + _format_lead_prompt(
+                        "spec_completeness_warning",
+                        _SPEC_COMPLETENESS_WARNING_FALLBACK,
+                        missing_lines=missing_lines,
+                    ) + "\n"
                     logger.warning(
                         "IMP-P6: %d resolved parameter(s) missing from spec: %s",
                         len(missing),
@@ -636,6 +834,7 @@ class LeadContractorWorkflow(WorkflowBase):
                     target_files=context.get("target_files"),
                     existing_files=context.get("existing_files"),
                     edit_mode=context.get("edit_mode"),
+                    edit_min_pct=context.get("edit_min_pct"),
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
@@ -719,6 +918,8 @@ class LeadContractorWorkflow(WorkflowBase):
                     implementation=current_implementation,
                     pass_threshold=pass_threshold,
                     iteration=iteration,
+                    forward_manifest=context.get("forward_manifest"),
+                    target_files=context.get("target_files"),
                 )
                 result.reviews.append(review)
 
@@ -856,6 +1057,101 @@ class LeadContractorWorkflow(WorkflowBase):
         return str(value)
 
     @staticmethod
+    def _build_spec_context_section(
+        context: Dict[str, Any],
+        output_format: Optional[str],
+        target_files: Optional[List[str]],
+    ) -> str:
+        """Build general context section (PC-A1). File manifest + remaining keys."""
+        from .prompts import get_template as _get_ctx_template
+
+        parts: List[str] = []
+        if target_files and len(target_files) > 1:
+            file_manifest = "\n".join(f"  - `{f}`" for f in target_files)
+            manifest_template = _get_ctx_template("prime_context", "file_manifest")
+            parts.append(manifest_template.format(file_manifest=file_manifest))
+
+        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
+        if output_format:
+            context_str += f"\n\nExpected Output Format:\n{output_format}"
+        parts.append(f"## Context\n{context_str}")
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _build_spec_plan_section(
+        plan_ctx: Optional[str],
+        is_edit: bool = False,
+    ) -> str:
+        """Build plan context section with truncation and framing (PC-B1, PC-F1).
+
+        When is_edit: prepends edit framing (plan describes CHANGES, not greenfield).
+        When create: prepends create framing (plan provides context; design doc authoritative).
+        Truncation budget accounts for framing so total section stays within _PLAN_CONTEXT_MAX_CHARS.
+        """
+        if not plan_ctx or not plan_ctx.strip():
+            return ""
+        if is_edit:
+            framing = _format_lead_prompt(
+                "plan_context_edit_framing",
+                _PLAN_CONTEXT_EDIT_FRAMING_FALLBACK,
+            ).rstrip() + "\n\n"
+        else:
+            framing = _format_lead_prompt(
+                "plan_context_create_framing",
+                _PLAN_CONTEXT_CREATE_FRAMING_FALLBACK,
+            ).rstrip() + "\n\n"
+        # Reserve space for framing; truncate plan to fit within total budget
+        plan_budget = _PLAN_CONTEXT_MAX_CHARS - len(framing)
+        truncated = _truncate_with_marker(
+            plan_ctx.strip(), plan_budget, _TRUNCATION_MARKER
+        )
+        if len(truncated) < len(plan_ctx.strip()):
+            logger.info(
+                "Spec prompt: plan context truncated from %d to %d chars (PC-B1)",
+                len(plan_ctx), len(truncated),
+            )
+        return f"## Plan Context\n{framing}{truncated}"
+
+    @staticmethod
+    def _build_spec_arch_section(arch_ctx: Any, is_edit: bool = False) -> str:
+        """Build architectural context section with truncation and framing (PC-B2, PC-F2).
+
+        When is_edit: prefixes with edit framing (apply to existing files, do not redesign).
+        """
+        if not arch_ctx:
+            return ""
+        truncated = _truncate_arch_context(arch_ctx, _ARCH_CONTEXT_MAX_CHARS)
+        orig_len = len(json.dumps(arch_ctx) if isinstance(arch_ctx, dict) else str(arch_ctx))
+        if len(truncated) < orig_len:
+            logger.info(
+                "Spec prompt: arch context truncated from %d to %d chars (PC-B2)",
+                orig_len, len(truncated),
+            )
+        if is_edit:
+            framing = _format_lead_prompt(
+                "arch_context_edit_framing",
+                _ARCH_CONTEXT_EDIT_FRAMING_FALLBACK,
+            ).rstrip() + "\n\n"
+            return f"## Project Architecture\n{framing}{truncated}"
+        return f"## Project Architecture\n{truncated}"
+
+    @staticmethod
+    def _build_spec_objectives_section(project_obj: Any) -> str:
+        """Build project objectives section (PC-A1)."""
+        if not project_obj:
+            return ""
+        _fmt = LeadContractorWorkflow._format_context_value
+        return f"## Project Objectives\n{_fmt(project_obj)}"
+
+    @staticmethod
+    def _build_spec_conventions_section(sem_conv: Any) -> str:
+        """Build semantic conventions section (PC-A1)."""
+        if not sem_conv:
+            return ""
+        _fmt = LeadContractorWorkflow._format_context_value
+        return f"## Semantic Conventions\n{_fmt(sem_conv)}"
+
+    @staticmethod
     def _build_spec_prompt(
         task_description: str,
         context: Dict[str, Any],
@@ -867,32 +1163,49 @@ class LeadContractorWorkflow(WorkflowBase):
         from *context* so the remainder can be JSON-serialized as general
         context.  Callers should pass a **copy** of the original context
         to avoid mutating upstream data.
+
+        Args:
+            task_description: The task description for the spec.
+            context: Dict with plan_context, architectural_context, existing_files,
+                edit_mode, edit_min_pct, etc. Structured keys are popped.
+            output_format: Optional output format string for the drafter.
+
+        Returns:
+            Formatted spec prompt string.
         """
         from ...contractors.prompt_utils import format_constraints
         from .prompts import get_template as _get_ctx_template
 
-        # --- PCA-605: Edit-aware spec framing ---
-        # When the task modifies existing files, prepend an edit-mode preamble
-        # so the spec LLM frames its output as a delta, not a greenfield design.
-        # PCA-605b: Pop existing_files so the full file content doesn't leak
-        # into the JSON context dump.  The spec LLM already sees existing code
-        # in the task description's "Existing Files" section; the draft LLM
-        # receives it via the separate existing_files parameter.
-        context.pop("existing_files", None)
-
+        # --- PCA-605 + PC-F1..PC-F3, PC-Q1: Edit-aware spec framing ---
+        existing_files = context.pop("existing_files", None)
         edit_mode = context.pop("edit_mode", None)
-        if edit_mode and edit_mode.get("mode") == "edit":
-            edit_preamble = (
-                "## EDIT MODE — Existing Code Modification\n"
-                "This task MODIFIES an existing file. The existing code is shown "
-                "below in the task description.\n"
-                "Your specification must:\n"
-                "- Describe ONLY the additions and modifications needed\n"
-                "- List which existing functions/classes to keep unchanged\n"
-                "- NOT redesign or restructure existing code\n"
-                "- Specify exact insertion points (e.g., 'Add after class X' "
-                "or 'Modify method Y')\n\n"
+        is_edit = bool(existing_files) or (
+            isinstance(edit_mode, dict) and edit_mode.get("mode") == "edit"
+        )
+        edit_min_pct = _resolve_edit_min_pct(context.get("edit_min_pct"))
+
+        if is_edit:
+            # PC-F3: Task verb — "update" for edit, "implement" for create
+            task_verb = "update"
+            edit_preamble = _format_lead_prompt(
+                "spec_edit_preamble_base",
+                _SPEC_EDIT_PREAMBLE_BASE_FALLBACK,
+                task_verb=task_verb.capitalize(),
             )
+            # PC-Q1: Quantitative spec constraint when we have existing_files
+            if existing_files:
+                total_lines = sum(
+                    len((c or "").splitlines()) for c in existing_files.values()
+                )
+                min_lines = int(total_lines * edit_min_pct / 100)
+                edit_preamble += _format_lead_prompt(
+                    "spec_edit_quantitative_constraint",
+                    _SPEC_EDIT_QUANTITATIVE_FALLBACK,
+                    total_lines=total_lines,
+                    min_lines=min_lines,
+                    edit_min_pct=edit_min_pct,
+                )
+            edit_preamble += "\n"
             task_description = edit_preamble + task_description
 
         # --- IMP-P5: Constraint categorization ---
@@ -913,6 +1226,15 @@ class LeadContractorWorkflow(WorkflowBase):
                 f"{requirements_text}\n"
             )
 
+        # --- IMP-P6 / REQ-PC-FM-006: Interface contract bindings from Forward Manifest ---
+        forward_contracts = context.pop("forward_contracts", None)
+        forward_contracts_section = ""
+        if forward_contracts and isinstance(forward_contracts, str) and forward_contracts.strip():
+            forward_contracts_section = (
+                "\n## Interface Contract Bindings (must enforce)\n"
+                f"{forward_contracts.strip()}\n"
+            )
+
         # --- IMP-P3: Critical parameter elevation ---
         critical_parameters = context.pop("critical_parameters", None)
         critical_parameters_section = ""
@@ -928,47 +1250,67 @@ class LeadContractorWorkflow(WorkflowBase):
                 f"{cp_str}\n"
             )
 
-        # --- IMP-P1: Structured context sections ---
+        # --- IMP-P1 + PC-A3: Pop all structured keys before context dump ---
         arch_ctx = context.pop("architectural_context", None)
         plan_ctx = context.pop("plan_context", None)
         project_obj = context.pop("project_objectives", None)
         sem_conv = context.pop("semantic_conventions", None)
+        # PC-A3: Pop pipeline strategy keys to avoid duplication in context_str
+        requirements_context = context.pop("requirements_context", None)
+        protocol_guidance = context.pop("protocol_guidance", None)
+        scope_boundary = context.pop("scope_boundary", None)
 
+        # --- PC-A1: Build sections via helpers ---
+        target_files = context.get("target_files")
         sections: List[str] = []
 
-        # Layer 1 (defense-in-depth): inject per-file manifest into the spec
-        target_files = context.get("target_files")
-        if target_files and len(target_files) > 1:
-            file_manifest = "\n".join(f"  - `{f}`" for f in target_files)
-            manifest_template = _get_ctx_template("prime_context", "file_manifest")
-            sections.append(manifest_template.format(file_manifest=file_manifest))
+        # Context section (file manifest + remaining keys)
+        ctx_section = LeadContractorWorkflow._build_spec_context_section(
+            context, output_format, target_files
+        )
+        sections.append(ctx_section)
 
-        # General context (remaining keys)
-        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
-        if output_format:
-            context_str += f"\n\nExpected Output Format:\n{output_format}"
-        sections.append(f"## Context\n{context_str}")
+        # Dedicated sections (PC-A3) — pop'd keys rendered here, not in context_str
+        if requirements_context:
+            sections.append(f"## Requirements Context\n{requirements_context}")
+        if protocol_guidance:
+            sections.append(f"## Protocol Guidance\n{protocol_guidance}")
+        if scope_boundary:
+            sections.append(f"## Scope Boundary\n{scope_boundary}")
 
-        _fmt = LeadContractorWorkflow._format_context_value
-        if project_obj:
-            sections.append(f"## Project Objectives\n{_fmt(project_obj)}")
-        if sem_conv:
-            sections.append(f"## Semantic Conventions\n{_fmt(sem_conv)}")
-        if arch_ctx:
-            if isinstance(arch_ctx, dict):
-                sections.append(f"## Project Architecture\n{json.dumps(arch_ctx, indent=2)}")
-            else:
-                sections.append(f"## Project Architecture\n{arch_ctx}")
-        if plan_ctx:
-            sections.append(f"## Plan Context\n{plan_ctx}")
+        # Project objectives, conventions, arch, plan
+        obj_section = LeadContractorWorkflow._build_spec_objectives_section(project_obj)
+        if obj_section:
+            sections.append(obj_section)
+        conv_section = LeadContractorWorkflow._build_spec_conventions_section(sem_conv)
+        if conv_section:
+            sections.append(conv_section)
+        arch_section = LeadContractorWorkflow._build_spec_arch_section(
+            arch_ctx, is_edit=is_edit
+        )
+        if arch_section:
+            sections.append(arch_section)
+        plan_section = LeadContractorWorkflow._build_spec_plan_section(
+            plan_ctx, is_edit=is_edit
+        )
+        if plan_section:
+            sections.append(plan_section)
 
         context_sections = "\n\n".join(sections)
+
+        # PC-B4: Log if over budget
+        if len(context_sections) > _SPEC_CONTEXT_BUDGET_CHARS:
+            logger.info(
+                "Spec prompt: context sections %d chars exceeds budget %d (PC-B4)",
+                len(context_sections), _SPEC_CONTEXT_BUDGET_CHARS,
+            )
 
         return SPEC_PROMPT_TEMPLATE.format(
             task_description=task_description,
             requirements_section=requirements_section,
             context_sections=context_sections,
             critical_parameters_section=critical_parameters_section,
+            forward_contracts_section=forward_contracts_section,
             domain_constraints=domain_constraints_str,
         )
 
@@ -1032,6 +1374,7 @@ class LeadContractorWorkflow(WorkflowBase):
         target_files: Optional[List[str]] = None,
         existing_files: Optional[Dict[str, str]] = None,
         edit_mode: Optional[Dict] = None,
+        edit_min_pct: Optional[int] = None,
     ) -> DraftResult:
         """Phase 2/4: Drafter creates implementation from spec.
 
@@ -1043,11 +1386,14 @@ class LeadContractorWorkflow(WorkflowBase):
             check_truncation: Whether to run heuristic truncation detection (default: True)
             strict_truncation: Use lower confidence threshold for detection (default: False)
             target_files: Target file paths (triggers multi-file output format when len > 1)
+            edit_min_pct: Min % of existing lines in edit output (PC-Q3, default 80)
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
         output_format = _build_output_format(
-            target_files, existing_files=existing_files,
+            target_files,
+            existing_files=existing_files,
+            edit_min_pct=edit_min_pct,
         )
         existing_files_section = _build_existing_files_section(existing_files, edit_mode)
 
@@ -1064,7 +1410,10 @@ class LeadContractorWorkflow(WorkflowBase):
             existing_files_section=existing_files_section,
         )
 
-        response_text, response_time_ms, token_usage = drafter_agent.generate(prompt)
+        sys_prompt = _get_drafter_system_prompt(existing_files)
+        response_text, response_time_ms, token_usage = drafter_agent.generate(
+            prompt, system_prompt=sys_prompt
+        )
 
         # Extract code from markdown code blocks (removes LLM commentary)
         implementation_code = self._extract_code_from_response(response_text)
@@ -1138,6 +1487,8 @@ class LeadContractorWorkflow(WorkflowBase):
         implementation: str,
         pass_threshold: int,
         iteration: int,
+        forward_manifest: Optional[Any] = None,
+        target_files: Optional[List[str]] = None,
     ) -> ReviewResult:
         """Phase 3: Lead reviews the draft implementation."""
         review_id = f"review-{uuid.uuid4().hex[:8]}"
@@ -1163,6 +1514,63 @@ class LeadContractorWorkflow(WorkflowBase):
         blocking = self._parse_list_section(review_text, "Blocking Issues")
         suggestions = self._parse_list_section(review_text, "Suggestions")
         strengths = self._parse_list_section(review_text, "Strengths")
+
+        # REQ-PC-VAL-003: Validator Hook during Review
+        if forward_manifest and getattr(forward_manifest, "contracts", None):
+            try:
+                from startd8.forward_manifest_validator import validate_forward_manifest
+                from startd8.utils.manifest_registry import ManifestRegistry
+                from startd8.utils.code_extraction import extract_multi_file_code
+
+                # Set up fallback explicitly
+                t_files = target_files or ["generated_code.py"]
+                # REQ-PC-VAL-002: Reconstruct ManifestRegistry for the Draft
+                # Parse the raw implementation markdown into a dictionary of file paths to source text
+                per_file_code = extract_multi_file_code(implementation, t_files)
+
+                # If extraction returned empty, try single file fallback
+                if not per_file_code and len(t_files) == 1:
+                    per_file_code[t_files[0]] = implementation
+
+                from pathlib import Path
+                from startd8.utils.code_manifest import generate_file_manifest
+                
+                # Build an ephemeral ManifestRegistry from the draft's string contents
+                manifest_dict = {}
+                for rel_path, src in per_file_code.items():
+                    try:
+                        manifest = generate_file_manifest(file_path=rel_path, source=src, project_root=Path("."))
+                        manifest_dict[rel_path] = manifest
+                    except Exception as e:
+                        logger.warning(
+                            "Failed to parse dynamically generated file '%s' during review validation: %s",
+                            rel_path, e
+                        )
+                registry = ManifestRegistry(manifests=manifest_dict)
+
+                # Validate against the forward manifest
+                violations = validate_forward_manifest(forward_manifest, registry)
+                
+                # Filter for severities that block merging
+                error_violations = [v for v in violations if v.severity == "error"]
+                
+                # REQ-PC-VAL-004: Auto-Fail on Structural Violations
+                if error_violations:
+                    passed = False
+                    for violation in error_violations:
+                        msg = f"[BLOCKING] {violation.violation_type} violation ({violation.contract_id}): Expected {violation.expected}"
+                        if violation.actual:
+                            msg += f", but got {violation.actual}"
+                        if violation.file_path:
+                            msg += f" (in {violation.file_path})"
+                        if msg not in blocking:
+                            blocking.append(msg)
+                    logger.warning(
+                        "Lead review validation gate FAILED: %d structural error(s) detected.",
+                        len(error_violations)
+                    )
+            except Exception as e:
+                logger.error("Failed to run validate_forward_manifest during lead review: %s", e, exc_info=True)
 
         review = ReviewResult(
             review_id=review_id,
@@ -1254,7 +1662,9 @@ class LeadContractorWorkflow(WorkflowBase):
         workflow_id = f"lc-{uuid.uuid4().hex[:12]}"
 
         task_description = config["task_description"]
-        context = config.get("context", {})
+        context = dict(config.get("context", {}))
+        if "edit_min_pct" not in context and config.get("edit_min_pct") is not None:
+            context["edit_min_pct"] = _resolve_edit_min_pct(config["edit_min_pct"])
         lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
         drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
@@ -1361,6 +1771,7 @@ class LeadContractorWorkflow(WorkflowBase):
                     target_files=context.get("target_files"),
                     existing_files=context.get("existing_files"),
                     edit_mode=context.get("edit_mode"),
+                    edit_min_pct=context.get("edit_min_pct"),
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
@@ -1619,6 +2030,7 @@ class LeadContractorWorkflow(WorkflowBase):
         target_files: Optional[List[str]] = None,
         existing_files: Optional[Dict[str, str]] = None,
         edit_mode: Optional[Dict] = None,
+        edit_min_pct: Optional[int] = None,
     ) -> DraftResult:
         """Phase 2/4 (async): Drafter creates implementation from spec.
 
@@ -1632,11 +2044,14 @@ class LeadContractorWorkflow(WorkflowBase):
             target_files: Target file paths (triggers multi-file output format when len > 1)
             existing_files: Existing file contents for edit mode (PCA-601)
             edit_mode: Edit mode classification dict (PCA-600)
+            edit_min_pct: Min % of existing lines in edit output (PC-Q3, default 80)
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
         output_format = _build_output_format(
-            target_files, existing_files=existing_files,
+            target_files,
+            existing_files=existing_files,
+            edit_min_pct=edit_min_pct,
         )
         existing_files_section = _build_existing_files_section(existing_files, edit_mode)
 
@@ -1652,7 +2067,10 @@ class LeadContractorWorkflow(WorkflowBase):
             existing_files_section=existing_files_section,
         )
 
-        response_text, response_time_ms, token_usage = await drafter_agent.agenerate(prompt)
+        sys_prompt = _get_drafter_system_prompt(existing_files)
+        response_text, response_time_ms, token_usage = await drafter_agent.agenerate(
+            prompt, system_prompt=sys_prompt
+        )
 
         implementation_code = self._extract_code_from_response(response_text)
 

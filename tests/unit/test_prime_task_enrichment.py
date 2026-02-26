@@ -204,6 +204,7 @@ class TestConstraintFormatting:
             requirements_section="",
             context_sections="## Context\n{}",
             critical_parameters_section="",
+            forward_contracts_section="",
             domain_constraints=domain_constraints_str,
         )
 
@@ -222,6 +223,7 @@ class TestConstraintFormatting:
             requirements_section="",
             context_sections="## Context\n{}",
             critical_parameters_section="",
+            forward_contracts_section="",
             domain_constraints="(No domain-specific constraints)",
         )
 

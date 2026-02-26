@@ -16,12 +16,15 @@ from unittest.mock import patch
 import pytest
 
 from startd8.utils.code_manifest import (
+    Dependencies,
     Element,
     ElementKind,
     FileManifest,
     ImportEntry,
-    Dependencies,
+    InspectInfo,
     Param,
+    ResolvedParam,
+    ResolvedSignature,
     Signature,
     Span,
     Visibility,
@@ -79,6 +82,7 @@ def _make_manifest(
     elements: list[Element] | None = None,
     imports: list[ImportEntry] | None = None,
     dependencies: Dependencies | None = None,
+    module_version: str | None = None,
 ) -> FileManifest:
     """Helper to create a FileManifest with sensible defaults."""
     return FileManifest(
@@ -88,6 +92,7 @@ def _make_manifest(
         elements=elements or [],
         imports=imports or [],
         dependencies=dependencies or Dependencies(),
+        module_version=module_version,
     )
 
 
@@ -295,6 +300,66 @@ class TestFileElementSummary:
         with caplog.at_level(logging.DEBUG, logger="startd8.utils.manifest_registry"):
             sample_registry.file_element_summary("src/mod.py")
         assert any("manifest.element_summary" in r.message for r in caplog.records)
+
+    def test_include_resolved_types_uses_resolved_signature(self) -> None:
+        """PI-2: When include_resolved_types=True, resolved signature is preferred over AST."""
+        resolved_sig = ResolvedSignature(
+            params=[
+                ResolvedParam(name="x", annotation="pandas.DataFrame"),
+                ResolvedParam(name="y", annotation="str", default="''"),
+            ],
+            return_annotation="None",
+        )
+        inspect_info = InspectInfo(resolved_signature=resolved_sig)
+        ast_sig = Signature(
+            params=[
+                Param(name="x", annotation="'DataFrame'"),
+                Param(name="y", annotation="str", default="''"),
+            ],
+            return_annotation="None",
+        )
+        el = _make_element("process", "mod.process", signature=ast_sig)
+        el = el.model_copy(update={"inspect_info": inspect_info})
+        manifest = _make_manifest(elements=[el])
+        registry = ManifestRegistry({"mod.py": manifest})
+
+        with_resolved = registry.file_element_summary(
+            "mod.py", budget_chars=4000, include_resolved_types=True
+        )
+        without_resolved = registry.file_element_summary(
+            "mod.py", budget_chars=4000, include_resolved_types=False
+        )
+
+        assert "pandas.DataFrame" in with_resolved
+        assert "'DataFrame'" not in with_resolved or "pandas.DataFrame" in with_resolved
+        assert "'DataFrame'" in without_resolved or "DataFrame" in without_resolved
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ManifestRegistry — module_version_for (PI-1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestModuleVersionFor:
+    """PI-1: module_version_for returns FileManifest.module_version."""
+
+    def test_returns_version_when_present(self) -> None:
+        manifest = _make_manifest(
+            file="src/foo/bar.py",
+            module="foo.bar",
+            module_version="0.4.0",
+        )
+        registry = ManifestRegistry({"src/foo/bar.py": manifest})
+        assert registry.module_version_for("src/foo/bar.py") == "0.4.0"
+
+    def test_returns_none_when_absent(self) -> None:
+        manifest = _make_manifest(file="src/foo/bar.py", module="foo.bar")
+        registry = ManifestRegistry({"src/foo/bar.py": manifest})
+        assert registry.module_version_for("src/foo/bar.py") is None
+
+    def test_returns_none_for_missing_file(self) -> None:
+        registry = ManifestRegistry({})
+        assert registry.module_version_for("nonexistent.py") is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

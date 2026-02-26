@@ -2288,6 +2288,95 @@ safety_resilience_requirements:
     verified_by:
       - tests/unit/test_service_metadata_preflight.py
 
+  # ---------------------------------------------------------------------------
+  # Edit-First Enforcement Gate (AR-811..AR-814)
+  # Prevents destructive complete-file overwrites during IMPLEMENT phase.
+  # Implements REQ-EFE-020 through REQ-EFE-023.
+  # ---------------------------------------------------------------------------
+
+  - id: AR-811
+    description: "Edit-First size regression gate validates post-generation character-count preservation (REQ-EFE-020)"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "After IMPLEMENT generation, per-file character-count ratio validation (output_chars / input_chars)"
+      - "Blocks files where output < threshold (default 80%)"
+      - "New files (no existing counterpart) always pass with status 'new_file'"
+      - "Returns EditFirstGateResult with per-file action: passed, rejected, new_file, force_overridden"
+      - "Rejects destructive complete-file overwrites (Mottainai Principle violation)"
+
+    depends_on: [AR-130]
+
+    implementation_hints:
+      file: src/startd8/contractors/edit_first_gate.py
+      function: validate_task_size_regression
+      related: src/startd8/contractors/context_seed_handlers.py
+
+    verified_by:
+      - tests/unit/contractors/test_edit_first_gate.py
+
+  - id: AR-812
+    description: "Edit-First gate resolves per-artifact-type thresholds from output contracts (REQ-EFE-021)"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "Resolves edit_min_pct from output_contracts dict per artifact type"
+      - "Multi-artifact tasks use max() — strictest threshold wins"
+      - "Defaults to 80% when schema_features lacks 'edit_first_enforcement' flag"
+      - "Emits WARNING when falling back to default threshold"
+
+    depends_on: [AR-811]
+
+    implementation_hints:
+      file: src/startd8/contractors/edit_first_gate.py
+      function: resolve_threshold
+
+    verified_by:
+      - tests/unit/contractors/test_edit_first_gate.py
+
+  - id: AR-813
+    description: "Edit-First gate emits OTel telemetry for size regressions (REQ-EFE-022)"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "Emits OTel span event 'edit_first.size_regression' per rejected file"
+      - "Event attributes: task.id, file.path, edit_first.input_chars, edit_first.output_chars, edit_first.ratio_pct, edit_first.threshold_pct, edit_first.artifact_type, edit_first.action"
+      - "Only rejected files emit events"
+      - "Gracefully handles None span (no-op, debug log only)"
+
+    depends_on: [AR-811, AR-600]
+
+    implementation_hints:
+      file: src/startd8/contractors/edit_first_gate.py
+      function: emit_rejection_telemetry
+
+    verified_by:
+      - tests/unit/contractors/test_edit_first_gate.py
+
+  - id: AR-814
+    description: "Edit-First gate builds edit-focused retry prompt for rejected files (REQ-EFE-023)"
+    status: implemented
+    type: safety
+
+    acceptance_criteria:
+      - "Constructs structured prompt guiding LLM to edit, not rewrite"
+      - "Prompt includes rejection reason, original file content, design doc, and task description"
+      - "Single retry attempt per rejected file (no iterative loop)"
+      - "Integrated into ImplementPhaseHandler for per-task retry orchestration"
+
+    depends_on: [AR-811, AR-130]
+
+    implementation_hints:
+      file: src/startd8/contractors/edit_first_gate.py
+      function: build_edit_retry_prompt
+      related: src/startd8/contractors/context_seed_handlers.py
+
+    verified_by:
+      - tests/unit/contractors/test_edit_first_gate.py
+
 # ==============================================================================
 # LAYER: MOTTAINAI COMPLIANCE (AR-9xx)
 # Cross-cutting requirements ensuring artifacts produced by earlier phases
@@ -2612,8 +2701,8 @@ traceability:
     requirements: [AR-700, AR-701, AR-702, AR-703, AR-704, AR-705, AR-706, AR-707]
     count: 8
   safety_resilience:
-    requirements: [AR-800, AR-801, AR-802, AR-803, AR-804, AR-805, AR-806, AR-807, AR-808, AR-809, AR-810]
-    count: 11
+    requirements: [AR-800, AR-801, AR-802, AR-803, AR-804, AR-805, AR-806, AR-807, AR-808, AR-809, AR-810, AR-811, AR-812, AR-813, AR-814]
+    count: 15
   mottainai_compliance:
     requirements: [AR-900, AR-901, AR-902, AR-903, AR-904, AR-905, AR-906, AR-907, AR-908]
     count: 9
@@ -2623,7 +2712,7 @@ traceability:
 # ==============================================================================
 
 summary:
-  total_requirements: 119
+  total_requirements: 123
   by_layer:
     phase_behavior: 39    # AR-1xx (includes AR-127..AR-128, AR-143..AR-147)
     orchestration: 12     # AR-2xx
@@ -2632,10 +2721,10 @@ summary:
     handoff_recovery: 12  # AR-5xx
     observability: 8      # AR-6xx
     configuration: 8      # AR-7xx
-    safety_resilience: 11 # AR-8xx (includes AR-810)
+    safety_resilience: 15 # AR-8xx (includes AR-810, AR-811..AR-814 Edit-First)
     mottainai_compliance: 9  # AR-9xx
   by_status:
-    implemented: 74
+    implemented: 78
     partial: 1
     planned: 44
   by_implementation_phase:
@@ -2646,4 +2735,4 @@ summary:
     phase_4_orchestration: 5
     phase_5_interactive: 6
     phase_6_mottainai: 9
-    already_implemented: 72
+    already_implemented: 76

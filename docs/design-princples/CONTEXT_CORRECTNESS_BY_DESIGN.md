@@ -298,16 +298,13 @@ warning when truncation occurs.
 
 ### Pillar 3: Shared-File Manifest
 
-**Principle:** Build a per-task map of which files are contested and by whom.
+**Principle:** Build a per-task map of which files are contested and by whom, and establish prescriptive interface contracts to govern those boundaries.
 
-Before design begins, compute a **shared-file manifest**: for each task, which
-of its `target_files` are also targeted by other tasks, and which tasks those
-are. This manifest serves three purposes:
+*Note: This pillar has been realized via the **Forward-Looking Code Manifest (FLCM)**, detailed in [`04_FORWARD_MANIFEST.md`](../design/forward-manifest/04_FORWARD_MANIFEST.md).*
 
-1. **Design prompt injection:** When the LLM designs Task B's changes to
-   `utils.py`, the prompt includes: "This file is also being modified by
-   Task A (health check endpoint) and Task C (metrics collector). Your design
-   must be compatible with theirs."
+Before design begins, the pipeline extracts a **shared-file manifest**: for each task, it determines which of its `target_files` are also targeted by other tasks, and identifies the explicit structural dependencies (e.g. gRPC methods, class names, shared variables) crossing those boundaries. This manifest serves three purposes:
+
+1. **Design prompt injection:** The FLCM injects `[BINDING]` or `[ADVISORY]` constraints into the prompt of each task modifying a shared file (e.g., "The logger must be instantiated as `getJSONLogger`"). This ensures design compatibility before code generation.
 
 2. **Lane validation:** The manifest provides a cross-check for lane
    computation. Every file appearing in the manifest for a task should also

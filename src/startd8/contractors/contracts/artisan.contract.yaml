@@ -1,0 +1,28 @@
+contract_metadata:
+  contract_id: "artisan-contractor-v1"
+  phase: "implementation"
+  version: "1.0.0"
+
+input_schema:
+  type: "object"
+  required:
+    - "project_id"
+    - "task_id"
+  properties:
+    project_id:
+      type: "string"
+    task_id:
+      type: "string"
+
+output_schema:
+  type: "object"
+  required:
+    - "code_changes"
+  properties:
+    code_changes:
+      type: "string"
+
+capabilities:
+  - "fs_read"
+  - "fs_write"
+  - "code_gen"

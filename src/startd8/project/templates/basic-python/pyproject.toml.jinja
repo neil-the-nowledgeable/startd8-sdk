@@ -1,0 +1,27 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "{{project_name}}"
+dynamic = ["version"]
+description = "{{description|default('A customized python package')}}"
+requires-python = ">=3.11"
+dependencies = [
+    # Add dependencies here
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=5.0",
+]
+
+[tool.hatch.version]
+path = "src/{{module_name}}/__init__.py"
+
+[tool.pytest.ini_options]
+addopts = "--cov=src/{{module_name}} --cov-report=term-missing"
+asyncio_mode = "auto"
+testpaths = ["tests"]

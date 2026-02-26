@@ -2757,6 +2757,87 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if _edit_mode_hint == "edit" and _manifest_summary:
             additional_context["manifest_edit_context"] = _manifest_summary
 
+            # Phase 5 DS-1: resolved types for edit-mode (type changes are highest risk)
+            if enable_introspect and manifest_registry is not None:
+                _rts_parts: list[str] = []
+                for tf in task.target_files:
+                    try:
+                        rts = manifest_registry.file_resolved_type_summary(tf)
+                        if rts:
+                            _rts_parts.append(f"### {tf}\n{rts}")
+                    except Exception:
+                        pass
+                if _rts_parts:
+                    additional_context["manifest_resolved_types"] = "\n\n".join(_rts_parts)
+
+        # Phase 5: Introspect enrichment for DESIGN context (DS-1..DS-4)
+        if enable_introspect and manifest_registry is not None and task.target_files:
+
+            # DS-1: Resolved types (non-edit path — edit path handled above)
+            if "manifest_resolved_types" not in additional_context:
+                _rts_parts_design: list[str] = []
+                for tf in task.target_files:
+                    try:
+                        rts = manifest_registry.file_resolved_type_summary(tf)
+                        if rts:
+                            _rts_parts_design.append(f"### {tf}\n{rts}")
+                    except Exception:
+                        pass
+                if _rts_parts_design:
+                    additional_context["manifest_resolved_types"] = "\n\n".join(_rts_parts_design)
+
+            # DS-2: MRO chains as supplemental manifest_context annotation
+            _mro_lines: list[str] = []
+            for tf in task.target_files:
+                try:
+                    mro_map = manifest_registry.file_mro_summary(tf)
+                    for fqn, mro in sorted(mro_map.items()):
+                        chain = " \u2192 ".join(mro)
+                        _mro_lines.append(f"- {fqn}: [{chain}]")
+                except Exception:
+                    pass
+            if _mro_lines:
+                _mro_section = "### Class Hierarchy\n" + "\n".join(_mro_lines)
+                existing_mc = additional_context.get("manifest_context", "")
+                additional_context["manifest_context"] = (
+                    existing_mc + "\n\n" + _mro_section if existing_mc else _mro_section
+                )
+
+            # DS-3: module __all__ as public_api_surface (T3 advisory)
+            _all_parts: list[str] = []
+            for tf in task.target_files:
+                try:
+                    mod_all = manifest_registry.module_all_for(tf)
+                    if mod_all:
+                        _all_parts.append(f"{tf}: [{', '.join(mod_all)}]")
+                except Exception:
+                    pass
+            if _all_parts:
+                additional_context["public_api_surface"] = "\n".join(_all_parts)
+
+            # DS-4: Runtime attributes for dataclass/namedtuple elements
+            _ra_lines: list[str] = []
+            for tf in task.target_files:
+                try:
+                    ra_map = manifest_registry.file_runtime_attributes(tf)
+                    for fqn, attrs in sorted(ra_map.items()):
+                        _ra_lines.append(
+                            f"- {fqn} (dataclass/namedtuple) \u2014 Generated members "
+                            f"(do NOT redefine): {', '.join(attrs)}"
+                        )
+                except Exception:
+                    pass
+            if _ra_lines:
+                _ra_section = "### Generated Members (dataclass/namedtuple)\n" + "\n".join(_ra_lines)
+                existing_mc = additional_context.get("manifest_context", "")
+                additional_context["manifest_context"] = (
+                    existing_mc + "\n\n" + _ra_section if existing_mc else _ra_section
+                )
+                logger.debug(
+                    "DESIGN DS-4: injected runtime attributes for %d/%d target files",
+                    len(_ra_lines), len(task.target_files),
+                )
+
         # DU-4 (Tier 2): ManifestDiff for redesign iterations
         # When prior manifest snapshot is available, compute diff here
         # via ManifestDiff.diff(old_manifest, new_manifest) and render as
@@ -5451,6 +5532,7 @@ class Test{class_name}:
         edit_mode_map: dict[str, EditModeClassification] | None = None,
         # AR-822: module inventory from SCAFFOLD for import grounding
         module_inventory: list[str] | None = None,
+        **kwargs: Any,  # Allow forward_manifest via kwargs to avoid massive signature change
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
 
@@ -5854,6 +5936,23 @@ class Test{class_name}:
                         ", ".join(missing_params[:5]),
                     )
 
+            # ── Phase 5: Forward Manifest Interface Contracts ──────
+            _forward_contracts = None
+            forward_manifest = kwargs.get("forward_manifest")
+            if forward_manifest is not None:
+                # Lazy import inside the loop to avoid circular import overhead
+                from startd8.contractors.artisan_phases.design_prompts.seed_mapping import map_forward_contracts_for_task
+                from startd8.contractors.artisan_phases.design_prompts.modules import ContractModule
+                _contract_data = map_forward_contracts_for_task(task, forward_manifest=forward_manifest)
+                if _contract_data:
+                    _fragment = ContractModule().render(_contract_data)
+                    if _fragment and _fragment.text:
+                        _forward_contracts = _fragment.text
+                        logger.info(
+                            "IMPLEMENT: injected forward contracts for task %s",
+                            task.task_id,
+                        )
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
@@ -5901,6 +6000,8 @@ class Test{class_name}:
                     # Mottainai Rule 5: parameter provenance for IMPLEMENT prompt
                     "parameter_sources": parameter_sources or {},
                     "semantic_conventions": semantic_conventions or {},
+                    # Phase 5: Forward interface contracts
+                    "forward_contracts": _forward_contracts,
                 },
             ))
 
@@ -6598,6 +6699,8 @@ class Test{class_name}:
                 edit_mode_map=edit_mode_map,
                 # AR-822: module inventory from SCAFFOLD
                 module_inventory=context.get("scaffold", {}).get("module_inventory"),
+                # Phase 5: Forward interface contracts
+                forward_manifest=context.get("forward_manifest"),
             )
 
             # Phase 4: Enrich chunks with manifest context (IM-1 through IM-4)
@@ -6606,10 +6709,14 @@ class Test{class_name}:
                 _manifest_registry = self.config.manifest_registry or context.get("project_manifests")
             if _manifest_registry is not None:
                 _manifest_budget = self.config.manifest_context_budget
+                _enable_introspect = getattr(self.config, "enable_introspect", False)
                 for chunk in chunks:
                     _mc_parts = []
                     for tf in getattr(chunk, "target_files", []):
-                        summary = _manifest_registry.file_element_summary(tf, _manifest_budget)
+                        summary = _manifest_registry.file_element_summary(
+                            tf, _manifest_budget,
+                            include_resolved_types=_enable_introspect,  # IM-1: Phase 5
+                        )
                         if summary:
                             _mc_parts.append(f"### {tf}\n{summary}")
                     if _mc_parts:
@@ -8710,6 +8817,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         project_context: dict[str, Any] | None = None,
         service_metadata: dict[str, Any] | None = None,
         refine_provenance: dict[str, Any] | None = None,
+        forward_contract_violations: list[Any] | None = None,  # GAP1-A
     ) -> str:
         """Build the review prompt for a single task.
 
@@ -8763,6 +8871,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
         )
         sections.extend(
             self._build_call_graph_section(task, generated_code)
+        )
+        sections.extend(
+            self._build_forward_contract_violations_section(forward_contract_violations)  # GAP1-A
         )
 
         if sections:
@@ -9221,6 +9332,63 @@ PASS if score >= {pass_threshold} and no blocking issues.
             logger.debug("REVIEW: call graph section failed", exc_info=True)
             return []
 
+    # -- helper: Forward Manifest contract violations (GAP1-A) ---------------
+
+    @staticmethod
+    def _build_forward_contract_violations_section(
+        violations: list[Any] | None,
+    ) -> list[str]:
+        """GAP1-A: Inject pre-computed Forward Manifest violations into review prompt.
+
+        When violations are present the reviewer LLM sees them BEFORE evaluating
+        the code, enabling it to write a contextual review that explicitly calls
+        out each structural defect.
+
+        Args:
+            violations: List of ContractViolation instances (or None).
+
+        Returns:
+            List of text strings to inject, or empty list when no violations.
+        """
+        if not violations:
+            return []
+
+        error_viols = [v for v in violations if getattr(v, "severity", "error") == "error"]
+        warn_viols = [v for v in violations if getattr(v, "severity", "error") == "warning"]
+
+        if not error_viols and not warn_viols:
+            return []
+
+        lines = [
+            "\n## Forward Manifest Contract Violations\n"
+            "The following structural contracts were violated by the generated code.\n"
+            "**BLOCKING** entries MUST be explicitly called out in the review score and issues list.\n"
+        ]
+
+        for v in error_viols:
+            cid = getattr(v, "contract_id", "?")
+            vtype = getattr(v, "violation_type", "?")
+            expected = getattr(v, "expected", "?")
+            actual = getattr(v, "actual", None) or "absent"
+            fpath = getattr(v, "file_path", None)
+            line = f"- **[BLOCKING]** `{cid}` | {vtype} | expected=`{expected}` | actual=`{actual}`"
+            if fpath:
+                line += f" | file=`{fpath}`"
+            lines.append(line)
+
+        for v in warn_viols:
+            cid = getattr(v, "contract_id", "?")
+            vtype = getattr(v, "violation_type", "?")
+            expected = getattr(v, "expected", "?")
+            line = f"- [WARN] `{cid}` | {vtype} | expected=`{expected}`"
+            lines.append(line)
+
+        lines.append(
+            "\nIf BLOCKING violations are present, the review score MUST be below the pass threshold "
+            "and the verdict MUST be FAIL.\n"
+        )
+        return lines
+
     # -- helper: deps allowlist advisory (Gate 5) ---------------------------
 
     @staticmethod
@@ -9370,6 +9538,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         project_context: dict[str, Any] | None = None,
         service_metadata: dict[str, Any] | None = None,
         refine_provenance: dict[str, Any] | None = None,
+        forward_contract_violations: list[Any] | None = None,  # GAP1-A: pre-computed FM violations
     ) -> dict[str, Any]:
         """Conduct LLM review for a single task.
 
@@ -9411,6 +9580,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     project_context=project_context,
                     service_metadata=service_metadata,
                     refine_provenance=refine_provenance,
+                    forward_contract_violations=forward_contract_violations,  # GAP1-A
                 )
 
                 # OT-306: review.evaluate span (child of OT-304 task span)
@@ -9896,6 +10066,21 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 if context.get("architectural_context"):
                     _track_onboarding_consumption(context, "architectural_context", "REVIEW")
 
+                # GAP1-A: Pre-compute FM violations so they appear in the review PROMPT
+                _pre_fm_violations: list[Any] = []
+                if self.config.manifest_consumption_enabled:
+                    _registry = self.config.manifest_registry
+                    _fwd_manifest = context.get("forward_manifest")
+                    if _registry is not None and _fwd_manifest is not None:
+                        try:
+                            from startd8.forward_manifest_validator import validate_forward_manifest
+                            _pre_fm_violations = validate_forward_manifest(_fwd_manifest, _registry) or []
+                        except Exception as _pre_fm_err:
+                            logger.debug(
+                                "REVIEW: pre-prompt FM validation failed for %s: %s",
+                                task.task_id, _pre_fm_err,
+                            )
+
                 review = self._review_task(
                     task, generated_code, task_test,
                     design_document=task_design_doc,
@@ -9905,6 +10090,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     project_context=_project_context,
                     service_metadata=context.get("service_metadata"),
                     refine_provenance=context.get("refine_provenance"),
+                    forward_contract_violations=_pre_fm_violations or None,  # GAP1-A
                 )
                 review["title"] = task.title
                 review["domain"] = task.domain

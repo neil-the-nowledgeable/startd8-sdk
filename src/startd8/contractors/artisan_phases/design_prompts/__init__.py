@@ -29,18 +29,18 @@ from .modules import (
     ConstraintsModule,
     EnrichmentModule,
     ManifestModule,
-    PriorArtModule,
     ScopeModule,
     GuidanceModule,
+    ContractModule,
 )
 from .seed_mapping import (
     extract_identity,
     extract_constraints,
     extract_enrichment,
     extract_manifest_context,
-    extract_prior_art,
     extract_scope,
     extract_guidance,
+    map_forward_contracts_for_task,
 )
 from .budget import enforce_budget, DEFAULT_PROMPT_TOKEN_BUDGET
 
@@ -86,10 +86,10 @@ _MODULES = [
     IdentityModule(),
     ConstraintsModule(),
     EnrichmentModule(),
-    ScopeModule(),
     ManifestModule(),
     PriorArtModule(),
     GuidanceModule(),
+    ContractModule(),
 ]
 
 
@@ -118,9 +118,11 @@ def assemble_design_prompt(
     prior_design_text: str | None = None,
     # Budget
     token_budget: int = DEFAULT_PROMPT_TOKEN_BUDGET,
-    # Phase 5: Manifest context (CS-7)
     manifest_registry: Any = None,
     manifest_context_budget: int = 2000,
+    enable_introspect: bool = False,
+    # Phase 4: Forward interfaces
+    forward_manifest: Any = None,
 ) -> tuple[str, str, int | None]:
     """Assemble the v2 design phase system prompt and user prompt.
 
@@ -186,6 +188,11 @@ def assemble_design_prompt(
         task,
         manifest_registry=manifest_registry,
         manifest_context_budget=manifest_context_budget,
+        enable_introspect=enable_introspect,
+    )
+    contract_data = map_forward_contracts_for_task(
+        task,
+        forward_manifest=forward_manifest,
     )
 
     # 2. Map categories to extracted data
@@ -193,10 +200,10 @@ def assemble_design_prompt(
         "identity": identity_data,
         "constraints": constraints_data,
         "enrichment": enrichment_data,
-        "manifest": manifest_data,
         "prior_art": prior_art_data,
         "scope": scope_data,
         "guidance": guidance_data,
+        "contracts": contract_data,
     }
 
     # 3. Render each module

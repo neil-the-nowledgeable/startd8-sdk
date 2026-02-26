@@ -16,6 +16,7 @@ Available workflows:
 - PlainLanguageWorkflow: Simplifies complex content into plain language
 - PlanIngestionWorkflow: Parses, assesses, and transforms generic plans into SDK-native formats
 - DomainPreflightWorkflow: Domain-aware pre-flight analysis for artisan context seeds
+- ConvergentReviewWorkflow: Requirements + plan sequential review (two-step arc review)
 """
 
 # Imports are done lazily to avoid circular imports
@@ -35,6 +36,7 @@ __all__ = [
     "PlainLanguageWorkflow",
     "PlanIngestionWorkflow",
     "DomainPreflightWorkflow",
+    "ConvergentReviewWorkflow",
 ]
 
 
@@ -79,4 +81,7 @@ def __getattr__(name: str):
     elif name == "DomainPreflightWorkflow":
         from .domain_preflight_workflow import DomainPreflightWorkflow
         return DomainPreflightWorkflow
+    elif name == "ConvergentReviewWorkflow":
+        from .convergent_review_workflow import ConvergentReviewWorkflow
+        return ConvergentReviewWorkflow
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

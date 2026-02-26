@@ -31,7 +31,13 @@ from startd8.contractors.context_seed_handlers import (
     _CACHE_SCHEMA_VERSION,
 )
 from startd8.contractors.protocols import GenerationResult
-
+from startd8.forward_manifest import (
+    ContractCategory,
+    ContractConfidence,
+    ForwardManifest,
+    InterfaceContract,
+)
+from startd8.forward_manifest_validator import ContractViolation
 
 # ============================================================================
 # Helpers
@@ -1182,3 +1188,115 @@ class TestReviewCacheWriteFailureNonFatal:
         # Phase should complete despite write failure
         handler._mock_review_task.assert_called_once()
         assert result["output"]["total_passed"] == 1
+
+
+# ============================================================================
+# Tests: Phase 5 - ForwardManifest Validator Integration
+# ============================================================================
+
+
+class TestReviewForwardManifestIntegration:
+    """Verify validate_forward_manifest integration into execute() stringently fails reviews."""
+
+    def test_forward_manifest_error_yields_fail_verdict_and_blocks(self, tmp_path):
+        f1 = _write_gen_file(tmp_path, "code.py", "x = 1")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+
+        tasks = [_make_seed_task(task_id="T1")]
+
+        # Mock a successful default review response
+        response = _make_review_response(score=90, verdict="PASS")
+
+        # Create a mock manifest and registry
+        manifest = ForwardManifest(
+            contracts=[
+                InterfaceContract(
+                    contract_id="C1",
+                    category=ContractCategory.FUNCTION_NAME,
+                    confidence=ContractConfidence.EXPLICIT,
+                    description="Requires init",
+                    binding_text="def __init__(self)",
+                )
+            ]
+        )
+        registry = MagicMock()
+
+        handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80, manifest_consumption_enabled=True))
+        handler._review_agent = _make_mock_agent(response)
+        handler.config.manifest_registry = registry
+
+        ctx = _build_context(tasks, {"T1": gen_result})
+        ctx["forward_manifest"] = manifest
+
+        # Force the validator to return an error violation
+        violation = ContractViolation(
+            contract_id="C1",
+            violation_type="Missing Element",
+            expected="def __init__(self)",
+            actual=None,
+            severity="error"
+        )
+
+        with patch(
+            "startd8.forward_manifest_validator.validate_forward_manifest",
+            return_value=[violation],
+        ) as mock_validator:
+            result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
+
+        mock_validator.assert_called_once_with(manifest, registry)
+
+        items = result["output"]["review_items"]
+        assert len(items) == 1
+        review = items[0]
+
+        # The LLM verdict was PASS, but the forward manifest explicitly failed it
+        assert review["passed"] is False
+        assert review["verdict"] == "FAIL"
+
+        # Check if the issue was injected properly
+        issues = review.get("issues", [])
+        assert any("[BLOCKING] Contract Violation" in issue and "C1" in issue for issue in issues)
+
+    def test_forward_manifest_warning_advises_does_not_fail(self, tmp_path):
+        f1 = _write_gen_file(tmp_path, "code.py", "x = 1")
+        gen_result = GenerationResult(success=True, generated_files=[f1])
+
+        tasks = [_make_seed_task(task_id="T1")]
+
+        response = _make_review_response(score=90, verdict="PASS")
+        manifest = ForwardManifest(contracts=[])
+        registry = MagicMock()
+
+        handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80, manifest_consumption_enabled=True))
+        handler._review_agent = _make_mock_agent(response)
+        handler.config.manifest_registry = registry
+
+        ctx = _build_context(tasks, {"T1": gen_result})
+        ctx["forward_manifest"] = manifest
+
+        violation = ContractViolation(
+            contract_id="W1",
+            violation_type="Advisory Mismatch",
+            expected="Should use factory",
+            actual=None,
+            severity="warning",
+        )
+
+        with patch(
+            "startd8.forward_manifest_validator.validate_forward_manifest",
+            return_value=[violation],
+        ) as mock_validator:
+            result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
+
+        mock_validator.assert_called_once_with(manifest, registry)
+
+        items = result["output"]["review_items"]
+        assert len(items) == 1
+        review = items[0]
+
+        # Must not have mutated PASS/FAIL state
+        assert review["passed"] is True
+        assert review["verdict"] == "PASS"
+
+        issues = review.get("issues", [])
+        assert any("[MINOR] Contract Advisory" in issue and "W1" in issue for issue in issues)

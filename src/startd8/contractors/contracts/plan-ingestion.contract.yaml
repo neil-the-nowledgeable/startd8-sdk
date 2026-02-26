@@ -1,0 +1,27 @@
+contract_metadata:
+  contract_id: "plan-ingestion-v1"
+  phase: "plan-ingestion"
+  version: "1.0.0"
+
+input_schema:
+  type: "object"
+  required:
+    - "project_id"
+    - "project_name"
+  properties: 
+    project_id:
+      type: "string"
+    project_name:
+      type: "string"
+
+output_schema:
+  type: "object"
+  required:
+    - "plan"
+  properties:
+    plan:
+      type: "string"
+
+capabilities:
+  - "fs_read"
+  - "net_access"

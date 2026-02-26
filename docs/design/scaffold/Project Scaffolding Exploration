@@ -1,0 +1,72 @@
+# Project Scaffolding Exploration
+
+To eliminate LLM-induced structural errors during project initialization (e.g., malformed `pyproject.toml` or incorrect `__init__.py` file hierarchies like in task `PI-001`), providing a programmatic scaffolding factory is the optimal approach.
+
+Here we explore different architectural paths to achieve robust project scaffolding, culminating in a **Hybrid Approach** that blends the best of both worlds.
+
+---
+
+## Approach 1: Expand the Existing Jinja2 `Scaffolder`
+
+Currently, `startd8-sdk` uses a `WorkflowScaffolder` (`src/startd8/workflows/scaffold.py`) to render single files (`.py.jinja`) into a specific directory. We could elevate this pattern to a `ProjectScaffolder` that renders a directory tree.
+
+### Pros
+
+- **Zero New Dependencies:** Utilizes the already-installed `Jinja2` library.
+- **Tightly Coupled to ContextCore:** Can easily read directly from `startd8-sdk` config or the context seed to populate fields (e.g., injecting `contextcore_v2` paths).
+- **Lightweight:** Does exactly what we need without the heavy feature set of a 3rd-party CLI tool.
+
+### Cons
+
+- **Reinventing the Wheel:** Directory walking and conditional file inclusion have to be manually programmed.
+- **Fire-and-Forget:** Cannot easily update or merge scaffolding changes into a project that an LLM has already modified (structural drift).
+
+---
+
+## Approach 2: Integrate `Copier` or `Cookiecutter`
+
+Instead of building a directory renderer, we adopt an industry-standard templating tool. **Copier** is highly recommended due to its ability to seamlessly **update** projects later using Git histories.
+
+### Pros
+
+- **Feature Rich:** Handles directory rendering, path templating, conditional files, and complex loops out of the box.
+- **Updates (Copier specific):** Copier can safely diff and apply scaffolding updates to an already existing, LLM-modified codebase.
+
+### Cons
+
+- **New Dependency:** Requires adding `copier` to `startd8-sdk`'s dependencies.
+- **Black Box:** Handling edge cases involves dealing with the tool's specific quirks rather than editing our own scripts.
+- **Overkill:** A full lifecycle tool may carry unnecessary weight for basic Python package generation.
+
+---
+
+## Approach 3: The Hybrid Approach (Recommended)
+
+To leverage the best of both worlds, we build a **Jinja2-powered Project Scaffolder** that adopts **Copier's Lifecycle Principles** without pulling in the heavy dependency.
+
+### How it works: State-Aware Jinja2 Directory Rendering
+
+1. **Jinja2 for Rendering:** We use your existing Jinja2 `TemplateLoader` to render file templates from a defined template directory (e.g., `templates/project/basic/`).
+2. **Project Manifest (The Copier trick):** When the scaffolder runs, it generates a hidden `.startd8-scaffold.json` file at the root of the new project. This manifest stores:
+   - The template used (e.g., `basic-python-package`)
+   - The version of the template
+   - The context variables used (e.g., `project_name`, `use_async`)
+   - Hashes of all the scaffolded files as they were originally generated
+3. **Safe Updates & Re-application:** If you later choose to re-run the scaffolder (e.g., you updated the base `pyproject.toml` template):
+   - The Scaffolder checks the hashes in `.startd8-scaffold.json`.
+   - If a file's current hash matches the original scaffolded hash, it's safe to overwrite (the LLM/user hasn't touched it).
+   - If the hash differs, the Scaffolder performs a smart merge or leaves it alone, logging a warning.
+
+### Why this is the best of both worlds
+
+- **No Third-Party Bloat:** It keeps `startd8-sdk` lightweight and avoids fighting with Copier's CLI/API quirks.
+- **Built for AI Workflows:** Unlike `Cookiecutter`, the hybrid approach natively understands that an LLM will be modifying these files and implements "hash-aware safe updates."
+- **Leverages Existing Tech:** It re-uses your `TemplateContext` and `check_jinja2_available()` logic from `WorkflowScaffolder`.
+- **Domain Specific:** It's tightly integrated with the Context Seed (`artisan-context-seed.json`) from Plan Ingestion, allowing it to extract variables pre-emptively.
+
+### Implementation Next Steps
+
+1. Define the directory structure for project templates (e.g., `src/startd8/project_templates/`).
+2. Create `ProjectScaffolder` in `startd8-sdk`.
+3. Implement the hidden `.startd8-scaffold.json` state tracking.
+4. Hook it into the `startd8` CLI (e.g., `startd8 project new <name>`).

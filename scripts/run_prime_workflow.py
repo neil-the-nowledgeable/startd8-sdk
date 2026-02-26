@@ -28,6 +28,12 @@ Usage:
     python3 scripts/run_prime_workflow.py \
         --seed out/project/plan-ingestion/prime-context-seed.json \
         --cost-budget 5.00
+
+    # With auto-commit (commit each feature after integration):
+    python3 scripts/run_prime_workflow.py \
+        --seed out/project/plan-ingestion/prime-context-seed.json \
+        --project-root /path/to/target/project \
+        --auto-commit
 """
 
 from __future__ import annotations
@@ -143,6 +149,10 @@ def main() -> int:
     parser.add_argument(
         "--auto-stash", action="store_true",
         help="Auto-stash uncommitted changes before proceeding",
+    )
+    parser.add_argument(
+        "--auto-commit", action="store_true",
+        help="Commit each feature's integrated code to git after successful integration",
     )
     parser.add_argument(
         "--force-regenerate", action="store_true",
@@ -357,6 +367,7 @@ def main() -> int:
         dry_run=args.dry_run,
         allow_dirty=args.allow_dirty,
         auto_stash=args.auto_stash,
+        auto_commit=args.auto_commit,
         code_generator=code_generator,
         cli_mode=args.mode,
     )

@@ -3290,6 +3290,76 @@ class PlanIngestionWorkflow(WorkflowBase):
         review_output: Optional[Dict[str, Any]] = None,
         project_metadata: Optional[Dict[str, Any]] = None,
     ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]]]:
+        from startd8.forward_manifest_extractor import extract_forward_contracts
+
+        forward_manifest_dict: Optional[Dict[str, Any]] = None
+        if parsed_plan is not None and parsed_plan.features:
+            try:
+                # REQ-PC-FM-001: Bridge to extractor API (features, proto_dir, etc.)
+                features = parsed_plan.features
+                tentative_contracts: Optional[List[Any]] = None
+                if review_output:
+                    # REFINE phase may produce tentative contracts (Phase 3)
+                    triage = review_output.get("triage") or {}
+                    if isinstance(triage, dict) and triage.get("contracts"):
+                        from startd8.forward_manifest import InterfaceContract
+
+                        raw = triage["contracts"]
+                        if isinstance(raw, list):
+                            tentative_contracts = [
+                                c if isinstance(c, InterfaceContract) else InterfaceContract.model_validate(c)
+                                for c in raw
+                            ]
+                proto_dir: Optional[Path] = None
+                for candidate in (output_dir / "proto", output_dir.parent / "proto"):
+                    if candidate.is_dir() and any(candidate.glob("*.proto")):
+                        proto_dir = candidate
+                        break
+                yaml_text: Optional[str] = None
+                if doc_path and doc_path.exists():
+                    plan_text = doc_path.read_text(encoding="utf-8")
+                    if "shared_contracts:" in plan_text:
+                        yaml_text = plan_text
+
+                forward_manifest = extract_forward_contracts(
+                    features,
+                    yaml_text=yaml_text,
+                    proto_dir=proto_dir,
+                    tentative_contracts=tentative_contracts,
+                )
+
+                # REQ-PC-FM-005: Rewrite applicable_task_ids from feature_id to task_id
+                fid_to_tid = {f.feature_id: f"PI-{i:03d}" for i, f in enumerate(features, start=1)}
+                if fid_to_tid and forward_manifest.contracts:
+                    from startd8.forward_manifest import InterfaceContract
+
+                    rewritten: List[Any] = []
+                    for c in forward_manifest.contracts:
+                        if not c.applicable_task_ids:
+                            rewritten.append(c)
+                            continue
+                        new_ids = [
+                            fid_to_tid.get(aid, aid) if aid in fid_to_tid else aid
+                            for aid in c.applicable_task_ids
+                        ]
+                        if new_ids != c.applicable_task_ids:
+                            rewritten.append(c.model_copy(update={"applicable_task_ids": new_ids}))
+                        else:
+                            rewritten.append(c)
+                    forward_manifest = forward_manifest.model_copy(
+                        update={"contracts": rewritten}
+                    )
+
+                forward_manifest_dict = forward_manifest.model_dump()
+                if forward_manifest.contracts:
+                    logger.info(
+                        "Forward manifest extracted: %d contract(s) for Prime/Artisan",
+                        len(forward_manifest.contracts),
+                    )
+            except Exception as exc:
+                logger.warning("Forward manifest extraction failed: %s", exc, exc_info=True)
+                forward_manifest_dict = None
+
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
             "quality_tier": review_quality_tier,
@@ -3480,6 +3550,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 wave_metadata=_wave_meta,
                 lane_assignments=_lane_assignments_emit,
                 project_metadata=project_metadata or None,
+                forward_manifest=forward_manifest_dict,
             )
 
             seed_dict = seed.to_dict()
@@ -3632,6 +3703,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 onboarding=onboarding_var_prime,
                 context_files=context_files_list_prime,
                 service_metadata=service_metadata_prime or None,
+                forward_manifest=forward_manifest_dict,
             )
 
             seed_prime_dict = seed_prime.to_dict()
@@ -3740,6 +3812,44 @@ class PlanIngestionWorkflow(WorkflowBase):
         max_contract_conflicts = int(config.get("max_contract_conflicts", 2))
         timeout_config = TimeoutConfig(read=llm_read_timeout_seconds)
         retry_config = RetryConfig(max_attempts=llm_max_attempts)
+
+        # Mottainai (Layer 1): Attempt to load onboarding from inventory to prevent waste
+        try:
+            from startd8.utils import artifact_inventory
+            inventory = artifact_inventory.load_inventory(output_dir)
+            onboarding_entry, outcome = artifact_inventory.lookup_artifact(inventory, "onboarding")
+            
+            if outcome == "hit" and onboarding_entry:
+                onboarding_raw = artifact_inventory.load_artifact_content(onboarding_entry, output_dir)
+                if isinstance(onboarding_raw, dict) and "_cc_capabilities" in onboarding_raw:
+                    config["_cc_capabilities"] = onboarding_raw["_cc_capabilities"]
+                    logger.info("Mottainai: loaded _cc_capabilities from artifact_inventory")
+        except ImportError:
+            pass
+
+        # Capability Propagation (Layer 5)
+        try:
+            from contextcore.contracts.capability.validator import CapabilityValidator
+            from contextcore.contracts.propagation.loader import ContractLoader
+            
+            contract_path = Path(__file__).parent.parent.parent / "contractors" / "contracts" / "plan-ingestion.contract.yaml"
+            if contract_path.exists():
+                logger.info(f"Loading CapabilityContract from {contract_path}")
+                # We load the contract and initiate the CapabilityValidator
+                contract = ContractLoader.load_contract(str(contract_path))
+                validator = CapabilityValidator(contract)
+                
+                # We validate entry capabilities
+                cap_result = validator.validate_entry("plan-ingestion", config)
+                if hasattr(cap_result, 'has_blocking_violations') and cap_result.has_blocking_violations():
+                    return WorkflowResult.from_error(
+                        "plan-ingestion", 
+                        f"Capability validation failed (Layer 5): {cap_result}"
+                    )
+        except ImportError as e:
+            logger.warning(f"ContextCore Layer 5 validation unavailable: {e}")
+        except Exception as e:
+            logger.error(f"Failed to run Capability validation: {e}", exc_info=True)
 
         # Task tracking (opt-in)
         generate_task_tracking = config.get("generate_task_tracking", False)

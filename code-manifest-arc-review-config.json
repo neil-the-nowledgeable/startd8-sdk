@@ -1,0 +1,11 @@
+{
+  "requirements_path": "docs/design/CODE_MANIFEST_REQUIREMENTS.md",
+  "plan_path": "docs/design/CODE_MANIFEST_PLAN.md",
+  "requirements_profile": "requirements",
+  "plan_profile": "design",
+  "reviewer_count": 2,
+  "enable_triage": true,
+  "enable_prompt_caching": true,
+  "warn_cost_usd": 4.0,
+  "max_cost_usd": 8.0
+}

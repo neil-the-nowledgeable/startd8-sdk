@@ -4,6 +4,35 @@
 
 The Context Bridge is a deterministic adapter that merges Eagle's `ProjectMetadata` (macro project structure) and ContextCore's `ExtractionResult` (micro capability inventory) into a single `context: dict[str, Any]` consumed by startd8-sdk's Artisan Contractor pipeline. It uses zero LLM tokens — purely data transformation.
 
+**Objectives:** Provide a zero-LLM-cost adapter that unifies macro project structure (Eagle) and micro capability inventory (ContextCore) into a single context dict consumable by startd8-sdk's Artisan Contractor phases, enabling code generation agents to understand both project architecture and code-level capabilities without manual context assembly.
+
+**Goals:**
+- Merge Eagle `ProjectMetadata` and ContextCore `ExtractionResult` into a validated `context: dict[str, Any]`
+- Normalize cross-source file paths (Eagle service-relative → project-relative POSIX)
+- Produce a human-readable `codebase_summary` for LLM prompt injection
+- Pass `ContextBridgeResult` Pydantic schema validation on output
+- Complete execution in under 10 seconds for projects up to 10K files
+
+---
+
+## Functional Requirements
+
+| ID | Requirement | Acceptance Criteria |
+|----|-------------|---------------------|
+| FR-001 | Run Eagle `RepoScanner` against project root and return `ProjectMetadata` | `run_eagle()` returns valid `ProjectMetadata` or raises `BridgeError` with diagnostic context |
+| FR-002 | Run ContextCore `CapabilityExtractor.extract_all()` and return `ExtractionResult` | `run_extract()` returns valid `ExtractionResult` without writing files to disk |
+| FR-003 | Transform Eagle output into `project_structure` dict with allowlisted fields only | Output contains only fields from the allowlist; no `dependency_manifest_contents` or `language_confidence` leakage |
+| FR-004 | Transform ContextCore output into `capability_map` dict with `by_type`, `by_file`, and `test_coverage_map` | `by_file` keys are project-relative POSIX paths; `total_capabilities` equals sum of `by_type` counts |
+| FR-005 | Normalize Eagle service-relative file paths to project-relative POSIX paths | All paths in `project_structure` and `by_file` use forward slashes, no leading `./`, no absolute paths |
+| FR-006 | Render a `codebase_summary` string from merged data with truncation at 15 services | Summary includes service/language/LOC counts; >15 services produce `"... and N more"` |
+| FR-007 | `build_context()` returns a JSON-serializable dict that passes Pydantic validation | `json.loads(json.dumps(output)) == output`; `ContextBridgeResult.model_validate(output)` succeeds |
+| FR-008 | Handle partial failure (Eagle fails, ContextCore succeeds, or vice versa) gracefully | Output contains the successful half with degraded summary; `bridge_warnings` field lists failures |
+| FR-009 | Sanitize paths to prevent traversal (`..`, absolute paths, symlinks) | Paths containing `..` or starting with `/` are rejected with a warning |
+| FR-010 | Graceful degradation when bridge output is consumed by downstream phase handlers | When `context["bridge_context"]` is `None` or partially populated, each consumer executes its pre-bridge logic path with no behavioral change. Degradation logged at INFO: `"Bridge context unavailable for {phase}; skipping bridge-enriched context"` |
+| NFR-001 | Complete `build_context()` in under 10 seconds for projects up to 10K files | Integration test on fixture project completes within timeout |
+| NFR-002 | Zero LLM token cost — purely deterministic data transformation | No API calls in any code path; no provider imports |
+| NFR-003 | `codebase_summary` must not exceed 2000 characters with progressive truncation | Truncation order: drop low-LOC services first → drop dependency lines → show header + entry point counts only. Integration test asserts `len(summary) <= 2000` for a 50-service fixture |
+
 ---
 
 ## 1. File-by-File Breakdown
@@ -54,31 +83,58 @@ None in external codebases. Eagle, ContextCore, and startd8-sdk are consumed as 
 2. Create `pyproject.toml` with path-based dependencies
 3. Create `__init__.py` files
 
+**Deliverables:**
+- [ ] `pyproject.toml` — Project config with path-based deps on Eagle and ContextCore
+- [ ] `src/hybrid_scaffold/__init__.py` — Package init, exports `ContextBridge`
+- [ ] `tests/__init__.py` — Test package init
+
 ### Phase 2: Eagle Transformation (1.5 hours)
 4. Implement `ContextBridge.__init__(project_root, project_id)`
-5. Implement `run_eagle()` — wraps `RepoScanner().extract()`
-6. Implement `_transform_eagle()` — converts `ProjectMetadata` to `project_structure` dict
+5. Implement `run_eagle()` — wraps `RepoScanner().extract()` and returns `ProjectMetadata` (FR-001). Sanitize paths to prevent traversal (FR-009)
+6. Implement `_transform_eagle()` — converts `ProjectMetadata` to `project_structure` dict with allowlisted fields only (FR-003). Normalize Eagle service-relative paths to POSIX (FR-005)
 7. Write unit tests for `_transform_eagle()`
 
+**Deliverables:**
+- [ ] `src/hybrid_scaffold/context_bridge.py` — `ContextBridge.__init__`, `run_eagle()`, `_transform_eagle()`
+- [ ] `tests/test_context_bridge.py` — Eagle transformation unit tests (5 tests)
+
 ### Phase 3: ContextCore Transformation (1.5 hours)
-8. Implement `run_extract()` — wraps `CapabilityExtractor(path).extract_all()` (NOT `run_extraction()` which writes files)
-9. Implement `_transform_extract()` — converts `ExtractionResult` to `capability_map` dict
-10. Implement `_build_by_file_index()`
-11. Implement `_build_test_coverage_map()`
+8. Implement `run_extract()` — wraps `CapabilityExtractor(path).extract_all()` (NOT `run_extraction()` which writes files) and returns `ExtractionResult` (FR-002). Sanitize paths to prevent traversal (FR-009)
+9. Implement `_transform_extract()` — converts `ExtractionResult` to `capability_map` dict with `by_type`, `by_file`, and `test_coverage_map` (FR-004). Normalize ContextCore paths to project-relative POSIX (FR-005)
+10. Implement `_build_by_file_index()` — groups capabilities by file_path (FR-004)
+11. Implement `_build_test_coverage_map()` — heuristic test-to-source mapping (FR-004)
 12. Write unit tests
 
+**Deliverables:**
+- [ ] `src/hybrid_scaffold/context_bridge.py` — `run_extract()`, `_transform_extract()`, `_build_by_file_index()`, `_build_test_coverage_map()`
+- [ ] `tests/test_context_bridge.py` — ContextCore transformation + by_file + test_coverage_map unit tests (12 tests)
+
 ### Phase 4: Summary Rendering (1 hour)
-13. Implement `_render_codebase_summary()`
-14. Write unit tests
+13. Implement `_render_codebase_summary()` — render merged data into `codebase_summary` string with truncation at 15 services (FR-006). Must not exceed 2000 characters with progressive truncation (NFR-003)
+14. Write unit tests for summary rendering and truncation behavior
+
+**Deliverables:**
+- [ ] `src/hybrid_scaffold/context_bridge.py` — `_render_codebase_summary()`
+- [ ] `tests/test_context_bridge.py` — Summary rendering unit tests (3 tests)
 
 ### Phase 5: Orchestration (30 min)
-15. Implement `build_context()` — wires everything together
+15. Implement `build_context()` — wires everything together. Returns JSON-serializable dict that passes Pydantic validation (FR-007). Handles partial failure when one source fails (FR-008). Graceful degradation for downstream consumers (FR-010). Zero LLM token cost (NFR-002)
 16. Write unit test with mocked sub-methods
+
+**Deliverables:**
+- [ ] `src/hybrid_scaffold/context_bridge.py` — `build_context()` orchestrator
+- [ ] `tests/test_context_bridge.py` — Orchestration unit tests (2 tests)
+
+**Context Threading Contract:** Bridge output is stored as `context["bridge_context"]` (a typed dict validated by `ContextBridgeResult`) — NOT via raw `context.update(merged)`. This avoids key collisions with `context["project_manifests"]` (ManifestRegistry from Code Manifest Phase 4) and other well-known context keys (`workflow_id`, `project_root`, `drafter_model`). Downstream phase handlers access bridge data exclusively through `context["bridge_context"]`. When absent or `None`, handlers execute their pre-bridge logic path unchanged (FR-010).
 
 ### Phase 6: Integration Tests (1 hour)
 17. Create test fixture project
-18. Write integration tests against fixture
+18. Write integration tests against fixture. Verify complete execution in under 10 seconds for projects up to 10K files (NFR-001)
 19. Verify output schema matches design doc
+
+**Deliverables:**
+- [ ] `tests/fixtures/sample_project/` — Minimal multi-service Python project fixture
+- [ ] `tests/test_context_bridge_integration.py` — Integration tests against fixture (7 tests)
 
 ---
 
@@ -257,7 +313,24 @@ Tests marked `@pytest.mark.integration` — run against `tests/fixtures/sample_p
 
 ---
 
-## 10. Risks and Unknowns
+## 10. Self-Validating Gap Verification
+
+This plan involves multi-phase context propagation (Eagle extraction → transformation → merge → summary rendering → output validation). Each phase boundary is a potential site for silent data loss or schema drift. The following self-validation checks (SV-*) map each boundary to a runtime integration test that **fails before the fix and passes after**, ensuring gaps are caught during execution rather than in production.
+
+| SV ID | Phase Boundary | What It Validates | Test Strategy |
+|-------|---------------|-------------------|---------------|
+| SV-1 | Eagle → `_transform_eagle()` | All allowlisted fields present in `project_structure`; service file paths normalized from service-relative to project-relative (POSIX) | Construct a `ProjectMetadata` with known service-relative paths; assert output paths are `{service_name}/{file_path}` with forward slashes; assert no dropped fields from the allowlist |
+| SV-2 | ContextCore → `_transform_extract()` | `by_file` keys are project-relative POSIX paths (no leading `./`, no `\\`); `sum(len(v) for v in by_type.values()) == total_capabilities` | Construct an `ExtractionResult` with mixed path formats; assert all `by_file` keys pass `_is_valid_posix_relative()`; assert capability count invariant holds |
+| SV-3 | `project_structure` + `capability_map` → `_render_codebase_summary()` | Summary references only services present in `project_structure`; per-service capability counts match `by_type` totals; no `KeyError` on partial-failure input (Eagle-only or ContextCore-only) | Feed summary renderer with (a) full data, (b) Eagle-only (empty capability_map), (c) ContextCore-only (empty project_structure); assert no exceptions and service names in summary match input |
+| SV-4 | `build_context()` → output dict | Output passes `ContextBridgeResult` Pydantic validation; `json.loads(json.dumps(output)) == output` (lossless round-trip); no keys collide with startd8-sdk reserved keys (`workflow_id`, `project_root`, `drafter_model`) | Call `build_context()` on fixture project; validate against Pydantic model; assert round-trip equality; assert reserved keys absent from output |
+
+**Implementation**: Each SV check maps to one or more `test_sv_*` functions in `tests/test_context_bridge.py`. These tests are tagged `@pytest.mark.sv` for selective execution during development.
+
+**Verification protocol**: During Phase 6 integration testing, run `pytest -m sv` and confirm all 4 checks pass. If any SV check fails, the corresponding phase boundary has a propagation gap that must be resolved before the bridge is considered complete.
+
+---
+
+## 11. Risks and Unknowns
 
 ### Risk 1: Eagle is not installable as a Python package
 Eagle has no `pyproject.toml`. Requires either sys.path hack or creating a minimal pyproject.toml for Eagle.
@@ -284,6 +357,26 @@ ContextCore repurposes `decorators` to store first 10 public method names for cl
 
 ### Risk 8: No output schema validation
 No Pydantic model validates the output dict. Consider adding one (~30 min extra) to catch schema drift early.
+
+---
+
+## 12. Relationship to Code Manifest
+
+The startd8-sdk pipeline may have both a Code Manifest (`context["project_manifests"]`, a `ManifestRegistry` instance) and Context Bridge output (`context["bridge_context"]`, a `ContextBridgeResult` dict) present simultaneously. These are **complementary, not conflicting** data sources serving different purposes:
+
+| Dimension | Code Manifest (ManifestRegistry) | Context Bridge (ContextBridgeResult) |
+|-----------|--------------------------------|--------------------------------------|
+| **Granularity** | Per-element: FQNs, signatures, spans, call graph, symbol table | Per-file/per-service: capability inventory, service dependencies, LOC |
+| **Source** | AST + symtable + bytecode + introspect of target project files | Eagle (macro structure) + ContextCore (micro capabilities) — external extractors |
+| **Primary consumer** | IMPLEMENT (surgical edits), INTEGRATE (pre-merge diff), REVIEW (blast radius) | DESIGN (architectural context), PLAN (complexity scoring), Explore phase |
+| **Cost** | Zero (static analysis) | Zero (deterministic transformation) |
+| **Availability** | Requires `startd8 manifest generate` or cache from prior run | Requires Eagle + ContextCore installed |
+
+**Design guidelines for phase handlers:**
+- Prefer `ManifestRegistry` for element-level queries (signature lookup, FQN resolution, call graph traversal, edit-scope spans)
+- Prefer `bridge_context` for project-level queries (service topology, language mix, total LOC, test coverage mapping, codebase summary)
+- When both provide overlapping data (e.g., function signatures), `ManifestRegistry` is authoritative (deeper analysis) and `bridge_context` provides the cross-source view (Eagle + ContextCore joined)
+- Both follow the same graceful degradation pattern: absent = skip enrichment, no behavioral change to the phase
 
 ---
 

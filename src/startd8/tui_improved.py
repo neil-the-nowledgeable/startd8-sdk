@@ -29,7 +29,7 @@ from rich import print as rprint
 from .framework import AgentFramework
 from .agents import MockAgent, ClaudeAgent, GPT4Agent, OpenAICompatibleAgent, ComposerAgent, BaseAgent
 from .orchestration import Pipeline, WorkflowTemplates
-from .workflows.builtin import DesignPolishWorkflow, CriticalReviewWorkflow
+from .workflows.builtin import DesignPolishWorkflow, CriticalReviewWorkflow, ArchitecturalReviewLogWorkflow, ConvergentReviewWorkflow
 from .document_enhancement import DocumentEnhancementChain
 from .iterative_workflow import IterativeDevWorkflow, IterativeWorkflowResult, save_workflow_result
 from .config import ConfigManager
@@ -2992,6 +2992,7 @@ class ImprovedTUI:
         choices.append("🚀 Run Design Pipeline (Draft → Review → Polish)")
         choices.append("✨ Design Polish Pipeline (Polish → Suggest Updates → Final Polish)")
         choices.append("🔍 Critical Review Workflow (Multi-Agent Analysis)")
+        choices.append("🏛️ Architectural Review Log Workflow (Append-Only Review)")
         choices.append("🔄 Iterative Dev Workflow (Dev → Review → Fix)")
         choices.append("📥 Job Queue")
         
@@ -6874,6 +6875,8 @@ Enhance this prompt:
         workflow_choices = [
             "✨ Design Polish Pipeline (Polish → Suggest Updates → Final Polish)",
             "🔍 Critical Review Workflow (Multi-Agent Analysis)",
+            "🏛️ Architectural Review Log Workflow (Append-Only Review)",
+            "📋 Convergent Review (Requirements + Plan)",
             "🔗 Document Enhancement Chain (Sequential Multi-Agent)",
             "🔄 Iterative Dev Workflow (Dev → Review → Fix)",
             "🚀 Design Pipeline (Draft → Review → Polish)",
@@ -6897,6 +6900,10 @@ Enhance this prompt:
                 self._run_design_polish_pipeline_from_job(selected_job, job_content)
             elif "Critical Review Workflow" in workflow_selection:
                 self._run_critical_review_from_job(selected_job, job_content)
+            elif "Architectural Review" in workflow_selection:
+                self._run_arc_review_from_job(selected_job, job_content)
+            elif "Convergent Review" in workflow_selection:
+                self._run_convergent_review_from_job(selected_job, job_content)
             elif "Document Enhancement Chain" in workflow_selection:
                 self._run_enhancement_chain_from_job(selected_job, job_content)
             elif "Iterative Dev Workflow" in workflow_selection:
@@ -6913,7 +6920,217 @@ Enhance this prompt:
             import traceback
             self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
             questionary.press_any_key_to_continue().ask()
-    
+
+    def _parse_two_doc_paths_from_job_content(self, content: str) -> tuple[Optional[Path], Optional[Path]]:
+        """Parse requirements and plan paths from job content (two lines).
+
+        Returns (req_path, plan_path) if both lines are valid .md paths, else (None, None).
+        """
+        content_stripped = (content or "").strip()
+        if not content_stripped:
+            return None, None
+        lines = [ln.strip() for ln in content_stripped.splitlines() if ln.strip()]
+        if len(lines) < 2:
+            return None, None
+        req_p = Path(lines[0]).expanduser().resolve()
+        plan_p = Path(lines[1]).expanduser().resolve()
+        if req_p.exists() and req_p.is_file() and plan_p.exists() and plan_p.is_file():
+            return req_p, plan_p
+        return None, None
+
+    def _parse_doc_path_from_job_content(self, content: str) -> Optional[Path]:
+        """Parse document path from job content if it looks like a file path.
+
+        Returns Path if content appears to be a path to an existing .md file,
+        else None. Uses first line when content has multiple lines.
+        """
+        content_stripped = (content or "").strip()
+        if not content_stripped:
+            return None
+        looks_like_path = (
+            content_stripped.endswith(".md") or ".md" in content_stripped
+            or "/" in content_stripped or "\\" in content_stripped
+        )
+        if not looks_like_path:
+            return None
+        lines = content_stripped.splitlines()
+        first_line = lines[0].strip() if lines else ""
+        if not first_line:
+            return None
+        path = Path(first_line).expanduser().resolve()
+        return path if path.exists() and path.is_file() else None
+
+    def _create_agents_from_infos(self, agent_infos: List[Dict[str, Any]]) -> List[BaseAgent]:
+        """Create BaseAgent instances from TUI agent info dicts.
+
+        Used by arc_review_workflow and other workflows that accept
+        agent selection from the TUI. Handles builtin (mock, claude, gpt4)
+        and custom agents via agent_manager.
+        """
+        agents: List[BaseAgent] = []
+        for agent_info in agent_infos:
+            inst = None
+            if agent_info.get("type") == "builtin":
+                bt = agent_info.get("builtin_type")
+                if bt == "mock":
+                    inst = MockAgent(name="mock", model="mock-model")
+                elif bt == "claude":
+                    inst = ClaudeAgent()
+                elif bt == "gpt4":
+                    inst = GPT4Agent()
+            else:
+                cfg = agent_info.get("custom_config")
+                if not cfg:
+                    for ca in self.agent_manager.list_agents():
+                        if ca.get("name") == agent_info.get("name"):
+                            cfg = ca
+                            break
+                if cfg:
+                    inst = self.agent_manager.create_agent_instance(cfg)
+            if inst:
+                agents.append(inst)
+        return agents
+
+    def _run_arc_review_from_job(self, job: Any, content: str) -> None:
+        """Run Architectural Review Log Workflow from job.
+
+        Job content may be a document path (e.g. docs/plan.md) or a prompt;
+        if not parseable as path, user is prompted for the document path.
+        """
+        from .logging_config import get_logger
+        logger = get_logger(__name__)
+
+        self.show_header("Architectural Review Log (from Job)")
+        doc_path = self._parse_doc_path_from_job_content(content)
+        doc_path_str = str(doc_path) if doc_path else None
+        if not doc_path_str:
+            doc_path_str = self._safe_path_input(
+                "Path to markdown document to review (job content may not be a path):",
+                only_directories=False,
+                style=custom_style
+            )
+        if not doc_path_str:
+            return
+        doc_path = Path(doc_path_str).expanduser().resolve()
+        if not doc_path.exists() or not doc_path.is_file():
+            self.console.print(f"[red]File not found: {doc_path}[/red]")
+            questionary.press_any_key_to_continue().ask()
+            return
+        config = {"document_path": str(doc_path), "reviewer_count": 2, "init_if_missing": True}
+        try:
+            workflow = ArchitecturalReviewLogWorkflow()
+            with self.console.status("[bold green]Running architectural review...[/bold green]") as status:
+                def progress_cb(c: int, t: int, m: str) -> None:
+                    status.update(f"[bold green]{m} ({c}/{t})...[/bold green]")
+                result = workflow.run(config=config, agents=None, on_progress=progress_cb)
+            metrics = getattr(result, "metrics", None)
+            total_cost = getattr(metrics, "total_cost", 0.0) if metrics else 0.0
+            if result.success:
+                out = result.output or {}
+                self.console.print(Panel(
+                    f"[green]✓ Review complete[/green]\n\n"
+                    f"Document: {out.get('document_path', doc_path)}\n"
+                    f"Rounds: {out.get('rounds_appended', 0)}\n"
+                    f"Cost: ${total_cost:.4f}",
+                    title="Review Complete",
+                    border_style="green"
+                ))
+                logger.info(
+                    "Arc review from job completed: doc=%s, rounds=%s, cost=%.4f",
+                    doc_path, out.get("rounds_appended", 0), total_cost,
+                )
+            else:
+                self.console.print(f"[red]Review failed: {result.error}[/red]")
+                logger.warning("Arc review from job failed: doc=%s, error=%s", doc_path, result.error)
+        except Exception as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+            logger.exception(
+                "Arc review from job raised: doc=%s, job_id=%s",
+                doc_path, getattr(job, "job_id", "unknown"),
+            )
+        questionary.press_any_key_to_continue().ask()
+
+    def _run_convergent_review_from_job(self, job: Any, content: str) -> None:
+        """Run Convergent Review (Requirements + Plan) from job.
+
+        Job content may be two paths (req_path, plan_path) on separate lines;
+        if not parseable, user is prompted for both paths.
+        """
+        from .logging_config import get_logger
+        logger = get_logger(__name__)
+
+        self.show_header("Convergent Review (Requirements + Plan) from Job")
+        req_path, plan_path = self._parse_two_doc_paths_from_job_content(content)
+        if not req_path or not plan_path:
+            req_path_str = self._safe_path_input(
+                "Path to requirements markdown document:",
+                only_directories=False,
+                style=custom_style,
+            )
+            if not req_path_str:
+                return
+            req_path = Path(req_path_str).expanduser().resolve()
+            if not req_path.exists() or not req_path.is_file():
+                self.console.print(f"[red]File not found: {req_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            plan_path_str = self._safe_path_input(
+                "Path to plan/design markdown document:",
+                only_directories=False,
+                style=custom_style,
+            )
+            if not plan_path_str:
+                return
+            plan_path = Path(plan_path_str).expanduser().resolve()
+            if not plan_path.exists() or not plan_path.is_file():
+                self.console.print(f"[red]File not found: {plan_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+        config = {
+            "requirements_path": str(req_path),
+            "plan_path": str(plan_path),
+            "reviewer_count": 2,
+        }
+        try:
+            workflow = ConvergentReviewWorkflow()
+            with self.console.status(
+                "[bold green]Running convergent review (requirements → plan)...[/bold green]"
+            ) as status:
+                def progress_cb(c: int, t: int, m: str) -> None:
+                    status.update(f"[bold green]{m} ({c}/{t})...[/bold green]")
+                result = workflow.run(config=config, agents=None, on_progress=progress_cb)
+            metrics = getattr(result, "metrics", None)
+            total_cost = getattr(metrics, "total_cost", 0.0) if metrics else 0.0
+            if result.success:
+                out = result.output or {}
+                req_out = out.get("requirements_review") or {}
+                plan_out = out.get("plan_review") or {}
+                self.console.print(Panel(
+                    f"[green]✓ Convergent review complete[/green]\n\n"
+                    f"Requirements: {req_path.name} — {req_out.get('rounds_appended', 0)} rounds\n"
+                    f"Plan: {plan_path.name} — {plan_out.get('rounds_appended', 0)} rounds\n"
+                    f"Cost: ${total_cost:.4f}",
+                    title="Review Complete",
+                    border_style="green",
+                ))
+                logger.info(
+                    "Convergent review from job completed: req=%s, plan=%s, cost=%.4f",
+                    req_path, plan_path, total_cost,
+                )
+            else:
+                self.console.print(f"[red]Review failed: {result.error}[/red]")
+                logger.warning(
+                    "Convergent review from job failed: req=%s, plan=%s, error=%s",
+                    req_path, plan_path, result.error,
+                )
+        except Exception as e:
+            self.console.print(f"[red]Error: {e}[/red]")
+            logger.exception(
+                "Convergent review from job raised: req=%s, plan=%s, job_id=%s",
+                req_path, plan_path, getattr(job, "job_id", "unknown"),
+            )
+        questionary.press_any_key_to_continue().ask()
+
     def _run_design_polish_pipeline_from_job(self, job, content: str):
         """Run Design Polish Pipeline with job content"""
         self.show_header("Design Polish Pipeline (from Job)")
@@ -8055,6 +8272,8 @@ Please be thorough, constructive, and specific in your analysis."""
                 self.run_design_polish_pipeline()
             elif "Critical Review Workflow" in choice:
                 self.critical_review_workflow()
+            elif "Architectural Review" in choice:
+                self.arc_review_workflow()
             elif "Iterative" in choice:
                 self.iterative_workflow_menu()
             elif "Job Queue" in choice:
@@ -10210,6 +10429,257 @@ Please be thorough, constructive, and specific in your analysis."""
             import traceback
             self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
         
+        questionary.press_any_key_to_continue().ask()
+
+    def arc_review_workflow(self) -> None:
+        """Architectural Review Log Workflow - Append-only review with triage.
+
+        Supports two modes:
+        - Single document: Review one plan/design doc
+        - Requirements + Plan (convergent): Review requirements first, then plan with requirements context
+        """
+        from .logging_config import get_logger
+        logger = get_logger(__name__)
+
+        self.show_header("Architectural Review Log Workflow")
+
+        # Show workflow intro with help
+        if self.workflow_helper and self.workflow_helper.has_workflow_help("arc_review_workflow"):
+            self.workflow_helper.show_workflow_intro("arc_review_workflow")
+
+        self.console.print(Panel(
+            "🏛️ [bold cyan]Architectural Review Log Workflow[/bold cyan]\n\n"
+            "High-quality sequential architectural review. Appends structured\n"
+            "suggestions to the document's Appendix C in an append-only fashion.\n\n"
+            "Features:\n"
+            "  • Uses flagship models by default (or select your own)\n"
+            "  • Automated triage classifies suggestions (Applied/Rejected)\n"
+            "  • Optional apply step to incorporate accepted suggestions\n"
+            "  • State persisted for resume and cost tracking\n\n"
+            "Modes:\n"
+            "  • Single document — Plan, design spec, or architecture doc\n"
+            "  • Requirements + Plan — Review requirements, then plan (convergent)",
+            border_style="cyan"
+        ))
+
+        # 1. Mode selection
+        mode_choice = questionary.select(
+            "Review mode:",
+            choices=[
+                "Single document (plan, design spec, or architecture doc)",
+                "Requirements + Plan (convergent: requirements first, then plan with context)",
+            ],
+            style=custom_style,
+        ).ask()
+        if not mode_choice:
+            return
+
+        convergent_mode = "Requirements + Plan" in (mode_choice or "")
+
+        if convergent_mode and self.workflow_helper and self.workflow_helper.has_workflow_help("convergent_review_workflow"):
+            self.workflow_helper.show_workflow_intro("convergent_review_workflow")
+
+        # 2. Document path(s)
+        if convergent_mode:
+            req_path_str = self._safe_path_input(
+                "Path to requirements markdown document:",
+                only_directories=False,
+                style=custom_style,
+            )
+            if not req_path_str:
+                return
+            req_path = Path(req_path_str).expanduser().resolve()
+            if not req_path.exists() or not req_path.is_file():
+                self.console.print(f"[red]File not found: {req_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+
+            plan_path_str = self._safe_path_input(
+                "Path to plan/design markdown document:",
+                only_directories=False,
+                style=custom_style,
+            )
+            if not plan_path_str:
+                return
+            plan_path = Path(plan_path_str).expanduser().resolve()
+            if not plan_path.exists() or not plan_path.is_file():
+                self.console.print(f"[red]File not found: {plan_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            doc_path = plan_path  # For display/metrics; primary output is plan
+        else:
+            doc_path_str = self._safe_path_input(
+                "Path to markdown document to review:",
+                only_directories=False,
+                style=custom_style,
+            )
+            if not doc_path_str:
+                return
+            doc_path = Path(doc_path_str).expanduser().resolve()
+            if not doc_path.exists():
+                self.console.print(f"[red]File not found: {doc_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+            if not doc_path.is_file():
+                self.console.print(f"[red]Path is not a file: {doc_path}[/red]")
+                questionary.press_any_key_to_continue().ask()
+                return
+
+        # 3. Agent selection: use defaults or select
+        use_default_agents = questionary.confirm(
+            "\nUse default flagship agents? (recommended)",
+            default=True,
+            style=custom_style
+        ).ask()
+
+        agents = None
+        selected_agent_infos = []
+        if not use_default_agents:
+            ready_agents = self._get_ready_agents_for_selection()
+            if not ready_agents:
+                self.console.print("[red]No ready agents available. Falling back to defaults.[/red]")
+            else:
+                agent_table = Table(title="Available Agents", show_header=True)
+                agent_table.add_column("", justify="center", width=3)
+                agent_table.add_column("Agent", style="bold cyan")
+                agent_table.add_column("Model", style="cyan")
+                for agent in ready_agents:
+                    agent_table.add_row(agent['icon'], agent['name'], agent['model'])
+                self.console.print(agent_table)
+                agent_choices = [f"{a['icon']} {a['name']} ({a['model']})" for a in ready_agents]
+                selected = questionary.checkbox(
+                    "Select agents for review (SPACE to select, ENTER to confirm):",
+                    choices=agent_choices,
+                    style=custom_style,
+                ).ask()
+                if selected:
+                    for agent in ready_agents:
+                        label = f"{agent['icon']} {agent['name']} ({agent['model']})"
+                        if label in selected:
+                            selected_agent_infos.append(agent)
+                    if selected_agent_infos:
+                        agents = self._create_agents_from_infos(selected_agent_infos)
+                        if not agents:
+                            self.console.print("[yellow]Could not create agents. Falling back to defaults.[/yellow]")
+                            agents = None
+
+        # 4. Reviewer count (only when using defaults)
+        reviewer_count = 2
+        if use_default_agents:
+            reviewer_count_str = questionary.text(
+                "Number of reviewers (default 2):",
+                default="2",
+                style=custom_style
+            ).ask()
+            if reviewer_count_str:
+                try:
+                    reviewer_count = max(1, min(5, int(reviewer_count_str)))
+                except ValueError:
+                    reviewer_count = 2
+
+        # 5. Build config and run
+        if convergent_mode:
+            config = {
+                "requirements_path": str(req_path),
+                "plan_path": str(plan_path),
+                "reviewer_count": reviewer_count,
+            }
+            workflow_cls = ConvergentReviewWorkflow
+            status_msg = "Running convergent review (requirements → plan)..."
+        else:
+            config = {
+                "document_path": str(doc_path),
+                "reviewer_count": reviewer_count,
+                "init_if_missing": True,
+            }
+            workflow_cls = ArchitecturalReviewLogWorkflow
+            status_msg = "Running architectural review..."
+
+        self.console.print(f"\n[cyan]Starting {status_msg.lower()}[/cyan]\n")
+        try:
+            workflow = workflow_cls()
+            with self.console.status(f"[bold green]{status_msg}[/bold green]") as status:
+                def progress_cb(current, total, message):
+                    status.update(f"[bold green]{message} ({current}/{total})...[/bold green]")
+
+                result = workflow.run(
+                    config=config,
+                    agents=agents,
+                    on_progress=progress_cb,
+                )
+
+            metrics = getattr(result, "metrics", None)
+            total_cost = getattr(metrics, "total_cost", 0.0) if metrics else 0.0
+            input_tokens = getattr(metrics, "input_tokens", 0) if metrics else 0
+            output_tokens = getattr(metrics, "output_tokens", 0) if metrics else 0
+
+            if result.success:
+                out = result.output or {}
+                if convergent_mode:
+                    req_out = out.get("requirements_review") or {}
+                    plan_out = out.get("plan_review") or {}
+                    summary = (
+                        f"[green]✓ Convergent review completed[/green]\n\n"
+                        f"Requirements: {req_path.name} — {req_out.get('rounds_appended', 0)} rounds\n"
+                        f"Plan: {plan_path.name} — {plan_out.get('rounds_appended', 0)} rounds\n\n"
+                        f"Cost: ${total_cost:.4f} | "
+                        f"Tokens: {input_tokens} in / {output_tokens} out"
+                    )
+                    logger.info(
+                        "Convergent review completed: req=%s, plan=%s, cost=%.4f",
+                        req_path, plan_path, total_cost,
+                    )
+                else:
+                    summary = (
+                        f"[green]✓ Architectural review completed[/green]\n\n"
+                        f"Document: {out.get('document_path', doc_path)}\n"
+                        f"Rounds appended: {out.get('rounds_appended', 0)}\n"
+                        f"State: {out.get('state_path', 'N/A')}\n\n"
+                        f"Cost: ${total_cost:.4f} | "
+                        f"Tokens: {input_tokens} in / {output_tokens} out"
+                    )
+                    logger.info(
+                        "Arc review completed: doc=%s, rounds=%s, cost=%.4f",
+                        doc_path, out.get("rounds_appended", 0), total_cost,
+                    )
+                self.console.print(Panel(summary, title="Review Complete", border_style="green"))
+                if result.steps:
+                    step_table = Table(title="Steps", show_header=True)
+                    step_table.add_column("Step", style="cyan")
+                    step_table.add_column("Agent", style="magenta")
+                    step_table.add_column("Output", style="white")
+                    step_table.add_column("Cost", style="green")
+                    for s in result.steps:
+                        # Truncate output for table display (60 chars)
+                        output_preview = (s.output or "-")[:60]
+                        if len(s.output or "") > 60:
+                            output_preview += "..."
+                        cost_str = f"${s.cost:.4f}" if s.cost is not None else "-"
+                        step_table.add_row(
+                            s.step_name,
+                            s.agent_name or "-",
+                            output_preview,
+                            cost_str,
+                        )
+                    self.console.print(step_table)
+            else:
+                err_msg = result.error or "Unknown error"
+                self.console.print(Panel(
+                    f"[red]Review did not complete successfully[/red]\n\n{err_msg}",
+                    title="Review Incomplete",
+                    border_style="red"
+                ))
+                logger.warning("Arc review incomplete: doc=%s, error=%s", doc_path, err_msg)
+                if result.steps:
+                    for s in result.steps:
+                        if s.error:
+                            self.console.print(f"  [red]{s.step_name}: {s.error}[/red]")
+        except Exception as e:
+            self.console.print(f"\n[red]Architectural review failed: {e}[/red]")
+            import traceback
+            self.console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            logger.exception("Arc review failed: doc=%s", doc_path)
+
         questionary.press_any_key_to_continue().ask()
 
     def analyze_last_error_workflow(self):

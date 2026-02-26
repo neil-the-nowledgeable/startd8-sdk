@@ -77,7 +77,14 @@ prompts:
       {per_file_details}
       {signal_conflicts}
       {mode_guidance}
-    placeholders: [mode_upper, confidence, per_file_details, signal_conflicts, mode_guidance]
+    placeholders:
+      [
+        mode_upper,
+        confidence,
+        per_file_details,
+        signal_conflicts,
+        mode_guidance,
+      ]
 
   design_doc_edit:
     description: "Design document framing for EDIT mode (B-5 fix: no rewrite-biasing language)"
@@ -165,6 +172,10 @@ prompts:
       - When Parameter Sources are listed in the prompt, use those parameter names EXACTLY as specified
       - When Semantic Conventions are listed, follow those naming rules for variables, functions, and classes
       - Do NOT rename, abbreviate, or "improve" names that come from upstream design documents
+
+      Scaffolding rules:
+      - This system natively supports project and workflow scaffolding (`startd8 project new` / `startd8 workflow new`)
+      - Do NOT generate basic project boilerplate (e.g., standard `pyproject.toml`, standard `__init__.py` files, or foundational structures) from scratch. Assume foundational scaffolding is already provided and only generate the unique business logic, custom configurations, and feature-specific code required by the task.
 
       Output format:
       - Emit the complete Python file inside a single fenced code block

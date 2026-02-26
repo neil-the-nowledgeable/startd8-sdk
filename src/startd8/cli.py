@@ -1030,6 +1030,48 @@ def queue_clear(
 
 
 # =============================================================================
+# Project Scaffolding Commands
+# =============================================================================
+
+project_app = typer.Typer(
+    name="project",
+    help="Project scaffolding and initialization commands"
+)
+app.add_typer(project_app, name="project")
+
+@project_app.command("new")
+def project_new(
+    name: str = typer.Argument(..., help="Name of the new project"),
+    template: str = typer.Option("basic-python", "--template", "-t", help="Template to use"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite conflicting files regardless of hash state")
+):
+    """Scaffold a new project or safely update an existing one using hybrid manifest tracking."""
+    try:
+        from .project.scaffolder import scaffold_project
+    except ImportError as e:
+        console.print(f"[red]Failed to load project scaffolder: {e}[/red]")
+        raise typer.Exit(1)
+
+    result = scaffold_project(
+        name=name,
+        template=template,
+        output_dir=output,
+        force=force
+    )
+
+    if not result.success:
+        console.print(f"[red]Scaffolding Failed:[/red] {result.error}")
+        raise typer.Exit(1)
+        
+    console.print(f"\n[green]Scaffolded {result.files_created} new file(s)[/green]")
+    if result.files_updated > 0:
+        console.print(f"[cyan]Safely updated {result.files_updated} file(s)[/cyan]")
+    if result.files_skipped > 0:
+        console.print(f"[yellow]Skipped {result.files_skipped} modified file(s) to protect custom logic[/yellow]")
+
+
+# =============================================================================
 # Workflow Commands
 # =============================================================================
 
@@ -1055,6 +1097,7 @@ def manifest_generate(
     path: Optional[str] = typer.Argument(None, help="Source path to scan (default: src/)"),
     output_dir: Optional[str] = typer.Option(None, "--output-dir", help="Cache/output directory"),
     fmt: str = typer.Option("json", "--format", help="Output format: json or yaml"),
+    mode: str = typer.Option("static", "--mode", help="Analysis mode: ast_only, static, bytecode"),
     check: bool = typer.Option(False, "--check", help="Exit non-zero if manifests are stale"),
     strict: bool = typer.Option(False, "--strict", help="Treat parse errors as hard failures"),
     verbose: bool = typer.Option(False, "--verbose", help="Print per-file status"),
@@ -1080,7 +1123,7 @@ def manifest_generate(
                 console.print(f"  {f}")
             raise SystemExit(1)
 
-    manifests = generate_project_manifests(project_root, source_root, cache_dir)
+    manifests = generate_project_manifests(project_root, source_root, cache_dir, mode=mode)
 
     error_count = sum(1 for m in manifests.values() if m.errors)
     if strict and error_count > 0:
@@ -1329,6 +1372,241 @@ def manifest_validate_capabilities(
                 console.print(f"  {ref}: manifest_element_count={count}")
 
 
+@manifest_app.command("validate-forward")
+def manifest_validate_forward(
+    manifest_path: str = typer.Argument(..., help="Path to the ForwardManifest JSON schema or seed"),
+    source_path: Optional[str] = typer.Option(None, "--source-path", help="Path to project root (default: cwd)"),
+):
+    """Validate codebase against a prescribed ForwardManifest contract."""
+    import json
+    from pathlib import Path as P
+    from rich.console import Console
+    from rich.table import Table
+    from startd8.forward_manifest import ForwardManifest
+    from startd8.utils.manifest_registry import ManifestRegistry
+    from startd8.forward_manifest_validator import validate_forward_manifest
+
+    console = Console()
+    project_root = P(source_path) if source_path else P.cwd()
+    manifest_file = P(manifest_path)
+
+    if not manifest_file.exists():
+        console.print(f"[red]Manifest file not found: {manifest_file}[/red]")
+        raise SystemExit(1)
+
+    try:
+        raw_data = json.loads(manifest_file.read_text(encoding="utf-8"))
+        
+        # Determine if it's a raw ContextSeed or a pure ForwardManifest
+        if "forward_manifest" in raw_data:
+            manifest_dict = raw_data["forward_manifest"]
+        else:
+            manifest_dict = raw_data
+            
+        manifest = ForwardManifest.model_validate(manifest_dict)
+    except Exception as exc:
+        console.print(f"[red]Failed to parse ForwardManifest: {exc}[/red]")
+        raise SystemExit(1)
+
+    # Load manifest registry to scan the current codebase topology
+    registry = ManifestRegistry.from_cache(project_root)
+    if registry is None:
+        console.print("[red]No codebase manifest cache found. Run 'startd8 manifest generate' first.[/red]")
+        raise SystemExit(1)
+
+    # Execute validator engine
+    violations = validate_forward_manifest(manifest, registry)
+
+    if not violations:
+        console.print("[green]✅ ForwardManifest validation passed. Codebase aligns with contracts.[/green]")
+        raise SystemExit(0)
+
+    # Summarize and format violations
+    table = Table(title=f"Contract Violations ({len(violations)})")
+    table.add_column("Severity", style="bold")
+    table.add_column("Type", style="cyan")
+    table.add_column("Contract ID", style="magenta")
+    table.add_column("Expected", style="green")
+    table.add_column("Actual", style="red")
+    
+    error_count = 0
+    warning_count = 0
+
+    for v in violations:
+        sev_color = "red" if v.severity == "error" else "yellow"
+        if v.severity == "error":
+            error_count += 1
+        else:
+            warning_count += 1
+            
+        table.add_row(
+            f"[{sev_color}]{v.severity.upper()}[/{sev_color}]",
+            v.violation_type,
+            v.contract_id,
+            v.expected,
+            v.actual or "-"
+        )
+
+    console.print(table)
+    
+    if error_count > 0:
+        console.print(f"[red]❌ Validation failed with {error_count} error(s) and {warning_count} warning(s).[/red]")
+        raise SystemExit(1)
+    else:
+        console.print(f"[yellow]⚠️ Validation passed with {warning_count} warning(s).[/yellow]")
+        raise SystemExit(0)
+
+
+@manifest_app.command("calls")
+def manifest_calls(
+    fqn: str = typer.Argument(..., help="Fully-qualified name to inspect"),
+    fmt: str = typer.Option("text", "--format", help="Output format: text or json"),
+):
+    """Show outbound calls for a specific element."""
+    import json as json_mod
+    from rich.console import Console
+    from startd8.utils.code_manifest import generate_file_manifest, lookup_element
+    from startd8.utils.manifest_registry import ManifestRegistry
+
+    console = Console()
+    project_root = Path.cwd()
+
+    registry = ManifestRegistry.from_cache(project_root)
+    if registry is None:
+        console.print("[red]No manifest cache found. Run 'manifest generate --mode bytecode' first.[/red]")
+        raise SystemExit(1)
+
+    result = registry.resolve_fqn(fqn)
+    if result is None:
+        console.print(f"[red]FQN not found: {fqn}[/red]")
+        raise SystemExit(1)
+
+    _file_path, element = result
+    if element.call_graph is None:
+        console.print(f"[yellow]No call graph data for {fqn}. Regenerate with --mode bytecode.[/yellow]")
+        raise SystemExit(0)
+
+    cg = element.call_graph
+    if fmt == "json":
+        console.print_json(json_mod.dumps(cg.model_dump(), indent=2, default=str))
+    else:
+        console.print(f"[bold]Calls from {fqn}[/bold] ({len(cg.calls)} total)")
+        for call in cg.calls:
+            status = "[green]resolved[/green]" if call.target_fqn else "[yellow]unresolved[/yellow]"
+            receiver = f" on {call.receiver}" if call.receiver else ""
+            console.print(f"  {call.target}{receiver} ({call.kind.value}) {status}")
+            if call.target_fqn:
+                console.print(f"    -> {call.target_fqn}")
+        if cg.attribute_reads:
+            console.print(f"\n[cyan]Attribute reads:[/cyan] {', '.join(cg.attribute_reads)}")
+        if cg.attribute_writes:
+            console.print(f"[cyan]Attribute writes:[/cyan] {', '.join(cg.attribute_writes)}")
+        if cg.has_dynamic_dispatch:
+            console.print("[yellow]Dynamic dispatch detected[/yellow]")
+
+
+@manifest_app.command("callers")
+def manifest_callers(
+    fqn: str = typer.Argument(..., help="Fully-qualified name to find callers of"),
+    fmt: str = typer.Option("text", "--format", help="Output format: text or json"),
+):
+    """Show direct callers of a specific element."""
+    import json as json_mod
+    from rich.console import Console
+    from startd8.utils.manifest_registry import ManifestRegistry
+
+    console = Console()
+    project_root = Path.cwd()
+
+    registry = ManifestRegistry.from_cache(project_root)
+    if registry is None:
+        console.print("[red]No manifest cache found. Run 'manifest generate --mode bytecode' first.[/red]")
+        raise SystemExit(1)
+
+    callers = registry.callers_of(fqn)
+    if fmt == "json":
+        console.print_json(json_mod.dumps({"fqn": fqn, "callers": sorted(callers)}, indent=2))
+    else:
+        console.print(f"[bold]Callers of {fqn}[/bold] ({len(callers)} total)")
+        for caller in sorted(callers):
+            console.print(f"  {caller}")
+        if not callers:
+            console.print("  [dim]No callers found[/dim]")
+
+
+@manifest_app.command("blast-radius")
+def manifest_blast_radius(
+    fqn: str = typer.Argument(..., help="Fully-qualified name to compute blast radius for"),
+    max_depth: int = typer.Option(10, "--max-depth", help="Maximum traversal depth"),
+    fmt: str = typer.Option("text", "--format", help="Output format: text or json"),
+):
+    """Compute transitive callers (blast radius) for a planned change."""
+    import json as json_mod
+    from rich.console import Console
+    from startd8.utils.manifest_registry import ManifestRegistry
+
+    console = Console()
+    project_root = Path.cwd()
+
+    registry = ManifestRegistry.from_cache(project_root)
+    if registry is None:
+        console.print("[red]No manifest cache found. Run 'manifest generate --mode bytecode' first.[/red]")
+        raise SystemExit(1)
+
+    radius = registry.blast_radius(fqn, max_depth=max_depth)
+    if fmt == "json":
+        console.print_json(json_mod.dumps({
+            "fqn": fqn, "max_depth": max_depth,
+            "blast_radius": sorted(radius), "count": len(radius),
+        }, indent=2))
+    else:
+        console.print(f"[bold]Blast radius for {fqn}[/bold] (depth={max_depth}, {len(radius)} callers)")
+        for caller in sorted(radius):
+            console.print(f"  {caller}")
+        if not radius:
+            console.print("  [dim]No transitive callers found[/dim]")
+
+
+@manifest_app.command("dead-code")
+def manifest_dead_code(
+    path: Optional[str] = typer.Argument(None, help="Filter by file path prefix"),
+    fmt: str = typer.Option("text", "--format", help="Output format: text or json"),
+):
+    """List public callables with zero inbound call edges (dead code candidates)."""
+    import json as json_mod
+    from rich.console import Console
+    from startd8.utils.manifest_registry import ManifestRegistry
+
+    console = Console()
+    project_root = Path.cwd()
+
+    registry = ManifestRegistry.from_cache(project_root)
+    if registry is None:
+        console.print("[red]No manifest cache found. Run 'manifest generate --mode bytecode' first.[/red]")
+        raise SystemExit(1)
+
+    candidates = registry.dead_candidates()
+    if path:
+        # Filter by file path prefix
+        filtered = []
+        for fqn in candidates:
+            result = registry.resolve_fqn(fqn)
+            if result and result[0].startswith(path):
+                filtered.append(fqn)
+        candidates = filtered
+
+    if fmt == "json":
+        console.print_json(json_mod.dumps({
+            "dead_candidates": candidates, "count": len(candidates),
+        }, indent=2))
+    else:
+        console.print(f"[bold]Dead code candidates[/bold] ({len(candidates)} total)")
+        for fqn in candidates:
+            console.print(f"  {fqn}")
+        if not candidates:
+            console.print("  [dim]No dead code candidates found[/dim]")
+
+
 def _load_workflow_registry():
     """Load workflow registry module"""
     try:
@@ -1473,6 +1751,14 @@ def workflow_run(
         False, "--dry-run",
         help="Simulate without API calls; show execution plan and cost estimate"
     ),
+    provenance: Optional[Path] = typer.Option(
+        None, "--provenance",
+        help="Path to provenance.json for ContextCore Mottainai inventory"
+    ),
+    onboarding: Optional[Path] = typer.Option(
+        None, "--onboarding",
+        help="Path to onboarding-metadata.json for Capability injection"
+    ),
 ):
     """Run a workflow with the given configuration"""
     import json
@@ -1509,6 +1795,19 @@ def workflow_run(
             config["document"] = input_text
         if "task" not in config:
             config["task"] = input_text
+
+    # Inject ContextCore parameters
+    if provenance:
+        if not provenance.exists():
+            console.print(f"[red]Provenance file not found: {provenance}[/red]")
+            raise typer.Exit(1)
+        config["provenance_path"] = str(provenance)
+    
+    if onboarding:
+        if not onboarding.exists():
+            console.print(f"[red]Onboarding metadata file not found: {onboarding}[/red]")
+            raise typer.Exit(1)
+        config["onboarding_path"] = str(onboarding)
 
     # Progress callback
     def on_progress(current: int, total: int, message: str):

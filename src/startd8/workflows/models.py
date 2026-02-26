@@ -164,6 +164,9 @@ class WorkflowMetadata:
     # Input/output definitions
     inputs: List[WorkflowInput] = field(default_factory=list)
 
+    # ContextCore layer 1 contract
+    contract_path: Optional[str] = None
+
     def get_input_schema(self) -> Dict[str, Any]:
         """Generate JSON Schema for workflow inputs."""
         properties = {}
@@ -194,6 +197,7 @@ class WorkflowMetadata:
             "min_agents": self.min_agents,
             "max_agents": self.max_agents,
             "input_schema": self.get_input_schema(),
+            "contract_path": self.contract_path,
         }
 
 

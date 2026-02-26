@@ -1272,10 +1272,12 @@ class DesignDocumentationPhase:
         max_iterations: int = 3,
         confidence_threshold: float = 0.3,
         resolution_callback: ResolutionCallback | None = None,
+        prompt_capture_dir: Path | None = None,
     ) -> None:
         self.llm = llm
         self.max_iterations = max_iterations
         self.confidence_threshold = confidence_threshold
+        self._prompt_capture_dir = prompt_capture_dir
         if not (0.0 <= confidence_threshold <= 1.0):
             raise ValueError(f"confidence_threshold must be in [0.0, 1.0], got {confidence_threshold}")
         # NOTE: This threshold detects disagreements (higher = fewer flagged).
@@ -1408,6 +1410,30 @@ class DesignDocumentationPhase:
                 "Generating design document for '%s' (iteration %d)",
                 context.feature_name,
                 iteration,
+            )
+
+        # ── Walkthrough: persist prompts, return synthetic result ──
+        if self._prompt_capture_dir is not None:
+            cap_dir = self._prompt_capture_dir
+            cap_dir.mkdir(parents=True, exist_ok=True)
+            (cap_dir / "generate_system_prompt.md").write_text(
+                system_prompt, encoding="utf-8",
+            )
+            (cap_dir / "generate_user_prompt.md").write_text(
+                prompt, encoding="utf-8",
+            )
+            logger.info(
+                "Walkthrough: persisted DESIGN generate prompts for '%s' → %s",
+                context.feature_name,
+                cap_dir,
+            )
+            from datetime import datetime, timezone
+            return DesignDocument(
+                raw_text="[walkthrough placeholder]",
+                feature_name=context.feature_name,
+                iteration=iteration,
+                sections={s.value: "[walkthrough placeholder]" for s in DesignSection},
+                generated_at=datetime.now(timezone.utc),
             )
 
         _tracer = _get_design_tracer()
@@ -1548,6 +1574,34 @@ class DesignDocumentationPhase:
             design.feature_name,
             design.iteration,
         )
+
+        # ── Walkthrough: persist review prompts, return synthetic verdict ──
+        if self._prompt_capture_dir is not None:
+            cap_dir = self._prompt_capture_dir
+            cap_dir.mkdir(parents=True, exist_ok=True)
+            prefix = "arbiter" if role == ReviewRole.ARBITER else "review"
+            (cap_dir / f"{prefix}_system_prompt.md").write_text(
+                system_prompt, encoding="utf-8",
+            )
+            (cap_dir / f"{prefix}_user_prompt.md").write_text(
+                prompt, encoding="utf-8",
+            )
+            logger.info(
+                "Walkthrough: persisted DESIGN %s prompts for '%s' → %s",
+                role.value,
+                design.feature_name,
+                cap_dir,
+            )
+            from datetime import datetime, timezone
+            return ReviewVerdict(
+                role=role,
+                approved=True,
+                confidence=1.0,
+                concerns=[],
+                suggestions=[],
+                summary="[walkthrough placeholder]",
+                reviewed_at=datetime.now(timezone.utc),
+            )
 
         _tracer = _get_design_tracer()
         with _tracer.start_as_current_span(

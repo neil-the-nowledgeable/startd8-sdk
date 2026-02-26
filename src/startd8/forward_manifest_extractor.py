@@ -80,7 +80,11 @@ _UTILITY_FILE_PATTERNS: dict[str, tuple[str, ContractCategory]] = {
 
 
 def _unparse(node: Optional[ast.AST]) -> Optional[str]:
-    """Safely unparse an AST node to source text."""
+    """Safely unparse an AST node to source text.
+
+    Note: mirrors ``code_manifest._unparse`` — kept local because that
+    function is private.  Consolidate if it becomes public.
+    """
     if node is None:
         return None
     try:
@@ -89,18 +93,23 @@ def _unparse(node: Optional[ast.AST]) -> Optional[str]:
         return None
 
 
+def _strip_def_prefix(sig_str: str) -> str:
+    """Strip ``def `` or ``async def `` prefix from a signature string."""
+    cleaned = sig_str.strip()
+    if cleaned.startswith("async def "):
+        return cleaned[len("async def "):]
+    if cleaned.startswith("def "):
+        return cleaned[len("def "):]
+    return cleaned
+
+
 def _parse_python_signature(sig_str: str) -> Optional[Signature]:
     """Parse a Python function signature string into a ``Signature`` model.
 
     Accepts forms like ``def foo(x: int) -> str``, ``async def bar()``,
     or bare ``foo(x: int) -> str``.  Returns ``None`` on any parse failure.
     """
-    cleaned = sig_str.strip()
-    # Strip async def / def prefix if present
-    if cleaned.startswith("async def "):
-        cleaned = cleaned[len("async def "):]
-    elif cleaned.startswith("def "):
-        cleaned = cleaned[len("def "):]
+    cleaned = _strip_def_prefix(sig_str)
 
     # Wrap as a valid function so ast.parse can handle it
     source = f"def {cleaned}: pass"
@@ -186,12 +195,7 @@ def _parse_python_signature(sig_str: str) -> Optional[Signature]:
 
 def _extract_function_name(sig_str: str) -> Optional[str]:
     """Extract the function name from a signature string."""
-    cleaned = sig_str.strip()
-    if cleaned.startswith("async def "):
-        cleaned = cleaned[len("async def "):]
-    elif cleaned.startswith("def "):
-        cleaned = cleaned[len("def "):]
-
+    cleaned = _strip_def_prefix(sig_str)
     paren_idx = cleaned.find("(")
     if paren_idx < 1:
         return None
@@ -241,10 +245,16 @@ class DeterministicExtractor:
         feature: ParsedFeature,
         file_elements: dict[str, list[ForwardElementSpec]],
     ) -> list[InterfaceContract]:
+        """Parse api_signatures into FUNCTION_NAME contracts + ForwardElementSpecs."""
         contracts: list[InterfaceContract] = []
         for sig_str in feature.api_signatures:
             func_name = _extract_function_name(sig_str)
             if not func_name:
+                logger.debug(
+                    "Skipping unparseable signature in feature %s: %r",
+                    feature.feature_id,
+                    sig_str,
+                )
                 continue
 
             abbrev = _CATEGORY_ABBREV[ContractCategory.FUNCTION_NAME]
@@ -278,6 +288,7 @@ class DeterministicExtractor:
     def _extract_runtime_dependencies(
         self, feature: ParsedFeature
     ) -> list[InterfaceContract]:
+        """Convert runtime_dependencies into IMPORT_PATH contracts."""
         contracts: list[InterfaceContract] = []
         for dep in feature.runtime_dependencies:
             abbrev = _CATEGORY_ABBREV[ContractCategory.IMPORT_PATH]
@@ -296,6 +307,7 @@ class DeterministicExtractor:
         return contracts
 
     def _extract_protocol(self, feature: ParsedFeature) -> list[InterfaceContract]:
+        """Convert non-empty protocol into an INFRASTRUCTURE contract."""
         if not feature.protocol or feature.protocol == "none":
             return []
 

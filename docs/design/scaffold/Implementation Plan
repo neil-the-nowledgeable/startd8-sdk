@@ -1,0 +1,78 @@
+# Implement Hybrid Project Scaffolder
+
+This document outlines the implementation plan for the Hybrid Project Scaffolder in `startd8-sdk`. The system will leverage the existing Jinja2 ecosystem to render full directory trees while persisting generated hashes in a manifest to support safe, repeatable updates without destroying downstream LLM modifications.
+
+## User Review Required
+>
+> [!IMPORTANT]
+>
+> - Since existing workflow scaffolding lives in `src/startd8/workflows/scaffold.py`, I propose creating a parallel module for this broader scope: `src/startd8/project/scaffolder.py` and `src/startd8/project/templates/`. Does this namespace location align with your vision?
+> - The manifest tracking file will be named `.startd8-scaffold.json` at the destination project root. Is this name acceptable?
+
+## Proposed Changes
+
+### Configuration & Constants
+
+#### [NEW] `src/startd8/project/scaffold_constants.py`
+
+Define CLI defaults, core schema fields for the manifest, error messages for hash mismatches and template resolution.
+
+### Core Logic
+
+#### [NEW] `src/startd8/project/scaffolder.py`
+
+Create the `ProjectScaffolder` class containing the following responsibilities:
+
+1. **Template Enumeration:** Walk a given template directory recursively (e.g., `src/startd8/project/templates/basic-python/`). For any file ending in `.jinja`, strip the extension for the destination filename. Keep non-`.jinja` files as-is.
+2. **Context Resolution:** Inject `project_name`, CLI argument overrides, and default metadata. We can evaluate templated directory/file paths directly (e.g., resolving `src/{{module_name}}/__init__.py.jinja`).
+3. **State Resolution (`.startd8-scaffold.json`):**
+   - On scaffolding a *new variable/file*: Generate the file, calculate the sha256 hash.
+   - On scaffolding an *existing file:* Load the manifest. If the current file's hash matches the last-generated hash from the manifest, it means the user/LLM hasn't changed it—it is safe to overwrite. If the hash differs, log a warning and skip overwriting the file (thereby protecting customized LLM work safely).
+4. **Manifest Creation:** Persist the final `.startd8-scaffold.json` manifest.
+
+#### [NEW] `src/startd8/project/manifest.py`
+
+Data classes bridging the JSON persistence logic and hash computation.
+
+- `ProjectScaffoldManifest` (schema version, template name, template variables, file hashes dictionary).
+
+### Templates
+
+#### [NEW] `src/startd8/project/templates/basic-python/pyproject.toml.jinja`
+
+#### [NEW] `src/startd8/project/templates/basic-python/src/{{module_name}}/__init__.py.jinja`
+
+Provide a default modern Python starter kit (with pytest, hatch, and async ready).
+
+### CLI Integration
+
+#### [MODIFY] `src/startd8/cli.py`
+
+Add a new command group:
+
+```python
+@app.command()
+def project_new(
+    name: str = typer.Argument(..., help="Name of the new project"),
+    template: str = typer.Option("basic-python", "--template", "-t", help="Template to use"),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite conflicting files regardless of hash state")
+):
+```
+
+Integrate commands identically in structure to `startd8 workflow new`.
+
+## Verification Plan
+
+### Automated Tests
+
+- Unit tests defining `ProjectScaffolder` path generation.
+- Mock the file system to ensure hashes dictate update behavior.
+  - Scenario A: File matches original hash -> overwrite allowed.
+  - Scenario B: File modified -> overwrite skipped.
+  - Scenario C: `force=True` -> overwrite executes regardless.
+
+### Manual Verification
+
+- Will initialize a dummy project using the CLI and verify folder structure.
+- Will modify a generated file, re-run scaffolding, and verify the customized file remains untouched while unmodified files receive updates.

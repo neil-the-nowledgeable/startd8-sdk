@@ -401,3 +401,64 @@ class GuidanceModule:
             token_estimate=_estimate_tokens(text),
             droppable=True,
         )
+
+class ContractModule:
+    """Renders forward-looking interface contracts for design prompts.
+
+    Non-droppable (Tier 0). Groups contracts by category and distinguishes
+    between binding and advisory constraints based on confidence level.
+    """
+
+    category = "contracts"
+
+    def render(self, data: dict[str, Any]) -> PromptFragment:
+        contracts = data.get("contracts", [])
+        file_specs = data.get("file_specs", {})
+
+        if not contracts and not file_specs:
+            return PromptFragment(
+                category=self.category,
+                text="",
+                token_estimate=0,
+                droppable=False,
+            )
+
+        sections = ["## Interface Contracts (Cross-Task Bindings)\n"]
+
+        # Group by category for readability
+        by_category: dict[str, list[dict[str, Any]]] = {}
+        for c in contracts:
+            category = c.get("category", "other")
+            by_category.setdefault(category, []).append(c)
+
+        for category, items in by_category.items():
+            sections.append(f"### {category.replace('_', ' ').title()}\n")
+            for item in items:
+                prefix = "[BINDING]" if item.get("confidence") != "tentative" else "[ADVISORY]"
+                binding_text = item.get("binding_text", item.get("description", ""))
+                sections.append(f"- {prefix} {binding_text}")
+                
+                source_ref = item.get("source_reference")
+                if source_ref:
+                    sections.append(f"  Source: {source_ref}")
+
+        # File-level prescribed elements
+        if file_specs:
+            sections.append("\n### Prescribed File Elements\n")
+            for path, spec in file_specs.items():
+                sections.append(f"**{path}**:")
+                for elem in spec.get("elements", []):
+                    kind = elem.get("kind", "")
+                    name = elem.get("name", "")
+                    # Try to stringify signature if it exists
+                    sig_dict = elem.get("signature")
+                    sig_str = "()" if sig_dict else ""
+                    sections.append(f"  - `{kind}` `{name}{sig_str}`")
+
+        text = "\n".join(sections)
+        return PromptFragment(
+            category=self.category,
+            text=text,
+            token_estimate=_estimate_tokens(text),
+            droppable=False,  # Tier 0: never dropped
+        )

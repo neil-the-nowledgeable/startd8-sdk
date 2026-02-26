@@ -73,6 +73,7 @@ class LeadContractorConfig:
         pass_threshold: Minimum review score to pass (0-100, default: 80)
         output_format: Expected output format guidance for drafter
         integration_instructions: Instructions for final integration
+        edit_min_pct: Min % of existing lines in edit output (PC-Q3, default 80)
 
     Note:
         Default models are defined in startd8.model_catalog.Models.
@@ -87,6 +88,7 @@ class LeadContractorConfig:
     pass_threshold: int = 80
     output_format: Optional[str] = None
     integration_instructions: Optional[str] = None
+    edit_min_pct: Optional[int] = 80  # PC-Q3: Min % of existing lines in edit output
 
 
 @dataclass

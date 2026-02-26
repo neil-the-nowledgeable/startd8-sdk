@@ -27,10 +27,18 @@ prompts:
       - If service_metadata in Additional Context specifies transport_protocol, use it as authoritative. Do NOT pattern-match health check type from sibling services.
       - When requirements or the task description specify exact parameter values (e.g., user="postgres", embedding_service=..., specific model names, system packages), carry these through verbatim into the design document. Do not substitute, generalize, or omit specific parameter values from requirements.
       - When a service explicitly does NOT use a capability (e.g., "no OpenTelemetry"), state this in the design document so the implementation phase does not add it.
+      - Scaffolding Awareness: This system naturally supports project scaffolding (`startd8 project new` / `startd8 workflow new`). Your design should NOT include instructions for generating basic project boilerplate (e.g. standard `pyproject.toml` or foundational directory structures). Assume foundational scaffolding exists, and focus the design ONLY on unique business logic and custom configurations.
       {depth_line}
       {foundation_block}
       {structural_awareness_block}
-    placeholders: [sections_list, depth_line, edit_mode_block, foundation_block, structural_awareness_block]
+    placeholders:
+      [
+        sections_list,
+        depth_line,
+        edit_mode_block,
+        foundation_block,
+        structural_awareness_block,
+      ]
 
   design_user:
     description: "User prompt for DESIGN generation"
@@ -50,7 +58,17 @@ prompts:
       {manifest_context}
 
       {revision_guidance}
-    placeholders: [feature_name, requirements_block, description, target_file, constraints, additional_context, manifest_context, revision_guidance]
+    placeholders:
+      [
+        feature_name,
+        requirements_block,
+        description,
+        target_file,
+        constraints,
+        additional_context,
+        manifest_context,
+        revision_guidance,
+      ]
 
   refine_system:
     description: "System prompt for refining an existing design document (dynamic: sections_list, depth_line)"
@@ -77,11 +95,19 @@ prompts:
         - `path/to/file.py` (new) — brief purpose
         - `path/to/existing.py` (modify) — what changes
       - If you do NOT add files beyond the Target File, omit the ### Files Touched section entirely.
+      - Scaffolding Awareness: This system naturally supports project scaffolding (`startd8 project new` / `startd8 workflow new`). Your design should NOT include instructions for generating basic project boilerplate (e.g. standard `pyproject.toml` or foundational directory structures). Assume foundational scaffolding exists, and focus the design ONLY on unique business logic and custom configurations.
       {edit_mode_block}
       {depth_line}
       {foundation_block}
       {structural_awareness_block}
-    placeholders: [sections_list, depth_line, edit_mode_block, foundation_block, structural_awareness_block]
+    placeholders:
+      [
+        sections_list,
+        depth_line,
+        edit_mode_block,
+        foundation_block,
+        structural_awareness_block,
+      ]
 
   refine_user:
     description: "User prompt for refining an existing design document"
@@ -116,7 +142,18 @@ prompts:
       - Maintain the same section structure (## headers).
 
       {revision_guidance}
-    placeholders: [feature_name, requirements_block, description, target_file, constraints, additional_context, manifest_context, prior_design, revision_guidance]
+    placeholders:
+      [
+        feature_name,
+        requirements_block,
+        description,
+        target_file,
+        constraints,
+        additional_context,
+        manifest_context,
+        prior_design,
+        revision_guidance,
+      ]
 
   review_json_schema:
     description: "JSON schema for reviewer/arbiter verdicts (helper, not a prompt)"

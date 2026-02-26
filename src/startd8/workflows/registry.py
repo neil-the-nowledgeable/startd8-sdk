@@ -431,7 +431,33 @@ class WorkflowRegistry:
             )
 
         try:
-            return workflow.run(config, agents, on_progress, dry_run=dry_run)
+            result = workflow.run(config, agents, on_progress, dry_run=dry_run)
+            
+            # ContextCore Layer 1 Boundary Validation (Exit)
+            if result.success and not dry_run and hasattr(workflow.metadata, 'contract_path') and workflow.metadata.contract_path:
+                try:
+                    from contextcore.contracts.propagation.validator import BoundaryValidator
+                    from contextcore.contracts.propagation.loader import ContractLoader
+                    
+                    contract = ContractLoader.load_contract(workflow.metadata.contract_path)
+                    validator = BoundaryValidator()
+                    
+                    # Assume workflow output is a dict that represents the exit context
+                    # If it's not a dict, we wrap it
+                    exit_context = result.output if isinstance(result.output, dict) else {"output": result.output}
+                    
+                    exit_result = validator.validate_exit(workflow_id, exit_context, contract)
+                    if exit_result.has_blocking_violations():
+                        return WorkflowResult.from_error(
+                            workflow_id, 
+                            f"Context Contract exit validation failed: {exit_result}"
+                        )
+                except ImportError as e:
+                    logger.warning(f"ContextCore not available for contract validation: {e}")
+                except Exception as e:
+                    logger.error(f"Error during context exit validation: {e}", exc_info=True)
+            
+            return result
         except Exception as e:
             logger.error(
                 f"Workflow {workflow_id} failed: {e}",
@@ -474,10 +500,33 @@ class WorkflowRegistry:
 
         try:
             if hasattr(workflow, 'arun'):
-                return await workflow.arun(config, agents, on_progress)
+                result = await workflow.arun(config, agents, on_progress)
             else:
                 # Fall back to sync execution
-                return workflow.run(config, agents, on_progress)
+                result = workflow.run(config, agents, on_progress)
+                
+            # ContextCore Layer 1 Boundary Validation (Exit)
+            if result.success and hasattr(workflow.metadata, 'contract_path') and workflow.metadata.contract_path:
+                try:
+                    from contextcore.contracts.propagation.validator import BoundaryValidator
+                    from contextcore.contracts.propagation.loader import ContractLoader
+                    
+                    contract = ContractLoader.load_contract(workflow.metadata.contract_path)
+                    validator = BoundaryValidator()
+                    exit_context = result.output if isinstance(result.output, dict) else {"output": result.output}
+                    exit_result = validator.validate_exit(workflow_id, exit_context, contract)
+                    
+                    if exit_result.has_blocking_violations():
+                        return WorkflowResult.from_error(
+                            workflow_id, 
+                            f"Context Contract exit validation failed: {exit_result}"
+                        )
+                except ImportError as e:
+                    logger.warning(f"ContextCore not available for contract validation: {e}")
+                except Exception as e:
+                    logger.error(f"Error during context exit validation: {e}", exc_info=True)
+            
+            return result
         except Exception as e:
             logger.error(
                 f"Workflow {workflow_id} failed: {e}",

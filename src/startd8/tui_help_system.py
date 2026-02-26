@@ -511,6 +511,8 @@ class HelpSystem:
             'iterative_workflow': 'advanced_features',
             'enhancement_chain': 'advanced_features',
             'design_pipeline': 'advanced_features',
+            'arc_review_workflow': 'advanced_features',
+            'convergent_review_workflow': 'advanced_features',
             'job_queue': 'advanced_features'
         }
         

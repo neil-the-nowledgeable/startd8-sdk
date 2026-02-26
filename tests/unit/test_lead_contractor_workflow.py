@@ -395,6 +395,481 @@ class TestTestPlanGeneration:
         assert "$0.05" in md
 
 
+class TestSpecPromptPhase1:
+    """Phase 1 tests: budget, truncation, section builders, deduplication (PC-B1..B5, PC-A1..A3)."""
+
+    def test_plan_context_truncated_in_spec(self):
+        """PC-B1: Plan context in spec prompt is truncated to 16KB with marker."""
+        from startd8.workflows.builtin.lead_contractor_workflow import (
+            LeadContractorWorkflow,
+            _PLAN_CONTEXT_MAX_CHARS,
+            _TRUNCATION_MARKER,
+        )
+
+        plan_60k = "x" * 60_000
+        context = {"plan_context": plan_60k}
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert _TRUNCATION_MARKER in prompt
+        # Plan section content (excluding header) should be <= 16KB + marker
+        plan_section_start = prompt.find("## Plan Context")
+        assert plan_section_start >= 0
+        plan_content = prompt[plan_section_start + 15 :]  # after "## Plan Context\n"
+        # Content up to next ## or end
+        next_section = plan_content.find("\n\n## ")
+        plan_body = plan_content[:next_section] if next_section >= 0 else plan_content.split("\n\n## ")[0]
+        assert len(plan_body) <= _PLAN_CONTEXT_MAX_CHARS + len(_TRUNCATION_MARKER)
+
+    def test_arch_context_truncated(self):
+        """PC-B2: Large architectural context is truncated to 4KB."""
+        from startd8.workflows.builtin.lead_contractor_workflow import (
+            LeadContractorWorkflow,
+            _ARCH_CONTEXT_MAX_CHARS,
+            _TRUNCATION_MARKER,
+        )
+
+        arch_large = {"objectives": ["obj"] * 100, "constraints": ["c"] * 100}
+        context = {"architectural_context": arch_large}
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "## Project Architecture" in prompt
+        assert _TRUNCATION_MARKER in prompt or len(prompt) < 50_000
+
+    def test_no_duplication_in_context_str(self):
+        """PC-A2, PC-A3: Popped keys do not appear in context_str."""
+        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+
+        context = {
+            "plan_context": "plan",
+            "architectural_context": {"obj": "x"},
+            "project_objectives": "obj",
+            "semantic_conventions": {"conv": "y"},
+            "requirements_context": "req_ctx",
+            "protocol_guidance": "proto",
+            "scope_boundary": "scope",
+            "feature_name": "f1",
+        }
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        # context_str should not contain the popped keys as JSON
+        assert '"plan_context"' not in prompt or "## Plan Context" in prompt
+        assert '"architectural_context"' not in prompt or "## Project Architecture" in prompt
+        assert '"requirements_context"' not in prompt or "## Requirements Context" in prompt
+        assert '"protocol_guidance"' not in prompt or "## Protocol Guidance" in prompt
+        assert '"scope_boundary"' not in prompt or "## Scope Boundary" in prompt
+        # feature_name should remain (not popped)
+        assert "feature_name" in prompt or "f1" in prompt
+
+    def test_section_builders_used(self):
+        """PC-A1: Spec prompt is built from section helpers."""
+        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+
+        context = {
+            "plan_context": "Plan text",
+            "architectural_context": {"objectives": ["O1"]},
+            "project_objectives": "Objectives",
+            "semantic_conventions": {"naming": "snake"},
+        }
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "## Plan Context" in prompt
+        assert "## Project Architecture" in prompt
+        assert "## Project Objectives" in prompt
+        assert "## Semantic Conventions" in prompt
+        assert "Plan text" in prompt
+        assert "O1" in prompt
+
+
+class TestPlanLoadCap:
+    """PC-B5: Plan load cap in prime_contractor."""
+
+    def test_plan_load_cap_constant(self):
+        """Plan load cap constant is 16KB."""
+        from startd8.contractors.prime_contractor import _PLAN_LOAD_MAX_BYTES
+
+        assert _PLAN_LOAD_MAX_BYTES == 16_384
+
+    def test_plan_truncated_on_load(self, tmp_path):
+        """Plan document is truncated to 16KB when loaded."""
+        from pathlib import Path
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+            _PLAN_LOAD_MAX_BYTES,
+        )
+
+        # Create plan file inside project root (path traversal check requires this)
+        plan_path = tmp_path / "plan_load_cap_test.md"
+        plan_path.write_text("x" * (_PLAN_LOAD_MAX_BYTES + 1000), encoding="utf-8")
+        workflow = PrimeContractorWorkflow(project_root=tmp_path)
+        seed = {
+            "artifacts": {"plan_document_path": str(plan_path)},
+            "execution_mode": "standalone",
+        }
+        workflow.load_seed_context(seed)
+        assert workflow.plan_document_text is not None
+        assert len(workflow.plan_document_text) <= _PLAN_LOAD_MAX_BYTES
+
+
+class TestExistingFilesPopulation:
+    """PC-O1: existing_files populated in prime_contractor develop_feature."""
+
+    def test_existing_files_populated_for_edit(self, tmp_path):
+        """Feature with target_files pointing to existing files populates gen_context."""
+        from pathlib import Path
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+            FeatureSpec,
+        )
+
+        # Create existing file under project root
+        target_rel = "src/foo.py"
+        target_path = tmp_path / target_rel
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text("def bar():\n    return 42\n", encoding="utf-8")
+
+        workflow = PrimeContractorWorkflow(project_root=tmp_path)
+        feature = FeatureSpec(
+            id="F-001",
+            name="Edit foo",
+            description="Add a function",
+            target_files=[target_rel],
+        )
+        gen_context = {}
+        workflow._populate_existing_files(feature, gen_context)
+
+        assert "existing_files" in gen_context
+        assert target_rel in gen_context["existing_files"]
+        assert "def bar():" in gen_context["existing_files"][target_rel]
+
+    def test_existing_files_skipped_outside_root(self, tmp_path):
+        """Target file outside project_root is skipped."""
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+            FeatureSpec,
+        )
+
+        workflow = PrimeContractorWorkflow(project_root=tmp_path)
+        feature = FeatureSpec(
+            id="F-001",
+            name="Edit",
+            description="Task",
+            target_files=["../outside/evil.py"],
+        )
+        gen_context = {}
+        workflow._populate_existing_files(feature, gen_context)
+
+        assert "existing_files" not in gen_context or len(gen_context.get("existing_files", {})) == 0
+
+    def test_existing_files_empty_without_targets(self, tmp_path):
+        """No target_files leaves gen_context unchanged."""
+        from startd8.contractors.prime_contractor import (
+            PrimeContractorWorkflow,
+            FeatureSpec,
+        )
+
+        workflow = PrimeContractorWorkflow(project_root=tmp_path)
+        feature = FeatureSpec(
+            id="F-001",
+            name="Create",
+            description="New file",
+            target_files=[],
+        )
+        gen_context = {}
+        workflow._populate_existing_files(feature, gen_context)
+
+        assert "existing_files" not in gen_context
+
+
+class TestExistingFilesBudget:
+    """PC-B3: Existing files budget reduced to 40KB."""
+
+    def test_existing_files_budget_40kb(self):
+        """_EXISTING_FILES_BUDGET_BYTES is 40KB."""
+        from startd8.workflows.builtin.lead_contractor_workflow import (
+            _EXISTING_FILES_BUDGET_BYTES,
+        )
+
+        assert _EXISTING_FILES_BUDGET_BYTES == 40 * 1024
+
+
+class TestSpecPromptPhase2:
+    """Phase 2 tests: conditional framing, quantitative constraints (PC-F1..F3, PC-Q1..Q3)."""
+
+    def test_plan_context_edit_framing(self):
+        """PC-F1: With existing_files, plan section has edit preamble."""
+        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+
+        context = {
+            "plan_context": "Add feature X to the service.",
+            "existing_files": {"src/service.py": "def foo():\n    pass\n" * 10},
+        }
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "CHANGES to apply to existing code" in prompt
+        assert "Do NOT treat it as a greenfield specification" in prompt
+
+    def test_plan_context_create_framing(self):
+        """PC-F1: Without existing_files, plan section has create preamble."""
+        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+
+        context = {"plan_context": "Implement feature X from scratch."}
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "provides context for this task" in prompt
+        assert "design document (if present) is authoritative" in prompt
+
+    def test_arch_context_edit_framing(self):
+        """PC-F2: With edit mode, arch section has edit prefix."""
+        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+
+        context = {
+            "architectural_context": {"objectives": ["O1"], "constraints": ["C1"]},
+            "existing_files": {"src/foo.py": "x = 1\n"},
+        }
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "Apply these architectural constraints to the existing file(s)" in prompt
+        assert "Do not redesign from scratch" in prompt
+
+    def test_quantitative_spec_constraint(self):
+        """PC-Q1: With existing_files totaling 100 lines, spec preamble includes AT LEAST 80 lines."""
+        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+
+        # 100 lines of content
+        content_100_lines = "\n".join([f"line {i}" for i in range(100)])
+        context = {
+            "existing_files": {"src/foo.py": content_100_lines},
+            "plan_context": "Update the service.",
+        }
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "total 100 lines" in prompt
+        assert "AT LEAST 80 lines" in prompt
+        assert "80% of existing" in prompt
+
+    def test_edit_min_pct_configurable(self):
+        """PC-Q3: edit_min_pct from context overrides default."""
+        from startd8.workflows.builtin.lead_contractor_workflow import LeadContractorWorkflow
+
+        content_100_lines = "\n".join([f"line {i}" for i in range(100)])
+        context = {
+            "existing_files": {"src/foo.py": content_100_lines},
+            "edit_min_pct": 90,
+            "plan_context": "Update.",
+        }
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "AT LEAST 90 lines" in prompt
+        assert "90% of existing" in prompt
+
+
+class TestPhase4YAMLExternalization:
+    """Phase 4 tests: YAML externalization, fallback (PC-Y1..Y4, AC-5)."""
+
+    def test_format_lead_prompt_uses_yaml_when_available(self):
+        """_format_lead_prompt returns YAML content when template exists."""
+        from startd8.workflows.builtin.lead_contractor_workflow import _format_lead_prompt
+
+        result = _format_lead_prompt(
+            "plan_context_edit_framing",
+            "fallback if missing",
+        )
+        assert "CHANGES to apply to existing code" in result
+        assert "fallback if missing" not in result
+
+    def test_format_lead_prompt_uses_fallback_when_yaml_missing(self):
+        """AC-5: _format_lead_prompt uses fallback when template missing."""
+        from startd8.workflows.builtin.lead_contractor_workflow import (
+            _format_lead_prompt,
+            _PLAN_CONTEXT_EDIT_FRAMING_FALLBACK,
+        )
+
+        result = _format_lead_prompt(
+            "nonexistent_template_xyz",
+            _PLAN_CONTEXT_EDIT_FRAMING_FALLBACK,
+        )
+        assert "CHANGES to apply to existing code" in result
+        assert "Do NOT treat it as a greenfield" in result
+
+    def test_format_lead_prompt_with_placeholders(self):
+        """_format_lead_prompt formats placeholders in fallback path."""
+        from startd8.workflows.builtin.lead_contractor_workflow import _format_lead_prompt
+
+        result = _format_lead_prompt(
+            "nonexistent_template_xyz",
+            "Hello {name}",
+            name="World",
+        )
+        assert result == "Hello World"
+
+    def test_all_phase4_templates_loadable(self):
+        """PC-Y3: All Phase 4 templates load without error."""
+        from startd8.workflows.builtin.prompts import get_template
+
+        templates = [
+            "plan_context_edit_framing",
+            "plan_context_create_framing",
+            "arch_context_edit_framing",
+            "spec_edit_preamble_base",
+            "spec_edit_quantitative_constraint",
+            "spec_completeness_warning",
+        ]
+        for name in templates:
+            t = get_template("lead_contractor", name)
+            assert isinstance(t, str)
+            assert len(t) > 0
+
+    @patch("startd8.workflows.builtin.lead_contractor_workflow._get_prime_template")
+    def test_spec_prompt_builds_with_fallback_when_yaml_missing(
+        self, mock_get_template
+    ):
+        """AC-5: Spec prompt builds with fallback when YAML templates unavailable."""
+        from startd8.workflows.builtin.lead_contractor_workflow import (
+            LeadContractorWorkflow,
+        )
+
+        # Raise for our Phase 4 templates; allow other templates (spec, etc.)
+        def side_effect(phase, name):
+            if name in (
+                "plan_context_edit_framing",
+                "plan_context_create_framing",
+                "arch_context_edit_framing",
+                "spec_edit_preamble_base",
+                "spec_edit_quantitative_constraint",
+            ):
+                raise FileNotFoundError("YAML missing")
+            # Delegate to real loader for spec template etc.
+            from startd8.workflows.builtin.prompts import get_template
+            return get_template(phase, name)
+
+        mock_get_template.side_effect = side_effect
+
+        context = {
+            "existing_files": {"src/foo.py": "\n".join([f"line {i}" for i in range(100)])},
+            "plan_context": "Update the service.",
+        }
+        prompt = LeadContractorWorkflow._build_spec_prompt(
+            "Task", dict(context), None
+        )
+        assert "EDIT MODE" in prompt
+        assert "AT LEAST 80 lines" in prompt
+        assert "CHANGES to apply to existing code" in prompt
+
+
+class TestPhase3DrafterSystemPrompt:
+    """Phase 3 tests: mode-aware drafter system prompts (PC-M2, PC-M3, PC-M4)."""
+
+    def test_drafter_create_system_prompt(self):
+        """PC-M2: Without existing_files, returns create_system."""
+        from startd8.workflows.builtin.lead_contractor_workflow import _get_drafter_system_prompt
+
+        prompt = _get_drafter_system_prompt(existing_files=None)
+        assert prompt is not None
+        assert "generating" in prompt.lower() or "implement" in prompt.lower()
+        assert "spec" in prompt.lower()
+
+    def test_drafter_edit_system_prompt(self):
+        """PC-M2: With existing_files (all < 50 lines), returns edit_system."""
+        from startd8.workflows.builtin.lead_contractor_workflow import _get_drafter_system_prompt
+
+        existing = {"src/foo.py": "def bar():\n    pass\n" * 5}  # ~25 lines
+        prompt = _get_drafter_system_prompt(existing_files=existing)
+        assert prompt is not None
+        assert "editing" in prompt.lower() or "edit" in prompt.lower()
+        assert "PRESERVE" in prompt or "preserve" in prompt
+
+    def test_drafter_search_replace_system_prompt(self):
+        """PC-M2: With existing_files and file ≥50 lines, returns search_replace_system."""
+        from startd8.workflows.builtin.lead_contractor_workflow import _get_drafter_system_prompt
+
+        content_60_lines = "\n".join([f"line {i}" for i in range(60)])
+        existing = {"src/large.py": content_60_lines}
+        prompt = _get_drafter_system_prompt(existing_files=existing)
+        assert prompt is not None
+        assert "large" in prompt.lower() or "minimal" in prompt.lower()
+
+    def test_draft_edit_ordering(self):
+        """PC-O2: With existing_files, existing_files_section appears before spec in prompt."""
+        from startd8.workflows.builtin.lead_contractor_workflow import (
+            DRAFT_EDIT_PROMPT_TEMPLATE,
+            _build_existing_files_section,
+        )
+
+        existing = {"src/foo.py": "def bar(): pass\n"}
+        section = _build_existing_files_section(existing, None)
+        prompt = DRAFT_EDIT_PROMPT_TEMPLATE.format(
+            spec="## Implementation Specification (changes to apply)\nThe spec content",
+            feedback="No feedback",
+            output_format="```\ncode\n```",
+            existing_files_section=section,
+        )
+        # existing_files_section must appear before "Implementation Specification"
+        idx_section = prompt.find(section[:50]) if len(section) > 50 else prompt.find(section)
+        idx_spec = prompt.find("Implementation Specification")
+        assert idx_section >= 0
+        assert idx_spec >= 0
+        assert idx_section < idx_spec
+
+    @patch('startd8.workflows.builtin.lead_contractor_workflow.resolve_agent_spec')
+    def test_drafter_receives_system_prompt(self, mock_resolve):
+        """PC-M2/P3.8: Drafter generate() is called with system_prompt when existing_files present."""
+        def make_token_usage(in_tok, out_tok):
+            u = Mock()
+            u.input, u.output = in_tok, out_tok
+            u.was_truncated = False
+            return u
+
+        mock_lead = Mock()
+        mock_lead.name = "claude"
+        mock_lead.model = "claude-sonnet-4-5"
+        mock_lead.generate.return_value = (
+            "### Task Summary\nAdd feature.\n### Requirements\n1. X\n### Score: 90\n### Verdict: PASS",
+            1000,
+            make_token_usage(500, 200),
+        )
+
+        mock_drafter = Mock()
+        mock_drafter.name = "gemini"
+        mock_drafter.model = "gemini-flash"
+        mock_drafter.generate.return_value = (
+            "```python\ndef foo(): pass\n```",
+            500,
+            make_token_usage(300, 100),
+        )
+
+        mock_resolve.side_effect = [mock_lead, mock_drafter]
+
+        workflow = LeadContractorWorkflow()
+        workflow.run(
+            config={
+                "task_description": "Add feature to existing file",
+                "context": {
+                    "existing_files": {"src/foo.py": "def bar(): pass\n" * 10},
+                    "target_files": ["src/foo.py"],
+                },
+                "max_iterations": 1,
+                "fail_on_truncation": False,
+            }
+        )
+
+        # Drafter generate must have been called with system_prompt
+        calls = mock_drafter.generate.call_args_list
+        assert len(calls) >= 1
+        kwargs = calls[0][1]
+        assert "system_prompt" in kwargs
+        assert kwargs["system_prompt"] is not None
+        assert "edit" in kwargs["system_prompt"].lower() or "preserve" in kwargs["system_prompt"].lower()
+
+
 class TestPromptTemplates:
     """Tests for prompt template formatting."""
 
@@ -405,6 +880,7 @@ class TestPromptTemplates:
             requirements_section="",
             context_sections="## Context\nContext info",
             critical_parameters_section="",
+            forward_contracts_section="",
             domain_constraints="(No domain-specific constraints)",
         )
         assert "Implement feature X" in prompt
@@ -619,3 +1095,115 @@ class TestTestCaseModel:
         assert tc.preconditions == []
         assert tc.steps == []
         assert tc.automation_status == "pending"
+
+class TestReviewDraftValidation:
+    """Tests for Phase 5 Forward Manifest Validator integration in _review_draft."""
+
+    @patch("startd8.forward_manifest_validator.validate_forward_manifest")
+    def test_review_draft_fails_on_structural_error(self, mock_validate):
+        """REQ-PC-VAL-004: Structural errors force passed=False and append [BLOCKING] issues."""
+        from startd8.forward_manifest_validator import ContractViolation
+        
+        # Setup mock violation
+        mock_validate.return_value = [
+            ContractViolation(
+                contract_id="function-foo",
+                violation_type="MissingFunction",
+                expected="def foo():",
+                actual="None",
+                file_path="src/app.py",
+                severity="error"
+            )
+        ]
+
+        workflow = LeadContractorWorkflow()
+        lead_agent = Mock()
+        lead_agent.model = "claude-sonnet"
+        
+        token_usage = Mock()
+        token_usage.input = 100
+        token_usage.output = 50
+
+        # The LLM thinks it passed the review
+        lead_agent.generate.return_value = (
+            "### Score: 90\n### Verdict: PASS\n### Strengths\n- Good\n",
+            100,
+            token_usage
+        )
+
+        spec = ImplementationSpec(
+            spec_id="spec-1",
+            task_summary="task",
+            requirements=[],
+            technical_approach="",
+            acceptance_criteria=[]
+        )
+
+        # Mock forward manifest object (simplest mock with a 'contracts' attr)
+        mock_manifest = Mock()
+        mock_manifest.contracts = ["fake_contract"]
+
+        result = workflow._review_draft(
+            lead_agent=lead_agent,
+            task_description="do thing",
+            spec=spec,
+            implementation="```python\ndef wrong_name(): pass\n```",
+            pass_threshold=80,
+            iteration=1,
+            forward_manifest=mock_manifest,
+            target_files=["src/app.py"]
+        )
+
+        # Assertions
+        assert result.passed is False, "Structural error MUST force the review to fail."
+        # The block issue must have injected the error text
+        assert any("MissingFunction violation" in issue for issue in result.blocking_issues)
+        assert any("[BLOCKING]" in issue for issue in result.blocking_issues)
+
+
+    @patch("startd8.forward_manifest_validator.validate_forward_manifest")
+    def test_review_draft_passes_on_warnings(self, mock_validate):
+        """REQ-PC-VAL-004: Structural warnings do NOT fail the review."""
+        from startd8.forward_manifest_validator import ContractViolation
+        
+        # Setup mock violation (warning)
+        mock_validate.return_value = [
+            ContractViolation(
+                contract_id="style-1",
+                violation_type="Advisory",
+                expected="something",
+                severity="warning"
+            )
+        ]
+
+        workflow = LeadContractorWorkflow()
+        lead_agent = Mock()
+        lead_agent.model = "claude-sonnet"
+        
+        token_usage = Mock()
+        token_usage.input = 100
+        token_usage.output = 50
+
+        lead_agent.generate.return_value = (
+            "### Score: 95\n### Verdict: PASS\n",
+            100,
+            token_usage
+        )
+
+        spec = ImplementationSpec(spec_id="spec-1", task_summary="task", requirements=[], technical_approach="", acceptance_criteria=[])
+        mock_manifest = Mock()
+        mock_manifest.contracts = ["fake_contract"]
+
+        result = workflow._review_draft(
+            lead_agent=lead_agent,
+            task_description="do thing",
+            spec=spec,
+            implementation="```python\ndef right_name(): pass\n```",
+            pass_threshold=80,
+            iteration=1,
+            forward_manifest=mock_manifest,
+            target_files=["src/app.py"]
+        )
+
+        # Assertions: warning does not override the review pass
+        assert result.passed is True

@@ -165,6 +165,7 @@ def extract_manifest_context(
     *,
     manifest_registry: Any = None,
     manifest_context_budget: int = 2000,
+    enable_introspect: bool = False,
 ) -> dict[str, Any] | None:
     """Extract structural context from the code manifest registry.
 
@@ -176,10 +177,14 @@ def extract_manifest_context(
         task: The seed task with target_files.
         manifest_registry: A ManifestRegistry instance (or None).
         manifest_context_budget: Max chars per file element summary.
+        enable_introspect: When True, include module_version (PI-1) and
+            prefer resolved signatures in file summaries (PI-2). When False,
+            behavior is identical to pre-Phase-5 (PI-3 graceful degradation).
 
     Returns:
         Dict with ``file_summaries`` and optional ``dependency_context``,
-        or None if no manifest data is available.
+        ``module_versions`` (when enable_introspect), or None if no manifest
+        data is available.
     """
     if manifest_registry is None:
         return None
@@ -188,7 +193,9 @@ def extract_manifest_context(
     for tf in getattr(task, "target_files", []) or []:
         try:
             summary = manifest_registry.file_element_summary(
-                tf, manifest_context_budget,
+                tf,
+                manifest_context_budget,
+                include_resolved_types=enable_introspect,
             )
             if summary:
                 file_summaries[tf] = summary
@@ -206,6 +213,19 @@ def extract_manifest_context(
         return None
 
     result: dict[str, Any] = {"file_summaries": file_summaries}
+
+    # PI-1: module_version in compatibility context when enable_introspect
+    if enable_introspect:
+        module_versions: dict[str, str] = {}
+        for tf in file_summaries:
+            try:
+                ver = manifest_registry.module_version_for(tf)
+                if ver:
+                    module_versions[tf] = ver
+            except Exception:
+                pass
+        if module_versions:
+            result["module_versions"] = module_versions
 
     # Optionally extract dependency context
     try:
@@ -263,3 +283,52 @@ def extract_enrichment(
         )
         return None
     return result
+
+def map_forward_contracts_for_task(
+    task: SeedTask,
+    *,
+    forward_manifest: Any = None,
+) -> dict[str, Any] | None:
+    """Extract forward interface contracts applicable to this task.
+
+    Args:
+        task: The seed task being processed.
+        forward_manifest: A hydrated ForwardManifest model instance (or None).
+
+    Returns:
+        Dict matching the schema required by ContractModule, or None if
+        no manifest exists or no contracts apply to this task (Mottainai rule 3).
+    """
+    if forward_manifest is None:
+        logger.debug(
+            "map_forward_contracts_for_task: no forward_manifest provided for %s",
+            task.task_id,
+        )
+        return None
+
+    try:
+        contracts = forward_manifest.contracts_for_task(task.task_id)
+        if not contracts:
+            logger.debug(
+                "map_forward_contracts_for_task: no applicable contracts for %s",
+                task.task_id,
+            )
+            return None
+
+        # Resolve file specs matching this task's target files
+        file_specs = forward_manifest.file_specs_for_task(
+            task.task_id,
+            getattr(task, "target_files", []) or [],
+        )
+
+        return {
+            "contracts": [c.model_dump() for c in contracts],
+            "file_specs": {path: spec.model_dump() for path, spec in file_specs.items()},
+        }
+    except Exception:
+        logger.warning(
+            "map_forward_contracts_for_task: failed to extract contracts for %s",
+            task.task_id,
+            exc_info=True,
+        )
+        return None

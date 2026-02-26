@@ -9,6 +9,7 @@ prompts:
       {requirements_section}
       {context_sections}
       {critical_parameters_section}
+      {forward_contracts_section}
       ## Domain Constraints
       {domain_constraints}
 
@@ -18,6 +19,7 @@ prompts:
       - If context specifies transport_protocol, use it as authoritative.
       - When requirements specify exact parameter values, carry these verbatim.
       - When a service explicitly does NOT use a capability, state this so drafter doesn't add it.
+      - **SCAFFOLDING AWARENESS**: This system natively supports project and workflow scaffolding (`startd8 project new` / `startd8 workflow new`). Do NOT generate basic project boilerplate (e.g., standard `pyproject.toml`, standard `__init__.py` files, or foundational structures) from scratch. Assume foundational scaffolding is already provided and only specify the unique business logic, custom configurations, and feature-specific code required by the task.
 
       ## Your Role
       Create a detailed implementation specification that a junior developer (or AI model) can follow precisely.
@@ -65,6 +67,7 @@ prompts:
       - requirements_section
       - context_sections
       - critical_parameters_section
+      - forward_contracts_section
       - domain_constraints
 
   draft:
@@ -138,6 +141,89 @@ prompts:
       - feedback
       - output_format
       - existing_files_section
+
+  # PC-M3: Mode-aware drafter system prompts (Phase 3)
+  draft_system_create:
+    description: "System prompt for greenfield CREATE mode — no existing files"
+    template: |
+      You are an expert Python engineer generating production-quality source code from a specification.
+      Implement the spec exactly. Emit complete implementations — no stubs or TODO placeholders.
+    placeholders: []
+
+  draft_system_edit:
+    description: "System prompt for whole-file EDIT mode — existing files < 50 lines each"
+    template: |
+      You are an expert Python engineer editing existing source code.
+      PRESERVE all existing code not being changed. ADD or MODIFY only what the spec specifies.
+      Your output MUST include the complete modified file — not just the changed sections.
+    placeholders: []
+
+  draft_system_search_replace:
+    description: "System prompt for large-file EDIT mode — existing files ≥ 50 lines (PC-M3)"
+    template: |
+      You are an expert Python engineer editing large existing source files.
+      Make minimal, targeted changes. Preserve all unchanged code.
+      Your output MUST be the complete modified file — include every line, changing only what the spec requires.
+    placeholders: []
+
+  # PC-Y3: Phase 2 framing templates (Phase 4 externalization)
+  plan_context_edit_framing:
+    description: "Framing for plan context when task modifies existing code (PC-F1)"
+    template: |
+      The following plan excerpt describes CHANGES to apply to existing code.
+      Do NOT treat it as a greenfield specification.
+    placeholders: []
+
+  plan_context_create_framing:
+    description: "Framing for plan context when task is greenfield (PC-F1)"
+    template: |
+      The following plan excerpt provides context for this task.
+      The design document (if present) is authoritative.
+    placeholders: []
+
+  arch_context_edit_framing:
+    description: "Framing for architectural context in edit mode (PC-F2)"
+    template: |
+      Apply these architectural constraints to the existing file(s).
+      Do not redesign from scratch.
+    placeholders: []
+
+  spec_edit_preamble_base:
+    description: "Base edit preamble for spec prompt — before quantitative constraint (PC-F3)"
+    template: |
+      ## EDIT MODE — Existing Code Modification
+      **Task type: {task_verb}** existing code.
+
+      This task MODIFIES an existing file. The existing code is shown
+      below in the task description.
+      Your specification must:
+      - Describe ONLY the additions and modifications needed
+      - List which existing functions/classes to keep unchanged
+      - NOT redesign or restructure existing code
+      - Specify exact insertion points (e.g., 'Add after class X'
+        or 'Modify method Y')
+    placeholders:
+      - task_verb
+
+  spec_edit_quantitative_constraint:
+    description: "Quantitative line-count constraint for edit spec (PC-Q1)"
+    template: |
+      **The existing file(s) total {total_lines} lines.**
+      Your spec must result in a draft that is AT LEAST {min_lines} lines ({edit_min_pct}% of existing).
+    placeholders:
+      - total_lines
+      - min_lines
+      - edit_min_pct
+
+  spec_completeness_warning:
+    description: "Warning when resolved parameters missing from spec (IMP-P6)"
+    template: |
+      ## Spec Completeness Warning
+      The following parameters from requirements are NOT mentioned in the spec.
+      Ensure these are included in your implementation:
+      {missing_lines}
+    placeholders:
+      - missing_lines
 
   single_file_output:
     description: "Output format for single-file tasks"

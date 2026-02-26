@@ -437,6 +437,12 @@ The meta-observability makes the contract system trustworthy.
 
 ## Relationship to Existing Work
 
+### The Forward-Looking Code Manifest (FLCM)
+
+While Context Correctness by Construction governs *builder-system propagation* (ensuring contextual payloads survive from phase to phase), the **Forward-Looking Code Manifest (FLCM)** governs *target-system coherence* (ensuring the code generated within those phases is structurally valid).
+
+The `forward_manifest` mechanism relies directly on Context Correctness by Construction to guarantee that contracts formulated during the PLAN phase are flawlessly propagated down to the IMPLEMENT and REVIEW phases without silent degradation. It is a critical payload that proves the value of the ContextCore type-checker model.
+
 ### OpenTelemetry Baggage
 
 OTel Baggage propagates key-value pairs across service boundaries. It is a
@@ -607,6 +613,7 @@ ContractValidationResult  PropagationChainResult
 ```
 
 **Key types:**
+
 - `FieldSpec` — severity (BLOCKING/WARNING/ADVISORY), default value, source phase
 - `PropagationChainSpec` — source → waypoints → destination with verification expression
 - `ChainStatus` — INTACT / DEGRADED / BROKEN
@@ -640,8 +647,8 @@ ContractValidationResult  PropagationChainResult
 
 ### Industry Practice
 
-- OpenTelemetry. *Baggage Specification*. https://opentelemetry.io/docs/specs/otel/baggage/
-- OpenLineage. *The Open Standard for Data Lineage*. https://openlineage.io/
+- OpenTelemetry. *Baggage Specification*. <https://opentelemetry.io/docs/specs/otel/baggage/>
+- OpenLineage. *The Open Standard for Data Lineage*. <https://openlineage.io/>
 - Birgisson, A. et al. (2014). *Macaroons: Cookies with Contextual Caveats for Decentralized Authorization in the Cloud*. NDSS.
   — Google's capability token system.
 - McSherry, F., Murray, D.G., Isaacs, R., & Isard, M. (2013). *Differential Dataflow*. CIDR.

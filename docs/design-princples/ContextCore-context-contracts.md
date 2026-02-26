@@ -1,4 +1,4 @@
-ContextCore Context Contracts.md
+# ContextCore Context Contracts
 
 Let me think through this carefully. This is an architectural design question that deserves deep analysis before any code.
 
@@ -45,13 +45,14 @@ Let me think through this carefully. This is an architectural design question th
 
   Layer 1: Context Contracts (Declaration)
 
-  The foundation. Phase handlers declare what they require and produce:
+  The foundation. Phase handlers declare what they require and produce. For example, ensuring that a critical artifact like the `forward_manifest` (which contains cross-task interface contracts) is explicitly required by the generation phase, making it structurally impossible to forget it:
 
   class ImplementPhaseHandler(AbstractPhaseHandler):
       context_requires = ContextContract({
           "domain": Field(type=str, critical=True, default="unknown"),
           "enriched_seed_path": Field(type=str, critical=True),
           "domain_constraints": Field(type=list, critical=False),
+          "forward_manifest": Field(type=ForwardManifest, critical=True),
       })
 
       context_produces = ContextContract({
@@ -82,20 +83,23 @@ Let me think through this carefully. This is an architectural design question th
          ✗ GAP: No phase produces domain_constraints into context
 
   The static analyzer walks the requires/produces graph and finds:
-  - Dangling reads: Phase requires X but no upstream phase produces X
-  - Dead writes: Phase produces X but no downstream phase requires X
-  - Shadow defaults: Critical field falls through to default because producer is conditional
+
+- Dangling reads: Phase requires X but no upstream phase produces X
+- Dead writes: Phase produces X but no downstream phase requires X
+- Shadow defaults: Critical field falls through to default because producer is conditional
 
   This runs at contextcore manifest validate or contextcore polish time — before any workflow executes.
 
   Layer 3: Pre-Flight Verification
 
   Just before a workflow run starts, validate:
-  - All critical requires fields have non-default values in the initial context
-  - The enriched seed actually contains the expected enrichment keys
-  - The dependency graph of phases matches the contract graph
 
-  # Before workflow.execute():
+- All critical requires fields have non-default values in the initial context
+- The enriched seed actually contains the expected enrichment keys
+- The dependency graph of phases matches the contract graph
+
+# Before workflow.execute()
+
   violations = workflow.verify_propagation_contracts(initial_context)
   if violations.critical:
       raise PropagationContractViolation(violations)
@@ -106,9 +110,10 @@ Let me think through this carefully. This is an architectural design question th
   Layer 4: Runtime Boundary Checks (partially implemented — WCP-003)
 
   At each phase boundary, verify and emit:
-  - context.propagated when critical field successfully forwarded
-  - context.defaulted when field falls back to default
-  - context.failed when field should be present but isn't
+
+- context.propagated when critical field successfully forwarded
+- context.defaulted when field falls back to default
+- context.failed when field should be present but isn't
 
   What we have: Span events in _execute_chunk() and from_seed_entry().
   What we need: Systematic boundary checking driven by contracts (Layer 1), not hand-written checks in each handler.
@@ -126,9 +131,10 @@ Let me think through this carefully. This is an architectural design question th
   Layer 7: Regression Prevention (CI/CD)
 
   Self-validating test suite pattern (already done with SV tests), plus:
-  - CI gate that runs propagation graph analysis on PR
-  - Regression test: propagation completeness must not decrease
-  - Contract drift detection: if a phase changes its produces/requires, validate graph
+
+- CI gate that runs propagation graph analysis on PR
+- Regression test: propagation completeness must not decrease
+- Contract drift detection: if a phase changes its produces/requires, validate graph
 
   What We Already Have vs What We Need
 
@@ -169,16 +175,19 @@ Let me think through this carefully. This is an architectural design question th
   Three approaches:
 
   A. Code-first — Contracts as Python classes/decorators on phase handlers
-  - Pro: Enforced by the runtime, discoverable via introspection
-  - Con: Only works for Python phases, requires SDK adoption
+
+- Pro: Enforced by the runtime, discoverable via introspection
+- Con: Only works for Python phases, requires SDK adoption
 
   B. Config-first — Contracts as YAML/JSON alongside pipeline definitions
-  - Pro: Language-agnostic, works with static analysis tools, human-readable
-  - Con: Can drift from code, no runtime enforcement without a validator layer
+
+- Pro: Language-agnostic, works with static analysis tools, human-readable
+- Con: Can drift from code, no runtime enforcement without a validator layer
 
   C. Dual-declaration (recommended) — Config as source of truth, code validates against it
-  - Pro: Static analysis AND runtime enforcement, progressive adoption
-  - Con: More complex, but aligns with ContextCore's existing YAML-native patterns
+
+- Pro: Static analysis AND runtime enforcement, progressive adoption
+- Con: More complex, but aligns with ContextCore's existing YAML-native patterns
 
   This aligns with how ContextCore already works: .contextcore.yaml is the config source of truth, and the Python SDK validates against it.
 

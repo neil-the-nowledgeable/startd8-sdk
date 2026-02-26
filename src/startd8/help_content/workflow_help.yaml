@@ -193,6 +193,71 @@ workflows:
       - "Review Draft"
       - "Polish Final"
 
+  arc_review_workflow:
+    title: "Architectural Review Log Workflow"
+    icon: "🏛️"
+    description: "High-quality sequential architectural review with append-only suggestions"
+    what_it_does: |
+      Runs multiple reviewers sequentially on a design/plan document. Each reviewer
+      appends structured suggestions to Appendix C. Optional automated triage
+      classifies suggestions into Applied/Rejected. Uses flagship models by default.
+    how_it_works: |
+      1️⃣  Select the markdown document to review (plan, design spec, etc.)
+      2️⃣  Choose default flagship agents or select your own
+      3️⃣  Set number of reviewers (when using defaults)
+      4️⃣  Workflow appends suggestions to document's Appendix C
+      5️⃣  Optional triage and apply steps classify and incorporate suggestions
+    use_cases: |
+      • Plan document review before implementation
+      • Architecture design review
+      • Design spec quality assurance
+      • Multi-perspective review with structured output
+    requirements: |
+      A markdown document (plan, design, or architecture doc)
+    tips: |
+      • Use default flagship agents for best quality
+      • Document is modified in place (Appendix C appended)
+      • State file enables resume and cost tracking
+      • Best for documents with clear structure
+    steps: 5
+    step_names:
+      - "Select Document"
+      - "Choose Agents"
+      - "Configure Reviewers"
+      - "Run Review Rounds"
+      - "View Results"
+
+  convergent_review_workflow:
+    title: "Convergent Review (Requirements + Plan)"
+    icon: "📋"
+    description: "Sequential review of requirements first, then plan with requirements context"
+    what_it_does: |
+      Runs two architectural review steps: (1) refines the requirements document,
+      then (2) refines the plan/design document while referencing the refined requirements.
+      Uses the same append-only Appendix C structure as single-document arc review.
+    how_it_works: |
+      1️⃣  Select requirements markdown document
+      2️⃣  Select plan/design markdown document
+      3️⃣  Choose agents and reviewer count
+      4️⃣  Step 1: Review requirements, append suggestions
+      5️⃣  Step 2: Review plan with requirements context, append suggestions
+    use_cases: |
+      • Requirements + implementation plan review before coding
+      • Design spec review with requirements traceability
+      • Pre-implementation document alignment
+    requirements: |
+      Two markdown documents: requirements and plan/design
+    tips: |
+      • Requirements are reviewed first; plan review sees refined requirements
+      • Same flagship agents and triage as single-document arc review
+    steps: 5
+    step_names:
+      - "Select Requirements"
+      - "Select Plan"
+      - "Choose Agents"
+      - "Review Requirements"
+      - "Review Plan"
+
   iterative_workflow:
     title: "Iterative Dev Workflow"
     icon: "🔄"
@@ -316,6 +381,26 @@ examples:
       why: "Feedback improves final design"
       use_case: "Architecture planning"
 
+  arc_review_workflow:
+    - title: "Plan Document Review"
+      task: "Review docs/design/MY_PLAN.md for clarity and execution safety"
+      why: "Structured suggestions appended to document"
+      use_case: "Pre-implementation plan review"
+    - title: "Architecture Design Review"
+      task: "Review docs/architecture/SYSTEM_DESIGN.md"
+      why: "Multi-reviewer perspective with triage"
+      use_case: "Architecture documentation quality"
+
+  convergent_review_workflow:
+    - title: "Requirements + Plan Review"
+      task: "Review docs/REQUIREMENTS.md and docs/plan/PHASE4.md together"
+      why: "Requirements refined first; plan reviewed with requirements context"
+      use_case: "Pre-implementation document alignment"
+    - title: "Design Spec with Requirements"
+      task: "Review requirements doc and design spec sequentially"
+      why: "Convergent refinement with traceability"
+      use_case: "Design documentation quality"
+
   iterative_workflow:
     - title: "Implement Function"
       task: "Implement a function to parse JSON with error handling"
@@ -357,5 +442,7 @@ integration_points:
   document_updater: true
   enhancement_chain: true
   design_pipeline: true
+  arc_review_workflow: true
+  convergent_review_workflow: true
   iterative_workflow: true
   job_queue: true

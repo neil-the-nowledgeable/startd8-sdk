@@ -55,6 +55,13 @@ VALID_EXECUTION_MODES: frozenset = frozenset({"standalone", "pipeline"})
 #: required to trigger pipeline mode during auto-detection.
 _DETECTION_THRESHOLD: int = 1
 
+#: Plan document load cap (PC-B5). Reduces from 60KB to 16KB for token savings.
+_PLAN_LOAD_MAX_BYTES: int = 16_384
+
+#: PC-O1, PC-O3: Budget for existing file content when populating gen_context.
+#: Matches lead_contractor_workflow._EXISTING_FILES_BUDGET_BYTES (40KB).
+_EXISTING_FILES_BUDGET_BYTES: int = 40 * 1024
+
 __all__ = [
     "MODE_STANDALONE",
     "MODE_PIPELINE",
@@ -581,6 +588,7 @@ class PrimeContractorWorkflow:
         self.seed_architectural_context: Dict[str, Any] = {}
         self.seed_design_calibration: Dict[str, Any] = {}
         self.seed_service_metadata: Dict[str, Any] = {}
+        self.seed_forward_manifest: Optional[Dict[str, Any]] = None  # REQ-PC-FM-002
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
         # Validation overrides (Phase 5: --validate / --no-validate / --strict-validation)
@@ -690,6 +698,49 @@ class PrimeContractorWorkflow:
             True if valid, False otherwise.
         """
         return isinstance(resolved, dict)
+
+    def _populate_existing_files(
+        self,
+        feature: FeatureSpec,
+        gen_context: Dict[str, Any],
+    ) -> None:
+        """Populate gen_context with existing file contents for edit tasks (PC-O1).
+
+        Reads target_files under project_root within _EXISTING_FILES_BUDGET_BYTES.
+        Paths outside project_root are skipped (path traversal safety).
+        """
+        if not feature.target_files:
+            return
+        root = self.project_root.resolve()
+        budget = _EXISTING_FILES_BUDGET_BYTES
+        existing: Dict[str, str] = {}
+        for rel_path in feature.target_files:
+            if budget <= 0:
+                logger.debug(
+                    "Existing files budget exhausted for '%s', skipping remaining",
+                    feature.name,
+                )
+                break
+            full = (root / rel_path).resolve()
+            if not str(full).startswith(str(root)):
+                logger.warning(
+                    "Target file %s is outside project root — skipping",
+                    rel_path,
+                )
+                continue
+            if not full.is_file():
+                continue
+            try:
+                raw = full.read_bytes()
+            except OSError as exc:
+                logger.warning("Could not read %s: %s", rel_path, exc)
+                continue
+            take = min(len(raw), budget)
+            content = raw[:take].decode("utf-8", errors="replace")
+            existing[rel_path] = content
+            budget -= take
+        if existing:
+            gen_context["existing_files"] = existing
 
     @staticmethod
     def _emit_fallback_metric(strategy_type: str) -> None:
@@ -1046,6 +1097,7 @@ class PrimeContractorWorkflow:
         architectural_context = seed_data.get("architectural_context") or {}
         design_calibration = seed_data.get("design_calibration") or {}
         service_metadata = seed_data.get("service_metadata") or {}
+        forward_manifest = seed_data.get("forward_manifest")  # REQ-PC-FM-002
 
         # Determine execution mode
         if cli_mode is not None:
@@ -1080,6 +1132,7 @@ class PrimeContractorWorkflow:
         self.seed_architectural_context = architectural_context
         self.seed_design_calibration = design_calibration
         self.seed_service_metadata = service_metadata
+        self.seed_forward_manifest = forward_manifest if isinstance(forward_manifest, dict) else None
 
         # Plan document text (not part of SeedContext — load if referenced)
         plan_doc_path = (seed_data.get("artifacts") or {}).get(
@@ -1097,8 +1150,8 @@ class PrimeContractorWorkflow:
             else:
                 try:
                     _text = resolved.read_text(encoding="utf-8")
-                    # Cap at 60KB to avoid blowing up LLM context (Leg 11 #48)
-                    self.plan_document_text = _text[:61440]
+                    # Cap at 16KB (PC-B5) to reduce spec prompt tokens
+                    self.plan_document_text = _text[:_PLAN_LOAD_MAX_BYTES]
                 except OSError as exc:
                     logger.warning(
                         "Could not load plan document %s: %s", plan_doc_path, exc,
@@ -1608,6 +1661,7 @@ class PrimeContractorWorkflow:
                 "design_calibration": self.design_calibration,
                 "plan_document_text": self.plan_document_text,
                 "service_metadata": self.seed_service_metadata,
+                "forward_manifest": self.seed_forward_manifest,  # REQ-PC-FM-003
             }
             feature_data = {
                 "name": feature.name,
@@ -1652,6 +1706,9 @@ class PrimeContractorWorkflow:
                 len(gen_context),
                 extra={"strategy_mode": self._context_strategy.mode, "context_keys": list(gen_context.keys())},
             )
+
+            # PC-O1: Populate existing_files for edit tasks when target_files exist
+            self._populate_existing_files(feature, gen_context)
 
             # Phase 4: Staleness detection — skip generation if cached result is current
             if not self._check_staleness(feature):

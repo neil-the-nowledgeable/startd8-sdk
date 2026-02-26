@@ -14,7 +14,6 @@ while maintaining stable internals.
 from __future__ import annotations
 
 import json
-import logging
 import re
 import threading
 from abc import ABC, abstractmethod
@@ -38,8 +37,10 @@ from .context_formatters import (
 
 # forensic_log.emit_forensic_log uses a different schema (OT-700);
 # context_resolution uses standard structured logging instead.
+# Use get_logger() for OTel Loki bridge attachment [SDK Leg 11 #31].
+from ..logging_config import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Pipeline signal keys used for auto-detection (shared with prime_contractor)
 PIPELINE_SIGNAL_KEYS: frozenset[str] = frozenset({
@@ -58,6 +59,7 @@ SECTION_IMP_P2 = "IMP-P2"
 SECTION_IMP_P3 = "IMP-P3"
 SECTION_IMP_P4 = "IMP-P4"
 SECTION_IMP_P5 = "IMP-P5"
+SECTION_IMP_P6 = "IMP-P6"  # Phase 4: Forward Contract Bindings
 
 VALID_SECTION_IDS: frozenset[str] = frozenset({
     SECTION_IMP_P1,
@@ -65,6 +67,7 @@ VALID_SECTION_IDS: frozenset[str] = frozenset({
     SECTION_IMP_P3,
     SECTION_IMP_P4,
     SECTION_IMP_P5,
+    SECTION_IMP_P6,
 })
 
 MAX_FIELD_LENGTH = 50_000
@@ -106,6 +109,7 @@ SECTION_FIELD_MAP: dict[str, tuple[str, ...]] = {
     SECTION_IMP_P3: ("design_doc", "constraints", "calibration_params"),
     SECTION_IMP_P4: ("generator_id", "timestamp", "pipeline_run_id"),
     SECTION_IMP_P5: ("validators", "post_checks", "gate_requirements"),
+    SECTION_IMP_P6: ("forward_contracts",),
 }
 
 SECTION_HEADINGS: dict[str, str] = {
@@ -114,6 +118,7 @@ SECTION_HEADINGS: dict[str, str] = {
     SECTION_IMP_P3: "Design Calibration",
     SECTION_IMP_P4: "Generation Provenance",
     SECTION_IMP_P5: "Validation Hookpoints",
+    SECTION_IMP_P6: "Interface Contract Bindings",
 }
 
 # Startup assertions: verify all section IDs are covered
@@ -428,13 +433,9 @@ def _build_section(
     for f in fields:
         val = ctx.get(f)
         if val is not None:
-            try:
-                validated = _validate_field_value(f, val)
-                if validated:  # Skip empty strings
-                    content_parts.append(f"**{f}**: {validated}")
-            except ValueError:
-                # Field-specific validation failed, re-raise
-                raise
+            validated = _validate_field_value(f, val)
+            if validated:  # Skip empty strings
+                content_parts.append(f"**{f}**: {validated}")
 
     if not content_parts:
         return PromptSection(
@@ -453,7 +454,10 @@ def _build_section(
     )
 
 
-# Section builder dispatch — all builders use generic helper
+# Section builder dispatch — all builders use generic helper.
+# Double-lambda captures `sid` by value (outer lambda default arg) to avoid
+# the classic closure-over-loop-variable bug where all lambdas would share
+# the final value of `sid`.
 SECTION_BUILDERS: dict[str, Callable[[dict[str, Any]], PromptSection]] = {
     sid: (lambda section_id: lambda ctx: _build_section(section_id, ctx))(sid)
     for sid in sorted(VALID_SECTION_IDS)
@@ -662,6 +666,22 @@ class StandaloneContextStrategy(ContextStrategy):
         the acceptance criterion.
         """
         gen_context: Dict[str, Any] = {"feature_name": feature_data.get("name", "")}
+        
+        # Phase 4 Threading: Inject forward manifest contracts verbatim (REQ-PC-FM-004)
+        fm = seed_data.get("forward_manifest")
+        if fm:
+            # Hydrate dict from JSON to ForwardManifest model when needed
+            if isinstance(fm, dict):
+                try:
+                    from ..forward_manifest import ForwardManifest
+                    fm = ForwardManifest.model_validate(fm)
+                except Exception as exc:
+                    logger.debug("Forward manifest hydration failed: %s", exc)
+                    fm = None
+            if fm and hasattr(fm, "binding_constraints_for_task"):
+                bindings = fm.binding_constraints_for_task(feature_data.get("id", ""))
+                if bindings:
+                    gen_context.setdefault("domain_constraints", []).extend(bindings)
 
         # Target file + domain constraints
         target_files = feature_data.get("target_files") or []
@@ -818,6 +838,24 @@ class PipelineContextStrategy(ContextStrategy):
         gen_context: Dict[str, Any] = {
             "feature_name": feature_data.get("name", ""),
         }
+
+        # Phase 4 Threading: Inject forward manifest contracts verbatim (REQ-PC-FM-004)
+        fm = seed_data.get("forward_manifest")
+        if fm:
+            # Hydrate dict from JSON to ForwardManifest model when needed
+            if isinstance(fm, dict):
+                try:
+                    from ..forward_manifest import ForwardManifest
+                    fm = ForwardManifest.model_validate(fm)
+                except Exception as exc:
+                    logger.debug("Forward manifest hydration failed: %s", exc)
+                    fm = None
+            if fm and hasattr(fm, "binding_constraints_for_task"):
+                bindings = fm.binding_constraints_for_task(feature_data.get("id", ""))
+                if bindings:
+                    gen_context["forward_contracts"] = "\n".join(
+                        f"- {b}" for b in bindings
+                    )
 
         # Target file (same as standalone)
         target_files = feature_data.get("target_files") or []
@@ -1061,6 +1099,7 @@ __all__ = [
     "SECTION_IMP_P3",
     "SECTION_IMP_P4",
     "SECTION_IMP_P5",
+    "SECTION_IMP_P6",
     "VALID_SECTION_IDS",
     "MAX_FIELD_LENGTH",
     "MAX_PATH_DEPTH",

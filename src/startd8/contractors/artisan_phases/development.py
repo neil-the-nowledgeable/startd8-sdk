@@ -1186,6 +1186,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         parts.extend(self._build_target_files(chunk, is_edit))       # B-1/B-7 fix
         parts.extend(self._build_importable_modules(chunk))          # AR-150
         parts.extend(self._build_manifest_context(chunk))            # Phase 4
+        parts.extend(self._build_forward_contracts(chunk))           # Phase 5
         parts.extend(self._build_call_graph_context(chunk))          # Phase 6
         parts.extend(self._build_structural_delta(chunk))            # Gap 3
         parts.extend(self._build_existing_files(_existing))
@@ -1493,6 +1494,23 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                     "manifest.post_generate: CG-IM-5 caller check failed for %s: %s",
                     gen_file, exc,
                 )
+
+    # -- helper: forward contracts (Phase 5) --------------------------------
+
+    @staticmethod
+    def _build_forward_contracts(
+        chunk: DevelopmentChunk,
+    ) -> List[str]:
+        """Phase 5: Forward interface contracts injected into prompt.
+        
+        Contracts are extracted and formatted by map_forward_contracts_for_task
+        in context_seed_handlers.py and passed via metadata.
+        """
+        contracts_text = chunk.metadata.get("forward_contracts")
+        if not contracts_text:
+            return []
+            
+        return [contracts_text, "\n---\n"]
 
     # -- helper: manifest context (Phase 4) ---------------------------------
 

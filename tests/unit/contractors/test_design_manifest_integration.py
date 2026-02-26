@@ -56,7 +56,9 @@ def _make_mock_registry(
     registry = MagicMock()
     _summaries = summaries or {}
 
-    def _file_element_summary(filepath: str, budget: int = 4000) -> str:
+    def _file_element_summary(
+        filepath: str, budget: int = 4000, *, include_resolved_types: bool = False
+    ) -> str:
         summary = _summaries.get(filepath, "")
         if summary and len(summary) > budget:
             return summary[:budget]
@@ -458,6 +460,84 @@ class TestBudgetCompliance:
         )
         for call_args in mock_registry.file_element_summary.call_args_list:
             assert call_args[0][1] == 1234  # second positional arg is budget
+
+
+# ============================================================================
+# 7g2: Phase 5 Plan Ingestion — PI-1, PI-2, PI-3
+# ============================================================================
+
+
+class TestPhase5PlanIngestion:
+    """PI-1: module_version in context. PI-2: resolved signatures. PI-3: graceful degradation."""
+
+    def test_pi1_module_versions_included_when_enable_introspect(self, basic_task):
+        """PI-1: When enable_introspect=True, module_versions dict is populated."""
+        registry = _make_mock_registry(
+            summaries={
+                "src/manifest.py": "Classes: Foo",
+                "src/config.py": "Functions: load",
+            },
+        )
+        registry.module_version_for = MagicMock(side_effect=lambda p: {
+            "src/manifest.py": "0.4.0",
+            "src/config.py": "0.4.0",
+        }.get(p))
+        result = extract_manifest_context(
+            basic_task,
+            manifest_registry=registry,
+            enable_introspect=True,
+        )
+        assert result is not None
+        assert "module_versions" in result
+        assert result["module_versions"]["src/manifest.py"] == "0.4.0"
+        assert result["module_versions"]["src/config.py"] == "0.4.0"
+
+    def test_pi1_module_versions_absent_when_no_versions(self, basic_task):
+        """PI-1: When no files have module_version, key is absent."""
+        registry = _make_mock_registry(
+            summaries={"src/manifest.py": "Classes: Foo"},
+        )
+        registry.module_version_for = MagicMock(return_value=None)
+        result = extract_manifest_context(
+            basic_task,
+            manifest_registry=registry,
+            enable_introspect=True,
+        )
+        assert result is not None
+        assert "module_versions" not in result
+
+    def test_pi2_include_resolved_types_passed_to_registry(self, basic_task, mock_registry):
+        """PI-2: When enable_introspect=True, file_element_summary gets include_resolved_types=True."""
+        mock_registry.module_version_for = MagicMock(return_value=None)
+        extract_manifest_context(
+            basic_task,
+            manifest_registry=mock_registry,
+            enable_introspect=True,
+        )
+        for call in mock_registry.file_element_summary.call_args_list:
+            assert call[1].get("include_resolved_types") is True
+
+    def test_pi3_graceful_degradation_without_introspect(self, basic_task, mock_registry):
+        """PI-3: When enable_introspect=False, no module_versions, include_resolved_types not passed."""
+        result = extract_manifest_context(
+            basic_task,
+            manifest_registry=mock_registry,
+            enable_introspect=False,
+        )
+        assert result is not None
+        assert "module_versions" not in result
+        # file_element_summary called without include_resolved_types (default False)
+        for call in mock_registry.file_element_summary.call_args_list:
+            assert call[1].get("include_resolved_types", False) is False
+
+    def test_pi3_default_enable_introspect_false(self, basic_task, mock_registry):
+        """PI-3: Default enable_introspect=False preserves pre-Phase-5 behavior."""
+        result = extract_manifest_context(
+            basic_task,
+            manifest_registry=mock_registry,
+        )
+        assert result is not None
+        assert "module_versions" not in result
 
 
 # ============================================================================

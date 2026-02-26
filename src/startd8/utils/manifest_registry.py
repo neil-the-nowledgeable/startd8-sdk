@@ -153,6 +153,31 @@ def _element_signature_str(el: Element) -> str:
     return sig
 
 
+def _resolved_signature_str(el: Element) -> str | None:
+    """Extract signature from inspect_info.resolved_signature when available.
+
+    Returns None when element has no resolved signature (fall back to AST).
+    """
+    info = getattr(el, "inspect_info", None)
+    if info is None or not hasattr(info, "resolved_signature"):
+        return None
+    rs = info.resolved_signature
+    if rs is None:
+        return None
+    parts = []
+    for p in rs.params:
+        s = p.name
+        if p.annotation:
+            s += f": {p.annotation}"
+        if p.default is not None:
+            s += f" = {p.default}"
+        parts.append(s)
+    sig = f"({', '.join(parts)})"
+    if rs.return_annotation:
+        sig += f" -> {rs.return_annotation}"
+    return sig
+
+
 @dataclass(frozen=True)
 class ManifestDiff:
     """Structural diff between two FileManifest instances.
@@ -179,6 +204,13 @@ class ManifestDiff:
     added_call_edges: list[CallEdge] = field(default_factory=list)    # edges in new, not in old
     # (fqn, old_sig, new_sig, callers) — populated only when registry is provided
     signature_changes_with_callers: list[tuple[str, str, str, frozenset[str]]] = field(default_factory=list)
+    # Phase 5: Introspect diff fields (IN-1, IN-2, IN-3)
+    # (fqn, old_resolved, new_resolved) — resolved type changes invisible to AST diff
+    changed_resolved_signatures: list[tuple[str, str, str]] = field(default_factory=list)
+    # (fqn, old_mro, new_mro) — MRO restructuring detection
+    mro_changes: list[tuple[str, list[str], list[str]]] = field(default_factory=list)
+    # (added_exports, removed_exports) or None if __all__ absent on either side
+    module_all_diff: tuple[list[str], list[str]] | None = None
 
     @property
     def has_breaking_changes(self) -> bool:
@@ -257,6 +289,49 @@ class ManifestDiff:
                     except Exception:
                         pass
 
+            # Phase 5: Resolved signature diff (IN-1) — catch type changes invisible to AST
+            changed_resolved: list[tuple[str, str, str]] = []
+            try:
+                for fqn in sorted(old_fqns & new_fqns):
+                    old_el = old_public[fqn]
+                    new_el = new_public[fqn]
+                    old_rs = getattr(getattr(old_el, "inspect_info", None), "resolved_signature", None)
+                    new_rs = getattr(getattr(new_el, "inspect_info", None), "resolved_signature", None)
+                    if old_rs is not None and new_rs is not None:
+                        old_str = str(old_rs)
+                        new_str = str(new_rs)
+                        if old_str != new_str:
+                            changed_resolved.append((fqn, old_str, new_str))
+            except Exception:
+                pass
+
+            # Phase 5: MRO change diff (IN-2)
+            mro_changes: list[tuple[str, list[str], list[str]]] = []
+            try:
+                for fqn in sorted(old_fqns & new_fqns):
+                    old_el = old_public[fqn]
+                    new_el = new_public[fqn]
+                    old_mro = getattr(getattr(old_el, "inspect_info", None), "mro", None)
+                    new_mro = getattr(getattr(new_el, "inspect_info", None), "mro", None)
+                    if old_mro is not None and new_mro is not None and old_mro != new_mro:
+                        mro_changes.append((fqn, list(old_mro), list(new_mro)))
+            except Exception:
+                pass
+
+            # Phase 5: __all__ diff (IN-3)
+            module_all_diff: tuple[list[str], list[str]] | None = None
+            try:
+                old_all = getattr(old, "module_all", None)
+                new_all = getattr(new, "module_all", None)
+                if old_all is not None and new_all is not None:
+                    old_set = set(old_all)
+                    new_set = set(new_all)
+                    added_exports = sorted(new_set - old_set)
+                    removed_exports = sorted(old_set - new_set)
+                    module_all_diff = (added_exports, removed_exports)
+            except Exception:
+                pass
+
             return ManifestDiff(
                 removed_public=removed,
                 added_public=added,
@@ -265,6 +340,9 @@ class ManifestDiff:
                 removed_call_edges=removed_edges,
                 added_call_edges=added_edges,
                 signature_changes_with_callers=sig_with_callers,
+                changed_resolved_signatures=changed_resolved,
+                mro_changes=mro_changes,
+                module_all_diff=module_all_diff,
             )
 
 
@@ -496,7 +574,13 @@ class ManifestRegistry:
             pass
         return False
 
-    def file_element_summary(self, relative_path: str, budget_chars: int = 4000) -> str:
+    def file_element_summary(
+        self,
+        relative_path: str,
+        budget_chars: int = 4000,
+        *,
+        include_resolved_types: bool = False,
+    ) -> str:
         """Build a budget-constrained element summary for a file.
 
         Elements are emitted in source-order (by span.start_line), truncated bottom-up.
@@ -506,6 +590,9 @@ class ManifestRegistry:
         2. Compact: drop docstrings
         3. Public-only: drop private/protected
         4. FQN-only: public FQNs + signatures only
+
+        When include_resolved_types is True and element.inspect_info.resolved_signature
+        is available, uses resolved parameter types instead of AST-extracted types (PI-2).
         """
         with _timer("manifest.element_summary", level=logging.DEBUG, path=relative_path, budget=budget_chars):
             manifest = self._manifests.get(relative_path)
@@ -516,14 +603,16 @@ class ManifestRegistry:
             # Sort by source order (span.start_line)
             all_elements.sort(key=lambda e: e.span.start_line if e.span else 0)
 
+            fmt_kw = {"include_resolved_types": include_resolved_types}
+
             # Tier 1: Full — FQN + signature + docstring (1 line) + span
-            lines = _format_elements_tier1(all_elements)
+            lines = _format_elements_tier1(all_elements, **fmt_kw)
             result = "\n".join(lines)
             if len(result) <= budget_chars:
                 return result
 
             # Tier 2: Compact — drop docstrings
-            lines = _format_elements_tier2(all_elements)
+            lines = _format_elements_tier2(all_elements, **fmt_kw)
             result = "\n".join(lines)
             if len(result) <= budget_chars:
                 return result
@@ -532,13 +621,13 @@ class ManifestRegistry:
             public_elements = [
                 e for e in all_elements if e.visibility == Visibility.PUBLIC
             ]
-            lines = _format_elements_tier2(public_elements)
+            lines = _format_elements_tier2(public_elements, **fmt_kw)
             result = "\n".join(lines)
             if len(result) <= budget_chars:
                 return result
 
             # Tier 4: FQN-only — public FQNs + signatures only
-            lines = _format_elements_tier4(public_elements)
+            lines = _format_elements_tier4(public_elements, **fmt_kw)
             result = "\n".join(lines)
             if len(result) <= budget_chars:
                 return result
@@ -557,6 +646,16 @@ class ManifestRegistry:
             return 0
         all_elements = _flatten_elements(manifest.elements)
         return sum(1 for e in all_elements if e.visibility == Visibility.PUBLIC)
+
+    def module_version_for(self, relative_path: str) -> str | None:
+        """Return FileManifest.module_version for the given file (PI-1).
+
+        Returns None when the file has no manifest or module_version is unset.
+        """
+        manifest = self._manifests.get(relative_path)
+        if manifest is None:
+            return None
+        return getattr(manifest, "module_version", None) or None
 
     def dependency_graph(self) -> dict[str, set[str]]:
         """File-level internal dependency adjacency list (req R1-S2).
@@ -596,6 +695,155 @@ class ManifestRegistry:
     def files(self) -> list[str]:
         """Return all file paths in the registry."""
         return list(self._manifests.keys())
+
+    # ───────────────────────────────────────────────────────────────────
+    # Phase 5: Introspect query methods (DS-1..DS-4, IM-1..IM-3, PF-1, PI-1)
+    # ───────────────────────────────────────────────────────────────────
+
+    def file_resolved_type_summary(
+        self,
+        relative_path: str,
+        budget_chars: int = 2000,
+    ) -> str:
+        """Compact LLM-readable summary of resolved types for a file's callables (PR-1, DS-1).
+
+        Format per callable: ``element_name: (param: Type, ...) -> ReturnType``
+        Progressive truncation: full → public-only → count-only.
+
+        Returns empty string when no elements have resolved type data or file
+        is not in the registry (graceful degradation, Phase 5 DS-6).
+        """
+        with _timer("manifest.file_resolved_type_summary", level=logging.DEBUG, path=relative_path):
+            try:
+                manifest = self._manifests.get(relative_path)
+                if manifest is None:
+                    return ""
+
+                all_elements = _flatten_elements(manifest.elements)
+                entries: list[tuple[str, str, bool]] = []  # (fqn, resolved_str, is_public)
+                for elem in all_elements:
+                    if not elem.fqn:
+                        continue
+                    inspect_info = getattr(elem, "inspect_info", None)
+                    if inspect_info is None:
+                        continue
+                    rs = getattr(inspect_info, "resolved_signature", None)
+                    if rs is None:
+                        continue
+                    is_public = elem.visibility == Visibility.PUBLIC
+                    entries.append((elem.fqn, str(rs), is_public))
+
+                if not entries:
+                    return ""
+
+                # Tier 1: Full (all elements)
+                lines = [f"{fqn}: {rs}" for fqn, rs, _ in entries]
+                result = "\n".join(lines)
+                if len(result) <= budget_chars:
+                    return result
+
+                # Tier 2: Public-only
+                public_lines = [f"{fqn}: {rs}" for fqn, rs, pub in entries if pub]
+                result = "\n".join(public_lines)
+                if len(result) <= budget_chars:
+                    return result
+
+                # Tier 3: Count-only
+                return f"{len(entries)} elements with resolved type data ({len(public_lines)} public)"
+
+            except Exception as exc:
+                logger.debug("manifest.file_resolved_type_summary failed for %s: %s", relative_path, exc)
+                return ""
+
+    def file_mro_summary(
+        self,
+        relative_path: str,
+    ) -> dict[str, list[str]]:
+        """MRO chains for class elements with meaningful inheritance (DS-2).
+
+        Returns a dict mapping class FQN to its MRO list, excluding
+        ``builtins.object`` and classes whose MRO has only 1 entry.
+        Returns empty dict when file not in registry or no eligible classes.
+        """
+        with _timer("manifest.file_mro_summary", level=logging.DEBUG, path=relative_path):
+            try:
+                manifest = self._manifests.get(relative_path)
+                if manifest is None:
+                    return {}
+
+                result: dict[str, list[str]] = {}
+                for elem in _flatten_elements(manifest.elements):
+                    if not elem.fqn:
+                        continue
+                    inspect_info = getattr(elem, "inspect_info", None)
+                    if inspect_info is None:
+                        continue
+                    mro = getattr(inspect_info, "mro", None)
+                    if not mro:
+                        continue
+                    # Filter out builtins.object, keep only non-trivial chains
+                    filtered = [m for m in mro if m != "builtins.object"]
+                    if len(filtered) > 1:
+                        result[elem.fqn] = filtered
+                return result
+
+            except Exception as exc:
+                logger.debug("manifest.file_mro_summary failed for %s: %s", relative_path, exc)
+                return {}
+
+    def file_runtime_attributes(
+        self,
+        relative_path: str,
+    ) -> dict[str, list[str]]:
+        """Runtime-only attributes for dataclass/namedtuple elements (DS-4, IM-2).
+
+        Returns a dict mapping element FQN to its list of runtime attributes.
+        Only elements with non-empty ``inspect_info.runtime_attributes`` are included.
+        Returns empty dict when file not in registry or no eligible elements.
+        """
+        with _timer("manifest.file_runtime_attributes", level=logging.DEBUG, path=relative_path):
+            try:
+                manifest = self._manifests.get(relative_path)
+                if manifest is None:
+                    return {}
+
+                result: dict[str, list[str]] = {}
+                for elem in _flatten_elements(manifest.elements):
+                    if not elem.fqn:
+                        continue
+                    inspect_info = getattr(elem, "inspect_info", None)
+                    if inspect_info is None:
+                        continue
+                    attrs = getattr(inspect_info, "runtime_attributes", None)
+                    if attrs:
+                        result[elem.fqn] = list(attrs)
+                return result
+
+            except Exception as exc:
+                logger.debug("manifest.file_runtime_attributes failed for %s: %s", relative_path, exc)
+                return {}
+
+    def module_all_for(
+        self,
+        relative_path: str,
+    ) -> list[str] | None:
+        """Runtime ``__all__`` list for the given file (DS-3, IN-3, PF-1).
+
+        Returns the ``FileManifest.module_all`` list, or None when:
+        - file is not in the registry
+        - ``module_all`` is absent or None (no introspect data, or module has no ``__all__``)
+        Never raises.
+        """
+        try:
+            manifest = self._manifests.get(relative_path)
+            if manifest is None:
+                return None
+            val = getattr(manifest, "module_all", None)
+            return list(val) if val else None
+        except Exception as exc:
+            logger.debug("manifest.module_all_for failed for %s: %s", relative_path, exc)
+            return None
+
 
     def summary_stats(self) -> ManifestSummarySchema:
         """Returns typed summary dict for handoff serialization (CT-2).
@@ -696,11 +944,23 @@ class ManifestRegistry:
             frontier = next_frontier
         return visited
 
-    def dead_candidates(self) -> list[str]:
+    def dead_candidates(
+        self,
+        *,
+        use_runtime_callable: bool = False,
+    ) -> list[str]:
         """Public callables with zero inbound call edges.
 
         These are candidate dead code — public functions/methods that
         are never called from within the project. Sorted alphabetically.
+
+        Args:
+            use_runtime_callable: When True (Phase 5, CG-1), use
+                ``inspect_info.is_callable`` as the callable classifier instead
+                of the AST-based ``ElementKind`` heuristic. Elements with
+                ``is_callable=True`` are included regardless of kind; elements
+                with ``is_callable=False`` are excluded regardless of kind.
+                Defaults to False (Phase 4 + Phase 6 behaviour).
         """
         reverse = self.reverse_call_graph()
         callable_kinds = frozenset({
@@ -711,8 +971,19 @@ class ManifestRegistry:
         })
         candidates: list[str] = []
         for fqn, (_path, elem) in self._fqn_index.items():
+            if use_runtime_callable:
+                # Phase 5 CG-1: use runtime is_callable truth
+                is_callable = getattr(getattr(elem, "inspect_info", None), "is_callable", None)
+                if is_callable is None:
+                    # No introspect data — fall through to kind heuristic
+                    callable_by_kind = elem.kind in callable_kinds
+                else:
+                    callable_by_kind = is_callable
+            else:
+                callable_by_kind = elem.kind in callable_kinds
+
             if (
-                elem.kind in callable_kinds
+                callable_by_kind
                 and elem.visibility == Visibility.PUBLIC
                 and fqn not in reverse
             ):
@@ -923,7 +1194,11 @@ def _flatten_elements(elements: list[Element]) -> list[Element]:
 
 
 def _format_element_line(
-    el: Element, *, include_docstring: bool = False, include_span: bool = False,
+    el: Element,
+    *,
+    include_docstring: bool = False,
+    include_span: bool = False,
+    include_resolved_types: bool = False,
 ) -> str:
     """Format a single element as a summary line.
 
@@ -931,8 +1206,14 @@ def _format_element_line(
         el: The element to format.
         include_docstring: Append first-line docstring (tier 1 only).
         include_span: Append source span ``[start-end]`` (tiers 1-3).
+        include_resolved_types: Prefer resolved signature from inspect_info when available.
     """
-    sig_str = _element_signature_str(el) if el.signature else ""
+    if include_resolved_types:
+        sig_str = _resolved_signature_str(el) or (
+            _element_signature_str(el) if el.signature else ""
+        )
+    else:
+        sig_str = _element_signature_str(el) if el.signature else ""
     parts = [f"- {el.fqn}{sig_str}"]
     if include_docstring and el.docstring:
         first_line = el.docstring.strip().split("\n")[0][:80]
@@ -942,16 +1223,38 @@ def _format_element_line(
     return "".join(parts)
 
 
-def _format_elements_tier1(elements: list[Element]) -> list[str]:
+def _format_elements_tier1(
+    elements: list[Element], *, include_resolved_types: bool = False
+) -> list[str]:
     """Tier 1: Full — FQN + signature + docstring (1 line) + span."""
-    return [_format_element_line(el, include_docstring=True, include_span=True) for el in elements]
+    return [
+        _format_element_line(
+            el,
+            include_docstring=True,
+            include_span=True,
+            include_resolved_types=include_resolved_types,
+        )
+        for el in elements
+    ]
 
 
-def _format_elements_tier2(elements: list[Element]) -> list[str]:
+def _format_elements_tier2(
+    elements: list[Element], *, include_resolved_types: bool = False
+) -> list[str]:
     """Tier 2: Compact — FQN + signature + span (no docstrings)."""
-    return [_format_element_line(el, include_span=True) for el in elements]
+    return [
+        _format_element_line(
+            el, include_span=True, include_resolved_types=include_resolved_types
+        )
+        for el in elements
+    ]
 
 
-def _format_elements_tier4(elements: list[Element]) -> list[str]:
+def _format_elements_tier4(
+    elements: list[Element], *, include_resolved_types: bool = False
+) -> list[str]:
     """Tier 4: FQN-only — public FQNs + signatures only."""
-    return [_format_element_line(el) for el in elements]
+    return [
+        _format_element_line(el, include_resolved_types=include_resolved_types)
+        for el in elements
+    ]
