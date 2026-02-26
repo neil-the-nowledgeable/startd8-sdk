@@ -60,6 +60,8 @@ class TestImplementWalkthrough:
             task_desc="## Task\nImplement widget module",
             sys_prompt="You are an expert Python engineer.",
             context={},
+            complexity_tier="tier_2",
+            effective_drafter_spec="mock:mock-model",
         )
 
         wt_dir = tmp_path / ".startd8" / "walkthrough" / "implement" / "WT-001"
@@ -101,6 +103,8 @@ class TestImplementWalkthrough:
             task_desc="## Task\nImplement widget",
             sys_prompt="You are an expert.",
             context={},
+            complexity_tier="tier_2",
+            effective_drafter_spec="mock:mock-model",
         )
 
         wt_dir = tmp_path / ".startd8" / "walkthrough" / "implement" / "WT-001"
@@ -134,6 +138,8 @@ class TestImplementWalkthrough:
             task_desc="## Task",
             sys_prompt="System prompt.",
             context={},
+            complexity_tier="tier_2",
+            effective_drafter_spec="mock:mock-model",
         )
 
         wt_dir = tmp_path / ".startd8" / "walkthrough" / "implement" / "WT-001"
@@ -298,7 +304,12 @@ class TestDesignWalkthrough:
 
         chunk = FakeDevelopmentChunk(chunk_id="PI-001")
         executor._persist_walkthrough_prompts(
-            chunk, "task desc", "sys prompt", {},
+            chunk,
+            "task desc",
+            "sys prompt",
+            {},
+            complexity_tier="tier_2",
+            effective_drafter_spec="mock:mock-model",
         )
 
         # Check structure
@@ -716,6 +727,8 @@ class TestAR412T2ContextCondensed:
             task_desc="## Full T1 prompt with lots of context",
             sys_prompt="System prompt.",
             context={},
+            complexity_tier="tier_2",
+            effective_drafter_spec="mock:mock-model",
         )
 
         wt_dir = tmp_path / ".startd8" / "walkthrough" / "implement" / "WT-001"
@@ -744,6 +757,8 @@ class TestAR412T2ContextCondensed:
             task_desc="## Task",
             sys_prompt="System prompt.",
             context={},
+            complexity_tier="tier_2",
+            effective_drafter_spec="mock:mock-model",
         )
 
         wt_dir = tmp_path / ".startd8" / "walkthrough" / "implement" / "WT-001"
