@@ -79,6 +79,7 @@ from startd8.contractors.protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
     GenerationResult,
     REVIEW_MODEL_CLAUDE_OPUS,
+    VALIDATE_MODEL_CLAUDE_SONNET,
 )
 from startd8.utils.file_operations import atomic_write_json
 from startd8.utils.retry import RetryConfig, _is_retryable_exception, _calculate_delay
@@ -444,12 +445,26 @@ class HandlerConfig:
     manifest_consumption_enabled: bool = True  # Kill switch (req R1-S10)
     manifest_context_budget: int = 4000  # Max chars for element summary in prompts
     manifest_registry: Any = None  # ManifestRegistry instance (avoid import)
+    # Phase 5: Introspect pipeline (PI-1, PI-2, PI-3)
+    enable_introspect: bool = False  # Use resolved types + module_version when True
     # Phase 6: Call graph pipeline control
     call_graph_context_budget: int = 2000  # Max chars for call graph in IMPLEMENT prompts
     call_graph_review_budget: int = 1500  # Max chars for call graph in REVIEW prompts
     blast_radius_warning_threshold: int = 20  # Blast radius count triggering WARNING
     blast_radius_max_depth: int = 3  # Max BFS depth for blast radius computation
     enable_call_graph_preflight: bool = True  # Enable call graph preflight rule
+    # Multi-tier model architecture (T1/T2/T3)
+    tier2_agent: Optional[str] = None          # T2 refiner spec; resolved in __post_init__
+    skip_refinement: bool = False              # Bypass T2 entirely
+    # Walk-through mode: build and persist all LLM prompts without calling LLMs
+    walkthrough: bool = False
+    # Complexity-Driven Model Router (CMR) — REQ-CMR-003
+    complexity_routing_enabled: bool = True     # Kill switch: False → all chunks Tier 2
+    tier3_agent: Optional[str] = None           # Opus drafter spec; resolved in __post_init__
+    complexity_blast_radius_tier3: int = 5      # Blast radius threshold for Tier 3
+    complexity_loc_tier1_max: int = 150         # Max LOC for Tier 1 eligibility
+    complexity_loc_tier3_min: int = 500         # Min LOC to trigger Tier 3
+    complexity_caller_tier3: int = 3            # Caller count threshold for Tier 3 (edit mode)
 
     _VALID_COLLISION_STRATEGIES = frozenset({"warn", "redesign", "abort"})
 
@@ -469,6 +484,12 @@ class HandlerConfig:
                 f"{sorted(self._VALID_COLLISION_STRATEGIES)}; "
                 f"got {self.design_collision_strategy!r}"
             )
+        # Resolve T2 default: Sonnet unless skip_refinement is set
+        if self.tier2_agent is None and not self.skip_refinement:
+            self.tier2_agent = VALIDATE_MODEL_CLAUDE_SONNET.agent_spec
+        # Resolve T3 default: Opus for complex tasks (REQ-CMR-003)
+        if self.tier3_agent is None:
+            self.tier3_agent = REVIEW_MODEL_CLAUDE_OPUS.agent_spec
 
     @classmethod
     def from_config(
@@ -851,6 +872,16 @@ def _extract_design_target_files(
     if not discovered:
         return current_targets
 
+    # Build lookups for contradictory-path deduplication (PCA-605d).
+    # When current_targets already specify a path for a given basename,
+    # the plan's path is authoritative — discovered paths that contradict
+    # it are dropped to prevent mixed-layout target lists.
+    _current_set = set(current_targets)
+    _bn_to_target: dict[str, list[str]] = {}
+    for _t in current_targets:
+        _bn = _t.rsplit("/", 1)[-1] if "/" in _t else _t
+        _bn_to_target.setdefault(_bn, []).append(_t)
+
     # Normalize bare filenames, filter by valid extension, and exclude test
     # files.  Test files are the TEST phase's responsibility — including them
     # here causes the drafter to generate test code instead of the primary
@@ -859,7 +890,13 @@ def _extract_design_target_files(
     _test_filtered: list[str] = []
     for raw in discovered:
         if "/" not in raw and prefix:
-            path = prefix + raw
+            # PCA-605d: if the bare filename already exists verbatim in
+            # current_targets, keep it bare.  Prevents turning root-level
+            # ``pyproject.toml`` into ``src/pkg/pyproject.toml``.
+            if raw in _current_set:
+                path = raw
+            else:
+                path = prefix + raw
         else:
             path = raw
         if not _has_valid_extension(path):
@@ -882,6 +919,36 @@ def _extract_design_target_files(
             len(_test_filtered),
             _test_filtered,
         )
+
+    if not normalized:
+        return current_targets
+
+    # PCA-605d: deduplicate contradictory paths — if a discovered path
+    # shares a basename with exactly one current target but at a different
+    # directory depth, drop it.  Prevents Layer 2 from injecting e.g.
+    # ``src/pkg/pyproject.toml`` when the plan already has ``pyproject.toml``
+    # at project root.
+    _contradictions: list[str] = []
+    _deduped: list[str] = []
+    for path in normalized:
+        _bn = path.rsplit("/", 1)[-1] if "/" in path else path
+        target_paths = _bn_to_target.get(_bn, [])
+        if (
+            len(target_paths) == 1
+            and path != target_paths[0]
+            and path not in _current_set
+        ):
+            _contradictions.append(path)
+            continue
+        _deduped.append(path)
+    if _contradictions:
+        logger.info(
+            "PCA-605d: dropped %d contradictory path(s) "
+            "(basename conflicts with current targets): %s",
+            len(_contradictions),
+            _contradictions,
+        )
+    normalized = _deduped
 
     if not normalized:
         return current_targets
@@ -2075,8 +2142,26 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         )
         return self._llm_backend
 
-    def _get_design_phase(self) -> Any:
-        """Lazily create the DesignDocumentationPhase."""
+    def _get_design_phase(
+        self,
+        prompt_capture_dir: Optional[Path] = None,
+    ) -> Any:
+        """Lazily create the DesignDocumentationPhase.
+
+        When ``prompt_capture_dir`` is set (walkthrough mode), a fresh
+        instance is created per call so each task gets its own capture
+        directory.  Otherwise the instance is cached.
+        """
+        if prompt_capture_dir is not None:
+            from startd8.contractors.artisan_phases.design_documentation import (
+                DesignDocumentationPhase,
+            )
+            return DesignDocumentationPhase(
+                llm=self._get_llm_backend(),
+                max_iterations=self.config.max_iterations,
+                prompt_capture_dir=prompt_capture_dir,
+            )
+
         if self._design_phase is not None:
             return self._design_phase
 
@@ -2125,6 +2210,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         # Phase 5: Manifest context for DESIGN phase (CS-1 through CS-6)
         manifest_registry: Any = None,
         manifest_context_budget: int = 2000,
+        # Phase 6: Call graph context budget for DESIGN (CG-DS-4)
+        call_graph_context_budget: int = 2000,
     ) -> Any:
         """Convert a SeedTask to a FeatureContext for the design phase.
 
@@ -2633,7 +2720,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 )
 
             # Phase 6: CG-DS-1,2,3 — call graph context for DESIGN
-            _cg_budget = self.config.call_graph_context_budget // 2  # CG-DS-4: share budget
+            _cg_budget = call_graph_context_budget // 2  # CG-DS-4: share budget
             try:
                 _cg_parts: list[str] = []
                 for tf in task.target_files:
@@ -3612,6 +3699,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             # Phase 5: Manifest context for V2 path
                             manifest_registry=_design_manifest_registry,
                             manifest_context_budget=self.config.manifest_context_budget,
+                            enable_introspect=self.config.enable_introspect,
                         )
                         _v2_raw = self._run_v2_generate(
                             backend, _v2_user, _v2_system,
@@ -3663,8 +3751,19 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             # Phase 5: Manifest context for DESIGN
                             manifest_registry=_design_manifest_registry,
                             manifest_context_budget=self.config.manifest_context_budget,
+                            # Phase 6: Call graph budget for DESIGN
+                            call_graph_context_budget=self.config.call_graph_context_budget,
                         )
-                        design_phase = self._get_design_phase()
+                        _wt_capture_dir: Optional[Path] = None
+                        if self.config.walkthrough:
+                            _wt_root = Path(_project_root) if _project_root else Path(".")
+                            _wt_capture_dir = (
+                                _wt_root / ".startd8" / "walkthrough"
+                                / "design" / task.task_id
+                            )
+                        design_phase = self._get_design_phase(
+                            prompt_capture_dir=_wt_capture_dir,
+                        )
                         result = self._run_design_async(
                             design_phase, feature_context,
                             timeout=self.config.development_timeout_seconds,
@@ -4146,6 +4245,246 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         )
 
         return {"output": output, "cost": total_cost, "metadata": {"duration": duration}}
+
+
+# ============================================================================
+# Complexity-Driven Model Router (CMR) — REQ-CMR-010, REQ-CMR-011
+# ============================================================================
+
+
+def _detect_cross_file_edges(
+    target_files: list[str],
+    manifest_registry: Any,
+    flatten_fn: Any,
+) -> bool:
+    """Check whether any target files have call edges to each other (C1 extract).
+
+    Args:
+        target_files: List of relative file paths (must have len > 1).
+        manifest_registry: ManifestRegistry with call_graph() method.
+        flatten_fn: The ``_flatten_elements`` helper from manifest_registry.
+
+    Returns:
+        ``True`` if any element in one target file calls an element in another.
+    """
+    try:
+        forward = manifest_registry.call_graph()
+        fqn_to_file: dict[str, str] = {}
+        for tf in target_files:
+            m = manifest_registry.get(tf)
+            if m:
+                for e in flatten_fn(m.elements):
+                    if e.fqn:
+                        fqn_to_file[e.fqn] = tf
+        for fqn, file_path in fqn_to_file.items():
+            for callee in forward.get(fqn, set()):
+                callee_file = fqn_to_file.get(callee)
+                if callee_file and callee_file != file_path:
+                    return True
+    except (AttributeError, TypeError, KeyError) as exc:
+        logger.debug("CMR: cross-file edge detection failed: %s", exc)
+    return False
+
+
+def _extract_complexity_signals(
+    chunk: Any,
+    manifest_registry: Any,
+) -> "TaskComplexitySignals":
+    """Extract complexity signals from chunk metadata and manifest registry.
+
+    Reads from existing enrichment data (``_call_graph_callers``,
+    ``_edit_mode``, ``estimated_loc``) and queries the registry for
+    ``has_dynamic_dispatch``, ``is_closure``, ``unresolved_calls``,
+    ``mro_depth``.
+
+    Args:
+        chunk: A ``DevelopmentChunk``-like object with ``metadata`` dict
+            and ``file_targets`` list.
+        manifest_registry: A ``ManifestRegistry`` instance, or ``None``
+            when manifest data is unavailable.
+
+    Returns:
+        A ``TaskComplexitySignals`` with all fields populated from available
+        data, falling back to safe defaults on any extraction failure.
+
+    Never raises — all lookups wrapped in try/except (REQ-CMR-010).
+    """
+    from startd8.contractors.artisan_phases.development import TaskComplexitySignals
+
+    meta = getattr(chunk, "metadata", {}) or {}
+    _chunk_id = getattr(chunk, "chunk_id", "?")
+
+    # --- Signals from chunk metadata (populated by earlier enrichment) ---
+    blast_radius = 0
+    caller_count = 0
+    has_cross_file_edges = False
+
+    try:
+        cg_callers = meta.get("_call_graph_callers", [])
+        if cg_callers:
+            blast_radius = max(
+                (entry.get("blast_radius", 0) for entry in cg_callers),
+                default=0,
+            )
+            caller_count = sum(
+                len(entry.get("direct_callers", []))
+                for entry in cg_callers
+            )
+    except (TypeError, AttributeError) as exc:
+        logger.debug("CMR: call graph caller extraction failed for %s: %s", _chunk_id, exc)
+
+    # Edit mode from classification
+    edit_mode = "unknown"
+    try:
+        edit_mode_dict = meta.get("_edit_mode")
+        if edit_mode_dict and isinstance(edit_mode_dict, dict):
+            edit_mode = edit_mode_dict.get("mode", "unknown")
+        elif isinstance(edit_mode_dict, str):
+            edit_mode = edit_mode_dict
+    except (TypeError, AttributeError) as exc:
+        logger.debug("CMR: edit mode extraction failed for %s: %s", _chunk_id, exc)
+
+    # Estimated LOC from seed task
+    estimated_loc = 0
+    try:
+        estimated_loc = int(meta.get("estimated_loc", 0) or 0)
+    except (ValueError, TypeError):
+        pass
+
+    # Target file count
+    target_files = getattr(chunk, "file_targets", []) or []
+    target_file_count = max(len(target_files), 1)
+
+    # --- Signals from manifest registry (Phase 5/6 data) ---
+    has_dynamic_dispatch = False
+    is_closure = False
+    mro_depth = 0
+    unresolved_call_count = 0
+
+    if manifest_registry is not None:
+        # Single import of _flatten_elements for reuse (R1)
+        try:
+            from startd8.utils.manifest_registry import _flatten_elements
+        except ImportError:
+            logger.debug("CMR: manifest_registry import failed for %s", _chunk_id)
+            _flatten_elements = None  # type: ignore[assignment]
+
+        if _flatten_elements is not None:
+            try:
+                for tf in target_files:
+                    manifest = manifest_registry.get(tf)
+                    if manifest is None:
+                        continue
+                    try:
+                        elements = _flatten_elements(manifest.elements)
+                    except (TypeError, AttributeError) as exc:
+                        logger.debug("CMR: element flattening failed for %s in %s: %s", tf, _chunk_id, exc)
+                        continue
+
+                    for elem in elements:
+                        # Dynamic dispatch + unresolved call detection
+                        try:
+                            cg = getattr(elem, "call_graph", None)
+                            if cg is not None:
+                                for call in getattr(cg, "calls", []):
+                                    if getattr(call, "is_dynamic", False):
+                                        has_dynamic_dispatch = True
+                                        break
+                                unresolved_call_count += sum(
+                                    1 for c in getattr(cg, "calls", [])
+                                    if getattr(c, "target_fqn", None) is None
+                                )
+                        except (TypeError, AttributeError) as exc:
+                            logger.debug("CMR: call graph inspection failed for element in %s: %s", _chunk_id, exc)
+
+                        # Closure detection
+                        if getattr(elem, "is_closure", False):
+                            is_closure = True
+
+                        # MRO depth (Phase 5)
+                        try:
+                            inspect_info = getattr(elem, "inspect_info", None)
+                            if inspect_info is not None:
+                                depth = getattr(inspect_info, "mro_depth", 0) or 0
+                                mro_depth = max(mro_depth, depth)
+                        except (TypeError, AttributeError) as exc:
+                            logger.debug("CMR: MRO depth extraction failed for element in %s: %s", _chunk_id, exc)
+
+                # Cross-file call edges (C1: extracted helper)
+                if len(target_files) > 1:
+                    has_cross_file_edges = _detect_cross_file_edges(
+                        target_files, manifest_registry, _flatten_elements,
+                    )
+            except Exception:
+                logger.debug("CMR: manifest signal extraction failed for %s", _chunk_id, exc_info=True)
+
+    return TaskComplexitySignals(
+        blast_radius=blast_radius,
+        caller_count=caller_count,
+        has_dynamic_dispatch=has_dynamic_dispatch,
+        is_closure=is_closure,
+        estimated_loc=estimated_loc,
+        target_file_count=target_file_count,
+        edit_mode=edit_mode,
+        mro_depth=mro_depth,
+        unresolved_call_count=unresolved_call_count,
+        has_cross_file_edges=has_cross_file_edges,
+    )
+
+
+def _classify_complexity_tier(
+    signals: "TaskComplexitySignals",
+    config: "HandlerConfig",
+) -> "TaskComplexityTier":
+    """Classify a task into a complexity tier (REQ-CMR-011).
+
+    Pure function, stateless, deterministic. Evaluation order:
+    1. Tier 3 triggers (any one triggers)
+    2. Tier 1 eligibility (all must pass)
+    3. Default: Tier 2
+
+    Args:
+        signals: Complexity signals extracted from chunk metadata and
+            manifest registry.
+        config: Handler configuration with tier threshold fields.
+
+    Returns:
+        The classified ``TaskComplexityTier``.
+    """
+    from startd8.contractors.artisan_phases.development import TaskComplexityTier
+
+    # --- Tier 3: any trigger fires ---
+    if signals.blast_radius > config.complexity_blast_radius_tier3:
+        return TaskComplexityTier.TIER_3
+    if signals.has_dynamic_dispatch:
+        return TaskComplexityTier.TIER_3
+    if (
+        signals.edit_mode == "edit"
+        and signals.caller_count > config.complexity_caller_tier3
+    ):
+        return TaskComplexityTier.TIER_3
+    if signals.mro_depth > 3:
+        return TaskComplexityTier.TIER_3
+    if signals.unresolved_call_count > 2:
+        return TaskComplexityTier.TIER_3
+    if signals.estimated_loc > config.complexity_loc_tier3_min:
+        return TaskComplexityTier.TIER_3
+    if signals.target_file_count > 1 and signals.has_cross_file_edges:
+        return TaskComplexityTier.TIER_3
+
+    # --- Tier 1: all must pass ---
+    if (
+        signals.blast_radius == 0
+        and signals.edit_mode == "create"
+        and signals.caller_count == 0
+        and not signals.has_dynamic_dispatch
+        and signals.estimated_loc < config.complexity_loc_tier1_max
+        and signals.target_file_count == 1
+    ):
+        return TaskComplexityTier.TIER_1
+
+    # --- Default: Tier 2 ---
+    return TaskComplexityTier.TIER_2
 
 
 class ImplementPhaseHandler(AbstractPhaseHandler):
@@ -4690,10 +5029,25 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             if size_regression_flag:
                 task_flag["size_regression"] = size_regression_details
             # AR-816: Mark tasks that should be blocked at INTEGRATE
-            from startd8.truncation_detection import CONFIDENCE_IS_TRUNCATED
+            from startd8.truncation_detection import (
+                CONFIDENCE_TRUNCATION_BLOCKED,
+                MIN_LINES_TRUNCATION_BLOCKING,
+            )
+            # Compute blocking confidence from files large enough to be meaningful.
+            # Tiny files (e.g., 1-line __init__.py) produce false-positive prose
+            # heuristics that shouldn't prevent integration.
+            _blocking_confidence = max(
+                (
+                    fr["truncation_confidence"]
+                    for fr in file_results
+                    if fr["lines"] >= MIN_LINES_TRUNCATION_BLOCKING
+                    and fr.get("truncation_detected", False)
+                ),
+                default=0.0,
+            )
             task_flag["truncation_blocked"] = (
                 task_flag["detected"]
-                and task_flag["max_confidence"] >= CONFIDENCE_IS_TRUNCATED
+                and _blocking_confidence >= CONFIDENCE_TRUNCATION_BLOCKED
             )
             # Aggregate unique indicators
             for fr in file_results:
@@ -6321,6 +6675,51 @@ class Test{class_name}:
                 if tid in _phantom_warns:
                     chunk.metadata["_phantom_element_warnings"] = _phantom_warns[tid]
 
+            # CMR: Complexity-Driven Model Router (REQ-CMR-012)
+            # Classification runs after Phase 6 call graph enrichment, before
+            # executor construction.
+            _tier_distribution = {"tier_1": 0, "tier_2": 0, "tier_3": 0}
+            if self.config.complexity_routing_enabled and chunks:
+                from startd8.contractors.artisan_phases.development import (
+                    TaskComplexityTier,
+                )
+
+                for chunk in chunks:
+                    try:
+                        signals = _extract_complexity_signals(
+                            chunk, _manifest_registry,
+                        )
+                        tier = _classify_complexity_tier(signals, self.config)
+                        chunk.metadata["_complexity_tier"] = tier.value
+                        chunk.metadata["_complexity_signals"] = signals.to_dict()
+                        _tier_distribution[tier.value] += 1
+                        logger.info(
+                            "CMR: chunk=%s tier=%s blast=%d callers=%d edit=%s loc=%d",
+                            getattr(chunk, "chunk_id", "?"),
+                            tier.value,
+                            signals.blast_radius,
+                            signals.caller_count,
+                            signals.edit_mode,
+                            signals.estimated_loc,
+                        )
+                    except Exception:
+                        # Graceful degradation — default to Tier 2
+                        chunk.metadata.setdefault("_complexity_tier", "tier_2")
+                        _tier_distribution["tier_2"] += 1
+                        logger.warning(
+                            "CMR: classification failed for chunk %s, defaulting to tier_2",
+                            getattr(chunk, "chunk_id", "?"),
+                            exc_info=True,
+                        )
+                logger.info(
+                    "CMR: T1=%d, T2=%d, T3=%d across %d chunks",
+                    _tier_distribution["tier_1"],
+                    _tier_distribution["tier_2"],
+                    _tier_distribution["tier_3"],
+                    len(chunks),
+                )
+            context["_tier_distribution"] = _tier_distribution
+
             # PCA-402: track onboarding field consumption
             if context.get("service_metadata") is not None:
                 _track_onboarding_consumption(context, "service_metadata", "IMPLEMENT")
@@ -6362,6 +6761,16 @@ class Test{class_name}:
 
             executor = ArtisanChunkExecutor(
                 drafter_spec=self.config.drafter_agent,
+                refiner_spec=(
+                    self.config.tier2_agent
+                    if not self.config.skip_refinement
+                    else None
+                ),
+                tier3_drafter_spec=(
+                    self.config.tier3_agent
+                    if self.config.complexity_routing_enabled
+                    else None
+                ),
                 output_dir=staging_dir,
                 max_tokens=self.config.max_tokens,
                 project_root=project_root,
@@ -6377,6 +6786,7 @@ class Test{class_name}:
                 chunks=chunks,
                 config={
                     "dry_run": False,
+                    "walkthrough": self.config.walkthrough,
                     "state_dir": str(project_root / ".startd8" / "state"),
                     "cancel_event": cancel_event,
                     "example_artifacts": context.get("example_artifacts", {}),
@@ -6635,8 +7045,10 @@ class Test{class_name}:
                 if gate_result.any_rejected:
                     # Emit telemetry for initial rejection
                     try:
-                        emit_rejection_telemetry(gate_result, span)
-                    except (TypeError, AttributeError, RuntimeError):
+                        from opentelemetry import trace as _g5_trace
+                        _g5_span = _g5_trace.get_current_span()
+                        emit_rejection_telemetry(gate_result, _g5_span)
+                    except (ImportError, TypeError, AttributeError, RuntimeError, NameError):
                         pass
 
                     # REQ-EFE-023: single retry with edit-focused prompt
@@ -6655,8 +7067,10 @@ class Test{class_name}:
                     if still_rejected:
                         # Emit telemetry for post-retry rejection
                         try:
-                            emit_rejection_telemetry(gate_result, span)
-                        except (TypeError, AttributeError, RuntimeError):
+                            from opentelemetry import trace as _g5_trace2
+                            _g5_span2 = _g5_trace2.get_current_span()
+                            emit_rejection_telemetry(gate_result, _g5_span2)
+                        except (ImportError, TypeError, AttributeError, RuntimeError, NameError):
                             pass
 
                 gate5_results[task.task_id] = {
@@ -10379,6 +10793,9 @@ class ContextSeedHandlers:
         design_agent: Optional[str] = None,
         review_agent: Optional[str] = None,
         enable_prompt_caching: Optional[bool] = None,
+        tier2_agent: Optional[str] = None,
+        skip_refinement: Optional[bool] = None,
+        walkthrough: Optional[bool] = None,
         code_generator: Optional[CodeGenerator] = None,
     ) -> dict[WorkflowPhase, AbstractPhaseHandler]:
         """Create handlers for all eight workflow phases.
@@ -10407,6 +10824,9 @@ class ContextSeedHandlers:
             design_agent: Agent spec for design phase (falls back to lead_agent).
             review_agent: Agent spec for review phase (falls back to lead_agent).
             enable_prompt_caching: Enable Anthropic prompt caching.
+            tier2_agent: T2 refinement agent spec (default: Sonnet).
+            skip_refinement: Skip T2 refinement (use T1 draft directly).
+            walkthrough: Build and persist all LLM prompts without calling LLMs.
             code_generator: Optional pre-configured CodeGenerator instance.
 
         Returns:
@@ -10440,6 +10860,9 @@ class ContextSeedHandlers:
             ("design_agent", design_agent),
             ("review_agent", review_agent),
             ("enable_prompt_caching", enable_prompt_caching),
+            ("tier2_agent", tier2_agent),
+            ("skip_refinement", skip_refinement),
+            ("walkthrough", walkthrough),
         ]:
             if val is not None:
                 cli_overrides[name] = val

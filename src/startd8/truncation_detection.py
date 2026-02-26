@@ -24,6 +24,8 @@ CONFIDENCE_IS_TRUNCATED = 0.5        # Default gate for TruncationResult.is_trun
 CONFIDENCE_IS_TRUNCATED_STRICT = 0.3 # Gate when strict_mode=True
 CONFIDENCE_HIGH = 0.7                # High-confidence truncation (triggers rejection/error)
 CONFIDENCE_HIGH_PROSE = 0.9          # Higher bar for prose heuristics (more false-positive prone)
+CONFIDENCE_TRUNCATION_BLOCKED = 0.6  # Higher bar for blocking INTEGRATE merge
+MIN_LINES_TRUNCATION_BLOCKING = 5    # Files below this line count excluded from blocking
 
 
 @dataclass

@@ -20,6 +20,11 @@ from startd8.contractors.context_seed_handlers import (
     _CACHE_SCHEMA_VERSION,
 )
 from startd8.contractors.protocols import GenerationResult
+from startd8.truncation_detection import (
+    CONFIDENCE_TRUNCATION_BLOCKED,
+    MIN_LINES_TRUNCATION_BLOCKING,
+    detect_truncation,
+)
 
 # Import shared FakeSeedTask from conftest (auto-discovered by pytest)
 from conftest import FakeSeedTask
@@ -377,6 +382,106 @@ class TestCacheEnvelope:
         }
         assert cache_envelope["truncation_flags"]["T-1"]["detected"] is True
         assert cache_envelope["_cache_meta"]["schema_version"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Gate 4 blocking threshold tests
+# ---------------------------------------------------------------------------
+
+
+def _compute_blocking(file_results: list[dict]) -> tuple[float, bool]:
+    """Replicate Gate 4 blocking logic for testing."""
+    detected = any(fr.get("truncation_detected", False) for fr in file_results)
+    _blocking_confidence = max(
+        (
+            fr["truncation_confidence"]
+            for fr in file_results
+            if fr["lines"] >= MIN_LINES_TRUNCATION_BLOCKING
+            and fr.get("truncation_detected", False)
+        ),
+        default=0.0,
+    )
+    blocked = detected and _blocking_confidence >= CONFIDENCE_TRUNCATION_BLOCKED
+    return _blocking_confidence, blocked
+
+
+class TestTruncationBlockingThresholds:
+    """Two-layer defense against false-positive truncation blocking."""
+
+    def test_small_file_excluded_from_blocking(self):
+        """A 1-line file at 0.55 confidence does NOT block when under MIN_LINES."""
+        file_results = [
+            {
+                "file": "tests/__init__.py",
+                "lines": 1,
+                "truncation_detected": True,
+                "truncation_confidence": 0.55,
+            },
+        ]
+        _blocking_conf, blocked = _compute_blocking(file_results)
+        assert _blocking_conf == 0.0, "Small file should not contribute to blocking"
+        assert blocked is False
+
+    def test_large_file_above_threshold_blocks(self):
+        """A 20-line file at 0.7 confidence blocks integration."""
+        file_results = [
+            {
+                "file": "src/core.py",
+                "lines": 20,
+                "truncation_detected": True,
+                "truncation_confidence": 0.7,
+            },
+        ]
+        _blocking_conf, blocked = _compute_blocking(file_results)
+        assert _blocking_conf == 0.7
+        assert blocked is True
+
+    def test_mixed_files_small_excluded(self):
+        """Task with one tiny high-confidence file and one large low-confidence file.
+
+        Blocking should use only the large file's confidence.
+        """
+        file_results = [
+            {
+                "file": "tests/__init__.py",
+                "lines": 1,
+                "truncation_detected": True,
+                "truncation_confidence": 0.8,  # high, but tiny file
+            },
+            {
+                "file": "src/module.py",
+                "lines": 50,
+                "truncation_detected": True,
+                "truncation_confidence": 0.4,  # below blocking threshold
+            },
+        ]
+        _blocking_conf, blocked = _compute_blocking(file_results)
+        assert _blocking_conf == 0.4, "Should use large file's confidence only"
+        assert blocked is False, "0.4 < 0.6 threshold, should not block"
+
+    def test_pi001_false_positive_scenario(self):
+        """Exact reproduction: `tests/__init__.py` with docstring-only content.
+
+        The file '\"\"\"Tests for hybrid_scaffold.\"\"\"' triggers prose heuristics
+        (unclosed quote + unclosed string) but must NOT block integration.
+        """
+        content = '"""Tests for hybrid_scaffold."""'
+        result = detect_truncation(content, code_mode=None)
+        # Detection may still flag it (is_truncated=True with ~0.55 confidence)
+        # but Gate 4 would NOT block because line_count=1 < MIN_LINES=5.
+        file_results = [
+            {
+                "file": "tests/__init__.py",
+                "lines": content.count("\n") + 1,  # 1 line
+                "truncation_detected": result.is_truncated,
+                "truncation_confidence": result.confidence,
+            },
+        ]
+        _blocking_conf, blocked = _compute_blocking(file_results)
+        assert blocked is False, (
+            f"1-line __init__.py should not block: "
+            f"confidence={result.confidence}, indicators={result.indicators}"
+        )
 
 
 # ---------------------------------------------------------------------------

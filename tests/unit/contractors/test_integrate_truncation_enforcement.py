@@ -139,28 +139,65 @@ class TestGate4TruncationBlockedFlag:
     """AR-816: Gate 4 sets truncation_blocked when confidence >= 0.5."""
 
     def test_truncation_blocked_set_on_high_confidence(self):
-        """truncation_blocked should be True when max_confidence >= 0.5."""
-        from startd8.truncation_detection import CONFIDENCE_IS_TRUNCATED
+        """truncation_blocked should be True when blocking confidence >= 0.6."""
+        from startd8.truncation_detection import (
+            CONFIDENCE_TRUNCATION_BLOCKED,
+            MIN_LINES_TRUNCATION_BLOCKING,
+        )
 
-        # Simulate Gate 4 logic
-        flag = {
-            "detected": True,
-            "max_confidence": 0.6,
-        }
+        # Simulate Gate 4 logic with a large file above threshold
+        file_results = [
+            {
+                "file": "src/module.py",
+                "lines": 20,
+                "truncation_detected": True,
+                "truncation_confidence": 0.7,
+            },
+        ]
+        flag = {"detected": True, "max_confidence": 0.7}
+        _blocking_confidence = max(
+            (
+                fr["truncation_confidence"]
+                for fr in file_results
+                if fr["lines"] >= MIN_LINES_TRUNCATION_BLOCKING
+                and fr.get("truncation_detected", False)
+            ),
+            default=0.0,
+        )
         flag["truncation_blocked"] = (
-            flag["detected"] and flag["max_confidence"] >= CONFIDENCE_IS_TRUNCATED
+            flag["detected"]
+            and _blocking_confidence >= CONFIDENCE_TRUNCATION_BLOCKED
         )
         assert flag["truncation_blocked"] is True
 
     def test_truncation_not_blocked_on_low_confidence(self):
-        """truncation_blocked should be False when max_confidence < 0.5."""
-        from startd8.truncation_detection import CONFIDENCE_IS_TRUNCATED
+        """truncation_blocked should be False when confidence is 0.55 (between 0.5 and 0.6)."""
+        from startd8.truncation_detection import (
+            CONFIDENCE_TRUNCATION_BLOCKED,
+            MIN_LINES_TRUNCATION_BLOCKING,
+        )
 
-        flag = {
-            "detected": True,
-            "max_confidence": 0.3,
-        }
+        # 0.55 is above old threshold (0.5) but below new blocking threshold (0.6)
+        file_results = [
+            {
+                "file": "src/module.py",
+                "lines": 20,
+                "truncation_detected": True,
+                "truncation_confidence": 0.55,
+            },
+        ]
+        flag = {"detected": True, "max_confidence": 0.55}
+        _blocking_confidence = max(
+            (
+                fr["truncation_confidence"]
+                for fr in file_results
+                if fr["lines"] >= MIN_LINES_TRUNCATION_BLOCKING
+                and fr.get("truncation_detected", False)
+            ),
+            default=0.0,
+        )
         flag["truncation_blocked"] = (
-            flag["detected"] and flag["max_confidence"] >= CONFIDENCE_IS_TRUNCATED
+            flag["detected"]
+            and _blocking_confidence >= CONFIDENCE_TRUNCATION_BLOCKED
         )
         assert flag["truncation_blocked"] is False
