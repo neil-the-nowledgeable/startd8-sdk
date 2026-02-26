@@ -251,6 +251,73 @@ class IntegrationEngine:
             except Exception as exc:
                 logger.debug("manifest.diff: CG-IN-3 caller impact failed: %s", exc)
 
+            # Phase 5 IN-1: Resolved type changes — catch type-level breaking changes
+            # invisible to AST diff (e.g. resolved int vs str when AST signature is same)
+            try:
+                for fqn, old_rs, new_rs in diff.changed_resolved_signatures:
+                    callers = self.manifest_registry.callers_of(fqn)
+                    if callers:
+                        logger.error(
+                            "INTEGRATE IN-1: Resolved type change for %s: %r → %r "
+                            "(%d callers — type change may break callers)",
+                            fqn, old_rs, new_rs, len(callers),
+                        )
+                    else:
+                        logger.warning(
+                            "INTEGRATE IN-1: Resolved type change for %s: %r → %r "
+                            "(no known callers)",
+                            fqn, old_rs, new_rs,
+                        )
+            except Exception as exc:
+                logger.debug("manifest.diff: IN-1 resolved type check failed: %s", exc)
+
+            # Phase 5 IN-2: MRO changes — inheritance restructuring detection
+            try:
+                for fqn, old_mro, new_mro in diff.mro_changes:
+                    added_bases = set(new_mro) - set(old_mro)
+                    removed_bases = set(old_mro) - set(new_mro)
+                    logger.warning(
+                        "INTEGRATE IN-2: MRO changed for %s — added: %s, removed: %s",
+                        fqn,
+                        sorted(added_bases) or "none",
+                        sorted(removed_bases) or "none",
+                    )
+                    try:
+                        gate = GateEmitter.quality_gate_result(
+                            gate_name="manifest_mro_change",
+                            passed=False,
+                            details={
+                                "path": rel_path,
+                                "fqn": fqn,
+                                "old_mro": old_mro,
+                                "new_mro": new_mro,
+                            },
+                        )
+                        GateEmitter.emit(gate)
+                    except Exception:
+                        pass
+            except Exception as exc:
+                logger.debug("manifest.diff: IN-2 MRO change check failed: %s", exc)
+
+            # Phase 5 IN-3: __all__ diff — exported surface change logging
+            try:
+                if diff.module_all_diff is not None:
+                    added_exports, removed_exports = diff.module_all_diff
+                    if added_exports:
+                        logger.info(
+                            "INTEGRATE IN-3: New exports in __all__ for %s: %s",
+                            rel_path, added_exports,
+                        )
+                    if removed_exports:
+                        logger.info(
+                            "INTEGRATE IN-3: Removed exports from __all__ for %s: %s "
+                            "(may break 'from %s import *' consumers)",
+                            rel_path, removed_exports,
+                            rel_path.replace("/", ".").removesuffix(".py"),
+                        )
+            except Exception as exc:
+                logger.debug("manifest.diff: IN-3 __all__ diff failed: %s", exc)
+
         except Exception as exc:
             logger.debug(
                 "manifest.diff: diff failed for %s: %s", rel_path, exc,

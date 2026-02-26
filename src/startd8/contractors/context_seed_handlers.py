@@ -8890,6 +8890,24 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 )
                 prompt += "\n" + enrichment
 
+        # GAP3-B CG-CR: Inject call graph context for review focus (CG-CR-1..CG-CR-5)
+        try:
+            _review_registry = None
+            if self.config.manifest_consumption_enabled:
+                _review_registry = self.config.manifest_registry
+            if _review_registry is not None:
+                from startd8.contractors.review_call_graph_context import (
+                    enrich_review_prompt_with_call_graph,
+                )
+                prompt = enrich_review_prompt_with_call_graph(
+                    prompt,
+                    file_paths=list(task.target_files),
+                    registry=_review_registry,
+                    budget_chars=2000,
+                )
+        except Exception as _cg_cr_err:
+            logger.debug("REVIEW CG-CR: call graph enrichment failed: %s", _cg_cr_err)
+
         return prompt
 
     # -- helper: base prompt ------------------------------------------------
