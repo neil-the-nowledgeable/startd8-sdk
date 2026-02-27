@@ -450,8 +450,42 @@ class PostMortemEvaluator:
         # 4. Anti-pattern detection
         ap_findings = self._detect_anti_patterns(task_id, generated_code)
 
-        # Composite score: 50% requirements, 50% file coverage
-        composite = (req_score + file_score) / 2.0
+        # 5. Incorporate test and review results when available
+        task_test = test_results.get(task_id, {}) if isinstance(test_results, dict) else {}
+        task_review = review_results.get(task_id, {}) if isinstance(review_results, dict) else {}
+        test_passed = bool(task_test.get("passed")) if task_test else None
+        review_score_raw = task_review.get("score")
+        review_norm = (
+            float(review_score_raw) / 100.0
+            if review_score_raw is not None
+            else None
+        )
+        quality_overall = (
+            float(quality_dict["overall"])
+            if quality_dict and "overall" in quality_dict
+            else None
+        )
+
+        # Composite score: weighted average of available signals.
+        # Weights: requirements 30%, file coverage 30%, quality 20%,
+        # review 20%.  Absent signals are excluded and weights re-normalised.
+        _components: list[tuple[float, float]] = [
+            (req_score, 0.3),
+            (file_score, 0.3),
+        ]
+        if quality_overall is not None:
+            _components.append((quality_overall, 0.2))
+        if review_norm is not None:
+            _components.append((max(0.0, min(1.0, review_norm)), 0.2))
+        _total_weight = sum(w for _, w in _components)
+        composite = (
+            sum(s * w for s, w in _components) / _total_weight
+            if _total_weight > 0
+            else 0.0
+        )
+        # Apply a penalty when tests explicitly failed
+        if test_passed is False:
+            composite *= 0.7
 
         return TaskPostMortem(
             task_id=task_id,

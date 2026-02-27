@@ -6,17 +6,18 @@ and explanatory notes. Used by LeadContractorWorkflow and available for
 downstream integration pipelines.
 """
 
-import logging
 import os
 import re
 from typing import Dict, List, Optional, Tuple
+
+from startd8.logging_config import get_logger
 
 #: Machine-readable sentinel embedded in every auto-generated stub.
 #: Used by observability and downstream phases to detect stubs without
 #: fragile substring heuristics.
 STUB_SENTINEL = "STARTD8_AUTO_STUB"
 
-logger = logging.getLogger("startd8.utils.code_extraction")
+logger = get_logger("startd8.utils.code_extraction")
 
 
 def extract_code_from_response(response: str, language: Optional[str] = None) -> str:

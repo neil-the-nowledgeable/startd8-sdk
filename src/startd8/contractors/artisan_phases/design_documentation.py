@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-import time
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -924,10 +924,15 @@ def parse_review_verdict(raw_text: str, role: ReviewRole) -> ReviewVerdict:
     # Try strict JSON parsing first
     try:
         data = json.loads(cleaned)
+        raw_conf = float(data.get("confidence", 0.0))
+        # Normalise percentage-scale values (e.g. 85 → 0.85) and clamp.
+        if raw_conf > 1.0:
+            raw_conf = raw_conf / 100.0
+        clamped_conf = max(0.0, min(1.0, raw_conf))
         return ReviewVerdict(
             role=role,
             approved=bool(data.get("approved", False)),
-            confidence=float(data.get("confidence", 0.0)),
+            confidence=clamped_conf,
             concerns=[str(c) for c in data.get("concerns", [])],
             suggestions=[str(s) for s in data.get("suggestions", [])],
             summary=str(data.get("summary", "")),
@@ -952,7 +957,10 @@ def parse_review_verdict(raw_text: str, role: ReviewRole) -> ReviewVerdict:
     conf_match = re.search(r'"confidence"\s*:\s*([\d.]+)', cleaned)
     if conf_match:
         try:
-            confidence = float(conf_match.group(1))
+            raw_c = float(conf_match.group(1))
+            if raw_c > 1.0:
+                raw_c = raw_c / 100.0
+            confidence = max(0.0, min(1.0, raw_c))
         except ValueError:
             pass
 
@@ -2432,7 +2440,7 @@ class DesignDocumentationPhase:
                         _delay,
                         exc,
                     )
-                    time.sleep(_delay)
+                    await asyncio.sleep(_delay)
                     continue  # re-enter the iteration loop
 
                 logger.error(

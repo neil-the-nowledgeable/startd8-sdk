@@ -104,10 +104,14 @@ class IntegrationCheckpoint:
 
     def capture_test_baseline(self) -> Set[str]:
         """
-        Capture the current set of passing tests as a baseline.
+        Capture the current set of *collected* (discovered) tests as a baseline.
 
-        This allows us to detect regressions (tests that were passing
-        before but fail after integration).
+        Uses ``--collect-only`` which enumerates test node IDs without running
+        them.  This allows us to detect regressions where previously-collected
+        tests disappear after integration (e.g. import errors, deleted files).
+
+        Note: collected ≠ passing.  A test that was collected but would fail is
+        still included in the baseline.
         """
         try:
             result = subprocess.run(
@@ -122,14 +126,14 @@ class IntegrationCheckpoint:
             self._test_baseline = set()
             return self._test_baseline
 
-        passing_tests = set()
+        collected_tests = set()
         for line in result.stdout.split("\n"):
             line = line.strip()
             if "::" in line and not line.startswith(("=", "-", " ")):
-                passing_tests.add(line.split()[0])
+                collected_tests.add(line.split()[0])
 
-        self._test_baseline = passing_tests
-        return passing_tests
+        self._test_baseline = collected_tests
+        return collected_tests
 
     def run_all_checkpoints(
         self,

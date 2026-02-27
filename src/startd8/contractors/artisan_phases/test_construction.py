@@ -2232,7 +2232,8 @@ class TestConstructionPhase:
                 result.errors = [
                     e
                     for e in result.errors
-                    if not e.startswith("Pytest collection")
+                    if "collection" not in e.lower()
+                    or "pytest" not in e.lower()
                 ]
                 result.collection_result = None
                 self._validate_collection(result)

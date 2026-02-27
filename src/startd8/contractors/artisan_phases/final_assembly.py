@@ -1000,6 +1000,17 @@ class FinalAssemblyPhase:
                 )
                 all_findings.extend(checker.check(source_code))
 
+        # Also check source files not covered by design specs
+        for file_path, source_code in source_files_cache.items():
+            if file_path in quality_checked_files:
+                continue
+            quality_checked_files.add(file_path)
+            if source_code is not None:
+                checker = QualityChecker(
+                    config=quality_config, file_path=file_path
+                )
+                all_findings.extend(checker.check(source_code))
+
         # ---- step 5: aggregate & report ----
         error_count = sum(1 for f in all_findings if f.severity == Severity.ERROR)
         warning_count = sum(1 for f in all_findings if f.severity == Severity.WARNING)

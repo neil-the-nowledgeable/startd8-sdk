@@ -1185,7 +1185,7 @@ def main() -> int:
         from startd8.contractors.postmortem import launch_postmortem_async
 
         pm_thread = launch_postmortem_async(
-            seed_path=str(args.seed),
+            seed_path=str(seed_path),
             workflow_result=result_data,
             context=_copy.deepcopy(initial_context),
             output_dir=output_dir,

@@ -646,13 +646,14 @@ def extract_forward_contracts(
         manifest.stages_completed.append("EXTRACT")
 
         return manifest
-    except Exception:
+    except (OSError, ValueError, KeyError, TypeError) as exc:
         logger.exception(
             "Catastrophic failure in extract_forward_contracts "
-            "(features=%d, yaml=%s, proto=%s)",
+            "(features=%d, yaml=%s, proto=%s): %s",
             len(features),
             yaml_text is not None,
             proto_dir,
+            exc,
         )
         return ForwardManifest()
 

@@ -3418,9 +3418,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         else:
             # Backward-compatible fallback for older handoff payloads/tests
             # that only persisted "agreed" without verdict objects.
-            score = 100 if entry.get("agreed") else 0
-            reviewer_conf = 1.0 if entry.get("agreed") else 0.0
-            arbiter_conf = 1.0 if entry.get("agreed") else 0.0
+            # Use pass_threshold as the score when agreed (not a binary 100)
+            # to avoid inflating gate outcomes.
+            score = pass_threshold if entry.get("agreed") else 0
+            reviewer_conf = (pass_threshold / 100.0) if entry.get("agreed") else 0.0
+            arbiter_conf = (pass_threshold / 100.0) if entry.get("agreed") else 0.0
             evidence_mode = "agreement_fallback"
 
         passed = bool(entry.get("agreed")) and reviewer_approved and arbiter_approved and (
@@ -10599,9 +10601,14 @@ class TestPhaseHandler(AbstractPhaseHandler):
         if validator_name == "syntax_check":
             return [py, "-m", "py_compile", *file_args]
         if validator_name in ("import_check", "imports_resolve"):
-            module_name = self._file_to_module(target_files[0], project_root) if target_files else ""
-            if module_name:
-                return [py, "-c", f"import {module_name}"]
+            modules = [
+                self._file_to_module(f, project_root)
+                for f in target_files
+            ] if target_files else []
+            modules = [m for m in modules if m]
+            if modules:
+                imports = "; ".join(f"import {m}" for m in modules)
+                return [py, "-c", imports]
             return None
 
         # --- WCP-008: Enrichment-produced domain validators ---
@@ -13485,6 +13492,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         implementation = context.get("implementation", {})
         test_results = context.get("test_results", {})
         review_results = context.get("review_results", {})
+        design_results = context.get("design_results", {})
 
         def _safe_cost(d: dict, key: str = "total_cost") -> float:
             try:
@@ -13492,12 +13500,23 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             except (TypeError, ValueError):
                 return 0.0
 
+        # Design cost: sum per-task costs from design_results dict
+        design_cost = 0.0
+        if isinstance(design_results, dict):
+            for entry in design_results.values():
+                if isinstance(entry, dict):
+                    try:
+                        design_cost += float(entry.get("cost", 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        pass
+
         impl_cost = _safe_cost(implementation)
         test_cost = _safe_cost(test_results)
         review_cost = _safe_cost(review_results)
-        total = impl_cost + test_cost + review_cost
+        total = design_cost + impl_cost + test_cost + review_cost
 
         return {
+            "design_cost": design_cost,
             "implementation_cost": impl_cost,
             "test_cost": test_cost,
             "review_cost": review_cost,

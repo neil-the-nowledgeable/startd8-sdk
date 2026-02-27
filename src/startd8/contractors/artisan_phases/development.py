@@ -56,6 +56,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 import uuid
 from abc import ABC, abstractmethod
@@ -4690,6 +4691,22 @@ class DevelopmentPhase:
             },
         )
         _chunk_span = _chunk_span_cm.__enter__()
+        try:
+            return await self._execute_chunk_inner(chunk, state, context, max_attempts, _chunk_span, _chunk_span_cm)
+        except BaseException:
+            _chunk_span_cm.__exit__(*sys.exc_info())
+            raise
+
+    async def _execute_chunk_inner(
+        self,
+        chunk: "DevelopmentChunk",
+        state: "ChunkState",
+        context: "ExecutionContext",
+        max_attempts: int,
+        _chunk_span: Any,
+        _chunk_span_cm: Any,
+    ) -> "ChunkState":
+        """Inner execution loop for a single chunk, wrapped by span try/finally."""
         if _chunk_span and hasattr(_chunk_span, "set_attribute"):
             _signals = chunk.metadata.get("_complexity_signals", {}) or {}
             _chunk_span.set_attribute(
