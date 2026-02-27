@@ -195,6 +195,7 @@ class DesignPhaseOutput(BaseModel):
     """Output of the DESIGN phase."""
 
     design_results: Dict[str, Any]
+    design_quality: Dict[str, Any] = {}
 
     @field_validator("design_results")
     @classmethod
@@ -212,6 +213,19 @@ class DesignPhaseOutput(BaseModel):
                 raise ValueError(
                     f"design_results[{task_id!r}] missing required 'status' key"
                 )
+        return v
+
+    @field_validator("design_quality")
+    @classmethod
+    def design_quality_has_required_metrics(cls, v: Dict[str, Any]) -> Dict[str, Any]:
+        if not v:
+            return v
+        required = {"total_passed", "total_failed", "agreement_rate"}
+        missing = required - set(v.keys())
+        if missing:
+            raise ValueError(
+                f"design_quality missing required keys: {sorted(missing)}"
+            )
         return v
 
 
@@ -369,7 +383,7 @@ _PHASE_EXIT_KEYS: Dict[str, List[str]] = {
         "semantic_conventions", "output_conventions",
     ],
     "scaffold": ["scaffold"],
-    "design": ["design_results"],
+    "design": ["design_results", "design_quality"],
     "implement": ["implementation", "generation_results", "truncation_flags"],
     "integrate": ["integration_results"],
     "test": ["test_results"],

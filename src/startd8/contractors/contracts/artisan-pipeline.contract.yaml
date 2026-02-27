@@ -179,7 +179,27 @@ phases:
             threshold: 2
             on_below: warning
             description: "Design output should have at least 2 sections (architecture + implementation notes)"
+        - name: design_quality
+          type: dict
+          severity: warning
+          description: "Aggregated DESIGN quality metrics (agreement/failure rates)."
+          quality:
+            metric: agreement_rate
+            threshold: 0.70
+            on_below: warning
+            description: "DESIGN agreement rate below threshold indicates review-convergence instability."
+          evaluation:
+            required: true
+            policy: any_evaluator
+            on_unevaluated: warning
+            on_below_threshold: warning
       optional:
+        - name: design_quality.total_failed
+          type: int
+          description: "Count of DESIGN tasks failing agreement/quality."
+        - name: design_quality.agreement_rate
+          type: float
+          description: "Share of evaluated DESIGN tasks that passed agreement checks."
         - name: design_results.*.design_mode
           type: str
           description: "Per-task design mode: 'create' (new file) or 'update' (existing file). Default 'create' for backward compatibility."

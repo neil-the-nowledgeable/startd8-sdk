@@ -182,6 +182,7 @@ class TestReviewTask:
         assert result["cost"] == pytest.approx(0.008)
         assert result["tokens"]["input"] == 600
         assert result["tokens"]["output"] == 300
+        assert result["prompt_telemetry"]["prompt_chars"] > 0
         mock_agent.generate.assert_called_once()
 
     def test_review_task_agent_error(self):
@@ -308,6 +309,18 @@ class TestExecute:
         assert result["output"]["total_cost"] == pytest.approx(0.03)
         assert result["output"]["total_passed"] == 1
         assert result["output"]["total_failed"] == 1
+        assert result["output"]["prompt_telemetry"]["tasks_with_telemetry"] == 2
+
+    def test_review_section_budget_helper_deduplicates(self):
+        sections = [
+            ("project_context", "## Project Context\nA"),
+            ("project_context", "## Project Context\nA"),
+            ("design_compliance", "X" * 10000),
+        ]
+        rendered, diagnostics = ReviewPhaseHandler._apply_review_section_budgets(sections)
+        assert diagnostics["dropped_section_count"] >= 1
+        assert diagnostics["truncation_count"] >= 1
+        assert any("Overflow Summary" in s for s in rendered)
 
     def test_execute_handles_missing_generated_file(self, tmp_path):
         """generated_files contains a Path that doesn't exist on disk.
@@ -1243,7 +1256,8 @@ class TestReviewForwardManifestIntegration:
         ) as mock_validator:
             result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
 
-        mock_validator.assert_called_once_with(manifest, registry)
+        assert mock_validator.call_count == 2
+        assert all(call.args == (manifest, registry) for call in mock_validator.call_args_list)
 
         items = result["output"]["review_items"]
         assert len(items) == 1
@@ -1288,7 +1302,8 @@ class TestReviewForwardManifestIntegration:
         ) as mock_validator:
             result = handler.execute(WorkflowPhase.REVIEW, ctx, dry_run=False)
 
-        mock_validator.assert_called_once_with(manifest, registry)
+        assert mock_validator.call_count == 2
+        assert all(call.args == (manifest, registry) for call in mock_validator.call_args_list)
 
         items = result["output"]["review_items"]
         assert len(items) == 1

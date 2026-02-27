@@ -125,6 +125,17 @@ class TestContractYAMLAmendment:
         required = contract["phases"]["design"]["exit"]["required"]
         names = [e["name"] for e in required]
         assert "design_results" in names
+        assert "design_quality" in names
+
+    def test_design_quality_required_has_agreement_rate_gate(
+        self, contract: dict[str, Any]
+    ) -> None:
+        """design_quality contract rule must enforce agreement_rate threshold."""
+        required = contract["phases"]["design"]["exit"]["required"]
+        entry = next(e for e in required if e["name"] == "design_quality")
+        quality = entry.get("quality", {})
+        assert quality.get("metric") == "agreement_rate"
+        assert "threshold" in quality
 
     def test_plan_exit_required_fields_intact(
         self, contract: dict[str, Any]

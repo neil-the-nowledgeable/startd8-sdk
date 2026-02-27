@@ -508,6 +508,57 @@ class TestDesignPhaseHandlerRealMode:
         )
         assert result["output"]["tasks_agreed"] == 0
 
+    def test_route_policy_forces_canonical_on_high_risk_task(self):
+        handler = DesignPhaseHandler(
+            handler_config=HandlerConfig(use_modular_prompts=True)
+        )
+        risky = _seed_task("T1")
+        risky.estimated_loc = 700
+        risky.depends_on = ["T0", "T00"]
+        context = {"tasks": [risky]}
+        fake_result = _make_fake_result()
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ) as mock_v1, patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value="## v2"
+        ) as mock_v2, patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        assert mock_v1.called
+        assert not mock_v2.called
+        route = context["design_results"]["T1"]["route_policy"]
+        assert route["selected_prompt_version"] == "v1"
+        assert route["reason"] == "policy_high_risk_canonical"
+
+    def test_route_policy_kill_switch_forces_canonical(self):
+        handler = DesignPhaseHandler(
+            handler_config=HandlerConfig(use_modular_prompts=True)
+        )
+        context = {
+            "tasks": [_seed_task("T1")],
+            "force_canonical_design_route": True,
+        }
+        fake_result = _make_fake_result()
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ) as mock_v1, patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value="## v2"
+        ) as mock_v2, patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        assert mock_v1.called
+        assert not mock_v2.called
+        route = context["design_results"]["T1"]["route_policy"]
+        assert route["reason"] == "kill_switch_force_canonical"
+
     def test_design_generation_marks_degraded_when_high_signal_floor_missing(self):
         handler = DesignPhaseHandler(handler_config=HandlerConfig())
         context = {"tasks": [_seed_task("T1")]}
@@ -560,6 +611,9 @@ class TestSerializeResult:
         fake_result = _make_fake_result(agreed=False)
         fake_result.non_agreement_reason_code = "DISAGREEMENT_UNRESOLVED"
         fake_result.final_iteration = 3
+        fake_result.resolution_audit = {"resolution_action_counts": {"merge": 1}}
+        fake_result.prompt_telemetry = {"total_calls": 2}
+        fake_result.disagreement_telemetry = {"disagreement_count": 1}
         serialized = DesignPhaseHandler._serialize_result(fake_result)
 
         assert serialized["agreed"] is False
@@ -569,6 +623,9 @@ class TestSerializeResult:
         assert "completed_at" in serialized
         assert serialized["non_agreement_reason_code"] == "DISAGREEMENT_UNRESOLVED"
         assert serialized["final_iteration"] == 3
+        assert serialized["resolution_audit"]["resolution_action_counts"]["merge"] == 1
+        assert serialized["prompt_telemetry"]["total_calls"] == 2
+        assert serialized["disagreement_telemetry"]["disagreement_count"] == 1
 
 
 # ============================================================================

@@ -1,0 +1,28 @@
+{
+  "suite_id": "prime-parity-default",
+  "suite_version": "1.0.0",
+  "description": "Fixed-seed suite for Artisan vs Prime parity benchmarking.",
+  "seeds": [
+    {
+      "id": "simple-seed",
+      "complexity": "simple",
+      "artisan_seed": "out/benchmarks/simple/artisan-context-seed-enriched.json",
+      "prime_seed": "out/benchmarks/simple/prime-context-seed-enriched.json",
+      "project_root": "."
+    },
+    {
+      "id": "medium-seed",
+      "complexity": "medium",
+      "artisan_seed": "out/benchmarks/medium/artisan-context-seed-enriched.json",
+      "prime_seed": "out/benchmarks/medium/prime-context-seed-enriched.json",
+      "project_root": "."
+    },
+    {
+      "id": "high-seed",
+      "complexity": "high",
+      "artisan_seed": "out/benchmarks/high/artisan-context-seed-enriched.json",
+      "prime_seed": "out/benchmarks/high/prime-context-seed-enriched.json",
+      "project_root": "."
+    }
+  ]
+}

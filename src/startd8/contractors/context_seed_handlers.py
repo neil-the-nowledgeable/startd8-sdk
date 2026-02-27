@@ -3199,6 +3199,15 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         final_iteration = getattr(result, "final_iteration", None)
         if final_iteration is not None:
             payload["final_iteration"] = final_iteration
+        resolution_audit = getattr(result, "resolution_audit", None)
+        if resolution_audit:
+            payload["resolution_audit"] = resolution_audit
+        prompt_telemetry = getattr(result, "prompt_telemetry", None)
+        if prompt_telemetry:
+            payload["prompt_telemetry"] = prompt_telemetry
+        disagreement_telemetry = getattr(result, "disagreement_telemetry", None)
+        if disagreement_telemetry:
+            payload["disagreement_telemetry"] = disagreement_telemetry
         return payload
 
     @staticmethod
@@ -3219,6 +3228,89 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             missing.append("critical_parameters_checklist")
         return missing
 
+    @staticmethod
+    def _is_truthy_flag(value: Any) -> bool:
+        """Parse permissive truthy values from context/env/config."""
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return False
+
+    @staticmethod
+    def _select_design_route(
+        task: SeedTask,
+        *,
+        use_modular_prompts: bool,
+        force_canonical: bool,
+        shared_file_manifest: dict[str, list[str]],
+        scaffold_existing_files: set[str],
+    ) -> dict[str, Any]:
+        """Policy-driven DESIGN routing with auditable criteria values."""
+        contested_file_count = sum(
+            1 for tf in task.target_files
+            if _normalize_target_path(tf) in shared_file_manifest
+        )
+        dependency_density = len(task.depends_on) / max(1, len(task.target_files))
+        edit_mode = any(tf in scaffold_existing_files for tf in task.target_files) or bool(
+            task.existing_content_hash
+        )
+        target_file_count = len(task.target_files)
+        estimated_loc = int(task.estimated_loc or 0)
+
+        risk_signals: list[str] = []
+        risk_score = 0
+        if estimated_loc >= 500:
+            risk_signals.append("large_loc")
+            risk_score += 2
+        elif estimated_loc >= 250:
+            risk_signals.append("medium_loc")
+            risk_score += 1
+        if contested_file_count > 0:
+            risk_signals.append("contested_files")
+            risk_score += 2
+        if dependency_density >= 1.0:
+            risk_signals.append("high_dependency_density")
+            risk_score += 1
+        if edit_mode:
+            risk_signals.append("edit_mode")
+            risk_score += 1
+        if target_file_count > 2:
+            risk_signals.append("wide_file_scope")
+            risk_score += 1
+
+        route = "v1"
+        reason = "modular_disabled"
+        if force_canonical:
+            route = "v1"
+            reason = "kill_switch_force_canonical"
+        elif use_modular_prompts:
+            if risk_score >= 3:
+                route = "v1"
+                reason = "policy_high_risk_canonical"
+            else:
+                route = "v2"
+                reason = "policy_low_risk_modular"
+
+        return {
+            "selected_prompt_version": route,
+            "reason": reason,
+            "criteria": {
+                "estimated_loc": estimated_loc,
+                "contested_file_count": contested_file_count,
+                "dependency_density": round(dependency_density, 3),
+                "edit_mode": edit_mode,
+                "target_file_count": target_file_count,
+                "depends_on_count": len(task.depends_on),
+            },
+            "risk_score": risk_score,
+            "risk_signals": risk_signals,
+            "force_canonical": force_canonical,
+            "modular_opt_in": use_modular_prompts,
+        }
+
     # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
@@ -3238,6 +3330,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             logger.warning(
                 "DESIGN: modular prompt path explicitly enabled "
                 "(use_modular_prompts=True)"
+            )
+        _force_canonical_flag = context.get(
+            "force_canonical_design_route",
+            os.getenv("STARTD8_FORCE_CANONICAL_DESIGN_ROUTE"),
+        )
+        _force_canonical_design_route = self._is_truthy_flag(_force_canonical_flag)
+        if _force_canonical_design_route:
+            logger.warning(
+                "DESIGN: canonical route kill switch enabled "
+                "(force_canonical_design_route=%r)",
+                _force_canonical_flag,
             )
 
         # REQ-PD-010: Source checksum drift detection (advisory only)
@@ -3325,6 +3428,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         tasks_failed = 0
         tasks_adopted = 0
         tasks_refined = 0
+        route_decision_counts: dict[str, int] = defaultdict(int)
+        route_quality_counts: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"passed": 0, "failed": 0}
+        )
 
         # Prior design_results injected via --adopt-prior (or checkpoint resume)
         prior_design_results: dict[str, dict[str, Any]] = context.get("design_results", {})
@@ -3588,6 +3695,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         except Exception as exc:
             logger.warning("DESIGN: manifest computation failed: %s", exc)
             shared_file_manifest = {}
+        _scaffold_existing_for_route = set(
+            context.get("scaffold", {}).get("existing_target_files", [])
+        )
 
         # CCD-302: Lane-to-file mapping
         lane_to_file_mapping: dict[int, list[str]] = {}
@@ -3722,9 +3832,28 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         "status": "adopted",
                         "adopted_from": "prior_design_results",
                     }
+                    adopted_prompt_version = design_results[task.task_id].get(
+                        "prompt_version", "v1",
+                    )
+                    design_results[task.task_id].setdefault(
+                        "route_policy",
+                        {
+                            "selected_prompt_version": adopted_prompt_version,
+                            "reason": "adopted_prior_result",
+                            "criteria": {},
+                            "risk_score": 0,
+                            "risk_signals": [],
+                            "force_canonical": _force_canonical_design_route,
+                            "modular_opt_in": self.config.use_modular_prompts,
+                        },
+                    )
+                    route_decision_counts[adopted_prompt_version] += 1
                     tasks_adopted += 1
                     if prior.get("agreed"):
                         tasks_agreed += 1
+                        route_quality_counts[adopted_prompt_version]["passed"] += 1
+                    else:
+                        route_quality_counts[adopted_prompt_version]["failed"] += 1
 
                     # Feed into cross-task progressive context
                     doc_text = prior["design_document"]
@@ -3854,6 +3983,22 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 retryable_status_codes=(429, 500, 502, 503, 504, 529),
             )
             _max_attempts = 1 + self.config.design_task_retries
+            route_policy = self._select_design_route(
+                task,
+                use_modular_prompts=self.config.use_modular_prompts,
+                force_canonical=_force_canonical_design_route,
+                shared_file_manifest=shared_file_manifest,
+                scaffold_existing_files=_scaffold_existing_for_route,
+            )
+            selected_prompt_version = route_policy["selected_prompt_version"]
+            logger.info(
+                "DESIGN route policy: task=%s -> %s (%s) criteria=%s risk=%d",
+                task.task_id,
+                selected_prompt_version,
+                route_policy["reason"],
+                route_policy["criteria"],
+                route_policy["risk_score"],
+            )
 
             for _attempt in range(_max_attempts):
                 try:
@@ -3868,7 +4013,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             _wt_root / ".startd8" / "walkthrough"
                             / "design" / task.task_id
                         )
-                    if self.config.use_modular_prompts:
+                    feature_context = None
+                    if selected_prompt_version == "v2":
                         # ── V2: modular prompt + single LLM call ──
                         # Dual-review envelope is still required for acceptance.
                         from startd8.contractors.artisan_phases.design_prompts import (
@@ -3923,11 +4069,41 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                 task.task_id,
                                 ", ".join(_high_signal_missing),
                             )
-                        _v2_raw = self._run_v2_generate(
-                            backend, _v2_user, _v2_system,
-                            max_tokens=_v2_max_tokens,
-                            timeout=self.config.development_timeout_seconds,
-                        )
+                        if _wt_capture_dir is not None:
+                            _wt_capture_dir.mkdir(parents=True, exist_ok=True)
+                            (_wt_capture_dir / "generate_system_prompt.md").write_text(
+                                _v2_system,
+                                encoding="utf-8",
+                            )
+                            (_wt_capture_dir / "generate_user_prompt.md").write_text(
+                                _v2_user,
+                                encoding="utf-8",
+                            )
+                            (_wt_capture_dir / "prompt_diagnostics.json").write_text(
+                                json.dumps(
+                                    {
+                                        "generate": {
+                                            "kind": "design_generate",
+                                            "iteration": 1,
+                                            "prompt_chars": len(_v2_user),
+                                            "system_prompt_chars": len(_v2_system),
+                                            "prompt_tokens_estimate": len(_v2_user) // 4,
+                                            "system_prompt_tokens_estimate": len(_v2_system) // 4,
+                                            "max_tokens": _v2_max_tokens,
+                                        }
+                                    },
+                                    indent=2,
+                                    default=str,
+                                ),
+                                encoding="utf-8",
+                            )
+                            _v2_raw = "[walkthrough placeholder]"
+                        else:
+                            _v2_raw = self._run_v2_generate(
+                                backend, _v2_user, _v2_system,
+                                max_tokens=_v2_max_tokens,
+                                timeout=self.config.development_timeout_seconds,
+                            )
                         _v2_design = DesignDocument(
                             feature_name=task.title,
                             sections={},
@@ -3966,6 +4142,47 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             "reviewer_summary": _reviewer_verdict.summary,
                             "arbiter_summary": _arbiter_verdict.summary,
                             "review_disagreement_count": len(_v2_disagreements),
+                            "prompt_telemetry": {
+                                "total_calls": 1,
+                                "calls": [
+                                    {
+                                        "kind": "design_generate",
+                                        "iteration": 1,
+                                        "prompt_chars": len(_v2_user),
+                                        "system_prompt_chars": len(_v2_system),
+                                        "prompt_tokens_estimate": len(_v2_user) // 4,
+                                        "system_prompt_tokens_estimate": len(_v2_system) // 4,
+                                        "max_tokens": _v2_max_tokens,
+                                    }
+                                ],
+                            },
+                            "disagreement_telemetry": {
+                                "review_pair_count": 1,
+                                "re_review_pair_count": 0,
+                                "re_review_rate": 0.0,
+                                "disagreement_iteration_count": (
+                                    1 if _v2_disagreements else 0
+                                ),
+                                "disagreement_count": len(_v2_disagreements),
+                                "disagreement_categories": [
+                                    (
+                                        d.disagreement_type.value
+                                        if hasattr(d, "disagreement_type")
+                                        else str(
+                                            (
+                                                d.get("type")
+                                                if isinstance(d, dict)
+                                                else "unknown"
+                                            )
+                                        )
+                                    )
+                                    for d in _v2_disagreements
+                                ],
+                                "max_confidence_gap": abs(
+                                    _reviewer_verdict.confidence
+                                    - _arbiter_verdict.confidence
+                                ),
+                            },
                         }
                         if not _v2_agreed:
                             serialized["non_agreement_reason_code"] = (
@@ -4045,6 +4262,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     # ── Shared post-processing (both v1 and v2) ──
                     serialized["status"] = "refined" if prior_design_text else "designed"
                     serialized["cost"] = task_cost
+                    serialized["prompt_version"] = selected_prompt_version
+                    serialized["route_policy"] = route_policy
                     design_results[task.task_id] = serialized
 
                     # PCA-605c: extract file decisions from design doc
@@ -4069,6 +4288,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         tasks_designed += 1
                     if serialized.get("agreed"):
                         tasks_agreed += 1
+                    route_decision_counts[selected_prompt_version] += 1
+                    if serialized.get("agreed"):
+                        route_quality_counts[selected_prompt_version]["passed"] += 1
+                    else:
+                        route_quality_counts[selected_prompt_version]["failed"] += 1
 
                     # Accumulate cross-task summary for progressive context
                     doc_text = serialized["design_document"]
@@ -4093,7 +4317,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
                     # REQ-PD-012/014: Foundation coverage + provenance (v1 only —
                     # v2 modules track their own fragment-level coverage)
-                    if not self.config.use_modular_prompts:
+                    if selected_prompt_version == "v1" and feature_context is not None:
                         _foundation_field_keys = [
                             "plan_architecture", "plan_risks",
                             "plan_verification_strategy", "refine_suggestions",
@@ -4137,8 +4361,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     _task_span.set_attribute("task.cost", task_cost)
                     _task_span.set_attribute("task.attempts", _attempt + 1)
                     _task_span.set_attribute("task.status", "designed")
-                    if self.config.use_modular_prompts:
-                        _task_span.set_attribute("task.prompt_version", "v2")
+                    _task_span.set_attribute("task.prompt_version", selected_prompt_version)
                     # CCD-601: lane-peer context injection attributes
                     # Compute truncation flag: same estimation as _apply_lane_peer_token_budget
                     _peer_count = len(lane_prior_designs) - 1 if lane_prior_designs else 0
@@ -4464,8 +4687,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 logger.debug("DESIGN: design_collision module not available — skipping")
         context["lane_conflicts"] = _lane_conflicts
 
-        # Context contract: validate DESIGN output model
-        DesignPhaseOutput(design_results=context["design_results"])
+        # Context contract validation runs after aggregate quality metrics
+        # are computed and attached to context.
 
         # Persist design results for auto-adoption on re-run
         if design_results and not dry_run and self.output_dir:
@@ -4524,6 +4747,100 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         agreement_rate = (
             quality_passed / quality_total if quality_total > 0 else 0.0
         )
+        design_quality = {
+            "total_passed": quality_passed,
+            "total_failed": quality_failed,
+            "agreement_rate": agreement_rate,
+            "evaluated_task_count": quality_total,
+        }
+        context["design_quality"] = design_quality
+
+        prompt_calls_total = 0
+        prompt_chars_total = 0
+        prompt_system_chars_total = 0
+        prompt_tasks_with_telemetry = 0
+        prompt_dropped_field_total = 0
+        prompt_truncation_event_count = 0
+        disagreement_count_total = 0
+        disagreement_pair_total = 0
+        re_review_pair_total = 0
+        resolution_action_summary: dict[str, int] = defaultdict(int)
+        resolution_outcome_summary: dict[str, int] = defaultdict(int)
+        for entry in design_results.values():
+            if not isinstance(entry, dict):
+                continue
+            prompt_info = entry.get("prompt_telemetry")
+            if isinstance(prompt_info, dict):
+                prompt_tasks_with_telemetry += 1
+                prompt_calls_total += int(prompt_info.get("total_calls", 0) or 0)
+                prompt_chars_total += int(prompt_info.get("total_prompt_chars", 0) or 0)
+                prompt_system_chars_total += int(
+                    prompt_info.get("total_system_prompt_chars", 0) or 0
+                )
+                for call in prompt_info.get("calls", []):
+                    if not isinstance(call, dict):
+                        continue
+                    ctx_budget = call.get("context_budget")
+                    if not isinstance(ctx_budget, dict):
+                        continue
+                    dropped = int(ctx_budget.get("dropped_field_count", 0) or 0)
+                    prompt_dropped_field_total += dropped
+                    if ctx_budget.get("compression_steps"):
+                        prompt_truncation_event_count += 1
+            disagreement_info = entry.get("disagreement_telemetry")
+            if isinstance(disagreement_info, dict):
+                disagreement_count_total += int(
+                    disagreement_info.get("disagreement_count", 0) or 0
+                )
+                disagreement_pair_total += int(
+                    disagreement_info.get("review_pair_count", 0) or 0
+                )
+                re_review_pair_total += int(
+                    disagreement_info.get("re_review_pair_count", 0) or 0
+                )
+            resolution_info = entry.get("resolution_audit")
+            if isinstance(resolution_info, dict):
+                for action, count in (resolution_info.get("resolution_action_counts", {}) or {}).items():
+                    resolution_action_summary[action] += int(count or 0)
+                for event in resolution_info.get("events", []) or []:
+                    if not isinstance(event, dict):
+                        continue
+                    outcome = event.get("outcome")
+                    if outcome:
+                        resolution_outcome_summary[str(outcome)] += 1
+
+        prompt_telemetry_summary = {
+            "tasks_with_telemetry": prompt_tasks_with_telemetry,
+            "prompt_calls_total": prompt_calls_total,
+            "prompt_chars_total": prompt_chars_total,
+            "system_prompt_chars_total": prompt_system_chars_total,
+            "dropped_field_total": prompt_dropped_field_total,
+            "truncation_event_count": prompt_truncation_event_count,
+        }
+        disagreement_summary = {
+            "disagreement_count_total": disagreement_count_total,
+            "review_pair_total": disagreement_pair_total,
+            "re_review_pair_total": re_review_pair_total,
+            "re_review_rate": (
+                re_review_pair_total / disagreement_pair_total
+                if disagreement_pair_total > 0
+                else 0.0
+            ),
+            "resolution_action_counts": dict(resolution_action_summary),
+            "resolution_outcome_counts": dict(resolution_outcome_summary),
+        }
+        route_quality_summary = {
+            route: {
+                "passed": counts["passed"],
+                "failed": counts["failed"],
+                "agreement_rate": (
+                    counts["passed"] / (counts["passed"] + counts["failed"])
+                    if (counts["passed"] + counts["failed"]) > 0
+                    else 0.0
+                ),
+            }
+            for route, counts in route_quality_counts.items()
+        }
         output: dict[str, Any] = {
             "tasks_designed": tasks_designed,
             "tasks_refined": tasks_refined,
@@ -4535,10 +4852,21 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "total_failed": quality_failed,
             "agreement_rate": agreement_rate,
             "per_task": quality_per_task,
+            "design_quality": design_quality,
+            "route_decisions": dict(route_decision_counts),
+            "route_quality": route_quality_summary,
+            "prompt_telemetry": prompt_telemetry_summary,
+            "disagreement_summary": disagreement_summary,
             "total_cost": total_cost,
         }
         if self.output_dir:
             output["output_dir"] = self.output_dir
+
+        # Context contract: validate DESIGN output model with quality payload.
+        DesignPhaseOutput(
+            design_results=context["design_results"],
+            design_quality=context["design_quality"],
+        )
 
         duration = time.monotonic() - start
         logger.info(
@@ -9001,6 +9329,7 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
     def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
         self.config = handler_config or HandlerConfig()
         self._review_agent: Any = None
+        self._last_review_prompt_diagnostics: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # Review prompt template — loaded from review.yaml
@@ -9048,6 +9377,21 @@ PASS if score >= {pass_threshold} and no blocking issues.
 ### Suggestions
 - [Specific improvements]
 """
+
+    # PAQ-102/502: deterministic REVIEW section budgets and global cap.
+    _REVIEW_SECTION_BUDGETS: dict[str, int] = {
+        "project_context": 2000,
+        "design_compliance": 8000,
+        "parameter_sources": 1200,
+        "semantic_conventions": 1200,
+        "service_metadata": 1200,
+        "refine_compliance": 1400,
+        "truncation_warning": 800,
+        "deps_advisory": 600,
+        "call_graph": 2000,
+        "forward_contract_violations": 1800,
+    }
+    _REVIEW_TOTAL_SECTION_BUDGET = 14000
 
     @staticmethod
     def _get_review_user_template() -> str:
@@ -9138,28 +9482,34 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         # -- Enrichment sections (inserted before "## Review Instructions") --
         # Each helper returns a list of strings.  Empty list = no injection.
-        sections: list[str] = []
-        sections.extend(self._build_project_context_section(project_context))
-        sections.extend(self._build_design_compliance_section(design_document))
-        sections.extend(self._build_parameter_sources_section(parameter_sources))
-        sections.extend(self._build_semantic_conventions_section(semantic_conventions))
-        sections.extend(self._build_service_metadata_section(service_metadata))
-        sections.extend(self._build_refine_compliance_section(refine_provenance))
-        sections.extend(
-            self._build_truncation_warning_section(truncation_info)
-        )
-        sections.extend(
-            self._build_deps_advisory_section(task, test_results)
-        )
-        sections.extend(
-            self._build_call_graph_section(task, generated_code)
-        )
-        sections.extend(
-            self._build_forward_contract_violations_section(forward_contract_violations)  # GAP1-A
-        )
+        named_sections: list[tuple[str, str]] = []
+        for text in self._build_project_context_section(project_context):
+            named_sections.append(("project_context", text))
+        for text in self._build_design_compliance_section(design_document):
+            named_sections.append(("design_compliance", text))
+        for text in self._build_parameter_sources_section(parameter_sources):
+            named_sections.append(("parameter_sources", text))
+        for text in self._build_semantic_conventions_section(semantic_conventions):
+            named_sections.append(("semantic_conventions", text))
+        for text in self._build_service_metadata_section(service_metadata):
+            named_sections.append(("service_metadata", text))
+        for text in self._build_refine_compliance_section(refine_provenance):
+            named_sections.append(("refine_compliance", text))
+        for text in self._build_truncation_warning_section(truncation_info):
+            named_sections.append(("truncation_warning", text))
+        for text in self._build_deps_advisory_section(task, test_results):
+            named_sections.append(("deps_advisory", text))
+        for text in self._build_call_graph_section(task, generated_code):
+            named_sections.append(("call_graph", text))
+        for text in self._build_forward_contract_violations_section(forward_contract_violations):
+            named_sections.append(("forward_contract_violations", text))
 
-        if sections:
-            enrichment = "\n".join(sections)
+        if named_sections:
+            budgeted_sections, diagnostics = self._apply_review_section_budgets(
+                named_sections
+            )
+            self._last_review_prompt_diagnostics = diagnostics
+            enrichment = "\n".join(budgeted_sections)
             if "## Review Instructions" in prompt:
                 prompt = prompt.replace(
                     "## Review Instructions",
@@ -9171,6 +9521,17 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "prompt — appending enrichment sections at end"
                 )
                 prompt += "\n" + enrichment
+        else:
+            self._last_review_prompt_diagnostics = {
+                "section_budget_total": self._REVIEW_TOTAL_SECTION_BUDGET,
+                "section_char_total": 0,
+                "section_count": 0,
+                "rendered_section_count": 0,
+                "dropped_sections": [],
+                "dropped_section_count": 0,
+                "truncated_sections": {},
+                "truncation_count": 0,
+            }
 
         # GAP3-B CG-CR: Inject call graph context for review focus (CG-CR-1..CG-CR-5)
         try:
@@ -9191,6 +9552,69 @@ PASS if score >= {pass_threshold} and no blocking issues.
             logger.debug("REVIEW CG-CR: call graph enrichment failed: %s", _cg_cr_err)
 
         return prompt
+
+    @classmethod
+    def _apply_review_section_budgets(
+        cls,
+        sections: list[tuple[str, str]],
+    ) -> tuple[list[str], dict[str, Any]]:
+        """Apply deterministic de-dup + overflow budgeting to REVIEW sections."""
+        rendered: list[str] = []
+        normalized_seen: set[str] = set()
+        dropped_sections: list[str] = []
+        truncated_sections: dict[str, int] = {}
+        total_chars = 0
+
+        for section_name, section_text in sections:
+            normalized = re.sub(r"\s+", " ", section_text.strip()).lower()
+            if normalized in normalized_seen:
+                dropped_sections.append(f"{section_name}:duplicate")
+                continue
+            normalized_seen.add(normalized)
+
+            budget = cls._REVIEW_SECTION_BUDGETS.get(section_name, 1200)
+            text = section_text
+            if len(text) > budget:
+                truncated_sections[section_name] = len(text) - budget
+                text = text[:budget] + (
+                    f"\n... [truncated — {len(section_text) - budget} chars omitted] ..."
+                )
+            if total_chars + len(text) > cls._REVIEW_TOTAL_SECTION_BUDGET:
+                dropped_sections.append(f"{section_name}:overflow")
+                continue
+            rendered.append(text)
+            total_chars += len(text)
+
+        overflow_lines: list[str] = []
+        if truncated_sections:
+            overflow_lines.append(
+                "truncated_sections: "
+                + ", ".join(
+                    f"{name}(-{omitted} chars)"
+                    for name, omitted in sorted(truncated_sections.items())
+                )
+            )
+        if dropped_sections:
+            overflow_lines.append(
+                "dropped_sections: " + ", ".join(sorted(dropped_sections))
+            )
+        if overflow_lines:
+            rendered.append(
+                "## Overflow Summary\n"
+                + "\n".join(f"- {line}" for line in overflow_lines)
+            )
+
+        diagnostics = {
+            "section_budget_total": cls._REVIEW_TOTAL_SECTION_BUDGET,
+            "section_char_total": total_chars,
+            "section_count": len(sections),
+            "rendered_section_count": len(rendered),
+            "dropped_sections": dropped_sections,
+            "dropped_section_count": len(dropped_sections),
+            "truncated_sections": truncated_sections,
+            "truncation_count": len(truncated_sections),
+        }
+        return rendered, diagnostics
 
     # -- helper: base prompt ------------------------------------------------
 
@@ -9882,6 +10306,13 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     refine_provenance=refine_provenance,
                     forward_contract_violations=forward_contract_violations,  # GAP1-A
                 )
+                _prompt_diag = dict(self._last_review_prompt_diagnostics or {})
+                _prompt_diag.update(
+                    {
+                        "prompt_chars": len(prompt),
+                        "prompt_tokens_estimate": len(prompt) // 4,
+                    }
+                )
 
                 # OT-306: review.evaluate span (child of OT-304 task span)
                 with _phase_tracer.start_as_current_span(
@@ -9905,6 +10336,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                             "output": token_usage_output(token_usage),
                         }
                         review["status"] = "reviewed"
+                        review["prompt_telemetry"] = _prompt_diag
 
                         # OT-306 AC-3: set verdict attribute
                         _eval_span.set_attribute(
@@ -9938,6 +10370,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                                 "design_doc_line_count": len(design_document.splitlines()) if design_document else None,
                                 "parameter_sources_present": parameter_sources is not None,
                                 "prompt_constraints_count": len(task.prompt_constraints) if task.prompt_constraints else 0,
+                                "prompt_section_count": _prompt_diag.get("section_count", 0),
+                                "prompt_dropped_sections": _prompt_diag.get("dropped_section_count", 0),
+                                "prompt_truncation_count": _prompt_diag.get("truncation_count", 0),
                             },
                             forensic_log_level=self.config.forensic_log_level,
                         )
@@ -10497,6 +10932,27 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "verdict": item.get("verdict"),
                 }
 
+        review_prompt_summary = {
+            "tasks_with_telemetry": 0,
+            "prompt_chars_total": 0,
+            "dropped_sections_total": 0,
+            "truncation_count_total": 0,
+        }
+        for item in review_items:
+            telemetry = item.get("prompt_telemetry")
+            if not isinstance(telemetry, dict):
+                continue
+            review_prompt_summary["tasks_with_telemetry"] += 1
+            review_prompt_summary["prompt_chars_total"] += int(
+                telemetry.get("prompt_chars", 0) or 0
+            )
+            review_prompt_summary["dropped_sections_total"] += int(
+                telemetry.get("dropped_section_count", 0) or 0
+            )
+            review_prompt_summary["truncation_count_total"] += int(
+                telemetry.get("truncation_count", 0) or 0
+            )
+
         output = {
             "review_items": review_items,
             "preflight_summary": preflight_summary,
@@ -10509,6 +10965,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             "total_passed": total_passed,
             "total_failed": total_failed,
             "per_task": per_task,
+            "prompt_telemetry": review_prompt_summary,
         }
 
         context["review_results"] = output

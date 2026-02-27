@@ -199,6 +199,33 @@ class TestRequiredT0Markers:
         assert "MISSING_T0:" not in result
 
 
+class TestDiagnostics:
+    """PAQ-102/502: diagnostics mode returns deterministic budget metadata."""
+
+    def test_return_diagnostics_tuple(self):
+        ctx = {"api_signatures": "GET /health"}
+        rendered, diag = format_tiered_context(ctx, return_diagnostics=True)
+        assert "GET /health" in rendered
+        assert diag["token_budget"] == _ADDITIONAL_CONTEXT_TOKEN_BUDGET
+        assert "compression_steps" in diag
+
+    def test_overflow_summary_when_fields_dropped(self):
+        ctx = {
+            "api_signatures": "GET /health",
+            "project_goals": "X" * 1200,
+            "parameter_sources": "Y" * 1200,
+            "domain": "infra",
+            "feature_id": "F-1",
+        }
+        rendered, diag = format_tiered_context(
+            ctx,
+            token_budget=80,
+            return_diagnostics=True,
+        )
+        assert "### Overflow Summary" in rendered
+        assert diag["dropped_field_count"] >= 0
+
+
 # ── TC-506: Empty tier omission ──────────────────────────────────────────
 
 

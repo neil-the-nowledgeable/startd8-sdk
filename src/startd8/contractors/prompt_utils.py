@@ -174,7 +174,8 @@ def format_tiered_context(
     *,
     token_budget: int = _ADDITIONAL_CONTEXT_TOKEN_BUDGET,
     required_t0_keys: tuple[str, ...] | None = None,
-) -> str:
+    return_diagnostics: bool = False,
+) -> str | tuple[str, dict[str, Any]]:
     """Render additional_context with tier-based progressive disclosure.
 
     Fields are grouped by tier (T0 critical → T3 metadata) with per-tier
@@ -189,8 +190,28 @@ def format_tiered_context(
 
     Returns:
         Structured markdown string, or ``"None"`` for empty/None input.
+        When ``return_diagnostics=True``, returns ``(text, diagnostics)``.
     """
+    def _empty_diag() -> dict[str, Any]:
+        return {
+            "token_budget": token_budget,
+            "initial_estimated_tokens": 0,
+            "final_estimated_tokens": 0,
+            "compression_steps": [],
+            "dropped_fields": [],
+            "collapsed_fields": [],
+            "truncated_fields": [],
+            "dropped_field_count": 0,
+            "tier_counts": {"0": 0, "1": 0, "2": 0, "3": 0},
+            "overflow_summary_lines": [],
+        }
+
     if not additional_context:
+        if return_diagnostics:
+            diag = _empty_diag()
+            diag["initial_estimated_tokens"] = _estimate_tokens("None")
+            diag["final_estimated_tokens"] = _estimate_tokens("None")
+            return "None", diag
         return "None"
 
     # Group fields by tier.
@@ -206,6 +227,22 @@ def format_tiered_context(
                 tier_groups[0][f"MISSING_T0:{key}"] = (
                     "NOT PROVIDED. Treat as unresolved critical context."
                 )
+
+    diagnostics: dict[str, Any] = {
+        "token_budget": token_budget,
+        "compression_steps": [],
+        "dropped_fields": [],
+        "collapsed_fields": [],
+        "truncated_fields": [],
+        "dropped_field_count": 0,
+        "tier_counts": {
+            "0": len(tier_groups[0]),
+            "1": len(tier_groups[1]),
+            "2": len(tier_groups[2]),
+            "3": len(tier_groups[3]),
+        },
+        "overflow_summary_lines": [],
+    }
 
     # --- Initial render (full fidelity per tier) ---
     def _render_all(
@@ -244,32 +281,91 @@ def format_tiered_context(
     output = _render_all(
         tier_groups[0], tier_groups[1], tier_groups[2], tier_groups[3],
     )
+    diagnostics["initial_estimated_tokens"] = _estimate_tokens(output)
 
     # --- Progressive compression cascade (TC-201..TC-203) ---
     if _estimate_tokens(output) <= token_budget:
+        diagnostics["final_estimated_tokens"] = _estimate_tokens(output)
+        if return_diagnostics:
+            return output, diagnostics
         return output
 
     # Step 1: Drop T3 (TC-201)
+    diagnostics["compression_steps"].append("drop_t3")
+    diagnostics["dropped_fields"] = sorted(tier_groups[3].keys())
+    diagnostics["dropped_field_count"] = len(diagnostics["dropped_fields"])
     output = _render_all(
         tier_groups[0], tier_groups[1], tier_groups[2], {},
     )
     if _estimate_tokens(output) <= token_budget:
+        if diagnostics["dropped_fields"]:
+            diagnostics["overflow_summary_lines"].append(
+                "dropped_t3_fields: " + ", ".join(diagnostics["dropped_fields"])
+            )
+        if diagnostics["overflow_summary_lines"]:
+            output += "\n\n### Overflow Summary\n" + "\n".join(
+                f"- {line}" for line in diagnostics["overflow_summary_lines"]
+            )
+        diagnostics["final_estimated_tokens"] = _estimate_tokens(output)
+        if return_diagnostics:
+            return output, diagnostics
         return output
 
     # Step 2: Collapse T2 to one-liners (TC-202)
+    diagnostics["compression_steps"].append("collapse_t2")
+    diagnostics["collapsed_fields"] = sorted(tier_groups[2].keys())
     output = _render_all(
         tier_groups[0], tier_groups[1], tier_groups[2], {},
         t2_renderer=_render_oneline,
     )
     if _estimate_tokens(output) <= token_budget:
+        if diagnostics["dropped_fields"]:
+            diagnostics["overflow_summary_lines"].append(
+                "dropped_t3_fields: " + ", ".join(diagnostics["dropped_fields"])
+            )
+        if diagnostics["collapsed_fields"]:
+            diagnostics["overflow_summary_lines"].append(
+                "collapsed_t2_fields: " + ", ".join(diagnostics["collapsed_fields"])
+            )
+        if diagnostics["overflow_summary_lines"]:
+            output += "\n\n### Overflow Summary\n" + "\n".join(
+                f"- {line}" for line in diagnostics["overflow_summary_lines"]
+            )
+        diagnostics["final_estimated_tokens"] = _estimate_tokens(output)
+        if return_diagnostics:
+            return output, diagnostics
         return output
 
     # Step 3: Truncate T1 strings to 500 chars (TC-203)
+    diagnostics["compression_steps"].append("truncate_t1")
+    diagnostics["truncated_fields"] = sorted(
+        k for k, v in tier_groups[1].items()
+        if isinstance(v, str) and len(v) > _T1_EMERGENCY_TRUNCATE
+    )
     output = _render_all(
         tier_groups[0], tier_groups[1], tier_groups[2], {},
         t2_renderer=_render_oneline,
         t1_truncate=_T1_EMERGENCY_TRUNCATE,
     )
+    if diagnostics["dropped_fields"]:
+        diagnostics["overflow_summary_lines"].append(
+            "dropped_t3_fields: " + ", ".join(diagnostics["dropped_fields"])
+        )
+    if diagnostics["collapsed_fields"]:
+        diagnostics["overflow_summary_lines"].append(
+            "collapsed_t2_fields: " + ", ".join(diagnostics["collapsed_fields"])
+        )
+    if diagnostics["truncated_fields"]:
+        diagnostics["overflow_summary_lines"].append(
+            "truncated_t1_fields: " + ", ".join(diagnostics["truncated_fields"])
+        )
+    if diagnostics["overflow_summary_lines"]:
+        output += "\n\n### Overflow Summary\n" + "\n".join(
+            f"- {line}" for line in diagnostics["overflow_summary_lines"]
+        )
+    diagnostics["final_estimated_tokens"] = _estimate_tokens(output)
+    if return_diagnostics:
+        return output, diagnostics
     return output
 
 

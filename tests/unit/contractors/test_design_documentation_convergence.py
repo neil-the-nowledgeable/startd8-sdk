@@ -123,6 +123,15 @@ async def test_non_rereview_resolution_rereviews_revised_design(monkeypatch):
     assert len(review_calls) == 4
     assert review_calls[2][0].endswith("draft-v2")
     assert review_calls[3][0].endswith("draft-v2")
+    assert result.resolution_audit is not None
+    assert result.resolution_audit["resolution_action_counts"]["merge"] == 1
+    event = result.resolution_audit["events"][0]
+    assert event["outcome"] == "accepted_after_revision"
+    assert "delta_summary" in event
+    assert result.prompt_telemetry is not None
+    assert result.prompt_telemetry["total_calls"] >= 0
+    assert result.disagreement_telemetry is not None
+    assert result.disagreement_telemetry["review_pair_count"] == 2
 
 
 @pytest.mark.asyncio

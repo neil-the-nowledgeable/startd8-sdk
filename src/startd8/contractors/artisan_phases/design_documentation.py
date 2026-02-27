@@ -326,6 +326,9 @@ class DesignDocumentResult:
     completed_at: datetime
     non_agreement_reason_code: str | None = None
     final_iteration: int | None = None
+    resolution_audit: dict[str, Any] | None = None
+    prompt_telemetry: dict[str, Any] | None = None
+    disagreement_telemetry: dict[str, Any] | None = None
 
 
 # ============================================================================
@@ -1295,6 +1298,36 @@ class DesignDocumentationPhase:
         self.resolution_callback: ResolutionCallback = (
             resolution_callback or AutoResolutionCallback()
         )
+        self._active_prompt_telemetry: list[dict[str, Any]] = []
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        """Estimate token count from character length."""
+        return len(text) // 4
+
+    @staticmethod
+    def _summarize_design_delta(before_text: str, after_text: str) -> dict[str, Any]:
+        """Build a deterministic summary of revision deltas."""
+        before_lines = before_text.splitlines()
+        after_lines = after_text.splitlines()
+        before_set = set(before_lines)
+        after_set = set(after_lines)
+        added = [line for line in after_lines if line not in before_set]
+        removed = [line for line in before_lines if line not in after_set]
+        return {
+            "before_chars": len(before_text),
+            "after_chars": len(after_text),
+            "before_lines": len(before_lines),
+            "after_lines": len(after_lines),
+            "added_line_count": len(added),
+            "removed_line_count": len(removed),
+            "added_line_preview": added[:5],
+            "removed_line_preview": removed[:5],
+        }
+
+    def _record_prompt_telemetry(self, payload: dict[str, Any]) -> None:
+        """Append per-call prompt telemetry for the active run."""
+        self._active_prompt_telemetry.append(payload)
 
     # ------------------------------------------------------------------
     # Forensic log metric helpers
@@ -1347,18 +1380,29 @@ class DesignDocumentationPhase:
         Returns:
             Parsed ``DesignDocument``.
         """
-        # TC-300 + PAQ-100/101: tiered rendering with required critical markers.
+        # TC-300 + PAQ-100/101/502: tiered rendering with required critical
+        # markers and de-duplication of dedicated sections.
         from startd8.contractors.prompt_utils import (
             DESIGN_CONTEXT_SECTION_BUDGETS,
             format_tiered_context,
         )
-        additional_context_str = format_tiered_context(
-            context.additional_context,
+        additional_context_payload = dict(context.additional_context or {})
+        deduped_fields: list[str] = []
+        if "manifest_context" in additional_context_payload:
+            additional_context_payload.pop("manifest_context", None)
+            deduped_fields.append("manifest_context")
+        if "manifest_edit_context" in additional_context_payload:
+            additional_context_payload.pop("manifest_edit_context", None)
+            deduped_fields.append("manifest_edit_context")
+
+        additional_context_str, context_diag = format_tiered_context(
+            additional_context_payload,
             required_t0_keys=(
                 "critical_parameters_checklist",
                 "plan_architecture",
                 "api_signatures",
             ),
+            return_diagnostics=True,
         )
 
         from startd8.contractors.artisan_phases.prompts import format_constraints
@@ -1440,6 +1484,29 @@ class DesignDocumentationPhase:
                 iteration,
             )
 
+        prompt_sections = {
+            "feature_name": len(context.feature_name or ""),
+            "description": len(context.description or ""),
+            "constraints": len(constraints_str or ""),
+            "additional_context": len(additional_context_str or ""),
+            "manifest_context": len(manifest_context_str or ""),
+            "requirements_block": len(requirements_block or ""),
+            "revision_guidance": len(revision_guidance or ""),
+        }
+        prompt_diag = {
+            "kind": "design_generate",
+            "iteration": iteration,
+            "is_refine": is_refine,
+            "prompt_chars": len(prompt),
+            "system_prompt_chars": len(system_prompt),
+            "prompt_tokens_estimate": self._estimate_tokens(prompt),
+            "system_prompt_tokens_estimate": self._estimate_tokens(system_prompt),
+            "section_contributions": prompt_sections,
+            "context_budget": context_diag,
+            "deduplicated_fields": deduped_fields,
+        }
+        self._record_prompt_telemetry(prompt_diag)
+
         # ── Walkthrough: persist prompts, return synthetic result ──
         if self._prompt_capture_dir is not None:
             cap_dir = self._prompt_capture_dir
@@ -1449,6 +1516,17 @@ class DesignDocumentationPhase:
             )
             (cap_dir / "generate_user_prompt.md").write_text(
                 prompt, encoding="utf-8",
+            )
+            (cap_dir / "prompt_diagnostics.json").write_text(
+                json.dumps(
+                    {
+                        "generate": prompt_diag,
+                        "context_budget": context_diag,
+                    },
+                    indent=2,
+                    default=str,
+                ),
+                encoding="utf-8",
             )
             logger.info(
                 "Walkthrough: persisted DESIGN generate prompts for '%s' → %s",
@@ -1595,6 +1673,21 @@ class DesignDocumentationPhase:
             project_context=project_context,
             manifest_context=manifest_context,
         )
+        review_prompt_diag = {
+            "kind": "design_review",
+            "iteration": design.iteration,
+            "role": role.value,
+            "prompt_chars": len(prompt),
+            "system_prompt_chars": len(system_prompt),
+            "prompt_tokens_estimate": self._estimate_tokens(prompt),
+            "system_prompt_tokens_estimate": self._estimate_tokens(system_prompt),
+            "section_contributions": {
+                "design_document": len(design.raw_text or ""),
+                "project_context": len(project_context or ""),
+                "manifest_context": len(manifest_context or ""),
+            },
+        }
+        self._record_prompt_telemetry(review_prompt_diag)
 
         logger.info(
             "Requesting %s review for '%s' (iteration %d)",
@@ -1613,6 +1706,16 @@ class DesignDocumentationPhase:
             )
             (cap_dir / f"{prefix}_user_prompt.md").write_text(
                 prompt, encoding="utf-8",
+            )
+            diag_path = cap_dir / "prompt_diagnostics.json"
+            try:
+                existing = json.loads(diag_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                existing = {}
+            existing[f"review_{role.value.lower()}"] = review_prompt_diag
+            diag_path.write_text(
+                json.dumps(existing, indent=2, default=str),
+                encoding="utf-8",
             )
             logger.info(
                 "Walkthrough: persisted DESIGN %s prompts for '%s' → %s",
@@ -1868,6 +1971,19 @@ class DesignDocumentationPhase:
             review_feedback=review_feedback,
             guidance=guidance,
         )
+        revision_prompt_diag = {
+            "kind": "design_revise",
+            "iteration": iteration,
+            "prompt_chars": len(prompt),
+            "system_prompt_chars": len(format_prompt("design", "revision_system")),
+            "prompt_tokens_estimate": self._estimate_tokens(prompt),
+            "section_contributions": {
+                "original_document": len(design.raw_text or ""),
+                "review_feedback": len(review_feedback or ""),
+                "guidance": len(guidance or ""),
+            },
+        }
+        self._record_prompt_telemetry(revision_prompt_diag)
 
         logger.info(
             "Revising design document for '%s' (iteration %d)",
@@ -1947,6 +2063,58 @@ class DesignDocumentationPhase:
         reviewer_verdict: ReviewVerdict | None = None
         arbiter_verdict: ReviewVerdict | None = None
         last_disagreements: list[Disagreement] = []
+        self._active_prompt_telemetry = []
+        review_pair_count = 0
+        re_review_pair_count = 0
+        pending_re_review_pair = False
+        disagreement_events: list[dict[str, Any]] = []
+        resolution_events: list[dict[str, Any]] = []
+        resolution_action_counts: dict[str, int] = {}
+
+        def _prompt_telemetry_payload() -> dict[str, Any]:
+            calls = list(self._active_prompt_telemetry)
+            return {
+                "total_calls": len(calls),
+                "total_prompt_chars": sum(c.get("prompt_chars", 0) for c in calls),
+                "total_system_prompt_chars": sum(
+                    c.get("system_prompt_chars", 0) for c in calls
+                ),
+                "calls": calls,
+            }
+
+        def _disagreement_telemetry_payload() -> dict[str, Any]:
+            categories = sorted(
+                {
+                    cat
+                    for event in disagreement_events
+                    for cat in event.get("categories", [])
+                }
+            )
+            total_points = sum(event.get("count", 0) for event in disagreement_events)
+            max_gap = 0.0
+            if disagreement_events:
+                max_gap = max(event.get("confidence_gap", 0.0) for event in disagreement_events)
+            return {
+                "review_pair_count": review_pair_count,
+                "re_review_pair_count": re_review_pair_count,
+                "re_review_rate": (
+                    re_review_pair_count / review_pair_count
+                    if review_pair_count > 0
+                    else 0.0
+                ),
+                "disagreement_iteration_count": len(disagreement_events),
+                "disagreement_count": total_points,
+                "disagreement_categories": categories,
+                "max_confidence_gap": max_gap,
+                "events": disagreement_events,
+            }
+
+        def _resolution_audit_payload() -> dict[str, Any]:
+            return {
+                "resolution_count": len(resolution_events),
+                "resolution_action_counts": dict(resolution_action_counts),
+                "events": resolution_events,
+            }
 
         _tracer = _get_design_tracer()
         for iteration in range(1, self.max_iterations + 1):
@@ -1976,12 +2144,32 @@ class DesignDocumentationPhase:
                 arbiter_verdict = await self._review_design(
                     design, ReviewRole.ARBITER, feature_context=context
                 )
+                review_pair_count += 1
+                if pending_re_review_pair:
+                    re_review_pair_count += 1
+                    pending_re_review_pair = False
 
                 # --- Check agreement ---
                 disagreements = self._detect_disagreements(
                     reviewer_verdict, arbiter_verdict
                 )
                 last_disagreements = disagreements
+                if disagreements:
+                    disagreement_events.append(
+                        {
+                            "iteration": iteration,
+                            "count": len(disagreements),
+                            "categories": [
+                                d.disagreement_type.value for d in disagreements
+                            ],
+                            "confidence_gap": abs(
+                                reviewer_verdict.confidence - arbiter_verdict.confidence
+                            ),
+                            "approval_conflict": (
+                                reviewer_verdict.approved != arbiter_verdict.approved
+                            ),
+                        }
+                    )
 
                 if not disagreements:
                     if reviewer_verdict.approved and arbiter_verdict.approved:
@@ -2001,6 +2189,9 @@ class DesignDocumentationPhase:
                             iterations=iteration,
                             completed_at=datetime.now(timezone.utc),
                             final_iteration=iteration,
+                            resolution_audit=_resolution_audit_payload(),
+                            prompt_telemetry=_prompt_telemetry_payload(),
+                            disagreement_telemetry=_disagreement_telemetry_payload(),
                         )
 
                     # Agreement without approval is a converged rejection.
@@ -2021,6 +2212,9 @@ class DesignDocumentationPhase:
                         completed_at=datetime.now(timezone.utc),
                         non_agreement_reason_code="DUAL_REJECTION",
                         final_iteration=iteration,
+                        resolution_audit=_resolution_audit_payload(),
+                        prompt_telemetry=_prompt_telemetry_payload(),
+                        disagreement_telemetry=_disagreement_telemetry_payload(),
                     )
 
                 # --- Disagreement detected — escalate ---
@@ -2046,10 +2240,25 @@ class DesignDocumentationPhase:
                     resolution_decision.action.value,
                     resolution_decision.decided_by,
                 )
+                _action = resolution_decision.action.value
+                resolution_action_counts[_action] = (
+                    resolution_action_counts.get(_action, 0) + 1
+                )
+                resolution_events.append(
+                    {
+                        "iteration": iteration,
+                        "action": _action,
+                        "guidance": resolution_decision.guidance,
+                        "decided_by": resolution_decision.decided_by,
+                        "decided_at": resolution_decision.decided_at.isoformat(),
+                        "recommended_action": escalation_report.recommended_action.value,
+                    }
+                )
 
                 # Non-RE_REVIEW resolutions: revise once then return
                 if resolution_decision.action != ResolutionAction.RE_REVIEW:
                     if iteration >= self.max_iterations:
+                        resolution_events[-1]["outcome"] = "max_iterations_exceeded"
                         return DesignDocumentResult(
                             design_document=design,
                             reviewer_verdict=reviewer_verdict,
@@ -2061,11 +2270,15 @@ class DesignDocumentationPhase:
                             completed_at=datetime.now(timezone.utc),
                             non_agreement_reason_code="MAX_ITERATIONS_EXCEEDED",
                             final_iteration=iteration,
+                            resolution_audit=_resolution_audit_payload(),
+                            prompt_telemetry=_prompt_telemetry_payload(),
+                            disagreement_telemetry=_disagreement_telemetry_payload(),
                         )
 
                     # REQ-PAQ-200: any revised design MUST be re-reviewed by
                     # reviewer and arbiter before acceptance/return.
                     revised_iteration = iteration + 1
+                    pre_revision_text = design.raw_text
                     design = await self._revise_design(
                         design,
                         reviewer_verdict,
@@ -2080,15 +2293,43 @@ class DesignDocumentationPhase:
                     arbiter_verdict = await self._review_design(
                         design, ReviewRole.ARBITER, feature_context=context
                     )
+                    review_pair_count += 1
+                    re_review_pair_count += 1
                     post_disagreements = self._detect_disagreements(
                         reviewer_verdict, arbiter_verdict
                     )
+                    resolution_events[-1]["delta_summary"] = self._summarize_design_delta(
+                        pre_revision_text,
+                        design.raw_text,
+                    )
+                    resolution_events[-1]["post_review_disagreement_count"] = len(
+                        post_disagreements
+                    )
+                    if post_disagreements:
+                        disagreement_events.append(
+                            {
+                                "iteration": revised_iteration,
+                                "count": len(post_disagreements),
+                                "categories": [
+                                    d.disagreement_type.value
+                                    for d in post_disagreements
+                                ],
+                                "confidence_gap": abs(
+                                    reviewer_verdict.confidence - arbiter_verdict.confidence
+                                ),
+                                "approval_conflict": (
+                                    reviewer_verdict.approved != arbiter_verdict.approved
+                                ),
+                                "source": "post_revision",
+                            }
+                        )
 
                     if (
                         not post_disagreements
                         and reviewer_verdict.approved
                         and arbiter_verdict.approved
                     ):
+                        resolution_events[-1]["outcome"] = "accepted_after_revision"
                         logger.info(
                             "Design for '%s' converged after revision at "
                             "iteration %d",
@@ -2105,6 +2346,9 @@ class DesignDocumentationPhase:
                             iterations=revised_iteration,
                             completed_at=datetime.now(timezone.utc),
                             final_iteration=revised_iteration,
+                            resolution_audit=_resolution_audit_payload(),
+                            prompt_telemetry=_prompt_telemetry_payload(),
+                            disagreement_telemetry=_disagreement_telemetry_payload(),
                         )
 
                     reason_code = (
@@ -2112,6 +2356,7 @@ class DesignDocumentationPhase:
                         if post_disagreements
                         else "DUAL_REJECTION"
                     )
+                    resolution_events[-1]["outcome"] = "rejected_after_revision"
                     return DesignDocumentResult(
                         design_document=design,
                         reviewer_verdict=reviewer_verdict,
@@ -2123,9 +2368,14 @@ class DesignDocumentationPhase:
                         completed_at=datetime.now(timezone.utc),
                         non_agreement_reason_code=reason_code,
                         final_iteration=revised_iteration,
+                        resolution_audit=_resolution_audit_payload(),
+                        prompt_telemetry=_prompt_telemetry_payload(),
+                        disagreement_telemetry=_disagreement_telemetry_payload(),
                     )
 
                 # RE_REVIEW — continue to next iteration
+                resolution_events[-1]["outcome"] = "re_review_requested"
+                pending_re_review_pair = True
 
             except DesignDocumentationError as exc:
                 logger.error("Design documentation phase failed: %s", exc)
@@ -2183,6 +2433,8 @@ class DesignDocumentationPhase:
             raise DesignDocumentationError("No reviewer verdict was produced after max iterations")
         if arbiter_verdict is None:
             raise DesignDocumentationError("No arbiter verdict was produced after max iterations")
+        for event in resolution_events:
+            event.setdefault("outcome", "max_iterations_exceeded")
 
         return DesignDocumentResult(
             design_document=design,
@@ -2199,4 +2451,7 @@ class DesignDocumentationPhase:
                 else "MAX_ITERATIONS_EXCEEDED"
             ),
             final_iteration=self.max_iterations,
+            resolution_audit=_resolution_audit_payload(),
+            prompt_telemetry=_prompt_telemetry_payload(),
+            disagreement_telemetry=_disagreement_telemetry_payload(),
         )

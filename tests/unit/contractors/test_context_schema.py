@@ -435,12 +435,26 @@ class TestScaffoldPhaseOutput:
 
 class TestDesignPhaseOutput:
     def test_valid(self):
-        model = DesignPhaseOutput(design_results={"T1": {"status": "agreed"}})
+        model = DesignPhaseOutput(
+            design_results={"T1": {"status": "agreed"}},
+            design_quality={
+                "total_passed": 1,
+                "total_failed": 0,
+                "agreement_rate": 1.0,
+            },
+        )
         assert "T1" in model.design_results
 
     def test_empty_rejected(self):
         with pytest.raises(Exception):
             DesignPhaseOutput(design_results={})
+
+    def test_design_quality_missing_metric_rejected(self):
+        with pytest.raises(Exception):
+            DesignPhaseOutput(
+                design_results={"T1": {"status": "agreed"}},
+                design_quality={"total_passed": 1, "total_failed": 0},
+            )
 
 
 class TestImplementPhaseOutput:
