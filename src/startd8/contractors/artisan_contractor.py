@@ -165,6 +165,8 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "design_mode_summary",
     # REQ-PAQ-603: quality gate traceability survives resume.
     "quality_gate_outcomes", "quality_gate_summary",
+    # AR-153: bounded regenerate-with-feedback forensic transcript.
+    "retry_transcripts",
 })
 
 
@@ -2551,6 +2553,11 @@ class ArtisanContractorWorkflow:
         WorkflowPhase.TEST,
         WorkflowPhase.REVIEW,
     )
+    RETRY_SOURCE_PHASES: tuple[WorkflowPhase, ...] = (
+        WorkflowPhase.INTEGRATE,
+        WorkflowPhase.TEST,
+        WorkflowPhase.REVIEW,
+    )
 
     # Global phases that run once at the start (before feature loop)
     GLOBAL_START_PHASES: tuple[WorkflowPhase, ...] = (
@@ -2594,8 +2601,13 @@ class ArtisanContractorWorkflow:
         # Filter context to just this feature for the inner loop
         # The handlers need to know which feature to process
         context["current_feature_id"] = feature_id
+        max_regen_retries = max(0, int(self.config.max_retries_per_phase))
+        regen_retry_count = 0
+        phase_index = 0
+
         try:
-            for inner_phase in self.INNER_PHASES:
+            while phase_index < len(self.INNER_PHASES):
+                inner_phase = self.INNER_PHASES[phase_index]
                 phase_start = datetime.now(timezone.utc).isoformat()
                 context["current_feature_phase"] = inner_phase.value
 
@@ -2627,12 +2639,72 @@ class ArtisanContractorWorkflow:
 
                     # Quality gate check for design/test/review in
                     # feature-serial and wave-parallel modes.
+                    gate_error: Optional[QualityGateError] = None
                     if inner_phase in (
                         WorkflowPhase.DESIGN,
                         WorkflowPhase.TEST,
                         WorkflowPhase.REVIEW,
                     ):
-                        self._check_quality_gate(inner_phase, phase_result)
+                        try:
+                            self._check_quality_gate(inner_phase, phase_result)
+                        except QualityGateError as exc:
+                            gate_error = exc
+
+                    # AR-153: bounded regenerate-with-feedback retries driven
+                    # by INTEGRATE/TEST/REVIEW failures.
+                    retry_feedback = self._build_regenerate_feedback(
+                        feature_id=feature_id,
+                        phase=inner_phase,
+                        phase_result=phase_result,
+                        gate_error=gate_error,
+                    )
+                    if retry_feedback is not None:
+                        if regen_retry_count < max_regen_retries:
+                            regen_retry_count += 1
+                            retry_feedback["attempt"] = regen_retry_count
+                            context["prior_error_feedback"] = retry_feedback[
+                                "prior_error_feedback"
+                            ]
+                            context["retry_feedback"] = retry_feedback
+                            context["_retry_attempt"] = regen_retry_count
+                            self._append_retry_transcript(
+                                context=context,
+                                feature_id=feature_id,
+                                transcript_entry={
+                                    "attempt": regen_retry_count,
+                                    "source_phase": inner_phase.value,
+                                    "failed_tasks": retry_feedback.get("failed_tasks", []),
+                                    "summary": retry_feedback.get("summary", ""),
+                                    "outcome": "retrying",
+                                },
+                            )
+                            self._logger.warning(
+                                "Feature %s: AR-153 retry %d/%d triggered by %s failure",
+                                feature_id,
+                                regen_retry_count,
+                                max_regen_retries,
+                                inner_phase.value,
+                            )
+                            phase_index = self.INNER_PHASES.index(WorkflowPhase.IMPLEMENT)
+                            continue
+
+                        self._append_retry_transcript(
+                            context=context,
+                            feature_id=feature_id,
+                            transcript_entry={
+                                "attempt": regen_retry_count,
+                                "source_phase": inner_phase.value,
+                                "failed_tasks": retry_feedback.get("failed_tasks", []),
+                                "summary": retry_feedback.get("summary", ""),
+                                "outcome": "retry_budget_exhausted",
+                            },
+                        )
+                        inner_results[inner_phase.value]["status"] = "failed"
+                        inner_results[inner_phase.value]["retry_exhausted"] = True
+                        inner_results[inner_phase.value]["error"] = retry_feedback.get(
+                            "summary", phase_result.error_message or "quality failure"
+                        )
+                        return False, WorkflowStatus.FAILED, inner_results
 
                     # Check for phase failure
                     if phase_result.status == PhaseStatus.FAILED:
@@ -2663,6 +2735,7 @@ class ArtisanContractorWorkflow:
                             inner_phase.value,
                         )
                         return False, WorkflowStatus.BUDGET_EXCEEDED, inner_results
+                    phase_index += 1
 
                 except Exception as err:
                     inner_results[inner_phase.value] = {
@@ -2682,6 +2755,8 @@ class ArtisanContractorWorkflow:
             # Avoid leaking feature-scoped context into subsequent global phases.
             context.pop("current_feature_id", None)
             context.pop("current_feature_phase", None)
+            context.pop("_retry_attempt", None)
+            context.pop("retry_feedback", None)
 
         # All inner phases succeeded
         self._logger.info(
@@ -2689,6 +2764,114 @@ class ArtisanContractorWorkflow:
             feature_id,
         )
         return True, WorkflowStatus.COMPLETED, inner_results
+
+    @staticmethod
+    def _append_retry_transcript(
+        context: dict[str, Any],
+        feature_id: str,
+        transcript_entry: dict[str, Any],
+    ) -> None:
+        """AR-153: persist retry transcript details for forensics/resume."""
+        transcripts = context.setdefault("retry_transcripts", {})
+        if not isinstance(transcripts, dict):
+            transcripts = {}
+            context["retry_transcripts"] = transcripts
+        feature_entries = transcripts.setdefault(feature_id, [])
+        if isinstance(feature_entries, list):
+            feature_entries.append(transcript_entry)
+
+    def _build_regenerate_feedback(
+        self,
+        feature_id: str,
+        phase: WorkflowPhase,
+        phase_result: PhaseResult,
+        gate_error: Optional[QualityGateError] = None,
+    ) -> Optional[dict[str, Any]]:
+        """AR-153: normalize INTEGRATE/TEST/REVIEW failures into retry feedback."""
+        if phase not in self.RETRY_SOURCE_PHASES:
+            return None
+
+        failed_tasks: list[str] = []
+        details: dict[str, Any] = {}
+        summary: Optional[str] = None
+
+        if phase_result.status in (PhaseStatus.FAILED, PhaseStatus.TIMED_OUT):
+            summary = (
+                phase_result.error_message
+                or f"{phase.value} phase did not complete successfully"
+            )
+
+        output = phase_result.output if isinstance(phase_result.output, dict) else {}
+        if phase == WorkflowPhase.INTEGRATE:
+            for task_id, task_result in output.items():
+                if not isinstance(task_result, dict):
+                    continue
+                if task_result.get("success") is False:
+                    failed_tasks.append(task_id)
+            if failed_tasks:
+                details["integration_failures"] = {
+                    task_id: output.get(task_id) for task_id in failed_tasks
+                }
+                summary = summary or (
+                    f"INTEGRATE failures for {len(failed_tasks)} task(s): "
+                    + ", ".join(failed_tasks)
+                )
+        elif phase == WorkflowPhase.TEST:
+            per_task = output.get("per_task", {})
+            if isinstance(per_task, dict):
+                for task_id, task_result in per_task.items():
+                    if isinstance(task_result, dict) and task_result.get("passed") is False:
+                        failed_tasks.append(task_id)
+            total_failed = int(output.get("total_failed", 0) or 0)
+            if total_failed > 0:
+                details["total_failed"] = total_failed
+                details["test_failures"] = {
+                    task_id: per_task.get(task_id) for task_id in failed_tasks
+                } if isinstance(per_task, dict) else {}
+                summary = summary or (
+                    f"TEST phase reported {total_failed} failed task(s)"
+                )
+        elif phase == WorkflowPhase.REVIEW:
+            per_task = output.get("per_task", {})
+            if isinstance(per_task, dict):
+                for task_id, task_result in per_task.items():
+                    if isinstance(task_result, dict) and task_result.get("passed") is False:
+                        failed_tasks.append(task_id)
+            total_failed = int(output.get("total_failed", 0) or 0)
+            if total_failed > 0:
+                details["total_failed"] = total_failed
+                details["review_failures"] = {
+                    task_id: per_task.get(task_id) for task_id in failed_tasks
+                } if isinstance(per_task, dict) else {}
+                summary = summary or (
+                    f"REVIEW phase reported {total_failed} failed task(s)"
+                )
+
+        if gate_error is not None:
+            details["quality_gate"] = {
+                "phase": gate_error.phase.value,
+                "details": gate_error.details,
+            }
+            summary = summary or str(gate_error)
+
+        if summary is None:
+            return None
+
+        prior_error_feedback = (
+            f"Feature: {feature_id}\n"
+            f"Source phase: {phase.value}\n"
+            f"Failure summary: {summary}\n"
+            f"Failed tasks: {', '.join(failed_tasks) if failed_tasks else feature_id}\n"
+            "Regenerate implementation and address these failures before proceeding."
+        )
+        return {
+            "feature_id": feature_id,
+            "source_phase": phase.value,
+            "summary": summary,
+            "failed_tasks": failed_tasks,
+            "details": details,
+            "prior_error_feedback": prior_error_feedback,
+        }
 
     def _build_feature_partial_result(
         self,

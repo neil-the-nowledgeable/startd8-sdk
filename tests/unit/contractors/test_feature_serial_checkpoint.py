@@ -135,6 +135,27 @@ class MockPhaseHandler(AbstractPhaseHandler):
         }
 
 
+def _phase_result(
+    phase: WorkflowPhase,
+    *,
+    output: Any = None,
+    status: PhaseStatus = PhaseStatus.COMPLETED,
+    error_message: str | None = None,
+) -> PhaseResult:
+    return PhaseResult(
+        phase=phase,
+        status=status,
+        start_time="2026-01-01T00:00:00+00:00",
+        end_time="2026-01-01T00:00:01+00:00",
+        duration_seconds=1.0,
+        cost=0.01,
+        output=output if output is not None else {},
+        error_message=error_message,
+        retry_count=0,
+        metadata={},
+    )
+
+
 # ============================================================================
 # TEST CLASSES
 # ============================================================================
@@ -654,3 +675,123 @@ class TestFeatureTaskSelection:
         }
         with pytest.raises(RuntimeError, match="unknown current_feature_id"):
             _ensure_context_loaded(context)
+
+
+class TestFeatureSerialRegenerateRetries:
+    """AR-153: bounded regenerate-with-feedback retries in feature-serial mode."""
+
+    def test_ar153_retries_from_integrate_failure_then_succeeds(self):
+        config = WorkflowConfig(workflow_id="test-ar153-integrate", max_retries_per_phase=1)
+        workflow = ArtisanContractorWorkflow(config=config)
+        cost_tracker = _CostTracker(budget=None)
+
+        call_order: list[str] = []
+        responses = {
+            WorkflowPhase.DESIGN: [
+                _phase_result(WorkflowPhase.DESIGN),
+            ],
+            WorkflowPhase.IMPLEMENT: [
+                _phase_result(WorkflowPhase.IMPLEMENT),
+                _phase_result(WorkflowPhase.IMPLEMENT),
+            ],
+            WorkflowPhase.INTEGRATE: [
+                _phase_result(
+                    WorkflowPhase.INTEGRATE,
+                    output={"F-001": {"success": False, "status": "FAILED", "errors": ["merge conflict"]}},
+                ),
+                _phase_result(
+                    WorkflowPhase.INTEGRATE,
+                    output={"F-001": {"success": True, "status": "SUCCESS", "errors": []}},
+                ),
+            ],
+            WorkflowPhase.TEST: [
+                _phase_result(
+                    WorkflowPhase.TEST,
+                    output={"total_failed": 0, "per_task": {"F-001": {"passed": True}}},
+                ),
+            ],
+            WorkflowPhase.REVIEW: [
+                _phase_result(
+                    WorkflowPhase.REVIEW,
+                    output={"total_failed": 0, "per_task": {"F-001": {"passed": True}}},
+                ),
+            ],
+        }
+
+        def fake_execute_phase(phase, context, timeout=None):
+            call_order.append(phase.value)
+            return responses[phase].pop(0)
+
+        context: dict[str, Any] = {"tasks": []}
+        with patch.object(workflow, "_execute_phase", side_effect=fake_execute_phase), patch.object(
+            workflow, "_commit_changes", return_value=None
+        ):
+            success, status, inner_results = workflow._execute_feature(
+                feature_id="F-001",
+                context=context,
+                remaining_total_timeout=None,
+                cost_tracker=cost_tracker,
+            )
+
+        assert success is True
+        assert status == WorkflowStatus.COMPLETED
+        assert call_order.count("implement") == 2
+        assert "retry_transcripts" in context
+        transcript = context["retry_transcripts"]["F-001"]
+        assert transcript[0]["source_phase"] == "integrate"
+        assert transcript[0]["outcome"] == "retrying"
+        assert inner_results["review"]["status"] == "completed"
+
+    def test_ar153_retry_budget_exhausted_marks_feature_failed(self):
+        config = WorkflowConfig(workflow_id="test-ar153-exhausted", max_retries_per_phase=1)
+        workflow = ArtisanContractorWorkflow(config=config)
+        cost_tracker = _CostTracker(budget=None)
+
+        responses = {
+            WorkflowPhase.DESIGN: [_phase_result(WorkflowPhase.DESIGN)],
+            WorkflowPhase.IMPLEMENT: [
+                _phase_result(WorkflowPhase.IMPLEMENT),
+                _phase_result(WorkflowPhase.IMPLEMENT),
+            ],
+            WorkflowPhase.INTEGRATE: [
+                _phase_result(
+                    WorkflowPhase.INTEGRATE,
+                    output={"F-001": {"success": True, "status": "SUCCESS", "errors": []}},
+                ),
+                _phase_result(
+                    WorkflowPhase.INTEGRATE,
+                    output={"F-001": {"success": True, "status": "SUCCESS", "errors": []}},
+                ),
+            ],
+            WorkflowPhase.TEST: [
+                _phase_result(
+                    WorkflowPhase.TEST,
+                    output={"total_failed": 1, "per_task": {"F-001": {"passed": False, "status": "failed"}}},
+                ),
+                _phase_result(
+                    WorkflowPhase.TEST,
+                    output={"total_failed": 1, "per_task": {"F-001": {"passed": False, "status": "failed"}}},
+                ),
+            ],
+            WorkflowPhase.REVIEW: [],
+        }
+
+        def fake_execute_phase(phase, context, timeout=None):
+            return responses[phase].pop(0)
+
+        context: dict[str, Any] = {"tasks": []}
+        with patch.object(workflow, "_execute_phase", side_effect=fake_execute_phase), patch.object(
+            workflow, "_commit_changes", return_value=None
+        ):
+            success, status, inner_results = workflow._execute_feature(
+                feature_id="F-001",
+                context=context,
+                remaining_total_timeout=None,
+                cost_tracker=cost_tracker,
+            )
+
+        assert success is False
+        assert status == WorkflowStatus.FAILED
+        assert inner_results["test"]["retry_exhausted"] is True
+        transcript = context["retry_transcripts"]["F-001"]
+        assert transcript[-1]["outcome"] == "retry_budget_exhausted"

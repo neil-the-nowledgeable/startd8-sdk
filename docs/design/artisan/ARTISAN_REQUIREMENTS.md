@@ -267,6 +267,19 @@ Wave-parallel execution partitions the task set into dependency waves computed f
 7. Resume from a wave checkpoint restarts from the incomplete wave, re-executing only incomplete lanes within that wave. Before resuming, a state-to-code integrity check verifies that generated files from completed lanes exist on disk; lanes whose output files are missing are marked incomplete and re-executed.
 8. A configurable `max_wave_resume_attempts` limits how many times a wave can be retried on resume. If a wave fails after the maximum number of attempts, the workflow transitions to `FAILED_UNRECOVERABLE` status, preventing unbounded cost waste from poison-pill tasks in resume loops. The `wave_resume_count` checkpoint field (see AR-505) tracks attempts across resume boundaries.
 
+### Prime-Convergent Quality Requirements
+
+The following requirements capture the Prime Contractor design/generation patterns that are being adopted in Artisan while preserving Artisan's phase boundaries:
+
+| Requirement | Status | Intent |
+|-------------|--------|--------|
+| AR-129 | planned | DESIGN runs a spec -> draft -> review loop with a configurable pass threshold before IMPLEMENT |
+| AR-139 | planned | DESIGN/IMPLEMENT handoff enforces resolved-parameter completeness gating |
+| AR-138 | implemented | IMPLEMENT adds preflight decomposition and staleness/provenance-aware reuse |
+| AR-153 | implemented | INTEGRATE/TEST/REVIEW failures feed bounded regenerate-with-feedback retries |
+| AR-166 | planned | FINALIZE persists Prime-style forensic artifacts (`spec`, `draft-*`, `review-*`, `integration`) |
+| AR-206 | implemented | Single-feature quality flow remains the default runner policy (batch requires explicit opt-in) |
+
 ---
 
 ## Layer 3: ContextCore Data Flow (AR-3xx)
@@ -1137,15 +1150,15 @@ Phase 3 (P1 — Completeness):
 |-------------|-------------------|-----------------|
 | AR-100..AR-102 | `src/startd8/contractors/context_seed_handlers.py` (PlanPhaseHandler) | |
 | AR-110..AR-111 | `src/startd8/contractors/context_seed_handlers.py` (ScaffoldPhaseHandler) | |
-| AR-120..AR-126 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | `artisan_phases/design_documentation.py` |
+| AR-120..AR-129 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | `artisan_phases/design_documentation.py` |
 | AR-127 | `src/startd8/contractors/context_seed_handlers.py` (DesignPhaseHandler) | Reuses `scaffold.existing_target_files` from ScaffoldPhaseHandler |
 | AR-128 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `handoff.py`, `artisan_phases/development.py` |
-| AR-130..AR-137 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `artisan_phases/development.py` |
+| AR-130..AR-139 | `src/startd8/contractors/context_seed_handlers.py` (ImplementPhaseHandler) | `artisan_phases/development.py` |
 | AR-170..AR-176 | `src/startd8/contractors/context_seed_handlers.py` (IntegratePhaseHandler) | `integration_engine.py` |
 | AR-140..AR-142 | `src/startd8/contractors/context_seed_handlers.py` (TestPhaseHandler) | |
 | AR-143..AR-147 | `src/startd8/contractors/artisan_phases/self_consistency.py` | `context_seed_handlers.py` (Gate 3b), `rules_validators.py` |
-| AR-150..AR-152 | `src/startd8/contractors/context_seed_handlers.py` (ReviewPhaseHandler) | |
-| AR-160..AR-165 | `src/startd8/contractors/context_seed_handlers.py` (FinalizePhaseHandler) | |
+| AR-150..AR-153 | `src/startd8/contractors/context_seed_handlers.py` (ReviewPhaseHandler) | |
+| AR-160..AR-166 | `src/startd8/contractors/context_seed_handlers.py` (FinalizePhaseHandler) | |
 | AR-200..AR-211 | `src/startd8/contractors/artisan_contractor.py` | `scripts/run_artisan_workflow.py` |
 | AR-212 | `src/startd8/contractors/artisan_contractor.py` | `scripts/run_artisan_workflow.py`, `handoff.py` |
 | AR-300..AR-311 | `src/startd8/contractors/context_seed_handlers.py` | `workflows/builtin/plan_ingestion_workflow.py` |
@@ -1197,13 +1210,13 @@ Phase 3 (P1 — Completeness):
 |-------------|-------------|
 | AR-100..AR-102 | `tests/unit/contractors/test_artisan_plan_deconstruction.py` |
 | AR-110 | `tests/unit/contractors/test_7phase_integration.py` |
-| AR-120..AR-124 | `tests/unit/contractors/test_design_phase_handler.py`, `test_design_quality_context.py`, `test_artisan_design_documentation.py` |
-| AR-130..AR-136 | `tests/unit/contractors/test_implement_phase_integration.py`, `test_implement_auto_commit.py` |
+| AR-120..AR-124, AR-129 | `tests/unit/contractors/test_design_phase_handler.py`, `test_design_quality_context.py`, `test_artisan_design_documentation.py` |
+| AR-130..AR-136, AR-138, AR-139 | `tests/unit/contractors/test_implement_phase_integration.py`, `test_implement_auto_commit.py` |
 | AR-170..AR-176 | `tests/unit/contractors/test_integrate_phase.py`, `tests/contract_validation/test_quality_gates.py` |
 | AR-140..AR-142 | `tests/unit/contractors/test_context_seed_review_finalize.py`, `test_artisan_test_construction.py` |
 | AR-143..AR-147 | `tests/unit/contractors/test_self_consistency_validators.py`, `test_gate3b_content_validation.py` |
-| AR-150..AR-152 | `tests/unit/contractors/test_review_phase_handler.py`, `test_context_seed_review_finalize.py` |
-| AR-160..AR-163 | `tests/unit/contractors/test_context_seed_review_finalize.py` |
+| AR-150..AR-153 | `tests/unit/contractors/test_review_phase_handler.py`, `test_context_seed_review_finalize.py` |
+| AR-160..AR-163, AR-166 | `tests/unit/contractors/test_context_seed_review_finalize.py` |
 | AR-200..AR-208 | `tests/unit/contractors/test_7phase_integration.py`, `tests/e2e/contractors/test_artisan_e2e.py` |
 | AR-202..AR-203 | `tests/e2e/contractors/test_artisan_timeout.py` |
 | AR-205 | `tests/e2e/contractors/test_artisan_dry_run.py` |
@@ -1239,6 +1252,7 @@ Requirements with no `verified_by` test file (need new tests):
 | AR-111 | planned | SCAFFOLD output_conventions validation |
 | AR-125, AR-126 | planned | DESIGN parameter_sources / semantic_conventions injection |
 | AR-137 | planned | IMPLEMENT parameter_sources in chunk metadata |
+| AR-129, AR-138, AR-139, AR-153, AR-166 | planned | Prime-convergent quality behaviors: DESIGN iterative threshold gate, parameter completeness gate, IMPLEMENT preflight/reuse, bounded failure feedback retries, forensic artifact persistence |
 | AR-164, AR-165 | planned | FINALIZE provenance block and Gate 3 compatibility |
 | AR-212 | planned | Wave-parallel execution: mutual exclusion validation, wave computation from depends_on, dependency ordering invariant, barrier semantics, degeneration to lane-parallel, wave checkpoint persistence and resume, state-to-code integrity check on resume, max_wave_resume_attempts retry limit and FAILED_UNRECOVERABLE transition |
 | AR-300..AR-309 | planned | All ContextCore data flow (provenance chain, enrichment consumption) |
@@ -1275,6 +1289,7 @@ Requirements with no `verified_by` test file (need new tests):
 | 2. Onboarding Metadata Consumption | AR-303..AR-308, AR-111, AR-125..AR-126, AR-137 | **Medium** | Enriches code generation with export data |
 | 3. Recovery Hardening | AR-508..AR-511 | **Medium** | Robust resume across config changes |
 | 4. Orchestration Enhancements | AR-209..AR-212, AR-405, AR-708, AR-809, AR-811, AR-812 | **Medium** | Wave-parallel execution, concurrency control, cost projection, operational safety, task ID validation, context immutability |
+| 4d. Prime-Convergent Quality Loop | AR-129, AR-138, AR-139, AR-153, AR-166 (with AR-206 policy baseline) | **High** | Brings Prime’s strongest quality controls into Artisan: spec/review thresholding, deterministic retries with feedback, decomposition/reuse safeguards, and forensic artifact retention |
 | 4b. Module Resolution Fidelity | AR-821, AR-822, AR-823, AR-824 | **Medium** | Prevents LLM from importing non-existent modules |
 | 4c. Safety Observability | AR-815, AR-820, AR-825 | **Medium** | Partial manifest, OTel events for truncation and import validation |
 | 5. Interactive and Git Safety | AR-605..AR-606, AR-805..AR-808 | **Low** | Interactive operation, event durability |

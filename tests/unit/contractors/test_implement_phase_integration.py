@@ -199,6 +199,76 @@ class TestTasksToChunks:
         assert skip_by_id["T2"]["status"] == "dep_blocked_env"
         assert skip_by_id["T2"]["blocked_dependencies"] == ["T1"]
 
+    def test_design_failed_task_is_blocked_before_implementation(self):
+        """Tasks marked design_failed in DESIGN are skipped in IMPLEMENT."""
+        tasks = [_make_seed_task(task_id="T1")]
+        design_results = {
+            "T1": {
+                "status": "design_failed",
+                "quality_failure_reason": "REVIEW_THRESHOLD_NOT_MET",
+            },
+        }
+
+        chunks, skipped = ImplementPhaseHandler._tasks_to_chunks(
+            tasks,
+            design_results=design_results,
+        )
+
+        assert chunks == []
+        assert len(skipped) == 1
+        assert skipped[0]["task_id"] == "T1"
+        assert skipped[0]["status"] == "design_blocked"
+        assert skipped[0]["reason"] == "REVIEW_THRESHOLD_NOT_MET"
+
+    def test_ar138_preflight_size_limit_blocks_oversized_task(self):
+        """AR-138: oversized tasks are blocked with split guidance."""
+        tasks = [
+            _make_seed_task(
+                task_id="T1",
+                description="Large feature generation",
+                target_files=["src/huge.py"],
+            ),
+        ]
+        tasks[0].estimated_loc = 5000
+
+        chunks, skipped = ImplementPhaseHandler._tasks_to_chunks(
+            tasks,
+            preflight_safe_loc_limit=800,
+            preflight_safe_token_limit=64000,
+        )
+
+        assert chunks == []
+        assert len(skipped) == 1
+        assert skipped[0]["status"] == "preflight_blocked_size"
+        assert skipped[0]["reason"] == "preflight_size_limit_exceeded"
+        assert "split" in skipped[0]["split_guidance"].lower()
+        assert skipped[0]["preflight_estimate"]["estimated_loc"] > 800
+
+    def test_ar138_provenance_classification_persisted_in_metadata(self, tmp_path):
+        """AR-138: per-file provenance classification is captured for audit."""
+        existing_file = tmp_path / "src" / "existing.py"
+        existing_file.parent.mkdir(parents=True, exist_ok=True)
+        existing_file.write_text("print('ok')", encoding="utf-8")
+
+        tasks = [
+            _make_seed_task(
+                task_id="T1",
+                target_files=["src/existing.py", "src/missing.py"],
+            ),
+        ]
+        chunks, skipped = ImplementPhaseHandler._tasks_to_chunks(
+            tasks,
+            staleness_classification={"src/existing.py": "stale"},
+            project_root_path=str(tmp_path),
+        )
+
+        assert skipped == []
+        assert len(chunks) == 1
+        provenance = chunks[0].metadata["artifact_provenance"]
+        assert provenance["summary"]["stale"] == 1
+        assert provenance["summary"]["missing"] == 1
+        assert chunks[0].metadata["reuse_decision"] == "regenerate_required"
+
     def test_custom_max_retries(self):
         """Custom max_retries is propagated to chunks."""
         tasks = [_make_seed_task()]

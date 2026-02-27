@@ -145,7 +145,7 @@ phase_behavior_requirements:
       class: ScaffoldPhaseHandler
 
   # ---------------------------------------------------------------------------
-  # DESIGN Phase (AR-120 – AR-126)
+  # DESIGN Phase (AR-120 – AR-129)
   # ---------------------------------------------------------------------------
 
   - id: AR-120
@@ -343,8 +343,27 @@ phase_behavior_requirements:
         - "_tasks_to_chunks() (existing conversion function)"
         - "generation-manifest.json (existing FINALIZE artifact)"
 
+  - id: AR-129
+    description: "DESIGN phase runs Prime-style spec -> draft -> review iterations with a pass-threshold gate"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "For each task, DESIGN emits an explicit implementation spec artifact before implementation drafting"
+      - "DESIGN supports iterative draft/review refinement up to max_iterations"
+      - "Each iteration records structured review output including score and pass/fail verdict"
+      - "A configurable pass_threshold must be met before the task can advance to IMPLEMENT"
+      - "If threshold is not met by max_iterations, task is marked design_failed with actionable feedback"
+
+    depends_on: [AR-120]
+    source: "Prime/Artisan convergence quality policy (2026-02-27)"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
+
   # ---------------------------------------------------------------------------
-  # IMPLEMENT Phase (AR-130 – AR-137)
+  # IMPLEMENT Phase (AR-130 – AR-139)
   # ---------------------------------------------------------------------------
 
   - id: AR-130
@@ -510,6 +529,44 @@ phase_behavior_requirements:
     implementation_hints:
       file: src/startd8/contractors/context_seed_handlers.py
       class: ImplementPhaseHandler
+
+  - id: AR-138
+    description: "IMPLEMENT phase applies preflight size/decomposition and staleness/provenance-aware reuse"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Before generation, estimator computes expected output size/tokens per task"
+      - "Tasks exceeding configured safe limits are decomposed into smaller execution units or blocked with split guidance"
+      - "When prior generated files exist, IMPLEMENT classifies each as current, stale, or missing using generation state provenance"
+      - "Current artifacts are reused without regeneration; stale/missing artifacts trigger regeneration"
+      - "Per-task provenance classification is persisted in IMPLEMENT metadata for downstream audit"
+
+    depends_on: [AR-130, AR-134]
+    source: "Prime/Artisan convergence quality policy (2026-02-27)"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: ImplementPhaseHandler
+
+  - id: AR-139
+    description: "DESIGN-to-IMPLEMENT handoff enforces resolved-parameter completeness gate"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Resolved requirements parameters are compared against the generated design/spec text per task"
+      - "Missing required parameters produce explicit feedback injected into the next draft/review iteration"
+      - "Before IMPLEMENT starts, tasks that fail completeness gate are blocked or marked degraded according to quality policy mode"
+      - "Per-task completeness outcome and missing parameter list are persisted in design_results"
+      - "Dry-run mode reports completeness findings without performing LLM calls"
+
+    depends_on: [AR-120, AR-131]
+    source: "Prime/Artisan convergence quality policy (2026-02-27)"
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: DesignPhaseHandler
 
   # ---------------------------------------------------------------------------
   # TEST Phase (AR-140 – AR-142)
@@ -757,8 +814,28 @@ phase_behavior_requirements:
     verified_by:
       - tests/unit/contractors/test_review_phase_handler.py
 
+  - id: AR-153
+    description: "INTEGRATE/TEST/REVIEW failures trigger bounded regenerate-with-feedback retries"
+    status: implemented
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Failures from INTEGRATE, TEST, or REVIEW are normalized into structured prior_error_feedback per task"
+      - "Workflow performs bounded retry by re-running IMPLEMENT for the failed task with prior_error_feedback injected"
+      - "Retry attempts preserve single-task isolation and append attempt metadata to checkpoint state"
+      - "If retry budget is exhausted, task remains failed and workflow halts according to quality gate policy"
+      - "Retry transcript (failure summary plus retry outcome) is persisted for forensic analysis"
+
+    depends_on: [AR-150, AR-206]
+    source: "Prime/Artisan convergence quality policy (2026-02-27)"
+
+    implementation_hints:
+      files:
+        - src/startd8/contractors/artisan_contractor.py
+        - src/startd8/contractors/context_seed_handlers.py
+
   # ---------------------------------------------------------------------------
-  # FINALIZE Phase (AR-160 – AR-165)
+  # FINALIZE Phase (AR-160 – AR-166)
   # ---------------------------------------------------------------------------
 
   - id: AR-160
@@ -878,6 +955,25 @@ phase_behavior_requirements:
 
     depends_on: [AR-161, AR-164]
     source: docs/plans/ARTISAN_CONTEXTCORE_DATA_FLOW_FIXES.md AR-309
+
+    implementation_hints:
+      file: src/startd8/contractors/context_seed_handlers.py
+      class: FinalizePhaseHandler
+
+  - id: AR-166
+    description: "FINALIZE persists per-task Prime-style forensic artifacts for design and generation"
+    status: planned
+    type: phase_behavior
+
+    acceptance_criteria:
+      - "Persists per-task raw artifacts: spec, draft-<iteration>, review-<iteration>, integration"
+      - "Writes artifacts under output_dir/.artifacts/<task_id>/ with deterministic filenames"
+      - "generation-manifest.json stores per-task pointers to persisted forensic artifact files"
+      - "Artifact persistence is best-effort: write failures emit warnings and do not discard generation results"
+      - "Dry-run mode records planned artifact paths without writing files"
+
+    depends_on: [AR-161]
+    source: "Prime/Artisan convergence quality policy (2026-02-27)"
 
     implementation_hints:
       file: src/startd8/contractors/context_seed_handlers.py
@@ -1021,6 +1117,8 @@ orchestration_requirements:
       - "Within a single workflow execution, PLAN and SCAFFOLD run once before the inner loop and FINALIZE runs once after the inner loop"
       - "scripts/run_artisan_workflow.py defaults to feature_serial=True"
       - "By default quality policy, phase-serial and parallel batch modes (lane/wave) require explicit --allow-batch-mode override"
+      - "Default runner policy fans out multi-task selections into isolated single-task DESIGN -> FINALIZE workflow runs"
+      - "Single-feature quality flow halts remaining queued tasks after the first task failure"
       - "Checkpoint tracks current_feature and current_feature_phase"
 
     depends_on: [AR-200]
@@ -2679,14 +2777,27 @@ implementation_order:
       - artifact_reuse
       - deterministic_pre_review
 
+  phase_7:
+    name: "Prime Workflow Quality Convergence (Planned)"
+    requirements:
+      - AR-129  # DESIGN spec->draft->review quality loop with threshold gate
+      - AR-138  # IMPLEMENT preflight decomposition and provenance-aware reuse
+      - AR-139  # DESIGN completeness gate for resolved parameters
+      - AR-153  # Bounded regenerate-with-feedback retries after quality failures
+      - AR-166  # Prime-style forensic artifact persistence
+    benefits_delivered:
+      - spec_driven_quality_gates
+      - deterministic_retry_recovery
+      - forensic_artifact_traceability
+
 # ==============================================================================
 # CROSS-REFERENCE: Requirement -> Benefit
 # ==============================================================================
 
 traceability:
   phase_behavior:
-    requirements: [AR-100, AR-101, AR-102, AR-110, AR-111, AR-120, AR-121, AR-122, AR-123, AR-124, AR-125, AR-126, AR-127, AR-128, AR-130, AR-131, AR-132, AR-133, AR-134, AR-135, AR-136, AR-137, AR-140, AR-141, AR-142, AR-143, AR-144, AR-145, AR-146, AR-147, AR-150, AR-151, AR-152, AR-160, AR-161, AR-162, AR-163, AR-164, AR-165]
-    count: 39
+    requirements: [AR-100, AR-101, AR-102, AR-110, AR-111, AR-120, AR-121, AR-122, AR-123, AR-124, AR-125, AR-126, AR-127, AR-128, AR-129, AR-130, AR-131, AR-132, AR-133, AR-134, AR-135, AR-136, AR-137, AR-138, AR-139, AR-140, AR-141, AR-142, AR-143, AR-144, AR-145, AR-146, AR-147, AR-150, AR-151, AR-152, AR-153, AR-160, AR-161, AR-162, AR-163, AR-164, AR-165, AR-166]
+    count: 44
   orchestration:
     requirements: [AR-200, AR-201, AR-202, AR-203, AR-204, AR-205, AR-206, AR-207, AR-208, AR-209, AR-210, AR-211]
     count: 12
@@ -2717,9 +2828,9 @@ traceability:
 # ==============================================================================
 
 summary:
-  total_requirements: 123
+  total_requirements: 128
   by_layer:
-    phase_behavior: 39    # AR-1xx (includes AR-127..AR-128, AR-143..AR-147)
+    phase_behavior: 44    # AR-1xx (includes AR-127..AR-129, AR-138..AR-139, AR-143..AR-147, AR-153, AR-166)
     orchestration: 12     # AR-2xx
     contextcore_data_flow: 12  # AR-3xx
     cost_model: 8         # AR-4xx
@@ -2731,7 +2842,7 @@ summary:
   by_status:
     implemented: 78
     partial: 1
-    planned: 44
+    planned: 49
   by_implementation_phase:
     phase_1b_semantic_validators: 6  # AR-143..AR-147, AR-810 (DONE)
     phase_1_contextcore: 5
@@ -2740,4 +2851,5 @@ summary:
     phase_4_orchestration: 5
     phase_5_interactive: 6
     phase_6_mottainai: 9
+    phase_7_prime_quality_convergence: 5
     already_implemented: 76

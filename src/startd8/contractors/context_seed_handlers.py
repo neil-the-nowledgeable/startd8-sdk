@@ -69,10 +69,6 @@ from startd8.contractors.artisan_contractor import (
     AbstractPhaseHandler,
     WorkflowPhase,
     _SAFE_TASK_ID_PATTERN,
-    compute_lanes,
-    compute_wave_index_map,
-    compute_wave_metadata,
-    compute_waves,
 )
 from startd8.contractors.protocols import (
     CodeGenerator,
@@ -1714,92 +1710,7 @@ class PlanPhaseHandler(AbstractPhaseHandler):
                 [t.task_id for t in sorted_tasks],
             )
 
-        # ── Wave assignment: auto-compute or verify from seed ──
-        has_wave = [t for t in sorted_tasks if t.wave_index is not None]
-        missing_wave = [t for t in sorted_tasks if t.wave_index is None]
 
-        if not has_wave or missing_wave:
-            # Cases 1 & 2: no/partial wave_index → auto-compute all.
-            if missing_wave and has_wave:
-                logger.warning(
-                    "Partial wave_index: %d/%d tasks missing wave_index — "
-                    "overriding all with auto-computed waves",
-                    len(missing_wave), len(sorted_tasks),
-                )
-            waves = compute_waves(sorted_tasks)
-            wave_map = compute_wave_index_map(waves)
-            for t in sorted_tasks:
-                t.wave_index = wave_map.get(t.task_id, 0)
-        else:
-            # Case 3: All wave_index present → trust but verify
-            task_count = len(sorted_tasks)
-            for t in sorted_tasks:
-                if t.wave_index < 0 or t.wave_index >= task_count:
-                    logger.warning(
-                        "Task %s: wave_index=%d out of range [0, %d) — "
-                        "will be overridden by computed value",
-                        t.task_id, t.wave_index, task_count,
-                    )
-
-            expected_waves = compute_waves(sorted_tasks)
-            expected_map = compute_wave_index_map(expected_waves)
-            mismatches = [
-                (t.task_id, t.wave_index, expected_map.get(t.task_id))
-                for t in sorted_tasks
-                if t.wave_index != expected_map.get(t.task_id)
-            ]
-            if mismatches:
-                logger.warning(
-                    "wave_index mismatch vs depends_on graph for %d tasks: %s "
-                    "— overriding with computed values",
-                    len(mismatches),
-                    [(tid, f"seed={sw}, computed={cw}") for tid, sw, cw in mismatches],
-                )
-                for t in sorted_tasks:
-                    t.wave_index = expected_map.get(t.task_id, 0)
-            waves = expected_waves
-
-        # Operational circuit breakers
-        wave_meta = compute_wave_metadata(waves)
-        if wave_meta["wave_count"] > 1:
-            parallelism_ratio = len(sorted_tasks) / wave_meta["wave_count"]
-            if parallelism_ratio < 1.5:
-                logger.warning(
-                    "Low parallelism: %d waves for %d tasks (ratio %.1f). "
-                    "This plan is nearly fully serial — consider restructuring "
-                    "depends_on to increase per-wave task count.",
-                    wave_meta["wave_count"], len(sorted_tasks), parallelism_ratio,
-                )
-            if wave_meta["critical_path_length"] > 10:
-                logger.warning(
-                    "Deep dependency chain: critical_path_length=%d. "
-                    "Wave barriers will serialize execution across %d waves.",
-                    wave_meta["critical_path_length"], wave_meta["wave_count"],
-                )
-
-        # Dependency-order assertion (skip for cycle-fallback single wave)
-        if len(waves) > 1:
-            _wave_map_check = {t.task_id: t.wave_index for t in sorted_tasks}
-            violations = []
-            for t in sorted_tasks:
-                for dep_id in (t.depends_on or []):
-                    dep_wave = _wave_map_check.get(dep_id)
-                    if (dep_wave is not None
-                            and t.wave_index is not None
-                            and dep_wave >= t.wave_index):
-                        violations.append(
-                            (t.task_id, t.wave_index, dep_id, dep_wave)
-                        )
-            if violations:
-                logger.error(
-                    "Wave dependency-order violation for %d task pairs: %s "
-                    "— falling back to single-wave execution",
-                    len(violations),
-                    [(tid, f"wave={tw}, dep={did}, dep_wave={dw}")
-                     for tid, tw, did, dw in violations],
-                )
-                for t in sorted_tasks:
-                    t.wave_index = 0
 
         # Extract plan metadata
         plan_meta = seed_data.get("plan", {})
@@ -1839,9 +1750,6 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         _complexity = seed_data.get("complexity") or {}
         context["complexity_dimensions"] = _complexity.get("dimensions", {})
         context["complexity_composite"] = _complexity.get("composite")
-
-        # REQ-PD-008: Forward wave_metadata into context
-        context["wave_metadata"] = wave_meta
 
         # -- Phase 2 data flow fixes: extract ContextCore enrichment --
         _artifacts = seed_data.get("artifacts") or {}
@@ -2254,6 +2162,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
         prior_design_text: str | None = None,
+        prior_quality_feedback: str | None = None,
         inv_derivation_rules: dict[str, Any] | None = None,
         inv_resolved_parameters: dict[str, Any] | None = None,
         inv_output_contracts: dict[str, Any] | None = None,
@@ -2417,6 +2326,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         # Task-specific design doc content hints (supplement structural sections)
         if task.design_doc_sections:
             additional_context["design_doc_sections"] = task.design_doc_sections
+
+        if prior_quality_feedback and prior_quality_feedback.strip():
+            additional_context["quality_feedback"] = (
+                "Quality feedback from previous design attempt (must be addressed):\n"
+                + prior_quality_feedback.strip()
+            )
 
         # Fix 2c: inject parameter_sources relevant to this task's artifact types
         all_param_sources = parameter_sources or {}
@@ -3238,6 +3153,16 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "iterations": result.iterations,
             "completed_at": result.completed_at.isoformat(),
         }
+        reviewer_verdict = DesignPhaseHandler._serialize_review_verdict(
+            getattr(result, "reviewer_verdict", None),
+        )
+        if reviewer_verdict:
+            payload["reviewer_verdict"] = reviewer_verdict
+        arbiter_verdict = DesignPhaseHandler._serialize_review_verdict(
+            getattr(result, "arbiter_verdict", None),
+        )
+        if arbiter_verdict:
+            payload["arbiter_verdict"] = arbiter_verdict
         reason_code = getattr(result, "non_agreement_reason_code", None)
         if reason_code:
             payload["non_agreement_reason_code"] = reason_code
@@ -3254,6 +3179,486 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if disagreement_telemetry:
             payload["disagreement_telemetry"] = disagreement_telemetry
         return payload
+
+    @staticmethod
+    def _coerce_float(value: Any, default: float = 0.0) -> float:
+        """Best-effort float coercion with sane fallback."""
+        try:
+            if value is None:
+                return default
+            coerced = float(value)
+            if coerced != coerced:  # NaN guard
+                return default
+            return coerced
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _serialize_review_verdict(verdict: Any) -> dict[str, Any] | None:
+        """Serialize a review verdict object into a JSON-safe dict."""
+        if verdict is None:
+            return None
+        role_value = getattr(verdict, "role", None)
+        if role_value is not None and hasattr(role_value, "value"):
+            role_value = role_value.value
+        reviewed_at = getattr(verdict, "reviewed_at", None)
+        if reviewed_at is not None and hasattr(reviewed_at, "isoformat"):
+            reviewed_at = reviewed_at.isoformat()
+        return {
+            "role": str(role_value) if role_value is not None else "",
+            "approved": bool(getattr(verdict, "approved", False)),
+            "confidence": max(
+                0.0,
+                min(
+                    1.0,
+                    DesignPhaseHandler._coerce_float(
+                        getattr(verdict, "confidence", 0.0),
+                    ),
+                ),
+            ),
+            "concerns": list(getattr(verdict, "concerns", []) or []),
+            "suggestions": list(getattr(verdict, "suggestions", []) or []),
+            "summary": str(getattr(verdict, "summary", "") or ""),
+            "reviewed_at": reviewed_at,
+        }
+
+    @staticmethod
+    def _extract_review_feedback(verdict: dict[str, Any] | None) -> list[str]:
+        """Extract actionable feedback lines from a serialized verdict."""
+        if not isinstance(verdict, dict):
+            return []
+        feedback: list[str] = []
+        summary = str(verdict.get("summary", "") or "").strip()
+        if summary:
+            feedback.append(summary)
+        for concern in verdict.get("concerns", []) or []:
+            c = str(concern or "").strip()
+            if c:
+                feedback.append(c)
+        for suggestion in verdict.get("suggestions", []) or []:
+            s = str(suggestion or "").strip()
+            if s:
+                feedback.append(s)
+        deduped: list[str] = []
+        seen: set[str] = set()
+        for item in feedback:
+            if item not in seen:
+                seen.add(item)
+                deduped.append(item)
+        return deduped
+
+    @staticmethod
+    def _build_review_gate(
+        entry: dict[str, Any],
+        *,
+        pass_threshold: int,
+    ) -> dict[str, Any]:
+        """Compute AR-129 review threshold gate from dual-review evidence."""
+        reviewer = entry.get("reviewer_verdict")
+        arbiter = entry.get("arbiter_verdict")
+        reviewer_dict = reviewer if isinstance(reviewer, dict) else {}
+        arbiter_dict = arbiter if isinstance(arbiter, dict) else {}
+
+        has_dual_verdict = bool(reviewer_dict) and bool(arbiter_dict)
+        reviewer_approved = bool(
+            reviewer_dict.get("approved", entry.get("agreed", False))
+        )
+        arbiter_approved = bool(
+            arbiter_dict.get("approved", entry.get("agreed", False))
+        )
+
+        if has_dual_verdict:
+            reviewer_conf = max(
+                0.0,
+                min(
+                    1.0,
+                    DesignPhaseHandler._coerce_float(
+                        reviewer_dict.get("confidence"),
+                        0.0,
+                    ),
+                ),
+            )
+            arbiter_conf = max(
+                0.0,
+                min(
+                    1.0,
+                    DesignPhaseHandler._coerce_float(
+                        arbiter_dict.get("confidence"),
+                        0.0,
+                    ),
+                ),
+            )
+            score = int(round(min(reviewer_conf, arbiter_conf) * 100))
+            evidence_mode = "dual_verdict"
+        else:
+            # Backward-compatible fallback for older handoff payloads/tests
+            # that only persisted "agreed" without verdict objects.
+            score = 100 if entry.get("agreed") else 0
+            reviewer_conf = 1.0 if entry.get("agreed") else 0.0
+            arbiter_conf = 1.0 if entry.get("agreed") else 0.0
+            evidence_mode = "agreement_fallback"
+
+        passed = bool(entry.get("agreed")) and reviewer_approved and arbiter_approved and (
+            score >= pass_threshold
+        )
+        feedback = []
+        if score < pass_threshold:
+            feedback.append(
+                f"Review score {score} is below pass_threshold {pass_threshold}."
+            )
+        if not reviewer_approved or not arbiter_approved:
+            feedback.append("Reviewer and Arbiter must both approve the design.")
+        feedback.extend(DesignPhaseHandler._extract_review_feedback(reviewer_dict))
+        feedback.extend(DesignPhaseHandler._extract_review_feedback(arbiter_dict))
+        deduped_feedback: list[str] = []
+        seen_feedback: set[str] = set()
+        for item in feedback:
+            if item not in seen_feedback:
+                seen_feedback.add(item)
+                deduped_feedback.append(item)
+
+        return {
+            "score": score,
+            "threshold": pass_threshold,
+            "passed": passed,
+            "verdict": "pass" if passed else "fail",
+            "evidence_mode": evidence_mode,
+            "reviewer_approved": reviewer_approved,
+            "arbiter_approved": arbiter_approved,
+            "reviewer_confidence": reviewer_conf,
+            "arbiter_confidence": arbiter_conf,
+            "iterations": int(entry.get("iterations", 0) or 0),
+            "actionable_feedback": deduped_feedback[:12],
+        }
+
+    @staticmethod
+    def _flatten_parameter_values(
+        value: Any,
+        *,
+        key_prefix: str = "",
+    ) -> list[tuple[str, str]]:
+        """Flatten nested parameter structures into key/value scalar pairs."""
+        flattened: list[tuple[str, str]] = []
+        if isinstance(value, dict):
+            for key, child in value.items():
+                next_prefix = f"{key_prefix}.{key}" if key_prefix else str(key)
+                flattened.extend(
+                    DesignPhaseHandler._flatten_parameter_values(
+                        child,
+                        key_prefix=next_prefix,
+                    )
+                )
+            return flattened
+        if isinstance(value, (list, tuple, set)):
+            for idx, child in enumerate(value):
+                next_prefix = f"{key_prefix}[{idx}]" if key_prefix else str(idx)
+                flattened.extend(
+                    DesignPhaseHandler._flatten_parameter_values(
+                        child,
+                        key_prefix=next_prefix,
+                    )
+                )
+            return flattened
+        if value is None:
+            return flattened
+        value_text = str(value).strip()
+        if not value_text:
+            return flattened
+        flattened.append((key_prefix or "value", value_text))
+        return flattened
+
+    @staticmethod
+    def _collect_resolved_parameters_for_task(
+        task: SeedTask,
+        *,
+        inv_resolved_parameters: dict[str, Any] | None,
+        onboarding_resolved_parameters: dict[str, Any] | None,
+        parameter_sources: dict[str, Any] | None,
+    ) -> list[dict[str, str]]:
+        """Collect resolved parameter key/value pairs relevant to a task."""
+        artifact_types = set(task.artifact_types_addressed or [])
+        task_markers = {
+            str(task.task_id or "").lower(),
+            str(task.feature_id or "").lower(),
+        } - {""}
+        collected: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def _emit(key: str, value: str, source: str) -> None:
+            pair = (key, value)
+            if pair in seen:
+                return
+            seen.add(pair)
+            collected.append({"key": key, "value": value, "source": source})
+
+        def _collect_from_mapping(data: dict[str, Any], source: str) -> None:
+            for raw_key, raw_value in data.items():
+                key_str = str(raw_key)
+                key_lc = key_str.lower()
+                if artifact_types:
+                    if not any(atype in key_str for atype in artifact_types):
+                        continue
+                elif task_markers and not any(marker in key_lc for marker in task_markers):
+                    # Without artifact typing, only evaluate task-scoped keys.
+                    continue
+                for param_key, param_val in DesignPhaseHandler._flatten_parameter_values(
+                    raw_value,
+                    key_prefix=key_str,
+                ):
+                    _emit(param_key, param_val, source)
+
+        for source_name, mapping in [
+            ("inventory", inv_resolved_parameters or {}),
+            ("onboarding", onboarding_resolved_parameters or {}),
+        ]:
+            if isinstance(mapping, dict) and mapping:
+                _collect_from_mapping(mapping, source_name)
+
+        # Fallback path for seeds that only include parameter_sources.
+        if (
+            not collected
+            and artifact_types
+            and isinstance(parameter_sources, dict)
+            and parameter_sources
+        ):
+            source_subset = parameter_sources
+            if artifact_types:
+                source_subset = {
+                    atype: parameter_sources.get(atype)
+                    for atype in artifact_types
+                    if atype in parameter_sources
+                }
+            for source_key, source_val in source_subset.items():
+                if isinstance(source_val, dict):
+                    for param_key, param_val in source_val.items():
+                        if isinstance(param_val, (str, int, float, bool)):
+                            _emit(str(param_key), str(param_val), f"parameter_sources:{source_key}")
+
+        return collected[:60]
+
+    @staticmethod
+    def _evaluate_parameter_completeness(
+        implementation_spec: str,
+        resolved_parameters: list[dict[str, str]],
+        *,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """Evaluate AR-139 parameter completeness against implementation spec text."""
+        if not resolved_parameters:
+            return {
+                "status": "not_applicable",
+                "passed": True,
+                "evaluated_count": 0,
+                "present_count": 0,
+                "missing_count": 0,
+                "missing": [],
+                "dry_run": dry_run,
+            }
+
+        spec_text = implementation_spec or ""
+        spec_lc = spec_text.lower()
+        missing: list[dict[str, str]] = []
+        present_count = 0
+
+        for param in resolved_parameters:
+            key = str(param.get("key", "") or "")
+            value = str(param.get("value", "") or "")
+            source = str(param.get("source", "unknown") or "unknown")
+            value_candidates = {
+                value.lower(),
+                value.strip('"').strip("'").lower(),
+            }
+            key_candidate = key.lower()
+
+            found = False
+            for candidate in value_candidates:
+                if candidate and len(candidate) >= 2 and candidate in spec_lc:
+                    found = True
+                    break
+            if not found and key_candidate and len(key_candidate) >= 3 and key_candidate in spec_lc:
+                found = True
+
+            if found:
+                present_count += 1
+                continue
+
+            missing.append({
+                "key": key,
+                "value": value,
+                "source": source,
+            })
+
+        missing_count = len(missing)
+        status = "pass" if missing_count == 0 else "fail"
+        return {
+            "status": status,
+            "passed": missing_count == 0,
+            "evaluated_count": len(resolved_parameters),
+            "present_count": present_count,
+            "missing_count": missing_count,
+            "missing": missing,
+            "dry_run": dry_run,
+        }
+
+    def _apply_design_quality_gates(
+        self,
+        *,
+        task: SeedTask,
+        entry: dict[str, Any],
+        resolved_parameters: list[dict[str, str]],
+        quality_policy_mode: str,
+        dry_run: bool,
+    ) -> None:
+        """Apply AR-129 and AR-139 quality gates to a task design result."""
+        design_text = str(entry.get("design_document", "") or "")
+        if not design_text:
+            design_text = str(entry.get("implementation_spec", "") or "")
+        entry["implementation_spec"] = design_text
+        entry["implementation_spec_artifact"] = {
+            "kind": "inline_design_spec",
+            "present": bool(design_text.strip()),
+            "char_count": len(design_text),
+            "line_count": len(design_text.splitlines()) if design_text else 0,
+        }
+
+        review_gate = self._build_review_gate(
+            entry,
+            pass_threshold=self.config.pass_threshold,
+        )
+        if dry_run:
+            entry["review_gate"] = {
+                "score": None,
+                "threshold": self.config.pass_threshold,
+                "passed": True,
+                "verdict": "not_evaluated",
+                "evidence_mode": "dry_run",
+                "actionable_feedback": [],
+            }
+            entry["review_score"] = None
+            entry["review_passed"] = True
+            entry["review_verdict"] = "not_evaluated"
+        else:
+            entry["review_gate"] = review_gate
+            entry["review_score"] = review_gate["score"]
+            entry["review_passed"] = review_gate["passed"]
+            entry["review_verdict"] = review_gate["verdict"]
+
+        completeness = self._evaluate_parameter_completeness(
+            design_text,
+            resolved_parameters,
+            dry_run=dry_run,
+        )
+        entry["parameter_completeness"] = completeness
+
+        if completeness.get("missing_count", 0):
+            missing_preview = ", ".join(
+                f"{p['key']}={p['value']}"
+                for p in completeness.get("missing", [])[:5]
+            )
+            feedback = (
+                "Resolved parameters are missing from the implementation spec: "
+                f"{missing_preview}. Add them verbatim to a Critical Parameters "
+                "section and implementation steps."
+            )
+            entry["completeness_feedback"] = feedback
+            prior_feedback = str(entry.get("next_iteration_feedback", "") or "").strip()
+            entry["next_iteration_feedback"] = (
+                f"{prior_feedback}\n{feedback}".strip()
+                if prior_feedback
+                else feedback
+            )
+
+        if not dry_run and review_gate.get("actionable_feedback"):
+            review_feedback = "\n".join(
+                f"- {line}" for line in review_gate["actionable_feedback"][:8]
+            )
+            entry["review_feedback"] = review_feedback
+            prior_feedback = str(entry.get("next_iteration_feedback", "") or "").strip()
+            entry["next_iteration_feedback"] = (
+                f"{prior_feedback}\n{review_feedback}".strip()
+                if prior_feedback
+                else review_feedback
+            )
+
+        if dry_run:
+            entry["completeness_gate_decision"] = "dry_run_report_only"
+            return
+
+        review_failed = not review_gate.get("passed", False)
+        completeness_failed = not completeness.get("passed", True)
+
+        if review_failed:
+            entry["quality_failure_reason"] = "REVIEW_THRESHOLD_NOT_MET"
+            entry.setdefault("non_agreement_reason_code", "REVIEW_THRESHOLD_NOT_MET")
+            if entry.get("status") in ("designed", "refined", "adopted"):
+                entry["status"] = "design_failed"
+            if review_gate.get("actionable_feedback"):
+                entry["error"] = (
+                    "AR-129 threshold gate failed after "
+                    f"{int(entry.get('iterations', 0) or 0)}/{self.config.max_iterations} "
+                    "iterations. " + " ".join(review_gate["actionable_feedback"][:3])
+                )
+            entry["completeness_gate_decision"] = "not_evaluated_due_to_review_failure"
+            return
+
+        if completeness_failed:
+            if quality_policy_mode == "block":
+                entry["quality_failure_reason"] = "PARAMETER_COMPLETENESS_FAILED"
+                entry.setdefault(
+                    "non_agreement_reason_code",
+                    "PARAMETER_COMPLETENESS_FAILED",
+                )
+                if entry.get("status") in ("designed", "refined", "adopted"):
+                    entry["status"] = "design_failed"
+                entry["error"] = (
+                    "AR-139 completeness gate failed in block mode for "
+                    f"{task.task_id}: {completeness.get('missing_count', 0)} parameter(s) missing."
+                )
+                entry["completeness_gate_decision"] = "blocked"
+            else:
+                entry["quality_failure_reason"] = "PARAMETER_COMPLETENESS_DEGRADED"
+                entry["completeness_gate_decision"] = "degraded"
+            return
+
+        entry["completeness_gate_decision"] = "pass"
+
+    @staticmethod
+    def _task_quality_passed(entry: dict[str, Any]) -> bool:
+        """Return whether a DESIGN task entry passes all quality gates."""
+        status = entry.get("status", "")
+        if status not in ("designed", "refined", "adopted"):
+            return False
+        if not bool(entry.get("agreed")):
+            return False
+        review_gate = entry.get("review_gate")
+        if isinstance(review_gate, dict) and not bool(review_gate.get("passed", False)):
+            return False
+        completeness = entry.get("parameter_completeness")
+        if isinstance(completeness, dict) and not bool(completeness.get("passed", True)):
+            return False
+        return True
+
+    @staticmethod
+    def _task_quality_reason(entry: dict[str, Any]) -> str | None:
+        """Return machine-friendly reason for DESIGN quality failure."""
+        if entry.get("status") == "design_failed":
+            return str(
+                entry.get("quality_failure_reason")
+                or entry.get("non_agreement_reason_code")
+                or "DESIGN_FAILED"
+            )
+        if not bool(entry.get("agreed")):
+            return str(entry.get("non_agreement_reason_code") or "DESIGN_NOT_AGREED")
+        review_gate = entry.get("review_gate")
+        if isinstance(review_gate, dict) and not bool(review_gate.get("passed", True)):
+            return "REVIEW_THRESHOLD_NOT_MET"
+        completeness = entry.get("parameter_completeness")
+        if isinstance(completeness, dict) and not bool(completeness.get("passed", True)):
+            decision = str(entry.get("completeness_gate_decision", "") or "")
+            if decision == "degraded":
+                return "PARAMETER_COMPLETENESS_DEGRADED"
+            return "PARAMETER_COMPLETENESS_FAILED"
+        return None
 
     @staticmethod
     def _evaluate_high_signal_floor(feature_context: Any) -> list[str]:
@@ -3477,6 +3882,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             _pi_design_chain_status, _chain_present, _chain_total,
             {k for k, v in _chain_signals.items() if v},
         )
+        _quality_gate_summary = context.get("quality_gate_summary", {}) or {}
+        quality_policy_mode = str(
+            _quality_gate_summary.get("policy_mode", "warn")
+        ).lower()
+        if quality_policy_mode not in {"skip", "warn", "block"}:
+            quality_policy_mode = "warn"
 
         design_results: dict[str, dict[str, Any]] = {}
         total_cost = 0.0
@@ -3882,6 +4293,23 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             # ----------------------------------------------------------
             prior = prior_design_results.get(task.task_id, {})
             prior_design_text: str | None = None
+            carry_forward_quality_feedback = "\n".join(
+                part.strip()
+                for part in [
+                    str(prior.get("next_iteration_feedback", "") or ""),
+                    str(prior.get("completeness_feedback", "") or ""),
+                    str(prior.get("review_feedback", "") or ""),
+                ]
+                if part and part.strip()
+            ).strip()
+            task_resolved_parameters = self._collect_resolved_parameters_for_task(
+                task,
+                inv_resolved_parameters=inv_resolved_parameters,
+                onboarding_resolved_parameters=context.get(
+                    "onboarding_resolved_parameters"
+                ),
+                parameter_sources=context.get("parameter_sources", {}),
+            )
 
             if (
                 prior.get("status") in ("designed", "adopted")
@@ -3896,19 +4324,19 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     )
                 else:
                     # Adopt as-is (existing behavior)
-                    design_results[task.task_id] = {
+                    adopted_entry = {
                         **prior,
                         "status": "adopted",
                         "adopted_from": "prior_design_results",
                     }
-                    adopted_prompt_version = design_results[task.task_id].get(
+                    adopted_prompt_version = adopted_entry.get(
                         "prompt_version", "v1",
                     )
                     adopted_path_tag = self._path_tag_for_prompt_version(
                         adopted_prompt_version
                     )
-                    design_results[task.task_id]["path_tag"] = adopted_path_tag
-                    design_results[task.task_id].setdefault(
+                    adopted_entry["path_tag"] = adopted_path_tag
+                    adopted_entry.setdefault(
                         "route_policy",
                         {
                             "selected_prompt_version": adopted_prompt_version,
@@ -3920,31 +4348,45 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             "modular_opt_in": self.config.use_modular_prompts,
                         },
                     )
+                    self._apply_design_quality_gates(
+                        task=task,
+                        entry=adopted_entry,
+                        resolved_parameters=task_resolved_parameters,
+                        quality_policy_mode=quality_policy_mode,
+                        dry_run=False,
+                    )
+                    design_results[task.task_id] = adopted_entry
                     route_decision_counts[adopted_prompt_version] += 1
-                    tasks_adopted += 1
-                    if prior.get("agreed"):
+                    if adopted_entry.get("status") == "design_failed":
+                        tasks_failed += 1
+                    else:
+                        tasks_adopted += 1
+                    if adopted_entry.get("agreed"):
                         tasks_agreed += 1
+                    adopted_quality_passed = self._task_quality_passed(adopted_entry)
+                    if adopted_quality_passed:
                         route_quality_counts[adopted_prompt_version]["passed"] += 1
                         path_quality_counts[adopted_path_tag]["passed"] += 1
-                        design_results[task.task_id]["quality_outcome"] = "pass"
+                        adopted_entry["quality_outcome"] = "pass"
                     else:
                         route_quality_counts[adopted_prompt_version]["failed"] += 1
                         path_quality_counts[adopted_path_tag]["failed"] += 1
-                        design_results[task.task_id]["quality_outcome"] = "fail"
+                        adopted_entry["quality_outcome"] = "fail"
 
-                    # Feed into cross-task progressive context
                     doc_text = prior["design_document"]
-                    first_line = doc_text[:300].split("\n")[0]
-                    summary = f"{task.task_id} ({task.title}): {first_line}"
-                    prior_summaries.append(summary)
-                    # REQ-PD-007: Track completed designs for dependency injection
-                    completed_designs[task.task_id] = summary
-                    # CCD-200/205: Lane-peer design accumulation
-                    lane_prior_designs.append({
-                        "task_id": task.task_id,
-                        "title": task.title,
-                        "design_document": doc_text,
-                    })
+                    if adopted_entry.get("status") != "design_failed":
+                        # Feed into cross-task progressive context
+                        first_line = doc_text[:300].split("\n")[0]
+                        summary = f"{task.task_id} ({task.title}): {first_line}"
+                        prior_summaries.append(summary)
+                        # REQ-PD-007: Track completed designs for dependency injection
+                        completed_designs[task.task_id] = summary
+                        # CCD-200/205: Lane-peer design accumulation
+                        lane_prior_designs.append({
+                            "task_id": task.task_id,
+                            "title": task.title,
+                            "design_document": doc_text,
+                        })
                     # CCD-401: Wave/lane metadata in design results
                     design_results[task.task_id].update(
                         _compute_ccd_task_metadata(
@@ -3980,13 +4422,16 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         "DESIGN: adopted prior result for %s (agreed=%s, cost=$%.4f)",
                         task.task_id, prior.get("agreed"), prior.get("cost", 0.0),
                     )
-                    _task_span.set_attribute("task.status", "adopted")
+                    _task_span.set_attribute(
+                        "task.status",
+                        str(adopted_entry.get("status", "adopted")),
+                    )
                     _sc = _capture_task_span_context(_task_span)
                     if _sc:
                         design_results[task.task_id]["_span_context"] = _sc
                     _log_task_boundary_complete(
                         task.task_id,
-                        status="adopted",
+                        status=str(adopted_entry.get("status", "adopted")),
                         phase="design",
                         cost_usd=_coerce_optional_float(
                             design_results[task.task_id].get("cost")
@@ -3996,7 +4441,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     continue
 
             if dry_run:
-                design_results[task.task_id] = {
+                dry_run_entry = {
                     "status": "dry_run_skipped",
                     "title": task.title,
                     "target_file": task.target_files[0] if task.target_files else "",
@@ -4005,7 +4450,16 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "prompt_version": "n/a",
                     "path_tag": "unknown",
                     "quality_outcome": "not_evaluated",
+                    "implementation_spec": task.description,
                 }
+                self._apply_design_quality_gates(
+                    task=task,
+                    entry=dry_run_entry,
+                    resolved_parameters=task_resolved_parameters,
+                    quality_policy_mode=quality_policy_mode,
+                    dry_run=True,
+                )
+                design_results[task.task_id] = dry_run_entry
                 _task_span.set_attribute("task.status", "dry_run_skipped")
                 _sc = _capture_task_span_context(_task_span)
                 if _sc:
@@ -4146,6 +4600,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             manifest_context_budget=self.config.manifest_context_budget,
                             enable_introspect=self.config.enable_introspect,
                         )
+                        if carry_forward_quality_feedback:
+                            _v2_user = (
+                                _v2_user
+                                + "\n\n# Prior Quality Feedback\n"
+                                + carry_forward_quality_feedback
+                            )
                         _high_signal_missing: list[str] = []
                         if not (
                             (task.requirements_text or "").strip()
@@ -4232,6 +4692,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                 tz=datetime.timezone.utc,
                             ).isoformat(),
                             "prompt_version": "v2",
+                            "reviewer_verdict": self._serialize_review_verdict(
+                                _reviewer_verdict
+                            ),
+                            "arbiter_verdict": self._serialize_review_verdict(
+                                _arbiter_verdict
+                            ),
                             "reviewer_summary": _reviewer_verdict.summary,
                             "arbiter_summary": _arbiter_verdict.summary,
                             "review_disagreement_count": len(_v2_disagreements),
@@ -4300,6 +4766,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             parameter_sources=context.get("parameter_sources", {}),
                             semantic_conventions=context.get("semantic_conventions", {}),
                             prior_design_text=prior_design_text,
+                            prior_quality_feedback=(
+                                carry_forward_quality_feedback or None
+                            ),
                             inv_derivation_rules=inv_derivation_rules,
                             inv_resolved_parameters=inv_resolved_parameters,
                             inv_output_contracts=inv_output_contracts,
@@ -4360,6 +4829,13 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         selected_prompt_version
                     )
                     serialized["route_policy"] = route_policy
+                    self._apply_design_quality_gates(
+                        task=task,
+                        entry=serialized,
+                        resolved_parameters=task_resolved_parameters,
+                        quality_policy_mode=quality_policy_mode,
+                        dry_run=False,
+                    )
                     design_results[task.task_id] = serialized
 
                     # PCA-605c: extract file decisions from design doc
@@ -4378,14 +4854,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                 _discovered,
                             )
 
-                    if prior_design_text:
+                    if serialized.get("status") == "design_failed":
+                        tasks_failed += 1
+                    elif prior_design_text:
                         tasks_refined += 1
                     else:
                         tasks_designed += 1
                     if serialized.get("agreed"):
                         tasks_agreed += 1
                     route_decision_counts[selected_prompt_version] += 1
-                    if serialized.get("agreed"):
+                    task_quality_passed = self._task_quality_passed(serialized)
+                    if task_quality_passed:
                         route_quality_counts[selected_prompt_version]["passed"] += 1
                         path_quality_counts[serialized["path_tag"]]["passed"] += 1
                         serialized["quality_outcome"] = "pass"
@@ -4396,17 +4875,18 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
                     # Accumulate cross-task summary for progressive context
                     doc_text = serialized["design_document"]
-                    first_line = doc_text[:300].split("\n")[0]
-                    summary = f"{task.task_id} ({task.title}): {first_line}"
-                    prior_summaries.append(summary)
-                    # REQ-PD-007: Track completed designs for dependency injection
-                    completed_designs[task.task_id] = summary
-                    # CCD-200/205: Lane-peer design accumulation
-                    lane_prior_designs.append({
-                        "task_id": task.task_id,
-                        "title": task.title,
-                        "design_document": doc_text,
-                    })
+                    if serialized.get("status") != "design_failed":
+                        first_line = doc_text[:300].split("\n")[0]
+                        summary = f"{task.task_id} ({task.title}): {first_line}"
+                        prior_summaries.append(summary)
+                        # REQ-PD-007: Track completed designs for dependency injection
+                        completed_designs[task.task_id] = summary
+                        # CCD-200/205: Lane-peer design accumulation
+                        lane_prior_designs.append({
+                            "task_id": task.task_id,
+                            "title": task.title,
+                            "design_document": doc_text,
+                        })
                     # CCD-401: Wave/lane metadata in design results
                     design_results[task.task_id].update(
                         _compute_ccd_task_metadata(
@@ -4460,12 +4940,23 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
                     _task_span.set_attribute("task.cost", task_cost)
                     _task_span.set_attribute("task.attempts", _attempt + 1)
-                    _task_span.set_attribute("task.status", "designed")
+                    _task_span.set_attribute(
+                        "task.status",
+                        str(serialized.get("status", "designed")),
+                    )
                     _task_span.set_attribute("task.prompt_version", selected_prompt_version)
                     # CCD-601: lane-peer context injection attributes
                     # Compute truncation flag: same estimation as _apply_lane_peer_token_budget
-                    _peer_count = len(lane_prior_designs) - 1 if lane_prior_designs else 0
-                    _peers_before_this = lane_prior_designs[:-1] if lane_prior_designs else []
+                    _has_current_task_context = bool(
+                        lane_prior_designs
+                        and lane_prior_designs[-1].get("task_id") == task.task_id
+                    )
+                    if _has_current_task_context:
+                        _peer_count = len(lane_prior_designs) - 1
+                        _peers_before_this = lane_prior_designs[:-1]
+                    else:
+                        _peer_count = len(lane_prior_designs)
+                        _peers_before_this = lane_prior_designs
                     _peer_chars = sum(len(d.get("design_document", "")) for d in _peers_before_this)
                     _was_truncated = (
                         _peer_chars // 4 > self.config.design_lane_peer_token_budget
@@ -4848,13 +5339,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             status = entry.get("status", "")
             if status in ("dry_run_skipped", "env_blocked"):
                 continue
-            passed = bool(entry.get("agreed")) and status in (
-                "designed", "refined", "adopted",
-            )
-            reason = entry.get("non_agreement_reason_code")
-            if status == "design_failed":
-                passed = False
-                reason = reason or "DESIGN_FAILED"
+            passed = self._task_quality_passed(entry)
+            reason = self._task_quality_reason(entry)
             if passed:
                 quality_passed += 1
             else:
@@ -4866,6 +5352,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 "prompt_version": entry.get("prompt_version", "n/a"),
                 "path_tag": entry.get("path_tag", "unknown"),
                 "quality_outcome": "pass" if passed else "fail",
+                "review_gate": entry.get("review_gate"),
+                "parameter_completeness": entry.get("parameter_completeness"),
             }
         quality_total = quality_passed + quality_failed
         agreement_rate = (
@@ -6250,6 +6738,7 @@ class Test{class_name}:
         design_results: dict[str, Any] | None = None,
         calibration_map: dict[str, dict[str, Any]] | None = None,
         downstream_map: dict[str, list[str]] | None = None,
+        staleness_classification: dict[str, str] | None = None,
         parameter_sources: dict[str, Any] | None = None,
         semantic_conventions: dict[str, Any] | None = None,
         # PCA-300/301/400: project-level context for IMPLEMENT prompts
@@ -6263,6 +6752,8 @@ class Test{class_name}:
         # PCA-501: project identity for edit-first behavior
         project_name: str | None = None,
         project_root_path: str | None = None,
+        preflight_safe_loc_limit: int = 800,
+        preflight_safe_token_limit: int = 64000,
         # PCA-600: edit mode classification from upstream signals
         edit_mode_map: dict[str, EditModeClassification] | None = None,
         # AR-822: module inventory from SCAFFOLD for import grounding
@@ -6295,6 +6786,7 @@ class Test{class_name}:
         skipped: list[dict[str, Any]] = []
         design_results = design_results or {}
         downstream_map = downstream_map or {}
+        staleness_classification = staleness_classification or {}
         active_task_ids = {t.task_id for t in tasks}
 
         env_blocked_ids: set[str] = set()
@@ -6355,10 +6847,37 @@ class Test{class_name}:
                 )
                 continue
 
+            task_design = design_results.get(task.task_id, {})
+            if task_design.get("status") == "design_failed":
+                fail_reason = (
+                    task_design.get("quality_failure_reason")
+                    or task_design.get("non_agreement_reason_code")
+                    or task_design.get("error")
+                    or "design_failed"
+                )
+                logger.warning(
+                    "IMPLEMENT: skipping task %s (%s) — design_blocked (%s)",
+                    task.task_id,
+                    task.title,
+                    fail_reason,
+                )
+                skipped.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "status": "design_blocked",
+                    "complexity_tier": "tier_2",
+                    "reason": str(fail_reason),
+                })
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status="design_blocked",
+                    phase="implement",
+                )
+                continue
+
             # Extract design document from DESIGN phase results (if available).
             # "adopted" status indicates reuse from a prior run (dress-rehearsal).
             design_doc_text = None
-            task_design = design_results.get(task.task_id, {})
             if task_design.get("status") in ("designed", "adopted", "refined"):
                 design_doc_text = task_design.get("design_document")
 
@@ -6643,6 +7162,88 @@ class Test{class_name}:
                         effective_targets,
                     )
 
+            # ── AR-138: preflight output-size guard + split guidance ─────
+            _effective_loc = task.estimated_loc
+            if _design_lines:
+                _effective_loc = max(_effective_loc, int(_design_lines * 0.6))
+            _estimated_tokens = int((_effective_loc * 24) + (len(effective_targets) * 512))
+            if isinstance(max_output_tokens, int) and max_output_tokens > 0:
+                _estimated_tokens = max(_estimated_tokens, max_output_tokens)
+            preflight_estimate = {
+                "estimated_loc": _effective_loc,
+                "estimated_tokens": _estimated_tokens,
+                "safe_loc_limit": preflight_safe_loc_limit,
+                "safe_token_limit": preflight_safe_token_limit,
+                "target_file_count": len(effective_targets),
+            }
+            if (
+                _effective_loc > preflight_safe_loc_limit
+                or _estimated_tokens > preflight_safe_token_limit
+            ):
+                split_guidance = (
+                    f"Task {task.task_id} exceeds IMPLEMENT preflight safe limits "
+                    f"(loc={_effective_loc}, tokens={_estimated_tokens}). "
+                    "Split into smaller execution units before regeneration."
+                )
+                logger.warning("IMPLEMENT: %s", split_guidance)
+                skipped.append({
+                    "task_id": task.task_id,
+                    "title": task.title,
+                    "status": "preflight_blocked_size",
+                    "complexity_tier": "tier_2",
+                    "reason": "preflight_size_limit_exceeded",
+                    "split_guidance": split_guidance,
+                    "preflight_estimate": preflight_estimate,
+                })
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status="preflight_blocked_size",
+                    phase="implement",
+                )
+                continue
+
+            # ── AR-138: staleness/provenance classification metadata ─────
+            provenance_files: list[dict[str, Any]] = []
+            current_count = 0
+            stale_count = 0
+            missing_count = 0
+            for _target in effective_targets:
+                _state_hint = staleness_classification.get(_target)
+                _exists = False
+                if project_root_path:
+                    try:
+                        _exists = (Path(project_root_path) / _target).exists()
+                    except (OSError, ValueError):
+                        _exists = False
+                if _exists:
+                    if _state_hint == "stale":
+                        _status = "stale"
+                        stale_count += 1
+                    else:
+                        _status = "current"
+                        current_count += 1
+                else:
+                    _status = "missing"
+                    missing_count += 1
+                provenance_files.append({
+                    "path": _target,
+                    "status": _status,
+                    "staleness_hint": _state_hint,
+                })
+            artifact_provenance = {
+                "files": provenance_files,
+                "summary": {
+                    "current": current_count,
+                    "stale": stale_count,
+                    "missing": missing_count,
+                },
+            }
+            reuse_decision = (
+                "reuse_candidate"
+                if stale_count == 0 and missing_count == 0 and current_count > 0
+                else "regenerate_required"
+            )
+
             # Strip dependencies on tasks not in this run (already completed
             # or filtered out by --task-filter).  The plan validator rejects
             # references to non-existent chunks.
@@ -6653,7 +7254,23 @@ class Test{class_name}:
             # design document. Missing parameters indicate information loss at
             # the DESIGN bottleneck.
             design_completeness_warning = ""
-            if design_doc_text:
+            _param_completeness = task_design.get("parameter_completeness")
+            if (
+                isinstance(_param_completeness, dict)
+                and _param_completeness.get("missing_count", 0)
+            ):
+                _missing = _param_completeness.get("missing", []) or []
+                _missing_preview = ", ".join(
+                    f"{m.get('key')}={m.get('value')}"
+                    for m in _missing[:5]
+                    if isinstance(m, dict)
+                )
+                design_completeness_warning = (
+                    f"WARNING: {_param_completeness.get('missing_count', 0)} "
+                    f"resolved parameter(s) missing from DESIGN specification: "
+                    f"{_missing_preview}. Include them verbatim in implementation."
+                )
+            elif design_doc_text:
                 _task_seed = design_results.get(task.task_id, {})
                 _seed_config = _task_seed.get("_seed_config", {})
                 _resolved = _seed_config.get("resolved_parameters", {})
@@ -6721,6 +7338,9 @@ class Test{class_name}:
                     "_design_lines": _design_lines,
                     "_design_sections": _design_sections,
                     "max_output_tokens": max_output_tokens,
+                    "preflight_estimate": preflight_estimate,
+                    "artifact_provenance": artifact_provenance,
+                    "reuse_decision": reuse_decision,
                     "artifact_types_addressed": task.artifact_types_addressed,
                     "downstream_files": task_downstream,
                     "original_target_files": task.target_files if task_downstream else None,
@@ -6816,6 +7436,10 @@ class Test{class_name}:
                 "validators": meta.get("post_generation_validators", []),
                 # PCA-505: track whether existing files were present for review
                 "had_existing_files": bool(meta.get("_existing_file_contents")),
+                # AR-138: IMPLEMENT preflight + provenance audit fields
+                "preflight_estimate": meta.get("preflight_estimate"),
+                "artifact_provenance": meta.get("artifact_provenance"),
+                "reuse_decision": meta.get("reuse_decision"),
             }
 
             # Surface missing target files (Fix 3: missing file detection)
@@ -7462,6 +8086,9 @@ class Test{class_name}:
                 design_results=design_results,
                 calibration_map=calibration_map,
                 downstream_map=downstream_map,
+                staleness_classification=context.get("scaffold", {}).get(
+                    "staleness_classification", {},
+                ),
                 parameter_sources=context.get("parameter_sources", {}),
                 semantic_conventions=context.get("semantic_conventions", {}),
                 # PCA-300/301/400: project-level context
