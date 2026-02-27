@@ -441,6 +441,9 @@ class HandlerConfig:
     design_collision_strategy: str = "warn"
     # V2 modular design prompts (single-pass, no dual-review)
     use_modular_prompts: bool = False
+    # REQ-PAQ-701: rollout guardrail toggles.
+    force_canonical_design_route: bool = False
+    enforce_post_revision_rereview: bool = True
     # Phase 4: Manifest consumption control
     manifest_consumption_enabled: bool = True  # Kill switch (req R1-S10)
     manifest_context_budget: int = 4000  # Max chars for element summary in prompts
@@ -2181,6 +2184,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             return DesignDocumentationPhase(
                 llm=self._get_llm_backend(),
                 max_iterations=self.config.max_iterations,
+                enforce_post_revision_rereview=self.config.enforce_post_revision_rereview,
                 prompt_capture_dir=prompt_capture_dir,
             )
 
@@ -2194,6 +2198,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         self._design_phase = DesignDocumentationPhase(
             llm=self._get_llm_backend(),
             max_iterations=self.config.max_iterations,
+            enforce_post_revision_rereview=self.config.enforce_post_revision_rereview,
         )
         return self._design_phase
 
@@ -3311,6 +3316,15 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "modular_opt_in": use_modular_prompts,
         }
 
+    @staticmethod
+    def _path_tag_for_prompt_version(prompt_version: str) -> str:
+        """Normalize prompt_version into canonical/variant path tags."""
+        if prompt_version == "v1":
+            return "canonical"
+        if prompt_version == "v2":
+            return "variant"
+        return "unknown"
+
     # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
@@ -3333,7 +3347,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             )
         _force_canonical_flag = context.get(
             "force_canonical_design_route",
-            os.getenv("STARTD8_FORCE_CANONICAL_DESIGN_ROUTE"),
+            (
+                self.config.force_canonical_design_route
+                or os.getenv("STARTD8_FORCE_CANONICAL_DESIGN_ROUTE")
+            ),
         )
         _force_canonical_design_route = self._is_truthy_flag(_force_canonical_flag)
         if _force_canonical_design_route:
@@ -3430,6 +3447,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         tasks_refined = 0
         route_decision_counts: dict[str, int] = defaultdict(int)
         route_quality_counts: dict[str, dict[str, int]] = defaultdict(
+            lambda: {"passed": 0, "failed": 0}
+        )
+        path_quality_counts: dict[str, dict[str, int]] = defaultdict(
             lambda: {"passed": 0, "failed": 0}
         )
 
@@ -3800,6 +3820,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 design_results[task.task_id] = {
                     "status": "env_blocked",
                     "environment_issues": env_fails,
+                    "prompt_version": "n/a",
+                    "path_tag": "unknown",
+                    "quality_outcome": "not_evaluated",
                 }
                 _task_span.set_attribute("task.status", "env_blocked")
                 _sc = _capture_task_span_context(_task_span)
@@ -3835,6 +3858,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     adopted_prompt_version = design_results[task.task_id].get(
                         "prompt_version", "v1",
                     )
+                    adopted_path_tag = self._path_tag_for_prompt_version(
+                        adopted_prompt_version
+                    )
+                    design_results[task.task_id]["path_tag"] = adopted_path_tag
                     design_results[task.task_id].setdefault(
                         "route_policy",
                         {
@@ -3852,8 +3879,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     if prior.get("agreed"):
                         tasks_agreed += 1
                         route_quality_counts[adopted_prompt_version]["passed"] += 1
+                        path_quality_counts[adopted_path_tag]["passed"] += 1
+                        design_results[task.task_id]["quality_outcome"] = "pass"
                     else:
                         route_quality_counts[adopted_prompt_version]["failed"] += 1
+                        path_quality_counts[adopted_path_tag]["failed"] += 1
+                        design_results[task.task_id]["quality_outcome"] = "fail"
 
                     # Feed into cross-task progressive context
                     doc_text = prior["design_document"]
@@ -3917,6 +3948,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     "target_file": task.target_files[0] if task.target_files else "",
                     "constraints_count": len(task.prompt_constraints),
                     "domain": task.domain,
+                    "prompt_version": "n/a",
+                    "path_tag": "unknown",
+                    "quality_outcome": "not_evaluated",
                 }
                 _task_span.set_attribute("task.status", "dry_run_skipped")
                 _sc = _capture_task_span_context(_task_span)
@@ -4263,6 +4297,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     serialized["status"] = "refined" if prior_design_text else "designed"
                     serialized["cost"] = task_cost
                     serialized["prompt_version"] = selected_prompt_version
+                    serialized["path_tag"] = self._path_tag_for_prompt_version(
+                        selected_prompt_version
+                    )
                     serialized["route_policy"] = route_policy
                     design_results[task.task_id] = serialized
 
@@ -4291,8 +4328,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     route_decision_counts[selected_prompt_version] += 1
                     if serialized.get("agreed"):
                         route_quality_counts[selected_prompt_version]["passed"] += 1
+                        path_quality_counts[serialized["path_tag"]]["passed"] += 1
+                        serialized["quality_outcome"] = "pass"
                     else:
                         route_quality_counts[selected_prompt_version]["failed"] += 1
+                        path_quality_counts[serialized["path_tag"]]["failed"] += 1
+                        serialized["quality_outcome"] = "fail"
 
                     # Accumulate cross-task summary for progressive context
                     doc_text = serialized["design_document"]
@@ -4408,7 +4449,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         "status": "design_failed",
                         "error": str(exc),
                         "cost": task_cost,
+                        "prompt_version": selected_prompt_version,
+                        "path_tag": self._path_tag_for_prompt_version(
+                            selected_prompt_version
+                        ),
+                        "quality_outcome": "fail",
                     }
+                    route_decision_counts[selected_prompt_version] += 1
+                    route_quality_counts[selected_prompt_version]["failed"] += 1
+                    path_quality_counts[design_results[task.task_id]["path_tag"]][
+                        "failed"
+                    ] += 1
                     break  # non-retryable or final attempt — exit retry loop
 
             # Capture span context before closing (E6 provenance linking)
@@ -4742,6 +4793,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 "passed": passed,
                 "status": status,
                 "reason": reason,
+                "prompt_version": entry.get("prompt_version", "n/a"),
+                "path_tag": entry.get("path_tag", "unknown"),
+                "quality_outcome": "pass" if passed else "fail",
             }
         quality_total = quality_passed + quality_failed
         agreement_rate = (
@@ -4841,6 +4895,33 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             }
             for route, counts in route_quality_counts.items()
         }
+        path_quality_summary = {
+            path_tag: {
+                "passed": counts["passed"],
+                "failed": counts["failed"],
+                "agreement_rate": (
+                    counts["passed"] / (counts["passed"] + counts["failed"])
+                    if (counts["passed"] + counts["failed"]) > 0
+                    else 0.0
+                ),
+            }
+            for path_tag, counts in path_quality_counts.items()
+        }
+        canonical_stats = path_quality_summary.get(
+            "canonical", {"passed": 0, "failed": 0, "agreement_rate": 0.0}
+        )
+        variant_stats = path_quality_summary.get(
+            "variant", {"passed": 0, "failed": 0, "agreement_rate": 0.0}
+        )
+        path_comparison = {
+            "canonical": canonical_stats,
+            "variant": variant_stats,
+            "agreement_rate_delta_canonical_minus_variant": (
+                canonical_stats["agreement_rate"] - variant_stats["agreement_rate"]
+            ),
+        }
+        context["design_path_quality"] = path_quality_summary
+        context["design_path_comparison"] = path_comparison
         output: dict[str, Any] = {
             "tasks_designed": tasks_designed,
             "tasks_refined": tasks_refined,
@@ -4855,6 +4936,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "design_quality": design_quality,
             "route_decisions": dict(route_decision_counts),
             "route_quality": route_quality_summary,
+            "path_quality": path_quality_summary,
+            "path_comparison": path_comparison,
             "prompt_telemetry": prompt_telemetry_summary,
             "disagreement_summary": disagreement_summary,
             "total_cost": total_cost,
@@ -11804,6 +11887,8 @@ class ContextSeedHandlers:
         tier2_agent: Optional[str] = None,
         skip_refinement: Optional[bool] = None,
         walkthrough: Optional[bool] = None,
+        force_canonical_design_route: Optional[bool] = None,
+        enforce_post_revision_rereview: Optional[bool] = None,
         complexity_routing_enabled: Optional[bool] = None,
         tier3_agent: Optional[str] = None,
         complexity_blast_radius_tier3: Optional[int] = None,
@@ -11842,6 +11927,8 @@ class ContextSeedHandlers:
             tier2_agent: T2 refinement agent spec (default: Sonnet).
             skip_refinement: Skip T2 refinement (use T1 draft directly).
             walkthrough: Build and persist all LLM prompts without calling LLMs.
+            force_canonical_design_route: Force canonical DESIGN path (v1) for all tasks.
+            enforce_post_revision_rereview: Require reviewer+arbiter re-review after revision.
             complexity_routing_enabled: Enable/disable complexity routing.
             tier3_agent: Tier 3 drafter agent spec override.
             complexity_blast_radius_tier3: Tier 3 blast radius threshold.
@@ -11885,6 +11972,8 @@ class ContextSeedHandlers:
             ("tier2_agent", tier2_agent),
             ("skip_refinement", skip_refinement),
             ("walkthrough", walkthrough),
+            ("force_canonical_design_route", force_canonical_design_route),
+            ("enforce_post_revision_rereview", enforce_post_revision_rereview),
             ("complexity_routing_enabled", complexity_routing_enabled),
             ("tier3_agent", tier3_agent),
             ("complexity_blast_radius_tier3", complexity_blast_radius_tier3),

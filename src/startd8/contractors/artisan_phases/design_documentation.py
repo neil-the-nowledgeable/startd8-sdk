@@ -1259,6 +1259,8 @@ class DesignDocumentationPhase:
         max_iterations: Maximum generate→review cycles (default ``3``).
         confidence_threshold: Minimum confidence gap to flag divergence
             (default ``0.3``).
+        enforce_post_revision_rereview: Require reviewer+arbiter re-review
+            after any revision before returning a result (default ``True``).
         resolution_callback: Optional callback for resolving disagreements.
             Defaults to ``AutoResolutionCallback()``.
 
@@ -1280,12 +1282,14 @@ class DesignDocumentationPhase:
         llm: LLMBackend,
         max_iterations: int = 3,
         confidence_threshold: float = 0.3,
+        enforce_post_revision_rereview: bool = True,
         resolution_callback: ResolutionCallback | None = None,
         prompt_capture_dir: Path | None = None,
     ) -> None:
         self.llm = llm
         self.max_iterations = max_iterations
         self.confidence_threshold = confidence_threshold
+        self.enforce_post_revision_rereview = enforce_post_revision_rereview
         self._prompt_capture_dir = prompt_capture_dir
         if not (0.0 <= confidence_threshold <= 1.0):
             raise ValueError(f"confidence_threshold must be in [0.0, 1.0], got {confidence_threshold}")
@@ -2287,6 +2291,35 @@ class DesignDocumentationPhase:
                         revised_iteration,
                         expected_sections=context.sections,
                     )
+                    resolution_events[-1]["delta_summary"] = self._summarize_design_delta(
+                        pre_revision_text,
+                        design.raw_text,
+                    )
+                    if not self.enforce_post_revision_rereview:
+                        # REQ-PAQ-701: rollback guardrail. When disabled via
+                        # config/env, return fail-closed instead of accepting
+                        # revised output without reviewer+arbiter evidence.
+                        resolution_events[-1]["outcome"] = "rereview_disabled"
+                        logger.warning(
+                            "Post-revision re-review disabled for '%s'; "
+                            "returning non-agreed result for revised design",
+                            context.feature_name,
+                        )
+                        return DesignDocumentResult(
+                            design_document=design,
+                            reviewer_verdict=reviewer_verdict,
+                            arbiter_verdict=arbiter_verdict,
+                            escalation_report=escalation_report,
+                            resolution_decision=resolution_decision,
+                            agreed=False,
+                            iterations=revised_iteration,
+                            completed_at=datetime.now(timezone.utc),
+                            non_agreement_reason_code="REREVIEW_DISABLED",
+                            final_iteration=revised_iteration,
+                            resolution_audit=_resolution_audit_payload(),
+                            prompt_telemetry=_prompt_telemetry_payload(),
+                            disagreement_telemetry=_disagreement_telemetry_payload(),
+                        )
                     reviewer_verdict = await self._review_design(
                         design, ReviewRole.REVIEWER, feature_context=context
                     )
@@ -2297,10 +2330,6 @@ class DesignDocumentationPhase:
                     re_review_pair_count += 1
                     post_disagreements = self._detect_disagreements(
                         reviewer_verdict, arbiter_verdict
-                    )
-                    resolution_events[-1]["delta_summary"] = self._summarize_design_delta(
-                        pre_revision_text,
-                        design.raw_text,
                     )
                     resolution_events[-1]["post_review_disagreement_count"] = len(
                         post_disagreements
