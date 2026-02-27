@@ -78,14 +78,9 @@ def build_enrichment_sections(
 
     # Semantic conventions
     if semantic_conventions:
-        if isinstance(semantic_conventions, str):
-            parts.append(
-                f"## Semantic Conventions\n{semantic_conventions[:2000]}",
-            )
-        else:
-            parts.append(
-                f"## Semantic Conventions\n{str(semantic_conventions)[:2000]}",
-            )
+        parts.append(
+            f"## Semantic Conventions\n{str(semantic_conventions)[:2000]}",
+        )
 
     return "\n\n".join(parts)
 
@@ -117,7 +112,7 @@ def compute_issue_coverage(
     lower_text = current_review_text.lower()
 
     # Label blocking issues as B1, B2, ... and other issues as I1, I2, ...
-    for idx, issue in enumerate(prior_review.blocking_issues, 1):
+    for idx, issue in enumerate(prior_review.blocking_issues or [], 1):
         label = f"B{idx}"
         entry = {"label": label, "text": issue, "severity": "BLOCKING"}
         # If review text mentions the issue as resolved, mark addressed
@@ -129,7 +124,7 @@ def compute_issue_coverage(
         else:
             outstanding.append(entry)
 
-    for idx, issue in enumerate(prior_review.issues, 1):
+    for idx, issue in enumerate(prior_review.issues or [], 1):
         label = f"I{idx}"
         entry = {"label": label, "text": issue, "severity": "MAJOR"}
         key_words = _extract_key_terms(issue)
@@ -144,8 +139,15 @@ def compute_issue_coverage(
 
 
 def _extract_key_terms(issue_text: str) -> List[str]:
-    """Extract 2-3 key terms from an issue for matching."""
-    words = re.findall(r'\b\w{4,}\b', issue_text.lower())
+    """Extract 2-3 distinctive 4+ char words from an issue for matching.
+
+    Args:
+        issue_text: Issue description string.
+
+    Returns:
+        Up to 3 lowercase key terms, excluding common stopwords.
+    """
+    words = re.findall(r'\b\w{4,}\b', str(issue_text).lower())
     # Take up to 3 distinctive words (skip common words)
     skip = {"that", "this", "with", "from", "should", "must", "have", "been",
             "does", "will", "need", "also", "some", "more", "very", "code"}
@@ -270,10 +272,15 @@ def _validate_against_manifest(
             }
             for v in (violations or [])
         ]
-    except Exception:
+    except (ImportError, ModuleNotFoundError) as exc:
         logger.debug(
-            "FLCM contract validation skipped (not available or failed)",
-            exc_info=True,
+            "FLCM contract validation not available: %s", exc,
+        )
+        return []
+    except Exception as exc:
+        logger.debug(
+            "FLCM contract validation failed (%s): %s",
+            type(exc).__name__, exc, exc_info=True,
         )
         return []
 
@@ -353,6 +360,7 @@ def review_draft(
         ReviewResult with score, pass/fail, and parsed feedback.
     """
     review_id = f"review-{uuid.uuid4().hex[:8]}"
+    logger.debug("Reviewer: starting review %s (iteration %d)", review_id, iteration)
 
     if hasattr(spec, "raw_spec"):
         raw_spec = spec.raw_spec
@@ -363,14 +371,14 @@ def review_draft(
     # Build enrichment sections from kwargs and/or context
     enrichment_ctx = dict(context or {})
     # Overlay explicit kwargs onto context (kwargs take precedence)
-    if manifest_context is not None:
-        enrichment_ctx["manifest_context"] = manifest_context
-    if call_graph_context is not None:
-        enrichment_ctx["call_graph_context"] = call_graph_context
-    if call_graph_callers is not None:
-        enrichment_ctx["call_graph_callers"] = call_graph_callers
-    if parameter_sources is not None:
-        enrichment_ctx["parameter_sources"] = parameter_sources
+    for _key, _val in (
+        ("manifest_context", manifest_context),
+        ("call_graph_context", call_graph_context),
+        ("call_graph_callers", call_graph_callers),
+        ("parameter_sources", parameter_sources),
+    ):
+        if _val is not None:
+            enrichment_ctx[_key] = _val
 
     enrichment = build_enrichment_sections(
         context=enrichment_ctx if enrichment_ctx else None,
@@ -443,7 +451,7 @@ def review_draft(
     )
 
     # FLCM contract validation (post-generation, optional)
-    if forward_manifest and hasattr(forward_manifest, "contracts"):
+    if forward_manifest:
         violations = _validate_against_manifest(
             forward_manifest, implementation, target_files,
         )
@@ -497,7 +505,14 @@ def format_review_feedback(
 
 
 def _format_flat_feedback(review: ReviewResult) -> str:
-    """Original flat feedback format."""
+    """Format review as flat markdown feedback (iteration 1 format).
+
+    Args:
+        review: Current ReviewResult to format.
+
+    Returns:
+        Markdown feedback string with issues, blocking issues, and suggestions.
+    """
     issues_str = (
         '\n'.join(f'- {issue}' for issue in review.issues)
         if review.issues else '- None listed'
@@ -531,7 +546,18 @@ def _format_convergence_feedback(
     review: ReviewResult,
     prior_review: ReviewResult,
 ) -> str:
-    """Convergence-focused feedback showing issue resolution status."""
+    """Format review as convergence-focused feedback (iteration 2+ format).
+
+    Shows resolved vs outstanding issues from the prior review so the drafter
+    addresses specific gaps rather than re-reading the full review.
+
+    Args:
+        review: Current ReviewResult.
+        prior_review: ReviewResult from the previous iteration.
+
+    Returns:
+        Markdown feedback with convergence status, blocking/outstanding/new/resolved sections.
+    """
     # Compute resolution status using current review text as evidence
     coverage = compute_issue_coverage(prior_review, review.review_text)
     prior_blocking_count = len(prior_review.blocking_issues)
@@ -577,9 +603,10 @@ def _format_convergence_feedback(
             )
 
     # New issues this iteration
+    addressed_texts = {e["text"] for e in coverage.get("addressed", [])}
     new_issues = [
         iss for iss in review.issues
-        if not any(iss in e["text"] for e in coverage.get("addressed", []))
+        if iss not in addressed_texts
     ]
     if new_issues:
         parts.append("")

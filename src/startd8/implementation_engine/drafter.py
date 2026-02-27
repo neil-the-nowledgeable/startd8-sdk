@@ -296,7 +296,15 @@ def detect_size_regression(
 # ---------------------------------------------------------------------------
 
 def _format_value(val: Any) -> str:
-    """Format an arbitrary context value as a string for prompt injection."""
+    """Format an arbitrary context value as a string for prompt injection.
+
+    Args:
+        val: Value to format — str passed through, list rendered as
+            bullet points, dict serialized as JSON, other types stringified.
+
+    Returns:
+        Formatted string representation.
+    """
     if isinstance(val, str):
         return val
     if isinstance(val, list):
@@ -355,7 +363,10 @@ def build_supplementary_sections(
                 )
                 flcm_added = True
         except Exception:
-            pass
+            logger.debug(
+                "FLCM binding_constraints_for_task() failed for task_id=%s",
+                task_id, exc_info=True,
+            )
     if not flcm_added:
         fc = context.get("forward_contracts")
         if fc:
@@ -369,6 +380,11 @@ def build_supplementary_sections(
     # P2: Caller backward-compatibility (compact format)
     cg_callers = context.get("call_graph_callers")
     if cg_callers and isinstance(cg_callers, list):
+        if len(cg_callers) > 10:
+            logger.debug(
+                "Supplementary sections: truncating call_graph_callers "
+                "from %d to 10 entries", len(cg_callers),
+            )
         lines = [
             f"- `{c['fqn']}` ({c['blast_radius']} callers)"
             for c in cg_callers[:10]
