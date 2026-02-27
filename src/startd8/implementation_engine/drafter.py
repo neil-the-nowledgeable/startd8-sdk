@@ -22,6 +22,8 @@ from .budget import (
     DRAFT_SIZE_REGRESSION_THRESHOLD,
     EXISTING_FILES_BUDGET_BYTES,
     SEARCH_REPLACE_LINE_THRESHOLD,
+    SUPPLEMENTARY_BUDGET_CHARS,
+    truncate_with_marker,
 )
 from .models import DraftResult
 from .prompts import get_template
@@ -32,6 +34,7 @@ __all__ = [
     "get_drafter_system_prompt",
     "build_existing_files_section",
     "build_output_format",
+    "build_supplementary_sections",
     "detect_size_regression",
 ]
 
@@ -289,6 +292,132 @@ def detect_size_regression(
 
 
 # ---------------------------------------------------------------------------
+# Supplementary context sections (budget-aware)
+# ---------------------------------------------------------------------------
+
+def _format_value(val: Any) -> str:
+    """Format an arbitrary context value as a string for prompt injection."""
+    if isinstance(val, str):
+        return val
+    if isinstance(val, list):
+        return "\n".join(f"- {item}" for item in val)
+    if isinstance(val, dict):
+        import json
+        return json.dumps(val, indent=2, default=str)
+    return str(val)
+
+
+def build_supplementary_sections(
+    context: Dict[str, Any],
+    task_id: str = "",
+    budget_chars: int = SUPPLEMENTARY_BUDGET_CHARS,
+) -> str:
+    """Build optional supplementary prompt sections within a budget.
+
+    Uses 3-priority progressive truncation:
+    P1 (kept first): critical_parameters, forward_contracts/FLCM
+    P2 (kept second): manifest_context, call_graph_callers
+    P3 (dropped first): call_graph_context, introspect_context, parameter_sources
+
+    Args:
+        context: EngineRequest.context dict.
+        task_id: Current task ID for FLCM binding_constraints_for_task().
+        budget_chars: Maximum character budget for all sections combined.
+
+    Returns:
+        Formatted supplementary sections string (empty if no context available).
+    """
+    if not context:
+        return ""
+
+    p1_sections: List[str] = []
+    p2_sections: List[str] = []
+    p3_sections: List[str] = []
+
+    # P1: Critical parameters
+    cp = context.get("critical_parameters")
+    if cp:
+        if isinstance(cp, list):
+            cp_text = "\n".join(f"- {p}" for p in cp)
+        else:
+            cp_text = str(cp)
+        p1_sections.append(f"## Critical Parameters\n{cp_text}")
+
+    # P1: FLCM task-specific constraints (preferred) or raw forward_contracts
+    flcm_added = False
+    fm = context.get("forward_manifest")
+    if fm and hasattr(fm, "binding_constraints_for_task") and task_id:
+        try:
+            constraints = fm.binding_constraints_for_task(task_id)
+            if constraints:
+                p1_sections.append(
+                    f"## Interface Contract Bindings\n{constraints}",
+                )
+                flcm_added = True
+        except Exception:
+            pass
+    if not flcm_added:
+        fc = context.get("forward_contracts")
+        if fc:
+            p1_sections.append(f"## Interface Contract Bindings\n{fc}")
+
+    # P2: Manifest structural context
+    mc = context.get("manifest_context")
+    if mc:
+        p2_sections.append(f"## Code Structure\n{mc}")
+
+    # P2: Caller backward-compatibility (compact format)
+    cg_callers = context.get("call_graph_callers")
+    if cg_callers and isinstance(cg_callers, list):
+        lines = [
+            f"- `{c['fqn']}` ({c['blast_radius']} callers)"
+            for c in cg_callers[:10]
+            if isinstance(c, dict) and "fqn" in c
+        ]
+        if lines:
+            p2_sections.append(
+                "## Backward Compatibility\n" + "\n".join(lines),
+            )
+
+    # P3: Call graph summary
+    cgc = context.get("call_graph_context")
+    if cgc:
+        p3_sections.append(f"## Call Dependencies\n{cgc}")
+
+    # P3: Introspect context
+    mic = context.get("manifest_introspect_context")
+    if mic:
+        p3_sections.append(f"## Type Introspection\n{mic}")
+
+    # P3: Parameter sources
+    ps = context.get("parameter_sources")
+    if ps:
+        p3_sections.append(f"## Parameter Sources\n{_format_value(ps)}")
+
+    # Progressive truncation cascade
+    all_text = "\n\n".join(p1_sections + p2_sections + p3_sections)
+    if not all_text:
+        return ""
+    if len(all_text) <= budget_chars:
+        return all_text
+
+    # Over budget: drop P3
+    all_text = "\n\n".join(p1_sections + p2_sections)
+    if len(all_text) <= budget_chars:
+        return all_text
+
+    # Still over: truncate P2 sections
+    p2_budget = max(budget_chars // 2, 200)
+    p2_truncated = [truncate_with_marker(s, p2_budget) for s in p2_sections]
+    all_text = "\n\n".join(p1_sections + p2_truncated)
+    if len(all_text) <= budget_chars:
+        return all_text
+
+    # Emergency: P1 only, truncated
+    return truncate_with_marker("\n\n".join(p1_sections), budget_chars)
+
+
+# ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
 
@@ -302,6 +431,7 @@ def create_draft(
     target_files: Optional[List[str]] = None,
     existing_files: Optional[Dict[str, str]] = None,
     edit_mode: Optional[Dict] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> DraftResult:
     """Create an implementation draft from a spec.
 
@@ -317,6 +447,7 @@ def create_draft(
         target_files: Target file paths.
         existing_files: Existing file contents for edit-mode tasks.
         edit_mode: Edit mode classification dict.
+        context: Optional pipeline context dict for supplementary sections.
 
     Returns:
         DraftResult with implementation code and truncation metadata.
@@ -334,6 +465,14 @@ def create_draft(
         raw_spec = str(spec)
     spec_id = getattr(spec, "spec_id", "")
 
+    # Build supplementary sections from pipeline context
+    supplementary = ""
+    if context:
+        task_id = context.get("task_id", "")
+        supplementary = build_supplementary_sections(
+            context, task_id=task_id,
+        )
+
     if existing_files:
         draft_template = get_template("draft_edit")
     else:
@@ -344,6 +483,7 @@ def create_draft(
         feedback=feedback if feedback else "This is the initial implementation attempt.",
         output_format=output_format,
         existing_files_section=existing_files_section,
+        supplementary_sections=supplementary,
     )
 
     sys_prompt = get_drafter_system_prompt(existing_files)

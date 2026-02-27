@@ -7874,10 +7874,114 @@ class Test{class_name}:
                     "plan_context", "architectural_context",
                     "project_objectives", "semantic_conventions",
                     "domain_constraints", "requirements_text",
+                    # Keys already handled by spec_builder but not previously forwarded
+                    "forward_contracts", "critical_parameters",
+                    "parameter_sources", "requirements_context",
+                    "protocol_guidance", "scope_boundary",
+                    # FLCM: full manifest object for task-specific constraints
+                    "forward_manifest",
                 ):
                     val = context.get(key)
                     if val:
                         engine_context[key] = val
+
+                # Phase 4/5/6: Manifest + call graph enrichment
+                # (mirrors ImplementPhaseHandler lines 8375-8428)
+                _manifest_registry = None
+                if config.manifest_consumption_enabled:
+                    _manifest_registry = (
+                        config.manifest_registry
+                        or context.get("project_manifests")
+                    )
+                if _manifest_registry is not None and task.target_files:
+                    _enable_introspect = getattr(
+                        config, "enable_introspect", False,
+                    )
+                    _manifest_budget = config.manifest_context_budget
+
+                    # Phase 4 (IM-1–IM-4) + Phase 5 (IM-1): element summaries
+                    _mc_parts: list[str] = []
+                    for tf in task.target_files:
+                        summary = _manifest_registry.file_element_summary(
+                            tf, _manifest_budget,
+                            include_resolved_types=_enable_introspect,
+                        )
+                        if summary:
+                            _mc_parts.append(f"### {tf}\n{summary}")
+                    if _mc_parts:
+                        engine_context["manifest_context"] = "\n\n".join(
+                            _mc_parts,
+                        )
+
+                    # Phase 6 (CG-IM-1,2,4): call graph summary + callers
+                    _cg_budget = config.call_graph_context_budget
+                    _cg_parts: list[str] = []
+                    _cg_callers: list[dict[str, Any]] = []
+                    for tf in task.target_files:
+                        try:
+                            cg_summary = _manifest_registry.call_graph_summary(
+                                tf, _cg_budget,
+                            )
+                            if cg_summary:
+                                _cg_parts.append(f"### {tf}\n{cg_summary}")
+                            callers_map = _manifest_registry.callers_of_file(tf)
+                            for fqn, callers in callers_map.items():
+                                br = _manifest_registry.blast_radius(
+                                    fqn,
+                                    max_depth=config.blast_radius_max_depth,
+                                )
+                                _cg_callers.append({
+                                    "fqn": fqn,
+                                    "direct_callers": sorted(callers),
+                                    "blast_radius": len(br),
+                                })
+                        except Exception:
+                            logger.debug(
+                                "Inner loop: call graph enrichment failed "
+                                "for %s", tf, exc_info=True,
+                            )
+                    if _cg_parts:
+                        engine_context["call_graph_context"] = "\n\n".join(
+                            _cg_parts,
+                        )
+                    if _cg_callers:
+                        engine_context["call_graph_callers"] = _cg_callers
+
+                    # Phase 5 (DS-2, DS-4): MRO + runtime attributes
+                    if _enable_introspect:
+                        _introspect_parts: list[str] = []
+                        for tf in task.target_files:
+                            try:
+                                mro_map = _manifest_registry.file_mro_summary(
+                                    tf,
+                                )
+                                if mro_map:
+                                    for cls, chain in mro_map.items():
+                                        if len(chain) > 2:
+                                            _introspect_parts.append(
+                                                f"- {cls} MRO: "
+                                                f"{' → '.join(chain)}"
+                                            )
+                                ra_map = (
+                                    _manifest_registry.file_runtime_attributes(
+                                        tf,
+                                    )
+                                )
+                                if ra_map:
+                                    for elem, attrs in ra_map.items():
+                                        _introspect_parts.append(
+                                            f"- {elem} runtime attrs: "
+                                            f"{', '.join(attrs)}"
+                                        )
+                            except Exception:
+                                logger.debug(
+                                    "Inner loop: introspect enrichment "
+                                    "failed for %s", tf, exc_info=True,
+                                )
+                        if _introspect_parts:
+                            engine_context[
+                                "manifest_introspect_context"
+                            ] = "\n".join(_introspect_parts)
 
                 request = EngineRequest(
                     task_description=task.description or task.title,

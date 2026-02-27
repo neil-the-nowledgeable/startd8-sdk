@@ -720,43 +720,6 @@ class LeadContractorWorkflow(WorkflowBase):
     # =========================================================================
 
     @staticmethod
-    def _format_context_value(value: Any) -> str:
-        """Format a context value. Delegates to implementation_engine.spec_builder."""
-        return _ie_spec_builder.format_context_value(value)
-
-    @staticmethod
-    def _build_spec_context_section(
-        context: Dict[str, Any],
-        output_format: Optional[str],
-        target_files: Optional[List[str]],
-    ) -> str:
-        """Build general context section. Delegates to implementation_engine.spec_builder."""
-        return _ie_spec_builder.build_spec_context_section(context, output_format, target_files)
-
-    @staticmethod
-    def _build_spec_plan_section(
-        plan_ctx: Optional[str],
-        is_edit: bool = False,
-    ) -> str:
-        """Build plan context section. Delegates to implementation_engine.spec_builder."""
-        return _ie_spec_builder.build_spec_plan_section(plan_ctx, is_edit=is_edit)
-
-    @staticmethod
-    def _build_spec_arch_section(arch_ctx: Any, is_edit: bool = False) -> str:
-        """Build architectural context section. Delegates to implementation_engine.spec_builder."""
-        return _ie_spec_builder.build_spec_arch_section(arch_ctx, is_edit=is_edit)
-
-    @staticmethod
-    def _build_spec_objectives_section(project_obj: Any) -> str:
-        """Build project objectives section. Delegates to implementation_engine.spec_builder."""
-        return _ie_spec_builder.build_spec_objectives_section(project_obj)
-
-    @staticmethod
-    def _build_spec_conventions_section(sem_conv: Any) -> str:
-        """Build semantic conventions section. Delegates to implementation_engine.spec_builder."""
-        return _ie_spec_builder.build_spec_conventions_section(sem_conv)
-
-    @staticmethod
     def _build_spec_prompt(
         task_description: str,
         context: Dict[str, Any],
@@ -1596,17 +1559,6 @@ class LeadContractorWorkflow(WorkflowBase):
         in ``startd8.utils.code_extraction``.
         """
         return extract_code_from_response(response)
-
-    @staticmethod
-    def _detect_size_regression(
-        existing_files: Optional[Dict[str, str]],
-        implementation_code: str,
-    ) -> bool:
-        """Check if draft output is catastrophically smaller than existing files.
-
-        Delegates to implementation_engine.drafter.detect_size_regression().
-        """
-        return _ie_drafter.detect_size_regression(existing_files, implementation_code)
 
     @staticmethod
     def _build_multi_file_directive(

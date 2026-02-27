@@ -47,6 +47,7 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
         "## Implementation Specification\n{spec}\n\n"
         "## Previous Feedback (if any)\n{feedback}\n\n"
         "{existing_files_section}\n\n"
+        "{supplementary_sections}\n\n"
         "## Output Format\n{output_format}"
     ),
     "draft_edit": (
@@ -54,6 +55,7 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
         "{existing_files_section}\n\n"
         "## Implementation Specification (changes to apply)\n{spec}\n\n"
         "## Previous Feedback (if any)\n{feedback}\n\n"
+        "{supplementary_sections}\n\n"
         "## Output Format\n{output_format}"
     ),
     "draft_system_create": (
@@ -77,16 +79,29 @@ _FALLBACK_TEMPLATES: Dict[str, str] = {
         "You are reviewing an implementation as the Lead Contractor.\n\n"
         "## Original Task\n{task_description}\n\n"
         "## Your Specification\n{spec}\n\n"
+        "{enrichment_sections}\n\n"
+        "{prior_issues_section}\n\n"
         "## Implementation to Review\n{implementation}\n\n"
-        "## Review Instructions\nEvaluate the implementation against your specification.\n\n"
+        "## Review Instructions\nEvaluate the implementation against your specification.\n"
+        "{convergence_instructions}\n\n"
         "## Required Output Format\n\n"
         "### Score: [0-100]\n### Verdict: [PASS/FAIL]\n"
         "### Strengths\n- [What was done well]\n"
-        "### Issues\n- [Problems found]\n"
+        "### Issues\n- [Problems found, with severity: BLOCKING, MAJOR, MINOR]\n"
         "### Suggestions\n- [Specific improvements]\n"
         "### Blocking Issues (if any)\n- [Issues that MUST be fixed]\n"
         "### Full Review\n[Detailed analysis]\n\n"
         "Pass threshold: {pass_threshold}"
+    ),
+    "review_system": (
+        "You are a senior software engineer reviewing code implementations for "
+        "correctness, completeness, and quality.\n\n"
+        "Severity classification:\n"
+        "- BLOCKING: Must be fixed (missing functionality, logic errors, broken imports)\n"
+        "- MAJOR: Should be fixed (poor error handling, missing type hints)\n"
+        "- MINOR: Nice to fix (cosmetic, naming suggestions)\n\n"
+        "Convergence: When prior issues are listed, explicitly state RESOLVED or "
+        "STILL OUTSTANDING for each. Do not re-raise addressed issues."
     ),
 }
 

@@ -6,10 +6,12 @@ from unittest.mock import Mock, patch
 from startd8.implementation_engine.budget import (
     EXISTING_FILES_BUDGET_BYTES,
     SEARCH_REPLACE_LINE_THRESHOLD,
+    SUPPLEMENTARY_BUDGET_CHARS,
 )
 from startd8.implementation_engine.drafter import (
     build_existing_files_section,
     build_output_format,
+    build_supplementary_sections,
     create_draft,
     detect_size_regression,
     get_drafter_system_prompt,
@@ -23,7 +25,15 @@ from startd8.implementation_engine.drafter import (
 class TestGetDrafterSystemPrompt:
     def test_create_mode_no_files(self):
         prompt = get_drafter_system_prompt()
-        assert "implement" in prompt.lower() or "engineer" in prompt.lower()
+        assert "engineer" in prompt.lower()
+
+    def test_create_mode_has_provenance_rules(self):
+        prompt = get_drafter_system_prompt()
+        assert "provenance" in prompt.lower() or "mottainai" in prompt.lower()
+
+    def test_create_mode_has_coding_standards(self):
+        prompt = get_drafter_system_prompt()
+        assert "E741" in prompt or "ruff" in prompt.lower()
 
     def test_edit_mode_small_files(self):
         files = {"app.py": "line\n" * 10}
@@ -31,12 +41,18 @@ class TestGetDrafterSystemPrompt:
         # Small files → edit mode (not search/replace)
         assert "edit" in prompt.lower() or "existing" in prompt.lower()
 
+    def test_edit_mode_has_edit_first_discipline(self):
+        files = {"app.py": "line\n" * 10}
+        prompt = get_drafter_system_prompt(files)
+        assert "preserve" in prompt.lower() or "edit" in prompt.lower()
+
     def test_search_replace_mode_large_file(self):
-        # File with >= 50 lines triggers search/replace
+        # File with >= 50 lines triggers search/replace mode
         content = "\n".join(f"line {i}" for i in range(SEARCH_REPLACE_LINE_THRESHOLD))
         files = {"big.py": content}
         prompt = get_drafter_system_prompt(files)
-        assert "search" in prompt.lower() or "replace" in prompt.lower() or "large" in prompt.lower()
+        # S/R prompt is distinct from the edit prompt — must contain "existing source code files"
+        assert "existing source code files" in prompt.lower() or "edit-first" in prompt.lower()
 
     def test_search_replace_any_file_triggers(self):
         big = "\n".join(f"line {i}" for i in range(60))
@@ -211,6 +227,119 @@ class TestDetectSizeRegression:
 
 
 # ---------------------------------------------------------------------------
+# build_supplementary_sections
+# ---------------------------------------------------------------------------
+
+class TestBuildSupplementarySections:
+    def test_empty_context_returns_empty(self):
+        assert build_supplementary_sections({}) == ""
+        assert build_supplementary_sections(None) == ""
+
+    def test_critical_parameters_list(self):
+        ctx = {"critical_parameters": ["port=8080", "host=localhost"]}
+        result = build_supplementary_sections(ctx)
+        assert "## Critical Parameters" in result
+        assert "port=8080" in result
+        assert "host=localhost" in result
+
+    def test_critical_parameters_string(self):
+        ctx = {"critical_parameters": "port=8080"}
+        result = build_supplementary_sections(ctx)
+        assert "port=8080" in result
+
+    def test_forward_contracts_fallback(self):
+        ctx = {"forward_contracts": "Must implement IService interface"}
+        result = build_supplementary_sections(ctx)
+        assert "## Interface Contract Bindings" in result
+        assert "IService" in result
+
+    def test_flcm_preferred_over_raw_contracts(self):
+        """ForwardManifest.binding_constraints_for_task() preferred over raw text."""
+        fm = Mock()
+        fm.binding_constraints_for_task.return_value = "FLCM constraint text"
+        ctx = {
+            "forward_manifest": fm,
+            "forward_contracts": "raw contract text",
+        }
+        result = build_supplementary_sections(ctx, task_id="T1")
+        assert "FLCM constraint text" in result
+        # Raw contract text should NOT appear (FLCM takes precedence)
+        assert "raw contract text" not in result
+        fm.binding_constraints_for_task.assert_called_once_with("T1")
+
+    def test_flcm_fallback_to_raw_on_error(self):
+        """Falls back to forward_contracts if FLCM raises."""
+        fm = Mock()
+        fm.binding_constraints_for_task.side_effect = RuntimeError("boom")
+        ctx = {
+            "forward_manifest": fm,
+            "forward_contracts": "raw contract text",
+        }
+        result = build_supplementary_sections(ctx, task_id="T1")
+        assert "raw contract text" in result
+
+    def test_flcm_fallback_when_no_task_id(self):
+        """Falls back to forward_contracts when no task_id."""
+        fm = Mock()
+        ctx = {
+            "forward_manifest": fm,
+            "forward_contracts": "raw contract text",
+        }
+        result = build_supplementary_sections(ctx)
+        assert "raw contract text" in result
+
+    def test_manifest_context_rendered(self):
+        ctx = {"manifest_context": "### app.py\nclass App: ..."}
+        result = build_supplementary_sections(ctx)
+        assert "## Code Structure" in result
+        assert "class App" in result
+
+    def test_call_graph_callers_rendered(self):
+        ctx = {"call_graph_callers": [
+            {"fqn": "app.main", "blast_radius": 5, "direct_callers": ["x"]},
+            {"fqn": "app.run", "blast_radius": 2, "direct_callers": ["y"]},
+        ]}
+        result = build_supplementary_sections(ctx)
+        assert "## Backward Compatibility" in result
+        assert "`app.main`" in result
+        assert "5 callers" in result
+
+    def test_call_graph_context_rendered(self):
+        ctx = {"call_graph_context": "### app.py\nmain -> run -> init"}
+        result = build_supplementary_sections(ctx)
+        assert "## Call Dependencies" in result
+
+    def test_introspect_context_rendered(self):
+        ctx = {"manifest_introspect_context": "- Widget MRO: Widget → Base → object"}
+        result = build_supplementary_sections(ctx)
+        assert "## Type Introspection" in result
+
+    def test_parameter_sources_rendered(self):
+        ctx = {"parameter_sources": {"port": "requirements.md:12"}}
+        result = build_supplementary_sections(ctx)
+        assert "## Parameter Sources" in result
+
+    def test_budget_drops_p3_first(self):
+        """Under budget pressure, P3 sections are dropped first."""
+        ctx = {
+            "critical_parameters": "port=8080",
+            "manifest_context": "x" * 2000,
+            "call_graph_context": "y" * 3000,  # P3
+            "parameter_sources": "z" * 3000,   # P3
+        }
+        result = build_supplementary_sections(ctx, budget_chars=3000)
+        # P1 (critical_parameters) should survive
+        assert "port=8080" in result
+        # P3 should be dropped
+        assert "## Call Dependencies" not in result
+
+    def test_budget_zero_returns_truncated(self):
+        ctx = {"critical_parameters": "port=8080"}
+        result = build_supplementary_sections(ctx, budget_chars=10)
+        assert len(result) <= 10
+
+
+# ---------------------------------------------------------------------------
 # create_draft
 # ---------------------------------------------------------------------------
 
@@ -315,3 +444,45 @@ class TestCreateDraft:
 
         # Cost should be set (may be 0.0 for unknown models)
         assert isinstance(draft.cost, float)
+
+    @patch("startd8.implementation_engine.drafter.extract_code_from_response")
+    def test_context_param_accepted(self, mock_extract):
+        """create_draft accepts and uses context parameter."""
+        mock_extract.return_value = "code"
+        agent = self._make_agent()
+        spec = self._make_spec()
+
+        ctx = {"critical_parameters": ["port=8080"]}
+        draft = create_draft(agent, spec, context=ctx)
+
+        assert draft.implementation == "code"
+        call_args = agent.generate.call_args
+        prompt = call_args[0][0]
+        assert "port=8080" in prompt
+
+    @patch("startd8.implementation_engine.drafter.extract_code_from_response")
+    def test_context_none_no_error(self, mock_extract):
+        """create_draft works fine with context=None (backward compat)."""
+        mock_extract.return_value = "code"
+        agent = self._make_agent()
+        spec = self._make_spec()
+
+        draft = create_draft(agent, spec, context=None)
+        assert draft.implementation == "code"
+
+    @patch("startd8.implementation_engine.drafter.extract_code_from_response")
+    def test_supplementary_sections_in_prompt(self, mock_extract):
+        """Pipeline context appears in the draft prompt via supplementary sections."""
+        mock_extract.return_value = "code"
+        agent = self._make_agent()
+        spec = self._make_spec()
+
+        ctx = {
+            "forward_contracts": "Must implement IService",
+            "manifest_context": "### app.py\nclass App",
+        }
+        create_draft(agent, spec, context=ctx)
+
+        call_args = agent.generate.call_args
+        prompt = call_args[0][0]
+        assert "IService" in prompt or "Interface Contract" in prompt

@@ -16,6 +16,8 @@ __all__ = [
     "SEARCH_REPLACE_LINE_THRESHOLD",
     "DRAFT_SIZE_REGRESSION_THRESHOLD",
     "DRAFT_SIZE_REGRESSION_MIN_LINES",
+    "SUPPLEMENTARY_BUDGET_CHARS",
+    "ENRICHMENT_BUDGET_CHARS",
     "truncate_with_marker",
     "truncate_arch_context",
 ]
@@ -40,6 +42,11 @@ SEARCH_REPLACE_LINE_THRESHOLD: int = 50
 # Only applies when existing files exceed MIN_LINES (skip for very small files).
 DRAFT_SIZE_REGRESSION_THRESHOLD: float = 0.20  # 20% of existing
 DRAFT_SIZE_REGRESSION_MIN_LINES: int = 50
+
+# Supplementary context budgets for optional prompt sections.
+# T1 drafter agents get a smaller budget; T2 reviewer agents get more.
+SUPPLEMENTARY_BUDGET_CHARS: int = 4_000   # ~1000 tokens — draft prompt (T1)
+ENRICHMENT_BUDGET_CHARS: int = 8_000      # ~2000 tokens — review prompt (T2)
 
 
 def truncate_with_marker(text: str, max_chars: int,

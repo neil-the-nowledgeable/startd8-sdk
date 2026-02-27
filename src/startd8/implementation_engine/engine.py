@@ -49,9 +49,9 @@ class DefaultImplementationEngine:
         2. Iteration loop (max N):
            a. Create draft from spec + feedback
            b. If truncated and iterations remain: auto-retry with continuation
-           c. Review draft
+           c. Review draft (with enrichment + convergent review context)
            d. If passed: break
-           e. Format review feedback for next iteration
+           e. Format convergence-aware review feedback for next iteration
         3. Assemble result
 
         Args:
@@ -90,6 +90,7 @@ class DefaultImplementationEngine:
             review_feedback = ""
             max_iterations = request.max_iterations
             current_implementation = ""
+            prior_review = None  # Track for convergent review
 
             for iteration in range(1, max_iterations + 1):
                 logger.info(
@@ -107,6 +108,7 @@ class DefaultImplementationEngine:
                     target_files=request.target_files,
                     existing_files=request.existing_files,
                     edit_mode=request.edit_mode,
+                    context=request.context,
                 )
                 result.drafts.append(draft)
                 result.draft_cost += draft.cost
@@ -162,6 +164,26 @@ class DefaultImplementationEngine:
                     implementation=current_implementation,
                     pass_threshold=request.pass_threshold,
                     iteration=iteration,
+                    # Enrichment context (pipeline + manifest)
+                    design_document=request.context.get("design_document"),
+                    parameter_sources=request.context.get("parameter_sources"),
+                    semantic_conventions=request.context.get(
+                        "semantic_conventions",
+                    ),
+                    manifest_context=request.context.get("manifest_context"),
+                    call_graph_context=request.context.get(
+                        "call_graph_context",
+                    ),
+                    call_graph_callers=request.context.get(
+                        "call_graph_callers",
+                    ),
+                    # Convergent review context
+                    prior_review=prior_review,
+                    max_iterations=max_iterations,
+                    # FLCM contract validation
+                    forward_manifest=request.context.get("forward_manifest"),
+                    target_files=request.target_files,
+                    context=request.context,
                 )
                 result.reviews.append(review)
                 result.review_cost += review.cost
@@ -178,7 +200,11 @@ class DefaultImplementationEngine:
                     result.passed = True
                     break
 
-                review_feedback = format_review_feedback(review)
+                # Convergence-aware feedback
+                review_feedback = format_review_feedback(
+                    review, prior_review=prior_review,
+                )
+                prior_review = review  # Track for next iteration
 
                 if iteration == max_iterations:
                     logger.warning(

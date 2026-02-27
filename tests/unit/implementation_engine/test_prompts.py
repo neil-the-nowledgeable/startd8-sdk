@@ -58,6 +58,9 @@ class TestFormatPrompt:
             spec="Full spec",
             implementation="def foo(): pass",
             pass_threshold=80,
+            enrichment_sections="",
+            prior_issues_section="",
+            convergence_instructions="",
         )
         assert "Build widget" in result
         assert "Full spec" in result

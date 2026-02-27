@@ -53,6 +53,7 @@ def _make_review(iteration=1, passed=False, score=60):
         passed=passed,
         score=score,
         issues=["Issue A"] if not passed else [],
+        blocking_issues=["Blocking B"] if not passed else [],
         review_text=f"Score: {score}\nVerdict: {'PASS' if passed else 'FAIL'}",
         input_tokens=200,
         output_tokens=150,
@@ -326,6 +327,166 @@ class TestDefaultImplementationEngine:
         # Review should proceed even with heuristic truncation
         assert len(result.reviews) == 1
         assert len(result.truncation_events) == 1
+
+    # --- New tests: context threading + convergent review ---
+
+    @patch("startd8.implementation_engine.engine.review_draft")
+    @patch("startd8.implementation_engine.engine.create_draft")
+    @patch("startd8.implementation_engine.engine.build_spec")
+    @patch("startd8.implementation_engine.engine.resolve_agent_spec")
+    def test_context_threaded_to_create_draft(
+        self, mock_resolve, mock_build_spec, mock_create_draft, mock_review_draft,
+    ):
+        """Engine threads request.context to create_draft."""
+        mock_resolve.return_value = Mock()
+        mock_build_spec.return_value = _make_spec()
+        mock_create_draft.return_value = _make_draft(1)
+        mock_review_draft.return_value = _make_review(1, passed=True, score=90)
+
+        engine = DefaultImplementationEngine()
+        ctx = {"design_document": "Design doc text", "critical_parameters": ["p=1"]}
+        request = EngineRequest(
+            task_description="Build widget",
+            drafter_agent_spec="mock:drafter",
+            reviewer_agent_spec="mock:reviewer",
+            context=ctx,
+        )
+        engine.build_and_execute(request)
+
+        # Verify context was passed to create_draft
+        call_kwargs = mock_create_draft.call_args.kwargs
+        assert call_kwargs.get("context") is ctx
+
+    @patch("startd8.implementation_engine.engine.review_draft")
+    @patch("startd8.implementation_engine.engine.create_draft")
+    @patch("startd8.implementation_engine.engine.build_spec")
+    @patch("startd8.implementation_engine.engine.resolve_agent_spec")
+    def test_enrichment_context_threaded_to_review_draft(
+        self, mock_resolve, mock_build_spec, mock_create_draft, mock_review_draft,
+    ):
+        """Engine threads enrichment context to review_draft."""
+        mock_resolve.return_value = Mock()
+        mock_build_spec.return_value = _make_spec()
+        mock_create_draft.return_value = _make_draft(1)
+        mock_review_draft.return_value = _make_review(1, passed=True, score=90)
+
+        engine = DefaultImplementationEngine()
+        ctx = {
+            "design_document": "Design doc text",
+            "parameter_sources": {"port": "req.md"},
+            "semantic_conventions": "use_snake_case",
+            "manifest_context": "### app.py\nclass App",
+            "call_graph_context": "main -> run",
+            "call_graph_callers": [{"fqn": "app.main", "blast_radius": 3}],
+        }
+        request = EngineRequest(
+            task_description="Build widget",
+            drafter_agent_spec="mock:drafter",
+            reviewer_agent_spec="mock:reviewer",
+            context=ctx,
+        )
+        engine.build_and_execute(request)
+
+        call_kwargs = mock_review_draft.call_args.kwargs
+        assert call_kwargs.get("design_document") == "Design doc text"
+        assert call_kwargs.get("manifest_context") == "### app.py\nclass App"
+        assert call_kwargs.get("call_graph_callers") is not None
+
+    @patch("startd8.implementation_engine.engine.format_review_feedback")
+    @patch("startd8.implementation_engine.engine.review_draft")
+    @patch("startd8.implementation_engine.engine.create_draft")
+    @patch("startd8.implementation_engine.engine.build_spec")
+    @patch("startd8.implementation_engine.engine.resolve_agent_spec")
+    def test_prior_review_threaded_across_iterations(
+        self, mock_resolve, mock_build_spec, mock_create_draft,
+        mock_review_draft, mock_format_feedback,
+    ):
+        """Engine tracks prior_review and passes it to subsequent review_draft calls."""
+        mock_resolve.return_value = Mock()
+        mock_build_spec.return_value = _make_spec()
+        mock_create_draft.side_effect = [_make_draft(1), _make_draft(2)]
+
+        review1 = _make_review(1, passed=False, score=50)
+        review2 = _make_review(2, passed=True, score=85)
+        mock_review_draft.side_effect = [review1, review2]
+        mock_format_feedback.return_value = "Fix issues"
+
+        engine = DefaultImplementationEngine()
+        request = EngineRequest(
+            task_description="Build widget",
+            drafter_agent_spec="mock:drafter",
+            reviewer_agent_spec="mock:reviewer",
+        )
+        engine.build_and_execute(request)
+
+        # First call: no prior_review
+        first_call_kwargs = mock_review_draft.call_args_list[0].kwargs
+        assert first_call_kwargs.get("prior_review") is None
+
+        # Second call: prior_review is review1
+        second_call_kwargs = mock_review_draft.call_args_list[1].kwargs
+        assert second_call_kwargs.get("prior_review") is review1
+
+    @patch("startd8.implementation_engine.engine.format_review_feedback")
+    @patch("startd8.implementation_engine.engine.review_draft")
+    @patch("startd8.implementation_engine.engine.create_draft")
+    @patch("startd8.implementation_engine.engine.build_spec")
+    @patch("startd8.implementation_engine.engine.resolve_agent_spec")
+    def test_format_feedback_receives_prior_review(
+        self, mock_resolve, mock_build_spec, mock_create_draft,
+        mock_review_draft, mock_format_feedback,
+    ):
+        """Engine passes prior_review to format_review_feedback."""
+        mock_resolve.return_value = Mock()
+        mock_build_spec.return_value = _make_spec()
+        mock_create_draft.side_effect = [_make_draft(1), _make_draft(2)]
+
+        review1 = _make_review(1, passed=False, score=50)
+        review2 = _make_review(2, passed=True, score=85)
+        mock_review_draft.side_effect = [review1, review2]
+        mock_format_feedback.return_value = "Fix issues"
+
+        engine = DefaultImplementationEngine()
+        request = EngineRequest(
+            task_description="Build widget",
+            drafter_agent_spec="mock:drafter",
+            reviewer_agent_spec="mock:reviewer",
+        )
+        engine.build_and_execute(request)
+
+        # format_review_feedback called once (review1 didn't pass)
+        assert mock_format_feedback.call_count == 1
+        call_kwargs = mock_format_feedback.call_args.kwargs
+        # First call: prior_review=None (no prior review yet)
+        assert call_kwargs.get("prior_review") is None
+
+    @patch("startd8.implementation_engine.engine.review_draft")
+    @patch("startd8.implementation_engine.engine.create_draft")
+    @patch("startd8.implementation_engine.engine.build_spec")
+    @patch("startd8.implementation_engine.engine.resolve_agent_spec")
+    def test_forward_manifest_threaded_to_review(
+        self, mock_resolve, mock_build_spec, mock_create_draft, mock_review_draft,
+    ):
+        """Engine threads forward_manifest from context to review_draft."""
+        mock_resolve.return_value = Mock()
+        mock_build_spec.return_value = _make_spec()
+        mock_create_draft.return_value = _make_draft(1)
+        mock_review_draft.return_value = _make_review(1, passed=True, score=90)
+
+        fm = Mock()
+        engine = DefaultImplementationEngine()
+        request = EngineRequest(
+            task_description="Build widget",
+            drafter_agent_spec="mock:drafter",
+            reviewer_agent_spec="mock:reviewer",
+            context={"forward_manifest": fm},
+            target_files=["app.py"],
+        )
+        engine.build_and_execute(request)
+
+        call_kwargs = mock_review_draft.call_args.kwargs
+        assert call_kwargs.get("forward_manifest") is fm
+        assert call_kwargs.get("target_files") == ["app.py"]
 
 
 class TestTruncationContinuationFeedback:

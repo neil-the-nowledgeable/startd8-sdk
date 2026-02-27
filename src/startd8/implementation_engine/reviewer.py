@@ -2,26 +2,297 @@
 Reviewer for the implementation engine.
 
 Extracted from ``LeadContractorWorkflow._review_draft`` and
-``_format_review_feedback``.
+``_format_review_feedback``.  Extended with convergent review support
+(issue tracking across iterations) and optional pipeline enrichment.
 """
 
 import re
 import uuid
-from typing import Any
+from typing import Any, Dict, List, Optional
 
 from ..logging_config import get_logger
 from ..costs.pricing import PricingService
+from .budget import ENRICHMENT_BUDGET_CHARS, truncate_with_marker
+from .drafter import build_supplementary_sections
 from .models import ReviewResult
 from .parsers import parse_list_section, parse_score
 from .prompts import get_template
 
 
-__all__ = ["review_draft", "format_review_feedback"]
+__all__ = [
+    "review_draft",
+    "format_review_feedback",
+    "build_enrichment_sections",
+    "build_prior_issues_section",
+    "compute_issue_coverage",
+]
 
 logger = get_logger(__name__)
 
 _pricing = PricingService()
 
+
+# ---------------------------------------------------------------------------
+# Enrichment section builder (T2 reviewer budget)
+# ---------------------------------------------------------------------------
+
+def build_enrichment_sections(
+    context: Optional[Dict[str, Any]] = None,
+    *,
+    design_document: Optional[str] = None,
+    semantic_conventions: Optional[str] = None,
+    task_id: str = "",
+    budget_chars: int = ENRICHMENT_BUDGET_CHARS,
+) -> str:
+    """Build optional enrichment sections for the review prompt.
+
+    Calls ``build_supplementary_sections`` for shared context (manifest,
+    call graph, parameters), then appends reviewer-specific sections
+    (design document, semantic conventions).
+
+    Args:
+        context: Pipeline context dict (forwarded to ``build_supplementary_sections``).
+        design_document: Design doc for compliance checking.
+        semantic_conventions: Naming convention rules.
+        task_id: Current task ID for FLCM constraint injection.
+        budget_chars: Character budget for all enrichment sections.
+
+    Returns:
+        Formatted enrichment sections string.
+    """
+    parts: List[str] = []
+
+    # Shared sections (manifest, call graph, parameters) — half the budget
+    if context:
+        shared = build_supplementary_sections(
+            context, task_id=task_id, budget_chars=budget_chars // 2,
+        )
+        if shared:
+            parts.append(shared)
+
+    # Design document — primary review input, separate budget
+    if design_document:
+        design_budget = min(budget_chars, 8000)
+        truncated = truncate_with_marker(design_document, design_budget)
+        parts.append(f"## Design Document (compliance reference)\n{truncated}")
+
+    # Semantic conventions
+    if semantic_conventions:
+        if isinstance(semantic_conventions, str):
+            parts.append(
+                f"## Semantic Conventions\n{semantic_conventions[:2000]}",
+            )
+        else:
+            parts.append(
+                f"## Semantic Conventions\n{str(semantic_conventions)[:2000]}",
+            )
+
+    return "\n\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Issue coverage computation (hint for reviewer, not a gate)
+# ---------------------------------------------------------------------------
+
+def compute_issue_coverage(
+    prior_review: "ReviewResult",
+    current_review_text: str = "",
+) -> Dict[str, List[Dict[str, str]]]:
+    """Compute which prior issues appear addressed vs still outstanding.
+
+    Uses simple heuristics: if key terms from a prior issue are absent
+    from the current review text, mark as addressed.  This is a best-effort
+    hint — the reviewer will verify.
+
+    Args:
+        prior_review: ReviewResult from the previous iteration.
+        current_review_text: Current review's raw text (empty before review runs).
+
+    Returns:
+        ``{"addressed": [...], "outstanding": [...]}`` where each item
+        has ``label``, ``text``, and ``severity`` keys.
+    """
+    addressed: List[Dict[str, str]] = []
+    outstanding: List[Dict[str, str]] = []
+    lower_text = current_review_text.lower()
+
+    # Label blocking issues as B1, B2, ... and other issues as I1, I2, ...
+    for idx, issue in enumerate(prior_review.blocking_issues, 1):
+        label = f"B{idx}"
+        entry = {"label": label, "text": issue, "severity": "BLOCKING"}
+        # If review text mentions the issue as resolved, mark addressed
+        key_words = _extract_key_terms(issue)
+        if current_review_text and not any(
+            kw in lower_text for kw in key_words
+        ):
+            addressed.append(entry)
+        else:
+            outstanding.append(entry)
+
+    for idx, issue in enumerate(prior_review.issues, 1):
+        label = f"I{idx}"
+        entry = {"label": label, "text": issue, "severity": "MAJOR"}
+        key_words = _extract_key_terms(issue)
+        if current_review_text and not any(
+            kw in lower_text for kw in key_words
+        ):
+            addressed.append(entry)
+        else:
+            outstanding.append(entry)
+
+    return {"addressed": addressed, "outstanding": outstanding}
+
+
+def _extract_key_terms(issue_text: str) -> List[str]:
+    """Extract 2-3 key terms from an issue for matching."""
+    words = re.findall(r'\b\w{4,}\b', issue_text.lower())
+    # Take up to 3 distinctive words (skip common words)
+    skip = {"that", "this", "with", "from", "should", "must", "have", "been",
+            "does", "will", "need", "also", "some", "more", "very", "code"}
+    terms = [w for w in words if w not in skip][:3]
+    return terms
+
+
+# ---------------------------------------------------------------------------
+# Prior issues section builder (convergent review pattern)
+# ---------------------------------------------------------------------------
+
+def build_prior_issues_section(
+    prior_review: Optional["ReviewResult"] = None,
+    iteration: int = 1,
+    max_iterations: int = 3,
+) -> str:
+    """Format prior review issues into a structured section for the reviewer.
+
+    Produces "Issues Substantially Addressed" and "Issues Still Outstanding"
+    sections modeled on the architectural review's convergent review pattern.
+
+    Args:
+        prior_review: ReviewResult from previous iteration (None on first iteration).
+        iteration: Current iteration number.
+        max_iterations: Maximum iterations configured.
+
+    Returns:
+        Formatted prior issues section, or empty string on first iteration.
+    """
+    if not prior_review or iteration <= 1:
+        return ""
+
+    has_blocking = bool(prior_review.blocking_issues)
+    has_issues = bool(prior_review.issues)
+    if not has_blocking and not has_issues:
+        return ""
+
+    parts = [f"## Issue Resolution Status (iteration {iteration} of {max_iterations})"]
+
+    # List all prior issues with labels for reference
+    if has_blocking:
+        parts.append(
+            "\n### Prior Blocking Issues (MUST verify resolution)"
+        )
+        for idx, issue in enumerate(prior_review.blocking_issues, 1):
+            parts.append(f"- [B{idx}] {issue}")
+
+    if has_issues:
+        parts.append("\n### Prior Issues")
+        for idx, issue in enumerate(prior_review.issues, 1):
+            parts.append(f"- [I{idx}] {issue}")
+
+    parts.append(
+        "\nFor each prior issue, explicitly state whether it is "
+        "RESOLVED or STILL OUTSTANDING. Do NOT re-raise issues that have "
+        "been properly addressed unless the fix introduced a regression."
+    )
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Convergence instructions builder
+# ---------------------------------------------------------------------------
+
+def _build_convergence_instructions(
+    iteration: int,
+    pass_threshold: int,
+    has_prior_review: bool,
+) -> str:
+    """Build convergence instructions for the review prompt.
+
+    Returns empty string on first iteration (no convergence context).
+    """
+    if iteration <= 1 or not has_prior_review:
+        return ""
+
+    return (
+        f"\n## Convergence Criteria\n"
+        f"This is iteration {iteration} of a convergent review loop.\n"
+        f"- PASS when: score >= {pass_threshold} AND all blocking issues "
+        f"from prior reviews are resolved AND no new blocking issues.\n"
+        f"- FAIL when: any blocking issue remains unresolved OR new "
+        f"blocking issues are found.\n"
+        f"- In your Issues section, explicitly reference prior issues by "
+        f"label (e.g., \"[B1] RESOLVED\" or \"[B1] STILL OUTSTANDING\").\n"
+        f"- Do NOT penalize the score for issues marked \"ADDRESSED\" "
+        f"above unless the fix introduced a regression."
+    )
+
+
+# ---------------------------------------------------------------------------
+# FLCM contract validation (optional)
+# ---------------------------------------------------------------------------
+
+def _validate_against_manifest(
+    forward_manifest: Any,
+    implementation: str,
+    target_files: Optional[List[str]] = None,
+) -> List[Dict[str, str]]:
+    """Run post-generation contract validation against the ForwardManifest.
+
+    Returns a list of violation dicts with ``severity``, ``violation_type``,
+    ``contract_id``, ``expected``, and ``actual`` keys.
+
+    Gracefully returns empty list on import failure or missing methods.
+    """
+    try:
+        if not hasattr(forward_manifest, "contracts"):
+            return []
+        validate_fn = getattr(forward_manifest, "validate_implementation", None)
+        if validate_fn is None:
+            return []
+        violations = validate_fn(implementation, target_files=target_files)
+        return [
+            {
+                "severity": getattr(v, "severity", "warning"),
+                "violation_type": getattr(v, "violation_type", "unknown"),
+                "contract_id": getattr(v, "contract_id", ""),
+                "expected": getattr(v, "expected", ""),
+                "actual": getattr(v, "actual", ""),
+            }
+            for v in (violations or [])
+        ]
+    except Exception:
+        logger.debug(
+            "FLCM contract validation skipped (not available or failed)",
+            exc_info=True,
+        )
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Review system prompt loader
+# ---------------------------------------------------------------------------
+
+def _get_review_system_prompt() -> str:
+    """Load the review system prompt from YAML (or fallback)."""
+    try:
+        return get_template("review_system")
+    except KeyError:
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Main review entry point
+# ---------------------------------------------------------------------------
 
 def review_draft(
     agent: Any,
@@ -30,11 +301,34 @@ def review_draft(
     implementation: str,
     pass_threshold: int = 80,
     iteration: int = 1,
+    *,
+    # Optional enrichment context
+    design_document: Optional[str] = None,
+    parameter_sources: Any = None,
+    semantic_conventions: Optional[str] = None,
+    # Phase 4/5/6 manifest context
+    manifest_context: Optional[str] = None,
+    call_graph_context: Optional[str] = None,
+    call_graph_callers: Optional[List[Dict[str, Any]]] = None,
+    # Convergent review context
+    prior_review: Optional["ReviewResult"] = None,
+    max_iterations: int = 3,
+    # FLCM contract validation
+    forward_manifest: Any = None,
+    target_files: Optional[List[str]] = None,
+    # Full context dict (for supplementary sections)
+    context: Optional[Dict[str, Any]] = None,
 ) -> ReviewResult:
     """Review a draft implementation.
 
-    Equivalent to ``LeadContractorWorkflow._review_draft()`` (without
-    forward manifest validation, which is Prime-specific).
+    Extended from ``LeadContractorWorkflow._review_draft()`` with:
+    - Optional pipeline enrichment (design doc, parameters, conventions)
+    - Manifest/call graph context (Phase 4/5/6)
+    - Convergent review (prior issue tracking across iterations)
+    - FLCM contract validation (post-generation)
+
+    All new parameters are optional with None defaults for backward
+    compatibility.
 
     Args:
         agent: Reviewer agent (must have ``.generate()``).
@@ -43,6 +337,17 @@ def review_draft(
         implementation: Implementation code to review.
         pass_threshold: Minimum score to pass (0-100).
         iteration: Current iteration number.
+        design_document: Design doc for compliance checking.
+        parameter_sources: Parameter provenance data.
+        semantic_conventions: Naming convention rules.
+        manifest_context: Phase 4/5 structural element summaries.
+        call_graph_context: Phase 6 call graph impact.
+        call_graph_callers: Phase 6 caller backward-compat data.
+        prior_review: ReviewResult from previous iteration.
+        max_iterations: Maximum iterations configured.
+        forward_manifest: ForwardManifest object for post-gen validation.
+        target_files: File list for multi-file validation.
+        context: Full pipeline context dict for supplementary sections.
 
     Returns:
         ReviewResult with score, pass/fail, and parsed feedback.
@@ -55,15 +360,56 @@ def review_draft(
         logger.debug("Reviewer: spec lacks raw_spec attribute, using str(spec)")
         raw_spec = str(spec)
 
+    # Build enrichment sections from kwargs and/or context
+    enrichment_ctx = dict(context or {})
+    # Overlay explicit kwargs onto context (kwargs take precedence)
+    if manifest_context is not None:
+        enrichment_ctx["manifest_context"] = manifest_context
+    if call_graph_context is not None:
+        enrichment_ctx["call_graph_context"] = call_graph_context
+    if call_graph_callers is not None:
+        enrichment_ctx["call_graph_callers"] = call_graph_callers
+    if parameter_sources is not None:
+        enrichment_ctx["parameter_sources"] = parameter_sources
+
+    enrichment = build_enrichment_sections(
+        context=enrichment_ctx if enrichment_ctx else None,
+        design_document=design_document,
+        semantic_conventions=semantic_conventions,
+    )
+
+    # Build prior issues section (convergent review)
+    prior_issues = build_prior_issues_section(
+        prior_review=prior_review,
+        iteration=iteration,
+        max_iterations=max_iterations,
+    )
+
+    # Build convergence instructions
+    convergence = _build_convergence_instructions(
+        iteration=iteration,
+        pass_threshold=pass_threshold,
+        has_prior_review=prior_review is not None,
+    )
+
     template = get_template("review")
     prompt = template.format(
         task_description=task_description,
         spec=raw_spec,
         implementation=implementation,
         pass_threshold=pass_threshold,
+        enrichment_sections=enrichment,
+        prior_issues_section=prior_issues,
+        convergence_instructions=convergence,
     )
 
-    response_text, response_time_ms, token_usage = agent.generate(prompt)
+    sys_prompt = _get_review_system_prompt()
+    if sys_prompt:
+        response_text, response_time_ms, token_usage = agent.generate(
+            prompt, system_prompt=sys_prompt,
+        )
+    else:
+        response_text, response_time_ms, token_usage = agent.generate(prompt)
 
     review_text = response_text
     score = parse_score(review_text)
@@ -96,20 +442,62 @@ def review_draft(
         review.output_tokens,
     )
 
+    # FLCM contract validation (post-generation, optional)
+    if forward_manifest and hasattr(forward_manifest, "contracts"):
+        violations = _validate_against_manifest(
+            forward_manifest, implementation, target_files,
+        )
+        error_violations = [
+            v for v in violations
+            if v.get("severity") == "error"
+        ]
+        if error_violations:
+            review.passed = False
+            for viol in error_violations:
+                msg = (
+                    f"[BLOCKING] {viol['violation_type']} "
+                    f"({viol['contract_id']}): "
+                    f"Expected {viol['expected']}"
+                )
+                if viol.get("actual"):
+                    msg += f", got {viol['actual']}"
+                if msg not in review.blocking_issues:
+                    review.blocking_issues.append(msg)
+
     return review
 
 
-def format_review_feedback(review: ReviewResult) -> str:
+# ---------------------------------------------------------------------------
+# Convergence-aware review feedback formatter
+# ---------------------------------------------------------------------------
+
+def format_review_feedback(
+    review: ReviewResult,
+    prior_review: Optional[ReviewResult] = None,
+) -> str:
     """Format review into feedback string for the next draft iteration.
 
-    Equivalent to ``LeadContractorWorkflow._format_review_feedback()``.
+    Without ``prior_review``: backward-compatible flat format.
+    With ``prior_review``: convergence-focused format showing resolved
+    vs outstanding issues so the drafter addresses specific gaps.
 
     Args:
-        review: ReviewResult to format.
+        review: Current ReviewResult to format.
+        prior_review: ReviewResult from the previous iteration (optional).
 
     Returns:
         Markdown feedback string.
     """
+    if prior_review is None:
+        # Backward-compatible flat format (iteration 1)
+        return _format_flat_feedback(review)
+
+    # Convergence-aware format (iteration 2+)
+    return _format_convergence_feedback(review, prior_review)
+
+
+def _format_flat_feedback(review: ReviewResult) -> str:
+    """Original flat feedback format."""
     issues_str = (
         '\n'.join(f'- {issue}' for issue in review.issues)
         if review.issues else '- None listed'
@@ -137,3 +525,80 @@ def format_review_feedback(review: ReviewResult) -> str:
 ### Full Feedback:
 {review.review_text}
 """
+
+
+def _format_convergence_feedback(
+    review: ReviewResult,
+    prior_review: ReviewResult,
+) -> str:
+    """Convergence-focused feedback showing issue resolution status."""
+    # Compute resolution status using current review text as evidence
+    coverage = compute_issue_coverage(prior_review, review.review_text)
+    prior_blocking_count = len(prior_review.blocking_issues)
+    prior_issue_count = len(prior_review.issues)
+    current_blocking_count = len(review.blocking_issues)
+    current_issue_count = len(review.issues)
+
+    resolved_blocking = [
+        e for e in coverage["addressed"] if e["severity"] == "BLOCKING"
+    ]
+    resolved_issues = [
+        e for e in coverage["addressed"] if e["severity"] != "BLOCKING"
+    ]
+    outstanding = coverage["outstanding"]
+
+    parts = [
+        f"## Review Feedback — Convergent Review (Score: {review.score}/100)",
+        "",
+        "### Convergence Status",
+        f"- Prior blocking issues: {prior_blocking_count} → "
+        f"Current: {current_blocking_count}",
+        f"- Prior other issues: {prior_issue_count} → "
+        f"Current: {current_issue_count}",
+    ]
+
+    # Blocking issues — MUST fix for convergence
+    if review.blocking_issues:
+        parts.append("")
+        parts.append("### BLOCKING — Must Fix for Convergence")
+        for issue in review.blocking_issues:
+            parts.append(f"- {issue}")
+
+    # Outstanding from prior review
+    outstanding_blocking = [
+        e for e in outstanding if e["severity"] == "BLOCKING"
+    ]
+    if outstanding_blocking:
+        parts.append("")
+        parts.append("### Still Outstanding from Prior Review")
+        for entry in outstanding_blocking:
+            parts.append(
+                f"- [{entry['label']}] {entry['text']} (STILL OUTSTANDING)"
+            )
+
+    # New issues this iteration
+    new_issues = [
+        iss for iss in review.issues
+        if not any(iss in e["text"] for e in coverage.get("addressed", []))
+    ]
+    if new_issues:
+        parts.append("")
+        parts.append("### New Issues This Iteration")
+        for issue in new_issues:
+            parts.append(f"- {issue}")
+
+    # Resolved since prior review
+    if resolved_blocking or resolved_issues:
+        parts.append("")
+        parts.append("### Resolved Since Prior Review (no action needed)")
+        for entry in resolved_blocking:
+            parts.append(f"- [{entry['label']}] {entry['text']} — RESOLVED")
+        for entry in resolved_issues:
+            parts.append(f"- [{entry['label']}] {entry['text']} — RESOLVED")
+
+    # Full feedback
+    parts.append("")
+    parts.append("### Full Feedback:")
+    parts.append(review.review_text)
+
+    return "\n".join(parts)

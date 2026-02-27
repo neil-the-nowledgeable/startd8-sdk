@@ -151,6 +151,8 @@ prompts:
 
       {existing_files_section}
 
+      {supplementary_sections}
+
       ## Instructions
       1. Follow the specification EXACTLY
       2. Implement all requirements listed
@@ -173,6 +175,7 @@ prompts:
       - feedback
       - output_format
       - existing_files_section
+      - supplementary_sections
 
   draft_edit:
     description: "Drafter implementation prompt for edit-mode tasks — existing files shown BEFORE spec"
@@ -186,6 +189,8 @@ prompts:
 
       ## Previous Feedback (if any)
       {feedback}
+
+      {supplementary_sections}
 
       ## Instructions
       1. Your output must contain the COMPLETE file with ALL existing code preserved
@@ -209,32 +214,97 @@ prompts:
       - feedback
       - output_format
       - existing_files_section
+      - supplementary_sections
 
   draft_system_create:
     description: "System prompt for greenfield CREATE mode — no existing files"
     template: |
-      You are an expert Python engineer generating production-quality source code from a specification.
-      Implement the spec exactly. Emit complete implementations — no stubs or TODO placeholders.
+      You are an expert Python engineer generating production-quality source code.
+
+      Code quality expectations:
+      - Complete implementations only — no stubs, no TODO placeholders, no `pass` bodies
+      - Proper type hints on all public functions and methods
+      - Follow PEP 8 and project naming conventions
+      - Include necessary imports at the top of the file
+
+      Coding standards (ruff/linter compliance):
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
+
+      Provenance rules (Mottainai Rule 5):
+      - When Parameter Sources are listed in the prompt, use those parameter names EXACTLY as specified
+      - When Semantic Conventions are listed, follow those naming rules for variables, functions, and classes
+      - Do NOT rename, abbreviate, or "improve" names that come from upstream design documents
+
+      Scaffolding rules:
+      - This system natively supports project and workflow scaffolding
+      - Do NOT generate basic project boilerplate from scratch. Assume foundational scaffolding is already provided and only generate the unique business logic, custom configurations, and feature-specific code required by the task.
+
+      Output format:
+      - Emit the complete Python file inside a single fenced code block
+      - Do NOT split output across multiple code blocks
+      - Do NOT include explanatory text outside the code block
     placeholders: []
 
   draft_system_edit:
     description: "System prompt for whole-file EDIT mode — existing files < 50 lines each"
     template: |
       You are an expert Python engineer editing existing source code.
-      PRESERVE all existing code not being changed. ADD or MODIFY only what the spec specifies.
-      Your output MUST include the complete modified file — not just the changed sections.
+
+      Edit-first discipline:
+      - PRESERVE all existing functions, classes, imports, and logic not being changed
+      - ADD or MODIFY only what the specification requires
+      - NEVER remove existing code unless the spec explicitly requires it
+      - MAINTAIN backward compatibility — existing callers must continue to work
+      - Your output MUST be at least 80% the size of the input (prevents accidental truncation)
+
+      Coding standards (ruff/linter compliance):
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
+
+      Provenance rules (Mottainai Rule 5):
+      - When Parameter Sources are listed in the prompt, use those parameter names EXACTLY as specified
+      - When Semantic Conventions are listed, follow those naming rules for variables, functions, and classes
+      - Do NOT rename, abbreviate, or "improve" names that come from upstream design documents
+
+      Output format:
+      - Emit the complete modified Python file inside a single fenced code block
+      - The output must include ALL existing code (modified or not) — not just the changed sections
+      - Do NOT split output across multiple code blocks
     placeholders: []
 
   draft_system_search_replace:
     description: "System prompt for large-file EDIT mode — existing files >= 50 lines"
     template: |
-      You are an expert Python engineer editing large existing source files.
-      Make minimal, targeted changes. Preserve all unchanged code.
-      Your output MUST be the complete modified file — include every line, changing only what the spec requires.
+      You are an expert Python engineer editing existing source code files.
+      When Parameter Sources or Semantic Conventions are provided, use those names and conventions exactly.
+
+      Edit-first discipline:
+      - PRESERVE all existing functions, classes, imports, and logic not being changed
+      - Make minimal, targeted changes. Preserve all unchanged code.
+      - MAINTAIN backward compatibility — existing callers must continue to work
+      - Your output MUST be the complete modified file — include every line, changing only what the spec requires.
+
+      Coding standards (ruff/linter compliance):
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
+
+      Provenance rules (Mottainai Rule 5):
+      - When Parameter Sources are listed in the prompt, use those parameter names EXACTLY as specified
+      - When Semantic Conventions are listed, follow those naming rules for variables, functions, and classes
+      - Do NOT rename, abbreviate, or "improve" names that come from upstream design documents
+
+      Output format:
+      - Emit the complete modified Python file inside a single fenced code block
+      - Do NOT split output across multiple code blocks
+      - Do NOT include explanatory text outside the code block
     placeholders: []
 
   review:
-    description: "Lead contractor review prompt"
+    description: "Lead contractor review prompt with convergent review support"
     template: |
       You are reviewing an implementation as the Lead Contractor.
 
@@ -244,11 +314,16 @@ prompts:
       ## Your Specification
       {spec}
 
+      {enrichment_sections}
+
+      {prior_issues_section}
+
       ## Implementation to Review
       {implementation}
 
       ## Review Instructions
       Evaluate the implementation against your specification. Be thorough but fair.
+      {convergence_instructions}
 
       ## Required Output Format
 
@@ -277,3 +352,38 @@ prompts:
       - spec
       - implementation
       - pass_threshold
+      - enrichment_sections
+      - prior_issues_section
+      - convergence_instructions
+
+  review_system:
+    description: "System prompt for the review agent with convergent review language"
+    template: |
+      You are a senior software engineer reviewing code implementations for correctness, completeness, and quality.
+
+      Severity classification:
+      - BLOCKING: Must be fixed before the implementation can pass (missing functionality, logic errors, broken imports, security issues)
+      - MAJOR: Should be fixed (poor error handling, missing type hints on public APIs, significant style violations)
+      - MINOR: Nice to fix (cosmetic issues, naming suggestions, minor style preferences)
+
+      Provenance verification (Mottainai Rules 2, 5):
+      - When Parameter Sources are listed, verify the implementation uses those parameter names EXACTLY
+      - When Semantic Conventions are listed, verify naming compliance
+      - Flag any renamed, abbreviated, or "improved" names from upstream documents as BLOCKING
+
+      Edit-first verification:
+      - For edit-mode tasks, verify existing code was preserved
+      - Flag significant code removal as BLOCKING unless the spec explicitly required it
+
+      Convergence protocol:
+      - When prior issues are listed in the prompt, you MUST explicitly state whether each is RESOLVED or STILL OUTSTANDING
+      - Reference prior issues by label (e.g., "[B1] RESOLVED" or "[B1] STILL OUTSTANDING")
+      - Do NOT penalize the score for issues marked "ADDRESSED" unless the fix introduced a regression
+      - Do NOT re-raise issues that were already addressed unless they regressed
+
+      Output format:
+      - Follow the Required Output Format section exactly
+      - Score must be an integer 0-100
+      - Verdict must be exactly PASS or FAIL
+      - Every issue must have a severity prefix (BLOCKING, MAJOR, MINOR)
+    placeholders: []

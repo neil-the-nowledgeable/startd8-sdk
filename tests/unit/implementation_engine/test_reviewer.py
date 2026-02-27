@@ -1,9 +1,12 @@
-"""Tests for implementation_engine.reviewer — review and feedback formatting."""
+"""Tests for implementation_engine.reviewer — review, enrichment, convergent review, feedback."""
 
 import pytest
 from unittest.mock import Mock
 
 from startd8.implementation_engine.reviewer import (
+    build_enrichment_sections,
+    build_prior_issues_section,
+    compute_issue_coverage,
     format_review_feedback,
     review_draft,
 )
@@ -121,6 +124,283 @@ class TestReviewDraft:
         assert result.score == 0
         assert result.passed is False
 
+    def test_enrichment_kwargs_accepted(self):
+        """review_draft accepts enrichment kwargs without error."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+        result = review_draft(
+            agent, "task", self._make_spec(), "code",
+            design_document="## Design\nBuild widget",
+            parameter_sources={"port": "req.md:5"},
+            semantic_conventions="use_snake_case",
+            manifest_context="### app.py\nclass App",
+            call_graph_context="main -> run",
+            call_graph_callers=[{"fqn": "app.main", "blast_radius": 3}],
+        )
+        assert result.score == 85
+
+    def test_enrichment_sections_in_prompt(self):
+        """Enrichment kwargs appear in the review prompt."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+        review_draft(
+            agent, "task", self._make_spec(), "code",
+            design_document="## Design\nBuild a CRM widget",
+        )
+        call_args = agent.generate.call_args
+        prompt = call_args[0][0]
+        assert "CRM widget" in prompt
+
+    def test_prior_review_creates_issues_section(self):
+        """prior_review generates issue resolution section in prompt."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+
+        prior = ReviewResult(
+            review_id="r-prior", iteration=1, passed=False, score=60,
+            blocking_issues=["Missing import for datetime"],
+            issues=["Missing type hint"],
+        )
+        review_draft(
+            agent, "task", self._make_spec(), "code",
+            iteration=2, prior_review=prior,
+        )
+
+        call_args = agent.generate.call_args
+        prompt = call_args[0][0]
+        assert "Issue Resolution Status" in prompt
+        assert "[B1]" in prompt
+        assert "datetime" in prompt
+
+    def test_convergence_instructions_in_prompt(self):
+        """Convergence criteria appear in prompt for iteration > 1."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+
+        prior = ReviewResult(
+            review_id="r-prior", iteration=1, passed=False, score=60,
+        )
+        review_draft(
+            agent, "task", self._make_spec(), "code",
+            iteration=2, prior_review=prior,
+        )
+
+        call_args = agent.generate.call_args
+        prompt = call_args[0][0]
+        assert "Convergence Criteria" in prompt
+
+    def test_system_prompt_sent(self):
+        """Reviewer sends a system prompt to the agent."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+        review_draft(agent, "task", self._make_spec(), "code")
+
+        call_args = agent.generate.call_args
+        # system_prompt should be passed as kwarg
+        if "system_prompt" in (call_args.kwargs or {}):
+            sys_prompt = call_args.kwargs["system_prompt"]
+            assert "senior" in sys_prompt.lower() or "reviewing" in sys_prompt.lower()
+
+    def test_flcm_contract_validation_appends_blocking(self):
+        """FLCM violations are appended as blocking issues."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+
+        fm = Mock()
+        fm.contracts = [Mock()]
+        violation = Mock()
+        violation.severity = "error"
+        violation.violation_type = "missing_method"
+        violation.contract_id = "C-001"
+        violation.expected = "def process()"
+        violation.actual = "not found"
+        fm.validate_implementation = Mock(return_value=[violation])
+
+        result = review_draft(
+            agent, "task", self._make_spec(), "code",
+            forward_manifest=fm, target_files=["app.py"],
+        )
+
+        assert result.passed is False
+        assert any("missing_method" in b for b in result.blocking_issues)
+
+    def test_flcm_no_contracts_attr_skipped(self):
+        """FLCM validation skipped when manifest has no contracts."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+
+        fm = Mock(spec=[])  # No `contracts` attribute
+        del fm.contracts
+
+        result = review_draft(
+            agent, "task", self._make_spec(), "code",
+            forward_manifest=fm,
+        )
+        assert result.passed is True
+
+    def test_manifest_context_in_review(self):
+        """Manifest context appears in the review prompt."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+        review_draft(
+            agent, "task", self._make_spec(), "code",
+            manifest_context="### app.py\nclass WidgetService: ...",
+        )
+        call_args = agent.generate.call_args
+        prompt = call_args[0][0]
+        assert "WidgetService" in prompt
+
+    def test_call_graph_callers_in_review(self):
+        """Call graph callers data appears in the review prompt."""
+        review_text = "### Score: 85\n### Verdict: PASS\n"
+        agent = self._make_agent(review_text)
+        review_draft(
+            agent, "task", self._make_spec(), "code",
+            call_graph_callers=[
+                {"fqn": "app.main", "blast_radius": 7, "direct_callers": ["x"]},
+            ],
+        )
+        call_args = agent.generate.call_args
+        prompt = call_args[0][0]
+        assert "app.main" in prompt or "Backward" in prompt
+
+
+# ---------------------------------------------------------------------------
+# build_enrichment_sections
+# ---------------------------------------------------------------------------
+
+class TestBuildEnrichmentSections:
+    def test_empty_returns_empty(self):
+        assert build_enrichment_sections() == ""
+        assert build_enrichment_sections(None) == ""
+
+    def test_design_document_rendered(self):
+        result = build_enrichment_sections(
+            design_document="## Design\nBuild a widget",
+        )
+        assert "Design Document" in result
+        assert "Build a widget" in result
+
+    def test_semantic_conventions_rendered(self):
+        result = build_enrichment_sections(
+            semantic_conventions="use_snake_case for functions",
+        )
+        assert "Semantic Conventions" in result
+        assert "snake_case" in result
+
+    def test_context_shared_sections(self):
+        ctx = {
+            "critical_parameters": ["port=8080"],
+            "manifest_context": "### app.py\nclass App",
+        }
+        result = build_enrichment_sections(context=ctx)
+        assert "port=8080" in result
+
+    def test_all_sections_combined(self):
+        ctx = {"critical_parameters": ["port=8080"]}
+        result = build_enrichment_sections(
+            context=ctx,
+            design_document="## Design\nWidget",
+            semantic_conventions="use_snake_case",
+        )
+        assert "port=8080" in result
+        assert "Widget" in result
+        assert "snake_case" in result
+
+
+# ---------------------------------------------------------------------------
+# build_prior_issues_section
+# ---------------------------------------------------------------------------
+
+class TestBuildPriorIssuesSection:
+    def test_first_iteration_returns_empty(self):
+        assert build_prior_issues_section(iteration=1) == ""
+        assert build_prior_issues_section(None, iteration=2) == ""
+
+    def test_no_issues_returns_empty(self):
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+        )
+        assert build_prior_issues_section(prior, iteration=2) == ""
+
+    def test_blocking_issues_labeled(self):
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            blocking_issues=["Missing import", "Syntax error"],
+        )
+        result = build_prior_issues_section(prior, iteration=2)
+        assert "Issue Resolution Status" in result
+        assert "[B1]" in result
+        assert "[B2]" in result
+        assert "Missing import" in result
+        assert "Syntax error" in result
+
+    def test_other_issues_labeled(self):
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            issues=["Missing type hint", "Poor naming"],
+        )
+        result = build_prior_issues_section(prior, iteration=2)
+        assert "[I1]" in result
+        assert "[I2]" in result
+
+    def test_iteration_number_shown(self):
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            blocking_issues=["Bug"],
+        )
+        result = build_prior_issues_section(prior, iteration=3, max_iterations=5)
+        assert "iteration 3 of 5" in result
+
+
+# ---------------------------------------------------------------------------
+# compute_issue_coverage
+# ---------------------------------------------------------------------------
+
+class TestComputeIssueCoverage:
+    def test_no_issues_empty(self):
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+        )
+        coverage = compute_issue_coverage(prior)
+        assert coverage["addressed"] == []
+        assert coverage["outstanding"] == []
+
+    def test_blocking_issues_without_review_text(self):
+        """Without review text, all issues are classified as outstanding."""
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            blocking_issues=["Missing import for datetime"],
+        )
+        coverage = compute_issue_coverage(prior)
+        assert len(coverage["outstanding"]) == 1
+        assert coverage["outstanding"][0]["label"] == "B1"
+
+    def test_blocking_issues_addressed_when_not_in_text(self):
+        """Issues whose key terms are absent from review text are addressed."""
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            blocking_issues=["Missing import for datetime"],
+        )
+        coverage = compute_issue_coverage(
+            prior,
+            current_review_text="Good code. No issues found.",
+        )
+        assert len(coverage["addressed"]) == 1
+        assert coverage["addressed"][0]["label"] == "B1"
+
+    def test_issues_labeled_correctly(self):
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            blocking_issues=["Bug A"],
+            issues=["Style B", "Naming C"],
+        )
+        coverage = compute_issue_coverage(prior)
+        labels = [e["label"] for e in coverage["outstanding"]]
+        assert "B1" in labels
+        assert "I1" in labels
+        assert "I2" in labels
+
 
 # ---------------------------------------------------------------------------
 # format_review_feedback
@@ -161,3 +441,52 @@ class TestFormatReviewFeedback:
         )
         result = format_review_feedback(review)
         assert "- Issue 1" in result
+
+    def test_convergence_format_with_prior_review(self):
+        """With prior_review, produces convergence-aware format."""
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            blocking_issues=["Missing import"],
+            issues=["Bad naming"],
+        )
+        current = ReviewResult(
+            review_id="r2", iteration=2, passed=False, score=75,
+            blocking_issues=[],
+            issues=["Unused variable"],
+            review_text="Better but still has issues",
+        )
+        result = format_review_feedback(current, prior_review=prior)
+
+        assert "Convergent Review" in result
+        assert "Score: 75/100" in result
+        assert "Convergence Status" in result
+
+    def test_convergence_shows_resolved_issues(self):
+        """Convergence format shows resolved issues."""
+        prior = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            blocking_issues=["Missing import for datetime"],
+            issues=["Bad naming convention"],
+        )
+        current = ReviewResult(
+            review_id="r2", iteration=2, passed=False, score=75,
+            blocking_issues=[],
+            issues=[],
+            review_text="All prior issues fixed",
+        )
+        result = format_review_feedback(current, prior_review=prior)
+
+        assert "Resolved Since Prior Review" in result
+
+    def test_backward_compat_no_prior(self):
+        """Without prior_review, produces flat format (backward compat)."""
+        review = ReviewResult(
+            review_id="r1", iteration=1, passed=False, score=60,
+            issues=["Bug A"],
+            review_text="Review text",
+        )
+        result = format_review_feedback(review, prior_review=None)
+
+        # Should be the flat format, not convergence format
+        assert "Convergent Review" not in result
+        assert "Score: 60/100" in result
