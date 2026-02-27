@@ -83,6 +83,14 @@ prompts:
       - Flag as **BLOCKING** if the implementation removes, overwrites, or breaks existing code that was not part of the stated change requirements
       - The generated code should add or modify only what the design document specifies
 
+      ## Skeleton Signature Compliance
+
+      When target files were pre-created as skeletons (indicated by ``# [STARTD8-SKELETON]`` marker):
+      - Flag as **BLOCKING** if a function/class signature was changed from the skeleton
+      - Flag as **BLOCKING** if skeleton imports were removed
+      - Flag as **MAJOR** if ``__all__`` exports differ from skeleton
+      - Verify docstrings and type hints are preserved
+
       ## Output Format Enforcement
 
       Your response MUST follow this exact structure:

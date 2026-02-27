@@ -32,6 +32,14 @@ prompts:
       - If the design specifies error conditions (raises), write ``pytest.raises`` tests for each one.
       - Count your test coverage: if the design describes N methods, your suite should have at least N test functions.
 
+      ## Skeleton API Verification
+
+      When implementation was built from skeleton files (indicated by ``# [STARTD8-SKELETON]`` marker):
+      - Ensure tests cover every public class and function from the skeleton's ``__all__`` list
+      - Verify correct return types matching skeleton signatures
+      - Test edge cases for each parameter type in skeleton signatures
+      - Confirm that ``raise NotImplementedError`` stubs have been replaced with working code
+
       ## Parameter Provenance (Mottainai Rules 2, 5)
 
       When ``Parameter Sources`` or ``Semantic Conventions`` sections are provided:

@@ -276,10 +276,30 @@ class DeterministicExtractor:
             parsed_sig = _parse_python_signature(sig_str)
             if parsed_sig and feature.target_files:
                 target_file = feature.target_files[0]
+
+                # Derive parent_class from dotted name (last-dot split)
+                parent_class = None
+                element_name = func_name
+                element_kind = ElementKind.FUNCTION
+                if "." in func_name:
+                    last_dot = func_name.rfind(".")
+                    parent_class = func_name[:last_dot]
+                    element_name = func_name[last_dot + 1:]
+                    element_kind = ElementKind.METHOD
+                    # Warn on deeply nested classes (>2 nesting levels)
+                    if parent_class.count(".") > 1:
+                        logger.warning(
+                            "Deeply nested class path (%d levels) in feature %s: %s",
+                            parent_class.count(".") + 1,
+                            feature.feature_id,
+                            func_name,
+                        )
+
                 spec = ForwardElementSpec(
-                    kind=ElementKind.FUNCTION,
-                    name=func_name,
+                    kind=element_kind,
+                    name=element_name,
                     signature=parsed_sig,
+                    parent_class=parent_class,
                     source_contract_id=contract_id,
                 )
                 file_elements.setdefault(target_file, []).append(spec)

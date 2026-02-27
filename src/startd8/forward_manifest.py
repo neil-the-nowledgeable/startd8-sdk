@@ -97,6 +97,7 @@ class ForwardElementSpec(BaseModel):
     visibility: Visibility = Visibility.PUBLIC
     decorators: list[str] = Field(default_factory=list)
     docstring_hint: Optional[str] = None
+    parent_class: Optional[str] = None
     source_contract_id: Optional[str] = None
 
     @model_validator(mode="after")
@@ -110,6 +111,7 @@ class ForwardElementSpec(BaseModel):
             ElementKind.PROPERTY,
         }
         class_kinds = {ElementKind.CLASS}
+        method_kinds = {ElementKind.METHOD, ElementKind.ASYNC_METHOD, ElementKind.PROPERTY}
 
         if self.kind in callable_kinds and self.signature is None:
             raise ValueError(
@@ -118,6 +120,11 @@ class ForwardElementSpec(BaseModel):
         if self.kind not in class_kinds and self.bases:
             raise ValueError(
                 f"ForwardElementSpec of kind '{self.kind.value}' must not have bases"
+            )
+        if self.parent_class is not None and self.kind not in method_kinds:
+            raise ValueError(
+                f"ForwardElementSpec with parent_class must be METHOD, "
+                f"ASYNC_METHOD, or PROPERTY, got '{self.kind.value}'"
             )
         return self
 

@@ -1904,6 +1904,27 @@ class PlanPhaseHandler(AbstractPhaseHandler):
         return {"output": output, "cost": 0.0, "metadata": {"duration": duration}}
 
 
+def _check_stub_drift(
+    emit_manifest: list[dict[str, Any]],
+    scaffold_metadata: list,
+) -> None:
+    """Log-only drift detection: compare EMIT-time vs SCAFFOLD-time SHA-256 hashes.
+
+    If the ForwardManifest changed between EMIT and SCAFFOLD (e.g., manual edit
+    to the seed), the hashes will differ. This is advisory — no error is raised.
+    """
+    emit_by_path = {e["file_path"]: e["sha256"] for e in emit_manifest if "sha256" in e}
+    for entry in scaffold_metadata:
+        path = entry.file_path if hasattr(entry, "file_path") else entry.get("file_path", "")
+        sha = entry.sha256 if hasattr(entry, "sha256") else entry.get("sha256", "")
+        if path in emit_by_path and sha and emit_by_path[path] != sha:
+            logger.warning(
+                "SCAFFOLD: stub drift detected for %s — "
+                "EMIT sha256=%s, SCAFFOLD sha256=%s",
+                path, emit_by_path[path][:12], sha[:12],
+            )
+
+
 class ScaffoldPhaseHandler(AbstractPhaseHandler):
     """SCAFFOLD phase: Verify target directories, check dependencies.
 
@@ -2024,6 +2045,64 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
         if module_inventory:
             logger.info("SCAFFOLD: discovered %d importable packages", len(module_inventory))
 
+        # Mottainai: deterministic file assembly — materialize skeleton stubs
+        file_stubs: list = []
+        file_stubs_created = file_stubs_skipped = file_stubs_failed = 0
+        assembly_degraded = False
+
+        try:
+            forward_manifest = context.get("forward_manifest")
+            if (
+                forward_manifest is not None
+                and hasattr(forward_manifest, "file_specs")
+                and forward_manifest.file_specs
+                and not dry_run
+            ):
+                from startd8.utils.file_assembler import DeterministicFileAssembler
+
+                assembler = DeterministicFileAssembler(
+                    module_inventory=module_inventory,
+                )
+
+                # Recompute source text from ForwardManifest
+                render_result = assembler.render_specs(forward_manifest)
+                file_stubs.extend(
+                    r.model_dump() for r in render_result.failures
+                )
+
+                # Validate against seed manifest for drift detection
+                stub_manifest = context.get("artifacts", {}).get("stub_manifest")
+                if stub_manifest and render_result.metadata:
+                    _check_stub_drift(stub_manifest, render_result.metadata)
+
+                # Materialize validated specs to disk
+                if render_result.specs:
+                    mat_results = assembler.materialize(
+                        render_result.specs, project_root, dry_run=False,
+                    )
+                    file_stubs.extend(r.model_dump() for r in mat_results)
+
+                # Telemetry counters
+                for stub_dict in file_stubs:
+                    status = stub_dict.get("status", "")
+                    if status == "created":
+                        file_stubs_created += 1
+                    elif status == "skipped_exists":
+                        file_stubs_skipped += 1
+                    elif status == "syntax_error":
+                        file_stubs_failed += 1
+
+                logger.info(
+                    "SCAFFOLD: file assembly complete — created=%d skipped=%d failed=%d",
+                    file_stubs_created, file_stubs_skipped, file_stubs_failed,
+                )
+        except Exception:
+            logger.warning(
+                "SCAFFOLD: deterministic file assembly failed — degrading gracefully",
+                exc_info=True,
+            )
+            assembly_degraded = True
+
         output = {
             "directories_needed": sorted(dirs_needed),
             "directories_exist": sorted(dirs_exist),
@@ -2035,13 +2114,26 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
             "project_root": str(project_root),
             "extension_warnings": extension_warnings,
             "module_inventory": module_inventory,
+            "file_stubs": file_stubs,
+            "file_stubs_created": file_stubs_created,
+            "file_stubs_skipped": file_stubs_skipped,
+            "file_stubs_failed": file_stubs_failed,
+            "assembly_degraded": assembly_degraded,
         }
 
         # Store scaffold results in context
         context["scaffold"] = output
 
         # Context contract: validate SCAFFOLD output model
-        ScaffoldPhaseOutput(scaffold=context["scaffold"])
+        ScaffoldPhaseOutput(
+            scaffold=context["scaffold"],
+            module_inventory=module_inventory,
+            file_stubs=file_stubs,
+            file_stubs_created=file_stubs_created,
+            file_stubs_skipped=file_stubs_skipped,
+            file_stubs_failed=file_stubs_failed,
+            assembly_degraded=assembly_degraded,
+        )
 
         duration = time.monotonic() - start
         logger.info(
@@ -6767,6 +6859,8 @@ class Test{class_name}:
         edit_mode_map: dict[str, EditModeClassification] | None = None,
         # AR-822: module inventory from SCAFFOLD for import grounding
         module_inventory: list[str] | None = None,
+        # Scaffold output for skeleton file detection
+        scaffold_output: dict[str, Any] | None = None,
         **kwargs: Any,  # Allow forward_manifest via kwargs to avoid massive signature change
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
@@ -7327,6 +7421,27 @@ class Test{class_name}:
                             task.task_id,
                         )
 
+            # ── Phase 6: Skeleton file detection for body-only prompting ──
+            _skeleton_file_list: str | None = None
+            _skeleton_files_present = False
+            _scaffold_data = scaffold_output or {}
+            _file_stubs = _scaffold_data.get("file_stubs", [])
+            _asm_degraded = _scaffold_data.get("assembly_degraded", False)
+            if _file_stubs and not _asm_degraded:
+                _task_skeleton_lines: list[str] = []
+                for stub in _file_stubs:
+                    stub_status = stub.get("status", "") if isinstance(stub, dict) else getattr(stub, "status", "")
+                    stub_path = stub.get("file_path", "") if isinstance(stub, dict) else getattr(stub, "file_path", "")
+                    if stub_status == "created" and stub_path in set(effective_targets):
+                        _task_skeleton_lines.append(f"- `{stub_path}`")
+                if _task_skeleton_lines:
+                    _skeleton_files_present = True
+                    _skeleton_file_list = "\n".join(_task_skeleton_lines)
+                    logger.info(
+                        "IMPLEMENT: %d skeleton file(s) detected for task %s",
+                        len(_task_skeleton_lines), task.task_id,
+                    )
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
@@ -7379,6 +7494,9 @@ class Test{class_name}:
                     "semantic_conventions": semantic_conventions or {},
                     # Phase 5: Forward interface contracts
                     "forward_contracts": _forward_contracts,
+                    # Phase 6: Skeleton file detection for body-only prompting
+                    "skeleton_file_list": _skeleton_file_list,
+                    "skeleton_files_present": _skeleton_files_present,
                     # REQ-CMR-042: per-task override from seed JSON
                     "complexity_tier_override": task.complexity_tier_override,
                 },
@@ -9042,6 +9160,8 @@ class Test{class_name}:
                 edit_mode_map=edit_mode_map,
                 # AR-822: module inventory from SCAFFOLD
                 module_inventory=context.get("scaffold", {}).get("module_inventory"),
+                # Scaffold output for skeleton file detection
+                scaffold_output=context.get("scaffold", {}),
                 # Phase 5: Forward interface contracts
                 forward_manifest=context.get("forward_manifest"),
             )

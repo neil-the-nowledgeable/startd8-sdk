@@ -3224,6 +3224,30 @@ class PlanIngestionWorkflow(WorkflowBase):
                 logger.warning("Forward manifest extraction failed: %s", exc, exc_info=True)
                 forward_manifest_dict = None
 
+        # Mottainai: deterministic file assembly — validate specs from ForwardManifest
+        stub_manifest: Optional[List[Dict[str, Any]]] = None
+        if forward_manifest_dict is not None and forward_manifest is not None:
+            try:
+                if hasattr(forward_manifest, "file_specs") and forward_manifest.file_specs:
+                    from startd8.utils.file_assembler import DeterministicFileAssembler
+
+                    assembler = DeterministicFileAssembler(module_inventory=None)
+                    render_result = assembler.render_specs(forward_manifest)
+                    if render_result.metadata:
+                        stub_manifest = [entry._asdict() for entry in render_result.metadata]
+                        logger.info(
+                            "EMIT: deterministic file assembly validated %d skeleton(s) "
+                            "from FLCM (%d render failures)",
+                            len(render_result.specs),
+                            len(render_result.failures),
+                        )
+            except Exception as exc:
+                logger.warning(
+                    "EMIT: deterministic file assembly validation failed: %s",
+                    exc,
+                    exc_info=True,
+                )
+
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
             "quality_tier": review_quality_tier,
@@ -3355,6 +3379,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "origin_phase": "ingestion.refine",
                     "apply_enabled": False,
                 }
+
+            # Mottainai: embed compact stub manifest metadata in seed
+            if stub_manifest:
+                artifacts["stub_manifest"] = stub_manifest
 
             context_files_list = _context_files_with_checksums(
                 context_files, base_dir=output_dir

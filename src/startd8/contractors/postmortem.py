@@ -524,7 +524,11 @@ class PostMortemEvaluator:
         # generated_files may be:
         #   - dict (filepath → content) — in-memory format
         #   - list of absolute paths — cached state format
-        generated_files = task_gen.get("generated_files", {})
+        if hasattr(task_gen, "generated_files"):
+            generated_files = getattr(task_gen, "generated_files")
+        else:
+            generated_files = task_gen.get("generated_files", {})
+
         if isinstance(generated_files, dict):
             produced_set = set(generated_files.keys())
         elif isinstance(generated_files, list):
@@ -719,7 +723,10 @@ class PostMortemEvaluator:
     ) -> str:
         """Collect all generated code for a task into a single string."""
         task_gen = gen_results.get(task_id, {})
-        generated_files = task_gen.get("generated_files", {})
+        if hasattr(task_gen, "generated_files"):
+            generated_files = getattr(task_gen, "generated_files")
+        else:
+            generated_files = task_gen.get("generated_files", {})
 
         parts: List[str] = []
 
@@ -785,6 +792,7 @@ class PostMortemEvaluator:
         sanitized_md = self._sanitizer.sanitize_text(md_content)
         md_path.write_text(sanitized_md, encoding="utf-8")
         logger.info("Wrote postmortem summary: %s", md_path)
+        print(f"\n{sanitized_md}\n", flush=True)
 
         # 3. Lessons JSON
         if report.lessons:
@@ -1021,8 +1029,10 @@ class WalkthroughPromptEvaluator:
         logger.info("Wrote walkthrough postmortem report: %s", json_path)
 
         md_path = out / f"walkthrough-postmortem-summary{suffix}.md"
-        md_path.write_text(self._render_markdown(report), encoding="utf-8")
+        md_content = self._render_markdown(report)
+        md_path.write_text(md_content, encoding="utf-8")
         logger.info("Wrote walkthrough postmortem summary: %s", md_path)
+        print(f"\n{md_content}\n", flush=True)
 
     def _render_markdown(self, report: WalkthroughPostMortemReport) -> str:
         lines: List[str] = []
@@ -1117,7 +1127,7 @@ def launch_postmortem_async(
         except Exception:
             logger.exception("Postmortem evaluation failed")
 
-    thread = threading.Thread(target=_run, name="postmortem-evaluator", daemon=True)
+    thread = threading.Thread(target=_run, name="postmortem-evaluator", daemon=False)
     thread.start()
     return thread
 
@@ -1166,7 +1176,7 @@ def launch_walkthrough_postmortem_async(
     thread = threading.Thread(
         target=_run,
         name="walkthrough-postmortem-evaluator",
-        daemon=True,
+        daemon=False,
     )
     thread.start()
     return thread

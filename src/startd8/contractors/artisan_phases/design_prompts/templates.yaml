@@ -32,6 +32,7 @@ prompts:
       - NO data flow diagrams or ASCII art
       - NO sections beyond the 4 above unless Constraints explicitly require them
       - If the input provides API signatures, copy them exactly into API Surface
+      - When target files already exist as skeleton stubs with function/class signatures, your API Surface section MUST match those signatures exactly. The skeleton defines the contract — do not propose changing signatures that already exist.
       - Total output: aim for 50-150 lines, not 300-500
     placeholders: []
 

@@ -528,64 +528,6 @@ def main() -> int:
             "after all tasks."
         ),
     )
-    serial_mode_group.add_argument(
-        "--phase-serial",
-        dest="feature_serial",
-        action="store_false",
-        help=(
-            "Phase-serial execution: all tasks complete each phase before moving to "
-            "the next phase."
-        ),
-    )
-    parser.set_defaults(feature_serial=True)
-    parser.add_argument(
-        "--allow-batch-mode",
-        action="store_true",
-        help=(
-            "Allow non-serial execution modes (phase-serial, lane-parallel, "
-            "wave-parallel). By default, single-feature quality flow is enforced."
-        ),
-    )
-
-    parser.add_argument(
-        "--lane-parallel", action="store_true",
-        help=(
-            "Lane-parallel execution: group tasks by file-scope overlap into "
-            "lanes, run lanes concurrently (feature-serial within each lane). "
-            "Prevents cross-file import conflicts that arise in phase-serial mode. "
-            "Auto-commit is disabled (concurrent git operations would race)."
-        ),
-    )
-    parser.add_argument(
-        "--max-lanes", type=int, default=4,
-        help="Maximum number of concurrent lanes in lane-parallel or wave-parallel mode (default: 4)",
-    )
-
-    parser.add_argument(
-        "--wave-parallel", action="store_true",
-        help=(
-            "Wave+Lane parallel execution: tasks execute in dependency-depth "
-            "waves, with lanes within each wave running concurrently. "
-            "Combines dependency ordering (waves) with file-scope isolation "
-            "(lanes). Mutually exclusive with --lane-parallel."
-        ),
-    )
-    parser.add_argument(
-        "--strict-wave-deps", action="store_true",
-        help=(
-            "Raise an error (instead of warning) on unresolved dependency "
-            "references during wave computation. Recommended for CI environments."
-        ),
-    )
-    parser.add_argument(
-        "--max-wave-resume-attempts", type=int, default=3,
-        help=(
-            "Maximum number of resume attempts per wave before marking as "
-            "FAILED_UNRECOVERABLE (default: 3). Prevents unbounded cost waste "
-            "on deterministically failing tasks."
-        ),
-    )
-
     # --dress-rehearsal and --adopt-prior are mutually exclusive:
     # dress-rehearsal generates *new* design artifacts into a staging dir,
     # adopt-prior *consumes* existing artifacts from a prior run.
@@ -647,37 +589,9 @@ def main() -> int:
     if args.postmortem_llm and not args.run_postmortem:
         parser.error("--postmortem-llm cannot be used with --no-postmortem")
 
-    if not args.allow_batch_mode:
-        if not args.feature_serial:
-            parser.error(
-                "--phase-serial is disabled by default quality flow. "
-                "Use --allow-batch-mode to override."
-            )
-        if args.lane_parallel:
-            parser.error(
-                "--lane-parallel is disabled by default quality flow. "
-                "Use --allow-batch-mode to override."
-            )
-        if args.wave_parallel:
-            parser.error(
-                "--wave-parallel is disabled by default quality flow. "
-                "Use --allow-batch-mode to override."
-            )
-
     setup_logging(verbose=args.verbose)
 
     logger = logging.getLogger("run_artisan_workflow")
-
-    if args.lane_parallel and args.feature_serial:
-        logger.warning(
-            "--lane-parallel requested; disabling feature-serial default for this run"
-        )
-        args.feature_serial = False
-    if args.wave_parallel and args.feature_serial:
-        logger.warning(
-            "--wave-parallel requested; disabling feature-serial default for this run"
-        )
-        args.feature_serial = False
 
     # Auto-configure OTel (metrics + traces) so artisan workflow data
     # reaches Mimir/Tempo/Loki via the collector.  In "auto" mode this
@@ -977,12 +891,7 @@ def main() -> int:
         )
 
     selected_task_ids = task_filter[:] if task_filter else _load_task_ids_from_seed(seed_path)
-    single_feature_quality_mode = (
-        args.feature_serial
-        and not args.allow_batch_mode
-        and not args.lane_parallel
-        and not args.wave_parallel
-    )
+    single_feature_quality_mode = True
 
     if single_feature_quality_mode and len(selected_task_ids) > 1:
         logger.info(
@@ -1081,12 +990,6 @@ def main() -> int:
         phase_timeout_seconds=args.phase_timeout,
         checkpoint_dir=args.checkpoint_dir,
         project_root=str(Path(args.project_root).resolve()),
-        feature_serial=args.feature_serial,
-        lane_parallel=args.lane_parallel,
-        max_parallel_lanes=args.max_lanes,
-        wave_parallel=args.wave_parallel,
-        strict_wave_deps=args.strict_wave_deps,
-        max_wave_resume_attempts=args.max_wave_resume_attempts,
         metadata={
             "seed_path": str(seed_path),
             "runner": "run_artisan_workflow.py",
@@ -1102,25 +1005,7 @@ def main() -> int:
         logger.info("Task filter: %s (%d task(s))", task_filter, len(task_filter))
     if config.cost_budget is not None:
         logger.info("Cost budget: $%.2f", config.cost_budget)
-    if config.wave_parallel:
-        logger.info(
-            "Execution mode: wave-parallel (max %d concurrent lanes, "
-            "strict_wave_deps=%s, max_wave_resume=%d)",
-            config.max_parallel_lanes,
-            config.strict_wave_deps,
-            config.max_wave_resume_attempts,
-        )
-    elif config.lane_parallel:
-        logger.info(
-            "Execution mode: lane-parallel (max %d concurrent lanes)",
-            config.max_parallel_lanes,
-        )
-    elif config.feature_serial:
-        logger.info(
-            "Execution mode: feature-serial (single task through DESIGN→REVIEW before next task)",
-        )
-    else:
-        logger.info("Execution mode: phase-serial")
+    logger.info("Execution mode: feature-serial (sequential execution)")
 
     # Determine phase sublist when --stop-after is set
     phases = None

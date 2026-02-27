@@ -11,7 +11,7 @@ design rationale and docs/ARTISAN_REQUIREMENTS.md for per-phase context keys.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -172,12 +172,34 @@ class PlanPhaseOutput(BaseModel):
         return self
 
 
+class FileStubResult(BaseModel):
+    """Result of a single file stub render or materialize operation."""
+
+    model_config = ConfigDict(frozen=True)
+
+    file_path: str
+    elements_count: int
+    imports_count: int
+    status: Literal[
+        "created", "skipped_exists", "syntax_error",
+        "would_create", "would_skip_exists",
+    ]
+    phase: Literal["render", "materialize"] = "materialize"
+    error: Optional[str] = None
+
+
 class ScaffoldPhaseOutput(BaseModel):
     """Output of the SCAFFOLD phase."""
 
     scaffold: Dict[str, Any]
     # AR-821: importable Python packages discovered during SCAFFOLD
     module_inventory: List[str] = []
+    # Deterministic file assembly results
+    file_stubs: List[Dict[str, Any]] = []
+    file_stubs_created: int = 0
+    file_stubs_skipped: int = 0
+    file_stubs_failed: int = 0
+    assembly_degraded: bool = False
 
     @field_validator("scaffold")
     @classmethod

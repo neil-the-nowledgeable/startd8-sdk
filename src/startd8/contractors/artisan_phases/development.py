@@ -1221,6 +1221,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         parts.extend(self._build_importable_modules(chunk))          # AR-150
         parts.extend(self._build_manifest_context(chunk))            # Phase 4
         parts.extend(self._build_forward_contracts(chunk))           # Phase 5
+        parts.extend(self._build_skeleton_guidance(chunk))           # Phase 6a
         parts.extend(self._build_call_graph_context(chunk))          # Phase 6
         parts.extend(self._build_structural_delta(chunk))            # Gap 3
         parts.extend(self._build_existing_files(_existing, _edit_mode))
@@ -1543,8 +1544,33 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         contracts_text = chunk.metadata.get("forward_contracts")
         if not contracts_text:
             return []
-            
+
         return [contracts_text, "\n---\n"]
+
+    # -- helper: skeleton file guidance (Phase 6a) --------------------------
+
+    @staticmethod
+    def _build_skeleton_guidance(
+        chunk: DevelopmentChunk,
+    ) -> List[str]:
+        """Phase 6a: Body-only fill-in guidance when skeleton files exist.
+
+        Reads ``skeleton_files_present`` and ``skeleton_file_list`` from chunk
+        metadata (injected by ImplementPhaseHandler) and formats the
+        ``skeleton_file_guidance`` template from implement.yaml.
+        """
+        if not chunk.metadata.get("skeleton_files_present"):
+            return []
+        skeleton_list = chunk.metadata.get("skeleton_file_list", "")
+        if not skeleton_list:
+            return []
+        rendered = _format_implement_prompt(
+            "skeleton_file_guidance",
+            skeleton_file_list=skeleton_list,
+        )
+        if rendered:
+            return [rendered]
+        return []
 
     # -- helper: manifest context (Phase 4) ---------------------------------
 
@@ -3249,6 +3275,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         parts.extend(self._build_supplementary_context(chunk))
         parts.extend(self._build_critical_parameters(chunk))
         parts.extend(self._build_forward_contracts_implement(chunk))
+        parts.extend(self._build_skeleton_guidance(chunk))
         parts.extend(self._build_coding_standards())
         parts.extend(self._build_output_format(chunk))
         parts.extend(self._build_completeness_warning(chunk))

@@ -361,6 +361,23 @@ prompts:
       {contracts}
     placeholders: [contracts]
 
+  skeleton_file_guidance:
+    description: "Body-only fill-in guidance when skeleton files exist from deterministic assembly"
+    condition: "skeleton_files_present"
+    template: |
+      ## Pre-Existing Skeleton Files
+      The following target files ALREADY EXIST with correct function/class
+      signatures (created deterministically from the design contract):
+      {skeleton_file_list}
+
+      Rules:
+      - NEVER change function signatures, class definitions, or type hints
+      - NEVER remove existing imports, decorators, or docstrings
+      - Fill in function bodies with complete implementations
+      - Replace `raise NotImplementedError` with working code
+      - Add internal helper functions/variables as needed INSIDE function bodies
+    placeholders: [skeleton_file_list]
+
   completeness_warning:
     description: "Warning when resolved parameters from design are missing in implementation (spec completeness check)"
     template: |

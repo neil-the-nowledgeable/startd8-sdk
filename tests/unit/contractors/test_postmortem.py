@@ -654,7 +654,7 @@ class TestAsyncLauncher:
         )
 
         assert isinstance(thread, threading.Thread)
-        assert thread.daemon is True
+        assert thread.daemon is False
         assert thread.is_alive() or True  # May finish quickly
 
         # Wait for it to complete

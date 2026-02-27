@@ -103,11 +103,31 @@ class _FakeDesignResult:
 
 
 def _make_fake_result(feature_name: str = "Feature T1", agreed: bool = True) -> _FakeDesignResult:
+    reviewer = ReviewVerdict(
+        role=ReviewRole.REVIEWER,
+        approved=agreed,
+        confidence=0.95 if agreed else 0.6,
+        concerns=[] if agreed else ["needs stronger edge-case handling"],
+        suggestions=["Add explicit failure-mode coverage"] if not agreed else [],
+        summary="approved" if agreed else "rejected",
+        reviewed_at=datetime.now(timezone.utc),
+    )
+    arbiter = ReviewVerdict(
+        role=ReviewRole.ARBITER,
+        approved=agreed,
+        confidence=0.95 if agreed else 0.6,
+        concerns=[] if agreed else ["critical parameter not explicit"],
+        suggestions=["Document required parameters verbatim"] if not agreed else [],
+        summary="approved" if agreed else "rejected",
+        reviewed_at=datetime.now(timezone.utc),
+    )
     return _FakeDesignResult(
         design_document=_FakeDesignDocument(
             feature_name=feature_name,
             raw_text="## Overview\nDesign for feature\n## Architecture\nClean arch",
         ),
+        reviewer_verdict=reviewer,
+        arbiter_verdict=arbiter,
         agreed=agreed,
         iterations=2,
     )
@@ -345,6 +365,102 @@ class TestDesignPhaseHandlerRealMode:
         assert out["agreement_rate"] == pytest.approx(0.5)
         assert out["per_task"]["T1"]["passed"] is True
         assert out["per_task"]["T2"]["passed"] is False
+
+    def test_ar129_review_threshold_failure_marks_design_failed(self):
+        handler = DesignPhaseHandler(handler_config=HandlerConfig(pass_threshold=90))
+        context = {"tasks": [_seed_task("T1")]}
+        mock_backend = MagicMock(total_cost_usd=0.0)
+        fake_result = _make_fake_result()
+        fake_result.reviewer_verdict = ReviewVerdict(
+            role=ReviewRole.REVIEWER,
+            approved=True,
+            confidence=0.62,
+            concerns=["missing risk handling"],
+            suggestions=["add failure-path detail"],
+            summary="weak approval",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+        fake_result.arbiter_verdict = ReviewVerdict(
+            role=ReviewRole.ARBITER,
+            approved=True,
+            confidence=0.61,
+            concerns=["too shallow"],
+            suggestions=["expand implementation specifics"],
+            summary="weak approval",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        entry = context["design_results"]["T1"]
+        assert entry["status"] == "design_failed"
+        assert entry["review_gate"]["score"] == 61
+        assert entry["review_gate"]["threshold"] == 90
+        assert entry["review_gate"]["passed"] is False
+        assert entry["non_agreement_reason_code"] == "REVIEW_THRESHOLD_NOT_MET"
+        assert result["output"]["total_failed"] == 1
+
+    def test_ar139_parameter_completeness_warn_mode_marks_degraded_not_blocked(self):
+        handler = DesignPhaseHandler(handler_config=HandlerConfig())
+        task = _seed_task("T1")
+        task.artifact_types_addressed = ["dashboard"]
+        context = {
+            "tasks": [task],
+            "onboarding_resolved_parameters": {
+                "dashboard.main": {"namespace": "prod-observability"},
+            },
+            "quality_gate_summary": {"policy_mode": "warn"},
+        }
+        mock_backend = MagicMock(total_cost_usd=0.0)
+        fake_result = _make_fake_result()
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        entry = context["design_results"]["T1"]
+        assert entry["status"] == "designed"
+        assert entry["parameter_completeness"]["passed"] is False
+        assert entry["parameter_completeness"]["missing_count"] >= 1
+        assert entry["completeness_gate_decision"] == "degraded"
+        assert entry["quality_failure_reason"] == "PARAMETER_COMPLETENESS_DEGRADED"
+        assert result["output"]["total_failed"] == 1
+
+    def test_ar139_parameter_completeness_block_mode_marks_design_failed(self):
+        handler = DesignPhaseHandler(handler_config=HandlerConfig())
+        task = _seed_task("T1")
+        task.artifact_types_addressed = ["dashboard"]
+        context = {
+            "tasks": [task],
+            "onboarding_resolved_parameters": {
+                "dashboard.main": {"namespace": "prod-observability"},
+            },
+            "quality_gate_summary": {"policy_mode": "block"},
+        }
+        mock_backend = MagicMock(total_cost_usd=0.0)
+        fake_result = _make_fake_result()
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        entry = context["design_results"]["T1"]
+        assert entry["status"] == "design_failed"
+        assert entry["parameter_completeness"]["passed"] is False
+        assert entry["completeness_gate_decision"] == "blocked"
+        assert entry["non_agreement_reason_code"] == "PARAMETER_COMPLETENESS_FAILED"
+        assert result["output"]["total_failed"] == 1
 
     def test_default_path_uses_v1_not_modular_v2(self):
         handler = DesignPhaseHandler(handler_config=HandlerConfig())
@@ -684,6 +800,8 @@ class TestSerializeResult:
         assert serialized["resolution_audit"]["resolution_action_counts"]["merge"] == 1
         assert serialized["prompt_telemetry"]["total_calls"] == 2
         assert serialized["disagreement_telemetry"]["disagreement_count"] == 1
+        assert serialized["reviewer_verdict"]["role"] == "Reviewer"
+        assert serialized["arbiter_verdict"]["role"] == "Arbiter"
 
 
 # ============================================================================
@@ -740,7 +858,7 @@ class TestOrchestratorWithDesign:
     """Integration tests for the orchestrator with DESIGN phase."""
 
     def test_full_dry_run_with_design_phase(self, tmp_path: Path):
-        """Full workflow dry-run produces 8 phase results including DESIGN."""
+        """Feature-serial dry-run records global phases; DESIGN runs inside feature loop."""
         seed_path = tmp_path / "seed.json"
         seed_path.write_text(json.dumps({
             "plan": {"title": "Test Plan", "goals": []},
@@ -779,21 +897,20 @@ class TestOrchestratorWithDesign:
         for wp_phase, handler in handlers.items():
             workflow.register_handler(wp_phase, handler)
 
-        result = workflow.execute(
-            context={"enriched_seed_path": str(seed_path)},
-        )
+        run_context: dict[str, Any] = {"enriched_seed_path": str(seed_path)}
+        result = workflow.execute(context=run_context)
 
         assert result.status == WorkflowStatus.COMPLETED
         phase_names = [pr.phase.value for pr in result.phase_results]
-        assert "design" in phase_names
-        assert len(result.phase_results) == 8
+        assert phase_names == ["plan", "scaffold", "finalize"]
+        assert "design" not in phase_names
 
-        # DESIGN phase result should exist
-        design_pr = [pr for pr in result.phase_results if pr.phase == WorkflowPhase.DESIGN][0]
-        assert design_pr.status.value == "dry_run"
+        # DESIGN still runs per-feature and populates design_results.
+        assert "design_results" in run_context
+        assert run_context["design_results"]["T1"]["status"] == "dry_run_skipped"
 
     def test_stop_after_design_runs_three_phases(self, tmp_path: Path):
-        """--stop-after design runs only PLAN, SCAFFOLD, DESIGN."""
+        """Phase list gates global phases; feature-serial inner phases still execute."""
         config = WorkflowConfig(dry_run=True, project_root=str(tmp_path))
         phases = [WorkflowPhase.PLAN, WorkflowPhase.SCAFFOLD, WorkflowPhase.DESIGN]
         workflow = ArtisanContractorWorkflow(config=config, phases=phases)
@@ -827,11 +944,34 @@ class TestOrchestratorWithDesign:
                 "directories_created": [],
                 "project_root": str(tmp_path),
             },
-            # DESIGN exit
-            "design_results": {"T1": {"status": "agreed"}},
+            # DESIGN exit + IMPLEMENT entry
+            "design_results": {"T1": {"status": "designed", "agreed": True}},
+            # IMPLEMENT exit + INTEGRATE/TEST/REVIEW entry
+            "implementation": {"tasks_processed": 0, "generation_results": {}},
+            "generation_results": {},
+            # INTEGRATE exit
+            "integration_results": {
+                "T1": {"success": True, "integrated_files": [], "errors": []},
+            },
+            # TEST exit
+            "test_results": {
+                "test_plan": [],
+                "total_passed": 0,
+                "total_failed": 0,
+                "per_task": {},
+            },
+            # REVIEW exit
+            "review_results": {
+                "review_items": [],
+                "total_passed": 0,
+                "total_failed": 0,
+                "per_task": {},
+            },
         }
         result = workflow.execute(context=context)
 
         assert result.status == WorkflowStatus.COMPLETED
-        assert len(result.phase_results) == 3
-        assert [pr.phase for pr in result.phase_results] == phases
+        assert [pr.phase for pr in result.phase_results] == [
+            WorkflowPhase.PLAN,
+            WorkflowPhase.SCAFFOLD,
+        ]

@@ -214,12 +214,30 @@ class PriorArtModule:
         # Existing files with staleness
         existing = data.get("existing_files", [])
         staleness = data.get("staleness", {})
+        file_stubs = data.get("file_stubs", [])
+        assembly_degraded = data.get("assembly_degraded", False)
+        # Build set of skeleton stub paths for annotation
+        # Handles both dict (serialized) and FileStubResult (Pydantic) forms
+        skeleton_paths: set[str] = set()
+        if file_stubs and not assembly_degraded:
+            for stub in file_stubs:
+                if isinstance(stub, dict):
+                    st = stub.get("status", "")
+                    fp = stub.get("file_path", "")
+                else:
+                    st = getattr(stub, "status", "")
+                    fp = getattr(stub, "file_path", "")
+                if st == "created" and fp:
+                    skeleton_paths.add(fp)
         if existing:
             has_content = True
             lines.append("**Existing files:**")
             for f in existing:
                 status = staleness.get(f, "unknown")
-                lines.append(f"- `{f}` ({status})")
+                if f in skeleton_paths:
+                    lines.append(f"- `{f}` (skeleton — signatures are binding)")
+                else:
+                    lines.append(f"- `{f}` ({status})")
 
         # Prior design summaries (droppable)
         summaries = data.get("summaries", [])

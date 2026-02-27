@@ -118,6 +118,31 @@ phases:
           type: dict
           severity: blocking
           description: "Scaffold results with directories_needed, directories_created, project_root"
+      optional:
+        - name: file_stubs
+          type: list
+          severity: advisory
+          description: "Per-file deterministic assembly results (FileStubResult dicts)"
+        - name: file_stubs_created
+          type: int
+          severity: advisory
+          description: "Count of skeleton files successfully written to disk"
+        - name: file_stubs_skipped
+          type: int
+          severity: advisory
+          description: "Count of skeleton files skipped (already exist on disk)"
+        - name: file_stubs_failed
+          type: int
+          severity: advisory
+          description: "Count of skeleton files that failed render or materialize"
+        - name: assembly_degraded
+          type: bool
+          severity: advisory
+          description: "True when deterministic file assembly failed entirely — downstream phases fall back to full-file generation"
+        - name: module_inventory
+          type: list
+          severity: advisory
+          description: "Importable Python package names discovered during directory walk (AR-821)"
 
   design:
     description: "Design documentation generation"
