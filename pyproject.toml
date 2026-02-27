@@ -125,6 +125,7 @@ startd8 = [
     "evaluation/corpus/*.yaml",
     "contractors/artisan_phases/prompts/*.yaml",
     "workflows/builtin/prompts/*.yaml",
+    "implementation_engine/prompts/*.yaml",
 ]
 
 

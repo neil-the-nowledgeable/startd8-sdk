@@ -54,6 +54,17 @@ from ...truncation_detection import (
     detect_truncation,
     get_expected_sections_for_code,
 )
+# REQ-IME-200: Delegate to implementation_engine modules
+from ...implementation_engine import parsers as _ie_parsers
+from ...implementation_engine import budget as _ie_budget
+from ...implementation_engine import spec_builder as _ie_spec_builder
+from ...implementation_engine import drafter as _ie_drafter
+from ...implementation_engine import reviewer as _ie_reviewer
+from ...implementation_engine.models import (
+    SpecResult as _IESpecResult,
+    DraftResult as _IEDraftResult,
+    ReviewResult as _IEReviewResult,
+)
 
 from .lead_contractor_models import (
     ImplementationSpec,
@@ -1000,12 +1011,8 @@ class LeadContractorWorkflow(WorkflowBase):
 
     @staticmethod
     def _format_context_value(value: Any) -> str:
-        """Format a context value as a bullet list or JSON string."""
-        if isinstance(value, list):
-            return "\n".join(f"- {item}" for item in value)
-        if isinstance(value, dict):
-            return "\n".join(f"- **{k}**: {v}" for k, v in value.items())
-        return str(value)
+        """Format a context value. Delegates to implementation_engine.spec_builder."""
+        return _ie_spec_builder.format_context_value(value)
 
     @staticmethod
     def _build_spec_context_section(
@@ -1013,94 +1020,31 @@ class LeadContractorWorkflow(WorkflowBase):
         output_format: Optional[str],
         target_files: Optional[List[str]],
     ) -> str:
-        """Build general context section (PC-A1). File manifest + remaining keys."""
-        from .prompts import get_template as _get_ctx_template
-
-        parts: List[str] = []
-        if target_files and len(target_files) > 1:
-            file_manifest = "\n".join(f"  - `{f}`" for f in target_files)
-            manifest_template = _get_ctx_template("prime_context", "file_manifest")
-            parts.append(manifest_template.format(file_manifest=file_manifest))
-
-        context_str = json.dumps(context, indent=2) if context else "No additional context provided."
-        if output_format:
-            context_str += f"\n\nExpected Output Format:\n{output_format}"
-        parts.append(f"## Context\n{context_str}")
-        return "\n\n".join(parts)
+        """Build general context section. Delegates to implementation_engine.spec_builder."""
+        return _ie_spec_builder.build_spec_context_section(context, output_format, target_files)
 
     @staticmethod
     def _build_spec_plan_section(
         plan_ctx: Optional[str],
         is_edit: bool = False,
     ) -> str:
-        """Build plan context section with truncation and framing (PC-B1, PC-F1).
-
-        When is_edit: prepends edit framing (plan describes CHANGES, not greenfield).
-        When create: prepends create framing (plan provides context; design doc authoritative).
-        Truncation budget accounts for framing so total section stays within _PLAN_CONTEXT_MAX_CHARS.
-        """
-        if not plan_ctx or not plan_ctx.strip():
-            return ""
-        if is_edit:
-            framing = _format_lead_prompt(
-                "plan_context_edit_framing",
-                _PLAN_CONTEXT_EDIT_FRAMING_FALLBACK,
-            ).rstrip() + "\n\n"
-        else:
-            framing = _format_lead_prompt(
-                "plan_context_create_framing",
-                _PLAN_CONTEXT_CREATE_FRAMING_FALLBACK,
-            ).rstrip() + "\n\n"
-        # Reserve space for framing; truncate plan to fit within total budget
-        plan_budget = _PLAN_CONTEXT_MAX_CHARS - len(framing)
-        truncated = _truncate_with_marker(
-            plan_ctx.strip(), plan_budget, _TRUNCATION_MARKER
-        )
-        if len(truncated) < len(plan_ctx.strip()):
-            logger.info(
-                "Spec prompt: plan context truncated from %d to %d chars (PC-B1)",
-                len(plan_ctx), len(truncated),
-            )
-        return f"## Plan Context\n{framing}{truncated}"
+        """Build plan context section. Delegates to implementation_engine.spec_builder."""
+        return _ie_spec_builder.build_spec_plan_section(plan_ctx, is_edit=is_edit)
 
     @staticmethod
     def _build_spec_arch_section(arch_ctx: Any, is_edit: bool = False) -> str:
-        """Build architectural context section with truncation and framing (PC-B2, PC-F2).
-
-        When is_edit: prefixes with edit framing (apply to existing files, do not redesign).
-        """
-        if not arch_ctx:
-            return ""
-        truncated = _truncate_arch_context(arch_ctx, _ARCH_CONTEXT_MAX_CHARS)
-        orig_len = len(json.dumps(arch_ctx) if isinstance(arch_ctx, dict) else str(arch_ctx))
-        if len(truncated) < orig_len:
-            logger.info(
-                "Spec prompt: arch context truncated from %d to %d chars (PC-B2)",
-                orig_len, len(truncated),
-            )
-        if is_edit:
-            framing = _format_lead_prompt(
-                "arch_context_edit_framing",
-                _ARCH_CONTEXT_EDIT_FRAMING_FALLBACK,
-            ).rstrip() + "\n\n"
-            return f"## Project Architecture\n{framing}{truncated}"
-        return f"## Project Architecture\n{truncated}"
+        """Build architectural context section. Delegates to implementation_engine.spec_builder."""
+        return _ie_spec_builder.build_spec_arch_section(arch_ctx, is_edit=is_edit)
 
     @staticmethod
     def _build_spec_objectives_section(project_obj: Any) -> str:
-        """Build project objectives section (PC-A1)."""
-        if not project_obj:
-            return ""
-        _fmt = LeadContractorWorkflow._format_context_value
-        return f"## Project Objectives\n{_fmt(project_obj)}"
+        """Build project objectives section. Delegates to implementation_engine.spec_builder."""
+        return _ie_spec_builder.build_spec_objectives_section(project_obj)
 
     @staticmethod
     def _build_spec_conventions_section(sem_conv: Any) -> str:
-        """Build semantic conventions section (PC-A1)."""
-        if not sem_conv:
-            return ""
-        _fmt = LeadContractorWorkflow._format_context_value
-        return f"## Semantic Conventions\n{_fmt(sem_conv)}"
+        """Build semantic conventions section. Delegates to implementation_engine.spec_builder."""
+        return _ie_spec_builder.build_spec_conventions_section(sem_conv)
 
     @staticmethod
     def _build_spec_prompt(
@@ -1108,158 +1052,9 @@ class LeadContractorWorkflow(WorkflowBase):
         context: Dict[str, Any],
         output_format: Optional[str],
     ) -> str:
-        """Build the spec prompt from context, consuming structured keys.
-
-        Pops structured keys (domain_constraints, requirements_text, etc.)
-        from *context* so the remainder can be JSON-serialized as general
-        context.  Callers should pass a **copy** of the original context
-        to avoid mutating upstream data.
-
-        Args:
-            task_description: The task description for the spec.
-            context: Dict with plan_context, architectural_context, existing_files,
-                edit_mode, edit_min_pct, etc. Structured keys are popped.
-            output_format: Optional output format string for the drafter.
-
-        Returns:
-            Formatted spec prompt string.
-        """
-        from ...contractors.prompt_utils import format_constraints
-        from .prompts import get_template as _get_ctx_template
-
-        # --- PCA-605 + PC-F1..PC-F3, PC-Q1: Edit-aware spec framing ---
-        existing_files = context.pop("existing_files", None)
-        edit_mode = context.pop("edit_mode", None)
-        is_edit = bool(existing_files) or (
-            isinstance(edit_mode, dict) and edit_mode.get("mode") == "edit"
-        )
-
-        if is_edit:
-            # PC-F3: Task verb — "update" for edit, "implement" for create
-            task_verb = "update"
-            edit_preamble = _format_lead_prompt(
-                "spec_edit_preamble_base",
-                _SPEC_EDIT_PREAMBLE_BASE_FALLBACK,
-                task_verb=task_verb.capitalize(),
-            )
-            # PC-Q1: Quantitative spec constraint when we have existing_files
-            if existing_files:
-                total_lines = sum(
-                    len((c or "").splitlines()) for c in existing_files.values()
-                )
-                edit_preamble += _format_lead_prompt(
-                    "spec_edit_quantitative_constraint",
-                    _SPEC_EDIT_QUANTITATIVE_FALLBACK,
-                    total_lines=total_lines,
-                    min_lines=min_lines,
-                )
-            edit_preamble += "\n"
-            task_description = edit_preamble + task_description
-
-        # --- IMP-P5: Constraint categorization ---
-        raw_constraints = context.pop("domain_constraints", None)
-        if raw_constraints and isinstance(raw_constraints, list):
-            domain_constraints_str = format_constraints(raw_constraints)
-        elif raw_constraints and isinstance(raw_constraints, str):
-            domain_constraints_str = raw_constraints
-        else:
-            domain_constraints_str = "(No domain-specific constraints)"
-
-        # --- IMP-P2: Requirements text passthrough ---
-        requirements_text = context.pop("requirements_text", "")
-        requirements_section = ""
-        if requirements_text:
-            requirements_section = (
-                "\n## Requirements (verbatim — authoritative for parameter details)\n"
-                f"{requirements_text}\n"
-            )
-
-        # --- IMP-P6 / REQ-PC-FM-006: Interface contract bindings from Forward Manifest ---
-        forward_contracts = context.pop("forward_contracts", None)
-        forward_contracts_section = ""
-        if forward_contracts and isinstance(forward_contracts, str) and forward_contracts.strip():
-            forward_contracts_section = (
-                "\n## Interface Contract Bindings (must enforce)\n"
-                f"{forward_contracts.strip()}\n"
-            )
-
-        # --- IMP-P3: Critical parameter elevation ---
-        critical_parameters = context.pop("critical_parameters", None)
-        critical_parameters_section = ""
-        if critical_parameters:
-            if isinstance(critical_parameters, list):
-                cp_str = "\n".join(f"- {p}" for p in critical_parameters)
-            elif isinstance(critical_parameters, str):
-                cp_str = critical_parameters
-            else:
-                cp_str = json.dumps(critical_parameters, indent=2)
-            critical_parameters_section = (
-                "\n## Critical Parameters (from requirements — include verbatim in spec)\n"
-                f"{cp_str}\n"
-            )
-
-        # --- IMP-P1 + PC-A3: Pop all structured keys before context dump ---
-        arch_ctx = context.pop("architectural_context", None)
-        plan_ctx = context.pop("plan_context", None)
-        project_obj = context.pop("project_objectives", None)
-        sem_conv = context.pop("semantic_conventions", None)
-        # PC-A3: Pop pipeline strategy keys to avoid duplication in context_str
-        requirements_context = context.pop("requirements_context", None)
-        protocol_guidance = context.pop("protocol_guidance", None)
-        scope_boundary = context.pop("scope_boundary", None)
-
-        # --- PC-A1: Build sections via helpers ---
-        target_files = context.get("target_files")
-        sections: List[str] = []
-
-        # Context section (file manifest + remaining keys)
-        ctx_section = LeadContractorWorkflow._build_spec_context_section(
-            context, output_format, target_files
-        )
-        sections.append(ctx_section)
-
-        # Dedicated sections (PC-A3) — pop'd keys rendered here, not in context_str
-        if requirements_context:
-            sections.append(f"## Requirements Context\n{requirements_context}")
-        if protocol_guidance:
-            sections.append(f"## Protocol Guidance\n{protocol_guidance}")
-        if scope_boundary:
-            sections.append(f"## Scope Boundary\n{scope_boundary}")
-
-        # Project objectives, conventions, arch, plan
-        obj_section = LeadContractorWorkflow._build_spec_objectives_section(project_obj)
-        if obj_section:
-            sections.append(obj_section)
-        conv_section = LeadContractorWorkflow._build_spec_conventions_section(sem_conv)
-        if conv_section:
-            sections.append(conv_section)
-        arch_section = LeadContractorWorkflow._build_spec_arch_section(
-            arch_ctx, is_edit=is_edit
-        )
-        if arch_section:
-            sections.append(arch_section)
-        plan_section = LeadContractorWorkflow._build_spec_plan_section(
-            plan_ctx, is_edit=is_edit
-        )
-        if plan_section:
-            sections.append(plan_section)
-
-        context_sections = "\n\n".join(sections)
-
-        # PC-B4: Log if over budget
-        if len(context_sections) > _SPEC_CONTEXT_BUDGET_CHARS:
-            logger.info(
-                "Spec prompt: context sections %d chars exceeds budget %d (PC-B4)",
-                len(context_sections), _SPEC_CONTEXT_BUDGET_CHARS,
-            )
-
-        return SPEC_PROMPT_TEMPLATE.format(
-            task_description=task_description,
-            requirements_section=requirements_section,
-            context_sections=context_sections,
-            critical_parameters_section=critical_parameters_section,
-            forward_contracts_section=forward_contracts_section,
-            domain_constraints=domain_constraints_str,
+        """Build the spec prompt. Delegates to implementation_engine.spec_builder."""
+        return _ie_spec_builder.build_spec_prompt(
+            task_description, context, output_format,
         )
 
     def _create_spec(
@@ -1269,47 +1064,18 @@ class LeadContractorWorkflow(WorkflowBase):
         context: Dict[str, Any],
         output_format: Optional[str],
     ) -> ImplementationSpec:
-        """Phase 1: Lead creates implementation specification."""
-        spec_id = f"spec-{uuid.uuid4().hex[:8]}"
+        """Phase 1: Lead creates implementation specification.
 
-        # Avoid mutating the caller's dict (R1)
-        context = dict(context)
-
-        prompt = self._build_spec_prompt(task_description, context, output_format)
-
-        response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
-
-        # Parse structured data from the spec response
-        requirements = self._parse_list_section(response_text, "Requirements")
-        acceptance_criteria = self._parse_list_section(response_text, "Acceptance Criteria")
-        edge_cases = self._parse_list_section(response_text, "Edge Cases")
-        constraints = self._parse_list_section(response_text, "Constraints")
-        technical_approach = self._parse_section_content(response_text, "Technical Approach")
-        code_structure = self._parse_section_content(response_text, "Code Structure")
-
-        spec = ImplementationSpec(
-            spec_id=spec_id,
-            task_summary=task_description,
-            requirements=requirements,
-            technical_approach=technical_approach,
-            acceptance_criteria=acceptance_criteria,
-            code_structure=code_structure if code_structure else None,
-            edge_cases=edge_cases,
-            constraints=constraints,
-            raw_spec=response_text,
-            input_tokens=token_usage.input if token_usage else 0,
-            output_tokens=token_usage.output if token_usage else 0,
-            time_ms=response_time_ms,
+        Delegates to implementation_engine.spec_builder.build_spec() and
+        converts the result to ImplementationSpec for backward compatibility.
+        """
+        ie_spec = _ie_spec_builder.build_spec(
+            agent=lead_agent,
+            task_description=task_description,
+            context=context,
+            output_format=output_format,
         )
-
-        # Calculate cost
-        spec.cost = self._pricing.calculate_total_cost(
-            lead_agent.model,
-            spec.input_tokens,
-            spec.output_tokens
-        )
-
-        return spec
+        return ie_spec.to_implementation_spec()
 
     def _create_draft(
         self,
@@ -1325,104 +1091,35 @@ class LeadContractorWorkflow(WorkflowBase):
     ) -> DraftResult:
         """Phase 2/4: Drafter creates implementation from spec.
 
-        Args:
-            drafter_agent: The agent to use for drafting
-            spec: The implementation specification
-            feedback: Review feedback from previous iteration (if any)
-            iteration: Current iteration number
-            check_truncation: Whether to run heuristic truncation detection (default: True)
-            strict_truncation: Use lower confidence threshold for detection (default: False)
-            target_files: Target file paths (triggers multi-file output format when len > 1)
+        Delegates to implementation_engine.drafter.create_draft() and
+        converts the result to DraftResult for backward compatibility.
         """
-        draft_id = f"draft-{uuid.uuid4().hex[:8]}"
-
-        output_format = _build_output_format(
-            target_files,
-            existing_files=existing_files,
-        )
-        existing_files_section = _build_existing_files_section(existing_files, edit_mode)
-
-        # PCA-605: Use edit-mode draft template when existing files are present.
-        # This puts existing code BEFORE the spec so the LLM sees it first.
-        if existing_files:
-            draft_template = DRAFT_EDIT_PROMPT_TEMPLATE
-        else:
-            draft_template = DRAFT_PROMPT_TEMPLATE
-        prompt = draft_template.format(
-            spec=spec.raw_spec,
-            feedback=feedback if feedback else "This is the initial implementation attempt.",
-            output_format=output_format,
-            existing_files_section=existing_files_section,
-        )
-
-        sys_prompt = _get_drafter_system_prompt(existing_files)
-        response_text, response_time_ms, token_usage = drafter_agent.generate(
-            prompt, system_prompt=sys_prompt
-        )
-
-        # Extract code from markdown code blocks (removes LLM commentary)
-        implementation_code = self._extract_code_from_response(response_text)
-
-        # Check for truncation (API-level detection)
-        api_truncated = token_usage.was_truncated if token_usage else False
-        truncation_source = "api" if api_truncated else None
-
-        # Heuristic detection for incomplete code (supplements API-level check).
-        # Does NOT pass original_input because the prompt-to-code length ratio
-        # is always misleadingly low (a 20K-char spec producing 5K chars of
-        # code is normal, not truncated).  code_mode auto-detects from content.
-        heuristic_truncated = False
-        if check_truncation and not api_truncated and implementation_code:
-            # Use CONFIDENCE_IS_TRUNCATED for strict mode, CONFIDENCE_HIGH for normal mode
-            confidence_threshold = CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
-            # Infer language-appropriate structure markers (None skips the check)
-            expected = get_expected_sections_for_code(implementation_code)
-            truncation_result = detect_truncation(
-                implementation_code,
-                expected_sections=expected,
-                strict_mode=strict_truncation,
-            )
-            if truncation_result.is_truncated and truncation_result.confidence >= confidence_threshold:
-                heuristic_truncated = True
-                truncation_source = "heuristic"
-                logger.warning(
-                    f"Draft appears truncated (heuristic, confidence={truncation_result.confidence:.0%}): "
-                    f"{truncation_result.indicators[:3]}"
-                )
-
-        was_truncated = api_truncated or heuristic_truncated
-
-        # PCA-607: Size regression gate for edit tasks — detect catastrophic
-        # size reduction before the draft leaves this method.
-        size_regression_detected = self._detect_size_regression(
-            existing_files, implementation_code,
-        )
-        was_truncated = was_truncated or size_regression_detected
-        if size_regression_detected and not truncation_source:
-            truncation_source = "size_regression"
-
-        draft = DraftResult(
-            draft_id=draft_id,
+        ie_draft = _ie_drafter.create_draft(
+            agent=drafter_agent,
+            spec=spec,
+            feedback=feedback,
             iteration=iteration,
-            implementation=implementation_code,
-            spec_id=spec.spec_id,
-            agent_name=drafter_agent.name,
-            model=drafter_agent.model,
-            input_tokens=token_usage.input if token_usage else 0,
-            output_tokens=token_usage.output if token_usage else 0,
-            time_ms=response_time_ms,
-            was_truncated=was_truncated,
-            truncation_source=truncation_source,
-            raw_response=response_text,  # PCA-607: preserve for multi-file extraction
+            check_truncation=check_truncation,
+            strict_truncation=strict_truncation,
+            target_files=target_files,
+            existing_files=existing_files,
+            edit_mode=edit_mode,
         )
-
-        draft.cost = self._pricing.calculate_total_cost(
-            drafter_agent.model,
-            draft.input_tokens,
-            draft.output_tokens
+        return DraftResult(
+            draft_id=ie_draft.draft_id,
+            iteration=ie_draft.iteration,
+            implementation=ie_draft.implementation,
+            spec_id=ie_draft.spec_id,
+            agent_name=ie_draft.agent_name,
+            model=ie_draft.model,
+            input_tokens=ie_draft.input_tokens,
+            output_tokens=ie_draft.output_tokens,
+            cost=ie_draft.cost,
+            time_ms=ie_draft.time_ms,
+            was_truncated=ie_draft.was_truncated,
+            truncation_source=ie_draft.truncation_source,
+            raw_response=ie_draft.raw_response,
         )
-
-        return draft
 
     def _review_draft(
         self,
@@ -1435,75 +1132,64 @@ class LeadContractorWorkflow(WorkflowBase):
         forward_manifest: Optional[Any] = None,
         target_files: Optional[List[str]] = None,
     ) -> ReviewResult:
-        """Phase 3: Lead reviews the draft implementation."""
-        review_id = f"review-{uuid.uuid4().hex[:8]}"
+        """Phase 3: Lead reviews the draft implementation.
 
-        prompt = REVIEW_PROMPT_TEMPLATE.format(
+        Delegates core review to implementation_engine.reviewer.review_draft().
+        Forward manifest validation (Prime-specific) remains here.
+        """
+        ie_review = _ie_reviewer.review_draft(
+            agent=lead_agent,
             task_description=task_description,
-            spec=spec.raw_spec,
+            spec=spec,
             implementation=implementation,
-            pass_threshold=pass_threshold
+            pass_threshold=pass_threshold,
+            iteration=iteration,
         )
 
-        response_text, response_time_ms, token_usage = lead_agent.generate(prompt)
+        # Convert to lead_contractor_models.ReviewResult
+        passed = ie_review.passed
+        blocking = list(ie_review.blocking_issues)
 
-        # Parse review
-        review_text = response_text
-        score = self._parse_score(review_text)
-        # Use word boundary regex to avoid false positives (e.g., "BYPASS", "PASSPORT")
-        has_pass_verdict = bool(re.search(r'\bPASS\b', review_text, re.IGNORECASE))
-        passed = score >= pass_threshold and has_pass_verdict
-
-        # Parse issues
-        issues = self._parse_list_section(review_text, "Issues")
-        blocking = self._parse_list_section(review_text, "Blocking Issues")
-        suggestions = self._parse_list_section(review_text, "Suggestions")
-        strengths = self._parse_list_section(review_text, "Strengths")
-
-        # REQ-PC-VAL-003: Validator Hook during Review
+        # REQ-PC-VAL-003: Validator Hook during Review (Prime-specific)
         if forward_manifest and getattr(forward_manifest, "contracts", None):
             try:
                 from startd8.forward_manifest_validator import validate_forward_manifest
                 from startd8.utils.manifest_registry import ManifestRegistry
                 from startd8.utils.code_extraction import extract_multi_file_code
 
-                # Set up fallback explicitly
                 t_files = target_files or ["generated_code.py"]
-                # REQ-PC-VAL-002: Reconstruct ManifestRegistry for the Draft
-                # Parse the raw implementation markdown into a dictionary of file paths to source text
                 per_file_code = extract_multi_file_code(implementation, t_files)
 
-                # If extraction returned empty, try single file fallback
                 if not per_file_code and len(t_files) == 1:
                     per_file_code[t_files[0]] = implementation
 
                 from pathlib import Path
                 from startd8.utils.code_manifest import generate_file_manifest
-                
-                # Build an ephemeral ManifestRegistry from the draft's string contents
+
                 manifest_dict = {}
                 for rel_path, src in per_file_code.items():
                     try:
-                        manifest = generate_file_manifest(file_path=rel_path, source=src, project_root=Path("."))
+                        manifest = generate_file_manifest(
+                            file_path=rel_path, source=src, project_root=Path(".")
+                        )
                         manifest_dict[rel_path] = manifest
-                    except Exception as e:
+                    except Exception as exc:
                         logger.warning(
-                            "Failed to parse dynamically generated file '%s' during review validation: %s",
-                            rel_path, e
+                            "Failed to parse dynamically generated file '%s' "
+                            "during review validation: %s",
+                            rel_path, exc
                         )
                 registry = ManifestRegistry(manifests=manifest_dict)
-
-                # Validate against the forward manifest
                 violations = validate_forward_manifest(forward_manifest, registry)
-                
-                # Filter for severities that block merging
                 error_violations = [v for v in violations if v.severity == "error"]
-                
-                # REQ-PC-VAL-004: Auto-Fail on Structural Violations
+
                 if error_violations:
                     passed = False
                     for violation in error_violations:
-                        msg = f"[BLOCKING] {violation.violation_type} violation ({violation.contract_id}): Expected {violation.expected}"
+                        msg = (
+                            f"[BLOCKING] {violation.violation_type} violation "
+                            f"({violation.contract_id}): Expected {violation.expected}"
+                        )
                         if violation.actual:
                             msg += f", but got {violation.actual}"
                         if violation.file_path:
@@ -1514,28 +1200,26 @@ class LeadContractorWorkflow(WorkflowBase):
                         "Lead review validation gate FAILED: %d structural error(s) detected.",
                         len(error_violations)
                     )
-            except Exception as e:
-                logger.error("Failed to run validate_forward_manifest during lead review: %s", e, exc_info=True)
+            except Exception as exc:
+                logger.error(
+                    "Failed to run validate_forward_manifest during lead review: %s",
+                    exc, exc_info=True,
+                )
 
         review = ReviewResult(
-            review_id=review_id,
-            iteration=iteration,
+            review_id=ie_review.review_id,
+            iteration=ie_review.iteration,
             passed=passed,
-            score=score,
-            review_text=review_text,
-            issues=issues,
+            score=ie_review.score,
+            review_text=ie_review.review_text,
+            issues=list(ie_review.issues),
             blocking_issues=blocking,
-            suggestions=suggestions,
-            strengths=strengths,
-            input_tokens=token_usage.input if token_usage else 0,
-            output_tokens=token_usage.output if token_usage else 0,
-            time_ms=response_time_ms,
-        )
-
-        review.cost = self._pricing.calculate_total_cost(
-            lead_agent.model,
-            review.input_tokens,
-            review.output_tokens
+            suggestions=list(ie_review.suggestions),
+            strengths=list(ie_review.strengths),
+            input_tokens=ie_review.input_tokens,
+            output_tokens=ie_review.output_tokens,
+            cost=ie_review.cost,
+            time_ms=ie_review.time_ms,
         )
 
         return review
@@ -1975,30 +1659,23 @@ class LeadContractorWorkflow(WorkflowBase):
     ) -> DraftResult:
         """Phase 2/4 (async): Drafter creates implementation from spec.
 
-        Args:
-            drafter_agent: The agent to use for drafting
-            spec: The implementation specification
-            feedback: Review feedback from previous iteration (if any)
-            iteration: Current iteration number
-            check_truncation: Whether to run heuristic truncation detection (default: True)
-            strict_truncation: Use lower confidence threshold for detection (default: False)
-            target_files: Target file paths (triggers multi-file output format when len > 1)
-            existing_files: Existing file contents for edit mode (PCA-601)
-            edit_mode: Edit mode classification dict (PCA-600)
+        Uses shared prompt builders from implementation_engine but calls
+        ``agent.agenerate()`` directly for async execution.
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
-        output_format = _build_output_format(
-            target_files,
-            existing_files=existing_files,
+        output_format = _ie_drafter.build_output_format(
+            target_files, existing_files=existing_files,
         )
-        existing_files_section = _build_existing_files_section(existing_files, edit_mode)
+        existing_files_section = _ie_drafter.build_existing_files_section(
+            existing_files, edit_mode,
+        )
 
-        # PCA-605: Use edit-mode draft template when existing files are present.
+        from ...implementation_engine.prompts import get_template as _ie_get_template
         if existing_files:
-            draft_template = DRAFT_EDIT_PROMPT_TEMPLATE
+            draft_template = _ie_get_template("draft_edit")
         else:
-            draft_template = DRAFT_PROMPT_TEMPLATE
+            draft_template = _ie_get_template("draft")
         prompt = draft_template.format(
             spec=spec.raw_spec,
             feedback=feedback if feedback else "This is the initial implementation attempt.",
@@ -2006,24 +1683,19 @@ class LeadContractorWorkflow(WorkflowBase):
             existing_files_section=existing_files_section,
         )
 
-        sys_prompt = _get_drafter_system_prompt(existing_files)
+        sys_prompt = _ie_drafter.get_drafter_system_prompt(existing_files)
         response_text, response_time_ms, token_usage = await drafter_agent.agenerate(
             prompt, system_prompt=sys_prompt
         )
 
         implementation_code = self._extract_code_from_response(response_text)
 
-        # Check for truncation (API-level detection)
         api_truncated = token_usage.was_truncated if token_usage else False
         truncation_source = "api" if api_truncated else None
 
-        # Heuristic detection — see sync _create_draft for rationale.
-        # code_mode auto-detects from content.
         heuristic_truncated = False
         if check_truncation and not api_truncated and implementation_code:
-            # Use CONFIDENCE_IS_TRUNCATED for strict mode, CONFIDENCE_HIGH for normal mode
             confidence_threshold = CONFIDENCE_IS_TRUNCATED if strict_truncation else CONFIDENCE_HIGH
-            # Infer language-appropriate structure markers (None skips the check)
             expected = get_expected_sections_for_code(implementation_code)
             truncation_result = detect_truncation(
                 implementation_code,
@@ -2034,14 +1706,14 @@ class LeadContractorWorkflow(WorkflowBase):
                 heuristic_truncated = True
                 truncation_source = "heuristic"
                 logger.warning(
-                    f"Draft appears truncated (heuristic, confidence={truncation_result.confidence:.0%}): "
-                    f"{truncation_result.indicators[:3]}"
+                    "Draft appears truncated (heuristic, confidence=%.0f%%): %s",
+                    truncation_result.confidence * 100,
+                    truncation_result.indicators[:3],
                 )
 
         was_truncated = api_truncated or heuristic_truncated
 
-        # PCA-607: Size regression gate for edit tasks
-        size_regression_detected = self._detect_size_regression(
+        size_regression_detected = _ie_drafter.detect_size_regression(
             existing_files, implementation_code,
         )
         was_truncated = was_truncated or size_regression_detected
@@ -2060,7 +1732,7 @@ class LeadContractorWorkflow(WorkflowBase):
             time_ms=response_time_ms,
             was_truncated=was_truncated,
             truncation_source=truncation_source,
-            raw_response=response_text,  # PCA-607: preserve for multi-file extraction
+            raw_response=response_text,
         )
 
         draft.cost = self._pricing.calculate_total_cost(
@@ -2177,57 +1849,32 @@ class LeadContractorWorkflow(WorkflowBase):
         return integration
 
     def _format_review_feedback(self, review: ReviewResult) -> str:
-        """Format review into feedback for next draft iteration."""
-        issues_str = '\n'.join(f'- {issue}' for issue in review.issues) if review.issues else '- None listed'
-        blocking_str = '\n'.join(f'- {b}' for b in review.blocking_issues) if review.blocking_issues else '- None'
-        suggestions_str = '\n'.join(f'- {s}' for s in review.suggestions) if review.suggestions else '- None listed'
-
-        feedback = f"""## Review Feedback (Score: {review.score}/100)
-
-### Issues to Address:
-{issues_str}
-
-### Blocking Issues (MUST FIX):
-{blocking_str}
-
-### Suggestions:
-{suggestions_str}
-
-### Full Feedback:
-{review.review_text}
-"""
-        return feedback
+        """Format review into feedback. Delegates to implementation_engine.reviewer."""
+        # Convert lead_contractor_models.ReviewResult to engine ReviewResult
+        engine_review = _IEReviewResult(
+            review_id=review.review_id,
+            iteration=review.iteration,
+            passed=review.passed,
+            score=review.score,
+            issues=review.issues,
+            blocking_issues=review.blocking_issues,
+            suggestions=review.suggestions,
+            strengths=review.strengths,
+            review_text=review.review_text,
+        )
+        return _ie_reviewer.format_review_feedback(engine_review)
 
     def _parse_score(self, review_text: str) -> int:
-        """Parse score from review text."""
-        # Look for "Score: X" pattern
-        match = re.search(r'Score:\s*(\d+)', review_text, re.IGNORECASE)
-        if match:
-            return min(100, max(0, int(match.group(1))))
-        return 0
+        """Parse score from review text. Delegates to implementation_engine.parsers."""
+        return _ie_parsers.parse_score(review_text)
 
     def _parse_list_section(self, text: str, section_name: str) -> List[str]:
-        """Parse a bulleted list section from review text."""
-        # Look for section header followed by bulleted items
-        pattern = rf'###?\s*{section_name}[^\n]*\n((?:\s*[-*]\s*[^\n]+\n?)+)'
-        match = re.search(pattern, text, re.IGNORECASE)
-        if match:
-            items_text = match.group(1)
-            items = re.findall(r'[-*]\s*(.+)', items_text)
-            return [item.strip() for item in items if item.strip()]
-        return []
+        """Parse a bulleted list section. Delegates to implementation_engine.parsers."""
+        return _ie_parsers.parse_list_section(text, section_name)
 
     def _parse_section_content(self, text: str, section_name: str) -> str:
-        """Parse the content of a section (non-list) from spec text."""
-        # Look for section header and capture until next section or end
-        pattern = rf'###?\s*{section_name}[^\n]*\n(.*?)(?=###|\Z)'
-        match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
-        if match:
-            content = match.group(1).strip()
-            # Remove any leading bullet points if present
-            content = re.sub(r'^[-*]\s*', '', content, flags=re.MULTILINE)
-            return content.strip()
-        return ""
+        """Parse section content. Delegates to implementation_engine.parsers."""
+        return _ie_parsers.parse_section_content(text, section_name)
 
     def _extract_code_from_response(self, response: str) -> str:
         """
@@ -2245,25 +1892,9 @@ class LeadContractorWorkflow(WorkflowBase):
     ) -> bool:
         """Check if draft output is catastrophically smaller than existing files.
 
-        Returns True when the extracted code is less than
-        ``_DRAFT_SIZE_REGRESSION_THRESHOLD`` of the total existing file
-        size and the existing files exceed ``_DRAFT_SIZE_REGRESSION_MIN_LINES``.
+        Delegates to implementation_engine.drafter.detect_size_regression().
         """
-        if not existing_files or not implementation_code:
-            return False
-        existing_total = sum(len(c.splitlines()) for c in existing_files.values())
-        extracted_lines = len(implementation_code.splitlines())
-        if (
-            existing_total > _DRAFT_SIZE_REGRESSION_MIN_LINES
-            and extracted_lines / existing_total < _DRAFT_SIZE_REGRESSION_THRESHOLD
-        ):
-            logger.warning(
-                "Draft size regression: %d lines vs %d existing (%.0f%%)",
-                extracted_lines, existing_total,
-                100 * extracted_lines / existing_total,
-            )
-            return True
-        return False
+        return _ie_drafter.detect_size_regression(existing_files, implementation_code)
 
     @staticmethod
     def _build_multi_file_directive(

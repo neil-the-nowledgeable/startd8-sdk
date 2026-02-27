@@ -509,6 +509,15 @@ class HandlerConfig:
     # REQ-CMR-022: Gate-driven Tier 2 escalation mode (bounded to one T2 pass)
     complexity_tier2_gate_escalation: bool = False
 
+    # REQ-IME-300: Opt-in inner loop — uses implementation_engine instead of
+    # single-shot DevelopmentPhase.  Default False = no behavior change.
+    # Cost: ~$2-5 per 10 tasks at avg 2 iterations (1 spec + up to 3 draft + 3 review).
+    enable_inner_loop: bool = False
+    inner_loop_drafter: Optional[str] = None   # Override drafter agent for inner loop
+    inner_loop_reviewer: Optional[str] = None  # Override reviewer agent for inner loop
+    inner_loop_max_iterations: int = 3         # Max draft-review cycles per task
+    inner_loop_pass_threshold: int = 80        # Min review score (0-100)
+
     _VALID_COLLISION_STRATEGIES = frozenset({"warn", "redesign", "abort"})
 
     def __post_init__(self) -> None:
@@ -7765,6 +7774,254 @@ class Test{class_name}:
         }
 
     # ------------------------------------------------------------------
+    # REQ-IME-300: Inner loop implementation engine path
+    # ------------------------------------------------------------------
+
+    def _execute_with_inner_loop(
+        self,
+        tasks: list[SeedTask],
+        context: dict[str, Any],
+        project_root: Path,
+        start_time: float,
+    ) -> dict[str, Any]:
+        """Execute IMPLEMENT phase using the implementation engine's
+        iterative spec-draft-review loop.
+
+        This replaces the single-shot DevelopmentPhase with a per-task
+        engine pipeline that produces a spec, then iterates draft-review
+        cycles until the review passes or max iterations are reached.
+
+        Falls back to logging errors on per-task failures
+        (REQ-IME-502: Mottainai Rule 3).
+
+        Returns the same output structure as the standard execute() path
+        so downstream phases (INTEGRATE, TEST, REVIEW, FINALIZE) require
+        zero code changes (REQ-IME-303).
+        """
+        from startd8.implementation_engine import (
+            DefaultImplementationEngine,
+            EngineRequest,
+        )
+
+        config = self.config
+        design_results = context.get("design_results", {})
+        staging_dir = Path(config.staging_dir) if config.staging_dir else (
+            project_root / ".startd8" / "staging"
+        )
+        staging_dir.mkdir(parents=True, exist_ok=True)
+
+        # Resolve agent specs
+        drafter_spec = config.inner_loop_drafter or config.drafter_agent
+        reviewer_spec = config.inner_loop_reviewer or config.lead_agent
+
+        # REQ-IME-502: Validate reviewer is configured
+        if not reviewer_spec:
+            logger.warning(
+                "IMPLEMENT inner loop: no reviewer agent configured — "
+                "falling back to single-shot DevelopmentPhase for all tasks"
+            )
+            config.enable_inner_loop = False
+            return {
+                "output": {"error": "inner_loop_reviewer not configured"},
+                "cost": 0.0,
+                "metadata": {"duration": time.monotonic() - start_time},
+            }
+
+        engine = DefaultImplementationEngine()
+        generation_results: dict[str, Any] = {}
+        task_reports: list[dict[str, Any]] = []
+        total_cost = 0.0
+        truncation_flags: dict[str, dict[str, Any]] = {}
+
+        for task in tasks:
+            task_id = task.task_id
+            _log_task_boundary_start(task, phase="implement")
+
+            try:
+                # --- Build EngineRequest ---
+                engine_context: dict[str, Any] = {}
+
+                # REQ-IME-301: Design document forwarding
+                task_design = design_results.get(task_id, {})
+                design_doc = task_design.get("design_document")
+                if design_doc:
+                    engine_context["design_document"] = design_doc
+                elif not design_doc:
+                    logger.warning(
+                        "Inner loop task %s: no design document available — "
+                        "falling back to spec template (Prime route)",
+                        task_id,
+                    )
+
+                # REQ-IME-305: Existing file content injection
+                existing_files: dict[str, str] = {}
+                edit_mode_map = context.get("edit_mode_map", {})
+                task_edit_mode = edit_mode_map.get(task_id)
+                for target_file in (task.target_files or []):
+                    fpath = project_root / target_file
+                    if fpath.is_file():
+                        try:
+                            existing_files[target_file] = fpath.read_text(
+                                encoding="utf-8", errors="replace"
+                            )
+                        except OSError as err:
+                            logger.warning(
+                                "Inner loop: cannot read %s: %s",
+                                target_file, err,
+                            )
+
+                # Forward pipeline context
+                for key in (
+                    "plan_context", "architectural_context",
+                    "project_objectives", "semantic_conventions",
+                    "domain_constraints", "requirements_text",
+                ):
+                    val = context.get(key)
+                    if val:
+                        engine_context[key] = val
+
+                request = EngineRequest(
+                    task_description=task.description or task.title,
+                    context=engine_context,
+                    drafter_agent_spec=drafter_spec,
+                    reviewer_agent_spec=reviewer_spec,
+                    max_iterations=config.inner_loop_max_iterations,
+                    pass_threshold=config.inner_loop_pass_threshold,
+                    existing_files=existing_files or None,
+                    edit_mode=task_edit_mode,
+                    target_files=task.target_files,
+                    check_truncation=config.check_truncation,
+                    strict_truncation=config.strict_truncation,
+                )
+
+                # --- Execute engine ---
+                result = engine.build_and_execute(request)
+
+                # --- Map to GenerationResult format (REQ-IME-303) ---
+                generated_files: dict[str, str] = {}
+                if result.final_code and task.target_files:
+                    if len(task.target_files) == 1:
+                        generated_files[task.target_files[0]] = result.final_code
+                    else:
+                        from startd8.utils.code_extraction import (
+                            extract_multi_file_code,
+                        )
+                        raw = result.last_raw_response or result.final_code
+                        generated_files = extract_multi_file_code(
+                            raw, task.target_files,
+                        )
+
+                # Write to staging
+                for rel_path, code in generated_files.items():
+                    out_path = staging_dir / rel_path
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
+                    out_path.write_text(code, encoding="utf-8")
+
+                gen_result: dict[str, Any] = {
+                    "success": bool(result.final_code),
+                    "generated_files": generated_files,
+                    "error": result.error,
+                    "input_tokens": result.total_input_tokens,
+                    "output_tokens": result.total_output_tokens,
+                    "cost_usd": result.total_cost,
+                    "iterations": result.iterations_used,
+                    "model": drafter_spec,
+                }
+
+                # REQ-IME-602: Engine result in metadata
+                gen_result["engine_result"] = result.to_serializable_summary()
+
+                generation_results[task_id] = gen_result
+                total_cost += result.total_cost
+
+                if result.truncation_events:
+                    truncation_flags[task_id] = {
+                        "events": result.truncation_events,
+                    }
+
+                task_reports.append({
+                    "task_id": task_id,
+                    "feature_id": task.feature_id,
+                    "title": task.title,
+                    "status": (
+                        "engine_passed" if result.passed else "engine_completed"
+                    ),
+                    "iterations": result.iterations_used,
+                    "review_passed": result.passed,
+                    "cost_usd": result.total_cost,
+                    "files_generated": len(generated_files),
+                })
+
+                _log_task_boundary_complete(
+                    task_id,
+                    status="passed" if result.passed else "completed",
+                    phase="implement",
+                )
+
+            except Exception as exc:
+                # REQ-IME-304: Per-task error guard
+                logger.warning(
+                    "IMPLEMENT inner loop: task %s failed — %s. "
+                    "Marking as failed (graceful degradation).",
+                    task_id, exc, exc_info=True,
+                )
+                generation_results[task_id] = {
+                    "success": False,
+                    "generated_files": {},
+                    "error": str(exc),
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cost_usd": 0.0,
+                    "iterations": 0,
+                    "model": drafter_spec,
+                }
+                task_reports.append({
+                    "task_id": task_id,
+                    "feature_id": task.feature_id,
+                    "title": task.title,
+                    "status": "engine_error",
+                    "error": str(exc),
+                })
+                _log_task_boundary_complete(
+                    task_id, status="error", phase="implement",
+                )
+
+        # --- Assemble output (same structure as DevelopmentPhase path) ---
+        output: dict[str, Any] = {
+            "task_reports": task_reports,
+            "tasks_processed": len(task_reports),
+            "total_cost": total_cost,
+            "generation_results": generation_results,
+        }
+
+        context["implementation"] = output
+        context["generation_results"] = generation_results
+        context["truncation_flags"] = truncation_flags
+        output["metadata"] = self._build_implementation_metadata(context)
+
+        # Context contract validation
+        ImplementPhaseOutput(
+            implementation=context["implementation"],
+            generation_results=context["generation_results"],
+            truncation_flags=context["truncation_flags"],
+        )
+
+        duration = time.monotonic() - start_time
+        logger.info(
+            "IMPLEMENT phase complete (inner loop): %d tasks, $%.4f (%.2fs)",
+            len(task_reports), total_cost, duration,
+        )
+        return {
+            "output": output,
+            "cost": total_cost,
+            "metadata": {
+                "duration": duration,
+                "resumed": False,
+                "engine": "implementation_engine",
+            },
+        }
+
+    # ------------------------------------------------------------------
     # Public execute
     # ------------------------------------------------------------------
 
@@ -7844,6 +8101,12 @@ class Test{class_name}:
                 len(task_reports), duration,
             )
             return {"output": output, "cost": 0.0, "metadata": {"duration": duration, "resumed": False}}
+
+        # --- REQ-IME-300: Inner loop path (opt-in) ---
+        if self.config.enable_inner_loop:
+            return self._execute_with_inner_loop(
+                tasks, context, project_root, start,
+            )
 
         # --- Real-mode path: delegate to DevelopmentPhase ---
         from startd8.contractors.artisan_phases.development import (
