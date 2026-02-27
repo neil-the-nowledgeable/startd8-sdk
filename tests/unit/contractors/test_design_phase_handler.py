@@ -559,6 +559,64 @@ class TestDesignPhaseHandlerRealMode:
         route = context["design_results"]["T1"]["route_policy"]
         assert route["reason"] == "kill_switch_force_canonical"
 
+    def test_output_reports_path_quality_comparison(self):
+        handler = DesignPhaseHandler(
+            handler_config=HandlerConfig(use_modular_prompts=True)
+        )
+        canonical_task = _seed_task("T1")
+        canonical_task.estimated_loc = 700  # forces canonical (v1)
+        variant_task = _seed_task("T2")
+        context = {"tasks": [canonical_task, variant_task]}
+        fake_result = _make_fake_result(feature_name="Feature T1", agreed=True)
+        mock_backend = MagicMock(total_cost_usd=0.0)
+
+        reviewer = ReviewVerdict(
+            role=ReviewRole.REVIEWER,
+            approved=False,
+            confidence=0.9,
+            concerns=["x"],
+            suggestions=[],
+            summary="reject",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+        arbiter = ReviewVerdict(
+            role=ReviewRole.ARBITER,
+            approved=True,
+            confidence=0.9,
+            concerns=["y"],
+            suggestions=[],
+            summary="approve",
+            reviewed_at=datetime.now(timezone.utc),
+        )
+
+        with patch.object(
+            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        ), patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value="## Overview\nv2"
+        ), patch.object(
+            DesignPhaseHandler,
+            "_run_v2_reviews_async",
+            return_value=(reviewer, arbiter, [{"type": "approval_conflict"}]),
+        ), patch.object(
+            DesignPhaseHandler, "_get_design_phase", return_value=MagicMock()
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        out = result["output"]
+        assert context["design_results"]["T1"]["path_tag"] == "canonical"
+        assert context["design_results"]["T2"]["path_tag"] == "variant"
+        assert out["path_quality"]["canonical"]["passed"] == 1
+        assert out["path_quality"]["variant"]["failed"] == 1
+        assert out["path_comparison"]["canonical"]["agreement_rate"] == pytest.approx(1.0)
+        assert out["path_comparison"]["variant"]["agreement_rate"] == pytest.approx(0.0)
+        assert out["per_task"]["T1"]["quality_outcome"] == "pass"
+        assert out["per_task"]["T2"]["quality_outcome"] == "fail"
+
     def test_design_generation_marks_degraded_when_high_signal_floor_missing(self):
         handler = DesignPhaseHandler(handler_config=HandlerConfig())
         context = {"tasks": [_seed_task("T1")]}

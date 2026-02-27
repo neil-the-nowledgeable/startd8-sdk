@@ -2177,8 +2177,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         containing the raw design document text.
     """
 
-    supports_feature_serial: bool = True
-
     def __init__(
         self,
         handler_config: Optional[HandlerConfig] = None,
@@ -5325,8 +5323,6 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         3. ``DevelopmentResult`` → output dict + ``context["generation_results"]``
            (``_map_development_result``)
     """
-
-    supports_feature_serial: bool = True
 
     def __init__(
         self,
@@ -8496,8 +8492,6 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
     not in IMPLEMENT.
     """
 
-    supports_feature_serial: bool = True
-
     def __init__(self, config: Optional[HandlerConfig] = None) -> None:
         self.config = config or HandlerConfig()
 
@@ -8781,8 +8775,6 @@ class TestPhaseHandler(AbstractPhaseHandler):
         * ``_run_validators_for_task`` — runs all validators for one task,
           skipping tasks whose generation was not successful.
     """
-
-    supports_feature_serial: bool = True
 
     def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
         self.config = handler_config or HandlerConfig()
@@ -9549,8 +9541,6 @@ class ReviewPhaseHandler(AbstractPhaseHandler):
     In real mode: sends generated code to a review agent for
     quality scoring, then aggregates pass/fail verdicts.
     """
-
-    supports_feature_serial: bool = True
 
     def __init__(self, handler_config: Optional[HandlerConfig] = None) -> None:
         self.config = handler_config or HandlerConfig()

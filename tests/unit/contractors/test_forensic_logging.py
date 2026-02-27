@@ -28,6 +28,7 @@ from startd8.contractors.forensic_log import (
     _extract_exemplars,
     _validate_inputs,
     emit_forensic_log,
+    emit_quality_gate_log,
     get_boundary_result,
     is_degraded,
     set_boundary_result,
@@ -634,3 +635,38 @@ class TestContextVarAccessors:
         assert get_boundary_result() is br
         _boundary_result_var.reset(token)
         assert get_boundary_result() is original
+
+
+class TestQualityGateForensic:
+    """Verify quality gate decision logs are emitted in forensic schema."""
+
+    def test_emit_quality_gate_log_includes_required_fields(self):
+        captured = {}
+
+        def _capture_log(msg, *args, extra=None, **kwargs):
+            if extra and "forensic" in extra:
+                captured.update(extra["forensic"])
+
+        with patch("startd8.contractors.forensic_log.get_logger") as mock_gl:
+            mock_logger = MagicMock()
+            mock_logger.info = _capture_log
+            mock_gl.return_value = mock_logger
+
+            emit_quality_gate_log(
+                gate_id="artisan.design.quality",
+                phase="design",
+                policy_mode="warn",
+                threshold={"metric": "total_failed", "operator": "eq", "value": 0},
+                observed_value=1,
+                decision="warn",
+                violated=True,
+                contract_signal_id="design_quality.total_failed",
+                details={"total_failed": 1},
+            )
+
+        assert captured["event"] == "quality.gate"
+        assert captured["gate_id"] == "artisan.design.quality"
+        assert captured["phase"] == "design"
+        assert captured["policy_mode"] == "warn"
+        assert captured["decision"] == "warn"
+        assert captured["violated"] is True

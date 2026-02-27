@@ -1010,24 +1010,29 @@ orchestration_requirements:
       - tests/e2e/contractors/test_artisan_dry_run.py
 
   - id: AR-206
-    description: "Feature-serial execution mode"
+    description: "Feature-serial execution mode and single-feature quality flow policy"
     status: implemented
     type: orchestration
 
     acceptance_criteria:
       - "WorkflowConfig.feature_serial=True changes execution strategy"
-      - "Each task completes DESIGN -> IMPLEMENT -> TEST -> REVIEW before the next task starts"
-      - "Phases that support feature_serial: DESIGN, IMPLEMENT, TEST, REVIEW"
-      - "PLAN, SCAFFOLD, FINALIZE always run once (not per-feature)"
+      - "Each task completes DESIGN -> IMPLEMENT -> INTEGRATE -> TEST -> REVIEW before the next task starts"
+      - "Phases that support feature_serial: DESIGN, IMPLEMENT, INTEGRATE, TEST, REVIEW"
+      - "Within a single workflow execution, PLAN and SCAFFOLD run once before the inner loop and FINALIZE runs once after the inner loop"
+      - "scripts/run_artisan_workflow.py defaults to feature_serial=True"
+      - "By default quality policy, phase-serial and parallel batch modes (lane/wave) require explicit --allow-batch-mode override"
       - "Checkpoint tracks current_feature and current_feature_phase"
 
     depends_on: [AR-200]
 
     implementation_hints:
-      file: src/startd8/contractors/artisan_contractor.py
+      files:
+        - src/startd8/contractors/artisan_contractor.py
+        - scripts/run_artisan_workflow.py
 
     verified_by:
       - tests/unit/contractors/test_feature_serial_checkpoint.py
+      - tests/plan_validation/test_wcp_gap_validation.py
 
   - id: AR-207
     description: "Stop-after-phase support"

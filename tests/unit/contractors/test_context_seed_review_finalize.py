@@ -130,6 +130,36 @@ def test_finalize_manifest_rolls_up_test_and_review_status(tmp_path: Path):
     assert task_status["review_passed"] is True
 
 
+def test_finalize_includes_quality_gate_summary(tmp_path: Path):
+    code_path = tmp_path / "src" / "feature.py"
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.write_text("def f() -> int:\n    return 1\n", encoding="utf-8")
+
+    context = {
+        "plan_title": "Test Plan",
+        "tasks": [_seed_task("T1")],
+        "domain_summary": {"backend": 1},
+        "preflight_summary": {},
+        "scaffold": {},
+        "implementation": {"tasks_processed": 1, "total_estimated_loc": 50, "total_cost": 0.02},
+        "generation_results": {"T1": _generation_result(code_path)},
+        "test_results": {"total_validators": 1, "tasks_with_tests": 1, "total_passed": 1, "total_failed": 0},
+        "review_results": {"tasks_with_env_issues": 0, "total_passed": 1, "total_failed": 0, "total_cost": 0.01},
+        "quality_gate_summary": {
+            "policy_mode": "warn",
+            "gate_count": 3,
+            "violation_count": 1,
+            "violations": [{"gate_id": "artisan.design.quality", "decision": "warn"}],
+        },
+    }
+
+    handler = FinalizePhaseHandler(output_dir=str(tmp_path), handler_config=HandlerConfig())
+    result = handler.execute(WorkflowPhase.FINALIZE, context, dry_run=False)
+
+    assert result["output"]["quality_gate"]["policy_mode"] == "warn"
+    assert result["output"]["quality_gate"]["violation_count"] == 1
+
+
 def test_test_phase_uses_arg_list_without_shell(tmp_path: Path):
     code_path = tmp_path / "src" / "feature.py"
     code_path.parent.mkdir(parents=True, exist_ok=True)

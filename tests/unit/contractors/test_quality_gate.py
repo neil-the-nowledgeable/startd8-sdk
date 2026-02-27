@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -209,6 +209,33 @@ class TestQualityGateWarn:
 
         assert "QUALITY GATE" not in caplog.text
 
+    def test_records_traceable_gate_outcome(self):
+        wf = _make_workflow("warn")
+        wf._active_workflow_context = {}
+        pr = _make_phase_result(
+            WorkflowPhase.DESIGN,
+            output={
+                "total_failed": 1,
+                "total_passed": 0,
+                "agreement_rate": 0.0,
+                "per_task": {"T-1": {"passed": False, "reason": "DESIGN_FAILED"}},
+            },
+        )
+        wf._check_quality_gate(WorkflowPhase.DESIGN, pr)
+
+        assert len(wf._quality_gate_outcomes) == 1
+        outcome = wf._quality_gate_outcomes[0]
+        assert outcome["gate_id"] == "artisan.design.quality"
+        assert outcome["contract_signal_id"] == "design_quality.total_failed"
+        assert outcome["policy_mode"] == "warn"
+        assert outcome["threshold"]["metric"] == "total_failed"
+        assert outcome["observed_value"] == 1
+        assert outcome["decision"] == "warn"
+        assert outcome["violated"] is True
+        summary = wf._active_workflow_context["quality_gate_summary"]
+        assert summary["violation_count"] == 1
+        assert len(wf._active_workflow_context["quality_gate_outcomes"]) == 1
+
 
 # ============================================================================
 # Skip mode
@@ -279,3 +306,8 @@ class TestQualityGateEdgeCases:
             wf._check_quality_gate(WorkflowPhase.TEST, pr)
 
         assert exc_info.value.details["failed_tasks"] == []
+
+    def test_constructor_uses_env_quality_gate_mode(self):
+        with patch.dict("os.environ", {"STARTD8_QUALITY_GATE_MODE": "block"}):
+            wf = ArtisanContractorWorkflow(config=WorkflowConfig(dry_run=True))
+        assert wf._quality_gate == "block"

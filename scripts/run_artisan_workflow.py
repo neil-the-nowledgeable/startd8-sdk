@@ -31,7 +31,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -81,6 +83,45 @@ def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
             "example_artifacts": {},
             "coverage_gaps": [],
         }
+
+
+def _load_task_ids_from_seed(seed_path: Path) -> list[str]:
+    """Return task IDs from the seed in source order."""
+    try:
+        data = json.loads(seed_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return []
+
+    task_ids: list[str] = []
+    for entry in data.get("tasks", []):
+        task_id = str((entry or {}).get("task_id", "")).strip()
+        if task_id:
+            task_ids.append(task_id)
+    return task_ids
+
+
+def _sanitize_cli_args_for_single_feature(raw_args: list[str]) -> list[str]:
+    """Drop batch-selection flags before spawning per-task child runs."""
+    strip_with_value = {"--task-filter", "--max-tasks", "--max-features", "--limit"}
+    strip_flags = {"--retry-incomplete"}
+
+    result: list[str] = []
+    skip_next = False
+    for arg in raw_args:
+        if skip_next:
+            skip_next = False
+            continue
+
+        key = arg.split("=", 1)[0]
+        if key in strip_flags:
+            continue
+        if key in strip_with_value:
+            if "=" not in arg:
+                skip_next = True
+            continue
+
+        result.append(arg)
+    return result
 
 
 def setup_logging(verbose: bool = False) -> None:
@@ -934,6 +975,96 @@ def main() -> int:
             "Auto-enrichment check failed: %s — continuing with original seed",
             exc,
         )
+
+    selected_task_ids = task_filter[:] if task_filter else _load_task_ids_from_seed(seed_path)
+    single_feature_quality_mode = (
+        args.feature_serial
+        and not args.allow_batch_mode
+        and not args.lane_parallel
+        and not args.wave_parallel
+    )
+
+    if single_feature_quality_mode and len(selected_task_ids) > 1:
+        logger.info(
+            "Single-feature quality flow: running %d task(s) as isolated DESIGN→FINALIZE workflows",
+            len(selected_task_ids),
+        )
+        child_base_args = _sanitize_cli_args_for_single_feature(sys.argv[1:])
+        force_quality_block = args.quality_gate != "block"
+        if force_quality_block:
+            logger.warning(
+                "Single-feature quality flow forces --quality-gate block for child runs "
+                "(requested=%s)",
+                args.quality_gate,
+            )
+
+        script_path = Path(__file__).resolve()
+        output_root = Path(output_dir)
+        run_records: list[dict[str, Any]] = []
+        failed_task: str | None = None
+
+        for idx, task_id in enumerate(selected_task_ids, start=1):
+            logger.info(
+                "Single-feature quality flow: starting task %s (%d/%d)",
+                task_id,
+                idx,
+                len(selected_task_ids),
+            )
+            child_args = [*child_base_args, "--task-filter", task_id]
+            if force_quality_block:
+                child_args.extend(["--quality-gate", "block"])
+            child_cmd = [sys.executable, str(script_path), *child_args]
+            child = subprocess.run(child_cmd, check=False)
+
+            result_path = output_root / f"workflow-result-{task_id}.json"
+            record: dict[str, Any] = {
+                "task_id": task_id,
+                "return_code": child.returncode,
+                "result_path": str(result_path),
+                "result_found": result_path.exists(),
+            }
+            if result_path.exists():
+                try:
+                    result_data = json.loads(result_path.read_text(encoding="utf-8"))
+                    record["workflow_id"] = result_data.get("workflow_id")
+                    record["status"] = result_data.get("status")
+                except (json.JSONDecodeError, OSError):
+                    record["status"] = "invalid_result_file"
+            run_records.append(record)
+
+            if child.returncode != 0:
+                failed_task = task_id
+                logger.error(
+                    "Single-feature quality flow: task %s failed; halting remaining tasks",
+                    task_id,
+                )
+                break
+
+        aggregate_status = "completed" if failed_task is None else "failed"
+        aggregate_data = {
+            "workflow_mode": "single_feature_quality_flow",
+            "status": aggregate_status,
+            "seed_path": str(seed_path),
+            "output_dir": str(output_root),
+            "task_sequence": selected_task_ids,
+            "completed_tasks": [r["task_id"] for r in run_records if r.get("return_code") == 0],
+            "failed_task": failed_task,
+            "quality_gate_mode_requested": args.quality_gate,
+            "quality_gate_mode_effective": "block" if force_quality_block else args.quality_gate,
+            "runs": run_records,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+        if not args.dry_run:
+            aggregate_path = output_root / "workflow-result.json"
+            aggregate_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(aggregate_path, "w", encoding="utf-8") as f:
+                json.dump(aggregate_data, f, indent=2, default=str)
+            logger.info("Wrote aggregate result to %s", aggregate_path)
+        else:
+            logger.info("Dry run — skipping aggregate result file write")
+
+        return 0 if failed_task is None else 1
 
     # Deterministic workflow ID when filtering to specific tasks so that
     # --resume reliably finds the checkpoint for the same task(s).

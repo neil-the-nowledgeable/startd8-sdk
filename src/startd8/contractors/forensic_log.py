@@ -682,6 +682,10 @@ def _record_internal_error(call_type: str, exc: Exception) -> None:
     except Exception:
         # Absolute last resort — emit a debug trace so failures are
         # discoverable when explicitly sought, then suppress (E1).
-        get_logger(__name__).debug(
-            "_record_internal_error itself failed", exc_info=True,
-        )
+        try:
+            get_logger(__name__).debug(
+                "_record_internal_error itself failed", exc_info=True,
+            )
+        except Exception:
+            # Never raise from forensic internals.
+            pass

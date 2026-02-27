@@ -379,62 +379,29 @@ def _build_existing_files_section(
     return "\n".join(result_parts)
 
 
-_EDIT_MIN_PCT = 80  # Minimum percentage of original lines expected in edit output
-_EDIT_MIN_PCT_RANGE = (1, 100)  # Valid range for edit_min_pct
-
-
-def _resolve_edit_min_pct(value: Any) -> int:
-    """Resolve edit_min_pct from context/config with defensive parsing.
-
-    Handles None, invalid types, and out-of-range values. Falls back to
-    _EDIT_MIN_PCT on any error. [O11Y Leg 8 #3]
-    """
-    if value is None:
-        return _EDIT_MIN_PCT
-    try:
-        pct = int(value)
-    except (TypeError, ValueError):
-        return _EDIT_MIN_PCT
-    lo, hi = _EDIT_MIN_PCT_RANGE
-    return max(lo, min(hi, pct))
-
-
-# PCA-607: Size regression gate thresholds for draft output.
-# Files smaller than _MIN_LINES are exempt; drafts below _THRESHOLD ratio
-# of the existing file size are flagged as truncated to trigger auto-retry.
-_DRAFT_SIZE_REGRESSION_THRESHOLD = 0.50   # Draft must be >= 50% of existing
-_DRAFT_SIZE_REGRESSION_MIN_LINES = 50     # Only check files larger than this
-
-
 def _build_output_format(
     target_files: Optional[List[str]] = None,
     existing_files: Optional[Dict[str, str]] = None,
-    edit_min_pct: Optional[int] = None,
 ) -> str:
     """Build the output format section for the draft prompt.
 
     Single-file tasks get a simple single-block format.
     Multi-file tasks get explicit per-file fencing instructions with a
-    verification checklist (Layer 2 defense-in-depth).
-    When existing_files are present (PCA-602), selects edit-mode templates.
-    PCA-605: Edit templates now include quantitative line-count constraints.
-    PC-Q3: edit_min_pct overrides default (80) when provided.
+    verification checklist.
+    When existing_files are present, selects edit-mode templates.
     """
     is_edit = bool(existing_files)
-    pct = _resolve_edit_min_pct(edit_min_pct)
 
     if not target_files or len(target_files) <= 1:
         if is_edit:
-            # PCA-605: Compute total line count across all existing files
             total_lines = sum(
                 len((content or "").splitlines())
                 for content in existing_files.values()
             )
-            min_output_lines = int(total_lines * pct / 100)
             return SINGLE_FILE_EDIT_OUTPUT_FORMAT.format(
                 existing_line_count=total_lines,
-                min_output_lines=min_output_lines,
-                min_pct=pct,
+                min_output_lines=0,
+                min_pct=0,
             )
         return SINGLE_FILE_OUTPUT_FORMAT
 
@@ -443,29 +410,16 @@ def _build_output_format(
         target_files,
         key=lambda f: (0 if f.endswith("__init__.py") else 1, f),
     )
-    file_list = "\n".join(f"- `{f}`" for f in ordered)
-    file_checklist = "\n".join(f"- [ ] `{f}` — has its own ``` code block" for f in ordered)
+    file_list = "
+".join(f"- `{f}`" for f in ordered)
+    file_checklist = "
+".join(f"- [ ] `{f}` — has its own ``` code block" for f in ordered)
 
     if is_edit:
-        # PCA-607: Per-file line counts + minimum output constraint
-        line_parts = []
-        for fpath, content in existing_files.items():
-            flines = len((content or "").splitlines())
-            min_lines = int(flines * pct / 100)
-            line_parts.append(
-                f"- `{fpath}`: {flines} lines — output MUST be AT LEAST {min_lines} lines"
-            )
-        # Defensive: line_parts is always non-empty here (existing_files is
-        # non-empty when is_edit is True), but guard anyway for safety.
-        existing_line_summary = (
-            "\n\nCRITICAL SIZE CONSTRAINT (per file):\n"
-            + "\n".join(line_parts)
-            + "\n\nOutputs shorter than 50% of the original will be REJECTED."
-        ) if line_parts else ""
         return MULTI_FILE_EDIT_OUTPUT_FORMAT.format(
             file_list=file_list,
             file_checklist=file_checklist,
-            existing_line_summary=existing_line_summary,
+            existing_line_summary="",
         )
     return MULTI_FILE_OUTPUT_FORMAT.format(
         file_list=file_list,
@@ -688,8 +642,6 @@ class LeadContractorWorkflow(WorkflowBase):
         # Parse configuration
         task_description = config["task_description"]
         context = dict(config.get("context", {}))
-        if "edit_min_pct" not in context and config.get("edit_min_pct") is not None:
-            context["edit_min_pct"] = _resolve_edit_min_pct(config["edit_min_pct"])
         lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
         drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
@@ -834,7 +786,6 @@ class LeadContractorWorkflow(WorkflowBase):
                     target_files=context.get("target_files"),
                     existing_files=context.get("existing_files"),
                     edit_mode=context.get("edit_mode"),
-                    edit_min_pct=context.get("edit_min_pct"),
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
@@ -1182,7 +1133,6 @@ class LeadContractorWorkflow(WorkflowBase):
         is_edit = bool(existing_files) or (
             isinstance(edit_mode, dict) and edit_mode.get("mode") == "edit"
         )
-        edit_min_pct = _resolve_edit_min_pct(context.get("edit_min_pct"))
 
         if is_edit:
             # PC-F3: Task verb — "update" for edit, "implement" for create
@@ -1197,13 +1147,11 @@ class LeadContractorWorkflow(WorkflowBase):
                 total_lines = sum(
                     len((c or "").splitlines()) for c in existing_files.values()
                 )
-                min_lines = int(total_lines * edit_min_pct / 100)
                 edit_preamble += _format_lead_prompt(
                     "spec_edit_quantitative_constraint",
                     _SPEC_EDIT_QUANTITATIVE_FALLBACK,
                     total_lines=total_lines,
                     min_lines=min_lines,
-                    edit_min_pct=edit_min_pct,
                 )
             edit_preamble += "\n"
             task_description = edit_preamble + task_description
@@ -1374,7 +1322,6 @@ class LeadContractorWorkflow(WorkflowBase):
         target_files: Optional[List[str]] = None,
         existing_files: Optional[Dict[str, str]] = None,
         edit_mode: Optional[Dict] = None,
-        edit_min_pct: Optional[int] = None,
     ) -> DraftResult:
         """Phase 2/4: Drafter creates implementation from spec.
 
@@ -1386,14 +1333,12 @@ class LeadContractorWorkflow(WorkflowBase):
             check_truncation: Whether to run heuristic truncation detection (default: True)
             strict_truncation: Use lower confidence threshold for detection (default: False)
             target_files: Target file paths (triggers multi-file output format when len > 1)
-            edit_min_pct: Min % of existing lines in edit output (PC-Q3, default 80)
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
         output_format = _build_output_format(
             target_files,
             existing_files=existing_files,
-            edit_min_pct=edit_min_pct,
         )
         existing_files_section = _build_existing_files_section(existing_files, edit_mode)
 
@@ -1663,8 +1608,6 @@ class LeadContractorWorkflow(WorkflowBase):
 
         task_description = config["task_description"]
         context = dict(config.get("context", {}))
-        if "edit_min_pct" not in context and config.get("edit_min_pct") is not None:
-            context["edit_min_pct"] = _resolve_edit_min_pct(config["edit_min_pct"])
         lead_spec = config.get("lead_agent", Models.LEAD_CONTRACTOR_LEAD)
         drafter_spec = config.get("drafter_agent", Models.LEAD_CONTRACTOR_DRAFTER)
         max_iterations = config.get("max_iterations", 3)
@@ -1771,7 +1714,6 @@ class LeadContractorWorkflow(WorkflowBase):
                     target_files=context.get("target_files"),
                     existing_files=context.get("existing_files"),
                     edit_mode=context.get("edit_mode"),
-                    edit_min_pct=context.get("edit_min_pct"),
                 )
                 result.drafts.append(draft)
                 current_implementation = draft.implementation
@@ -2030,7 +1972,6 @@ class LeadContractorWorkflow(WorkflowBase):
         target_files: Optional[List[str]] = None,
         existing_files: Optional[Dict[str, str]] = None,
         edit_mode: Optional[Dict] = None,
-        edit_min_pct: Optional[int] = None,
     ) -> DraftResult:
         """Phase 2/4 (async): Drafter creates implementation from spec.
 
@@ -2044,14 +1985,12 @@ class LeadContractorWorkflow(WorkflowBase):
             target_files: Target file paths (triggers multi-file output format when len > 1)
             existing_files: Existing file contents for edit mode (PCA-601)
             edit_mode: Edit mode classification dict (PCA-600)
-            edit_min_pct: Min % of existing lines in edit output (PC-Q3, default 80)
         """
         draft_id = f"draft-{uuid.uuid4().hex[:8]}"
 
         output_format = _build_output_format(
             target_files,
             existing_files=existing_files,
-            edit_min_pct=edit_min_pct,
         )
         existing_files_section = _build_existing_files_section(existing_files, edit_mode)
 

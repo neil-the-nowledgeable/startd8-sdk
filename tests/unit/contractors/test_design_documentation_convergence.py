@@ -242,3 +242,47 @@ async def test_non_rereview_resolution_at_max_iterations_marks_exhausted(monkeyp
     assert result.agreed is False
     assert result.non_agreement_reason_code == "MAX_ITERATIONS_EXCEEDED"
     assert result.final_iteration == 1
+
+
+@pytest.mark.asyncio
+async def test_rereview_guardrail_flag_can_disable_post_revision_rereview(monkeypatch):
+    """REQ-PAQ-701: disabling re-review returns fail-closed marker."""
+    phase = DesignDocumentationPhase(
+        llm=_DummyLLM(),
+        max_iterations=3,
+        enforce_post_revision_rereview=False,
+        resolution_callback=_StaticResolutionCallback(ResolutionAction.MERGE),
+    )
+    ctx = FeatureContext(
+        feature_name="Feature A",
+        description="desc",
+        target_file="src/a.py",
+    )
+
+    d1 = _design(1, "draft-v1")
+    d2 = _design(2, "draft-v2")
+    rv1 = _verdict(ReviewRole.REVIEWER, approved=False, confidence=0.9, summary="reject-v1")
+    av1 = _verdict(ReviewRole.ARBITER, approved=True, confidence=0.9, summary="approve-v1")
+    verdicts = [rv1, av1]
+    review_calls: list[tuple[str, str]] = []
+
+    async def _gen(*args, **kwargs):
+        return d1
+
+    async def _revise(*args, **kwargs):
+        return d2
+
+    async def _review(design, role, feature_context=None):
+        review_calls.append((design.raw_text, role.value))
+        return verdicts.pop(0)
+
+    monkeypatch.setattr(phase, "_generate_design", _gen)
+    monkeypatch.setattr(phase, "_revise_design", _revise)
+    monkeypatch.setattr(phase, "_review_design", _review)
+
+    result = await phase.run(ctx)
+
+    assert len(review_calls) == 2
+    assert result.agreed is False
+    assert result.non_agreement_reason_code == "REREVIEW_DISABLED"
+    assert result.final_iteration == 2
