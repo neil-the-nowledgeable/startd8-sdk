@@ -421,10 +421,8 @@ def _build_output_format(
         target_files,
         key=lambda f: (0 if f.endswith("__init__.py") else 1, f),
     )
-    file_list = "
-".join(f"- `{f}`" for f in ordered)
-    file_checklist = "
-".join(f"- [ ] `{f}` — has its own ``` code block" for f in ordered)
+    file_list = "\n".join(f"- `{f}`" for f in ordered)
+    file_checklist = "\n".join(f"- [ ] `{f}` — has its own ``` code block" for f in ordered)
 
     if is_edit:
         return MULTI_FILE_EDIT_OUTPUT_FORMAT.format(
@@ -1053,8 +1051,10 @@ class LeadContractorWorkflow(WorkflowBase):
         output_format: Optional[str],
     ) -> str:
         """Build the spec prompt. Delegates to implementation_engine.spec_builder."""
+        edit_min_pct = context.pop("edit_min_pct", 80)
         return _ie_spec_builder.build_spec_prompt(
             task_description, context, output_format,
+            edit_min_pct=edit_min_pct,
         )
 
     def _create_spec(
