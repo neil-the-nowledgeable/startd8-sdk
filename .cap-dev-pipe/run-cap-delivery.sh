@@ -1,1 +1,0 @@
-/Users/neilyashinsky/Documents/dev/cap-dev-pipe/run-cap-delivery.sh

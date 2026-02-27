@@ -1,1 +1,0 @@
-/Users/neilyashinsky/Documents/dev/cap-dev-pipe/run-prime-contractor.sh
