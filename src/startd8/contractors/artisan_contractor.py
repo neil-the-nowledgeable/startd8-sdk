@@ -169,6 +169,26 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "retry_transcripts",
 })
 
+# ---------------------------------------------------------------------------
+# Contract-defined quality thresholds (artisan-pipeline.contract.yaml).
+# Each entry maps (phase, metric_name) → (threshold, description).
+# These are enforced by _check_quality_gate() in addition to total_failed.
+# ---------------------------------------------------------------------------
+_CONTRACT_QUALITY_THRESHOLDS: dict[str, list[tuple[str, float, str]]] = {
+    "design": [
+        ("agreement_rate", 0.70, "DESIGN agreement rate below 0.70 indicates review-convergence instability"),
+    ],
+    "implement": [
+        ("line_count", 10, "Generation results should have meaningful content (>= 10 lines)"),
+    ],
+    "integrate": [
+        ("success_rate", 0.50, "At least half of integration results should succeed"),
+    ],
+    "test": [
+        ("total_passed", 1, "At least one task should pass its validators"),
+    ],
+}
+
 
 # ============================================================================
 # ENUMS
@@ -2247,14 +2267,28 @@ class ArtisanContractorWorkflow:
                 checkpoint=checkpoint,
             )
 
+    # Phases eligible for quality gate checking.
+    _QUALITY_GATE_PHASES = frozenset({
+        WorkflowPhase.DESIGN, WorkflowPhase.IMPLEMENT,
+        WorkflowPhase.INTEGRATE, WorkflowPhase.TEST,
+        WorkflowPhase.REVIEW,
+    })
+
     def _check_quality_gate(
         self,
         phase: WorkflowPhase,
         phase_result: "PhaseResult",
     ) -> None:
-        """Check quality gate after DESIGN, TEST, or REVIEW phases.
+        """Check quality gate after eligible phases.
 
-        Compares ``total_failed`` in the phase output dict against zero.
+        Evaluates two layers of quality signals:
+
+        1. **total_failed == 0** — the original binary pass/fail check for
+           DESIGN, TEST, and REVIEW phases.
+        2. **Contract metric thresholds** — numeric thresholds from
+           ``_CONTRACT_QUALITY_THRESHOLDS`` (agreement_rate, line_count,
+           success_rate, total_passed) for all eligible phases.
+
         Behavior depends on ``self._quality_gate``:
 
         * ``"skip"`` — no-op.
@@ -2269,19 +2303,21 @@ class ArtisanContractorWorkflow:
             QualityGateError: When ``quality_gate == "block"`` and failures
                               are detected.
         """
-        if phase not in (WorkflowPhase.DESIGN, WorkflowPhase.TEST, WorkflowPhase.REVIEW):
+        if phase not in self._QUALITY_GATE_PHASES:
             return
 
         signal_map = {
             WorkflowPhase.DESIGN: "design_quality.total_failed",
             WorkflowPhase.TEST: "test_results.total_failed",
             WorkflowPhase.REVIEW: "review_results.total_failed",
+            WorkflowPhase.IMPLEMENT: "generation_results.line_count",
+            WorkflowPhase.INTEGRATE: "integration_results.success_rate",
         }
 
         if not phase_result.output or not isinstance(phase_result.output, dict):
             outcome = {
                 "gate_id": f"artisan.{phase.value}.quality",
-                "contract_signal_id": signal_map[phase],
+                "contract_signal_id": signal_map.get(phase, f"{phase.value}.quality"),
                 "phase": phase.value,
                 "policy_mode": self._quality_gate,
                 "threshold": {"metric": "total_failed", "operator": "eq", "value": 0},
@@ -2314,7 +2350,7 @@ class ArtisanContractorWorkflow:
             ]
             details["failed_tasks"] = failed_tasks
             msg = f"TEST quality gate: {total_failed} task(s) failed validation"
-        else:
+        elif phase == WorkflowPhase.REVIEW:
             per_task = phase_result.output.get("per_task", {})
             failed_reviews = {
                 tid: info.get("score", "?")
@@ -2323,37 +2359,115 @@ class ArtisanContractorWorkflow:
             }
             details["failed_reviews"] = failed_reviews
             msg = f"REVIEW quality gate: {total_failed} task(s) failed review"
+        elif phase == WorkflowPhase.IMPLEMENT:
+            msg = f"IMPLEMENT quality gate: checking generation result metrics"
+        elif phase == WorkflowPhase.INTEGRATE:
+            msg = f"INTEGRATE quality gate: checking integration success rate"
+        else:
+            msg = f"{phase.value} quality gate"
+
+        # --- Layer 1: total_failed binary check (DESIGN/TEST/REVIEW) ---
+        has_total_failed_violation = (
+            total_failed > 0
+            and phase in (WorkflowPhase.DESIGN, WorkflowPhase.TEST, WorkflowPhase.REVIEW)
+        )
 
         if self._quality_gate == "skip":
             decision = "skipped"
-        elif total_failed == 0:
-            decision = "pass"
-        elif self._quality_gate == "block":
+        elif has_total_failed_violation and self._quality_gate == "block":
             decision = "block"
-        else:
+        elif has_total_failed_violation:
             decision = "warn"
+        else:
+            decision = "pass"
 
         outcome = {
             "gate_id": f"artisan.{phase.value}.quality",
-            "contract_signal_id": signal_map[phase],
+            "contract_signal_id": signal_map.get(phase, f"{phase.value}.quality"),
             "phase": phase.value,
             "policy_mode": self._quality_gate,
             "threshold": {"metric": "total_failed", "operator": "eq", "value": 0},
             "observed_value": total_failed,
             "decision": decision,
-            "violated": total_failed > 0,
+            "violated": has_total_failed_violation,
             "message": msg,
             "details": details,
         }
         self._record_quality_gate_outcome(outcome)
 
-        if self._quality_gate == "skip" or total_failed == 0:
-            return
+        if has_total_failed_violation and self._quality_gate != "skip":
+            if self._quality_gate == "block":
+                self._logger.error("QUALITY GATE BLOCKED: %s", msg)
+                raise QualityGateError(msg, phase=phase, details=details)
+            self._logger.warning("QUALITY GATE WARNING: %s — %s", msg, details)
 
-        if self._quality_gate == "block":
-            self._logger.error("QUALITY GATE BLOCKED: %s", msg)
-            raise QualityGateError(msg, phase=phase, details=details)
-        self._logger.warning("QUALITY GATE WARNING: %s — %s", msg, details)
+        # --- Layer 2: contract metric thresholds ---
+        phase_thresholds = _CONTRACT_QUALITY_THRESHOLDS.get(phase.value, [])
+        for metric_name, threshold, description in phase_thresholds:
+            observed = phase_result.output.get(metric_name)
+            if observed is None:
+                # Try nested extraction for common patterns
+                if metric_name == "success_rate":
+                    per_task = phase_result.output.get("per_task", {})
+                    if per_task:
+                        successes = sum(
+                            1 for info in per_task.values()
+                            if info.get("success") or info.get("passed")
+                        )
+                        observed = successes / len(per_task)
+                elif metric_name == "line_count":
+                    # Approximate from generation_results or output string length
+                    per_task = phase_result.output.get("per_task", {})
+                    if per_task:
+                        total_lines = sum(
+                            len(str(info.get("code", info.get("output", ""))).splitlines())
+                            for info in per_task.values()
+                        )
+                        observed = total_lines
+
+            if observed is None:
+                self._logger.debug(
+                    "Quality metric %s not available for %s — skipping threshold check",
+                    metric_name, phase.value,
+                )
+                continue
+
+            try:
+                observed_num = float(observed)
+            except (TypeError, ValueError):
+                continue
+
+            violated = observed_num < threshold
+            metric_decision = "skipped" if self._quality_gate == "skip" else (
+                "block" if violated and self._quality_gate == "block" else (
+                    "warn" if violated else "pass"
+                )
+            )
+
+            metric_outcome = {
+                "gate_id": f"artisan.{phase.value}.{metric_name}",
+                "contract_signal_id": f"{phase.value}.exit.{metric_name}",
+                "phase": phase.value,
+                "policy_mode": self._quality_gate,
+                "threshold": {"metric": metric_name, "operator": "gte", "value": threshold},
+                "observed_value": observed_num,
+                "decision": metric_decision,
+                "violated": violated,
+                "message": description if violated else f"{metric_name} = {observed_num} (>= {threshold})",
+                "details": {"metric": metric_name, "threshold": threshold, "observed": observed_num},
+            }
+            self._record_quality_gate_outcome(metric_outcome)
+
+            if violated and self._quality_gate != "skip":
+                metric_msg = (
+                    f"{phase.value.upper()} contract threshold violated: "
+                    f"{metric_name} = {observed_num} (threshold >= {threshold}). "
+                    f"{description}"
+                )
+                if self._quality_gate == "block":
+                    self._logger.error("QUALITY GATE BLOCKED: %s", metric_msg)
+                    raise QualityGateError(metric_msg, phase=phase, details=metric_outcome["details"])
+                self._logger.warning("QUALITY GATE WARNING: %s", metric_msg)
 
     def _record_quality_gate_outcome(self, outcome: dict[str, Any]) -> None:
         """Store quality gate outcomes for workflow/finalize traceability."""
@@ -2640,11 +2754,7 @@ class ArtisanContractorWorkflow:
                     # Quality gate check for design/test/review in
                     # feature-serial and wave-parallel modes.
                     gate_error: Optional[QualityGateError] = None
-                    if inner_phase in (
-                        WorkflowPhase.DESIGN,
-                        WorkflowPhase.TEST,
-                        WorkflowPhase.REVIEW,
-                    ):
+                    if inner_phase in self._QUALITY_GATE_PHASES:
                         try:
                             self._check_quality_gate(inner_phase, phase_result)
                         except QualityGateError as exc:

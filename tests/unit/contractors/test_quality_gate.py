@@ -223,7 +223,8 @@ class TestQualityGateWarn:
         )
         wf._check_quality_gate(WorkflowPhase.DESIGN, pr)
 
-        assert len(wf._quality_gate_outcomes) == 1
+        # Layer 1: total_failed check + Layer 2: agreement_rate threshold
+        assert len(wf._quality_gate_outcomes) == 2
         outcome = wf._quality_gate_outcomes[0]
         assert outcome["gate_id"] == "artisan.design.quality"
         assert outcome["contract_signal_id"] == "design_quality.total_failed"
@@ -232,9 +233,16 @@ class TestQualityGateWarn:
         assert outcome["observed_value"] == 1
         assert outcome["decision"] == "warn"
         assert outcome["violated"] is True
+        # Layer 2: agreement_rate contract threshold
+        metric_outcome = wf._quality_gate_outcomes[1]
+        assert metric_outcome["gate_id"] == "artisan.design.agreement_rate"
+        assert metric_outcome["threshold"]["metric"] == "agreement_rate"
+        assert metric_outcome["threshold"]["value"] == 0.7
+        assert metric_outcome["observed_value"] == 0.0
+        assert metric_outcome["violated"] is True
         summary = wf._active_workflow_context["quality_gate_summary"]
-        assert summary["violation_count"] == 1
-        assert len(wf._active_workflow_context["quality_gate_outcomes"]) == 1
+        assert summary["violation_count"] == 2
+        assert len(wf._active_workflow_context["quality_gate_outcomes"]) == 2
 
 
 # ============================================================================

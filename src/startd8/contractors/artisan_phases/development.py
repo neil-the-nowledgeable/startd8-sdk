@@ -100,22 +100,141 @@ _STALE_CONTEXT_MARKERS: Dict[str, List[str]] = {
 def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]:
     """Load and format a template from ``implement.yaml``.
 
-    Returns the formatted string on success, or ``None`` when the YAML
-    file or template is unavailable (e.g. downstream installs that
-    haven't updated).  Failures are logged at DEBUG so they're
-    traceable without cluttering normal output.
+    Returns the formatted string on success.  When the YAML file or
+    template is unavailable (e.g. downstream installs that haven't
+    updated), falls back to ``_INLINE_FALLBACK_TEMPLATES`` so callers
+    always receive a usable prompt string for known templates.
+
+    Returns ``None`` only for template names with no registered fallback.
     """
     try:
         from startd8.contractors.artisan_phases.prompts import format_prompt
 
         return format_prompt("implement", template_name, **kwargs)
     except (FileNotFoundError, KeyError) as exc:
+        fallback = _INLINE_FALLBACK_TEMPLATES.get(template_name)
+        if fallback is not None:
+            _log.debug(
+                "YAML template implement/%s unavailable — using inline fallback: %s",
+                template_name,
+                exc,
+            )
+            try:
+                return fallback.format(**kwargs)
+            except KeyError as fmt_exc:
+                _log.debug(
+                    "Inline fallback for implement/%s failed to format: %s",
+                    template_name,
+                    fmt_exc,
+                )
+                return fallback  # Return unformatted rather than None
         _log.debug(
-            "YAML template implement/%s unavailable, using inline fallback: %s",
+            "YAML template implement/%s unavailable, no inline fallback: %s",
             template_name,
             exc,
         )
         return None
+
+
+# ---------------------------------------------------------------------------
+# Inline fallback templates — mirrors of implement.yaml for resilience.
+# These ensure the LLM always receives structured prompt sections even
+# when the YAML file is missing or a template key was renamed.
+# Keep in sync with implement.yaml; see artisan-pipeline.contract.yaml.
+# ---------------------------------------------------------------------------
+_INLINE_FALLBACK_TEMPLATES: Dict[str, str] = {
+    "project_identity": (
+        "## Project Identity\n"
+        "**Project:** {project_name}\n"
+        "{project_root_line}\n"
+        "{goals_block}"
+    ),
+    "target_files_edit": (
+        "## Target Files\n"
+        "You MUST update the following existing file(s). Focus on applying the\n"
+        "changes described in the design document — do NOT rewrite from scratch.\n"
+        "{file_list}"
+    ),
+    "target_files_create": (
+        "## Target Files\n"
+        "You MUST generate the following file(s). Focus on implementing\n"
+        "the PRIMARY artifact — do NOT generate test code.\n"
+        "{file_list}"
+    ),
+    "importable_modules": (
+        "## Importable Modules (ground truth)\n"
+        "The following modules ACTUALLY EXIST in the project. When writing\n"
+        "import statements, ONLY use module paths from this list. Do NOT\n"
+        "invent module paths from the design document if they are not listed here.\n\n"
+        "{module_list}"
+    ),
+    "edit_first_directive": (
+        "## Edit-First Directive\n"
+        "**CRITICAL:** The target files shown above already exist in the project. "
+        "You MUST:\n"
+        "1. PRESERVE all existing functions, classes, imports, and logic "
+        "that are not explicitly being changed\n"
+        "2. ADD or MODIFY only what the design document specifies\n"
+        "3. NEVER remove existing code unless the design explicitly requires it\n"
+        "4. MAINTAIN backward compatibility — existing callers must continue to work\n"
+        "5. Keep existing docstrings, type hints, and error handling intact\n\n"
+        "Treat this as an EDIT to production code, not a greenfield implementation. "
+        "If the design document describes new functionality, integrate it alongside "
+        "the existing code.\n\n"
+        "**SIZE CONSTRAINT:** The existing file(s) total {total_lines} lines. "
+        "Your output MUST be AT LEAST {min_lines} lines (80% of original). "
+        "Outputs significantly shorter than the original will be REJECTED.\n"
+    ),
+    "edit_mode_classification": (
+        "## Edit Mode Classification\n"
+        "**Task mode:** {mode_upper} (confidence: {confidence})\n"
+        "{per_file_details}\n"
+        "{signal_conflicts}\n"
+        "{mode_guidance}"
+    ),
+    "design_doc_edit": (
+        "## AUTHORITATIVE Design Changes\n"
+        "The following design document describes CHANGES to apply to the "
+        "existing code shown above. It is the AUTHORITATIVE specification "
+        "for what to ADD or MODIFY.\n\n"
+        "**CRITICAL:** Apply these changes to the existing code. "
+        "Do NOT rewrite the file from scratch. The existing code is the "
+        "foundation — the design document describes what to change, not "
+        "what the entire file should look like.\n\n"
+        "**Design Scope:** {design_lines} lines across {design_sections} "
+        "sections. A partial implementation that omits designed sections "
+        "will be rejected in review.\n"
+    ),
+    "design_doc_create": (
+        "## AUTHORITATIVE Design Document\n"
+        "The following design document was approved during the DESIGN phase. "
+        "It is the AUTHORITATIVE specification for this task.\n\n"
+        "**CRITICAL:** This design document OVERRIDES the Task Summary below "
+        "when they differ in scope or detail. The Task Summary is only a brief "
+        "label. The design document defines the FULL scope of what must be "
+        "implemented — all sections, rules, structures, and patterns specified "
+        "in the design MUST appear in your output.\n\n"
+        "**Design Scope:** {design_lines} lines across {design_sections} "
+        "sections. A partial implementation that omits designed sections "
+        "will be rejected in review.\n"
+    ),
+    "task_summary_label": (
+        "## Task Summary (label only — see AUTHORITATIVE Design Document "
+        "above for full scope)\n"
+    ),
+    "retry_feedback": (
+        "## Retry Feedback\n"
+        "The previous attempt failed. Please fix the issues and regenerate.\n"
+        "{error_block}\n"
+        "{test_block}"
+    ),
+    "design_doc_sr_disambiguation": (
+        "**NOTE:** The design document below uses SEARCH/REPLACE notation "
+        "to specify the changes to apply. These blocks describe WHAT to "
+        "change in the existing code \u2014 they are NOT your output format. "
+        "Follow the output format instructions in your system prompt.\n"
+    ),
+}
 
 
 def _normalize_target_path(value: str) -> str:
@@ -531,10 +650,12 @@ class DefaultChunkExecutor(ChunkExecutor):
             return True, "Dry-run: implementation skipped"
 
         if self.callback is None:
-            self.logger.debug(
-                f"[NO-OP] No callback provided for {chunk.chunk_id}, returning success"
+            self.logger.warning(
+                "Chunk %s: no callback provided — no code generated. "
+                "Register an LLM callback to produce real output.",
+                chunk.chunk_id,
             )
-            return True, "No callback: implementation logged"
+            return False, "No callback: no code was generated"
 
         try:
             self.logger.debug(f"Executing chunk {chunk.chunk_id}")
@@ -1265,12 +1386,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             goals_block=goals_block,
         )
         if text is None:
-            _pi_parts = ["## Project Identity\n", f"**Project:** {_proj_name}"]
-            if project_root_line:
-                _pi_parts.append(project_root_line)
-            if goals_block:
-                _pi_parts.append(goals_block)
-            text = "\n".join(_pi_parts)
+            return []
 
         if len(text) > 500:
             text = text[:500] + "\n..."
@@ -1304,19 +1420,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         template_name = "target_files_edit" if is_edit else "target_files_create"
         text = _format_implement_prompt(template_name, file_list=file_list)
         if text is None:
-            if is_edit:
-                header = (
-                    "## Target Files\n"
-                    "You MUST update the following existing file(s). Focus on applying the\n"
-                    "changes described in the design document — do NOT rewrite from scratch.\n"
-                )
-            else:
-                header = (
-                    "## Target Files\n"
-                    "You MUST generate the following file(s). Focus on implementing "
-                    "the PRIMARY artifact — do NOT generate test code.\n"
-                )
-            text = header + file_list
+            return []
 
         return [text, "\n---\n"]
 
@@ -1426,13 +1530,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             "importable_modules", module_list=module_list
         )
         if text is None:
-            text = (
-                "## Importable Modules (ground truth)\n"
-                "The following modules ACTUALLY EXIST in the project. When writing\n"
-                "import statements, ONLY use module paths from this list. Do NOT\n"
-                "invent module paths from the design document if they are not listed here.\n\n"
-                + module_list
-            )
+            return []
 
         if scaffold_inventory:
             text += "\nImport ONLY from the modules listed above. Do not invent import paths."
@@ -1831,24 +1929,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             min_lines=min_lines,
         )
         if text is None:
-            pct = int(cls._MIN_OUTPUT_FRACTION * 100)
-            text = (
-                "## Edit-First Directive\n"
-                "**CRITICAL:** The target files shown above already exist in the project. "
-                "You MUST:\n"
-                "1. PRESERVE all existing functions, classes, imports, and logic "
-                "that are not explicitly being changed\n"
-                "2. ADD or MODIFY only what the design document specifies\n"
-                "3. NEVER remove existing code unless the design explicitly requires it\n"
-                "4. MAINTAIN backward compatibility — existing callers must continue to work\n"
-                "5. Keep existing docstrings, type hints, and error handling intact\n"
-                "\nTreat this as an EDIT to production code, not a greenfield implementation. "
-                "If the design document describes new functionality, integrate it alongside "
-                "the existing code.\n"
-                f"\n**SIZE CONSTRAINT:** The existing file(s) total {total_lines} lines. "
-                f"Your output MUST be AT LEAST {min_lines} lines ({pct}% of original). "
-                f"Outputs significantly shorter than the original will be REJECTED.\n"
-            )
+            return []
 
         return [text, "\n---\n"]
 
@@ -1936,16 +2017,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             mode_guidance=mode_guidance,
         )
         if text is None:
-            _em_parts = [
-                "## Edit Mode Classification\n",
-                f"**Task mode:** {mode_upper} (confidence: {confidence})\n",
-            ]
-            if per_file_details:
-                _em_parts.append(per_file_details)
-            if signal_conflicts:
-                _em_parts.append(signal_conflicts)
-            _em_parts.append(mode_guidance)
-            text = "\n".join(_em_parts)
+            return []
 
         return [text, "\n---\n"]
 
@@ -2090,50 +2162,21 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         summary_label = _format_implement_prompt("task_summary_label")
 
         if framing is None:
-            if existing:
-                framing = (
-                    "## AUTHORITATIVE Design Changes\n"
-                    "The following design document describes CHANGES to apply to the "
-                    "existing code shown above. It is the AUTHORITATIVE specification "
-                    "for what to ADD or MODIFY.\n\n"
-                    "**CRITICAL:** Apply these changes to the existing code. "
-                    "Do NOT rewrite the file from scratch. The existing code is the "
-                    "foundation — the design document describes what to change, not "
-                    "what the entire file should look like.\n\n"
-                    f"**Design Scope:** {design_lines} lines across {design_sections} "
-                    f"sections. A partial implementation that omits designed sections "
-                    f"will be rejected in review.\n"
-                )
-            else:
-                framing = (
-                    "## AUTHORITATIVE Design Document\n"
-                    "The following design document was approved during the DESIGN phase. "
-                    "It is the AUTHORITATIVE specification for this task.\n\n"
-                    "**CRITICAL:** This design document OVERRIDES the Task Summary below "
-                    "when they differ in scope or detail. The Task Summary is only a brief "
-                    "label. The design document defines the FULL scope of what must be "
-                    "implemented — all sections, rules, structures, and patterns specified "
-                    "in the design MUST appear in your output.\n\n"
-                    f"**Design Scope:** {design_lines} lines across {design_sections} "
-                    f"sections. A partial implementation that omits designed sections "
-                    f"will be rejected in review.\n"
-                )
-        if summary_label is None:
-            summary_label = (
-                "## Task Summary (label only — see AUTHORITATIVE Design Document "
-                "above for full scope)\n"
+            # All fallbacks are now in _INLINE_FALLBACK_TEMPLATES — if we still
+            # got None, the template name itself is unrecognised.
+            _log.warning(
+                "Design framing template %s has no fallback — prompt will lack "
+                "authoritative design context", template_name,
             )
+            framing = f"## Design Document ({design_lines} lines, {design_sections} sections)\n"
+        if summary_label is None:
+            summary_label = _INLINE_FALLBACK_TEMPLATES["task_summary_label"]
 
         # AR-410: disambiguate when design doc contains S/R specification blocks
         _has_sr = "<<<<<<< SEARCH" in filtered_doc or ">>>>>>> REPLACE" in filtered_doc
         sr_note = ""
         if _has_sr and template_name == "design_doc_edit":
-            sr_note = _format_implement_prompt("design_doc_sr_disambiguation") or (
-                "**NOTE:** The design document below uses SEARCH/REPLACE notation "
-                "to specify the changes to apply. These blocks describe WHAT to "
-                "change in the existing code \u2014 they are NOT your output format. "
-                "Follow the output format instructions in your system prompt.\n"
-            )
+            sr_note = _format_implement_prompt("design_doc_sr_disambiguation") or ""
 
         parts = [framing]
         if sr_note:
@@ -2312,13 +2355,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             test_block=test_block,
         )
         if text is None:
-            text = (
-                "\n## Retry Feedback\n"
-                "The previous attempt failed. Please fix the issues "
-                "and regenerate."
-                + error_block
-                + test_block
-            )
+            return []
 
         return [text]
 

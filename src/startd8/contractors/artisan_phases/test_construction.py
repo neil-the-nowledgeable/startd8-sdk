@@ -491,7 +491,7 @@ def generate_test_cases_for_function(func_spec: FunctionSpec) -> List[TestCase]:
         )
     )
 
-    # -- returns test --
+    # -- returns test (template stub — skipped until LLM populates assertions) --
     func_arrange, func_call = _make_func_call(func_spec)
     body_parts = ["# Arrange"]
     if func_arrange:
@@ -504,7 +504,11 @@ def generate_test_cases_for_function(func_spec: FunctionSpec) -> List[TestCase]:
         body_parts.append(f"result = {func_call}")
     body_parts.append("")
     body_parts.append("# Assert")
-    body_parts.append("assert result is not None  # TODO: assert specific value")
+    body_parts.append("assert result is not None  # Template stub — needs real assertions")
+
+    skip_markers = list(markers) + [
+        'skip(reason="Template-generated stub: needs LLM-driven assertions")'
+    ]
 
     test_cases.append(
         TestCase(
@@ -512,9 +516,9 @@ def generate_test_cases_for_function(func_spec: FunctionSpec) -> List[TestCase]:
             test_type=TestType.UNIT,
             target_name=fn,
             target_method=None,
-            description=f"Verify {fn} returns expected result",
+            description=f"Verify {fn} returns expected result [TEMPLATE STUB]",
             test_body="\n    ".join(body_parts),
-            markers=list(markers),
+            markers=skip_markers,
         )
     )
 
@@ -582,16 +586,16 @@ def generate_edge_case_tests(
         if "raises" in expected.lower() or "error" in expected.lower():
             body = (
                 "# Edge case: " + description + "\n"
-                "    # TODO: set up edge-case conditions\n"
-                "    with pytest.raises(Exception):  # TODO: specific exception\n"
-                "        pass  # TODO: call target"
+                "    # Template stub — needs LLM-driven setup and assertions\n"
+                "    with pytest.raises(Exception):  # Needs specific exception type\n"
+                "        pass  # Needs target invocation"
             )
         else:
             body = (
                 "# Edge case: " + description + "\n"
-                "    # TODO: set up edge-case conditions\n"
-                "    result = None  # TODO: call target\n"
-                "    assert result is not None  # TODO: assert expected"
+                "    # Template stub — needs LLM-driven setup and assertions\n"
+                "    result = None  # Needs target invocation\n"
+                "    assert result is not None  # Needs specific assertion"
             )
 
         # Determine whether this is a class test
@@ -603,8 +607,9 @@ def generate_edge_case_tests(
                 test_type=TestType.EDGE_CASE,
                 target_name=target_name,
                 target_method=target_method,
-                description=description,
+                description=f"{description} [TEMPLATE STUB]",
                 test_body=body,
+                markers=['skip(reason="Template-generated stub: needs LLM-driven assertions")'],
                 _is_class_test=is_class,
             )
         )
@@ -1999,7 +2004,7 @@ class TestConstructionPhase:
                 return result
 
             # 2. Generate test cases for classes & functions
-            logger.info("Step 2: Generating test cases")
+            logger.info("Step 2: Generating template-based test cases")
             all_test_cases: List[TestCase] = []
 
             for cls_spec in design.classes:
@@ -2014,6 +2019,22 @@ class TestConstructionPhase:
             logger.info("Step 3: Generating edge-case tests")
             edge_tests = generate_edge_case_tests(design.edge_cases, design)
             all_test_cases.extend(edge_tests)
+
+            # Warn about template-generated stubs — these have skip markers
+            # and should be replaced by LLM-driven tests when agent_spec is
+            # provided.
+            stub_count = sum(
+                1 for tc in all_test_cases
+                if any("Template-generated stub" in m for m in tc.markers)
+            )
+            if stub_count > 0:
+                logger.warning(
+                    "Template-based generation produced %d stub test(s) "
+                    "marked @pytest.mark.skip. These do NOT validate real "
+                    "behavior — provide agent_spec for LLM-driven test "
+                    "generation to get meaningful assertions.",
+                    stub_count,
+                )
 
             # 4. Build test modules (group by module_path)
             logger.info("Step 4: Building test modules")
