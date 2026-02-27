@@ -62,6 +62,7 @@ _POSTMORTEM_LLM_THREAD_TIMEOUT = 600.0  # with LLM judge
 _VERDICT_PASS = "PASS"
 _VERDICT_PARTIAL = "PARTIAL"
 _VERDICT_FAIL = "FAIL"
+_CURRENCY_SYMBOL = "$"
 
 
 # ---------------------------------------------------------------------------
@@ -830,7 +831,7 @@ class PostMortemEvaluator:
             for phase, info in report.phase_summary.items():
                 lines.append(
                     f"| {phase} | {info.get('status', '-')} | "
-                    f"${info.get('cost', 0):.4f} | "
+                    f"{_CURRENCY_SYMBOL}{info.get('cost', 0):.4f} | "
                     f"{info.get('duration_seconds', 0):.1f} |"
                 )
             lines.append("")
@@ -887,7 +888,7 @@ class PostMortemEvaluator:
         lines.append("## Cost Summary")
         lines.append("")
         lines.append(
-            f"- **Total Cost:** ${report.cost_summary.get('total_cost', 0):.4f}"
+            f"- **Total Cost:** {_CURRENCY_SYMBOL}{report.cost_summary.get('total_cost', 0):.4f}"
         )
         lines.append(
             f"- **Total Duration:** "

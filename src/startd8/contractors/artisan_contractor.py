@@ -167,6 +167,12 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "quality_gate_outcomes", "quality_gate_summary",
     # AR-153: bounded regenerate-with-feedback forensic transcript.
     "retry_transcripts",
+    # Complexity routing data (PLAN → IMPLEMENT)
+    "complexity_dimensions", "complexity_composite",
+    # FINALIZE phase: workflow summary and forensic artifacts
+    "workflow_summary", "forensic_artifacts",
+    # Manifest registry (run_workflow → IMPLEMENT/INTEGRATE)
+    "project_manifests",
 })
 
 # ---------------------------------------------------------------------------
