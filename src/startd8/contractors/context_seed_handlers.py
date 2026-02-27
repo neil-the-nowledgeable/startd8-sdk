@@ -368,6 +368,48 @@ def _log_task_timing(
     return now
 
 
+def _log_task_boundary_start(task: Any, *, phase: str) -> None:
+    """Emit AL-202 task-start debug log with structured fields."""
+    logger.debug(
+        "Processing task %s: %s",
+        task.task_id,
+        task.title,
+        extra={
+            "task_id": task.task_id,
+            "task_title": task.title,
+            "phase": phase,
+            "domain": task.domain,
+        },
+    )
+
+
+def _log_task_boundary_complete(
+    task_id: str,
+    *,
+    status: str,
+    phase: str,
+    cost_usd: Optional[float] = None,
+) -> None:
+    """Emit AL-202 task-completion debug log with structured fields."""
+    extra: dict[str, Any] = {
+        "task_id": task_id,
+        "status": status,
+        "phase": phase,
+    }
+    if cost_usd is not None:
+        extra["cost_usd"] = cost_usd
+    logger.debug("Task %s completed: %s", task_id, status, extra=extra)
+
+
+def _coerce_optional_float(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 # ============================================================================
 # Handler configuration
 # ============================================================================
@@ -3805,6 +3847,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 start,
                 previous_task_started_mono,
             )
+            _log_task_boundary_start(task, phase="design")
             # Skip tasks with env failures
             env_fails = [
                 c for c in task.environment_checks
@@ -3828,6 +3871,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 _sc = _capture_task_span_context(_task_span)
                 if _sc:
                     design_results[task.task_id]["_span_context"] = _sc
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status="env_blocked",
+                    phase="design",
+                )
                 _task_span_cm.__exit__(None, None, None)
                 continue
 
@@ -3938,6 +3986,14 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     _sc = _capture_task_span_context(_task_span)
                     if _sc:
                         design_results[task.task_id]["_span_context"] = _sc
+                    _log_task_boundary_complete(
+                        task.task_id,
+                        status="adopted",
+                        phase="design",
+                        cost_usd=_coerce_optional_float(
+                            design_results[task.task_id].get("cost")
+                        ),
+                    )
                     _task_span_cm.__exit__(None, None, None)
                     continue
 
@@ -3956,6 +4012,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 _sc = _capture_task_span_context(_task_span)
                 if _sc:
                     design_results[task.task_id]["_span_context"] = _sc
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status="dry_run_skipped",
+                    phase="design",
+                )
                 _task_span_cm.__exit__(None, None, None)
                 continue
 
@@ -4466,6 +4527,17 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             _sc = _capture_task_span_context(_task_span)
             if _sc and task.task_id in design_results:
                 design_results[task.task_id]["_span_context"] = _sc
+            _design_entry = design_results.get(task.task_id, {})
+            _log_task_boundary_complete(
+                task.task_id,
+                status=str(_design_entry.get("status", "unknown")),
+                phase="design",
+                cost_usd=(
+                    _coerce_optional_float(_design_entry.get("cost"))
+                    if isinstance(_design_entry, dict)
+                    else None
+                ),
+            )
             # Close the per-task span after the retry loop completes
             _task_span_cm.__exit__(None, None, None)
 
@@ -6231,6 +6303,7 @@ class Test{class_name}:
 
         env_blocked_ids: set[str] = set()
         for task in tasks:
+            _log_task_boundary_start(task, phase="implement")
             env_fails = [
                 c for c in task.environment_checks
                 if c.get("status") == "fail"
@@ -6253,6 +6326,11 @@ class Test{class_name}:
                         if c.get("status") in ("fail", "warn")
                     ],
                 })
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status="env_blocked",
+                    phase="implement",
+                )
 
         for task in tasks:
             if task.task_id in env_blocked_ids:
@@ -6274,6 +6352,11 @@ class Test{class_name}:
                     "blocked_dependencies": blocked_deps,
                     "depends_on": task.depends_on,
                 })
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status="dep_blocked_env",
+                    phase="implement",
+                )
                 continue
 
             # Extract design document from DESIGN phase results (if available).
@@ -6772,6 +6855,12 @@ class Test{class_name}:
             else:
                 task_report["status"] = "unknown"
 
+            _log_task_boundary_complete(
+                chunk_id,
+                status=str(task_report.get("status", "unknown")),
+                phase="implement",
+                cost_usd=_coerce_optional_float(task_report.get("cost")),
+            )
             task_reports.append(task_report)
 
         # Domain breakdown
@@ -7081,6 +7170,7 @@ class Test{class_name}:
         if dry_run:
             task_reports: list[dict[str, Any]] = []
             for task in tasks:
+                _log_task_boundary_start(task, phase="implement")
                 env_checks = self._check_environment(task)
                 task_report: dict[str, Any] = {
                     "task_id": task.task_id,
@@ -7098,6 +7188,11 @@ class Test{class_name}:
                 if env_checks:
                     task_report["environment_issues"] = env_checks
                 task_reports.append(task_report)
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status=str(task_report["status"]),
+                    phase="implement",
+                )
 
             domain_tasks: dict[str, list[str]] = defaultdict(list)
             for task in tasks:
@@ -7190,6 +7285,7 @@ class Test{class_name}:
 
                     task_reports: list[dict[str, Any]] = []
                     for task in tasks:
+                        _log_task_boundary_start(task, phase="implement")
                         gr = generation_results.get(task.task_id)
                         report: dict[str, Any] = {
                             "task_id": task.task_id,
@@ -7216,6 +7312,12 @@ class Test{class_name}:
                         else:
                             report["status"] = "not_in_saved_results"
                         task_reports.append(report)
+                        _log_task_boundary_complete(
+                            task.task_id,
+                            status=str(report["status"]),
+                            phase="implement",
+                            cost_usd=_coerce_optional_float(report.get("cost")),
+                        )
 
                     output: dict[str, Any] = {
                         "task_reports": task_reports,
@@ -8448,6 +8550,7 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
             task = task_map.get(task_id)
             if not task:
                 continue
+            _log_task_boundary_start(task, phase="integrate")
 
             _links = _build_provenance_links(task_id, context, ["design", "implement"])
             with _phase_tracer.start_as_current_span(
@@ -8488,6 +8591,11 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                             "truncation.action": "rejected",
                             "truncation.source": _task_trunc.get("source", "unknown"),
                         },
+                    )
+                    _log_task_boundary_complete(
+                        task_id,
+                        status="BLOCKED",
+                        phase="integrate",
                     )
                     continue
 
@@ -8555,6 +8663,11 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 _sc = _capture_task_span_context(_int_span)
                 if _sc:
                     integration_results[task_id]["_span_context"] = _sc
+                _log_task_boundary_complete(
+                    task_id,
+                    status=str(integration_results[task_id].get("status", "unknown")),
+                    phase="integrate",
+                )
 
                 # Update generation_results paths: staging → project_root
                 if result.success:
@@ -9175,6 +9288,8 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 start,
                 previous_task_started_mono,
             )
+            _log_task_boundary_start(task, phase="test")
+            task_status = "unknown"
             validators = task.post_generation_validators
             for v in validators:
                 validator_counts[v] += 1
@@ -9194,6 +9309,11 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 _sc = _capture_task_span_context(_task_span)
                 if _sc:
                     test_entry["_span_context"] = _sc
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status="dry_run_planned",
+                    phase="test",
+                )
                 _task_span_cm.__exit__(None, None, None)
                 continue
 
@@ -9216,6 +9336,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                         "status": "skipped_no_generation",
                     })
                     _task_span.set_attribute("task.status", "skipped_no_generation")
+                    task_status = "skipped_no_generation"
                     continue
 
                 # Run validators
@@ -9231,9 +9352,11 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 if task_test_result["all_passed"]:
                     total_passed += 1
                     _task_span.set_attribute("task.status", "passed")
+                    task_status = "passed"
                 else:
                     total_failed += 1
                     _task_span.set_attribute("task.status", "failed")
+                    task_status = "failed"
             except Exception as exc:
                 logger.warning(
                     "TEST: unexpected error for task %s: %s",
@@ -9251,10 +9374,16 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 })
                 total_failed += 1
                 _task_span.set_attribute("task.status", "error")
+                task_status = "error"
             finally:
                 _sc = _capture_task_span_context(_task_span)
                 if _sc and test_plan:
                     test_plan[-1]["_span_context"] = _sc
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status=task_status,
+                    phase="test",
+                )
                 _task_span_cm.__exit__(None, None, None)
 
         per_task: dict[str, Any] = {}
@@ -10737,6 +10866,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 start,
                 previous_task_started_mono,
             )
+            _log_task_boundary_start(task, phase="review")
+            task_status = "unknown"
+            task_cost: Optional[float] = None
             # Count constraint types (always, for coverage report)
             for constraint in task.prompt_constraints:
                 key = constraint.split("(")[0].strip()[:60]
@@ -10763,6 +10895,11 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "review_status": "dry_run_pending",
                 })
                 _task_span.set_attribute("task.status", "dry_run_pending")
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status="dry_run_pending",
+                    phase="review",
+                )
                 _task_span_cm.__exit__(None, None, None)
                 continue
 
@@ -10785,6 +10922,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                         "env_warnings": len(env_warns),
                         "review_status": "skipped_no_generation",
                     })
+                    task_status = "skipped_no_generation"
                     continue
 
                 # Read generated code for review.
@@ -10835,6 +10973,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                         "env_warnings": len(env_warns),
                         "review_status": "skipped_no_code",
                     })
+                    task_status = "skipped_no_code"
                     continue
                 task_test = test_by_task.get(task.task_id, {})
 
@@ -10852,6 +10991,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     else:
                         total_failed += 1
                     review_items.append(review)
+                    task_status = "cached"
+                    task_cost = _coerce_optional_float(review.get("cost"))
                     logger.info(
                         "REVIEW: using cached result for %s (score=%s, passed=%s)",
                         task.task_id, cached.get("score"), cached.get("passed"),
@@ -10979,6 +11120,8 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     total_failed += 1
 
                 review_items.append(review)
+                task_status = str(review.get("review_status", "reviewed"))
+                task_cost = _coerce_optional_float(review.get("cost"))
 
                 # Emit quality gate result (Item 10)
                 try:
@@ -11001,10 +11144,17 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 )
                 total_failed += 1
                 _task_span.set_attribute("task.status", "error")
+                task_status = "error"
             finally:
                 _sc = _capture_task_span_context(_task_span)
                 if _sc and review_items:
                     review_items[-1]["_span_context"] = _sc
+                _log_task_boundary_complete(
+                    task.task_id,
+                    status=task_status,
+                    phase="review",
+                    cost_usd=task_cost,
+                )
                 _task_span_cm.__exit__(None, None, None)
 
         per_task: dict[str, Any] = {}

@@ -2087,10 +2087,14 @@ class ArtisanContractorWorkflow:
 
         last_error: Optional[Exception] = None
         phase_start_iso = ""
+        workflow_id = context.get("workflow_id") or self.config.workflow_id
 
         while attempt <= max_retries:
             phase_start = time.monotonic()
             phase_start_iso = datetime.now(timezone.utc).isoformat()
+            phase_success = False
+            phase_outcome = PhaseStatus.FAILED.value
+            phase_duration_ms: Optional[int] = None
 
             span_context = self.tracer.start_as_current_span(
                 f"phase.{phase.value}",
@@ -2104,6 +2108,15 @@ class ArtisanContractorWorkflow:
 
             with span_context as span:
                 try:
+                    self._logger.info(
+                        "Starting phase: %s",
+                        phase.value,
+                        extra={
+                            "phase": phase.value,
+                            "workflow_id": workflow_id,
+                            "attempt": attempt + 1,
+                        },
+                    )
                     # --- Context contract: entry validation ---
                     # validate_phase_boundary runs legacy validation
                     # internally, then contract entry + enrichment when
@@ -2116,16 +2129,41 @@ class ArtisanContractorWorkflow:
                             phase, context, "entry", self._contract_path
                         )
                         if entry_result:
+                            _entry_propagation_status = (
+                                entry_result.propagation_status.value
+                                if hasattr(entry_result, "propagation_status")
+                                else "unknown"
+                            )
+                            _entry_violations = list(
+                                getattr(entry_result, "blocking_failures", []) or []
+                            )
+                            _entry_extra = {
+                                "phase": phase.value,
+                                "passed": entry_result.passed,
+                                "gate.phase": phase.value,
+                                "gate.entry.passed": entry_result.passed,
+                                "gate.propagation_status": _entry_propagation_status,
+                                "gate.violations": _entry_violations,
+                            }
+                            if entry_result.passed:
+                                self._logger.info(
+                                    "gate.entry.passed=true phase=%s",
+                                    phase.value,
+                                    extra=_entry_extra,
+                                )
+                            else:
+                                self._logger.warning(
+                                    "gate.entry.passed=false phase=%s violations=%s",
+                                    phase.value,
+                                    _entry_violations,
+                                    extra=_entry_extra,
+                                )
                             gate_entry_span.set_attribute(
                                 "gate.passed", entry_result.passed
                             )
                             gate_entry_span.set_attribute(
                                 "gate.propagation_status",
-                                (
-                                    entry_result.propagation_status.value
-                                    if hasattr(entry_result, "propagation_status")
-                                    else "unknown"
-                                ),
+                                _entry_propagation_status,
                             )
                             try:
                                 from contextcore.contracts.propagation.otel import (
@@ -2169,16 +2207,41 @@ class ArtisanContractorWorkflow:
                             phase, context, "exit", self._contract_path
                         )
                         if exit_result:
+                            _exit_propagation_status = (
+                                exit_result.propagation_status.value
+                                if hasattr(exit_result, "propagation_status")
+                                else "unknown"
+                            )
+                            _exit_violations = list(
+                                getattr(exit_result, "blocking_failures", []) or []
+                            )
+                            _exit_extra = {
+                                "phase": phase.value,
+                                "passed": exit_result.passed,
+                                "gate.phase": phase.value,
+                                "gate.exit.passed": exit_result.passed,
+                                "gate.propagation_status": _exit_propagation_status,
+                                "gate.violations": _exit_violations,
+                            }
+                            if exit_result.passed:
+                                self._logger.info(
+                                    "gate.exit.passed=true phase=%s",
+                                    phase.value,
+                                    extra=_exit_extra,
+                                )
+                            else:
+                                self._logger.warning(
+                                    "gate.exit.passed=false phase=%s violations=%s",
+                                    phase.value,
+                                    _exit_violations,
+                                    extra=_exit_extra,
+                                )
                             gate_exit_span.set_attribute(
                                 "gate.passed", exit_result.passed
                             )
                             gate_exit_span.set_attribute(
                                 "gate.propagation_status",
-                                (
-                                    exit_result.propagation_status.value
-                                    if hasattr(exit_result, "propagation_status")
-                                    else "unknown"
-                                ),
+                                _exit_propagation_status,
                             )
                             try:
                                 from contextcore.contracts.propagation.otel import (
@@ -2196,6 +2259,8 @@ class ArtisanContractorWorkflow:
                         if config.dry_run
                         else PhaseStatus.COMPLETED
                     )
+                    phase_success = True
+                    phase_outcome = status.value
                     raw_cost = result_dict.get("cost")
                     try:
                         cost = float(raw_cost) if raw_cost is not None else 0.0
@@ -2229,6 +2294,8 @@ class ArtisanContractorWorkflow:
                 except FuturesTimeoutError:
                     phase_end = time.monotonic()
                     duration = phase_end - phase_start
+                    phase_duration_ms = int(duration * 1000)
+                    phase_outcome = PhaseStatus.TIMED_OUT.value
 
                     self._logger.warning(
                         "Phase %s timed out after %.2fs (attempt %d)",
@@ -2269,6 +2336,7 @@ class ArtisanContractorWorkflow:
                 except Exception as err:
                     phase_end = time.monotonic()
                     duration = phase_end - phase_start
+                    phase_duration_ms = int(duration * 1000)
                     last_error = err
 
                     if HAS_OTEL and not isinstance(span, _NoOpSpan):
@@ -2279,6 +2347,7 @@ class ArtisanContractorWorkflow:
                         span.set_status(Status(StatusCode.ERROR, str(err)))
 
                     if attempt < max_retries:
+                        phase_outcome = "retrying"
                         self._logger.info(
                             "Phase %s failed (attempt %d/%d), retrying: %s",
                             phase.value,
@@ -2300,6 +2369,7 @@ class ArtisanContractorWorkflow:
                         attempt + 1,
                         err,
                     )
+                    phase_outcome = PhaseStatus.FAILED.value
 
                     self._record_error(
                         source=phase.value,
@@ -2319,6 +2389,22 @@ class ArtisanContractorWorkflow:
                         duration_seconds=duration,
                         error_message=str(err),
                         retry_count=attempt,
+                    )
+                finally:
+                    if phase_duration_ms is None:
+                        phase_duration_ms = int((time.monotonic() - phase_start) * 1000)
+                    self._logger.info(
+                        "Finished phase: %s (%s)",
+                        phase.value,
+                        "success" if phase_success else "failure",
+                        extra={
+                            "phase": phase.value,
+                            "success": phase_success,
+                            "duration_ms": phase_duration_ms,
+                            "workflow_id": workflow_id,
+                            "status": phase_outcome,
+                            "attempt": attempt + 1,
+                        },
                     )
 
         # Defensive fallback (should be unreachable)
