@@ -168,6 +168,23 @@ class TestSVPrereq:
             "run_artisan_workflow.py missing DomainPreflightWorkflow import"
         )
 
+    def test_feature_serial_default_is_wired(self):
+        """Runner defaults to feature-serial and forwards it into WorkflowConfig."""
+        script = Path(__file__).resolve().parents[2] / "scripts" / "run_artisan_workflow.py"
+        if not script.exists():
+            pytest.skip("run_artisan_workflow.py not found at expected path")
+
+        content = script.read_text(encoding="utf-8")
+        assert "--phase-serial" in content, (
+            "run_artisan_workflow.py missing --phase-serial CLI override"
+        )
+        assert "parser.set_defaults(feature_serial=True)" in content, (
+            "run_artisan_workflow.py missing feature-serial default"
+        )
+        assert "feature_serial=args.feature_serial" in content, (
+            "run_artisan_workflow.py missing feature_serial wiring into WorkflowConfig"
+        )
+
 
 # ---------------------------------------------------------------------------
 # SV-005: Design calibration is domain-aware (Gap #2)

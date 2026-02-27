@@ -4965,14 +4965,14 @@ def _extract_complexity_signals(
     except (TypeError, AttributeError) as exc:
         logger.debug("CMR: call graph caller extraction failed for %s: %s", _chunk_id, exc)
 
-    # Edit mode from classification
+    # Edit mode from classification (normalized at extraction boundary)
     edit_mode = "unknown"
     try:
         edit_mode_dict = meta.get("_edit_mode")
         if edit_mode_dict and isinstance(edit_mode_dict, dict):
-            edit_mode = edit_mode_dict.get("mode", "unknown")
+            edit_mode = str(edit_mode_dict.get("mode", "unknown")).strip().lower()
         elif isinstance(edit_mode_dict, str):
-            edit_mode = edit_mode_dict
+            edit_mode = edit_mode_dict.strip().lower()
     except (TypeError, AttributeError) as exc:
         logger.debug("CMR: edit mode extraction failed for %s: %s", _chunk_id, exc)
 
@@ -5052,15 +5052,14 @@ def _extract_complexity_signals(
             except Exception:
                 logger.debug("CMR: manifest signal extraction failed for %s", _chunk_id, exc_info=True)
 
-    # REQ-CMR-013 confidence signal: how much manifest/call-graph data was available.
-    if manifest_registry is None:
-        manifest_coverage = "none"
-    elif target_files and manifests_found == len(target_files) and bool(cg_callers):
-        manifest_coverage = "full"
-    elif manifests_found > 0 or bool(cg_callers):
-        manifest_coverage = "partial"
-    else:
-        manifest_coverage = "none"
+    # Simplified confidence signal: binary manifest coverage.
+    manifest_coverage = (
+        "full"
+        if manifest_registry is not None
+        and target_files
+        and manifests_found == len(target_files)
+        else "none"
+    )
 
     return TaskComplexitySignals(
         blast_radius=blast_radius,
@@ -5131,6 +5130,26 @@ def _classify_complexity_tier(
 
     # --- Default: Tier 2 ---
     return TaskComplexityTier.TIER_2
+
+
+def _set_default_complexity_metadata(
+    chunk: Any,
+    *,
+    force: bool,
+) -> None:
+    """Set Tier 2 fallback metadata in one place."""
+    from startd8.contractors.artisan_phases.development import (
+        TaskComplexitySignals,
+        TaskComplexityTier,
+    )
+
+    if force:
+        chunk.metadata["_complexity_tier"] = TaskComplexityTier.TIER_2.value
+        chunk.metadata["_complexity_signals"] = TaskComplexitySignals().to_dict()
+        return
+
+    chunk.metadata.setdefault("_complexity_tier", TaskComplexityTier.TIER_2.value)
+    chunk.metadata.setdefault("_complexity_signals", TaskComplexitySignals().to_dict())
 
 
 class ImplementPhaseHandler(AbstractPhaseHandler):
@@ -7380,8 +7399,7 @@ class Test{class_name}:
                 for chunk in chunks:
                     try:
                         if not self.config.complexity_routing_enabled:
-                            chunk.metadata["_complexity_tier"] = TaskComplexityTier.TIER_2.value
-                            chunk.metadata["_complexity_signals"] = TaskComplexitySignals().to_dict()
+                            _set_default_complexity_metadata(chunk, force=True)
                             _tier_distribution["tier_2"] += 1
                             continue
 
@@ -7421,11 +7439,7 @@ class Test{class_name}:
                         )
                     except Exception:
                         # Graceful degradation — default to Tier 2
-                        chunk.metadata.setdefault("_complexity_tier", "tier_2")
-                        chunk.metadata.setdefault(
-                            "_complexity_signals",
-                            TaskComplexitySignals().to_dict(),
-                        )
+                        _set_default_complexity_metadata(chunk, force=False)
                         _tier_distribution["tier_2"] += 1
                         logger.warning(
                             "CMR: classification failed for chunk %s, defaulting to tier_2",

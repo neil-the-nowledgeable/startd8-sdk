@@ -22,12 +22,13 @@ Usage:
 
 import ast
 import json
-import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
+
+from startd8.logging_config import get_logger
 
 
 # ============================================================================
@@ -896,7 +897,7 @@ class FinalAssemblyPhase:
 
     def __init__(self) -> None:
         """Initialize phase."""
-        self.logger = logging.getLogger(self.__class__.__name__)
+        self.logger = get_logger(__name__)
 
     def run(self, context: Dict[str, Any]) -> ReconciliationReport:
         """Execute the final assembly phase.

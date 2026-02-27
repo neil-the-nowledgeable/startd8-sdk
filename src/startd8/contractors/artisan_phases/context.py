@@ -1,9 +1,10 @@
-import logging
 from enum import Enum
 from dataclasses import dataclass, field, replace
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from pathlib import Path
+
+from startd8.logging_config import get_logger
 
 
 class _FallbackEncoding:
@@ -963,7 +964,7 @@ except ImportError:
     tiktoken = None  # type: ignore[assignment]
     _HAS_TIKTOKEN = False
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 __all__ = [
     "ContextPriority",

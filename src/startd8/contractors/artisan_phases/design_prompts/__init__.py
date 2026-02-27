@@ -16,12 +16,12 @@ Usage::
 
 from __future__ import annotations
 
-import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 import yaml
+from startd8.logging_config import get_logger
 
 from .modules import (
     PromptFragment,
@@ -55,7 +55,7 @@ __all__ = [
     "DEFAULT_PROMPT_TOKEN_BUDGET",
 ]
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _TEMPLATES_DIR = Path(__file__).parent
 

@@ -43,6 +43,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, Protocol, Sequence, Type, runtime_checkable
 
+from startd8.logging_config import get_logger
+
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
 _OTEL_DESCRIPTORS = {
     "spans": [
@@ -92,7 +94,7 @@ __all__ = [
     "PhaseRunner",
 ]
 
-logger = logging.getLogger("startd8.phase_runner")
+logger = get_logger(__name__)
 
 
 class _NoOpSpan:

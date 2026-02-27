@@ -25,7 +25,7 @@ from ..protocols import (
 )
 
 
-logger = get_logger("startd8.contractors")
+logger = get_logger(__name__)
 
 
 # ============================================================================

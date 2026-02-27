@@ -16,17 +16,17 @@ mutate the returned data; public accessors return only strings or copies.
 from __future__ import annotations
 
 import copy
-import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
+from startd8.logging_config import get_logger
 
 from ...prompt_utils import format_constraints  # noqa: F401 (re-export)
 from ...prompt_utils import format_tiered_context  # noqa: F401 (re-export)
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 _PROMPTS_DIR = Path(__file__).parent
 

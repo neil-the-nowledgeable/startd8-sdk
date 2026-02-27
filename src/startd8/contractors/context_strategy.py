@@ -13,10 +13,11 @@ ContextResolutionStrategy protocol is used as a type annotation.
 from __future__ import annotations
 
 import dataclasses
-import logging
 import typing
 
-logger = logging.getLogger(__name__)
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------

@@ -36,16 +36,17 @@ from __future__ import annotations
 import abc
 import enum
 import hashlib
-import logging
 import re
 import time
 from dataclasses import dataclass, field
 from typing import ClassVar, Dict, List, Optional, Set, Tuple
 
+from startd8.logging_config import get_logger
+
 # ---------------------------------------------------------------------------
 # Module logger
 # ---------------------------------------------------------------------------
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ============================================================================

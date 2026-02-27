@@ -33,7 +33,6 @@ import copy
 import enum
 import hashlib
 import json
-import logging
 import os
 import pickle
 import re
@@ -1416,9 +1415,7 @@ class ArtisanContractorWorkflow:
             if _default.exists():
                 contract_path = _default
         self._contract_path = contract_path
-        self._logger = logging.getLogger(
-            f"artisan_contractor.{self.config.workflow_id}"
-        )
+        self._logger = get_logger(__name__)
 
         # Checkpoint store selection
         if checkpoint_store is not None:

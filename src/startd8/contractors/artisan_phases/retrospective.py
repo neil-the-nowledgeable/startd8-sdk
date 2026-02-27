@@ -47,6 +47,8 @@ import re
 import uuid
 from typing import Any, Dict, List, Optional
 
+from startd8.logging_config import get_logger
+
 
 # ============================================================================
 # Enums
@@ -431,7 +433,7 @@ class AntiPatternDetector:
 
     def __init__(self) -> None:
         """Initialize the anti-pattern detector."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def detect(self, context: RetrospectiveContext) -> List[AntiPatternFinding]:
         """
@@ -858,7 +860,7 @@ class LessonCapture:
 
     def __init__(self) -> None:
         """Initialize the lesson capture utility."""
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def capture(self, context: RetrospectiveContext) -> List[RetroItem]:
         """
@@ -1275,7 +1277,7 @@ class RetrospectivePhase:
             anti_pattern_detector or AntiPatternDetector()
         )
         self.capture: LessonCapture = LessonCapture()
-        self.logger: logging.Logger = logging.getLogger(__name__)
+        self.logger: logging.Logger = get_logger(__name__)
 
     def run(self, context: RetrospectiveContext) -> RetrospectiveReport:
         """

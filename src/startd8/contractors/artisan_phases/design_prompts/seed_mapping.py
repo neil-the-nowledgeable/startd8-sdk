@@ -7,13 +7,14 @@ for missing fields (Mottainai rule 3: degrade gracefully).
 
 from __future__ import annotations
 
-import logging
 from typing import Any, TYPE_CHECKING
+
+from startd8.logging_config import get_logger
 
 if TYPE_CHECKING:
     from startd8.contractors.context_seed_handlers import SeedTask
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def extract_identity(

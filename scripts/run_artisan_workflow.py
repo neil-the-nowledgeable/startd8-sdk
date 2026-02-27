@@ -476,6 +476,28 @@ def main() -> int:
         ),
     )
 
+    serial_mode_group = parser.add_mutually_exclusive_group()
+    serial_mode_group.add_argument(
+        "--feature-serial",
+        dest="feature_serial",
+        action="store_true",
+        help=(
+            "Feature-serial execution (default): each task runs DESIGN→IMPLEMENT→"
+            "INTEGRATE→TEST→REVIEW before the next task starts. FINALIZE runs once "
+            "after all tasks."
+        ),
+    )
+    serial_mode_group.add_argument(
+        "--phase-serial",
+        dest="feature_serial",
+        action="store_false",
+        help=(
+            "Phase-serial execution: all tasks complete each phase before moving to "
+            "the next phase."
+        ),
+    )
+    parser.set_defaults(feature_serial=True)
+
     parser.add_argument(
         "--lane-parallel", action="store_true",
         help=(
@@ -578,6 +600,17 @@ def main() -> int:
     setup_logging(verbose=args.verbose)
 
     logger = logging.getLogger("run_artisan_workflow")
+
+    if args.lane_parallel and args.feature_serial:
+        logger.warning(
+            "--lane-parallel requested; disabling feature-serial default for this run"
+        )
+        args.feature_serial = False
+    if args.wave_parallel and args.feature_serial:
+        logger.warning(
+            "--wave-parallel requested; disabling feature-serial default for this run"
+        )
+        args.feature_serial = False
 
     # Auto-configure OTel (metrics + traces) so artisan workflow data
     # reaches Mimir/Tempo/Loki via the collector.  In "auto" mode this
@@ -891,6 +924,7 @@ def main() -> int:
         phase_timeout_seconds=args.phase_timeout,
         checkpoint_dir=args.checkpoint_dir,
         project_root=str(Path(args.project_root).resolve()),
+        feature_serial=args.feature_serial,
         lane_parallel=args.lane_parallel,
         max_parallel_lanes=args.max_lanes,
         wave_parallel=args.wave_parallel,
@@ -924,6 +958,12 @@ def main() -> int:
             "Execution mode: lane-parallel (max %d concurrent lanes)",
             config.max_parallel_lanes,
         )
+    elif config.feature_serial:
+        logger.info(
+            "Execution mode: feature-serial (single task through DESIGN→REVIEW before next task)",
+        )
+    else:
+        logger.info("Execution mode: phase-serial")
 
     # Determine phase sublist when --stop-after is set
     phases = None

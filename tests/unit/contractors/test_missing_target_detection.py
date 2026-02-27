@@ -98,7 +98,7 @@ class TestLLMChunkExecutorMissingTargets:
 
         assert success is True
         assert "_missing_targets" in chunk.metadata
-        assert chunk.metadata["_missing_targets"] == ["bar.py"]
+        assert chunk.metadata["_missing_targets"] == ["src/bar.py"]
 
     @pytest.mark.asyncio
     async def test_all_targets_produced_no_flag(self, tmp_path):
@@ -183,3 +183,37 @@ class TestLLMChunkExecutorMissingTargets:
 
         assert success is True
         assert "_missing_targets" not in chunk.metadata
+
+    @pytest.mark.asyncio
+    async def test_same_basename_in_different_dirs_detects_missing(self, tmp_path):
+        """Path-aware detection should not collapse by basename."""
+        chunk = _make_chunk(file_targets=["a/config.py", "b/config.py"])
+        executor = LLMChunkExecutor(
+            drafter_agent="mock:mock-model",
+            output_dir=tmp_path,
+        )
+
+        fake_usage = _FakeTokenUsage()
+        mock_agent = AsyncMock()
+        mock_agent.agenerate = AsyncMock(
+            return_value=("```python\nprint('hello')\n```", 100, fake_usage),
+        )
+        mock_agent.model = "mock:mock-model"
+
+        only_one = tmp_path / "a" / "config.py"
+        only_one.parent.mkdir(parents=True, exist_ok=True)
+        only_one.write_text("print('hello')", encoding="utf-8")
+
+        with (
+            patch.object(executor, "_resolve_drafter", return_value=mock_agent),
+            patch(
+                "startd8.utils.code_extraction.extract_code_from_response",
+                return_value="print('hello')",
+            ),
+            patch.object(executor, "_write_generated_files", return_value=[only_one]),
+            patch("startd8.contractors.forensic_log.emit_forensic_log"),
+        ):
+            success, output = await executor.execute(chunk, {})
+
+        assert success is True
+        assert chunk.metadata["_missing_targets"] == ["b/config.py"]

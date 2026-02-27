@@ -12,6 +12,7 @@ Tests cover:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 from typing import Any, Optional
 from unittest.mock import MagicMock
 
@@ -90,13 +91,14 @@ class TestTaskComplexitySignals:
         assert signals.mro_depth == 0
         assert signals.unresolved_call_count == 0
         assert signals.has_cross_file_edges is False
+        assert signals.manifest_coverage == "none"
 
     def test_to_dict(self) -> None:
         signals = TaskComplexitySignals(blast_radius=3, edit_mode="create")
         d = signals.to_dict()
         assert d["blast_radius"] == 3
         assert d["edit_mode"] == "create"
-        assert len(d) == 10  # All 10 fields
+        assert len(d) == 11  # All 11 fields
 
     def test_frozen(self) -> None:
         signals = TaskComplexitySignals()
@@ -188,6 +190,7 @@ class TestClassifyTier1:
             has_dynamic_dispatch=False,
             estimated_loc=100,
             target_file_count=1,
+            manifest_coverage="full",
         )
         assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_1
 
@@ -289,6 +292,7 @@ class TestClassifyThresholdOverrides:
             caller_count=0,
             estimated_loc=180,
             target_file_count=1,
+            manifest_coverage="full",
         )
         assert _classify_complexity_tier(signals, config) == TaskComplexityTier.TIER_1
 
@@ -373,6 +377,34 @@ class TestExtractComplexitySignals:
         # Should return defaults without raising
         assert isinstance(signals, TaskComplexitySignals)
 
+    def test_manifest_coverage_full_without_callers(self) -> None:
+        """Manifest present for all targets should count as full coverage."""
+        chunk = FakeChunk(metadata={
+            "_edit_mode": "create",
+            "_call_graph_callers": [],
+            "estimated_loc": 10,
+        })
+
+        class _Registry:
+            def get(self, _tf: str) -> Any:
+                return SimpleNamespace(elements=[])
+
+            def call_graph(self) -> dict[str, set[str]]:
+                return {}
+
+        signals = _extract_complexity_signals(chunk, _Registry())
+        assert signals.manifest_coverage == "full"
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_1
+
+    def test_edit_mode_normalized_to_lowercase(self) -> None:
+        chunk = FakeChunk(metadata={
+            "_edit_mode": {"mode": "EDIT"},
+            "_call_graph_callers": [{"direct_callers": ["a", "b", "c", "d"], "blast_radius": 0}],
+        })
+        signals = _extract_complexity_signals(chunk, None)
+        assert signals.edit_mode == "edit"
+        assert _classify_complexity_tier(signals, _make_config()) == TaskComplexityTier.TIER_3
+
 
 # ============================================================================
 # Graceful degradation
@@ -387,12 +419,7 @@ class TestGracefulDegradation:
         chunk = FakeChunk(metadata={"_edit_mode": {"mode": "create"}})
         signals = _extract_complexity_signals(chunk, None)
         tier = _classify_complexity_tier(signals, _make_config())
-        # Without blast_radius/caller data, won't be Tier 1 because
-        # default estimated_loc=0 < 150 AND edit_mode=create, but
-        # blast_radius == 0 from defaults (no confidence guard here).
-        # Actually this WOULD qualify for Tier 1 since all conditions pass.
-        # The confidence guard (REQ-CMR-013, P1) is a separate check.
-        assert tier in (TaskComplexityTier.TIER_1, TaskComplexityTier.TIER_2)
+        assert tier == TaskComplexityTier.TIER_2
 
     def test_routing_disabled_via_config(self) -> None:
         """complexity_routing_enabled=False → classification not called."""
@@ -434,6 +461,7 @@ class TestHandlerConfigCMR:
         assert config.complexity_loc_tier1_max == 150
         assert config.complexity_loc_tier3_min == 500
         assert config.complexity_caller_tier3 == 3
+        assert config.complexity_tier2_gate_escalation is False
         # tier3_agent resolved in __post_init__
         assert config.tier3_agent is not None
 

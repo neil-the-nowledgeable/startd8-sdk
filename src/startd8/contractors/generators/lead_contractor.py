@@ -15,7 +15,7 @@ from ..protocols import (
     VALIDATE_MODEL_CLAUDE_SONNET,
 )
 
-logger = get_logger("startd8.contractors.generators")
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Helpers

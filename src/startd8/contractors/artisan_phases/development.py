@@ -73,6 +73,7 @@ from startd8.contractors.protocols import (
     VALIDATE_MODEL_CLAUDE_SONNET,
 )
 from startd8.logging_config import get_logger
+from startd8.otel_conventions import AttributeKeys
 
 # OTel instrumentation (graceful degradation when unavailable)
 try:
@@ -117,6 +118,33 @@ def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]
         return None
 
 
+def _normalize_target_path(value: str) -> str:
+    """Normalize relative target paths for deterministic comparisons."""
+    path = Path(value)
+    normalized = path.as_posix()
+    if normalized.startswith("./"):
+        normalized = normalized[2:]
+    return normalized
+
+
+def _detect_missing_targets(
+    *,
+    expected_targets: List[str],
+    written_files: List[Path],
+    output_dir: Path,
+) -> Set[str]:
+    """Return expected target paths that were not produced by the executor."""
+    expected = {_normalize_target_path(target) for target in expected_targets}
+    actual: Set[str] = set()
+    for written in written_files:
+        try:
+            relative = written.resolve().relative_to(output_dir.resolve())
+            actual.add(_normalize_target_path(str(relative)))
+        except ValueError:
+            actual.add(_normalize_target_path(str(written)))
+    return expected - actual
+
+
 # ============================================================================
 # ENUMS
 # ============================================================================
@@ -154,6 +182,7 @@ class TaskComplexitySignals:
     mro_depth: int = 0
     unresolved_call_count: int = 0
     has_cross_file_edges: bool = False
+    manifest_coverage: str = "none"
 
     def to_dict(self) -> Dict[str, Any]:
         """Serialize to dict for JSON storage and forensic logging.
@@ -491,7 +520,7 @@ class DefaultChunkExecutor(ChunkExecutor):
                 If None, operates in no-op mode.
         """
         self.callback = callback
-        self.logger = get_logger("startd8.development.executor")
+        self.logger = get_logger(__name__)
 
     async def execute(
         self, chunk: DevelopmentChunk, context: Dict[str, Any]
@@ -583,7 +612,7 @@ class LLMChunkExecutor(ChunkExecutor):
         self._drafter: Optional[Any] = None
         self._lead: Optional[Any] = None
 
-        self.logger = get_logger("startd8.development.llm_executor")
+        self.logger = get_logger(__name__)
 
     # ------------------------------------------------------------------
     # Agent resolution (lazy, cached)
@@ -846,6 +875,9 @@ class LLMChunkExecutor(ChunkExecutor):
                     "prompt_constraints_count": len(context.get("domain_constraints", []))
                         if isinstance(context.get("domain_constraints"), list) else 0,
                     "environment_checks_count": context.get("_environment_checks_count"),
+                    "complexity_manifest_coverage": (
+                        chunk.metadata.get("_complexity_signals", {}) or {}
+                    ).get("manifest_coverage", "none"),
                 },
             )
 
@@ -862,16 +894,18 @@ class LLMChunkExecutor(ChunkExecutor):
 
             # Check for missing target files
             if written_files and chunk.file_targets:
-                generated_names = {f.name for f in written_files}
-                expected_names = {Path(t).name for t in chunk.file_targets}
-                missing = expected_names - generated_names
+                missing = _detect_missing_targets(
+                    expected_targets=chunk.file_targets,
+                    written_files=written_files,
+                    output_dir=self._output_dir,
+                )
                 if missing:
                     chunk.metadata["_missing_targets"] = sorted(missing)
                     self.logger.warning(
                         "IMPLEMENT: chunk %s missing %d of %d target files: %s",
                         chunk.chunk_id,
                         len(missing),
-                        len(expected_names),
+                        len(chunk.file_targets),
                         sorted(missing),
                     )
 
@@ -986,7 +1020,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         self._strict_truncation = strict_truncation
         self._project_root = project_root
         self._generator: Optional[Any] = None
-        self.logger = get_logger("startd8.development.lead_executor")
+        self.logger = get_logger(__name__)
 
     # ------------------------------------------------------------------
     # Generator resolution (lazy, cached)
@@ -2404,6 +2438,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         drafter_spec: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         refiner_spec: Optional[str] = None,
         tier3_drafter_spec: Optional[str] = None,
+        tier2_gate_escalation: bool = False,
         output_dir: Optional[Path] = None,
         max_tokens: Optional[int] = None,
         project_root: Optional[Path] = None,
@@ -2417,6 +2452,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 T2 refinement is skipped and T1 output is used directly.
             tier3_drafter_spec: Agent spec for Tier 3 Opus drafter (REQ-CMR-021).
                 When ``None``, Tier 3 chunks fall back to the default drafter_spec.
+            tier2_gate_escalation: Enable gate-driven Tier 2 escalation (REQ-CMR-022).
             output_dir: Staging directory for writing generated files.
             max_tokens: Override max_tokens for agent creation.
             project_root: Project root for reading existing files.
@@ -2434,11 +2470,12 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         self._drafter_spec = drafter_spec
         self._refiner_spec = refiner_spec
         self._tier3_drafter_spec = tier3_drafter_spec
+        self._tier2_gate_escalation = tier2_gate_escalation
         self._artisan_drafter: Optional[Any] = None
         self._artisan_refiner: Optional[Any] = None
         self._artisan_tier3_drafter: Optional[Any] = None
         self._artisan_max_tokens = max_tokens or 64000
-        self.logger = get_logger("startd8.development.artisan_executor")
+        self.logger = get_logger(__name__)
 
     # ------------------------------------------------------------------
     # Agent resolution (lazy, cached)
@@ -2746,6 +2783,9 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         task_desc: str,
         sys_prompt: Optional[str],
         context: Dict[str, Any],
+        *,
+        complexity_tier: str,
+        effective_drafter_spec: str,
     ) -> None:
         """Persist IMPLEMENT prompts to walkthrough directory (no LLM call)."""
         project_root = self._project_root or Path(".")
@@ -2789,6 +2829,9 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             "target_files": chunk.file_targets,
             "drafter_spec": self._drafter_spec,
             "refiner_spec": self._refiner_spec,
+            "complexity_tier": complexity_tier,
+            "complexity_signals": chunk.metadata.get("_complexity_signals", {}),
+            "effective_drafter": effective_drafter_spec,
             "t1_system_prompt_chars": len(sys_prompt) if sys_prompt else 0,
             "t1_user_prompt_chars": len(task_desc),
             "estimated_t1_tokens": len(task_desc) // 4,
@@ -3036,6 +3079,36 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             )
         return written
 
+    def _decide_t2_refinement(
+        self,
+        *,
+        complexity_tier: str,
+        written_files: List[Path],
+        missing_targets: Set[str],
+        chunk: DevelopmentChunk,
+    ) -> Tuple[bool, str]:
+        """Return whether T2 should run and the reason code."""
+        if complexity_tier == TaskComplexityTier.TIER_1.value:
+            return False, "tier_1"
+        if not written_files or not self._refiner_spec:
+            return False, "refiner_unavailable"
+        if not (
+            self._tier2_gate_escalation
+            and complexity_tier == TaskComplexityTier.TIER_2.value
+        ):
+            return True, "default_refine"
+
+        escalation_reasons: List[str] = []
+        if missing_targets:
+            escalation_reasons.append("missing_targets")
+        if chunk.metadata.get("_stubbed_files"):
+            escalation_reasons.append("stubbed_files")
+        if int(chunk.metadata.get("_search_replace_failed_blocks", 0) or 0) > 0:
+            escalation_reasons.append("search_replace_failed_blocks")
+        if escalation_reasons:
+            return True, ",".join(escalation_reasons)
+        return False, "tier2_gate_clear"
+
     # ------------------------------------------------------------------
     # Core execute (replaces LeadContractor path with direct agenerate)
     # ------------------------------------------------------------------
@@ -3089,7 +3162,14 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
 
             # ── Walkthrough short-circuit ────────────────────────────
             if context.get("walkthrough"):
-                self._persist_walkthrough_prompts(chunk, task_desc, sys_prompt, context)
+                self._persist_walkthrough_prompts(
+                    chunk,
+                    task_desc,
+                    sys_prompt,
+                    context,
+                    complexity_tier=_complexity_tier,
+                    effective_drafter_spec=_effective_drafter_spec,
+                )
                 return True, "Walkthrough: prompts persisted, LLM call skipped"
 
             self.logger.info(
@@ -3154,6 +3234,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             # ── Process response ──────────────────────────────────────
             use_sr = chunk.metadata.get("_use_search_replace", False)
             existing = chunk.metadata.get("_existing_file_contents", {})
+            chunk.metadata["_search_replace_failed_blocks"] = 0
 
             if use_sr and existing:
                 from startd8.utils.search_replace import (
@@ -3200,11 +3281,14 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                             applied_files[target] = result.content
 
                         if all_failed:
+                            chunk.metadata["_search_replace_failed_blocks"] = len(all_failed)
                             self.logger.warning(
                                 "Search/replace had %d failed block(s): %s",
                                 len(all_failed),
                                 "; ".join(all_failed[:3]),
                             )
+                        else:
+                            chunk.metadata["_search_replace_failed_blocks"] = 0
 
                         written_files = self._write_applied_files(applied_files, chunk)
                     else:
@@ -3239,37 +3323,109 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                     return False, "LLM returned empty code after extraction"
                 written_files = self._write_generated_files(code, chunk)
 
-            # ── T2 Refinement pass (REQ-CMR-020) ──────────────────
-            # Tier 1: skip T2 (simple greenfield tasks)
-            # Tier 2/3: run T2 as before
-            refine_info: Dict[str, Any] = {}
-            _skip_t2 = _complexity_tier == TaskComplexityTier.TIER_1.value
-            if written_files and self._refiner_spec and not _skip_t2:
-                refined_result = await self._refine_written_files(
-                    written_files, task_desc, chunk, context,
-                )
-                if refined_result is not None:
-                    written_files, refine_info = refined_result
-            if _skip_t2:
-                self.logger.info(
-                    "CMR: Tier 1 — skipping T2 refinement for chunk %s",
-                    chunk.chunk_id,
-                )
-
             # ── Check for missing target files ────────────────────────
+            missing: Set[str] = set()
             if written_files and chunk.file_targets:
-                generated_names = {f.name for f in written_files}
-                expected_names = {Path(t).name for t in chunk.file_targets}
-                missing = expected_names - generated_names
+                missing = _detect_missing_targets(
+                    expected_targets=chunk.file_targets,
+                    written_files=written_files,
+                    output_dir=self._output_dir,
+                )
                 if missing:
                     chunk.metadata["_missing_targets"] = sorted(missing)
                     self.logger.warning(
                         "IMPLEMENT: chunk %s missing %d of %d target files: %s",
                         chunk.chunk_id,
                         len(missing),
-                        len(expected_names),
+                        len(chunk.file_targets),
                         sorted(missing),
                     )
+
+            # ── T2 Refinement pass (REQ-CMR-020/022) ──────────────────
+            refine_info: Dict[str, Any] = {}
+            _attempt_t2, _t2_reason = self._decide_t2_refinement(
+                complexity_tier=_complexity_tier,
+                written_files=written_files,
+                missing_targets=missing,
+                chunk=chunk,
+            )
+            if _t2_reason == "tier_1":
+                self.logger.info(
+                    "CMR: Tier 1 — skipping T2 refinement for chunk %s",
+                    chunk.chunk_id,
+                )
+            elif _t2_reason == "tier2_gate_clear":
+                self.logger.info(
+                    "CMR: Tier 2 gate escalation skipped for chunk %s (no gate issues)",
+                    chunk.chunk_id,
+                )
+            elif _attempt_t2 and _t2_reason != "default_refine":
+                self.logger.info(
+                    "CMR: Tier 2 gate escalation for chunk %s (reasons=%s)",
+                    chunk.chunk_id,
+                    _t2_reason,
+                )
+
+            if _attempt_t2:
+                refined_result = await self._refine_written_files(
+                    written_files, task_desc, chunk, context,
+                )
+                if refined_result is not None:
+                    written_files, refine_info = refined_result
+                else:
+                    # REQ-CMR-032: record attempted-but-not-applied refinement path.
+                    emit_forensic_log(
+                        call_type="implement.chunk.refine",
+                        call={
+                            "prompt_length": 0,
+                            "max_tokens": self._artisan_max_tokens,
+                            "model_spec": self._refiner_spec,
+                            "response_time_ms": 0,
+                            "tokens_input": 0,
+                            "tokens_output": 0,
+                            "cost_usd": 0.0,
+                            "t2_decision": "attempted_keep_t1",
+                            "reason": _t2_reason,
+                        },
+                        task={
+                            "task_id": chunk.chunk_id,
+                            "title": chunk.description,
+                            "phase": "implement",
+                            "target_files": chunk.file_targets,
+                        },
+                        context_propagation={
+                            "tier": "T2",
+                            "decision": "attempted_keep_t1",
+                            "reason": _t2_reason,
+                        },
+                    )
+            else:
+                # REQ-CMR-032: explicit forensic record for T2 skip decision.
+                emit_forensic_log(
+                    call_type="implement.chunk.refine",
+                    call={
+                        "prompt_length": 0,
+                        "max_tokens": self._artisan_max_tokens,
+                        "model_spec": self._refiner_spec,
+                        "response_time_ms": 0,
+                        "tokens_input": 0,
+                        "tokens_output": 0,
+                        "cost_usd": 0.0,
+                        "t2_decision": "skipped",
+                        "reason": _t2_reason,
+                    },
+                    task={
+                        "task_id": chunk.chunk_id,
+                        "title": chunk.description,
+                        "phase": "implement",
+                        "target_files": chunk.file_targets,
+                    },
+                    context_propagation={
+                        "tier": "T2",
+                        "decision": "skipped",
+                        "reason": _t2_reason,
+                    },
+                )
 
             # ── Accumulate cost metrics (T1 + T2) ────────────────────
             t1_cost = token_usage.cost_estimate
@@ -3297,7 +3453,8 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             chunk.metadata["generated_files"] = [str(p) for p in written_files]
             # CMR: record effective drafter and T2 decision (REQ-CMR-032)
             chunk.metadata["drafter_model"] = _effective_drafter_spec
-            chunk.metadata["t2_skipped"] = _skip_t2
+            chunk.metadata["t2_skipped"] = not bool(refine_info)
+            chunk.metadata["t2_decision_reason"] = _t2_reason
             # T2 refinement metadata
             if refine_info:
                 chunk.metadata["refine_cost_usd"] = t2_cost
@@ -3397,7 +3554,7 @@ class DefaultTestRunner(TestRunner):
             timeout: Timeout in seconds for each individual test command.
         """
         self.timeout = timeout
-        self.logger = get_logger("startd8.development.tests")
+        self.logger = get_logger(__name__)
 
     async def run_tests(
         self, chunk: DevelopmentChunk, context: Dict[str, Any]
@@ -3483,7 +3640,7 @@ class JsonFileStateStore(StateStore):
         self._legacy_directory = Path(
             str(directory).replace(".startd8/state", ".startd8_state")
         ) if ".startd8/state" in str(directory) else None
-        self.logger = get_logger("startd8.development.state")
+        self.logger = get_logger(__name__)
 
     def _get_state_path(self, plan_id: str) -> Path:
         """Get the file path for a plan's state."""
@@ -3806,7 +3963,7 @@ class DevelopmentPhase:
             max_parallel: Maximum concurrent chunk executions per tier.
                 Must be >= 1.
             logger: Logger instance.
-                Default: logging.getLogger("startd8.development").
+                Default: get_logger(__name__).
             domain_checklist: Optional DomainChecklist instance for injecting
                 domain-aware prompt constraints into chunk execution context.
         """
@@ -3817,7 +3974,7 @@ class DevelopmentPhase:
         self.test_runner = test_runner or DefaultTestRunner()
         self.state_store = state_store or JsonFileStateStore()
         self.max_parallel = max_parallel
-        self.logger = logger or get_logger("startd8.development")
+        self.logger = logger or get_logger(__name__)
         self.domain_checklist = domain_checklist
 
     async def run(self, plan: DevelopmentPlan) -> DevelopmentResult:
@@ -4153,6 +4310,24 @@ class DevelopmentPhase:
             },
         )
         _chunk_span = _chunk_span_cm.__enter__()
+        if _chunk_span and hasattr(_chunk_span, "set_attribute"):
+            _signals = chunk.metadata.get("_complexity_signals", {}) or {}
+            _chunk_span.set_attribute(
+                AttributeKeys.TASK_COMPLEXITY_TIER,
+                chunk.metadata.get("_complexity_tier", TaskComplexityTier.TIER_2.value),
+            )
+            _chunk_span.set_attribute(
+                AttributeKeys.TASK_BLAST_RADIUS,
+                int(_signals.get("blast_radius", 0) or 0),
+            )
+            _chunk_span.set_attribute(
+                AttributeKeys.TASK_CALLER_COUNT,
+                int(_signals.get("caller_count", 0) or 0),
+            )
+            _chunk_span.set_attribute(
+                AttributeKeys.TASK_HAS_DYNAMIC_DISPATCH,
+                bool(_signals.get("has_dynamic_dispatch", False)),
+            )
 
         while state.attempts < max_attempts:
             state.attempts += 1

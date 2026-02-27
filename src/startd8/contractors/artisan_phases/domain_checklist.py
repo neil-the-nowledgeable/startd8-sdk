@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import ast
 import json
-import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from startd8.logging_config import get_logger
 from startd8.workflows.builtin.domain_preflight_models import (
     AvailableDeps,
     TaskDomain,
@@ -24,7 +24,7 @@ from startd8.workflows.builtin.domain_preflight_models import (
 )
 from startd8.workflows.builtin.domain_preflight_workflow import DomainPreflightWorkflow
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # ============================================================================
@@ -303,7 +303,7 @@ class DomainChecklist:
         self._enrichment_map: Optional[Dict[str, TaskEnrichment]] = None
         self._deps_cache: Optional[AvailableDeps] = None
         self._seed_loaded = False
-        self.logger = logging.getLogger(__name__)
+        self.logger = get_logger(__name__)
 
     def scan_deps(self) -> Optional[AvailableDeps]:
         """Scan project dependencies (cached after first call).

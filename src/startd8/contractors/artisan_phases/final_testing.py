@@ -38,6 +38,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from startd8.logging_config import get_logger
+
 
 # ============================================================================
 # ENUMS
@@ -359,7 +361,7 @@ class FinalTestingPhase:
             config: Phase configuration. Uses defaults if not provided.
         """
         self.config = config or FinalTestingConfig()
-        self.logger = logging.getLogger("startd8.final_testing")
+        self.logger = get_logger(__name__)
         self._last_report: Optional[FinalTestingReport] = None
 
     # ========================================================================

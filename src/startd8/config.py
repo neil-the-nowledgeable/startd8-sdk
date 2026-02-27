@@ -108,6 +108,13 @@ class ConfigManager:
                 "design_agent": None,
                 "review_agent": None,
                 "enable_prompt_caching": None,
+                "complexity_routing_enabled": None,
+                "tier3_agent": None,
+                "complexity_blast_radius_tier3": None,
+                "complexity_loc_tier1_max": None,
+                "complexity_loc_tier3_min": None,
+                "complexity_caller_tier3": None,
+                "complexity_tier2_gate_escalation": None,
             },
             "resilience": {
                 "level": "standard",  # off, minimal, standard, aggressive, custom
@@ -485,11 +492,14 @@ _ARTISAN_BOOL_KEYS = {
     "fail_on_truncation", "check_truncation", "strict_truncation",
     "scaffold_test_first", "force_implement",
     "force_design", "refine_design", "force_review",
-    "enable_prompt_caching",
+    "enable_prompt_caching", "complexity_routing_enabled",
+    "complexity_tier2_gate_escalation",
 }
 _ARTISAN_INT_KEYS = {
     "max_iterations", "pass_threshold", "max_tokens", "design_max_tokens",
     "test_timeout_seconds", "review_max_code_chars",
+    "complexity_blast_radius_tier3", "complexity_loc_tier1_max",
+    "complexity_loc_tier3_min", "complexity_caller_tier3",
 }
 _ARTISAN_FLOAT_KEYS = {
     "review_temperature", "development_timeout_seconds",
@@ -524,6 +534,5 @@ def get_config_manager(config_dir: Optional[Path] = None) -> ConfigManager:
         _config_manager = ConfigManager(config_dir)
     
     return _config_manager
-
 
 

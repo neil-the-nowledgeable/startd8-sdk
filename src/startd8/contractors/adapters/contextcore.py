@@ -22,7 +22,7 @@ from ..protocols import (
 )
 
 
-logger = get_logger("startd8.contractors.contextcore")
+logger = get_logger(__name__)
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
 _OTEL_DESCRIPTORS = {

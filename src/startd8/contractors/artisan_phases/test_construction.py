@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import asyncio
 import enum
-import logging
 import os
 import re
 import sys
@@ -1223,7 +1222,7 @@ class LLMTestGenerator:
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
 
-        self.logger = get_logger("startd8.test_construction.llm_gen")
+        self.logger = get_logger(__name__)
 
     # ------------------------------------------------------------------
     # Agent resolution (lazy, cached)

@@ -11,13 +11,14 @@ This module is self-contained with no relative imports.
 
 import dataclasses
 import enum
-import logging
 import uuid
 from collections import deque, defaultdict
 from typing import Any, Dict, List, Optional, Set, Tuple
 from copy import deepcopy
 
-logger = logging.getLogger(__name__)
+from startd8.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 # ─── Enums ───

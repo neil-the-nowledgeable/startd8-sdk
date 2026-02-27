@@ -266,6 +266,11 @@ def is_degraded(
     ):
         reasons.append(DegradationReasons.DESIGN_DOC_EMPTY)
 
+    # 8b. manifest coverage absent for complexity routing signals (REQ-CMR-034)
+    if phase == "implement":
+        if context_propagation.get("complexity_manifest_coverage") == "none":
+            reasons.append(DegradationReasons.COMPLEXITY_MANIFEST_MISSING)
+
     # 9-12: Contract state conditions (from boundary result)
     if boundary_result is not None:
         # 9. entry_gate_passed is false
@@ -447,7 +452,7 @@ def emit_forensic_log(
         }
 
         # --- Emit via get_logger() (OT-700 AC-5, OT-715) ---
-        flogger = get_logger("startd8.forensic")
+        flogger = get_logger(__name__)
 
         level = _resolve_log_level(forensic_log_level)
         # "forensic" is safe as an extra key — not in Python's LogRecord
@@ -544,7 +549,7 @@ def _extract_exemplars() -> tuple[str | None, str | None]:
         span_id = format(ctx.span_id, "016x")
         return trace_id, span_id
     except Exception:
-        logging.getLogger("startd8.forensic").debug(
+        get_logger(__name__).debug(
             "OTel exemplar extraction failed", exc_info=True,
         )
         return None, None
@@ -607,16 +612,11 @@ def _resolve_log_level(forensic_log_level: str) -> int:
 def _record_internal_error(call_type: str, exc: Exception) -> None:
     """Record an internal forensic logging error on the current OTel span.
 
-    Uses ``get_logger()`` for OTel bridge forwarding with a fallback
-    to ``logging.getLogger()`` if the bridge itself fails (SDK Leg 11 #31).
+    Uses ``get_logger()`` for OTel bridge forwarding.
     Never raises.
     """
     try:
-        # Prefer get_logger for OTel bridge forwarding (R1)
-        try:
-            _fallback_logger = get_logger("startd8.forensic")
-        except Exception:
-            _fallback_logger = logging.getLogger("startd8.forensic")
+        _fallback_logger = get_logger(__name__)
 
         _fallback_logger.warning(
             "Forensic log emission failed for call_type=%s: %s",
@@ -638,6 +638,6 @@ def _record_internal_error(call_type: str, exc: Exception) -> None:
     except Exception:
         # Absolute last resort — emit a debug trace so failures are
         # discoverable when explicitly sought, then suppress (E1).
-        logging.getLogger("startd8.forensic").debug(
+        get_logger(__name__).debug(
             "_record_internal_error itself failed", exc_info=True,
         )

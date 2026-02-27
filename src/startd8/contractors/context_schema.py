@@ -10,15 +10,15 @@ design rationale and docs/ARTISAN_REQUIREMENTS.md for per-phase context keys.
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from ..exceptions import Startd8Error
+from startd8.logging_config import get_logger
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 # ============================================================================
@@ -156,7 +156,7 @@ class PlanPhaseOutput(BaseModel):
         empty enrichment degrades DESIGN quality silently.  Log warnings so
         the gap is visible in workflow output.
         """
-        _logger = logging.getLogger("startd8.context_schema")
+        _logger = get_logger(__name__)
         task_count = len(self.tasks)
         if task_count and not self.architectural_context:
             _logger.warning(
