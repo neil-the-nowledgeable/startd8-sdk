@@ -54,7 +54,7 @@ from concurrent.futures import (
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Protocol, Sequence, runtime_checkable
+from typing import Any, Optional, Protocol, Sequence
 
 from startd8.contractors.context_schema import (
     PhaseContextError,
@@ -827,7 +827,7 @@ _SAFE_TASK_ID_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
 # ============================================================================
 
 
-@runtime_checkable
+
 
 
 

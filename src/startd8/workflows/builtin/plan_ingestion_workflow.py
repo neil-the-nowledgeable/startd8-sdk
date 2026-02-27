@@ -46,13 +46,7 @@ from .plan_ingestion_models import (
     ParsedFeature,
     ParsedPlan,
 )
-from ...contractors.artisan_contractor import (
-    _SAFE_TASK_ID_PATTERN,
-    compute_lanes,
-    compute_wave_index_map,
-    compute_wave_metadata,
-    compute_waves,
-)
+from ...contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN
 from ...logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -133,117 +127,6 @@ def _validate_context_seed(data: Dict[str, Any]) -> None:
         # Log but do not raise — validation is advisory; seed may have extra keys
 
 
-class _TaskDictAdapter:
-    """Adapts plan-ingestion task dicts to the ``WaveComputeTask`` protocol.
-
-    Satisfies the ``WaveComputeTask`` Protocol defined in
-    ``artisan_contractor.py`` (``task_id`` + ``depends_on`` properties).
-
-    This is the single normalization point for task dict → WaveComputeTask
-    conversion. Plan ingestion task dicts come from LLM-generated PARSE
-    output where depends_on may be null, absent, or contain non-string
-    entries.
-    """
-
-    def __init__(self, data: dict) -> None:
-        self._data = data
-
-    @property
-    def task_id(self) -> str:
-        return self._data["task_id"]
-
-    @property
-    def depends_on(self) -> list[str]:
-        raw = self._data.get("depends_on") or []
-        cleaned = []
-        for d in raw:
-            if not isinstance(d, str) or not d:
-                continue
-            if not _SAFE_TASK_ID_PATTERN.match(d):
-                logger.warning(
-                    "Task %s: depends_on reference %r contains unsafe "
-                    "characters (must match %s) — filtering out",
-                    self._data.get("task_id"), d,
-                    _SAFE_TASK_ID_PATTERN.pattern,
-                )
-                continue
-            cleaned.append(d)
-        return cleaned
-
-    @property
-    def target_files(self) -> list:
-        """Read target_files from config.context (compute_lanes() protocol)."""
-        return self._data.get("config", {}).get("context", {}).get(
-            "target_files", []
-        ) or []
-
-
-def _assign_wave_indices(
-    tasks: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
-    """Assign wave_index to each task dict based on dependency depth.
-
-    Delegates to compute_waves() via _TaskDictAdapter objects, then
-    uses compute_wave_index_map() to map wave indices back onto the
-    original task dicts.
-
-    Returns:
-        (tasks, wave_metadata) — tasks with wave_index added, and
-        wave metadata dict (wave_count, wave_summary, critical_path_length).
-    """
-    if not tasks:
-        return tasks, {"wave_count": 0, "wave_summary": [], "critical_path_length": 0}
-
-    adapters = [_TaskDictAdapter(t) for t in tasks]
-    waves = compute_waves(adapters)
-    wave_map = compute_wave_index_map(waves)
-    wave_meta = compute_wave_metadata(waves)
-
-    for task in tasks:
-        tid = task.get("task_id", "")
-        task["wave_index"] = wave_map.get(tid, 0)
-
-    return tasks, wave_meta
-
-
-def _assign_lane_indices(
-    tasks: List[Dict[str, Any]],
-) -> Tuple[List[Dict[str, Any]], Dict[str, int]]:
-    """Assign lane_index to each task dict based on shared target_files.
-
-    Delegates to compute_lanes() via _TaskDictAdapter objects.
-    Lane indices are advisory — target_files may be incomplete at
-    plan ingestion time (populated later during PLAN/SCAFFOLD).
-
-    Returns:
-        (tasks, lane_assignments) — tasks with lane_index added
-        (at top level), and lane_assignments dict (task_id → lane_index).
-        When compute_lanes() fails or target_files are all empty,
-        lane_assignments is {} and no lane_index keys are added.
-    """
-    if not tasks:
-        return tasks, {}
-
-    adapters = [_TaskDictAdapter(t) for t in tasks]
-    try:
-        lanes = compute_lanes(adapters)
-    except Exception as exc:
-        logger.warning(
-            "Lane assignment skipped (compute_lanes() failed): %s", exc
-        )
-        return tasks, {}
-
-    lane_assignments: dict[str, int] = {}
-    for lane_idx, lane_tasks in enumerate(lanes):
-        for adapter in lane_tasks:
-            lane_assignments[adapter.task_id] = lane_idx
-
-    for task in tasks:
-        tid = task.get("task_id", "")
-        if tid in lane_assignments:
-            task["lane_index"] = lane_assignments[tid]
-
-    return tasks, lane_assignments
 
 
 def _validate_seed_field_coverage(seed_dict: Dict[str, Any]) -> List[str]:
@@ -2569,25 +2452,6 @@ class PlanIngestionWorkflow(WorkflowBase):
         # becomes two sub-tasks after Gate 2a.  Filter the __init__.py one.
         tasks = PlanIngestionWorkflow._filter_trivial_test_init_tasks(tasks)
 
-        # ── Wave assignment: BFS dependency-depth layering ──
-        tasks, wave_metadata = _assign_wave_indices(tasks)
-        logger.info(
-            "Wave assignment: %d waves for %d tasks (critical path: %d)",
-            wave_metadata.get("wave_count", 0),
-            len(tasks),
-            wave_metadata.get("critical_path_length", 0),
-        )
-
-        # CCD-402: Lane assignment: Union-Find on shared target_files (advisory)
-        tasks, _lane_assignments = _assign_lane_indices(tasks)
-        if _lane_assignments:
-            _lane_count = len(set(_lane_assignments.values()))
-            logger.info(
-                "Lane assignment: %d lane(s) for %d tasks (advisory)",
-                _lane_count,
-                len(tasks),
-            )
-
         return tasks
 
     @staticmethod
@@ -3504,33 +3368,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                 parsed_plan.features, onboarding_early,
             )
 
-            # Compute wave metadata from per-task wave_index assignments
-            _wave_indices = [t.get("wave_index", 0) for t in tasks]
-            if _wave_indices:
-                _wave_count = max(_wave_indices) + 1
-                _wave_summary = [0] * _wave_count
-                for wi in _wave_indices:
-                    _wave_summary[wi] += 1
-                _wave_meta: Optional[Dict[str, Any]] = {
-                    "wave_count": _wave_count,
-                    "wave_summary": _wave_summary,
-                    "critical_path_length": _wave_count,
-                }
-            else:
-                _wave_meta = None
-
-            # CCD-402: Reconstruct lane_assignments from per-task lane_index
-            _lane_assignments_emit: Optional[Dict[str, int]] = None
-            _lane_tasks = [
-                (t.get("task_id", ""), t.get("lane_index"))
-                for t in tasks
-                if t.get("lane_index") is not None
-            ]
-            if _lane_tasks:
-                _lane_assignments_emit = {
-                    tid: li for tid, li in _lane_tasks
-                }
-
             seed = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
                 source_checksum=source_checksum_val,
@@ -3547,8 +3384,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 onboarding=onboarding_var,
                 context_files=context_files_list,
                 service_metadata=service_metadata or None,
-                wave_metadata=_wave_meta,
-                lane_assignments=_lane_assignments_emit,
+                wave_metadata=None,
+                lane_assignments=None,
                 project_metadata=project_metadata or None,
                 forward_manifest=forward_manifest_dict,
             )
