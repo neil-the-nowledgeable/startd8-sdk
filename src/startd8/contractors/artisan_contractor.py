@@ -168,6 +168,8 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "shared_file_manifest", "lane_to_file_mapping", "lane_conflicts",
     "_design_lane_computation_skipped", "_design_lane_count",
     "design_mode_summary",
+    # REQ-PAQ-603: quality gate traceability survives resume.
+    "quality_gate_outcomes", "quality_gate_summary",
 })
 
 
@@ -1377,7 +1379,7 @@ class ArtisanContractorWorkflow:
         checkpoint_store: Optional[CheckpointStore] = None,
         phases: Optional[list[WorkflowPhase]] = None,
         contract_path: Optional[Path] = None,
-        quality_gate: str = "warn",
+        quality_gate: Optional[str] = None,
     ) -> None:
         """Initialize the workflow orchestrator.
 
@@ -1397,13 +1399,21 @@ class ArtisanContractorWorkflow:
                            When ``None`` (default), auto-discovers
                            ``contracts/artisan-pipeline.contract.yaml`` adjacent
                            to this module if it exists.
-            quality_gate: Behavior on TEST/REVIEW quality failures.
+            quality_gate: Behavior on DESIGN/TEST/REVIEW quality failures.
                           ``"skip"`` = no check (legacy behavior).
                           ``"warn"`` = log WARNING, continue (default).
                           ``"block"`` = raise :class:`QualityGateError`.
         """
         self.config = config or WorkflowConfig()
-        self._quality_gate = quality_gate
+        gate_mode = quality_gate
+        if gate_mode is None:
+            gate_mode = os.getenv("STARTD8_QUALITY_GATE_MODE", "warn")
+        gate_mode = str(gate_mode).strip().lower()
+        if gate_mode not in {"skip", "warn", "block"}:
+            raise ValueError(
+                f"quality_gate must be one of skip|warn|block, got {gate_mode!r}"
+            )
+        self._quality_gate = gate_mode
         self.phases = phases or WorkflowPhase.ordered()
         self.handlers: dict[WorkflowPhase, AbstractPhaseHandler] = dict(handlers or {})
         self._default_handler = DefaultPhaseHandler()
@@ -1432,6 +1442,10 @@ class ArtisanContractorWorkflow:
         self._budget_warning_emitted: bool = False
 
         self._tracer: Optional[Any] = None
+        # REQ-PAQ-603: runtime gate traceability.
+        self._quality_gate_outcomes: list[dict[str, Any]] = []
+        self._quality_gate_violations: list[dict[str, Any]] = []
+        self._active_workflow_context: Optional[dict[str, Any]] = None
 
     # ------------------------------------------------------------------
     # Properties
@@ -1546,6 +1560,9 @@ class ArtisanContractorWorkflow:
         """
         if context is None:
             context = {}
+        self._active_workflow_context = context
+        self._quality_gate_outcomes = []
+        self._quality_gate_violations = []
 
         # Inject workflow_id so phase handlers can reference it
         context.setdefault("workflow_id", self.config.workflow_id)
@@ -1560,6 +1577,17 @@ class ArtisanContractorWorkflow:
             context.setdefault("project_root", self.config.project_root)
         else:
             context.setdefault("project_root", str(Path.cwd()))
+        # REQ-PAQ-603: centralized gate traceability context envelope.
+        context.setdefault("quality_gate_outcomes", [])
+        context.setdefault(
+            "quality_gate_summary",
+            {
+                "policy_mode": self._quality_gate,
+                "gate_count": 0,
+                "violation_count": 0,
+                "violations": [],
+            },
+        )
 
         # Phase 4: Load ManifestRegistry from cache (never blocking)
         try:
@@ -1756,6 +1784,7 @@ class ArtisanContractorWorkflow:
                 workflow_end = time.monotonic()
                 workflow_end_iso = datetime.now(timezone.utc).isoformat()
                 total_duration = workflow_end - workflow_start
+                self._active_workflow_context = None
 
                 if HAS_OTEL and not isinstance(root_span, _NoOpSpan):
                     root_span.set_attribute("workflow.status", final_status.value)
@@ -1775,6 +1804,15 @@ class ArtisanContractorWorkflow:
                         ),
                     )
 
+        result_metadata = copy.deepcopy(config.metadata)
+        result_metadata["quality_gate"] = {
+            "policy_mode": self._quality_gate,
+            "gate_count": len(self._quality_gate_outcomes),
+            "violation_count": len(self._quality_gate_violations),
+            "violations": list(self._quality_gate_violations),
+            "outcomes": list(self._quality_gate_outcomes),
+        }
+
         return WorkflowResult(
             workflow_id=config.workflow_id,
             status=final_status,
@@ -1785,7 +1823,7 @@ class ArtisanContractorWorkflow:
             end_time=workflow_end_iso,
             resumed_from=resumed_from_value,
             dry_run=config.dry_run,
-            metadata=config.metadata,
+            metadata=result_metadata,
         )
 
     # ------------------------------------------------------------------
@@ -2634,18 +2672,34 @@ class ArtisanContractorWorkflow:
             QualityGateError: When ``quality_gate == "block"`` and failures
                               are detected.
         """
-        if self._quality_gate == "skip":
+        if phase not in (WorkflowPhase.DESIGN, WorkflowPhase.TEST, WorkflowPhase.REVIEW):
             return
+
+        signal_map = {
+            WorkflowPhase.DESIGN: "design_quality.total_failed",
+            WorkflowPhase.TEST: "test_results.total_failed",
+            WorkflowPhase.REVIEW: "review_results.total_failed",
+        }
+
         if not phase_result.output or not isinstance(phase_result.output, dict):
+            outcome = {
+                "gate_id": f"artisan.{phase.value}.quality",
+                "contract_signal_id": signal_map[phase],
+                "phase": phase.value,
+                "policy_mode": self._quality_gate,
+                "threshold": {"metric": "total_failed", "operator": "eq", "value": 0},
+                "observed_value": None,
+                "decision": "unevaluated",
+                "violated": False,
+                "details": {"reason": "missing_or_non_dict_output"},
+            }
+            self._record_quality_gate_outcome(outcome)
             return
 
-        total_failed = phase_result.output.get("total_failed", 0)
-        if total_failed == 0:
-            return
-
+        total_failed = int(phase_result.output.get("total_failed", 0) or 0)
         details: dict[str, Any] = {
             "total_failed": total_failed,
-            "total_passed": phase_result.output.get("total_passed", 0),
+            "total_passed": int(phase_result.output.get("total_passed", 0) or 0),
         }
 
         if phase == WorkflowPhase.DESIGN:
@@ -2663,7 +2717,7 @@ class ArtisanContractorWorkflow:
             ]
             details["failed_tasks"] = failed_tasks
             msg = f"TEST quality gate: {total_failed} task(s) failed validation"
-        elif phase == WorkflowPhase.REVIEW:
+        else:
             per_task = phase_result.output.get("per_task", {})
             failed_reviews = {
                 tid: info.get("score", "?")
@@ -2672,14 +2726,73 @@ class ArtisanContractorWorkflow:
             }
             details["failed_reviews"] = failed_reviews
             msg = f"REVIEW quality gate: {total_failed} task(s) failed review"
+
+        if self._quality_gate == "skip":
+            decision = "skipped"
+        elif total_failed == 0:
+            decision = "pass"
+        elif self._quality_gate == "block":
+            decision = "block"
         else:
+            decision = "warn"
+
+        outcome = {
+            "gate_id": f"artisan.{phase.value}.quality",
+            "contract_signal_id": signal_map[phase],
+            "phase": phase.value,
+            "policy_mode": self._quality_gate,
+            "threshold": {"metric": "total_failed", "operator": "eq", "value": 0},
+            "observed_value": total_failed,
+            "decision": decision,
+            "violated": total_failed > 0,
+            "message": msg,
+            "details": details,
+        }
+        self._record_quality_gate_outcome(outcome)
+
+        if self._quality_gate == "skip" or total_failed == 0:
             return
 
         if self._quality_gate == "block":
             self._logger.error("QUALITY GATE BLOCKED: %s", msg)
             raise QualityGateError(msg, phase=phase, details=details)
-        else:  # "warn"
-            self._logger.warning("QUALITY GATE WARNING: %s — %s", msg, details)
+        self._logger.warning("QUALITY GATE WARNING: %s — %s", msg, details)
+
+    def _record_quality_gate_outcome(self, outcome: dict[str, Any]) -> None:
+        """Store quality gate outcomes for workflow/finalize traceability."""
+        self._quality_gate_outcomes.append(outcome)
+        if outcome.get("violated"):
+            self._quality_gate_violations.append(outcome)
+
+        if self._active_workflow_context is not None:
+            ctx_outcomes = self._active_workflow_context.setdefault(
+                "quality_gate_outcomes", []
+            )
+            if isinstance(ctx_outcomes, list):
+                ctx_outcomes.append(outcome)
+            self._active_workflow_context["quality_gate_summary"] = {
+                "policy_mode": self._quality_gate,
+                "gate_count": len(self._quality_gate_outcomes),
+                "violation_count": len(self._quality_gate_violations),
+                "violations": list(self._quality_gate_violations),
+            }
+
+        try:
+            from startd8.contractors.forensic_log import emit_quality_gate_log
+
+            emit_quality_gate_log(
+                gate_id=str(outcome.get("gate_id")),
+                phase=str(outcome.get("phase")),
+                policy_mode=str(outcome.get("policy_mode")),
+                threshold=outcome.get("threshold"),
+                observed_value=outcome.get("observed_value"),
+                decision=str(outcome.get("decision")),
+                violated=bool(outcome.get("violated")),
+                contract_signal_id=str(outcome.get("contract_signal_id")),
+                details=outcome.get("details", {}),
+            )
+        except Exception:
+            self._logger.debug("quality gate forensic emission failed", exc_info=True)
 
     def _execute_phase_serial_mode(
         self,

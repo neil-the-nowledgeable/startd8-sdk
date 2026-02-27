@@ -1,7 +1,7 @@
 # Artisan Logging — Requirements
 
 > **Version:** 1.0.0
-> **Status:** Draft (AL-1xx implemented; AL-2xx through AL-7xx planned)
+> **Status:** Draft (mixed implementation state; see Section 6 Status Dashboard)
 > **Date:** 2026-02-24
 > **Scope:** Structured logging requirements for the Artisan 8-phase pipeline — logger acquisition, phase/task lifecycle logging, gate and contract events, operational logging (LLM calls, errors, retries), Loki correlation, and graceful degradation
 > **Extends:** `ARTISAN_REQUIREMENTS.md` Layer 6 (AR-6xx Observability)
@@ -64,7 +64,7 @@ All Artisan contractor modules must obtain loggers via the OTel-attached pipelin
 
 #### AL-100: get_logger() Mandate
 
-**Status:** implemented (partial — 4 modules still use `logging.getLogger()`)
+**Status:** implemented
 **Source:** CLAUDE.md "Must Do", `PATTERN-silent-telemetry-loss.md`
 
 All Python modules in `src/startd8/contractors/**` must obtain loggers via `get_logger(__name__)` from `startd8.logging_config`, not `logging.getLogger(...)`.
@@ -80,13 +80,9 @@ All Python modules in `src/startd8/contractors/**` must obtain loggers via `get_
 3. The `get_logger()` call triggers `_ensure_default_log_file_handler()` which attaches `OTelLogHandler` and `OTelTraceContextFilter` when OTel is configured.
 4. Logs from contractor modules appear in Loki when Promtail is configured (per `LOKI_SETUP_GUIDE.md`).
 
-**Migration targets (currently non-compliant):**
-| Module | Current | Required |
-|--------|---------|----------|
-| `contractors/artisan_phases/design_prompts/seed_mapping.py` | `logging.getLogger(__name__)` | `get_logger(__name__)` |
-| `contractors/context_schema.py` | `logging.getLogger(__name__)` | `get_logger(__name__)` |
-| `contractors/context_strategy.py` | `logging.getLogger(__name__)` | `get_logger(__name__)` |
-| `contractors/artisan_phases/domain_checklist.py` | `logging.getLogger(__name__)` | `get_logger(__name__)` |
+**Migration status (2026-02-27):**
+- Contractor-scope logger acquisition migration is complete.
+- No known `logging.getLogger(...)` usage remains under `src/startd8/contractors/**`.
 
 #### AL-101: Logger Name Convention
 
@@ -477,10 +473,10 @@ flowchart TD
 | `src/startd8/contractors/artisan_phases/design_documentation.py` | AL-100 | AL-401 |
 | `src/startd8/contractors/artisan_phases/development.py` | AL-100 | AL-401 |
 | `src/startd8/contractors/artisan_phases/test_construction.py` | AL-100 | AL-401 |
-| `contractors/artisan_phases/design_prompts/seed_mapping.py` | | AL-100 (migration) |
-| `contractors/context_schema.py` | | AL-100 (migration) |
-| `contractors/context_strategy.py` | | AL-100 (migration) |
-| `contractors/artisan_phases/domain_checklist.py` | | AL-100 (migration) |
+| `src/startd8/contractors/artisan_phases/design_prompts/seed_mapping.py` | AL-100 | |
+| `src/startd8/contractors/context_schema.py` | AL-100 | |
+| `src/startd8/contractors/context_strategy.py` | AL-100 | |
+| `src/startd8/contractors/artisan_phases/domain_checklist.py` | AL-100 | |
 
 ### Cross-Cutting Requirements → Affected Source Files
 
@@ -506,16 +502,16 @@ flowchart TD
 
 | Layer | ID Range | Total | Implemented | Partial | Planned |
 |-------|----------|-------|-------------|---------|---------|
-| Logger Acquisition | AL-1xx | 2 | 1 | 1 | 0 |
+| Logger Acquisition | AL-1xx | 2 | 2 | 0 | 0 |
 | Phase-Lifecycle Logging | AL-2xx | 3 | 0 | 0 | 3 |
 | Gate and Contract Logging | AL-3xx | 3 | 0 | 0 | 3 |
-| Operational Logging | AL-4xx | 5 | 2 | 0 | 3 |
+| Operational Logging | AL-4xx | 5 | 2 | 1 | 2 |
 | Loki Correlation | AL-5xx | 3 | 3 | 0 | 0 |
 | Structured Conventions | AL-6xx | 3 | 1 | 0 | 2 |
 | Graceful Degradation | AL-7xx | 3 | 3 | 0 | 0 |
-| **Total** | | **22** | **10** | **1** | **11** |
+| **Total** | | **22** | **11** | **1** | **10** |
 
-> **AL-100 partial note:** AL-100 is partially implemented — most contractor modules use `get_logger()`, but 4 modules (seed_mapping, context_schema, context_strategy, domain_checklist) still use `logging.getLogger()` and require migration.
+> **AL-100 completion note (2026-02-27):** AL-100 migration is complete in contractor scope. `logging.getLogger(...)` usages were migrated to `get_logger(...)`, and AL-101 allowlist exceptions are documented.
 
 ---
 

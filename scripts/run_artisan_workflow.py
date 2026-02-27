@@ -497,6 +497,14 @@ def main() -> int:
         ),
     )
     parser.set_defaults(feature_serial=True)
+    parser.add_argument(
+        "--allow-batch-mode",
+        action="store_true",
+        help=(
+            "Allow non-serial execution modes (phase-serial, lane-parallel, "
+            "wave-parallel). By default, single-feature quality flow is enforced."
+        ),
+    )
 
     parser.add_argument(
         "--lane-parallel", action="store_true",
@@ -597,6 +605,24 @@ def main() -> int:
     args = parser.parse_args()
     if args.postmortem_llm and not args.run_postmortem:
         parser.error("--postmortem-llm cannot be used with --no-postmortem")
+
+    if not args.allow_batch_mode:
+        if not args.feature_serial:
+            parser.error(
+                "--phase-serial is disabled by default quality flow. "
+                "Use --allow-batch-mode to override."
+            )
+        if args.lane_parallel:
+            parser.error(
+                "--lane-parallel is disabled by default quality flow. "
+                "Use --allow-batch-mode to override."
+            )
+        if args.wave_parallel:
+            parser.error(
+                "--wave-parallel is disabled by default quality flow. "
+                "Use --allow-batch-mode to override."
+            )
+
     setup_logging(verbose=args.verbose)
 
     logger = logging.getLogger("run_artisan_workflow")

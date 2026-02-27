@@ -169,7 +169,7 @@ class TestSVPrereq:
         )
 
     def test_feature_serial_default_is_wired(self):
-        """Runner defaults to feature-serial and forwards it into WorkflowConfig."""
+        """Runner enforces feature-serial by default and forwards config wiring."""
         script = Path(__file__).resolve().parents[2] / "scripts" / "run_artisan_workflow.py"
         if not script.exists():
             pytest.skip("run_artisan_workflow.py not found at expected path")
@@ -180,6 +180,12 @@ class TestSVPrereq:
         )
         assert "parser.set_defaults(feature_serial=True)" in content, (
             "run_artisan_workflow.py missing feature-serial default"
+        )
+        assert "--allow-batch-mode" in content, (
+            "run_artisan_workflow.py missing explicit batch-mode override flag"
+        )
+        assert "if not args.allow_batch_mode" in content, (
+            "run_artisan_workflow.py missing default quality-flow enforcement guard"
         )
         assert "feature_serial=args.feature_serial" in content, (
             "run_artisan_workflow.py missing feature_serial wiring into WorkflowConfig"

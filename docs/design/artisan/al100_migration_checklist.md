@@ -14,6 +14,14 @@ Scope: `src/startd8/contractors/**/*.py` (including `__init__.py`, module-level 
 - Currently compliant `get_logger(__name__)` files (no detected policy violations): `14`
 - Files with no logger acquisition in scope: `13`
 
+## Post-Migration Audit (2026-02-27)
+
+- Direct `logging.getLogger(...)` call sites in contractor scope: `0`
+- Non-allowlisted `get_logger("...")` call sites: `0`
+- Allowlisted string logger call sites: `1` (`registry.py`)
+- Files with `get_logger(__name__)`: `34`
+- Guardrail tests: `tests/unit/contractors/test_logger_acquisition_policy.py` (`2` tests passing)
+
 ## Regeneration Commands
 
 ```bash
@@ -104,7 +112,7 @@ Per AL-101 policy freeze, non-`__name__` logger names are non-compliant unless i
 
 ## Phase 1 Execution Checklist
 
-- [ ] Migrate all Section A sites to `get_logger(...)`.
-- [ ] Migrate Section B sites to `get_logger(__name__)` or expand allowlist with rationale.
-- [ ] Re-run inventory commands and confirm Section A + B are empty.
-- [ ] Update status counts in `ARTISAN_LOGGING_REQUIREMENTS.md` to match post-migration state.
+- [x] Migrate all Section A sites to `get_logger(...)`.
+- [x] Migrate Section B sites to `get_logger(__name__)` or expand allowlist with rationale.
+- [x] Re-run inventory commands and confirm Section A + B are empty.
+- [x] Update status counts in `ARTISAN_LOGGING_REQUIREMENTS.md` to match post-migration state.

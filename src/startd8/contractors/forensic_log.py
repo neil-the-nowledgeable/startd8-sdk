@@ -13,6 +13,7 @@ Design principles:
 
 Public API (``__all__``):
 - ``emit_forensic_log`` — centralized log builder
+- ``emit_quality_gate_log`` — centralized quality-gate decision log builder
 - ``CallMetadata``, ``TaskMetadata``, ``ContextPropagationMetadata``,
   ``ProvenanceMetadata`` — dict type aliases (documented field contracts)
 - ``set_boundary_result``, ``get_boundary_result``,
@@ -101,6 +102,7 @@ ProvenanceMetadata = dict[str, Any]
 
 __all__ = [
     "emit_forensic_log",
+    "emit_quality_gate_log",
     "CallMetadata",
     "TaskMetadata",
     "ContextPropagationMetadata",
@@ -462,6 +464,48 @@ def emit_forensic_log(
     except Exception as exc:
         # OT-712 AC-8: Record error on current OTel span, never raise
         _record_internal_error(call_type, exc)
+
+
+def emit_quality_gate_log(
+    *,
+    gate_id: str,
+    phase: str,
+    policy_mode: str,
+    threshold: dict[str, Any] | None,
+    observed_value: Any,
+    decision: str,
+    violated: bool,
+    contract_signal_id: str | None = None,
+    details: dict[str, Any] | None = None,
+) -> None:
+    """Emit a structured forensic log entry for a quality gate decision.
+
+    The payload mirrors the runtime gate object so downstream artifacts can
+    trace each decision (phase, mode, threshold, observed value, decision).
+    Never raises.
+    """
+    try:
+        trace_id, span_id = _extract_exemplars()
+        entry = {
+            "event": "quality.gate",
+            "schema_version": FORENSIC_LOG_SCHEMA_VERSION,
+            "gate_id": gate_id,
+            "contract_signal_id": contract_signal_id,
+            "phase": phase,
+            "policy_mode": policy_mode,
+            "threshold": threshold or {},
+            "observed_value": observed_value,
+            "decision": decision,
+            "violated": violated,
+            "details": details or {},
+            "exemplars": {
+                "trace_id": trace_id,
+                "span_id": span_id,
+            },
+        }
+        get_logger(__name__).info("quality.gate", extra={"forensic": entry})
+    except Exception as exc:
+        _record_internal_error("quality.gate", exc)
 
 
 # ---------------------------------------------------------------------------

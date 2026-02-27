@@ -11619,6 +11619,15 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                 "total_failed": review_results.get("total_failed", 0),
                 "total_cost": review_results.get("total_cost", 0.0),
             },
+            "quality_gate": context.get(
+                "quality_gate_summary",
+                {
+                    "policy_mode": "warn",
+                    "gate_count": 0,
+                    "violation_count": 0,
+                    "violations": [],
+                },
+            ),
             "truncation_summary": {
                 "tasks_flagged": len(truncation_flags),
                 "tasks_with_syntax_errors": sum(
