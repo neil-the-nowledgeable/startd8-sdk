@@ -57,6 +57,12 @@ class TestImplementYamlLoading:
         "design_doc_create",
         "task_summary_label",
         "retry_feedback",
+        "coding_standards",
+        "output_format_single",
+        "output_format_multi",
+        "critical_parameters",
+        "forward_contracts",
+        "completeness_warning",
     ]
 
     def test_all_templates_load(self):
@@ -85,11 +91,11 @@ class TestImplementYamlLoading:
             assert f"TEST_{p}" in result
 
     def test_template_count(self):
-        """implement.yaml contains exactly 18 prompt entries (15 original + 2 T2 refine + 1 AR-410 disambiguation)."""
+        """implement.yaml contains exactly 24 prompt entries (18 original + 6 IMP quality templates)."""
         from startd8.contractors.artisan_phases.prompts import _load_file
 
         data = _load_file("implement")
-        assert len(data["prompts"]) == 18
+        assert len(data["prompts"]) == 24
 
 
 # ============================================================================
@@ -500,3 +506,143 @@ class TestDesignDocTargetFiltering:
         result = executor._build_task_description(chunk, {})
         # The raw doc has 10 lines; filtered should be fewer
         assert "Design Scope:" in result
+
+
+# ============================================================================
+# Part 6: IMP quality improvements (coding standards, output format, etc.)
+# ============================================================================
+
+
+def _make_artisan_executor():
+    """Create an ArtisanChunkExecutor with mocked dependencies."""
+    from startd8.contractors.artisan_phases.development import (
+        ArtisanChunkExecutor,
+    )
+
+    with patch.object(
+        ArtisanChunkExecutor, "__init__", lambda self, **kw: None
+    ):
+        executor = ArtisanChunkExecutor.__new__(ArtisanChunkExecutor)
+    return executor
+
+
+class TestCodingStandards:
+    """IMP-CS: Coding standards section appears in task description."""
+
+    def test_coding_standards_section_present(self):
+        """Coding standards section is always present in artisan output."""
+        executor = _make_artisan_executor()
+        chunk = _FakeChunk(metadata={})
+        result = executor._build_task_description(chunk, {})
+        assert "Coding Standards" in result
+        assert "ruff" in result.lower() or "E741" in result
+
+
+class TestOutputFormat:
+    """IMP-OF: Structured output format section."""
+
+    def test_output_format_single_file(self):
+        """Single-file tasks get single-format output instructions."""
+        executor = _make_artisan_executor()
+        chunk = _FakeChunk(
+            file_targets=["src/widget.py"],
+            metadata={},
+        )
+        result = executor._build_task_description(chunk, {})
+        assert "## Output Format" in result
+        assert "single" in result.lower() or "fenced code block" in result.lower()
+
+    def test_output_format_multi_file(self):
+        """Multi-file tasks get multi-format output with verification checklist."""
+        executor = _make_artisan_executor()
+        chunk = _FakeChunk(
+            file_targets=["src/widget.py", "src/__init__.py", "src/utils.py"],
+            metadata={},
+        )
+        result = executor._build_task_description(chunk, {})
+        assert "## Output Format" in result
+        assert "MULTIPLE" in result or "REQUIRED files" in result
+        assert "VERIFICATION CHECKLIST" in result
+        # All files appear in the checklist
+        assert "src/widget.py" in result
+        assert "src/__init__.py" in result
+        assert "src/utils.py" in result
+
+    def test_no_output_format_without_targets(self):
+        """No output format section when file_targets is empty."""
+        executor = _make_artisan_executor()
+        chunk = _FakeChunk(file_targets=[], metadata={})
+        result = executor._build_task_description(chunk, {})
+        # Should not have output format section (may have other sections)
+        sections = [s for s in result.split("## ") if s.startswith("Output Format")]
+        assert len(sections) == 0
+
+
+class TestCriticalParameters:
+    """IMP-CP: Critical parameter elevation."""
+
+    def test_critical_parameters_elevated(self):
+        """Critical params from metadata appear in task description."""
+        executor = _make_artisan_executor()
+        chunk = _FakeChunk(
+            metadata={
+                "critical_parameters": [
+                    "api_key: str (required, from env WAYFINDER_API_KEY)",
+                    "timeout_ms: int (default 5000)",
+                ],
+            },
+        )
+        result = executor._build_task_description(chunk, {})
+        assert "Critical Parameters" in result
+        assert "api_key" in result
+        assert "timeout_ms" in result
+
+    def test_no_critical_params_when_absent(self):
+        """No critical parameters section when metadata is empty."""
+        executor = _make_artisan_executor()
+        chunk = _FakeChunk(metadata={})
+        result = executor._build_task_description(chunk, {})
+        assert "Critical Parameters" not in result
+
+
+class TestForwardContractsImplement:
+    """IMP-FC: Forward contract bindings in implement phase."""
+
+    def test_forward_contracts_in_implement(self):
+        """Forward contracts from metadata appear in implement prompt."""
+        executor = _make_artisan_executor()
+        chunk = _FakeChunk(
+            metadata={
+                "forward_contracts": [
+                    "generate_manifests(ctx: GenerationContext) -> List[ArtifactManifest]",
+                    "validate_template(path: Path) -> ValidationResult",
+                ],
+            },
+        )
+        result = executor._build_task_description(chunk, {})
+        assert "Interface Contract Bindings" in result
+        assert "generate_manifests" in result
+        assert "validate_template" in result
+
+    def test_no_forward_contracts_when_absent(self):
+        """No contracts section when metadata is empty."""
+        executor = _make_artisan_executor()
+        chunk = _FakeChunk(metadata={})
+        result = executor._build_task_description(chunk, {})
+        assert "Interface Contract Bindings" not in result
+
+
+class TestRequirementsTextFraming:
+    """IMP-R1: Requirements text uses authoritative framing."""
+
+    def test_requirements_text_verbatim_framing(self):
+        """Requirements section uses 'verbatim — authoritative' label."""
+        executor = _make_executor()
+        chunk = _FakeChunk(
+            metadata={
+                "requirements_text": "The ingestion engine SHALL parse all YAML files.",
+            },
+        )
+        result = executor._build_task_description(chunk, {})
+        assert "authoritative" in result.lower()
+        assert "SHALL parse all YAML" in result

@@ -2130,10 +2130,12 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             parts.append("\n## Plan Context")
             parts.append(plan_context[:4000])
 
-        # PCA-404: requirements text section
+        # PCA-404: requirements text section (IMP-R1: authoritative framing)
         req_text = chunk.metadata.get("requirements_text")
         if req_text and isinstance(req_text, str):
-            parts.append("\n## Requirements")
+            parts.append(
+                "\n## Requirements (verbatim — authoritative for parameter details)"
+            )
             parts.append(req_text)
 
         # PCA-403: prior implementations section
@@ -2897,6 +2899,191 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
 
         return [text, "\n---\n"]
 
+    # -- helper: coding standards (IMP-CS) ----------------------------------
+
+    @staticmethod
+    def _build_coding_standards() -> List[str]:
+        """IMP-CS: Coding standards section for the user prompt.
+
+        Mirrors the prime contractor's inline coding standards in the
+        draft template, ensuring the LLM sees ruff/linter rules in both
+        the system prompt and the user prompt for reinforcement.
+        """
+        text = _format_implement_prompt("coding_standards")
+        if text is None:
+            text = (
+                "## Coding Standards (ruff/linter compliance)\n"
+                "- NEVER use single-letter variable names `l`, `O`, or "
+                "`I` — they are ambiguous (ruff E741).\n"
+                "- Do NOT import modules not in stdlib or pyproject.toml "
+                "dependencies.\n"
+                "- Define helper functions BEFORE callsites that reference "
+                "them."
+            )
+        return [text, "\n---\n"]
+
+    # -- helper: output format (IMP-OF) -------------------------------------
+
+    @staticmethod
+    def _build_output_format(chunk: DevelopmentChunk) -> List[str]:
+        """IMP-OF: Structured output format instructions.
+
+        Single-file tasks get a simple single-block format.
+        Multi-file tasks get explicit per-file fencing instructions with
+        a verification checklist — matching the prime contractor's
+        ``single_file_output`` / ``multi_file_output`` templates.
+        """
+        targets = chunk.file_targets
+        if not targets:
+            return []
+
+        if len(targets) == 1:
+            text = _format_implement_prompt("output_format_single")
+            if text is None:
+                text = (
+                    "## Output Format\n"
+                    "Provide your complete implementation inside a single "
+                    "fenced code block.\n"
+                    "Do NOT split output across multiple code blocks.\n"
+                    "Do NOT include explanatory text outside the code block."
+                )
+            return [text, "\n---\n"]
+
+        # Multi-file: build file list + checklist
+        file_list = "\n".join(f"  - `{f}`" for f in targets)
+        file_checklist = "\n".join(
+            f"  - [ ] `{f}` has a code block" for f in targets
+        )
+        text = _format_implement_prompt(
+            "output_format_multi",
+            file_list=file_list,
+            file_checklist=file_checklist,
+        )
+        if text is None:
+            text = (
+                "## Output Format\n"
+                "This task requires MULTIPLE files. Produce a SEPARATE "
+                "fenced code block for each file.\n\n"
+                f"REQUIRED files:\n{file_list}\n\n"
+                "## VERIFICATION CHECKLIST\n"
+                f"{file_checklist}"
+            )
+        return [text, "\n---\n"]
+
+    # -- helper: critical parameters (IMP-CP) --------------------------------
+
+    @staticmethod
+    def _build_critical_parameters(chunk: DevelopmentChunk) -> List[str]:
+        """IMP-CP: Critical parameter elevation.
+
+        Surfaces ``critical_parameters`` from chunk metadata into a
+        dedicated prompt section — matching the prime contractor's
+        ``critical_parameters_section`` pattern.
+        """
+        critical = chunk.metadata.get("critical_parameters")
+        if not critical:
+            return []
+
+        if isinstance(critical, list):
+            params_str = "\n".join(f"- {p}" for p in critical)
+        elif isinstance(critical, str):
+            params_str = critical
+        else:
+            import json as _json
+            params_str = _json.dumps(critical, indent=2)
+
+        text = _format_implement_prompt(
+            "critical_parameters", parameters=params_str,
+        )
+        if text is None:
+            text = (
+                "## Critical Parameters (from requirements — include "
+                "verbatim in implementation)\n" + params_str
+            )
+        return [text, "\n---\n"]
+
+    # -- helper: forward contracts (IMP-FC) ----------------------------------
+
+    @staticmethod
+    def _build_forward_contracts_implement(
+        chunk: DevelopmentChunk,
+    ) -> List[str]:
+        """IMP-FC: Forward contract bindings in the implement phase.
+
+        The design phase already injects forward contracts, but the LLM
+        may lose track of them during implementation. This re-surfaces
+        them in the implement prompt — matching the prime contractor's
+        ``forward_contracts_section`` pattern.
+        """
+        contracts = chunk.metadata.get("forward_contracts")
+        if not contracts:
+            return []
+
+        if isinstance(contracts, str):
+            contracts_str = contracts.strip()
+        elif isinstance(contracts, list):
+            contracts_str = "\n".join(f"- {c}" for c in contracts)
+        else:
+            import json as _json
+            contracts_str = _json.dumps(contracts, indent=2)
+
+        if not contracts_str:
+            return []
+
+        text = _format_implement_prompt(
+            "forward_contracts", contracts=contracts_str,
+        )
+        if text is None:
+            text = (
+                "## Interface Contract Bindings (must enforce)\n"
+                + contracts_str
+            )
+        return [text, "\n---\n"]
+
+    # -- helper: completeness warning (IMP-CW) -------------------------------
+
+    @staticmethod
+    def _build_completeness_warning(
+        chunk: DevelopmentChunk,
+    ) -> List[str]:
+        """IMP-CW: Warn when design parameters are missing from implementation.
+
+        Uses ``find_missing_parameters`` from ``prompt_utils`` to detect
+        parameters from the design document that haven't been referenced
+        in the chunk's description or prior output.
+        """
+        resolved_params = chunk.metadata.get("resolved_parameters")
+        if not resolved_params or not isinstance(resolved_params, list):
+            return []
+
+        from startd8.contractors.prompt_utils import find_missing_parameters
+
+        # Check against the chunk description (the closest proxy for
+        # what the LLM will implement).
+        missing = find_missing_parameters(
+            chunk.description, resolved_params,
+        )
+        if not missing:
+            return []
+
+        missing_lines = "\n".join(
+            f"- `{p.get('key_name', p.get('key_value', '?'))}`: "
+            f"{p.get('key_value', '?')}"
+            for p in missing[:10]
+        )
+
+        text = _format_implement_prompt(
+            "completeness_warning", missing_lines=missing_lines,
+        )
+        if text is None:
+            text = (
+                "## Implementation Completeness Warning\n"
+                "The following parameters from the design document are "
+                "NOT yet reflected. Ensure these are included:\n"
+                + missing_lines
+            )
+        return [text, "\n---\n"]
+
     def _get_system_prompt(self, chunk: DevelopmentChunk) -> Optional[str]:
         """Return a mode-aware system prompt for this chunk.
 
@@ -2961,6 +3148,11 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         parts.extend(self._build_design_framing(chunk, _existing))
         parts.append(chunk.description)
         parts.extend(self._build_supplementary_context(chunk))
+        parts.extend(self._build_critical_parameters(chunk))
+        parts.extend(self._build_forward_contracts_implement(chunk))
+        parts.extend(self._build_coding_standards())
+        parts.extend(self._build_output_format(chunk))
+        parts.extend(self._build_completeness_warning(chunk))
         parts.extend(self._build_retry_feedback(context))
         return "\n".join(parts)
 

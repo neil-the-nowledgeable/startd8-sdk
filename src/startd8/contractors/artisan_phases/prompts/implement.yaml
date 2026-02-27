@@ -168,6 +168,11 @@ prompts:
       - Follow PEP 8 and project naming conventions
       - Include necessary imports at the top of the file
 
+      Coding standards (ruff/linter compliance):
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
+
       Provenance rules (Mottainai Rule 5):
       - When Parameter Sources are listed in the prompt, use those parameter names EXACTLY as specified
       - When Semantic Conventions are listed, follow those naming rules for variables, functions, and classes
@@ -194,6 +199,11 @@ prompts:
       - NEVER remove existing code unless the design explicitly requires it
       - MAINTAIN backward compatibility — existing callers must continue to work
       - Your output MUST be at least 80% the size of the input (prevents accidental truncation)
+
+      Coding standards (ruff/linter compliance):
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
 
       Provenance rules (Mottainai Rule 5):
       - When Parameter Sources are listed in the prompt, use those parameter names EXACTLY as specified
@@ -276,3 +286,81 @@ prompts:
       Copy the SEARCH text exactly from the existing file shown above.
       Include enough context (2-3 surrounding lines) for unambiguous matching.
     placeholders: [total_lines]
+
+  coding_standards:
+    description: "Coding standards section for user prompt (ruff/linter compliance, aligned with prime contractor)"
+    template: |
+      ## Coding Standards (ruff/linter compliance)
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
+    placeholders: []
+
+  output_format_single:
+    description: "Output format for single-file tasks (aligned with prime contractor single_file_output)"
+    template: |
+      ## Output Format
+      Provide your complete implementation inside a single fenced code block.
+      Do NOT split output across multiple code blocks.
+      Do NOT include explanatory text outside the code block.
+
+      ```
+      [Your complete implementation here]
+      ```
+    placeholders: []
+
+  output_format_multi:
+    description: "Output format for multi-file tasks with per-file fencing and checklist (aligned with prime contractor multi_file_output)"
+    template: |
+      ## Output Format
+      This task requires MULTIPLE files. You MUST produce a SEPARATE fenced code block
+      for each file listed below. Each block MUST have the file path as the first line comment.
+
+      REQUIRED files (you MUST produce ALL of these — do not skip any):
+      {file_list}
+
+      ORDERING: Produce __init__.py FIRST (if listed). It is the package root — other files
+      import from it or are imported by it. Even a minimal __init__.py (imports + __all__) is
+      required; omission causes the build to fail.
+
+      Use this exact format for EACH file:
+      ```
+      # <full path to file>
+      <complete implementation>
+      ```
+
+      ## VERIFICATION CHECKLIST
+      Before submitting, count your code blocks and verify each required file has one:
+      {file_checklist}
+
+      If any file above does not have a matching code block, add it now.
+
+      CRITICAL RULES:
+      - __init__.py MUST be its own code block — even if it only contains imports and __all__.
+      - Every target file MUST have its own distinct block. No exceptions.
+      - Do NOT combine multiple files into a single block.
+      - Do NOT skip any file — missing blocks will cause the implementation to FAIL.
+    placeholders: [file_list, file_checklist]
+
+  critical_parameters:
+    description: "Critical parameter elevation section (from requirements — include verbatim, aligned with prime contractor)"
+    template: |
+      ## Critical Parameters (from requirements — include verbatim in implementation)
+      {parameters}
+    placeholders: [parameters]
+
+  forward_contracts:
+    description: "Forward contract bindings section for implement phase (must enforce)"
+    template: |
+      ## Interface Contract Bindings (must enforce)
+      {contracts}
+    placeholders: [contracts]
+
+  completeness_warning:
+    description: "Warning when resolved parameters from design are missing in implementation (spec completeness check)"
+    template: |
+      ## Implementation Completeness Warning
+      The following parameters from the design document are NOT yet reflected.
+      Ensure these are included in your implementation:
+      {missing_lines}
+    placeholders: [missing_lines]
