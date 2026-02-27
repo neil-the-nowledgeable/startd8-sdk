@@ -7800,7 +7800,6 @@ class Test{class_name}:
         """
         from startd8.implementation_engine import (
             DefaultImplementationEngine,
-            EngineRequest,
         )
 
         config = self.config
@@ -7827,10 +7826,335 @@ class Test{class_name}:
             }
 
         engine = DefaultImplementationEngine()
-        generation_results: dict[str, Any] = {}
+        generation_results: dict[str, GenerationResult] = {}
         task_reports: list[dict[str, Any]] = []
         total_cost = 0.0
         truncation_flags: dict[str, dict[str, Any]] = {}
+
+        # PCA-600: Build per-task edit mode classification
+        # (mirrors standard path edit_mode_map computation)
+        scaffold = context.get("scaffold", {})
+        design_mode_summary = context.get("design_mode_summary", {})
+        _mode_evidence = context.get("design_mode_evidence", {})
+        _manifest_registry_for_edit = None
+        if config.manifest_consumption_enabled:
+            _manifest_registry_for_edit = (
+                config.manifest_registry or context.get("project_manifests")
+            )
+        edit_mode_map: dict[str, EditModeClassification] = {}
+        for task in tasks:
+            edit_mode_map[task.task_id] = self._classify_edit_mode(
+                task, scaffold, design_mode_summary,
+                design_mode_evidence=_mode_evidence,
+                manifest_registry=_manifest_registry_for_edit,
+            )
+        context["edit_mode_classifications"] = {
+            tid: cls.to_dict() for tid, cls in edit_mode_map.items()
+        }
+        edit_tasks = sum(1 for v in edit_mode_map.values() if v.mode == "edit")
+        logger.info(
+            "IMPLEMENT inner loop: edit mode classification: %d edit, %d create",
+            edit_tasks, len(tasks) - edit_tasks,
+        )
+
+        # CMR: Complexity-Driven Model Router (mirrors standard path 8563-8630)
+        from startd8.contractors.artisan_phases.development import (
+            TaskComplexityTier,
+        )
+        import types as _types
+
+        task_tiers: dict[str, TaskComplexityTier] = {}
+        _tier_distribution: dict[str, int] = {"tier_1": 0, "tier_2": 0, "tier_3": 0}
+
+        if config.complexity_routing_enabled:
+            _cmr_manifest = None
+            if config.manifest_consumption_enabled:
+                _cmr_manifest = (
+                    config.manifest_registry or context.get("project_manifests")
+                )
+
+            for task in tasks:
+                try:
+                    _cmr_meta: dict[str, Any] = {}
+                    # Inject call graph callers from manifest registry
+                    if _cmr_manifest and task.target_files:
+                        _cg_callers_cmr: list[dict[str, Any]] = []
+                        for tf in task.target_files:
+                            try:
+                                callers_map = _cmr_manifest.callers_of_file(tf)
+                                for fqn, callers in callers_map.items():
+                                    br = _cmr_manifest.blast_radius(
+                                        fqn,
+                                        max_depth=config.blast_radius_max_depth,
+                                    )
+                                    _cg_callers_cmr.append({
+                                        "fqn": fqn,
+                                        "direct_callers": sorted(callers),
+                                        "blast_radius": len(br),
+                                    })
+                            except Exception:
+                                pass
+                        if _cg_callers_cmr:
+                            _cmr_meta["_call_graph_callers"] = _cg_callers_cmr
+
+                    # Edit mode from classification
+                    _edit_cls = edit_mode_map.get(task.task_id)
+                    if _edit_cls:
+                        _cmr_meta["_edit_mode"] = _edit_cls.to_dict()
+
+                    # Estimated LOC from task
+                    if hasattr(task, "estimated_loc") and task.estimated_loc:
+                        _cmr_meta["estimated_loc"] = task.estimated_loc
+
+                    # Build chunk-like object for CMR functions
+                    _chunk_like = _types.SimpleNamespace(
+                        metadata=_cmr_meta,
+                        file_targets=task.target_files or [],
+                        chunk_id=task.task_id,
+                    )
+
+                    signals = _extract_complexity_signals(_chunk_like, _cmr_manifest)
+                    tier = _classify_complexity_tier(signals, config)
+                    task_tiers[task.task_id] = tier
+                    _tier_distribution[tier.value] += 1
+
+                    logger.info(
+                        "CMR inner loop: task=%s tier=%s blast=%d callers=%d "
+                        "edit=%s loc=%d",
+                        task.task_id, tier.value,
+                        signals.blast_radius, signals.caller_count,
+                        signals.edit_mode, signals.estimated_loc,
+                    )
+                except Exception:
+                    task_tiers[task.task_id] = TaskComplexityTier.TIER_2
+                    _tier_distribution["tier_2"] += 1
+                    logger.warning(
+                        "CMR inner loop: classification failed for %s, "
+                        "defaulting to tier_2",
+                        task.task_id, exc_info=True,
+                    )
+        else:
+            for task in tasks:
+                task_tiers[task.task_id] = TaskComplexityTier.TIER_2
+                _tier_distribution["tier_2"] += 1
+
+        context["_tier_distribution"] = _tier_distribution
+
+        # Resume check: load prior generation results if available
+        results_path = project_root / ".startd8" / "state" / "generation_results.json"
+        resumed = False
+        resumed_cost = 0.0
+
+        if not config.force_implement and results_path.exists():
+            try:
+                saved = json.loads(results_path.read_text(encoding="utf-8"))
+                cached_results = self._validate_resume_cache(
+                    saved, tasks, project_root,
+                    source_checksum=context.get("source_checksum"),
+                )
+                if cached_results is not None:
+                    generation_results = cached_results
+                    resumed = True
+                    resumed_cost = sum(
+                        gr.cost_usd for gr in cached_results.values()
+                    )
+                    total_cost = resumed_cost
+                    truncation_flags = saved.get("truncation_flags", {})
+                    logger.info(
+                        "IMPLEMENT inner loop: resumed %d tasks from cache ($%.4f)",
+                        len(cached_results), resumed_cost,
+                    )
+            except (
+                json.JSONDecodeError, KeyError, TypeError,
+                OSError, ValueError, UnicodeDecodeError,
+            ) as exc:
+                logger.warning(
+                    "IMPLEMENT inner loop: cache load failed: "
+                    "%s — running fresh",
+                    exc, exc_info=True,
+                )
+
+        if not resumed:
+            self._execute_inner_loop_tasks(
+                tasks, engine, config, context,
+                design_results, staging_dir, project_root,
+                drafter_spec, reviewer_spec,
+                edit_mode_map, task_tiers,
+                generation_results, task_reports,
+                truncation_flags,
+            )
+            total_cost = sum(
+                gr.cost_usd for gr in generation_results.values()
+            )
+
+        # --- Post-generation gates (mirrors standard path) ---
+
+        # Gate 3: multi-file completeness
+        gate3 = self._validate_generation_completeness(
+            tasks, generation_results, project_root,
+        )
+
+        # Gate 3b: semantic content validation
+        _svc_meta = context.get("service_metadata")
+        gate3b = self._validate_generation_content(
+            tasks, generation_results, project_root,
+            service_metadata=_svc_meta,
+        )
+
+        # Gate 4: truncation detection
+        existing_file_sizes: dict[str, dict[str, int]] = {}
+        for task in tasks:
+            task_sizes: dict[str, int] = {}
+            task_edit_cls = edit_mode_map.get(task.task_id)
+            if task_edit_cls and task_edit_cls.mode == "edit":
+                for fpath in (task.target_files or []):
+                    fp = project_root / fpath
+                    if fp.is_file():
+                        try:
+                            task_sizes[fpath] = len(
+                                fp.read_text(encoding="utf-8").splitlines()
+                            )
+                        except (OSError, UnicodeDecodeError):
+                            pass
+            if task_sizes:
+                existing_file_sizes[task.task_id] = task_sizes
+
+        truncation_flags_gate4 = self._validate_truncation(
+            tasks, generation_results, project_root,
+            existing_file_sizes=existing_file_sizes,
+        )
+        truncation_flags.update(truncation_flags_gate4)
+
+        # Persist generation_results to disk for crash recovery (v2 envelope)
+        try:
+            save_path = project_root / ".startd8" / "state" / "generation_results.json"
+            serializable_tasks: dict[str, dict[str, Any]] = {}
+            for tid, gr in generation_results.items():
+                content_hashes: dict[str, str] = {}
+                for p in gr.generated_files:
+                    fp = Path(p)
+                    if fp.exists():
+                        content_hashes[str(p)] = hashlib.sha256(
+                            fp.read_bytes()
+                        ).hexdigest()
+                serializable_tasks[tid] = {
+                    "success": gr.success,
+                    "generated_files": [str(p) for p in gr.generated_files],
+                    "content_hashes": content_hashes,
+                    "error": gr.error,
+                    "input_tokens": gr.input_tokens,
+                    "output_tokens": gr.output_tokens,
+                    "cost_usd": gr.cost_usd,
+                    "iterations": gr.iterations,
+                    "model": gr.model,
+                }
+            cache_envelope: dict[str, Any] = {
+                "_cache_meta": {
+                    "schema_version": _CACHE_SCHEMA_VERSION,
+                    "created_at": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat(),
+                    "source_checksum": context.get("source_checksum"),
+                },
+                "truncation_flags": truncation_flags,
+                "tasks": serializable_tasks,
+            }
+            save_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_json(save_path, cache_envelope, indent=2)
+            logger.info(
+                "IMPLEMENT inner loop: saved %d generation results to %s",
+                len(generation_results), save_path,
+            )
+        except Exception as exc:
+            logger.warning(
+                "IMPLEMENT inner loop: failed to write cache: %s (non-fatal)",
+                exc, exc_info=True,
+            )
+
+        # --- Assemble output (same structure as DevelopmentPhase path) ---
+        if not task_reports:
+            # Build task reports for resumed path
+            for task in tasks:
+                gr = generation_results.get(task.task_id)
+                report: dict[str, Any] = {
+                    "task_id": task.task_id,
+                    "feature_id": task.feature_id,
+                    "title": task.title,
+                    "status": "resumed",
+                    "complexity_tier": task_tiers.get(
+                        task.task_id, TaskComplexityTier.TIER_2,
+                    ).value,
+                }
+                if gr is not None:
+                    report["cost_usd"] = gr.cost_usd
+                    report["iterations"] = gr.iterations
+                    report["files_generated"] = len(gr.generated_files)
+                task_reports.append(report)
+
+        output: dict[str, Any] = {
+            "task_reports": task_reports,
+            "tasks_processed": len(task_reports),
+            "total_cost": total_cost,
+            "generation_results": generation_results,
+        }
+
+        if gate3:
+            output["_gate3_validation"] = gate3
+        if gate3b:
+            output["_gate3b_content_validation"] = gate3b
+        if truncation_flags_gate4:
+            output["_gate4_truncation"] = truncation_flags_gate4
+
+        context["implementation"] = output
+        context["generation_results"] = generation_results
+        context["truncation_flags"] = truncation_flags
+        output["metadata"] = self._build_implementation_metadata(context)
+
+        # Context contract validation
+        ImplementPhaseOutput(
+            implementation=context["implementation"],
+            generation_results=context["generation_results"],
+            truncation_flags=context["truncation_flags"],
+        )
+
+        duration = time.monotonic() - start_time
+        logger.info(
+            "IMPLEMENT phase complete (inner loop): %d tasks, $%.4f (%.2fs)",
+            len(task_reports), total_cost, duration,
+        )
+        return {
+            "output": output,
+            "cost": total_cost,
+            "metadata": {
+                "duration": duration,
+                "resumed": resumed,
+                "engine": "implementation_engine",
+                **({"resumed_cost": resumed_cost} if resumed else {}),
+            },
+        }
+
+    def _execute_inner_loop_tasks(
+        self,
+        tasks: list[SeedTask],
+        engine: Any,
+        config: "HandlerConfig",
+        context: dict[str, Any],
+        design_results: dict[str, Any],
+        staging_dir: Path,
+        project_root: Path,
+        drafter_spec: str,
+        reviewer_spec: str,
+        edit_mode_map: dict[str, EditModeClassification],
+        task_tiers: dict[str, Any],
+        generation_results: dict[str, GenerationResult],
+        task_reports: list[dict[str, Any]],
+        truncation_flags: dict[str, dict[str, Any]],
+    ) -> None:
+        """Run the inner loop engine for each task, populating results in-place."""
+        from startd8.implementation_engine import EngineRequest
+        from startd8.contractors.artisan_phases.development import (
+            TaskComplexityTier,
+        )
 
         for task in tasks:
             task_id = task.task_id
@@ -7854,8 +8178,8 @@ class Test{class_name}:
 
                 # REQ-IME-305: Existing file content injection
                 existing_files: dict[str, str] = {}
-                edit_mode_map = context.get("edit_mode_map", {})
-                task_edit_mode = edit_mode_map.get(task_id)
+                task_edit_cls = edit_mode_map.get(task_id)
+                task_edit_mode = task_edit_cls.to_dict() if task_edit_cls else None
                 for target_file in (task.target_files or []):
                     fpath = project_root / target_file
                     if fpath.is_file():
@@ -7983,10 +8307,22 @@ class Test{class_name}:
                                 "manifest_introspect_context"
                             ] = "\n".join(_introspect_parts)
 
+                # CMR: select per-task drafter based on complexity tier
+                _task_tier = task_tiers.get(
+                    task_id, TaskComplexityTier.TIER_2,
+                )
+                if (
+                    _task_tier == TaskComplexityTier.TIER_3
+                    and config.tier3_agent
+                ):
+                    _task_drafter = config.tier3_agent
+                else:
+                    _task_drafter = drafter_spec
+
                 request = EngineRequest(
                     task_description=task.description or task.title,
                     context=engine_context,
-                    drafter_agent_spec=drafter_spec,
+                    drafter_agent_spec=_task_drafter,
                     reviewer_agent_spec=reviewer_spec,
                     max_iterations=config.inner_loop_max_iterations,
                     pass_threshold=config.inner_loop_pass_threshold,
@@ -7995,6 +8331,8 @@ class Test{class_name}:
                     target_files=task.target_files,
                     check_truncation=config.check_truncation,
                     strict_truncation=config.strict_truncation,
+                    fail_on_api_truncation=config.fail_on_truncation,
+                    fail_on_heuristic_truncation=False,
                 )
 
                 # --- Execute engine ---
@@ -8020,22 +8358,30 @@ class Test{class_name}:
                     out_path.parent.mkdir(parents=True, exist_ok=True)
                     out_path.write_text(code, encoding="utf-8")
 
-                gen_result: dict[str, Any] = {
-                    "success": bool(result.final_code),
-                    "generated_files": generated_files,
-                    "error": result.error,
-                    "input_tokens": result.total_input_tokens,
-                    "output_tokens": result.total_output_tokens,
-                    "cost_usd": result.total_cost,
-                    "iterations": result.iterations_used,
-                    "model": drafter_spec,
-                }
-
-                # REQ-IME-602: Engine result in metadata
-                gen_result["engine_result"] = result.to_serializable_summary()
+                _gen_file_paths: list[Path] = [
+                    staging_dir / rel_path for rel_path in generated_files
+                ]
+                gen_result = GenerationResult(
+                    success=bool(result.final_code),
+                    generated_files=_gen_file_paths,
+                    error=result.error,
+                    input_tokens=result.total_input_tokens,
+                    output_tokens=result.total_output_tokens,
+                    cost_usd=result.total_cost,
+                    iterations=result.iterations_used,
+                    model=_task_drafter,
+                    metadata={
+                        "engine_result": result.to_serializable_summary(),
+                        "_edit_mode": (
+                            task_edit_cls.to_dict()
+                            if task_edit_cls
+                            else None
+                        ),
+                        "_complexity_tier": _task_tier.value,
+                    },
+                )
 
                 generation_results[task_id] = gen_result
-                total_cost += result.total_cost
 
                 if result.truncation_events:
                     truncation_flags[task_id] = {
@@ -8052,7 +8398,8 @@ class Test{class_name}:
                     "iterations": result.iterations_used,
                     "review_passed": result.passed,
                     "cost_usd": result.total_cost,
-                    "files_generated": len(generated_files),
+                    "files_generated": len(gen_result.generated_files),
+                    "complexity_tier": _task_tier.value,
                 })
 
                 _log_task_boundary_complete(
@@ -8068,16 +8415,11 @@ class Test{class_name}:
                     "Marking as failed (graceful degradation).",
                     task_id, exc, exc_info=True,
                 )
-                generation_results[task_id] = {
-                    "success": False,
-                    "generated_files": {},
-                    "error": str(exc),
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cost_usd": 0.0,
-                    "iterations": 0,
-                    "model": drafter_spec,
-                }
+                generation_results[task_id] = GenerationResult(
+                    success=False,
+                    error=str(exc),
+                    model=drafter_spec,
+                )
                 task_reports.append({
                     "task_id": task_id,
                     "feature_id": task.feature_id,
@@ -8088,41 +8430,6 @@ class Test{class_name}:
                 _log_task_boundary_complete(
                     task_id, status="error", phase="implement",
                 )
-
-        # --- Assemble output (same structure as DevelopmentPhase path) ---
-        output: dict[str, Any] = {
-            "task_reports": task_reports,
-            "tasks_processed": len(task_reports),
-            "total_cost": total_cost,
-            "generation_results": generation_results,
-        }
-
-        context["implementation"] = output
-        context["generation_results"] = generation_results
-        context["truncation_flags"] = truncation_flags
-        output["metadata"] = self._build_implementation_metadata(context)
-
-        # Context contract validation
-        ImplementPhaseOutput(
-            implementation=context["implementation"],
-            generation_results=context["generation_results"],
-            truncation_flags=context["truncation_flags"],
-        )
-
-        duration = time.monotonic() - start_time
-        logger.info(
-            "IMPLEMENT phase complete (inner loop): %d tasks, $%.4f (%.2fs)",
-            len(task_reports), total_cost, duration,
-        )
-        return {
-            "output": output,
-            "cost": total_cost,
-            "metadata": {
-                "duration": duration,
-                "resumed": False,
-                "engine": "implementation_engine",
-            },
-        }
 
     # ------------------------------------------------------------------
     # Public execute
