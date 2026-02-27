@@ -7803,7 +7803,6 @@ class Test{class_name}:
         )
 
         config = self.config
-        design_results = context.get("design_results", {})
         staging_dir = Path(config.staging_dir) if config.staging_dir else (
             project_root / ".startd8" / "staging"
         )
@@ -7831,6 +7830,32 @@ class Test{class_name}:
         total_cost = 0.0
         truncation_flags: dict[str, dict[str, Any]] = {}
 
+        # --- Pre-IMPLEMENT setup (mirrors standard path) ---
+
+        # Pre-IMPLEMENT: warn about risky multi-file tasks (Gap 4)
+        self._validate_multi_file_tasks(tasks)
+
+        # Item 12 (Gap 5): scaffold test files for artifact generator tasks
+        if config.scaffold_test_first:
+            self._ensure_test_scaffolding_for_artifact_tasks(
+                tasks, project_root,
+            )
+
+        # Gate 2c (Gap 2): pre-stub downstream files and build downstream_map
+        design_results = context.get("design_results", {})
+        pre_computed_dm = context.get("_downstream_map")
+        if pre_computed_dm is not None:
+            downstream_map: dict[str, list[str]] = pre_computed_dm
+            logger.debug(
+                "IMPLEMENT inner loop: using pre-computed "
+                "_downstream_map (%d entries)",
+                len(downstream_map),
+            )
+        else:
+            downstream_map = self._reconcile_design_downstream(
+                tasks, design_results, project_root,
+            )
+
         # PCA-600: Build per-task edit mode classification
         # (mirrors standard path edit_mode_map computation)
         scaffold = context.get("scaffold", {})
@@ -7856,6 +7881,55 @@ class Test{class_name}:
             "IMPLEMENT inner loop: edit mode classification: %d edit, %d create",
             edit_tasks, len(tasks) - edit_tasks,
         )
+
+        # --- Gap 6: Manifest staleness check (advisory) ---
+        _design_checksums = context.get("manifest_file_checksums", {})
+        if _design_checksums and project_root:
+            _current_checksums = _compute_manifest_file_checksums(
+                list(_design_checksums.keys()), str(project_root),
+            )
+            _stale_files = [
+                fpath for fpath, expected in _design_checksums.items()
+                if fpath in _current_checksums
+                and _current_checksums[fpath] != expected
+            ]
+            if _stale_files:
+                logger.warning(
+                    "IMPLEMENT inner loop Gap 6: %d target file(s) "
+                    "changed since DESIGN: %s",
+                    len(_stale_files),
+                    ", ".join(_stale_files[:5]),
+                )
+                context["_manifest_stale_files"] = _stale_files
+
+        # --- Gap 6: Phantom element warnings (advisory) ---
+        _phantom_warnings: dict[str, list[str]] = {}
+        _design_refs = context.get("design_referenced_elements", {})
+        if _design_refs and _manifest_registry_for_edit is not None:
+            for tid, file_refs in _design_refs.items():
+                for fpath, elements in file_refs.items():
+                    try:
+                        _current_summary = (
+                            _manifest_registry_for_edit.file_element_summary(
+                                fpath, 5000,
+                            )
+                        )
+                    except (AttributeError, TypeError, OSError):
+                        _current_summary = None
+                    if not _current_summary:
+                        continue
+                    for elem in elements:
+                        if elem not in _current_summary:
+                            _phantom_warnings.setdefault(tid, []).append(
+                                f"{fpath}:{elem}",
+                            )
+            if _phantom_warnings:
+                context["_phantom_element_warnings"] = _phantom_warnings
+                logger.warning(
+                    "IMPLEMENT inner loop Gap 6: %d task(s) have "
+                    "phantom element references",
+                    len(_phantom_warnings),
+                )
 
         # CMR: Complexity-Driven Model Router (mirrors standard path 8563-8630)
         from startd8.contractors.artisan_phases.development import (
@@ -7982,6 +8056,7 @@ class Test{class_name}:
                 edit_mode_map, task_tiers,
                 generation_results, task_reports,
                 truncation_flags,
+                downstream_map=downstream_map,
             )
             total_cost = sum(
                 gr.cost_usd for gr in generation_results.values()
@@ -7992,6 +8067,7 @@ class Test{class_name}:
         # Gate 3: multi-file completeness
         gate3 = self._validate_generation_completeness(
             tasks, generation_results, project_root,
+            downstream_map=downstream_map,
         )
 
         # Gate 3b: semantic content validation
@@ -8025,6 +8101,167 @@ class Test{class_name}:
         )
         truncation_flags.update(truncation_flags_gate4)
 
+        # ── Gate 5: Edit-First Enforcement (REQ-EFE-020) ──
+        from startd8.contractors.edit_first_gate import (
+            validate_task_size_regression,
+            resolve_threshold,
+            emit_rejection_telemetry,
+        )
+        from startd8.utils.code_extraction import extract_code_from_response
+        import types as _types_g5
+
+        gate5_results: dict[str, Any] = {}
+        _output_contracts = context.get("onboarding_output_contracts")
+        _schema_features = context.get("onboarding_schema_features")
+
+        # Resolve a retry agent lazily (only if needed)
+        _retry_agent = None
+        _retry_executor = None
+
+        for task in tasks:
+            gr = generation_results.get(task.task_id)
+            if gr is None or not gr.success:
+                continue
+
+            task_edit_cls = edit_mode_map.get(task.task_id)
+            if not task_edit_cls or task_edit_cls.mode != "edit":
+                continue  # New-file task — no size regression possible
+
+            # Read existing file contents for comparison
+            chunk_efc: dict[str, str] = {}
+            for fpath in (task.target_files or []):
+                fp = project_root / fpath
+                if fp.is_file():
+                    try:
+                        chunk_efc[fpath] = fp.read_text(
+                            encoding="utf-8", errors="replace",
+                        )
+                    except OSError:
+                        pass
+            if not chunk_efc:
+                continue
+
+            # Read generated file content from staging
+            gen_file_contents: dict[str, str] = {}
+            for gen_path in gr.generated_files:
+                fp = Path(gen_path)
+                if fp.exists():
+                    try:
+                        rel_key = str(fp.relative_to(staging_dir))
+                    except ValueError:
+                        rel_key = fp.name
+                    try:
+                        gen_file_contents[rel_key] = fp.read_text(
+                            encoding="utf-8",
+                        )
+                    except (OSError, UnicodeDecodeError):
+                        pass
+            if not gen_file_contents:
+                continue
+
+            # Resolve threshold
+            artifact_types = [
+                task.artifact_type,
+            ] if hasattr(task, "artifact_type") and task.artifact_type else [
+                "source_code",
+            ]
+            threshold = resolve_threshold(
+                artifact_types=artifact_types,
+                output_contracts=_output_contracts,
+                schema_features=_schema_features,
+            )
+
+            gate_result = validate_task_size_regression(
+                task_id=task.task_id,
+                generated_files=gen_file_contents,
+                existing_contents=chunk_efc,
+                threshold=threshold,
+                artifact_type=(
+                    artifact_types[0] if artifact_types else "unknown"
+                ),
+                force_rewrite=config.force_rewrite,
+            )
+
+            if gate_result.any_rejected:
+                # Emit rejection telemetry
+                try:
+                    from opentelemetry import trace as _g5_trace
+                    _g5_span = _g5_trace.get_current_span()
+                    emit_rejection_telemetry(gate_result, _g5_span)
+                except (
+                    ImportError, TypeError, AttributeError,
+                    RuntimeError, NameError,
+                ):
+                    pass
+
+                # Lazy-resolve retry agent (once per run)
+                if _retry_agent is None:
+                    try:
+                        from startd8.utils.agent_resolution import (
+                            resolve_agent_spec,
+                        )
+                        _retry_agent = resolve_agent_spec(drafter_spec)
+                        _retry_executor = _types_g5.SimpleNamespace(
+                            agent=_retry_agent,
+                        )
+                    except Exception as agent_exc:
+                        logger.warning(
+                            "Gate 5: cannot resolve retry agent %s: %s",
+                            drafter_spec, agent_exc,
+                        )
+
+                if _retry_executor is not None:
+                    retry_succeeded = self._attempt_edit_first_retry(
+                        task, gate_result, chunk_efc, context,
+                        gr, _retry_executor, staging_dir, threshold,
+                        extract_code_from_response,
+                    )
+
+                    # Re-evaluate after retry
+                    still_rejected = any(
+                        f.action == "rejected"
+                        for f in gate_result.file_results
+                    )
+                    gate_result.any_rejected = still_rejected
+                    gate_result.retry_succeeded = (
+                        retry_succeeded and not still_rejected
+                    )
+
+            gate5_results[task.task_id] = {
+                "any_rejected": gate_result.any_rejected,
+                "retry_needed": gate_result.retry_needed,
+                "retry_succeeded": gate_result.retry_succeeded,
+                "file_results": [
+                    {
+                        "file_path": fr.file_path,
+                        "input_chars": fr.input_chars,
+                        "output_chars": fr.output_chars,
+                        "ratio": round(fr.ratio, 2),
+                        "threshold": fr.threshold,
+                        "artifact_type": fr.artifact_type,
+                        "passed": fr.passed,
+                        "action": fr.action,
+                    }
+                    for fr in gate_result.file_results
+                ],
+            }
+
+        if gate5_results:
+            rejected_count = sum(
+                1 for r in gate5_results.values() if r["any_rejected"]
+            )
+            if rejected_count:
+                logger.warning(
+                    "Gate 5: %d task(s) with edit-first size regression",
+                    rejected_count,
+                )
+            else:
+                logger.info(
+                    "Gate 5: edit-first gate passed for %d task(s)",
+                    len(gate5_results),
+                )
+        context["edit_first_gate_results"] = gate5_results
+
         # Persist generation_results to disk for crash recovery (v2 envelope)
         try:
             save_path = project_root / ".startd8" / "state" / "generation_results.json"
@@ -8057,6 +8294,8 @@ class Test{class_name}:
                     "source_checksum": context.get("source_checksum"),
                 },
                 "truncation_flags": truncation_flags,
+                "downstream_map": downstream_map,
+                "edit_first_gate_results": gate5_results,
                 "tasks": serializable_tasks,
             }
             save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -8104,11 +8343,33 @@ class Test{class_name}:
             output["_gate3b_content_validation"] = gate3b
         if truncation_flags_gate4:
             output["_gate4_truncation"] = truncation_flags_gate4
+        # Gate 5 results (only include if any rejections)
+        if gate5_results:
+            rejected_count = sum(
+                1 for r in gate5_results.values() if r["any_rejected"]
+            )
+            if rejected_count:
+                output["_gate5_edit_first"] = gate5_results
 
         context["implementation"] = output
         context["generation_results"] = generation_results
         context["truncation_flags"] = truncation_flags
         output["metadata"] = self._build_implementation_metadata(context)
+
+        # Gap 3: Context propagation for downstream phases (REVIEW, TEST)
+        # PCA-403: accumulate prior implementation summaries
+        prior_summaries = context.get("_prior_impl_summaries", [])
+        for task_id_ps, gr_ps in generation_results.items():
+            if gr_ps.success:
+                prior_summaries.append({
+                    "task_id": task_id_ps,
+                    "files": [str(p) for p in gr_ps.generated_files[:5]],
+                })
+        context["_prior_impl_summaries"] = prior_summaries[-3:]
+
+        # Propagate downstream_map to REVIEW phase
+        if downstream_map:
+            context["_downstream_map"] = downstream_map
 
         # Context contract validation
         ImplementPhaseOutput(
@@ -8149,6 +8410,8 @@ class Test{class_name}:
         generation_results: dict[str, GenerationResult],
         task_reports: list[dict[str, Any]],
         truncation_flags: dict[str, dict[str, Any]],
+        *,
+        downstream_map: dict[str, list[str]] | None = None,
     ) -> None:
         """Run the inner loop engine for each task, populating results in-place."""
         from startd8.implementation_engine import EngineRequest
