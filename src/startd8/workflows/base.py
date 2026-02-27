@@ -237,11 +237,14 @@ class WorkflowBase:
         # Type checking (FR-110)
         for inp in meta.inputs:
             if inp.name in config:
+                val = config[inp.name]
+                if val is None and not inp.required:
+                    continue  # Explicitly allowing None for optional inputs
                 expected = self._TYPE_MAP.get(inp.type)
-                if expected and not isinstance(config[inp.name], expected):
+                if expected and not isinstance(val, expected):
                     errors.append(
                         f"Input '{inp.name}': expected {inp.type}, "
-                        f"got {type(config[inp.name]).__name__}"
+                        f"got {type(val).__name__}"
                     )
 
         # Optional JSON Schema validation (FR-111)

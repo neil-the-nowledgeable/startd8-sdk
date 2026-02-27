@@ -128,7 +128,10 @@ class WorkflowInput:
         if isinstance(mapped_type, dict):
             schema.update(mapped_type)
         else:
-            schema["type"] = mapped_type
+            if not self.required:
+                schema["type"] = [mapped_type, "null"]
+            else:
+                schema["type"] = mapped_type
 
         if self.description:
             schema["description"] = self.description
