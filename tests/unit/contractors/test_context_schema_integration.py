@@ -148,9 +148,11 @@ class TestDryRunWithValidation:
         result = workflow.execute(context=context)
 
         assert result.status == WorkflowStatus.COMPLETED
-        assert len(result.phase_results) == 8
+        # Feature-serial mode: only global phases (PLAN, SCAFFOLD, FINALIZE)
+        # appear in phase_results; inner phases tracked per-feature.
+        assert len(result.phase_results) == 3
 
-        # Verify every phase completed (dry-run status)
+        # Verify every global phase completed (dry-run status)
         for pr in result.phase_results:
             assert pr.status == PhaseStatus.DRY_RUN, (
                 f"Phase {pr.phase.value} has status {pr.status.value}"

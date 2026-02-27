@@ -327,18 +327,20 @@ class TestExemplars:
         assert span_id is None
 
     def test_exemplars_none_when_span_invalid(self):
+        import startd8.contractors.forensic_log as _fl_mod
         with patch("startd8.contractors.forensic_log._HAS_OTEL", True):
             mock_span = MagicMock()
             mock_ctx = MagicMock()
             mock_ctx.is_valid = False
             mock_span.get_span_context.return_value = mock_ctx
-            with patch("startd8.contractors.forensic_log._trace") as mock_trace:
+            with patch.object(_fl_mod, "_trace", create=True) as mock_trace:
                 mock_trace.get_current_span.return_value = mock_span
                 trace_id, span_id = _extract_exemplars()
         assert trace_id is None
         assert span_id is None
 
     def test_exemplars_extracted_when_span_valid(self):
+        import startd8.contractors.forensic_log as _fl_mod
         with patch("startd8.contractors.forensic_log._HAS_OTEL", True):
             mock_span = MagicMock()
             mock_ctx = MagicMock()
@@ -346,7 +348,7 @@ class TestExemplars:
             mock_ctx.trace_id = 0x1234ABCD
             mock_ctx.span_id = 0x5678EF
             mock_span.get_span_context.return_value = mock_ctx
-            with patch("startd8.contractors.forensic_log._trace") as mock_trace:
+            with patch.object(_fl_mod, "_trace", create=True) as mock_trace:
                 mock_trace.get_current_span.return_value = mock_span
                 trace_id, span_id = _extract_exemplars()
         assert trace_id is not None
@@ -452,9 +454,10 @@ class TestExceptionSafety:
 
     def test_validation_error_recorded_as_span_event(self):
         """Invalid call_type should record span event, not crash."""
+        import startd8.contractors.forensic_log as _fl_mod
         with patch("startd8.contractors.forensic_log._HAS_OTEL", True):
             mock_span = MagicMock()
-            with patch("startd8.contractors.forensic_log._trace") as mock_trace:
+            with patch.object(_fl_mod, "_trace", create=True) as mock_trace:
                 mock_trace.get_current_span.return_value = mock_span
                 # Invalid call_type
                 emit_forensic_log(

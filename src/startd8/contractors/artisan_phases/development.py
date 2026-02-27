@@ -3521,8 +3521,8 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 try:
                     from startd8.truncation_detection import detect_truncation
                     trunc_result = detect_truncation(
-                        response_text, token_usage,
-                        strict=self._strict_truncation,
+                        response_text,
+                        strict_mode=self._strict_truncation,
                     )
                     if trunc_result.is_truncated:
                         if trunc_result.is_api_truncation and self._fail_on_truncation:

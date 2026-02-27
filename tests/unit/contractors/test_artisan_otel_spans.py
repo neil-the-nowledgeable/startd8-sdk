@@ -345,23 +345,19 @@ class TestBuildProvenanceLinks:
         assert len(links) == 1
         assert links[0].attributes["link.phase"] == "implement"
 
+    @pytest.mark.skipif(not _CSH_HAS_OTEL, reason="OTel not installed")
     def test_handles_missing_span_context(self):
         """No _span_context key → no link, no crash."""
         context = {"design_results": {"T1": {"status": "designed"}}}
-        with patch(
-            "startd8.contractors.context_seed_handlers._HAS_OTEL", True
-        ):
-            links = _build_provenance_links("T1", context, ["design"])
-            assert links == []
+        links = _build_provenance_links("T1", context, ["design"])
+        assert links == []
 
+    @pytest.mark.skipif(not _CSH_HAS_OTEL, reason="OTel not installed")
     def test_handles_missing_task_id(self):
         """Task ID not in results → no link, no crash."""
         context = {"design_results": {"T2": {"status": "designed"}}}
-        with patch(
-            "startd8.contractors.context_seed_handlers._HAS_OTEL", True
-        ):
-            links = _build_provenance_links("T1", context, ["design"])
-            assert links == []
+        links = _build_provenance_links("T1", context, ["design"])
+        assert links == []
 
     @pytest.mark.skipif(not _CSH_HAS_OTEL, reason="OTel not installed")
     def test_builds_multiple_links_from_multiple_phases(self):

@@ -46,3 +46,5 @@ class FakeSeedTask:
     negative_scope: list[str] = field(default_factory=list)
     # Wave+Lane execution: dependency-depth wave assignment
     wave_index: Optional[int] = None
+    # Complexity tier override for calibration
+    complexity_tier_override: Optional[str] = None

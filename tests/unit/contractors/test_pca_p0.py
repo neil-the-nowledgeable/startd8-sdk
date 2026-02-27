@@ -527,7 +527,8 @@ class TestPCA302ReviewPrompt:
         )
 
         assert "## Project Context" in prompt
-        assert "truncated for prompt budget" in prompt
+        # Budget system truncates with "chars omitted" format
+        assert "chars omitted" in prompt or "truncated" in prompt
 
     def test_project_context_injected_before_review_instructions(self):
         handler = self._make_handler()
