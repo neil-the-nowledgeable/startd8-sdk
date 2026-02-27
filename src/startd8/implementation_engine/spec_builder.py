@@ -353,25 +353,18 @@ def build_spec_prompt(
 
     template = get_template(selected_key)
 
-    # Format template — spec_from_design has extra {design_document} placeholder
+    # Common placeholders; spec_from_design adds {design_document}
+    format_kwargs = {
+        "task_description": task_description,
+        "requirements_section": requirements_section,
+        "context_sections": context_sections,
+        "critical_parameters_section": critical_parameters_section,
+        "forward_contracts_section": forward_contracts_section,
+        "domain_constraints": domain_constraints_str,
+    }
     if selected_key == "spec_from_design":
-        return template.format(
-            design_document=design_document,
-            task_description=task_description,
-            requirements_section=requirements_section,
-            context_sections=context_sections,
-            critical_parameters_section=critical_parameters_section,
-            forward_contracts_section=forward_contracts_section,
-            domain_constraints=domain_constraints_str,
-        )
-    return template.format(
-        task_description=task_description,
-        requirements_section=requirements_section,
-        context_sections=context_sections,
-        critical_parameters_section=critical_parameters_section,
-        forward_contracts_section=forward_contracts_section,
-        domain_constraints=domain_constraints_str,
-    )
+        format_kwargs["design_document"] = design_document
+    return template.format(**format_kwargs)
 
 
 def build_spec(
@@ -435,7 +428,7 @@ def build_spec(
     )
 
     spec.cost = _pricing.calculate_total_cost(
-        agent.model,
+        getattr(agent, "model", "unknown"),
         spec.input_tokens,
         spec.output_tokens,
     )

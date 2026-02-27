@@ -7814,13 +7814,12 @@ class Test{class_name}:
         drafter_spec = config.inner_loop_drafter or config.drafter_agent
         reviewer_spec = config.inner_loop_reviewer or config.lead_agent
 
-        # REQ-IME-502: Validate reviewer is configured
+        # REQ-IME-502: Validate reviewer is configured (don't mutate shared config)
         if not reviewer_spec:
             logger.warning(
                 "IMPLEMENT inner loop: no reviewer agent configured — "
                 "falling back to single-shot DevelopmentPhase for all tasks"
             )
-            config.enable_inner_loop = False
             return {
                 "output": {"error": "inner_loop_reviewer not configured"},
                 "cost": 0.0,
@@ -7846,7 +7845,7 @@ class Test{class_name}:
                 design_doc = task_design.get("design_document")
                 if design_doc:
                     engine_context["design_document"] = design_doc
-                elif not design_doc:
+                else:
                     logger.warning(
                         "Inner loop task %s: no design document available — "
                         "falling back to spec template (Prime route)",

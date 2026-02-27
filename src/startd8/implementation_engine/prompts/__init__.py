@@ -118,7 +118,7 @@ def get_template(prompt_name: str) -> str:
         template = entry.get("template") if isinstance(entry, dict) else None
         if template:
             return template
-    except (FileNotFoundError, KeyError, TypeError):
+    except (FileNotFoundError, KeyError, TypeError, yaml.YAMLError):
         pass
 
     fallback = _FALLBACK_TEMPLATES.get(prompt_name)
@@ -138,4 +138,9 @@ def format_prompt(prompt_name: str, **kwargs: Any) -> str:
         Formatted prompt string.
     """
     template = get_template(prompt_name)
-    return template.format(**kwargs)
+    try:
+        return template.format(**kwargs)
+    except KeyError as e:
+        raise KeyError(
+            f"Template '{prompt_name}' missing placeholder: {e}"
+        ) from e

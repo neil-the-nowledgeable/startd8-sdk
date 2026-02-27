@@ -181,7 +181,7 @@ class EngineRequest:
     strict_truncation: bool = False
     fail_on_api_truncation: bool = True
     fail_on_heuristic_truncation: bool = False
-    edit_min_pct: Optional[int] = 80
+    edit_min_pct: int = 80
 
 
 @dataclass
@@ -207,6 +207,7 @@ class EngineResult:
 
     # Error info
     error: Optional[str] = None
+    error_type: Optional[str] = None  # Exception class name for caller disambiguation
 
     # Truncation events
     truncation_events: List[Dict[str, Any]] = field(default_factory=list)

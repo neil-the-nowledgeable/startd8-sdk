@@ -35,8 +35,10 @@ TRUNCATION_MARKER: str = "... [truncated; full plan in artifacts]"
 # Line threshold for search/replace vs whole-file edit mode
 SEARCH_REPLACE_LINE_THRESHOLD: int = 50
 
-# Size regression detection for edit-mode drafts
-DRAFT_SIZE_REGRESSION_THRESHOLD: float = 0.20
+# Size regression detection for edit-mode drafts:
+# Draft with < THRESHOLD of existing file lines is flagged as catastrophically truncated.
+# Only applies when existing files exceed MIN_LINES (skip for very small files).
+DRAFT_SIZE_REGRESSION_THRESHOLD: float = 0.20  # 20% of existing
 DRAFT_SIZE_REGRESSION_MIN_LINES: int = 50
 
 

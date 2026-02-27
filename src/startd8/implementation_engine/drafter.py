@@ -118,6 +118,7 @@ def build_existing_files_section(
         per_file_modes = edit_mode["per_file"]
 
     def _sort_key(item: tuple) -> tuple:
+        """Sort key: edit-mode files first, then largest-first within each mode."""
         path, content = item
         mode = per_file_modes.get(path, {}).get("mode", "create")
         mode_order = 0 if mode == "edit" else 1
@@ -129,7 +130,6 @@ def build_existing_files_section(
     for fpath, fcontent in sorted_files:
         fsize = len(fcontent.encode("utf-8", errors="replace"))
         flines = len(fcontent.splitlines())
-        total_lines = flines
 
         if total_bytes + fsize <= EXISTING_FILES_BUDGET_BYTES:
             nonce = uuid.uuid4().hex[:8]
@@ -148,11 +148,11 @@ def build_existing_files_section(
                     break
                 included_lines.append(line)
                 running += line_bytes
-            remaining_lines = total_lines - len(included_lines)
+            remaining_lines = flines - len(included_lines)
             truncated_content = "\n".join(included_lines)
             truncated_content += (
                 f"\n# ... [TRUNCATED: {remaining_lines} lines omitted "
-                f"— full file is {total_lines} lines] ..."
+                f"— full file is {flines} lines] ..."
             )
             nonce = uuid.uuid4().hex[:8]
             parts.append(f"\n### `{fpath}` ({flines} lines, truncated)")
@@ -160,7 +160,7 @@ def build_existing_files_section(
             total_bytes = EXISTING_FILES_BUDGET_BYTES
             included_count += 1
         else:
-            omitted.append((fpath, total_lines))
+            omitted.append((fpath, flines))
 
     included_kb = total_bytes / 1024
     header = (
@@ -272,6 +272,8 @@ def detect_size_regression(
     if not existing_files or not implementation_code:
         return False
     existing_total = sum(len(c.splitlines()) for c in existing_files.values())
+    if existing_total == 0:
+        return False
     extracted_lines = len(implementation_code.splitlines())
     if (
         existing_total > DRAFT_SIZE_REGRESSION_MIN_LINES
@@ -324,9 +326,13 @@ def create_draft(
     output_format = build_output_format(target_files, existing_files=existing_files)
     existing_files_section = build_existing_files_section(existing_files, edit_mode)
 
-    # Select template
-    raw_spec = spec.raw_spec if hasattr(spec, "raw_spec") else str(spec)
-    spec_id = spec.spec_id if hasattr(spec, "spec_id") else ""
+    # Select template — duck-typed spec may be a SpecResult, ImplementationSpec, or str
+    if hasattr(spec, "raw_spec"):
+        raw_spec = spec.raw_spec
+    else:
+        logger.debug("Drafter: spec lacks raw_spec attribute, using str(spec)")
+        raw_spec = str(spec)
+    spec_id = getattr(spec, "spec_id", "")
 
     if existing_files:
         draft_template = get_template("draft_edit")
@@ -370,10 +376,11 @@ def create_draft(
         ):
             heuristic_truncated = True
             truncation_source = "heuristic"
+            indicators = truncation_result.indicators[:3] if truncation_result.indicators else []
             logger.warning(
                 "Draft appears truncated (heuristic, confidence=%.0f%%): %s",
                 truncation_result.confidence * 100,
-                truncation_result.indicators[:3],
+                indicators,
             )
 
     was_truncated = api_truncated or heuristic_truncated
@@ -391,8 +398,8 @@ def create_draft(
         iteration=iteration,
         implementation=implementation_code,
         spec_id=spec_id,
-        agent_name=agent.name,
-        model=agent.model,
+        agent_name=getattr(agent, "name", "unknown"),
+        model=getattr(agent, "model", "unknown"),
         input_tokens=token_usage.input if token_usage else 0,
         output_tokens=token_usage.output if token_usage else 0,
         time_ms=response_time_ms,
@@ -402,7 +409,9 @@ def create_draft(
     )
 
     draft.cost = _pricing.calculate_total_cost(
-        agent.model, draft.input_tokens, draft.output_tokens
+        getattr(agent, "model", "unknown"),
+        draft.input_tokens,
+        draft.output_tokens,
     )
 
     return draft

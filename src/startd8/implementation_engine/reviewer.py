@@ -7,7 +7,7 @@ Extracted from ``LeadContractorWorkflow._review_draft`` and
 
 import re
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from ..logging_config import get_logger
 from ..costs.pricing import PricingService
@@ -49,7 +49,11 @@ def review_draft(
     """
     review_id = f"review-{uuid.uuid4().hex[:8]}"
 
-    raw_spec = spec.raw_spec if hasattr(spec, "raw_spec") else str(spec)
+    if hasattr(spec, "raw_spec"):
+        raw_spec = spec.raw_spec
+    else:
+        logger.debug("Reviewer: spec lacks raw_spec attribute, using str(spec)")
+        raw_spec = str(spec)
 
     template = get_template("review")
     prompt = template.format(
@@ -87,7 +91,9 @@ def review_draft(
     )
 
     review.cost = _pricing.calculate_total_cost(
-        agent.model, review.input_tokens, review.output_tokens
+        getattr(agent, "model", "unknown"),
+        review.input_tokens,
+        review.output_tokens,
     )
 
     return review

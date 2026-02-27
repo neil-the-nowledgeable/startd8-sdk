@@ -5,12 +5,11 @@ Orchestrates: spec creation -> [draft -> truncation check -> review -> feedback]
 Extracted from ``LeadContractorWorkflow._aexecute`` iteration loop.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from ..logging_config import get_logger
 from ..utils.agent_resolution import resolve_agent_spec
 from .models import EngineRequest, EngineResult
-from .protocol import ImplementationEngine
 from .spec_builder import build_spec
 from .drafter import create_draft
 from .reviewer import format_review_feedback, review_draft
@@ -36,6 +35,10 @@ class DefaultImplementationEngine:
 
     The engine does NOT include an integration/polish phase — that is
     Prime-specific and remains in LeadContractorWorkflow.
+
+    Truncation handling: when a draft is truncated and iterations remain,
+    the engine skips the review phase, injects a continuation prompt, and
+    re-drafts immediately.  Truncation events are recorded in the result.
     """
 
     def build_and_execute(self, request: EngineRequest) -> EngineResult:
@@ -196,8 +199,12 @@ class DefaultImplementationEngine:
             )
 
         except Exception as exc:
-            logger.error("Engine: failed — %s", exc, exc_info=True)
+            logger.error(
+                "Engine: failed (%s) — %s", type(exc).__name__, exc,
+                exc_info=True,
+            )
             result.error = str(exc)
+            result.error_type = type(exc).__name__
 
         return result
 
