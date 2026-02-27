@@ -67,11 +67,16 @@ All Artisan contractor modules must obtain loggers via the OTel-attached pipelin
 **Status:** implemented (partial — 4 modules still use `logging.getLogger()`)
 **Source:** CLAUDE.md "Must Do", `PATTERN-silent-telemetry-loss.md`
 
-All modules in `src/startd8/contractors/` and `src/startd8/contractors/artisan_phases/` must obtain loggers via `get_logger(__name__)` from `startd8.logging_config`, not `logging.getLogger(__name__)`.
+All Python modules in `src/startd8/contractors/**` must obtain loggers via `get_logger(__name__)` from `startd8.logging_config`, not `logging.getLogger(...)`.
+
+**Scope note (Phase 1 policy freeze):**
+- Applies to all contractor Python files, including `__init__.py`.
+- Applies to all logger acquisition sites: module-level loggers, class attributes (for example `self.logger = ...`), and helper/fallback loggers.
+- If a file emits logs, all logger acquisition in that file must follow AL-100 unless explicitly allowlisted under AL-101.
 
 **Acceptance criteria:**
-1. Every contractor module that emits logs imports `from startd8.logging_config import get_logger` and uses `logger = get_logger(__name__)`.
-2. No contractor module uses `import logging` followed by `logger = logging.getLogger(__name__)`.
+1. Every contractor module that emits logs imports `from startd8.logging_config import get_logger` and uses `get_logger(__name__)` for logger acquisition by default.
+2. No contractor module directly calls `logging.getLogger(...)` unless explicitly documented in the AL-101 exception allowlist.
 3. The `get_logger()` call triggers `_ensure_default_log_file_handler()` which attaches `OTelLogHandler` and `OTelTraceContextFilter` when OTel is configured.
 4. Logs from contractor modules appear in Loki when Promtail is configured (per `LOKI_SETUP_GUIDE.md`).
 
@@ -92,8 +97,19 @@ Logger names must follow the module path so Loki queries can filter by `logger` 
 
 **Acceptance criteria:**
 1. Logger name is `__name__` (e.g., `startd8.contractors.context_seed_handlers`).
-2. No ad-hoc logger names (e.g., `get_logger("custom")`) except for registry/bootstrap modules that document the exception.
+2. No ad-hoc logger names (e.g., `get_logger("custom")`) except modules explicitly listed in the AL-101 exception allowlist table below.
 3. Promtail extracts `logger` as a low-cardinality label for LogQL filtering.
+
+**AL-101 Exception Allowlist (authoritative for Phase 1):**
+
+| Module Path | Allowed Logger Name(s) | Rationale |
+|-------------|------------------------|-----------|
+| `src/startd8/contractors/registry.py` | `startd8.contractors.registry` | Registry/bootstrap anchor logger used for subsystem-level lifecycle logging |
+
+Governance rules:
+- This table is the single source of truth for allowed non-`__name__` logger names in contractor scope.
+- Any non-allowlisted `get_logger("...")` usage is non-compliant and must be migrated to `get_logger(__name__)` in Phase 1.
+- New exceptions require updating this table in the same change that introduces the exception.
 
 ---
 
@@ -156,7 +172,7 @@ Log the entry gate validation result.
 **Acceptance criteria:**
 1. When entry gate passes: INFO log with `gate.entry.passed=true`, `gate.phase`, `gate.propagation_status`.
 2. When entry gate fails: WARNING log with `gate.entry.passed=false`, `gate.phase`, `gate.propagation_status`, and any violation summary.
-3. `extra` dict includes fields that Promtail can extract as Loki labels (low cardinality): `phase`, `passed`.
+3. `extra` dict includes structured JSON fields for gate analysis: `phase`, `passed` (queryable via `| json`; not required as Loki labels).
 4. Log is emitted inside the gate.entry span (OT-200) so trace-log correlation groups it with the span.
 
 #### AL-301: Gate Exit Result Log
