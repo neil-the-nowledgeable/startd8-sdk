@@ -277,7 +277,7 @@ The following requirements capture the Prime Contractor design/generation patter
 | AR-139 | planned | DESIGN/IMPLEMENT handoff enforces resolved-parameter completeness gating |
 | AR-138 | implemented | IMPLEMENT adds preflight decomposition and staleness/provenance-aware reuse |
 | AR-153 | implemented | INTEGRATE/TEST/REVIEW failures feed bounded regenerate-with-feedback retries |
-| AR-166 | planned | FINALIZE persists Prime-style forensic artifacts (`spec`, `draft-*`, `review-*`, `integration`) |
+| AR-166 | implemented | FINALIZE persists Prime-style forensic artifacts (`spec`, `draft-*`, `review-*`, `integration`) |
 | AR-206 | implemented | Single-feature quality flow remains the default runner policy (batch requires explicit opt-in) |
 
 ---

@@ -12107,6 +12107,104 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
         return artifacts
 
+    def _persist_forensic_artifacts(
+        self,
+        *,
+        context: dict[str, Any],
+        output_dir: Path,
+        dry_run: bool,
+    ) -> dict[str, dict[str, Any]]:
+        """AR-166: Persist Prime-style per-task forensic artifacts.
+
+        Stores best-effort artifacts under:
+          ``<output_dir>/.artifacts/<task_id>/``
+        with deterministic names:
+          - ``spec.md``
+          - ``draft-<n>.md``
+          - ``review-<n>.json``
+          - ``integration.json``
+
+        In dry-run mode, records planned paths only.
+        """
+        tasks: list[SeedTask] = _ensure_context_loaded(context)
+        design_results: dict[str, Any] = context.get("design_results", {}) or {}
+        integration_results: dict[str, Any] = context.get("integration_results", {}) or {}
+        forensic_map: dict[str, dict[str, Any]] = {}
+
+        for task in tasks:
+            task_id = task.task_id
+            task_dir = output_dir / ".artifacts" / task_id
+            task_design = design_results.get(task_id, {}) if isinstance(design_results, dict) else {}
+            task_integration = integration_results.get(task_id, {}) if isinstance(integration_results, dict) else {}
+
+            pointers: dict[str, Any] = {
+                "spec": str(task_dir / "spec.md"),
+                "drafts": [str(task_dir / "draft-1.md")],
+                "reviews": [str(task_dir / "review-1.json")],
+                "integration": str(task_dir / "integration.json"),
+                "planned_only": bool(dry_run),
+                "persisted": False,
+            }
+            forensic_map[task_id] = pointers
+            if dry_run:
+                continue
+
+            try:
+                task_dir.mkdir(parents=True, exist_ok=True)
+
+                spec_text = str(
+                    task_design.get("implementation_spec")
+                    or task.description
+                    or ""
+                )
+                (task_dir / "spec.md").write_text(spec_text, encoding="utf-8")
+
+                draft_text = str(
+                    task_design.get("design_document")
+                    or task_design.get("implementation_spec")
+                    or ""
+                )
+                (task_dir / "draft-1.md").write_text(draft_text, encoding="utf-8")
+
+                review_payload = {
+                    "reviewer_verdict": task_design.get("reviewer_verdict"),
+                    "arbiter_verdict": task_design.get("arbiter_verdict"),
+                    "reviewer_summary": task_design.get("reviewer_summary"),
+                    "arbiter_summary": task_design.get("arbiter_summary"),
+                    "status": task_design.get("status"),
+                    "agreed": task_design.get("agreed"),
+                    "iterations": task_design.get("iterations"),
+                }
+                atomic_write_json(
+                    task_dir / "review-1.json",
+                    review_payload,
+                    indent=2,
+                    default=str,
+                )
+
+                integration_payload = task_integration if isinstance(task_integration, dict) else {}
+                atomic_write_json(
+                    task_dir / "integration.json",
+                    integration_payload,
+                    indent=2,
+                    default=str,
+                )
+                pointers["persisted"] = True
+            except OSError as exc:
+                logger.warning(
+                    "FINALIZE: forensic artifact write failed for %s: %s",
+                    task_id,
+                    exc,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "FINALIZE: forensic artifact persistence error for %s: %s",
+                    task_id,
+                    exc,
+                )
+
+        return forensic_map
+
     @staticmethod
     def _build_cost_summary(context: dict[str, Any]) -> dict[str, Any]:
         """Aggregate costs across all phases.
@@ -12227,9 +12325,15 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                     "verdict": entry.get("verdict"),
                 }
 
+        forensic_artifacts_map: dict[str, Any] = context.get("forensic_artifacts", {}) or {}
+        all_task_ids: set[str] = set(t.task_id for t in context.get("tasks", []) or [])
+        all_task_ids.update(generation_results.keys())
+        all_task_ids.update(forensic_artifacts_map.keys())
+
         task_status: dict[str, dict[str, Any]] = {}
-        for task_id, gen_result in generation_results.items():
+        for task_id in sorted(all_task_ids):
             try:
+                gen_result = generation_results.get(task_id)
                 test_info = test_results_map.get(task_id, {})
                 review_info = review_results_map.get(task_id, {})
                 # Surface missing target files if IMPLEMENT flagged them
@@ -12239,13 +12343,15 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                     {},
                 )
                 _entry: dict[str, Any] = {
-                    "generated": gen_result.success,
-                    "files_count": len(gen_result.generated_files),
-                    "generation_cost_usd": gen_result.cost_usd,
+                    "generated": bool(gen_result.success) if gen_result is not None else False,
+                    "files_count": len(gen_result.generated_files) if gen_result is not None else 0,
+                    "generation_cost_usd": gen_result.cost_usd if gen_result is not None else 0.0,
                     "tests_passed": test_info.get("passed", None),
                     "review_score": review_info.get("score", None),
                     "review_passed": review_info.get("passed", None),
                 }
+                if task_id in forensic_artifacts_map:
+                    _entry["forensic_artifacts"] = forensic_artifacts_map[task_id]
                 _missing = _task_report.get("missing_targets")
                 if _missing:
                     _entry["missing_targets"] = _missing
@@ -12402,6 +12508,15 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         # Collect artifacts and costs
         artifacts = self._collect_generated_artifacts(context)
         cost_summary = self._build_cost_summary(context)
+        forensic_base_dir = Path(self.output_dir) if self.output_dir else Path(
+            context.get("project_root", ".")
+        )
+        forensic_artifacts = self._persist_forensic_artifacts(
+            context=context,
+            output_dir=forensic_base_dir,
+            dry_run=(dry_run or not bool(self.output_dir)),
+        )
+        context["forensic_artifacts"] = forensic_artifacts
 
         # Compute overall status rollup
         generation_results: dict[str, GenerationResult] = context.get(
@@ -12494,6 +12609,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
             "gate3b_validation": {},
             "cost_summary": cost_summary,
             "generated_artifacts": artifacts,
+            "forensic_artifacts": forensic_artifacts,
             "artifact_count": len(artifacts),
             "dry_run": dry_run,
         }

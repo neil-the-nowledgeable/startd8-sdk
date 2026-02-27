@@ -181,3 +181,84 @@ def test_test_phase_uses_arg_list_without_shell(tmp_path: Path):
     args, kwargs = mock_run.call_args
     assert isinstance(args[0], list)
     assert kwargs.get("shell") is None
+
+
+def test_finalize_ar166_persists_forensic_artifacts_and_manifest_pointers(tmp_path: Path):
+    code_path = tmp_path / "src" / "feature.py"
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.write_text("def f() -> int:\n    return 1\n", encoding="utf-8")
+
+    context = {
+        "plan_title": "Test Plan",
+        "tasks": [_seed_task("T1")],
+        "domain_summary": {"backend": 1},
+        "preflight_summary": {},
+        "scaffold": {},
+        "implementation": {"tasks_processed": 1, "total_estimated_loc": 50, "total_cost": 0.02},
+        "generation_results": {"T1": _generation_result(code_path)},
+        "test_results": {
+            "total_validators": 1,
+            "tasks_with_tests": 1,
+            "total_passed": 1,
+            "total_failed": 0,
+            "per_task": {"T1": {"status": "passed", "passed": True}},
+        },
+        "review_results": {
+            "tasks_with_env_issues": 0,
+            "total_passed": 1,
+            "total_failed": 0,
+            "total_cost": 0.01,
+            "per_task": {
+                "T1": {"status": "reviewed", "passed": True, "score": 92, "verdict": "PASS"},
+            },
+        },
+        "design_results": {
+            "T1": {
+                "status": "designed",
+                "implementation_spec": "spec text",
+                "design_document": "draft text",
+                "reviewer_verdict": {"approved": True, "confidence": 0.9},
+                "arbiter_verdict": {"approved": True, "confidence": 0.92},
+            },
+        },
+        "integration_results": {
+            "T1": {"success": True, "status": "SUCCESS", "integrated_files": [str(code_path)]},
+        },
+    }
+
+    handler = FinalizePhaseHandler(output_dir=str(tmp_path), handler_config=HandlerConfig())
+    handler.execute(WorkflowPhase.FINALIZE, context, dry_run=False)
+
+    assert (tmp_path / ".artifacts" / "T1" / "spec.md").exists()
+    assert (tmp_path / ".artifacts" / "T1" / "draft-1.md").exists()
+    assert (tmp_path / ".artifacts" / "T1" / "review-1.json").exists()
+    assert (tmp_path / ".artifacts" / "T1" / "integration.json").exists()
+
+    manifest = json.loads((tmp_path / "generation-manifest.json").read_text(encoding="utf-8"))
+    forensic = manifest["task_status"]["T1"]["forensic_artifacts"]
+    assert forensic["persisted"] is True
+    assert forensic["planned_only"] is False
+
+
+def test_finalize_ar166_dry_run_records_planned_paths_without_writes(tmp_path: Path):
+    context = {
+        "plan_title": "Test Plan",
+        "tasks": [_seed_task("T1")],
+        "domain_summary": {"backend": 1},
+        "preflight_summary": {},
+        "scaffold": {},
+        "implementation": {"tasks_processed": 0, "total_estimated_loc": 50, "total_cost": 0.0},
+        "generation_results": {},
+        "test_results": {"total_validators": 0, "tasks_with_tests": 0, "total_passed": 0, "total_failed": 0},
+        "review_results": {"tasks_with_env_issues": 0, "total_passed": 0, "total_failed": 0, "total_cost": 0.0},
+        "design_results": {"T1": {"status": "dry_run_pending", "implementation_spec": "spec"}},
+        "integration_results": {},
+    }
+
+    handler = FinalizePhaseHandler(output_dir=str(tmp_path), handler_config=HandlerConfig())
+    result = handler.execute(WorkflowPhase.FINALIZE, context, dry_run=True)
+
+    forensic = result["output"]["forensic_artifacts"]["T1"]
+    assert forensic["planned_only"] is True
+    assert forensic["persisted"] is False
+    assert not (tmp_path / ".artifacts" / "T1" / "spec.md").exists()

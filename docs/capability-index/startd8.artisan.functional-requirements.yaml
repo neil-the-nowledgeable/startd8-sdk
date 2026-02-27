@@ -962,7 +962,7 @@ phase_behavior_requirements:
 
   - id: AR-166
     description: "FINALIZE persists per-task Prime-style forensic artifacts for design and generation"
-    status: planned
+    status: implemented
     type: phase_behavior
 
     acceptance_criteria:
@@ -978,6 +978,9 @@ phase_behavior_requirements:
     implementation_hints:
       file: src/startd8/contractors/context_seed_handlers.py
       class: FinalizePhaseHandler
+
+    verified_by:
+      - tests/unit/contractors/test_context_seed_review_finalize.py
 
 # ==============================================================================
 # LAYER: ORCHESTRATION (AR-2xx)
