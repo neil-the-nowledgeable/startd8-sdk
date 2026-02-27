@@ -317,19 +317,26 @@ class CostBudgetExceededError(WorkflowError):
 
 
 class InvalidTaskIdError(ValueError):
-    """Raised when a task_id contains unsafe characters."""
+    """Raised when a task_id contains unsafe characters.
+
+    .. note:: Reserved for future wave/lane dependency validation.
+       Currently defined but not raised — kept for API stability.
+    """
 
 
 class UnresolvedDependencyError(ValueError):
-    """Raised when depends_on references a task_id not in the task set (strict mode)."""
+    """Raised when depends_on references a task_id not in the task set (strict mode).
+
+    .. note:: Reserved for future wave/lane dependency validation.
+       Currently defined but not raised — kept for API stability.
+    """
 
 
 class WaveMergeCollisionError(RuntimeError):
     """Raised when a task ID appears in multiple waves during merge.
 
-    This indicates a fundamental invariant violation in compute_waves() —
-    the task set was not properly partitioned. Continuing would cause
-    non-deterministic data corruption via silent dict.update() overwrite.
+    .. note:: Reserved for future wave/lane parallel execution.
+       Currently defined but not raised — kept for API stability.
     """
 
 
@@ -618,9 +625,12 @@ class CheckpointStore(ABC):
 
 
 class DefaultPhaseHandler(AbstractPhaseHandler):
-    """A no-op phase handler that returns empty results.
+    """Fallback handler that fails explicitly for unregistered phases.
 
-    Used as fallback for phases without a registered handler.
+    Previously returned ``{"output": None}`` silently, causing downstream
+    ``TypeError`` when callers accessed structured fields. Now raises
+    ``PhaseExecutionError`` so missing handler registration is detected
+    immediately instead of cascading as cryptic failures.
     """
 
     def execute(
@@ -629,11 +639,18 @@ class DefaultPhaseHandler(AbstractPhaseHandler):
         context: dict[str, Any],
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        return {
-            "output": None,
-            "cost": 0.0,
-            "metadata": {"handler": "default", "dry_run": dry_run},
-        }
+        if dry_run:
+            return {
+                "output": {},
+                "cost": 0.0,
+                "metadata": {"handler": "default", "dry_run": True},
+            }
+        raise PhaseExecutionError(
+            f"No handler registered for phase {phase.value!r}. "
+            f"Register a handler via workflow.register_handler({phase.value!r}, handler) "
+            f"before executing this phase.",
+            phase=phase,
+        )
 
 
 class JsonFileCheckpointStore(CheckpointStore):
@@ -844,39 +861,6 @@ class InMemoryCheckpointStore(CheckpointStore):
 _SAFE_TASK_ID_PATTERN = re.compile(r'^[A-Za-z0-9._-]+$')
 
 
-# ============================================================================
-# WAVE COMPUTATION PROTOCOL AND ALGORITHM
-# ============================================================================
-
-
-
-
-
-
-
-
-
-
-
-
-
-# ============================================================================
-# MODULE-LEVEL CONSTANTS FOR CONTEXT FIELD MANAGEMENT
-# ============================================================================
-
-# Task-keyed fields: dicts where keys are task_ids.
-# Used by _isolate_context_for_lane() and _merge_lane_results().
-
-# File-keyed fields: dicts where keys are file paths, not task IDs.
-# Merged with last-write-wins semantics (no collision assertion).
-
-# Read-only global fields: set once during PLAN/SCAFFOLD, should not
-# be modified by lane threads during IMPLEMENT waves.
-
-
-# ============================================================================
-# LANE-PARALLEL HELPERS
-# ============================================================================
 
 
 
@@ -1525,14 +1509,40 @@ class ArtisanContractorWorkflow:
             if not status.stdout.strip():
                 return  # No changes to commit
 
-            # Add all changes
-            subprocess.run(
-                ["git", "add", "-A"],
-                cwd=str(project_root),
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            # Scope git add to files produced by the workflow (not -A).
+            # Collect integrated file paths from context; fall back to
+            # porcelain output if integration_results is unavailable.
+            ctx = context or {}
+            generated_files: list[str] = []
+            int_results = ctx.get("integration_results", {})
+            if isinstance(int_results, dict):
+                for task_info in int_results.values():
+                    if isinstance(task_info, dict):
+                        for f in task_info.get("integrated_files", []):
+                            generated_files.append(str(f))
+            gen_results = ctx.get("generation_results", {})
+            if isinstance(gen_results, dict):
+                for task_info in gen_results.values():
+                    if isinstance(task_info, dict):
+                        for f in task_info.get("files", []):
+                            generated_files.append(str(f))
+
+            if generated_files:
+                # Add only the specific generated files
+                subprocess.run(
+                    ["git", "add", "--"] + generated_files,
+                    cwd=str(project_root),
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+            else:
+                # Fallback: no file list available — log and skip
+                self._logger.warning(
+                    "Auto-commit: no generated file list available — "
+                    "skipping commit to avoid staging unrelated changes"
+                )
+                return
 
             # Build a meaningful per-feature commit message from context
             msg = self._build_commit_message(feature_id, context)
@@ -2643,16 +2653,6 @@ class ArtisanContractorWorkflow:
             )
 
         return WorkflowStatus.COMPLETED
-
-    # ------------------------------------------------------------------
-    # Lane-parallel execution
-    # ------------------------------------------------------------------
-
-
-    # ------------------------------------------------------------------
-    # Wave+Lane parallel execution
-    # ------------------------------------------------------------------
-
 
     # ------------------------------------------------------------------
     # Feature-serial execution helpers

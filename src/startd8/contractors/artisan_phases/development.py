@@ -4769,10 +4769,13 @@ class DevelopmentPhase:
                                         "context.task_id": chunk.chunk_id,
                                         "context.constraint_count": len(enrichment.prompt_constraints),
                                     })
-                            except Exception:
-                                pass  # OTel not available — non-fatal
-                        except Exception:
-                            pass  # Non-fatal
+                            except ImportError:
+                                pass  # OTel not installed — non-fatal
+                        except (OSError, TypeError, ValueError) as _prop_err:
+                            self.logger.debug(
+                                "Chunk %s: propagation tracking failed (non-fatal): %s",
+                                chunk.chunk_id, _prop_err,
+                            )
                 except Exception as e:
                     self.logger.warning(
                         "Chunk %s: domain checklist failed (non-fatal): %s",
