@@ -482,17 +482,23 @@ class PostMortemEvaluator:
         if not keywords:
             return [], []
 
-        code_lower = generated_code.lower()
+        # Normalize underscores to spaces so snake_case identifiers
+        # (e.g. implement_authentication_middleware) match requirement
+        # keywords (e.g. "implement authentication middleware"), while
+        # using word-boundary matching to avoid substring false positives
+        # (e.g. "set" matching inside "result", "run" inside "runtime").
+        code_lower = generated_code.lower().replace("_", " ")
         met: List[str] = []
         missed: List[str] = []
 
         for kw in keywords:
-            # Check if key words from the requirement appear in the code
-            # Use individual word matching (majority of words must be present)
             words = kw.split()
             if not words:
                 continue
-            present = sum(1 for w in words if w in code_lower)
+            present = sum(
+                1 for w in words
+                if re.search(rf'\b{re.escape(w)}\b', code_lower)
+            )
             if present / len(words) >= 0.5:
                 met.append(kw)
             else:

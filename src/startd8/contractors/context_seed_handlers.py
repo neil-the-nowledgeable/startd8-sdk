@@ -13882,6 +13882,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
 
         # Task 11a: Gate 3b content validation summary
         gate3b_data: dict[str, Any] = implementation.get("_gate3b_content_validation", {})
+        severity_counts: dict[str, int] = {"high": 0, "medium": 0, "low": 0}
         if gate3b_data:
             try:
                 severity_counts = FinalizePhaseHandler._count_gate3b_by_severity(gate3b_data)

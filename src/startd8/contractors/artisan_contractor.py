@@ -1799,6 +1799,8 @@ class ArtisanContractorWorkflow:
                     # --- Context contract: exit validation ---
                     # validate_phase_boundary runs legacy validation
                     # internally, then contract exit when configured.
+                    exit_result = None
+                    _exit_violations: list[Any] = []
                     with self.tracer.start_as_current_span(
                         "gate.exit",
                         attributes={"gate.phase": phase.value},
@@ -1851,16 +1853,50 @@ class ArtisanContractorWorkflow:
                             except ImportError:
                                 pass
 
+                    # --- Exit gate enforcement ---
+                    # When the exit gate has blocking failures, honour quality
+                    # gate mode: block → FAILED, warn → WARNING + metadata,
+                    # skip → ignore.
+                    _exit_gate_failed = False
+                    if (
+                        exit_result
+                        and not exit_result.passed
+                        and _exit_violations
+                    ):
+                        if self._quality_gate == "block":
+                            _exit_gate_failed = True
+                            self._logger.error(
+                                "EXIT GATE BLOCKED: phase %s has %d blocking "
+                                "violation(s): %s",
+                                phase.value,
+                                len(_exit_violations),
+                                _exit_violations,
+                            )
+                        elif self._quality_gate == "warn":
+                            self._logger.warning(
+                                "EXIT GATE WARNING: phase %s completed with "
+                                "%d blocking violation(s) — continuing per "
+                                "warn policy: %s",
+                                phase.value,
+                                len(_exit_violations),
+                                _exit_violations,
+                            )
+
                     phase_end = time.monotonic()
                     duration = phase_end - phase_start
 
-                    status = (
-                        PhaseStatus.DRY_RUN
-                        if config.dry_run
-                        else PhaseStatus.COMPLETED
-                    )
-                    phase_success = True
-                    phase_outcome = status.value
+                    if _exit_gate_failed:
+                        status = PhaseStatus.FAILED
+                        phase_success = False
+                        phase_outcome = "exit_gate_blocked"
+                    elif config.dry_run:
+                        status = PhaseStatus.DRY_RUN
+                        phase_success = True
+                        phase_outcome = status.value
+                    else:
+                        status = PhaseStatus.COMPLETED
+                        phase_success = True
+                        phase_outcome = status.value
                     raw_cost = result_dict.get("cost")
                     try:
                         cost = float(raw_cost) if raw_cost is not None else 0.0
