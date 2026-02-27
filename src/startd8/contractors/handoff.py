@@ -101,6 +101,10 @@ HANDOFF_SCHEMA: dict[str, Any] = {
                 "generated_at": {"type": "string"},
             },
         },
+        "design_quality": {
+            "type": "object",
+            "description": "DESIGN phase quality gate results (total_passed, total_failed, agreement_rate)",
+        },
         "created_at": {"type": "string"},
         "schema_version": {"type": "integer"},
         "schema_version_str": {"type": "string"},
@@ -195,6 +199,9 @@ class HandoffData:
     # Gap 5: Per-file manifest truncation tier used during DESIGN
     # {filepath: "full|compact|public_only|fqn_only|unavailable"}
     manifest_truncation_tier: dict[str, str] = field(default_factory=dict)
+    # Quality gate result from DESIGN phase
+    # {total_passed, total_failed, agreement_rate, evaluated_task_count}
+    design_quality: dict[str, Any] = field(default_factory=dict)
     created_at: str = ""
     schema_version: int = SCHEMA_VERSION
     schema_version_str: str = ARTISAN_SCHEMA_VERSION
@@ -407,6 +414,7 @@ def write_design_handoff(
     manifest_file_checksums: dict[str, str] | None = None,
     design_mode_evidence: dict[str, dict[str, Any]] | None = None,
     manifest_truncation_tier: dict[str, str] | None = None,
+    design_quality: dict[str, Any] | None = None,
 ) -> Path:
     """Serialize design handoff state to a JSON file.
 
@@ -432,6 +440,7 @@ def write_design_handoff(
         manifest_file_checksums: Per-file design-time checksums (Gap 2).
         design_mode_evidence: Per-task mode evidence (Gap 4).
         manifest_truncation_tier: Per-file truncation tiers (Gap 5).
+        design_quality: DESIGN phase quality gate results.
 
     Returns:
         Path to the written handoff file.
@@ -475,6 +484,7 @@ def write_design_handoff(
         manifest_file_checksums=manifest_file_checksums or {},
         design_mode_evidence=design_mode_evidence or {},
         manifest_truncation_tier=manifest_truncation_tier or {},
+        design_quality=design_quality or {},
         created_at=datetime.now(timezone.utc).isoformat(),
         schema_version=SCHEMA_VERSION,
         schema_version_str=ARTISAN_SCHEMA_VERSION,
@@ -584,6 +594,7 @@ def load_design_handoff(path: str | Path) -> HandoffData:
         manifest_file_checksums=raw.get("manifest_file_checksums", {}),
         design_mode_evidence=raw.get("design_mode_evidence", {}),
         manifest_truncation_tier=raw.get("manifest_truncation_tier", {}),
+        design_quality=raw.get("design_quality", {}),
         created_at=raw.get("created_at", ""),
         schema_version=version,
         schema_version_str=raw.get("schema_version_str")

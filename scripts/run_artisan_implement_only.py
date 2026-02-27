@@ -348,6 +348,9 @@ def main() -> int:
     # B-6: Reconstruct design_mode_summary from handoff (lost in split runs)
     if handoff is not None and handoff.design_mode_summary:
         initial_context["design_mode_summary"] = handoff.design_mode_summary
+    # Reconstruct design_quality from handoff for downstream quality gates
+    if handoff is not None and handoff.design_quality:
+        initial_context["design_quality"] = handoff.design_quality
 
     logger.info("Workflow ID: %s", config.workflow_id)
     logger.info("Implementation-only: phases=%s", [p.value for p in phases])

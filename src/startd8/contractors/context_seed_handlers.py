@@ -323,6 +323,30 @@ def _compute_gen_file_hash(
     return h.hexdigest() if any_read else None
 
 
+def _compute_design_results_hash(design_results: dict[str, Any]) -> str | None:
+    """Compute SHA-256 over design_results for cache invalidation.
+
+    When the design changes between runs (e.g. ``--force-design``),
+    cached TEST/REVIEW results are stale because the implementation
+    they validated was built from a different design.
+
+    Returns hex digest, or ``None`` if design_results is empty.
+    """
+    if not design_results:
+        return None
+    # Deterministic: sort by task_id, then serialize
+    h = hashlib.sha256()
+    for tid in sorted(design_results.keys()):
+        entry = design_results[tid]
+        # Hash the design document content (primary driver of implementation)
+        doc = ""
+        if isinstance(entry, dict):
+            doc = entry.get("design_document", "") or ""
+        h.update(tid.encode("utf-8"))
+        h.update(doc.encode("utf-8"))
+    return h.hexdigest()
+
+
 from startd8.contractors.gate_contracts import GateEmitter
 
 __all__ = [
@@ -5423,6 +5447,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     manifest_file_checksums=_manifest_file_checksums,
                     design_mode_evidence=_design_mode_evidence,
                     manifest_truncation_tier=_manifest_truncation_tier,
+                    design_quality=context.get("design_quality"),
                 )
                 logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
             except (OSError, ValueError, TypeError) as exc:
@@ -8137,7 +8162,8 @@ class Test{class_name}:
         resumed = False
         resumed_cost = 0.0
 
-        if not config.force_implement and results_path.exists():
+        _is_retry_inner = bool(context.get("_retry_attempt", 0))
+        if not config.force_implement and not _is_retry_inner and results_path.exists():
             try:
                 saved = json.loads(results_path.read_text(encoding="utf-8"))
                 cached_results = self._validate_resume_cache(
@@ -8816,6 +8842,71 @@ class Test{class_name}:
     # Public execute
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _bridge_retry_feedback(context: dict[str, Any]) -> bool:
+        """Bridge AR-153 orchestrator retry feedback into DevelopmentPhase keys.
+
+        The orchestrator (_execute_feature) sets ``prior_error_feedback`` and
+        ``retry_feedback`` when rewinding to IMPLEMENT after an
+        INTEGRATE/TEST/REVIEW failure.  DevelopmentPhase reads
+        ``last_error`` and ``test_output``.  This method bridges the two
+        so the LLM receives error-informed retry context.
+
+        Returns True if retry feedback was bridged (i.e. this is a retry).
+        """
+        retry_attempt = context.get("_retry_attempt", 0)
+        if not retry_attempt:
+            return False
+
+        # Bridge primary error feedback
+        prior_feedback = context.get("prior_error_feedback")
+        if prior_feedback and not context.get("last_error"):
+            context["last_error"] = prior_feedback
+
+        # Extract structured test/review failure details for the LLM
+        retry_fb = context.get("retry_feedback")
+        if isinstance(retry_fb, dict) and not context.get("test_output"):
+            details = retry_fb.get("details", {})
+            source_phase = retry_fb.get("source_phase", "")
+            detail_parts: list[str] = []
+
+            test_failures = details.get("test_failures")
+            if isinstance(test_failures, dict):
+                for tid, info in test_failures.items():
+                    if isinstance(info, dict):
+                        failures = info.get("failures", [])
+                        detail_parts.append(
+                            f"Task {tid}: {len(failures)} validator(s) failed — "
+                            + ", ".join(str(f) for f in failures[:5])
+                        )
+
+            review_failures = details.get("review_failures")
+            if isinstance(review_failures, dict):
+                for tid, info in review_failures.items():
+                    score = info.get("score", "?") if isinstance(info, dict) else info
+                    detail_parts.append(f"Task {tid}: review score {score}")
+
+            integration_failures = details.get("integration_failures")
+            if isinstance(integration_failures, dict):
+                for tid, info in integration_failures.items():
+                    reason = (
+                        info.get("error", "unknown")
+                        if isinstance(info, dict) else str(info)
+                    )
+                    detail_parts.append(f"Task {tid}: integration failed — {reason}")
+
+            if detail_parts:
+                context["test_output"] = (
+                    f"[{source_phase.upper()} phase failures]\n"
+                    + "\n".join(detail_parts)
+                )
+
+        logger.info(
+            "IMPLEMENT: AR-153 retry %d — bridged prior_error_feedback → last_error",
+            retry_attempt,
+        )
+        return True
+
     def execute(
         self,
         phase: WorkflowPhase,
@@ -8829,7 +8920,14 @@ class Test{class_name}:
         project_root = Path(_project_root_str) if _project_root_str and _project_root_str.strip() else Path(".")
         _has_explicit_project_root = bool(_project_root_str and _project_root_str.strip())
 
-        logger.info("IMPLEMENT phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
+        # AR-153: Bridge orchestrator retry feedback into DevelopmentPhase keys.
+        # Must run before cache check so _is_retry can gate cache loading.
+        _is_retry = self._bridge_retry_feedback(context)
+
+        logger.info(
+            "IMPLEMENT phase: processing %d tasks (dry_run=%s, retry=%s)",
+            len(tasks), dry_run, _is_retry,
+        )
 
         # --- Pre-IMPLEMENT validation: warn about risky multi-file tasks ---
         self._validate_multi_file_tasks(tasks)
@@ -8927,6 +9025,7 @@ class Test{class_name}:
             and results_path.exists()
             and not dry_run
             and not self.config.force_implement
+            and not _is_retry  # AR-153: skip cache on retry to avoid regenerating identical output
         ):
             try:
                 with open(results_path) as f:
@@ -10783,8 +10882,9 @@ class TestPhaseHandler(AbstractPhaseHandler):
         tasks: list[Any],
         generation_results: dict[str, Any],
         source_checksum: str | None,
+        design_results: dict[str, Any] | None = None,
     ) -> dict[str, Any] | None:
-        """Validate a saved test_results cache through 3 ordered layers.
+        """Validate a saved test_results cache through 4 ordered layers.
 
         Returns the cached output dict if all layers pass, or None if the
         cache should be rejected (caller falls through to fresh TEST).
@@ -10792,6 +10892,8 @@ class TestPhaseHandler(AbstractPhaseHandler):
         Layers (cheapest → most expensive):
             0: Schema version — _cache_meta exists, schema_version == _CACHE_SCHEMA_VERSION
             1: Source checksum — _cache_meta.source_checksum matches context
+            1.5: Design hash — design_results hash matches context (catches
+                 ``--force-design`` invalidation)
             2: Per-task generation file hash — cached results valid only if
                generated code hasn't changed since tests ran.
         """
@@ -10834,6 +10936,23 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 "present" if cached_checksum else "absent",
                 "present" if source_checksum else "absent",
             )
+
+        # Layer 1.5: Design hash — invalidate when design changes
+        # (e.g. --force-design re-ran DESIGN but IMPLEMENT cache was
+        # also invalidated, producing new code from the new design).
+        cached_design_hash = cache_meta.get("design_hash")
+        if cached_design_hash is not None and design_results is not None:
+            current_design_hash = _compute_design_results_hash(design_results)
+            if (
+                current_design_hash is not None
+                and current_design_hash != cached_design_hash
+            ):
+                logger.warning(
+                    "TEST: design_hash mismatch "
+                    "(cached=%s, current=%s) — re-running",
+                    cached_design_hash[:12], current_design_hash[:12],
+                )
+                return None
 
         # Layer 2: Per-task generation file hash — verify generated code
         # hasn't changed since tests were run.
@@ -10892,6 +11011,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         project_root = Path(context.get("project_root", "."))
         generation_results: dict[str, GenerationResult] = context.get("generation_results", {})
         truncation_flags: dict[str, Any] = context.get("truncation_flags", {})
+        integration_results_ctx: dict[str, Any] = context.get("integration_results", {})
 
         logger.info("TEST phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
 
@@ -10915,6 +11035,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     tasks,
                     generation_results,
                     context.get("source_checksum"),
+                    context.get("design_results"),
                 )
                 if cached_output is not None:
                     context["test_results"] = cached_output
@@ -11012,6 +11133,28 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     })
                     _task_span.set_attribute("task.status", "skipped_no_generation")
                     task_status = "skipped_no_generation"
+                    continue
+
+                # Skip tasks that failed INTEGRATE (e.g. truncation-blocked)
+                _int_result = integration_results_ctx.get(task.task_id, {})
+                if isinstance(_int_result, dict) and _int_result.get("success") is False:
+                    _int_status = _int_result.get("status", "unknown")
+                    logger.warning(
+                        "TEST: skipping task %s (%s) — integration failed (status=%s)",
+                        task.task_id, task.title, _int_status,
+                    )
+                    test_plan.append({
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "domain": task.domain,
+                        "validators": validators,
+                        "validator_count": len(validators),
+                        "status": "skipped_integration_failed",
+                        "integration_status": _int_status,
+                    })
+                    _task_span.set_attribute("task.status", "skipped_integration_failed")
+                    _task_span.set_attribute("task.integration_status", _int_status)
+                    task_status = "skipped_integration_failed"
                     continue
 
                 # Run validators
@@ -11145,6 +11288,11 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     if file_hash is not None:
                         gen_file_hashes[task.task_id] = file_hash
 
+                # Compute design hash for cache invalidation (Layer 1.5)
+                _design_hash = _compute_design_results_hash(
+                    context.get("design_results", {})
+                )
+
                 cache_envelope: dict[str, Any] = {
                     "_cache_meta": {
                         "schema_version": _CACHE_SCHEMA_VERSION,
@@ -11153,6 +11301,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                         ).isoformat(),
                         "source_checksum": context.get("source_checksum"),
                         "generation_file_hashes": gen_file_hashes,
+                        "design_hash": _design_hash,
                     },
                     "output": output,
                 }
@@ -12374,8 +12523,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
         saved: dict[str, Any],
         generation_results: dict[str, GenerationResult],
         source_checksum: str | None,
+        design_results: dict[str, Any] | None = None,
     ) -> dict[str, dict[str, Any]]:
-        """Validate a saved review cache through 4 ordered layers.
+        """Validate a saved review cache through 5 ordered layers.
 
         Returns a dict of task_id → cached review data for entries that
         pass all layers. Empty dict if cache-wide validation fails.
@@ -12383,6 +12533,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         Layers (cheapest → most expensive):
             0: Schema version — _cache_meta exists, schema_version == _CACHE_SCHEMA_VERSION
             1: Source checksum — _cache_meta.source_checksum matches context
+            1.5: Design hash — design_results hash matches context
             2: Per-task status — entry has status == "reviewed"
             3: Per-task code hash — reviewed_code_hash matches current generated code
         """
@@ -12424,6 +12575,21 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 "present" if cached_checksum else "absent",
                 "present" if source_checksum else "absent",
             )
+
+        # Layer 1.5: Design hash — invalidate when design changes
+        cached_design_hash = cache_meta.get("design_hash")
+        if cached_design_hash is not None and design_results is not None:
+            current_design_hash = _compute_design_results_hash(design_results)
+            if (
+                current_design_hash is not None
+                and current_design_hash != cached_design_hash
+            ):
+                logger.warning(
+                    "REVIEW: design_hash mismatch "
+                    "(cached=%s, current=%s) — ignoring entire cache",
+                    cached_design_hash[:12], current_design_hash[:12],
+                )
+                return {}
 
         tasks_data = saved.get("tasks", {})
         valid: dict[str, dict[str, Any]] = {}
@@ -12473,6 +12639,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         test_results_ctx: dict[str, Any] = context.get("test_results", {})
         test_plan = test_results_ctx.get("test_plan", [])
         test_by_task = {t["task_id"]: t for t in test_plan if isinstance(t, dict)}
+        integration_results_ctx: dict[str, Any] = context.get("integration_results", {})
 
         # Gate 2c downstream map — used to exclude downstream stubs from
         # review scoring so they don't unfairly penalize the task.
@@ -12509,6 +12676,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     raw_cache,
                     generation_results,
                     context.get("source_checksum"),
+                    context.get("design_results"),
                 )
                 logger.info(
                     "REVIEW: loaded %d validated cached review result(s) from %s",
@@ -12598,6 +12766,27 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     task_status = "skipped_no_generation"
                     continue
 
+                # Skip tasks that failed INTEGRATE (e.g. truncation-blocked)
+                _int_result = integration_results_ctx.get(task.task_id, {})
+                if isinstance(_int_result, dict) and _int_result.get("success") is False:
+                    _int_status = _int_result.get("status", "unknown")
+                    logger.warning(
+                        "REVIEW: skipping task %s (%s) — integration failed (status=%s)",
+                        task.task_id, task.title, _int_status,
+                    )
+                    review_items.append({
+                        "task_id": task.task_id,
+                        "title": task.title,
+                        "domain": task.domain,
+                        "constraint_count": len(task.prompt_constraints),
+                        "env_failures": len(env_fails),
+                        "env_warnings": len(env_warns),
+                        "review_status": "skipped_integration_failed",
+                        "integration_status": _int_status,
+                    })
+                    task_status = "skipped_integration_failed"
+                    continue
+
                 # Read generated code for review.
                 # Exclude downstream stub files (Gate 2c) from the review body
                 # so the reviewer doesn't penalize minimal placeholders that are
@@ -12649,6 +12838,19 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     task_status = "skipped_no_code"
                     continue
                 task_test = test_by_task.get(task.task_id, {})
+
+                # Warn when a generated task has no test results — the
+                # reviewer should be aware that test coverage is absent.
+                if not task_test or task_test.get("status") in (
+                    "skipped_no_generation", "skipped_integration_failed",
+                ):
+                    logger.warning(
+                        "REVIEW: task %s has no test results (test_status=%s) "
+                        "— review will proceed without test coverage signal",
+                        task.task_id,
+                        task_test.get("status", "missing"),
+                    )
+                    task_test.setdefault("_no_test_coverage", True)
 
                 # Check pre-validated cache before LLM call
                 cached = cached_reviews.get(task.task_id)
@@ -12926,6 +13128,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
                                 datetime.timezone.utc
                             ).isoformat(),
                             "source_checksum": context.get("source_checksum"),
+                            "design_hash": _compute_design_results_hash(
+                                context.get("design_results", {})
+                            ),
                         },
                         "tasks": serializable_tasks,
                     }

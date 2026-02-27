@@ -2888,6 +2888,12 @@ class ArtisanContractorWorkflow:
             context.pop("current_feature_phase", None)
             context.pop("_retry_attempt", None)
             context.pop("retry_feedback", None)
+            context.pop("prior_error_feedback", None)
+            # AR-153: Clean bridged DevelopmentPhase retry keys set by
+            # ImplementPhaseHandler._bridge_retry_feedback() so the next
+            # feature starts fresh.
+            context.pop("last_error", None)
+            context.pop("test_output", None)
 
         # All inner phases succeeded
         self._logger.info(
@@ -2988,11 +2994,27 @@ class ArtisanContractorWorkflow:
         if summary is None:
             return None
 
+        # Build informative error string with gate details for
+        # DevelopmentPhase consumption (bridged via _bridge_retry_feedback).
+        gate_section = ""
+        if gate_error is not None:
+            gate_details = gate_error.details or {}
+            gate_section = (
+                f"\nQuality gate ({gate_error.phase.value}): BLOCKED\n"
+            )
+            if "failed_tasks" in gate_details:
+                gate_section += f"  Failed tasks: {gate_details['failed_tasks']}\n"
+            if "failed_reviews" in gate_details:
+                gate_section += f"  Failed reviews: {gate_details['failed_reviews']}\n"
+            if "failed_designs" in gate_details:
+                gate_section += f"  Failed designs: {gate_details['failed_designs']}\n"
+
         prior_error_feedback = (
             f"Feature: {feature_id}\n"
             f"Source phase: {phase.value}\n"
             f"Failure summary: {summary}\n"
             f"Failed tasks: {', '.join(failed_tasks) if failed_tasks else feature_id}\n"
+            f"{gate_section}"
             "Regenerate implementation and address these failures before proceeding."
         )
         return {
