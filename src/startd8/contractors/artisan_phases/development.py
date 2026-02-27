@@ -1223,7 +1223,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         parts.extend(self._build_forward_contracts(chunk))           # Phase 5
         parts.extend(self._build_call_graph_context(chunk))          # Phase 6
         parts.extend(self._build_structural_delta(chunk))            # Gap 3
-        parts.extend(self._build_existing_files(_existing))
+        parts.extend(self._build_existing_files(_existing, _edit_mode))
         if _existing:
             parts.extend(self._build_edit_first_directive(_existing))
         parts.extend(self._build_edit_mode_classification(_edit_mode))  # B-3 fix
@@ -1691,37 +1691,102 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     @staticmethod
     def _build_existing_files(
         existing: Dict[str, str],
+        edit_mode: Optional[Dict[str, Any]] = None,
     ) -> List[str]:
-        """PCA-503: Existing file contents section.
+        """PCA-503/TM-1: Existing file contents with budget + priority ordering.
 
-        Shows the full source of each existing target file so the LLM
-        can preserve code it must not overwrite.  Files are capped at a
-        120 KB aggregate budget to prevent prompt token overflow.
+        Shows existing target files within a 60KB aggregate budget.
+        Files are priority-sorted: edit-mode files first, then by size
+        descending (largest first).  Files that cross the budget boundary
+        are partially included with a line-aware truncation marker.
+        Files beyond the budget are listed as omitted.
+
+        This matches the prime contractor's ``_build_existing_files_section``
+        budgeting pattern (PC-B3).
         """
         if not existing:
             return []
 
-        _MAX_EXISTING_TOTAL = 120_000
-        _ef_parts: List[str] = [
-            "## Existing Files\n",
+        _BUDGET_BYTES = 60_000
+
+        # Priority ordering: edit files first, then by size descending
+        per_file_modes: Dict[str, Dict] = {}
+        if edit_mode and edit_mode.get("per_file"):
+            per_file_modes = edit_mode["per_file"]
+
+        def _sort_key(item: tuple) -> tuple:
+            path, content = item
+            mode = per_file_modes.get(path, {}).get("mode", "create")
+            mode_order = 0 if mode == "edit" else 1
+            return (mode_order, -len(content))
+
+        sorted_files = sorted(existing.items(), key=_sort_key)
+
+        full_kb = sum(len(c) for c in existing.values()) / 1024
+        total_count = len(existing)
+        total_bytes = 0
+        included_count = 0
+        omitted: List[tuple] = []  # (path, line_count)
+        file_parts: List[str] = []
+
+        for ef_path, ef_content in sorted_files:
+            ef_size = len(ef_content.encode("utf-8", errors="replace"))
+            ef_lines = len(ef_content.splitlines())
+
+            if total_bytes + ef_size <= _BUDGET_BYTES:
+                # Full inclusion
+                _nonce = uuid.uuid4().hex[:8]
+                file_parts.append(f"\n### `{ef_path}` ({ef_lines} lines)")
+                file_parts.append(f"```source-{_nonce}\n{ef_content}\n```")
+                total_bytes += ef_size
+                included_count += 1
+            elif total_bytes < _BUDGET_BYTES:
+                # Partial inclusion — truncate at budget boundary
+                remaining_budget = _BUDGET_BYTES - total_bytes
+                lines = ef_content.splitlines()
+                included_lines: List[str] = []
+                running = 0
+                for line in lines:
+                    line_bytes = len(line.encode("utf-8", errors="replace")) + 1
+                    if running + line_bytes > remaining_budget:
+                        break
+                    included_lines.append(line)
+                    running += line_bytes
+                remaining_lines = ef_lines - len(included_lines)
+                truncated_content = "\n".join(included_lines)
+                truncated_content += (
+                    f"\n# ... [TRUNCATED: {remaining_lines} lines omitted "
+                    f"— full file is {ef_lines} lines] ..."
+                )
+                _nonce = uuid.uuid4().hex[:8]
+                file_parts.append(f"\n### `{ef_path}` ({ef_lines} lines, truncated)")
+                file_parts.append(f"```source-{_nonce}\n{truncated_content}\n```")
+                total_bytes = _BUDGET_BYTES
+                included_count += 1
+            else:
+                omitted.append((ef_path, ef_lines))
+
+        included_kb = total_bytes / 1024
+
+        # Build header with inclusion stats
+        header_parts: List[str] = [
+            f"## Existing Files (showing {included_count}/{total_count} files, "
+            f"{included_kb:.1f}KB of {full_kb:.1f}KB)\n",
             "The following target files ALREADY EXIST in the project. "
             "Your output MUST preserve existing functionality and only "
-            "add or modify what is specified in the design document.\n",
+            "add or modify what is specified in the design document.",
         ]
-        _total_bytes = 0
-        for _ef_path, _ef_content in existing.items():
-            _ef_size = len(_ef_content)
-            if _total_bytes + _ef_size > _MAX_EXISTING_TOTAL:
-                _ef_parts.append(
-                    f"\n### `{_ef_path}` (skipped — total existing file budget exceeded)"
-                )
-                continue
-            _total_bytes += _ef_size
-            _nonce = uuid.uuid4().hex[:8]
-            _ef_parts.append(f"\n### `{_ef_path}` ({_ef_size:,} bytes)")
-            _ef_parts.append(f"```source-{_nonce}\n{_ef_content}\n```")
 
-        return _ef_parts + ["\n---\n"]
+        if omitted:
+            omitted_list = ", ".join(
+                f"`{p}` ({n} lines)" for p, n in omitted
+            )
+            header_parts.append(
+                f"\n**Omitted files** (exceed context budget — preserve as-is): "
+                f"{omitted_list}"
+            )
+
+        return header_parts + file_parts + ["\n---\n"]
 
     # -- helper: edit-first directive --------------------------------------
 
@@ -2075,6 +2140,8 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             parts.append(completeness_warning)
 
         # PCA-300: project architecture section (AR-411: suppress stale template defaults)
+        # TM-3: capped at 4,096 chars to match prime contractor budget.
+        _ARCH_CTX_BUDGET = 4_096
         arch_ctx = chunk.metadata.get("architectural_context")
         if arch_ctx and isinstance(arch_ctx, dict):
             objectives = arch_ctx.get("objectives")
@@ -2094,8 +2161,11 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                     for con in (arch_constraints if isinstance(arch_constraints, list) else [arch_constraints])[:5]:
                         _arch_parts.append(f"- {con}")
                 if _arch_parts:
+                    arch_text = "\n".join(_arch_parts)
+                    if len(arch_text) > _ARCH_CTX_BUDGET:
+                        arch_text = arch_text[:_ARCH_CTX_BUDGET] + "\n... [truncated]"
                     parts.append("\n## Project Architecture")
-                    parts.extend(_arch_parts)
+                    parts.append(arch_text)
 
         plan_goals = chunk.metadata.get("plan_goals")
         if plan_goals and isinstance(plan_goals, list):
@@ -2131,12 +2201,17 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             parts.append(plan_context[:4000])
 
         # PCA-404: requirements text section (IMP-R1: authoritative framing)
+        # TM-3: capped at 8,000 chars to prevent prompt bloat.
+        _REQ_TEXT_BUDGET = 8_000
         req_text = chunk.metadata.get("requirements_text")
         if req_text and isinstance(req_text, str):
             parts.append(
                 "\n## Requirements (verbatim — authoritative for parameter details)"
             )
-            parts.append(req_text)
+            if len(req_text) > _REQ_TEXT_BUDGET:
+                parts.append(req_text[:_REQ_TEXT_BUDGET] + "\n... [truncated]")
+            else:
+                parts.append(req_text)
 
         # PCA-403: prior implementations section
         prior_impls = chunk.metadata.get("prior_implementations")
@@ -2148,11 +2223,25 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 parts.append(f"- {_tid}: {_files}")
 
         # IMP-5: grouped prompt constraints
+        # TM-3: capped at 4,000 chars to prevent prompt bloat.
+        _CONSTRAINTS_BUDGET = 4_000
         constraints = chunk.metadata.get("prompt_constraints", [])
         if constraints:
             from startd8.contractors.artisan_phases.prompts import format_constraints
+            # Normalize: if constraints are dicts, extract 'text' field
+            normalized = []
+            for c in constraints:
+                if isinstance(c, dict):
+                    cat = c.get("category", "")
+                    text = c.get("text", str(c))
+                    normalized.append(f"[{cat}] {text}" if cat else text)
+                else:
+                    normalized.append(str(c))
+            formatted = format_constraints(normalized)
+            if len(formatted) > _CONSTRAINTS_BUDGET:
+                formatted = formatted[:_CONSTRAINTS_BUDGET] + "\n... [truncated]"
             parts.append("\n## Constraints")
-            parts.append(format_constraints(constraints))
+            parts.append(formatted)
 
         # Mottainai Rule 5: parameter provenance
         param_sources = chunk.metadata.get("parameter_sources")
@@ -2599,6 +2688,11 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 else:
                     parts.append(f"- {key}: {value}")
 
+        # IMP-CS: coding standards for T2 refiner (matches T1 user prompt)
+        coding_std = _format_implement_prompt("coding_standards")
+        if coding_std:
+            parts.append(coding_std)
+
         return "\n".join(parts)
 
     # ------------------------------------------------------------------
@@ -2937,6 +3031,11 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         if not targets:
             return []
 
+        # Search/replace mode already has its own output directive — don't
+        # add a conflicting 'complete implementation' instruction.
+        if chunk.metadata.get("_use_search_replace"):
+            return []
+
         if len(targets) == 1:
             text = _format_implement_prompt("output_format_single")
             if text is None:
@@ -3136,7 +3235,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         parts.extend(self._build_project_identity(chunk))
         parts.extend(self._build_target_files(chunk, is_edit))
         parts.extend(self._build_structural_delta(chunk))            # Gap 3
-        parts.extend(self._build_existing_files(_existing))
+        parts.extend(self._build_existing_files(_existing, _edit_mode))
 
         if _existing:
             if use_search_replace:
@@ -3389,6 +3488,31 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 token_usage.input,
                 token_usage.output,
             )
+
+            # TM-2: Output truncation detection (matches prime contractor)
+            if self._check_truncation:
+                try:
+                    from startd8.truncation_detection import detect_truncation
+                    trunc_result = detect_truncation(
+                        response_text, token_usage,
+                        strict=self._strict_truncation,
+                    )
+                    if trunc_result.is_truncated:
+                        if trunc_result.is_api_truncation and self._fail_on_truncation:
+                            self.logger.error(
+                                "Chunk %s: API truncation detected — failing: %s",
+                                chunk.chunk_id, trunc_result.reason,
+                            )
+                            return False, f"API truncation: {trunc_result.reason}"
+                        self.logger.warning(
+                            "Chunk %s: truncation detected (api=%s, heuristic=%s): %s",
+                            chunk.chunk_id,
+                            trunc_result.is_api_truncation,
+                            trunc_result.is_heuristic_truncation,
+                            trunc_result.reason,
+                        )
+                except ImportError:
+                    pass  # truncation_detection not available
 
             # CS4: Forensic log for implement.chunk (REQ-CMR-032)
             from startd8.contractors.forensic_log import emit_forensic_log

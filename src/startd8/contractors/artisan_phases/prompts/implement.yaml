@@ -155,6 +155,11 @@ prompts:
       - To ADD code, include the insertion point in SEARCH and add new lines in REPLACE
       - To DELETE code, use an empty REPLACE section
       - Do NOT output the entire file
+
+      Coding standards (ruff/linter compliance):
+      - NEVER use single-letter variable names `l`, `O`, or `I` — they are ambiguous (ruff E741). Use descriptive names instead (e.g., `lesson`, `item`, `idx`).
+      - Do NOT import modules that are not in the Python stdlib or the project's pyproject.toml dependencies. If unsure, use a try/except ImportError fallback.
+      - Define all helper functions and utilities BEFORE classes or callsites that reference them (especially `Field(default_factory=...)`).
     placeholders: []
 
   create_system:

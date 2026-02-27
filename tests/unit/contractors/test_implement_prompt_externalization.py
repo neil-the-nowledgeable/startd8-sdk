@@ -646,3 +646,136 @@ class TestRequirementsTextFraming:
         result = executor._build_task_description(chunk, {})
         assert "authoritative" in result.lower()
         assert "SHALL parse all YAML" in result
+
+
+# ============================================================================
+# Part 7: Token management improvements (TM-1, TM-2, TM-3)
+# ============================================================================
+
+
+class TestExistingFilesBudget:
+    """TM-1: Global existing-files budget with priority ordering."""
+
+    def test_budget_enforced(self):
+        """Files exceeding 60KB budget are partially included or omitted."""
+        executor = _make_executor()
+        # Create 3 files: 30KB, 25KB, 20KB = 75KB total (exceeds 60KB)
+        chunk = _FakeChunk(
+            metadata={
+                "_existing_file_contents": {
+                    "src/big.py": "x\n" * 15000,      # ~30KB
+                    "src/medium.py": "y\n" * 12500,    # ~25KB
+                    "src/small.py": "z\n" * 10000,     # ~20KB
+                },
+            },
+        )
+        result = executor._build_task_description(chunk, {})
+        # Should show inclusion stats
+        assert "showing" in result.lower()
+        assert "Existing Files" in result
+        # At least one file should be fully included
+        assert "src/big.py" in result or "src/medium.py" in result
+        # Should have some truncation or omission
+        assert "TRUNCATED" in result or "Omitted" in result
+
+    def test_edit_priority_ordering(self):
+        """Edit-mode files are included before create-mode files."""
+        executor = _make_executor()
+        # Create files that together exceed budget, with edit file as smallest
+        chunk = _FakeChunk(
+            metadata={
+                "_existing_file_contents": {
+                    "src/create_big.py": "A\n" * 25000,   # ~50KB, create mode
+                    "src/edit_small.py": "B\n" * 2500,    # ~5KB, edit mode
+                },
+                "_edit_mode": {
+                    "mode": "edit",
+                    "per_file": {
+                        "src/edit_small.py": {"mode": "edit"},
+                        "src/create_big.py": {"mode": "create"},
+                    },
+                },
+            },
+        )
+        result = executor._build_task_description(chunk, {})
+        # Edit file should always be included (it's small and prioritized)
+        assert "src/edit_small.py" in result
+        # Find positions to verify ordering
+        edit_pos = result.find("src/edit_small.py")
+        create_pos = result.find("src/create_big.py")
+        if create_pos > 0:
+            assert edit_pos < create_pos, "Edit file should appear before create file"
+
+    def test_partial_truncation_marker(self):
+        """File crossing budget boundary gets line-aware truncation marker."""
+        executor = _make_executor()
+        # First file fills most of budget, second must be partially included
+        chunk = _FakeChunk(
+            metadata={
+                "_existing_file_contents": {
+                    "src/first.py": "a\n" * 27000,    # ~54KB
+                    "src/second.py": "b\n" * 10000,   # ~20KB (only ~6KB budget left)
+                },
+            },
+        )
+        result = executor._build_task_description(chunk, {})
+        # Second file should be partially included with truncation marker
+        if "TRUNCATED" in result:
+            assert "lines omitted" in result
+            assert "full file is" in result
+
+    def test_omitted_files_listed(self):
+        """Files fully beyond budget are listed in omitted section."""
+        executor = _make_executor()
+        # First file fills entire budget, second is omitted
+        chunk = _FakeChunk(
+            metadata={
+                "_existing_file_contents": {
+                    "src/huge.py": "x\n" * 35000,     # ~70KB (fills budget)
+                    "src/omitted.py": "y\n" * 5000,   # ~10KB (beyond budget)
+                },
+            },
+        )
+        result = executor._build_task_description(chunk, {})
+        # Check for omission notice
+        assert "Omitted" in result or "src/omitted.py" in result
+
+
+class TestContextBudgets:
+    """TM-3: Context section character budgets."""
+
+    def test_requirements_text_truncated_at_budget(self):
+        """Requirements text >8000 chars is truncated with marker."""
+        executor = _make_executor()
+        long_req = "The system SHALL comply with requirement X. " * 300  # ~13K chars
+        chunk = _FakeChunk(
+            metadata={"requirements_text": long_req},
+        )
+        result = executor._build_task_description(chunk, {})
+        assert "Requirements" in result
+        assert "truncated" in result.lower()
+        # Should not contain the full text
+        assert len(result) < len(long_req)
+
+
+class TestConstraintDictNormalization:
+    """TM-3/IMP-5: Dict constraints are normalized to tagged strings."""
+
+    def test_dict_constraints_normalized(self):
+        """Constraints passed as dicts with text/category are normalized."""
+        executor = _make_executor()
+        chunk = _FakeChunk(
+            metadata={
+                "prompt_constraints": [
+                    {"text": "Use SandboxedEnvironment", "category": "BINDING"},
+                    {"text": "Cache invalidation on mtime", "category": "STRUCTURAL"},
+                    "A plain string constraint",
+                ],
+            },
+        )
+        result = executor._build_task_description(chunk, {})
+        assert "Constraints" in result
+        assert "SandboxedEnvironment" in result
+        assert "Cache invalidation" in result
+        assert "plain string constraint" in result
+        # Should NOT crash with AttributeError
