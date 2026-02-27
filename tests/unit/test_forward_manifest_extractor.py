@@ -9,29 +9,22 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import List
-
-import pytest
 
 from startd8.forward_manifest import (
     ContractCategory,
     ContractConfidence,
-    ForwardElementSpec,
-    ForwardManifest,
     InterfaceContract,
-    compute_binding_text,
 )
 from startd8.forward_manifest_extractor import (
     DeterministicExtractor,
     HumanYamlExtractor,
     ManifestMerger,
     ProtoExtractor,
-    _extract_function_name,
     _make_contract,
     _parse_python_signature,
     extract_forward_contracts,
 )
-from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
+from startd8.utils.code_manifest import ElementKind
 from startd8.workflows.builtin.plan_ingestion_models import ParsedFeature
 
 

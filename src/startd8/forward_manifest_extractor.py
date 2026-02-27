@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Optional
 
@@ -335,10 +336,9 @@ class DeterministicExtractor:
         contracts: list[InterfaceContract] = []
 
         # Count file occurrences across features
-        file_counts: dict[str, int] = {}
-        for feature in features:
-            for f in feature.target_files:
-                file_counts[f] = file_counts.get(f, 0) + 1
+        file_counts: Counter[str] = Counter(
+            f for feature in features for f in feature.target_files
+        )
 
         # Files appearing in 2+ features
         for filepath, count in file_counts.items():
@@ -358,7 +358,8 @@ class DeterministicExtractor:
             )
             contracts.append(contract)
 
-        # Known utility file patterns
+        # Known utility file patterns — O(1) dedup via set
+        seen_ids: set[str] = {c.contract_id for c in contracts}
         for feature in features:
             for filepath in feature.target_files:
                 basename = Path(filepath).name
@@ -367,9 +368,9 @@ class DeterministicExtractor:
                     abbrev = _CATEGORY_ABBREV[category]
                     contract_id = f"flcm-{abbrev}-util-{name}"
 
-                    # Avoid duplicates
-                    if any(c.contract_id == contract_id for c in contracts):
+                    if contract_id in seen_ids:
                         continue
+                    seen_ids.add(contract_id)
 
                     kwargs: dict[str, object] = {
                         "contract_id": contract_id,
@@ -396,8 +397,8 @@ class HumanYamlExtractor:
         """Parse YAML text and return explicit contracts."""
         try:
             data = yaml.safe_load(yaml_text)
-        except yaml.YAMLError:
-            logger.warning("Failed to parse human YAML")
+        except yaml.YAMLError as exc:
+            logger.warning("Failed to parse human YAML: %s", exc)
             return []
 
         if not isinstance(data, dict):
@@ -626,7 +627,13 @@ def extract_forward_contracts(
 
         return manifest
     except Exception:
-        logger.exception("Catastrophic failure in extract_forward_contracts")
+        logger.exception(
+            "Catastrophic failure in extract_forward_contracts "
+            "(features=%d, yaml=%s, proto=%s)",
+            len(features),
+            yaml_text is not None,
+            proto_dir,
+        )
         return ForwardManifest()
 
 
