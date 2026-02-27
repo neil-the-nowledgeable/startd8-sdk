@@ -667,7 +667,9 @@ class JsonFileCheckpointStore(CheckpointStore):
         # let mkdir succeed (exist_ok=True) but silently fail on every save.
         _probe = self.directory / ".write_probe"
         try:
-            _probe.touch()
+            _probe.write_text("1", encoding="utf-8")
+            if not _probe.exists():
+                raise OSError("write probe file not created")
             _probe.unlink()
         except OSError as exc:
             logger.warning(
@@ -1232,6 +1234,15 @@ class ArtisanContractorWorkflow:
             if loaded_checkpoint.context_snapshot:
                 for key, value in loaded_checkpoint.context_snapshot.items():
                     context.setdefault(key, value)
+                # PCA-202: warn if plan_document_text was truncated in checkpoint
+                if loaded_checkpoint.context_snapshot.get("_plan_doc_truncated"):
+                    self._logger.warning(
+                        "Restored plan_document_text was truncated in checkpoint "
+                        "(max %d chars). Design phases may reference incomplete "
+                        "plan context — consider re-running from PLAN if outputs "
+                        "seem incomplete.",
+                        _PLAN_DOC_CHECKPOINT_MAX_CHARS,
+                    )
             # Include feature-serial resume coordinates when present so users can
             # quickly see exactly where execution will restart.
             if (
@@ -2512,8 +2523,12 @@ class ArtisanContractorWorkflow:
                 contract_signal_id=str(outcome.get("contract_signal_id")),
                 details=outcome.get("details", {}),
             )
-        except Exception:
-            self._logger.debug("quality gate forensic emission failed", exc_info=True)
+        except ImportError:
+            self._logger.debug("forensic_log module not available", exc_info=True)
+        except (AttributeError, TypeError, ValueError) as exc:
+            self._logger.warning(
+                "Quality gate forensic emission failed: %s", exc, exc_info=True,
+            )
 
 
     def _execute_workflow(

@@ -792,8 +792,9 @@ def generate_stub_for_class(class_spec: ClassSpec) -> str:
             lines.append(f'        """{meth.description}"""')
 
         lines.append(
-            f"        raise NotImplementedError("
-            f'"{class_spec.name}.{meth.name} is not yet implemented")'
+            f'        raise NotImplementedError('
+            f'"{class_spec.name}.{meth.name} stub — '
+            f'requires LLM-driven implementation")'
         )
         lines.append("")
 
@@ -818,7 +819,8 @@ def generate_stub_for_function(func_spec: FunctionSpec) -> str:
     if func_spec.description:
         lines.append(f'    """{func_spec.description}"""')
     lines.append(
-        f'    raise NotImplementedError("{func_spec.name} is not yet implemented")'
+        f'    raise NotImplementedError("{func_spec.name} stub — '
+        f'requires LLM-driven implementation")'
     )
 
     return "\n".join(lines)

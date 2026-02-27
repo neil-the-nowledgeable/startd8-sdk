@@ -56,8 +56,8 @@ _CATEGORY_ABBREV: dict[ContractCategory, str] = {
     ContractCategory.INFRASTRUCTURE: "inf",
 }
 
+# Higher numeric value = higher precedence (wins on duplicate contract_id).
 _SOURCE_PRECEDENCE: dict[str, int] = {
-    "llm-refine": 0,
     "deterministic": 1,
     "proto": 2,
     "human-yaml": 3,

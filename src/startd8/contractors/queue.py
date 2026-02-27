@@ -477,26 +477,26 @@ class FeatureQueue:
             self.save_state()
 
     def print_status(self):
-        """Print current queue status."""
-        print("\n" + "=" * 70)
-        print("FEATURE QUEUE STATUS")
-        print("=" * 70)
-
+        """Log current queue status."""
         summary = self.get_status_summary()
         progress = self.get_progress()
 
-        print(
-            f"\nProgress: {progress:.1f}% ({summary['complete']}/{len(self.features)} features)"
-        )
-        print(f"  Pending: {summary['pending']}")
-        print(f"  Developing: {summary['developing']}")
-        print(f"  Generated: {summary['generated']}")
-        print(f"  Integrating: {summary['integrating']}")
-        print(f"  Complete: {summary['complete']}")
-        print(f"  Failed: {summary['failed']}")
-        print(f"  Blocked: {summary['blocked']}")
+        lines = [
+            "",
+            "=" * 70,
+            "FEATURE QUEUE STATUS",
+            "=" * 70,
+            f"\nProgress: {progress:.1f}% ({summary['complete']}/{len(self.features)} features)",
+            f"  Pending: {summary['pending']}",
+            f"  Developing: {summary['developing']}",
+            f"  Generated: {summary['generated']}",
+            f"  Integrating: {summary['integrating']}",
+            f"  Complete: {summary['complete']}",
+            f"  Failed: {summary['failed']}",
+            f"  Blocked: {summary['blocked']}",
+            "\nFeature Details:",
+        ]
 
-        print("\nFeature Details:")
         for feature_id in self.order:
             feature = self.features.get(feature_id)
             if not feature:
@@ -513,8 +513,10 @@ class FeatureQueue:
                 FeatureStatus.BLOCKED: "⊘",
             }.get(feature.status, "?")
 
-            print(f"  {icon} {feature.name} ({feature.status.value})")
+            lines.append(f"  {icon} {feature.name} ({feature.status.value})")
             if feature.error_message:
-                print(f"      Error: {feature.error_message}")
+                lines.append(f"      Error: {feature.error_message}")
             if feature.dependencies:
-                print(f"      Depends on: {', '.join(feature.dependencies)}")
+                lines.append(f"      Depends on: {', '.join(feature.dependencies)}")
+
+        logger.info("\n".join(lines))
