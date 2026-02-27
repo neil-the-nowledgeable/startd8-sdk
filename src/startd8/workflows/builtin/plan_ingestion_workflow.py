@@ -15,7 +15,8 @@ from hashlib import sha256
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from dataclasses import replace as _dataclass_replace
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import yaml
 
@@ -148,7 +149,7 @@ def _validate_seed_field_coverage(seed_dict: Dict[str, Any]) -> List[str]:
         return warnings
 
     tasks_missing_targets = sum(
-        1 for t in tasks if not t.get("config", {}).get("target_files")
+        1 for t in tasks if not t.get("config", {}).get("context", {}).get("target_files")
     )
     if tasks_missing_targets > 0:
         warnings.append(
@@ -156,7 +157,7 @@ def _validate_seed_field_coverage(seed_dict: Dict[str, Any]) -> List[str]:
         )
 
     tasks_missing_description = sum(
-        1 for t in tasks if not t.get("config", {}).get("description")
+        1 for t in tasks if not t.get("config", {}).get("task_description")
     )
     if tasks_missing_description > 0:
         warnings.append(
@@ -630,15 +631,22 @@ def _heuristic_assess_complexity(
         except Exception:
             logger.debug("CG-PI-1: blast radius computation failed", exc_info=True)
 
-    # Composite: 6 dimensions when call graph available, 5 when not
+    # Normalize feature_count to 0-100 scale for composite parity with
+    # the LLM assess path (which scores all 7 dimensions on 0-100).
+    # Scale: 1-3 features → low, 10 → mid, 20+ → high.
+    feature_count_score = min(100, max(10, feature_count * 7))
+
+    # Composite: includes feature_count_score for parity with LLM path
     if call_graph_impact > 0:
         composite = int(
-            (api_surface + test_complexity + integration_depth
-             + domain_novelty + ambiguity + call_graph_impact) / 6
+            (feature_count_score + api_surface + test_complexity
+             + integration_depth + domain_novelty + ambiguity
+             + call_graph_impact) / 7
         )
     else:
         composite = int(
-            (api_surface + test_complexity + integration_depth + domain_novelty + ambiguity) / 5
+            (feature_count_score + api_surface + test_complexity
+             + integration_depth + domain_novelty + ambiguity) / 6
         )
 
     if force_route:
@@ -1516,10 +1524,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
         # Determine route from composite score (don't trust LLM's route suggestion)
+        composite = int(data.get("composite", 50))
         if force_route:
             route = ContractorRoute(force_route)
         else:
-            composite = int(data.get("composite", 50))
             route = ContractorRoute.PRIME if composite <= threshold else ContractorRoute.ARTISAN
             llm_route = data.get("route", "").lower()
             if llm_route and llm_route != route.value:
@@ -1536,7 +1544,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             integration_depth=int(data.get("integration_depth", 0)),
             domain_novelty=int(data.get("domain_novelty", 0)),
             ambiguity=int(data.get("ambiguity", 0)),
-            composite=int(data.get("composite", 0)),
+            composite=composite,
             reasoning=data.get("reasoning", ""),
             route=route,
             input_tokens=in_tok,
@@ -2531,6 +2539,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                 for key in (
                     "design_doc_sections",
                     "artifact_types_addressed",
+                    "requirement_ids",
+                    "acceptance_obligations",
+                    "source_references",
+                    "mapping_rationale",
                 ):
                     if key in ctx:
                         sub_ctx[key] = ctx[key]
@@ -2554,6 +2566,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                             f"[Auto-split from {parent_id}: implement "
                             f"`{target_file}` only.]"
                         ),
+                        "requirements_text": task.get("config", {}).get("requirements_text", ""),
                         "context": sub_ctx,
                     },
                 })
@@ -3153,7 +3166,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         onboarding_metadata: Optional[Dict[str, Any]] = None,
         review_output: Optional[Dict[str, Any]] = None,
         project_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]]]:
+    ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]], List[Dict[str, Any]]]:
         from startd8.forward_manifest_extractor import extract_forward_contracts
 
         forward_manifest_dict: Optional[Dict[str, Any]] = None
@@ -3191,28 +3204,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                     proto_dir=proto_dir,
                     tentative_contracts=tentative_contracts,
                 )
-
-                # REQ-PC-FM-005: Rewrite applicable_task_ids from feature_id to task_id
-                fid_to_tid = {f.feature_id: f"PI-{i:03d}" for i, f in enumerate(features, start=1)}
-                if fid_to_tid and forward_manifest.contracts:
-                    from startd8.forward_manifest import InterfaceContract
-
-                    rewritten: List[Any] = []
-                    for c in forward_manifest.contracts:
-                        if not c.applicable_task_ids:
-                            rewritten.append(c)
-                            continue
-                        new_ids = [
-                            fid_to_tid.get(aid, aid) if aid in fid_to_tid else aid
-                            for aid in c.applicable_task_ids
-                        ]
-                        if new_ids != c.applicable_task_ids:
-                            rewritten.append(c.model_copy(update={"applicable_task_ids": new_ids}))
-                        else:
-                            rewritten.append(c)
-                    forward_manifest = forward_manifest.model_copy(
-                        update={"contracts": rewritten}
-                    )
 
                 forward_manifest_dict = forward_manifest.model_dump()
                 if forward_manifest.contracts:
@@ -3275,23 +3266,21 @@ class PlanIngestionWorkflow(WorkflowBase):
         config_path = output_dir / "review-config.json"
         atomic_write_json(config_path, review_config, indent=2)
 
-        # Artisan route: also emit context seed JSON
+        # --- Resolve onboarding once for both routes (eliminates
+        # onboarding_early/onboarding_prime split that caused divergent
+        # task derivation between seed, tracking, and traceability).
         context_seed_path: Optional[Path] = None
-        onboarding_early: Optional[Dict[str, Any]] = None
-        if route == ContractorRoute.ARTISAN and parsed_plan is not None:
-            costs = step_costs or {}
-            total_cost = sum(costs.values())
-
-            # Mottainai: prefer onboarding already loaded by PREFLIGHT
-            # (avoids re-reading from disk and ensures data never silently
-            # disappears when context_files omits onboarding-metadata.json).
+        onboarding_resolved: Optional[Dict[str, Any]] = None
+        if parsed_plan is not None:
             if onboarding_metadata:
-                onboarding_early = onboarding_metadata
+                onboarding_resolved = onboarding_metadata
             elif context_files:
                 logger.debug("Onboarding not passed from PREFLIGHT — falling back to disk load")
-                onboarding_early = self._load_onboarding_metadata(context_files, output_dir)
-            else:
-                onboarding_early = None
+                onboarding_resolved = self._load_onboarding_metadata(context_files, output_dir)
+
+        # --- Derive tasks once and reuse for seed, tracking, and traceability.
+        tasks: List[Dict[str, Any]] = []
+        if parsed_plan is not None:
             tasks = self._derive_tasks_from_features(
                 parsed_plan.features,
                 parsed_plan.dependency_graph,
@@ -3303,69 +3292,101 @@ class PlanIngestionWorkflow(WorkflowBase):
                 ),
                 requirement_hints=requirement_hints or {},
                 output_path_conventions=(
-                    onboarding_early.get("output_path_conventions")
-                    if isinstance(onboarding_early, dict)
+                    onboarding_resolved.get("output_path_conventions")
+                    if isinstance(onboarding_resolved, dict)
                     else None
                 ),
             )
 
-            # Derive architectural context + design calibration
-            m_ctx = manifest_context or {}
-            architectural_context = self._derive_architectural_context(
-                parsed_plan, m_ctx,
-            )
-            design_calibration = self._derive_design_calibration(tasks)
+        # --- REQ-PC-FM-005: Rewrite forward manifest applicable_task_ids using actual task IDs
+        # (must run AFTER _derive_tasks_from_features so skipped features and split
+        #  sub-tasks are reflected — see task ID mapping divergence fix)
+        if forward_manifest_dict is not None and parsed_plan is not None:
+            # Build feature_id → [task_id, ...] from actual derived tasks
+            # (accounts for skipped features and split sub-tasks)
+            actual_fid_to_tids: Dict[str, List[str]] = {}
+            for t in tasks:
+                fid = t.get("config", {}).get("context", {}).get("feature_id", "")
+                if fid:
+                    actual_fid_to_tids.setdefault(fid, []).append(t["task_id"])
 
-            # Build artifacts dict
-            artifacts: Dict[str, Any] = {
+            if actual_fid_to_tids and forward_manifest_dict.get("contracts"):
+                rewritten_contracts = []
+                for c_dict in forward_manifest_dict["contracts"]:
+                    old_ids = c_dict.get("applicable_task_ids") or []
+                    if not old_ids:
+                        rewritten_contracts.append(c_dict)
+                        continue
+                    new_ids: List[str] = []
+                    for aid in old_ids:
+                        mapped = actual_fid_to_tids.get(aid)
+                        if mapped:
+                            new_ids.extend(mapped)
+                        else:
+                            new_ids.append(aid)  # keep as-is if not a feature_id
+                    if new_ids != old_ids:
+                        c_copy = dict(c_dict)
+                        c_copy["applicable_task_ids"] = new_ids
+                        rewritten_contracts.append(c_copy)
+                    else:
+                        rewritten_contracts.append(c_dict)
+                forward_manifest_dict["contracts"] = rewritten_contracts
+
+        # --- Shared derived data (both routes use the same logic) ---
+        costs = step_costs or {}
+        total_cost = sum(costs.values())
+        m_ctx = manifest_context or {}
+        architectural_context = (
+            self._derive_architectural_context(parsed_plan, m_ctx)
+            if parsed_plan is not None else {}
+        )
+        design_calibration = self._derive_design_calibration(tasks) if tasks else {}
+
+        refine_suggestions = (
+            self._extract_refine_suggestions_for_seed(review_output)
+            if review_output else []
+        )
+
+        # --- Build common artifacts and onboarding_var ---
+        def _build_seed_artifacts() -> Tuple[Dict[str, Any], Optional[Dict[str, Any]], Optional[str]]:
+            """Build artifacts dict, onboarding_var, and source_checksum from resolved onboarding."""
+            artifacts_out: Dict[str, Any] = {
                 "plan_document_path": str(doc_path),
                 "review_config_path": str(config_path),
             }
+            ob_var: Optional[Dict[str, Any]] = None
+            sc_val: Optional[str] = None
 
-            # Merge onboarding metadata if present in context files (Items 5, 7)
-            # Reuse the early load from before _derive_tasks_from_features.
-            onboarding = onboarding_early
-            onboarding_var: Optional[Dict[str, Any]] = None
-            source_checksum_val: Optional[str] = None
-            if onboarding:
-                onboarding_var = onboarding
-                artifacts["onboarding"] = onboarding
-                amp = onboarding.get("artifact_manifest_path")
-                pcp = onboarding.get("project_context_path")
+            if onboarding_resolved:
+                ob_var = dict(onboarding_resolved)
+                artifacts_out["onboarding"] = onboarding_resolved
+                amp = onboarding_resolved.get("artifact_manifest_path")
+                pcp = onboarding_resolved.get("project_context_path")
                 if amp:
-                    artifacts["artifact_manifest_path"] = str(amp)
+                    artifacts_out["artifact_manifest_path"] = str(amp)
                 if pcp:
-                    artifacts["project_context_path"] = str(pcp)
-                # Item 9: example artifacts per type (e.g. ServiceMonitor YAML) for implement phase
-                ex = onboarding.get("example_artifacts")
+                    artifacts_out["project_context_path"] = str(pcp)
+                ex = onboarding_resolved.get("example_artifacts")
                 if ex and isinstance(ex, dict):
-                    artifacts["example_artifacts"] = dict(ex)
-                # Item 11: coverage gaps — artifact types to generate first
-                cg = onboarding.get("coverage_gaps")
+                    artifacts_out["example_artifacts"] = dict(ex)
+                cg = onboarding_resolved.get("coverage_gaps")
                 if cg and isinstance(cg, list):
-                    artifacts["coverage_gaps"] = list(cg)
-                # Item 16: provenance chain — propagate source_checksum to seed
-                sc = onboarding.get("source_checksum") or onboarding.get(
+                    artifacts_out["coverage_gaps"] = list(cg)
+                sc = onboarding_resolved.get("source_checksum") or onboarding_resolved.get(
                     "export_provenance_checksum"
                 )
                 if sc and isinstance(sc, str):
-                    artifacts["source_checksum"] = sc
-                    source_checksum_val = sc
+                    artifacts_out["source_checksum"] = sc
+                    sc_val = sc
 
-            # Mottainai: inject REFINE triage suggestions into seed onboarding
-            refine_suggestions = (
-                self._extract_refine_suggestions_for_seed(review_output)
-                if review_output else []
-            )
-            if onboarding_var is None:
-                onboarding_var = {}
-            onboarding_var["refine_suggestions"] = refine_suggestions
+            if ob_var is None:
+                ob_var = {}
+            ob_var["refine_suggestions"] = refine_suggestions
 
-            # Mottainai: record REFINE apply provenance for traceability
             if review_output:
                 apply_data = review_output.get("apply", {})
                 triage_data = review_output.get("triage", {})
-                artifacts["refine_provenance"] = {
+                artifacts_out["refine_provenance"] = {
                     "origin_phase": "ingestion.refine",
                     "triage_accepted": triage_data.get("accepted", 0),
                     "triage_rejected": triage_data.get("rejected", 0),
@@ -3375,26 +3396,36 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "state_path": review_output.get("state_path"),
                 }
             else:
-                artifacts["refine_provenance"] = {
+                artifacts_out["refine_provenance"] = {
                     "origin_phase": "ingestion.refine",
                     "apply_enabled": False,
                 }
 
-            # Mottainai: embed compact stub manifest metadata in seed
             if stub_manifest:
-                artifacts["stub_manifest"] = stub_manifest
+                artifacts_out["stub_manifest"] = stub_manifest
 
-            context_files_list = _context_files_with_checksums(
-                context_files, base_dir=output_dir
-            ) if context_files else None
+            return artifacts_out, ob_var, sc_val
 
-            _ensure_onboarding_in_context_files(
-                context_files_list, onboarding_early, output_dir,
-            )
+        context_files_list = _context_files_with_checksums(
+            context_files, base_dir=output_dir
+        ) if context_files else None
 
-            service_metadata = _infer_service_metadata(
-                parsed_plan.features, onboarding_early,
-            )
+        _ensure_onboarding_in_context_files(
+            context_files_list, onboarding_resolved, output_dir,
+        )
+
+        service_metadata = _infer_service_metadata(
+            parsed_plan.features if parsed_plan else [], onboarding_resolved,
+        )
+
+        ingestion_metrics = {
+            **{f"{k}_cost": v for k, v in costs.items()},
+            "total_cost": total_cost,
+        }
+
+        # Artisan route: emit artisan-context-seed.json
+        if route == ContractorRoute.ARTISAN and parsed_plan is not None:
+            artifacts, onboarding_var, source_checksum_val = _build_seed_artifacts()
 
             seed = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
@@ -3403,10 +3434,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 complexity=complexity.to_seed_dict(),
                 tasks=tasks,
                 artifacts=artifacts,
-                ingestion_metrics={
-                    **{f"{k}_cost": v for k, v in costs.items()},
-                    "total_cost": total_cost,
-                },
+                ingestion_metrics=ingestion_metrics,
                 architectural_context=architectural_context,
                 design_calibration=design_calibration,
                 onboarding=onboarding_var,
@@ -3453,104 +3481,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         # Prime route: emit prime-context-seed.json (symmetric with artisan)
         if route == ContractorRoute.PRIME and parsed_plan is not None:
-            costs = step_costs or {}
-            total_cost = sum(costs.values())
-
-            # Mottainai: prefer onboarding already loaded by PREFLIGHT
-            if onboarding_metadata:
-                onboarding_prime = onboarding_metadata
-            elif context_files:
-                logger.debug("Onboarding not passed from PREFLIGHT (prime) — falling back to disk load")
-                onboarding_prime = self._load_onboarding_metadata(context_files, output_dir)
-            else:
-                onboarding_prime = None
-            tasks = self._derive_tasks_from_features(
-                parsed_plan.features,
-                parsed_plan.dependency_graph,
-                requirement_to_feature=(translation_quality or {}).get(
-                    "requirement_to_feature", {}
-                ),
-                artifact_to_feature=(translation_quality or {}).get(
-                    "artifact_to_feature", {}
-                ),
-                requirement_hints=requirement_hints or {},
-                output_path_conventions=(
-                    onboarding_prime.get("output_path_conventions")
-                    if isinstance(onboarding_prime, dict)
-                    else None
-                ),
-            )
-
-            # Mottainai: derive architectural_context + design_calibration
-            # for prime route too (closes Gaps 11-12).
-            m_ctx_prime = manifest_context or {}
-            architectural_context_prime = self._derive_architectural_context(
-                parsed_plan, m_ctx_prime,
-            )
-            design_calibration_prime = self._derive_design_calibration(tasks)
-
-            artifacts_prime: Dict[str, Any] = {
-                "plan_document_path": str(doc_path),
-                "review_config_path": str(config_path),
-            }
-
-            onboarding_var_prime: Optional[Dict[str, Any]] = None
-            source_checksum_prime: Optional[str] = None
-            if onboarding_prime:
-                onboarding_var_prime = onboarding_prime
-                artifacts_prime["onboarding"] = onboarding_prime
-                amp = onboarding_prime.get("artifact_manifest_path")
-                pcp = onboarding_prime.get("project_context_path")
-                if amp:
-                    artifacts_prime["artifact_manifest_path"] = str(amp)
-                if pcp:
-                    artifacts_prime["project_context_path"] = str(pcp)
-                sc = onboarding_prime.get("source_checksum") or onboarding_prime.get(
-                    "export_provenance_checksum"
-                )
-                if sc and isinstance(sc, str):
-                    artifacts_prime["source_checksum"] = sc
-                    source_checksum_prime = sc
-
-            # Mottainai: inject REFINE triage suggestions into prime seed onboarding
-            refine_suggestions_prime = (
-                self._extract_refine_suggestions_for_seed(review_output)
-                if review_output else []
-            )
-            if onboarding_var_prime is None:
-                onboarding_var_prime = {}
-            onboarding_var_prime["refine_suggestions"] = refine_suggestions_prime
-
-            # Mottainai: record REFINE apply provenance for traceability
-            if review_output:
-                apply_data = review_output.get("apply", {})
-                triage_data = review_output.get("triage", {})
-                artifacts_prime["refine_provenance"] = {
-                    "origin_phase": "ingestion.refine",
-                    "triage_accepted": triage_data.get("accepted", 0),
-                    "triage_rejected": triage_data.get("rejected", 0),
-                    "applied_ids": apply_data.get("applied_ids", []),
-                    "warning_ids": apply_data.get("warning_ids", []),
-                    "apply_error": apply_data.get("error"),
-                    "state_path": review_output.get("state_path"),
-                }
-            else:
-                artifacts_prime["refine_provenance"] = {
-                    "origin_phase": "ingestion.refine",
-                    "apply_enabled": False,
-                }
-
-            context_files_list_prime = _context_files_with_checksums(
-                context_files, base_dir=output_dir
-            ) if context_files else None
-
-            _ensure_onboarding_in_context_files(
-                context_files_list_prime, onboarding_prime, output_dir,
-            )
-
-            service_metadata_prime = _infer_service_metadata(
-                parsed_plan.features, onboarding_prime,
-            )
+            artifacts_prime, onboarding_var_prime, source_checksum_prime = _build_seed_artifacts()
 
             seed_prime = ArtisanContextSeed(
                 generated_at=datetime.now(timezone.utc).isoformat(),
@@ -3559,15 +3490,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                 complexity=complexity.to_seed_dict(),
                 tasks=tasks,
                 artifacts=artifacts_prime,
-                ingestion_metrics={
-                    **{f"{k}_cost": v for k, v in costs.items()},
-                    "total_cost": total_cost,
-                },
-                architectural_context=architectural_context_prime,
-                design_calibration=design_calibration_prime,
+                ingestion_metrics=ingestion_metrics,
+                architectural_context=architectural_context,
+                design_calibration=design_calibration,
                 onboarding=onboarding_var_prime,
-                context_files=context_files_list_prime,
-                service_metadata=service_metadata_prime or None,
+                context_files=context_files_list,
+                service_metadata=service_metadata or None,
                 forward_manifest=forward_manifest_dict,
             )
 
@@ -3579,10 +3507,10 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             # Mottainai Rule 6: log propagation chain status (prime)
             if review_output and review_output.get("triage", {}).get("accepted", 0) > 0:
-                if refine_suggestions_prime:
+                if refine_suggestions:
                     logger.info(
                         "REFINE→prime seed chain INTACT: %d accepted suggestions forwarded",
-                        len(refine_suggestions_prime),
+                        len(refine_suggestions),
                     )
                 else:
                     logger.warning(
@@ -3598,7 +3526,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 output_dir=output_dir,
                 doc_path=doc_path,
                 context_seed_path=prime_seed_path,
-                design_calibration=design_calibration_prime,
+                design_calibration=design_calibration,
                 context_files=context_files,
                 source_checksum_val=source_checksum_prime,
                 review_output=review_output,
@@ -3608,32 +3536,17 @@ class PlanIngestionWorkflow(WorkflowBase):
             if context_seed_path is None:
                 context_seed_path = prime_seed_path
 
-        # Task tracking artifact generation (opt-in)
+        # Task tracking artifact generation (opt-in) — reuses the single
+        # tasks list derived above (eliminates divergent onboarding source).
         tracking_result = None
         if tracking_config is not None and parsed_plan is not None:
             from .task_tracking_emitter import emit_task_tracking_artifacts
 
-            tracking_tasks = self._derive_tasks_from_features(
-                parsed_plan.features,
-                parsed_plan.dependency_graph,
-                requirement_to_feature=(translation_quality or {}).get(
-                    "requirement_to_feature", {}
-                ),
-                artifact_to_feature=(translation_quality or {}).get(
-                    "artifact_to_feature", {}
-                ),
-                requirement_hints=requirement_hints or {},
-                output_path_conventions=(
-                    onboarding_early.get("output_path_conventions")
-                    if isinstance(onboarding_early, dict)
-                    else None
-                ),
-            )
             tracking_result = emit_task_tracking_artifacts(
-                parsed_plan, complexity, tracking_tasks, tracking_config, output_dir,
+                parsed_plan, complexity, tasks, tracking_config, output_dir,
             )
 
-        return config_path, review_config, context_seed_path, tracking_result
+        return config_path, review_config, context_seed_path, tracking_result, tasks
 
     # ------------------------------------------------------------------
     # Main execution
@@ -3784,6 +3697,22 @@ class PlanIngestionWorkflow(WorkflowBase):
             preflight_evidence: Dict[str, Any] = {"checksums": {}, "paths": {}, "coverage": {}}
             requirements_hints_index: Dict[str, Dict[str, Any]] = {}
 
+            # --- DISCOVER .contextcore.yaml (needed by both PREFLIGHT and MANIFEST) ---
+            contextcore_yaml: Optional[Path] = None
+            _raw_cc_yaml = config.get("contextcore_yaml")
+            if _raw_cc_yaml is not None:
+                contextcore_yaml = Path(str(_raw_cc_yaml)).expanduser()
+            else:
+                # Auto-discover: project_root (most specific), output_dir, cwd
+                candidates = [output_dir / ".contextcore.yaml", Path.cwd() / ".contextcore.yaml"]
+                project_root = config.get("project_root")
+                if project_root:
+                    candidates.insert(0, Path(project_root) / ".contextcore.yaml")
+                for candidate in candidates:
+                    if candidate.exists():
+                        contextcore_yaml = candidate
+                        break
+
             # --- PREFLIGHT ---
             progress("Preflight")
             preflight_step = StepResult(step_name="preflight", output="Running export contract checks")
@@ -3793,6 +3722,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     context_files=context_files,
                     output_dir=output_dir,
                     min_export_coverage=min_export_coverage,
+                    contextcore_yaml_path=contextcore_yaml,
                 )
             )
             if preflight_warnings:
@@ -3819,17 +3749,6 @@ class PlanIngestionWorkflow(WorkflowBase):
             # --- MANIFEST LOADING (optional) ---
             manifest_context: Dict[str, Any] = {}
             project_metadata: Dict[str, Any] = {}
-            contextcore_yaml = config.get("contextcore_yaml")
-            if contextcore_yaml is None:
-                # Auto-discover: project_root (most specific), output_dir, cwd
-                candidates = [output_dir / ".contextcore.yaml", Path.cwd() / ".contextcore.yaml"]
-                project_root = config.get("project_root")
-                if project_root:
-                    candidates.insert(0, Path(project_root) / ".contextcore.yaml")
-                for candidate in candidates:
-                    if candidate.exists():
-                        contextcore_yaml = candidate
-                        break
             if contextcore_yaml:
                 try:
                     from contextcore.models import load_manifest
@@ -3855,8 +3774,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
             parsed_plan, parse_step = self._phase_parse(plan_text, assessor)
+            _used_heuristic_parse = False
             if parse_step.error and enable_heuristic_parse_fallback:
                 parsed_plan = _heuristic_parse_plan(plan_text)
+                _used_heuristic_parse = True
                 parse_step.error = None
                 parse_step.output = (
                     parse_step.output + "\n[heuristic fallback] parse succeeded without LLM JSON"
@@ -3868,9 +3789,25 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return _fail(parse_step.error)
             state.parsed_plan = parsed_plan
             logger.debug(
-                "Parsed plan: '%s' with %d features",
-                parsed_plan.title, len(parsed_plan.features),
+                "Parsed plan: '%s' with %d features (heuristic=%s)",
+                parsed_plan.title, len(parsed_plan.features), _used_heuristic_parse,
             )
+
+            # When heuristic parse collapses all features into a single
+            # fallback entry, translation quality metrics are unreliable
+            # (everything maps to the one feature → inflated coverage).
+            # Track this so downstream routing can compensate.
+            _heuristic_degraded = (
+                _used_heuristic_parse
+                and len(parsed_plan.features) == 1
+                and parsed_plan.features[0].feature_id == "F-001"
+                and not parsed_plan.features[0].target_files
+            )
+            if _heuristic_degraded:
+                logger.warning(
+                    "Heuristic parse collapsed plan to single fallback feature — "
+                    "translation quality metrics are unreliable; biasing toward artisan"
+                )
 
             translation_quality = self._evaluate_translation_quality(
                 parsed_plan=parsed_plan,
@@ -3878,6 +3815,9 @@ class PlanIngestionWorkflow(WorkflowBase):
                 onboarding=onboarding_metadata,
                 requirements_hints=requirements_hints_index,
             )
+            # Mark quality as degraded so traceability report is honest
+            if _heuristic_degraded:
+                translation_quality["_heuristic_degraded"] = True
 
             cost_err = _check_cost("parse")
             if cost_err:
@@ -3887,10 +3827,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Assess")
             state.current_phase = IngestionPhase.ASSESS
 
+            _used_heuristic_assess = False
             complexity, assess_step = self._phase_assess(
                 parsed_plan, assessor, threshold, force_route,
             )
             if assess_step.error and enable_heuristic_parse_fallback:
+                _used_heuristic_assess = True
                 complexity = _heuristic_assess_complexity(
                     parsed_plan,
                     threshold=threshold,
@@ -3907,6 +3849,23 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return _fail(assess_step.error)
             state.complexity = complexity
             state.route = complexity.route
+
+            # When heuristic parse produced a degraded single-feature plan,
+            # the composite score is artificially low and quality metrics
+            # are inflated.  Override routing to artisan unless the user
+            # explicitly forced a route.
+            if _heuristic_degraded and not force_route:
+                complexity.route = ContractorRoute.ARTISAN
+                state.route = ContractorRoute.ARTISAN
+                steps.append(
+                    StepResult(
+                        step_name="assess:heuristic-degradation-override",
+                        output=(
+                            "Heuristic parse produced single fallback feature — "
+                            "routing forced to artisan to prevent under-orchestration"
+                        ),
+                    )
+                )
 
             low_quality_reasons: List[str] = []
             if (
@@ -4031,7 +3990,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Emit")
             state.current_phase = IngestionPhase.EMIT
 
-            config_path, review_config_data, context_seed_path, tracking_result = self._phase_emit(
+            config_path, review_config_data, context_seed_path, tracking_result, emit_tasks = self._phase_emit(
                 doc_path, route, complexity, output_dir,
                 review_rounds, review_quality_tier, scope, context_files,
                 warn_cost_usd, max_cost_usd,
@@ -4047,22 +4006,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
             # Emit deterministic traceability report for downstream auditing.
-            trace_tasks = self._derive_tasks_from_features(
-                parsed_plan.features,
-                parsed_plan.dependency_graph,
-                requirement_to_feature=translation_quality.get("requirement_to_feature", {}),
-                artifact_to_feature=translation_quality.get("artifact_to_feature", {}),
-                requirement_hints=requirements_hints_index,
-                output_path_conventions=(
-                    onboarding_metadata.get("output_path_conventions")
-                    if isinstance(onboarding_metadata, dict)
-                    else None
-                ),
-            )
+            # Reuse the same tasks derived in _phase_emit to ensure seed,
+            # tracking, and traceability all agree on task decomposition.
             trace_payload = self._build_traceability_artifact(
                 route=route,
                 parsed_plan=parsed_plan,
-                tasks=trace_tasks,
+                tasks=emit_tasks,
                 quality=translation_quality,
                 checksum_evidence=preflight_evidence.get("checksums", {}),
             )

@@ -96,7 +96,8 @@ class TestHeuristicAssessComplexity:
         }
 
         result = assess(plan, threshold=50, force_route=None, manifest_registry=mock_registry)
-        assert result.cross_file_deps == 3
+        # cross_file_deps normalized to 0-100: min(100, max(0, 3 * 10)) = 30
+        assert result.cross_file_deps == 30
 
     def test_manifest_failure_falls_back(self) -> None:
         """If manifest raises, fall back to heuristic."""
@@ -117,5 +118,7 @@ class TestHeuristicAssessComplexity:
 
         result = assess(plan, threshold=50, force_route=None, manifest_registry=mock_registry)
         # Should not crash — falls back to heuristic
-        assert result.feature_count == 1
-        assert result.cross_file_deps == 1  # len(["dep1"])
+        # feature_count is now a normalized 0-100 score: min(100, max(10, 1 * 7)) = 10
+        assert result.feature_count == 10
+        # cross_file_deps normalized to 0-100: min(100, max(0, 1 * 10)) = 10
+        assert result.cross_file_deps == 10

@@ -690,7 +690,7 @@ class TestEmitPhase:
         doc_path.write_text("# Plan")
         complexity = ComplexityScore(composite=45, reasoning="Medium")
 
-        config_path, data, _, _tracking = self.wf._phase_emit(
+        config_path, data, _, _tracking, _tasks = self.wf._phase_emit(
             doc_path,
             ContractorRoute.ARTISAN,
             complexity,
@@ -720,7 +720,7 @@ class TestEmitPhase:
         doc_path.write_text("project: {}")
         complexity = ComplexityScore(composite=20)
 
-        config_path, data, _, _tracking = self.wf._phase_emit(
+        config_path, data, _, _tracking, _tasks = self.wf._phase_emit(
             doc_path,
             ContractorRoute.PRIME,
             complexity,
@@ -1117,7 +1117,8 @@ class TestEndToEnd:
             "project_context_path": str(project_context_path),
             "artifact_manifest_checksum": None,
             "project_context_checksum": None,
-            "source_checksum": "sha256:test",
+            # source_checksum omitted (None) — test focuses on requirements
+            # hints, not checksum verification.
             "resolved_artifact_parameters": {"dashboard": {"x": {"resolved": True}}},
             "coverage": {"overallCoverage": 100, "gaps": []},
             "requirements_hints": [
@@ -1861,7 +1862,7 @@ class TestEmitPhaseArtisanRoute:
             mentioned_files=["a.py"],
         )
 
-        config_path, _, seed_path, _tracking = self.wf._phase_emit(
+        config_path, _, seed_path, _tracking, _tasks = self.wf._phase_emit(
             doc_path, ContractorRoute.ARTISAN, complexity, tmp_path,
             review_rounds=2, review_quality_tier="flagship",
             scope=None, context_files=None,
@@ -1923,7 +1924,7 @@ class TestEmitPhaseArtisanRoute:
             ]
         }
 
-        _config_path, _, seed_path, _tracking = self.wf._phase_emit(
+        _config_path, _, seed_path, _tracking, _tasks = self.wf._phase_emit(
             doc_path,
             ContractorRoute.ARTISAN,
             complexity,
@@ -1950,7 +1951,7 @@ class TestEmitPhaseArtisanRoute:
         complexity = ComplexityScore(composite=20, route=ContractorRoute.PRIME)
         parsed_plan = ParsedPlan(title="Simple", features=[])
 
-        config_path, _, seed_path, _tracking = self.wf._phase_emit(
+        config_path, _, seed_path, _tracking, _tasks = self.wf._phase_emit(
             doc_path, ContractorRoute.PRIME, complexity, tmp_path,
             review_rounds=1, review_quality_tier="flagship",
             scope=None, context_files=None,
@@ -1969,7 +1970,7 @@ class TestEmitPhaseArtisanRoute:
             composite=65, route=ContractorRoute.ARTISAN,
         )
 
-        config_path, _, seed_path, _tracking = self.wf._phase_emit(
+        config_path, _, seed_path, _tracking, _tasks = self.wf._phase_emit(
             doc_path, ContractorRoute.ARTISAN, complexity, tmp_path,
             review_rounds=1, review_quality_tier="flagship",
             scope=None, context_files=None,
@@ -2008,7 +2009,7 @@ class TestEmitPhaseArtisanRoute:
             mentioned_files=["a.py"],
         )
 
-        _config_path, _, seed_path, _tracking = self.wf._phase_emit(
+        _config_path, _, seed_path, _tracking, _tasks = self.wf._phase_emit(
             doc_path, ContractorRoute.ARTISAN, complexity, tmp_path,
             review_rounds=1, review_quality_tier="flagship",
             scope=None, context_files=[str(onboarding_path)],
