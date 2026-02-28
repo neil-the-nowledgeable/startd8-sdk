@@ -497,7 +497,7 @@ def main() -> int:
             thread.join(timeout=120)
             logger.info("Walkthrough postmortem completed")
         except Exception as exc:
-            logger.warning("Walkthrough postmortem failed: %s", exc)
+            logger.warning("Walkthrough postmortem failed: %s", exc, exc_info=True)
 
     # Write result JSON
     if task_filter and len(task_filter) == 1:

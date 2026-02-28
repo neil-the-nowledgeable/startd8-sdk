@@ -532,6 +532,7 @@ class PrimeContractorWorkflow:
             force_mode: Force override of persisted execution mode
             context_strategy: Custom context resolution strategy (default: StandaloneContextStrategy)
             strict_mode: If True, raise on strategy resolution failures (default: False for production, True for CI/testing)
+            walkthrough: If True, persist all LLM prompts without making API calls
         """
         self.project_root = project_root or Path.cwd()
         self.dry_run = dry_run
@@ -1633,8 +1634,12 @@ class PrimeContractorWorkflow:
         template_key = "draft_edit" if is_edit else "draft"
         try:
             draft_template = get_template(template_key)
-        except Exception:
+        except Exception as exc:
             draft_template = f"[Could not load template '{template_key}']"
+            logger.warning(
+                "Walkthrough: draft template '%s' load failed for '%s': %s",
+                template_key, feature.name, exc, exc_info=True,
+            )
 
         existing_section = build_existing_files_section(
             existing_files=existing_files,
@@ -1660,16 +1665,24 @@ class PrimeContractorWorkflow:
         # --- Review phase ---
         try:
             review_system = get_template("review_system")
-        except Exception:
+        except Exception as exc:
             review_system = "[Could not load review_system template]"
+            logger.warning(
+                "Walkthrough: review_system template load failed for '%s': %s",
+                feature.name, exc, exc_info=True,
+            )
         (wt_dir / "review_system_prompt.md").write_text(
             review_system, encoding="utf-8",
         )
 
         try:
             review_template = get_template("review")
-        except Exception:
+        except Exception as exc:
             review_template = "[Could not load review template]"
+            logger.warning(
+                "Walkthrough: review template load failed for '%s': %s",
+                feature.name, exc, exc_info=True,
+            )
         review_user = (
             f"# Review User Prompt\n\n"
             f"**Template:** `review`\n\n"
@@ -1683,14 +1696,8 @@ class PrimeContractorWorkflow:
         )
 
         # --- Metadata ---
-        agent_spec = "unknown"
-        if self.code_generator and hasattr(self.code_generator, "lead_agent"):
-            agent_spec = str(self.code_generator.lead_agent)
-        drafter_spec = "unknown"
-        if self.code_generator and hasattr(
-            self.code_generator, "drafter_agent",
-        ):
-            drafter_spec = str(self.code_generator.drafter_agent)
+        agent_spec = str(getattr(self.code_generator, "lead_agent", None) or "unknown")
+        drafter_spec = str(getattr(self.code_generator, "drafter_agent", None) or "unknown")
 
         metadata = {
             "feature_id": feature.id,
