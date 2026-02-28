@@ -549,16 +549,13 @@ def _heuristic_assess_complexity(
     - PI-3: modification_type classification via fqn_exists (ImplementPhaseHandler._classify_edit_mode, REQ-EMM-001/002)
     """
     feature_count = len(parsed_plan.features)
+    mentioned_files = {tf for f in parsed_plan.features for tf in f.target_files}
 
     # PI-2: Use manifest dependency graph when available
     if manifest_registry is not None:
         try:
             dep_graph = manifest_registry.dependency_graph()
             # Count unique cross-file dependencies from mentioned files
-            mentioned_files = set()
-            for f in parsed_plan.features:
-                for tf in f.target_files:
-                    mentioned_files.add(tf)
             cross_file_deps = sum(
                 len(dep_graph.get(mf, set()))
                 for mf in mentioned_files
@@ -576,10 +573,6 @@ def _heuristic_assess_complexity(
     # PI-1: Use manifest public_element_count when available
     if manifest_registry is not None:
         try:
-            mentioned_files = set()
-            for f in parsed_plan.features:
-                for tf in f.target_files:
-                    mentioned_files.add(tf)
             api_surface = min(
                 100,
                 max(10, sum(
@@ -972,12 +965,10 @@ def _extract_requirement_ids(requirements_text: str) -> List[str]:
     if found:
         return sorted(set(found))
 
-    fallback: List[str] = []
-    for idx, line in enumerate(requirements_text.splitlines(), start=1):
-        lower = line.lower()
-        if ("must" in lower or "shall" in lower) and line.strip().startswith(("-", "*")):
-            fallback.append(f"REQ-LINE-{idx}")
-    return fallback
+    # Synthetic IDs (REQ-LINE-*) never appear in feature text, guaranteeing
+    # unmapped status and inflating quality gate metrics.  Return empty
+    # list so coverage is computed only from real requirement IDs.
+    return []
 
 
 def _load_requirements_documents(requirements_files: List[str], base_dir: Path) -> Dict[str, str]:
@@ -1644,6 +1635,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         )
 
         # Validate output
+        _md_quality_warning = None
         if route == ContractorRoute.PRIME:
             try:
                 yaml.safe_load(content)
@@ -1662,7 +1654,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         else:
             # Markdown: check for at least one heading
             if "##" not in content and "# " not in content:
-                logger.warning("Generated markdown has no headings — may be low quality")
+                _md_quality_warning = "Generated markdown has no headings — may be low quality"
+                logger.warning(_md_quality_warning)
 
         # Write output
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -1678,6 +1671,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             input_tokens=in_tok,
             output_tokens=out_tok,
             cost=cost,
+            error=_md_quality_warning,
         )
 
         return out_path, step
