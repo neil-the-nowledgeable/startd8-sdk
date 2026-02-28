@@ -3413,6 +3413,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if fid:
                     actual_fid_to_tids.setdefault(fid, []).append(t["task_id"])
 
+            # C-3 fix: build full set of ALL feature IDs (including skipped)
+            # so we can distinguish stale feature refs from legitimate task IDs
+            all_feature_ids = {
+                f.feature_id for f in parsed_plan.features
+            } if parsed_plan.features else set()
+
             if actual_fid_to_tids and forward_manifest_dict.get("contracts"):
                 rewritten_contracts = []
                 for c_dict in forward_manifest_dict["contracts"]:
@@ -3425,8 +3431,17 @@ class PlanIngestionWorkflow(WorkflowBase):
                         mapped = actual_fid_to_tids.get(aid)
                         if mapped:
                             new_ids.extend(mapped)
+                        elif aid in all_feature_ids:
+                            # C-3: stale feature ID — was skipped/filtered,
+                            # no tasks derived. Drop it to avoid downstream
+                            # phases receiving contracts with nonexistent IDs.
+                            logger.warning(
+                                "Forward manifest: dropping stale feature ID %r from "
+                                "contract %r (feature was skipped/filtered)",
+                                aid, c_dict.get("contract_id", "?"),
+                            )
                         else:
-                            new_ids.append(aid)  # keep as-is if not a feature_id
+                            new_ids.append(aid)  # keep as-is — already a task ID or external ref
                     if new_ids != old_ids:
                         c_copy = dict(c_dict)
                         c_copy["applicable_task_ids"] = new_ids
@@ -3710,30 +3725,39 @@ class PlanIngestionWorkflow(WorkflowBase):
                     logger.info("Mottainai: loaded _cc_capabilities from artifact_inventory")
         except ImportError:
             pass
+        except Exception as exc:
+            logger.warning(
+                "Mottainai Layer 1: inventory lookup failed (non-fatal): %s",
+                exc,
+            )
 
         # Capability Propagation (Layer 5)
+        _cap_validation_error: Optional[str] = None
         try:
             from contextcore.contracts.capability.validator import CapabilityValidator
             from contextcore.contracts.propagation.loader import ContractLoader
             
             contract_path = Path(__file__).parent.parent.parent / "contractors" / "contracts" / "plan-ingestion.contract.yaml"
             if contract_path.exists():
-                logger.info(f"Loading CapabilityContract from {contract_path}")
+                logger.info("Loading CapabilityContract from %s", contract_path)
                 # We load the contract and initiate the CapabilityValidator
                 contract = ContractLoader.load_contract(str(contract_path))
                 validator = CapabilityValidator(contract)
-                
+
                 # We validate entry capabilities
                 cap_result = validator.validate_entry("plan-ingestion", config)
                 if hasattr(cap_result, 'has_blocking_violations') and cap_result.has_blocking_violations():
-                    return WorkflowResult.from_error(
-                        "plan-ingestion", 
+                    _cap_validation_error = (
                         f"Capability validation failed (Layer 5): {cap_result}"
                     )
         except ImportError as e:
-            logger.warning(f"ContextCore Layer 5 validation unavailable: {e}")
+            logger.warning("ContextCore Layer 5 validation unavailable: %s", e)
         except Exception as e:
-            logger.error(f"Failed to run Capability validation: {e}", exc_info=True)
+            logger.warning(
+                "Capability validation unavailable (Layer 5 internal error, non-fatal): %s",
+                e,
+                exc_info=True,
+            )
 
         # Task tracking (opt-in)
         generate_task_tracking = config.get("generate_task_tracking", False)
@@ -3794,6 +3818,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             return WorkflowResult.from_error(
                 self.metadata.workflow_id, error_msg, steps=steps,
             )
+
+        # Deferred Layer 5 capability validation failure (set before _fail was defined)
+        if _cap_validation_error:
+            return _fail(_cap_validation_error)
 
         try:
             # Read plan
