@@ -173,25 +173,30 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "workflow_summary", "forensic_artifacts",
     # Manifest registry (run_workflow → IMPLEMENT/INTEGRATE)
     "project_manifests",
+    # M-2: DESIGN enrichment keys lost on resume without these:
+    "design_quality", "design_enrichment",
+    "reviewer_confidence", "arbiter_confidence",
+    "design_iteration_count",
 })
 
 # ---------------------------------------------------------------------------
 # Contract-defined quality thresholds (artisan-pipeline.contract.yaml).
-# Each entry maps (phase, metric_name) → (threshold, description).
+# Each entry maps (phase, metric_name) → (threshold, operator, description).
+# Supported operators: "gte" (observed >= threshold), "lte" (observed <= threshold).
 # These are enforced by _check_quality_gate() in addition to total_failed.
 # ---------------------------------------------------------------------------
-_CONTRACT_QUALITY_THRESHOLDS: dict[str, list[tuple[str, float, str]]] = {
+_CONTRACT_QUALITY_THRESHOLDS: dict[str, list[tuple[str, float, str, str]]] = {
     "design": [
-        ("agreement_rate", 0.70, "DESIGN agreement rate below 0.70 indicates review-convergence instability"),
+        ("agreement_rate", 0.70, "gte", "DESIGN agreement rate below 0.70 indicates review-convergence instability"),
     ],
     "implement": [
-        ("line_count", 10, "Generation results should have meaningful content (>= 10 lines)"),
+        ("line_count", 10, "gte", "Generation results should have meaningful content (>= 10 lines)"),
     ],
     "integrate": [
-        ("success_rate", 0.50, "At least half of integration results should succeed"),
+        ("success_rate", 0.50, "gte", "At least half of integration results should succeed"),
     ],
     "test": [
-        ("total_passed", 1, "At least one task should pass its validators"),
+        ("total_passed", 1, "gte", "At least one task should pass its validators"),
     ],
 }
 
@@ -2465,8 +2470,13 @@ class ArtisanContractorWorkflow:
             self._logger.warning("QUALITY GATE WARNING: %s — %s", msg, details)
 
         # --- Layer 2: contract metric thresholds ---
+        _OPERATOR_MAP = {
+            "gte": lambda obs, thr: obs < thr,   # violated when observed < threshold
+            "lte": lambda obs, thr: obs > thr,   # violated when observed > threshold
+        }
+        _OPERATOR_SYMBOL = {"gte": ">=", "lte": "<="}
         phase_thresholds = _CONTRACT_QUALITY_THRESHOLDS.get(phase.value, [])
-        for metric_name, threshold, description in phase_thresholds:
+        for metric_name, threshold, operator, description in phase_thresholds:
             observed = phase_result.output.get(metric_name)
             if observed is None:
                 # Try nested extraction for common patterns
@@ -2500,7 +2510,9 @@ class ArtisanContractorWorkflow:
             except (TypeError, ValueError):
                 continue
 
-            violated = observed_num < threshold
+            violation_fn = _OPERATOR_MAP.get(operator, _OPERATOR_MAP["gte"])
+            violated = violation_fn(observed_num, threshold)
+            op_symbol = _OPERATOR_SYMBOL.get(operator, ">=")
             metric_decision = "skipped" if self._quality_gate == "skip" else (
                 "block" if violated and self._quality_gate == "block" else (
                     "warn" if violated else "pass"
@@ -2512,19 +2524,19 @@ class ArtisanContractorWorkflow:
                 "contract_signal_id": f"{phase.value}.exit.{metric_name}",
                 "phase": phase.value,
                 "policy_mode": self._quality_gate,
-                "threshold": {"metric": metric_name, "operator": "gte", "value": threshold},
+                "threshold": {"metric": metric_name, "operator": operator, "value": threshold},
                 "observed_value": observed_num,
                 "decision": metric_decision,
                 "violated": violated,
-                "message": description if violated else f"{metric_name} = {observed_num} (>= {threshold})",
-                "details": {"metric": metric_name, "threshold": threshold, "observed": observed_num},
+                "message": description if violated else f"{metric_name} = {observed_num} ({op_symbol} {threshold})",
+                "details": {"metric": metric_name, "threshold": threshold, "operator": operator, "observed": observed_num},
             }
             self._record_quality_gate_outcome(metric_outcome)
 
             if violated and self._quality_gate != "skip":
                 metric_msg = (
                     f"{phase.value.upper()} contract threshold violated: "
-                    f"{metric_name} = {observed_num} (threshold >= {threshold}). "
+                    f"{metric_name} = {observed_num} (threshold {op_symbol} {threshold}). "
                     f"{description}"
                 )
                 if self._quality_gate == "block":
@@ -3181,6 +3193,10 @@ class ArtisanContractorWorkflow:
                     feature_id,
                 )
                 continue
+
+            # M-1: Reset truncation_flags so stale flags from the previous
+            # feature do not leak into this iteration.
+            context["truncation_flags"] = {}
 
             current_feature = feature_id
 

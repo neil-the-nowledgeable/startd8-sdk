@@ -60,6 +60,7 @@ import subprocess
 import sys
 import threading
 import time
+import warnings
 from collections import defaultdict
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -3761,7 +3762,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if isinstance(review_gate, dict) and not bool(review_gate.get("passed", False)):
             return False
         completeness = entry.get("parameter_completeness")
-        if isinstance(completeness, dict) and not bool(completeness.get("passed", True)):
+        if isinstance(completeness, dict) and not bool(completeness.get("passed", False)):
             return False
         return True
 
@@ -3780,7 +3781,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if isinstance(review_gate, dict) and not bool(review_gate.get("passed", True)):
             return "REVIEW_THRESHOLD_NOT_MET"
         completeness = entry.get("parameter_completeness")
-        if isinstance(completeness, dict) and not bool(completeness.get("passed", True)):
+        if isinstance(completeness, dict) and not bool(completeness.get("passed", False)):
             decision = str(entry.get("completeness_gate_decision", "") or "")
             if decision == "degraded":
                 return "PARAMETER_COMPLETENESS_DEGRADED"
@@ -5947,6 +5948,15 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
         enriched_seed_path: Optional[Path] = None,
         project_root: Optional[Path] = None,
     ) -> None:
+        if code_generator is not None:
+            warnings.warn(
+                "ImplementPhaseHandler: 'code_generator' parameter is deprecated "
+                "and ignored. The artisan pipeline now uses DevelopmentPhase with "
+                "'drafter_spec' from HandlerConfig instead. This parameter will "
+                "be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         self.config = handler_config or HandlerConfig()
         self._enriched_seed_path = enriched_seed_path
         self._project_root = project_root
@@ -6401,10 +6411,10 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                 for existing_path, existing_lines in task_sizes.items():
                     if existing_lines <= _SIZE_REGRESSION_MIN_LINES:
                         continue
-                    # Find matching generated file — match by filename
+                    # Find matching generated file — match by relative path suffix
                     gen_lines = 0
                     for gen_path, gen_lc in gen_line_counts.items():
-                        if gen_path.endswith(existing_path) or Path(gen_path).name == Path(existing_path).name:
+                        if gen_path.endswith(existing_path) or str(Path(gen_path)) == str(Path(existing_path)):
                             gen_lines = gen_lc
                             break
                     if gen_lines <= 0:
@@ -7486,6 +7496,7 @@ class Test{class_name}:
                     "post_generation_validators": task.post_generation_validators,
                     "title": task.title,
                     "design_document": design_doc_text,
+                    "design_document_missing": design_doc_text is None,
                     "_design_lines": _design_lines,
                     "_design_sections": _design_sections,
                     "max_output_tokens": max_output_tokens,
@@ -7600,6 +7611,10 @@ class Test{class_name}:
             missing_targets = meta.get("_missing_targets")
             if missing_targets:
                 task_report["missing_targets"] = missing_targets
+
+            # Surface design document absence for downstream phases (Issue 4)
+            if meta.get("design_document_missing"):
+                task_report["design_document_missing"] = True
 
             if state.status == ChunkStatus.PASSED and gen_result is not None:
                 task_report["status"] = "generated"
@@ -7751,8 +7766,9 @@ class Test{class_name}:
         tasks: list[SeedTask],
         project_root: Path,
         source_checksum: str | None,
+        design_results: dict[str, Any] | None = None,
     ) -> dict[str, GenerationResult] | None:
-        """Validate a saved generation_results cache through 7 ordered layers.
+        """Validate a saved generation_results cache through 8 ordered layers.
 
         Returns a dict of task_id → GenerationResult if all layers pass,
         or None if the cache should be rejected (caller falls through to
@@ -7763,6 +7779,8 @@ class Test{class_name}:
             1: Filter success:false entries (info log)
             2: Coverage — all current task IDs present in successful entries
             3: Source checksum — _cache_meta.source_checksum matches context
+            3b: Design hash — design_results hash matches context (catches
+                ``--force-design`` invalidation; mirrors TEST/REVIEW Layer 1.5)
             4: Path validation — cached generated_files match task.target_files
             5: File existence — every cached file exists on disk
             6: Content hash — sha256(file_bytes) matches cached content_hashes
@@ -7827,6 +7845,32 @@ class Test{class_name}:
                 "cache has %s, current has %s — cannot verify integrity",
                 "checksum" if cached_checksum else "None",
                 "checksum" if source_checksum else "None",
+            )
+
+        # Layer 3b: Design hash — invalidate when design changes
+        # (mirrors TEST/REVIEW Layer 1.5; catches --force-design)
+        cached_design_hash = cache_meta.get("design_hash")
+        if cached_design_hash is not None and design_results is not None:
+            current_design_hash = _compute_design_results_hash(design_results)
+            if (
+                current_design_hash is not None
+                and current_design_hash != cached_design_hash
+            ):
+                logger.warning(
+                    "IMPLEMENT --resume: design_hash mismatch "
+                    "(cached=%s, current=%s) — design changed since last "
+                    "IMPLEMENT; re-running to regenerate from new design",
+                    cached_design_hash[:16], current_design_hash[:16],
+                )
+                return None
+            logger.debug(
+                "IMPLEMENT --resume: Layer 3b (design hash): match",
+            )
+        elif cached_design_hash is not None:
+            logger.info(
+                "IMPLEMENT --resume: Layer 3b: cache has design_hash but "
+                "current context has no design_results — cannot verify; "
+                "proceeding (design may not have changed)",
             )
 
         # Parse GenerationResult objects from successful entries
@@ -7898,7 +7942,7 @@ class Test{class_name}:
 
         logger.info(
             "IMPLEMENT --resume: all %d layers passed for %d tasks",
-            7, len(generation_results),
+            8, len(generation_results),
         )
         return generation_results
 
@@ -8171,6 +8215,7 @@ class Test{class_name}:
                 cached_results = self._validate_resume_cache(
                     saved, tasks, project_root,
                     source_checksum=context.get("source_checksum"),
+                    design_results=context.get("design_results"),
                 )
                 if cached_results is not None:
                     generation_results = cached_results
@@ -8295,7 +8340,9 @@ class Test{class_name}:
                     try:
                         rel_key = str(fp.relative_to(staging_dir))
                     except ValueError:
-                        rel_key = fp.name
+                        # Fallback: use full path string to avoid
+                        # name-only collisions across directories.
+                        rel_key = str(fp)
                     try:
                         gen_file_contents[rel_key] = fp.read_text(
                             encoding="utf-8",
@@ -8438,6 +8485,9 @@ class Test{class_name}:
                         datetime.timezone.utc
                     ).isoformat(),
                     "source_checksum": context.get("source_checksum"),
+                    "design_hash": _compute_design_results_hash(
+                        context.get("design_results", {})
+                    ),
                 },
                 "truncation_flags": truncation_flags,
                 "downstream_map": downstream_map,
@@ -8576,12 +8626,15 @@ class Test{class_name}:
                 # REQ-IME-301: Design document forwarding
                 task_design = design_results.get(task_id, {})
                 design_doc = task_design.get("design_document")
+                _design_doc_missing = False
                 if design_doc:
                     engine_context["design_document"] = design_doc
                 else:
+                    _design_doc_missing = True
                     logger.warning(
                         "Inner loop task %s: no design document available — "
-                        "falling back to spec template (Prime route)",
+                        "falling back to spec template (Prime route). "
+                        "Downstream phases will see design_document_missing flag.",
                         task_id,
                     )
 
@@ -8787,6 +8840,7 @@ class Test{class_name}:
                             else None
                         ),
                         "_complexity_tier": _task_tier.value,
+                        **({"design_document_missing": True} if _design_doc_missing else {}),
                     },
                 )
 
@@ -8797,7 +8851,7 @@ class Test{class_name}:
                         "events": result.truncation_events,
                     }
 
-                task_reports.append({
+                _task_report: dict[str, Any] = {
                     "task_id": task_id,
                     "feature_id": task.feature_id,
                     "title": task.title,
@@ -8809,7 +8863,10 @@ class Test{class_name}:
                     "cost_usd": result.total_cost,
                     "files_generated": len(gen_result.generated_files),
                     "complexity_tier": _task_tier.value,
-                })
+                }
+                if _design_doc_missing:
+                    _task_report["design_document_missing"] = True
+                task_reports.append(_task_report)
 
                 _log_task_boundary_complete(
                     task_id,
@@ -9035,6 +9092,7 @@ class Test{class_name}:
                 validated = self._validate_resume_cache(
                     saved, tasks, project_root,
                     source_checksum=context.get("source_checksum"),
+                    design_results=context.get("design_results"),
                 )
                 if validated is not None:
                     generation_results = validated
@@ -9710,7 +9768,9 @@ class Test{class_name}:
                         try:
                             rel_key = str(fp.relative_to(staging_dir))
                         except ValueError:
-                            rel_key = fp.name
+                            # Fallback: use full path string to avoid
+                            # name-only collisions across directories.
+                            rel_key = str(fp)
                         try:
                             gen_file_contents[rel_key] = fp.read_text(
                                 encoding="utf-8",
@@ -9855,6 +9915,9 @@ class Test{class_name}:
                                 datetime.timezone.utc
                             ).isoformat(),
                             "source_checksum": context.get("source_checksum"),
+                            "design_hash": _compute_design_results_hash(
+                                context.get("design_results", {})
+                            ),
                         },
                         "downstream_map": downstream_map,
                         "truncation_flags": truncation_flags,
@@ -9996,7 +10059,9 @@ class Test{class_name}:
                     try:
                         rel = str(gfp.relative_to(staging_dir))
                     except ValueError:
-                        rel = gfp.name
+                        # Fallback: use full path string to avoid
+                        # name-only collisions across directories.
+                        rel = str(gfp)
                     if rel == fr.file_path and gfp.exists():
                         gfp.write_text(retry_code, encoding="utf-8")
                         fr.output_chars = len(retry_code)
@@ -10464,8 +10529,8 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
             if ir.get("status") == "BLOCKED":
                 continue
 
-            integrated = {Path(f).name for f in ir.get("integrated_files", [])}
-            expected = {f.name for f in gr.generated_files}
+            integrated = {str(Path(f)) for f in ir.get("integrated_files", [])}
+            expected = {str(f) for f in gr.generated_files}
 
             # Also count skipped files as "accounted for"
             skipped_paths = ir.get("skipped_files", [])
@@ -10473,9 +10538,9 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 if isinstance(sf, dict):
                     sp = sf.get("path", "")
                     if sp:
-                        integrated.add(Path(sp).name)
+                        integrated.add(str(Path(sp)))
                 elif isinstance(sf, str):
-                    integrated.add(Path(sf).name)
+                    integrated.add(str(Path(sf)))
 
             missing = expected - integrated
             if missing:
@@ -12237,7 +12302,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         """
         import re
 
-        score = 0
+        score: int | None = None
         verdict = "FAIL"
 
         # Extract score
@@ -12251,7 +12316,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 score = min(100, max(0, int(score_fallback.group(1))))
             else:
                 logger.warning(
-                    "REVIEW: could not extract score from response (defaulting to 0); "
+                    "REVIEW: could not extract score from response (score=None); "
                     "first 200 chars: %s", response[:200],
                 )
 
@@ -12284,7 +12349,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         return {
             "score": score,
             "verdict": verdict,
-            "passed": verdict == "PASS" and score >= self.config.pass_threshold,
+            "passed": verdict == "PASS" and score is not None and score >= self.config.pass_threshold,
             "raw_response": response[:4000],  # truncate for storage
             "strengths": extract_section("Strengths"),
             "issues": extract_section("Issues"),
@@ -12469,7 +12534,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 logger.warning("REVIEW: agent error for %s: %s", task.task_id, exc)
                 return {
                     "task_id": task.task_id,
-                    "score": 0,
+                    "score": None,
                     "verdict": "ERROR",
                     "passed": False,
                     "cost": 0.0,
@@ -12479,7 +12544,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 }
         # Unreachable — loop always returns — but satisfies type checker
         return {
-            "task_id": task.task_id, "score": 0, "verdict": "ERROR",
+            "task_id": task.task_id, "score": None, "verdict": "ERROR",
             "passed": False, "cost": 0.0, "tokens": {"input": 0, "output": 0},
             "error": "retry loop exhausted", "status": "review_error",
         }
@@ -12506,7 +12571,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             "review_status": "error",
             "error": str(exc),
             "passed": False,
-            "score": 0,
+            "score": None,
         }
 
     # ------------------------------------------------------------------
@@ -13049,7 +13114,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 per_task[task_id] = {
                     "status": "error",
                     "passed": False,
-                    "score": 0,
+                    "score": None,
                     "verdict": "ERROR",
                     "error": item.get("error", ""),
                 }
@@ -14100,11 +14165,23 @@ class ContextSeedHandlers:
             complexity_loc_tier3_min: Tier 3 minimum estimated LOC.
             complexity_caller_tier3: Tier 3 caller threshold (edit mode).
             complexity_tier2_gate_escalation: Gate-driven T2 escalation for Tier 2.
-            code_generator: Optional pre-configured CodeGenerator instance.
+            code_generator: Deprecated. Previously used for code generation;
+                now ignored. The artisan pipeline uses DevelopmentPhase with
+                ``drafter_spec`` from HandlerConfig instead.
 
         Returns:
             Dict mapping WorkflowPhase → handler instance.
         """
+        if code_generator is not None:
+            warnings.warn(
+                "ContextSeedHandlers.create_all(): 'code_generator' parameter "
+                "is deprecated and ignored. The artisan pipeline now uses "
+                "DevelopmentPhase with 'drafter_spec' from HandlerConfig "
+                "instead. This parameter will be removed in a future release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         # Build cli_overrides from non-None kwargs
         cli_overrides: dict[str, Any] = {}
         for name, val in [
