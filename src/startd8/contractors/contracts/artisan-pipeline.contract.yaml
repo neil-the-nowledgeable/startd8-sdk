@@ -241,6 +241,10 @@ phases:
         - name: lane_conflicts
           type: list
           description: "Post-lane compatibility check results. Empty list if no conflicts."
+        - name: design_mode_summary
+          type: dict
+          severity: advisory
+          description: "Per-task design mode mapping (task_id -> 'create'|'update'|'skipped'). Derived from design_results by DesignPhaseHandler for propagation to IMPLEMENT."
 
   implement:
     description: "Test construction + code development"

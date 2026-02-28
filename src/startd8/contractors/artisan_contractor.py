@@ -177,6 +177,8 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "design_quality", "design_enrichment",
     "reviewer_confidence", "arbiter_confidence",
     "design_iteration_count",
+    # Multi-feature aggregation: accumulated per-feature results for FINALIZE
+    "completed_features", "feature_partial_results",
 })
 
 # ---------------------------------------------------------------------------
@@ -1537,8 +1539,9 @@ class ArtisanContractorWorkflow:
                 return  # No changes to commit
 
             # Scope git add to files produced by the workflow (not -A).
-            # Collect integrated file paths from context; fall back to
-            # porcelain output if integration_results is unavailable.
+            # Collect integrated file paths from context.  In multi-feature
+            # mode the per-feature keys are cleaned up after each feature,
+            # so fall back to the accumulated _all_feature_results.
             ctx = context or {}
             generated_files: list[str] = []
             int_results = ctx.get("integration_results", {})
@@ -1553,6 +1556,22 @@ class ArtisanContractorWorkflow:
                     if isinstance(task_info, dict):
                         for f in task_info.get("files", []):
                             generated_files.append(str(f))
+
+            # Multi-feature fallback: extract from accumulated results
+            if not generated_files:
+                all_feat = ctx.get("_all_feature_results", {})
+                if isinstance(all_feat, dict):
+                    for _feat_data in all_feat.values():
+                        if not isinstance(_feat_data, dict):
+                            continue
+                        for _ir in _feat_data.get("integration_results", {}).values():
+                            if isinstance(_ir, dict):
+                                for f in _ir.get("integrated_files", []):
+                                    generated_files.append(str(f))
+                        for _gr in _feat_data.get("generation_results", {}).values():
+                            if isinstance(_gr, dict):
+                                for f in _gr.get("files", []):
+                                    generated_files.append(str(f))
 
             if generated_files:
                 # Add only the specific generated files
@@ -2363,16 +2382,16 @@ class ArtisanContractorWorkflow:
 
         if phase_result.status == PhaseStatus.COMPLETED:
             self._commit_changes(phase, context=context)
-
-        # Persist checkpoint after global phase
-        self._persist_checkpoint(
-            phase,
-            phase_results,
-            cost_tracker.cumulative_cost,
-            WorkflowStatus.IN_PROGRESS,
-            context=context,
-            **extra_checkpoint_kwargs,
-        )
+            # Persist checkpoint only on success — failure/timeout
+            # paths persist their own terminal-status checkpoint below.
+            self._persist_checkpoint(
+                phase,
+                phase_results,
+                cost_tracker.cumulative_cost,
+                WorkflowStatus.IN_PROGRESS,
+                context=context,
+                **extra_checkpoint_kwargs,
+            )
 
         if phase_result.status == PhaseStatus.FAILED:
             checkpoint = self._persist_checkpoint(
@@ -2772,6 +2791,43 @@ class ArtisanContractorWorkflow:
                     checkpoint=checkpoint,
                 )
 
+        # Inject multi-feature aggregation data into context so FINALIZE
+        # and auto-commit can access per-feature results and metadata.
+        context["completed_features"] = completed_features
+        context["feature_partial_results"] = feature_partial_results
+
+        # Reconstruct per-phase context keys from _all_feature_results so
+        # the FINALIZE entry gate (requires generation_results) passes and
+        # the finalize handler has access to cross-feature data.
+        _all_feat = context.get("_all_feature_results", {})
+        if isinstance(_all_feat, dict) and _all_feat:
+            # Task-keyed dicts: merge across all features into one dict.
+            # Always set the key (even if empty) so entry-gate validation
+            # passes — it checks presence, not non-emptiness.
+            for _merge_key in (
+                "generation_results", "design_results",
+                "integration_results",
+            ):
+                if _merge_key not in context:
+                    _merged: dict[str, Any] = {}
+                    for _fd in _all_feat.values():
+                        if isinstance(_fd, dict):
+                            _fv = _fd.get(_merge_key)
+                            if isinstance(_fv, dict):
+                                _merged.update(_fv)
+                    context[_merge_key] = _merged
+
+            # Structured aggregates (implementation, test_results,
+            # review_results): last feature's value provides the shape,
+            # which is sufficient for FINALIZE summary generation.
+            for _struct_key in (
+                "implementation", "test_results", "review_results",
+            ):
+                if _struct_key not in context:
+                    for _fd in _all_feat.values():
+                        if isinstance(_fd, dict) and _struct_key in _fd:
+                            context[_struct_key] = _fd[_struct_key]
+
         # Execute global end phases (FINALIZE)
         _fs_end_kwargs = dict(
             completed_features=completed_features,
@@ -3078,15 +3134,36 @@ class ArtisanContractorWorkflow:
             # feature starts fresh.
             context.pop("last_error", None)
             context.pop("test_output", None)
+
+            # Accumulate per-feature phase outputs before cleanup so
+            # FINALIZE and auto-commit can access aggregated results.
+            _feature_accumulator = context.setdefault(
+                "_all_feature_results", {},
+            )
+            _this_feature: dict[str, Any] = {}
+            for _accum_key in (
+                "implementation", "generation_results",
+                "integration_results", "test_results",
+                "review_results", "design_results",
+            ):
+                _accum_val = context.get(_accum_key)
+                if _accum_val is not None:
+                    _this_feature[_accum_key] = _accum_val
+            if _this_feature:
+                _feature_accumulator[feature_id] = _this_feature
+
             # Phase output keys that are feature-scoped — stale data from
             # feature N must not leak into feature N+1's handlers.
+            # NOTE: _prior_impl_summaries is intentionally excluded — it
+            # is a cross-feature accumulation key that later features read
+            # to understand earlier features' implementations.
             for _feature_key in (
                 "implementation", "generation_results",
                 "integration_results", "test_results",
                 "review_results", "truncation_flags",
                 "design_results", "design_calibration",
                 "edit_mode_classifications",
-                "_prior_impl_summaries", "_downstream_map",
+                "_downstream_map",
             ):
                 context.pop(_feature_key, None)
 

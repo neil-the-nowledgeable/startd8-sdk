@@ -133,6 +133,26 @@ _SIZE_REGRESSION_THRESHOLD = 0.70
 _SIZE_REGRESSION_MIN_LINES = 50
 
 
+def _dict_to_gen_result(d: dict) -> GenerationResult:
+    """Convert a plain dict (e.g. from JSON cache) to a GenerationResult dataclass.
+
+    This is used as a normalization step after loading cached generation_results
+    from disk so that downstream phases can safely access attributes like
+    ``.cost_usd`` and ``.success`` without risking AttributeError on raw dicts.
+    """
+    return GenerationResult(
+        success=d.get("success", False),
+        generated_files=[Path(p) for p in d.get("generated_files", [])],
+        error=d.get("error"),
+        input_tokens=d.get("input_tokens", 0),
+        output_tokens=d.get("output_tokens", 0),
+        cost_usd=d.get("cost_usd", 0.0),
+        iterations=d.get("iterations", 1),
+        model=d.get("model", ""),
+        metadata=d.get("metadata", {}),
+    )
+
+
 # ---------------------------------------------------------------------------
 # E6: Cross-phase provenance linking helpers
 # ---------------------------------------------------------------------------
@@ -4078,6 +4098,44 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             logger.info(
                                 "DESIGN: auto-loaded %d prior design result(s) from %s",
                                 len(prior_design_results), handoff_path,
+                            )
+                            # C-5: Compute design_quality from prior results
+                            # so that downstream consumers (handoff write,
+                            # DesignPhaseOutput validation) have it available
+                            # even before the end-of-phase quality loop runs.
+                            _adopted_passed = 0
+                            _adopted_failed = 0
+                            for _adr in prior_design_results.values():
+                                if not isinstance(_adr, dict):
+                                    continue
+                                _adr_status = _adr.get("status", "")
+                                if _adr_status in (
+                                    "dry_run_skipped", "env_blocked",
+                                ):
+                                    continue
+                                if _adr.get("agreed"):
+                                    _adopted_passed += 1
+                                else:
+                                    _adopted_failed += 1
+                            _adopted_total = _adopted_passed + _adopted_failed
+                            _adopted_agreement = (
+                                _adopted_passed / _adopted_total
+                                if _adopted_total > 0
+                                else 0.0
+                            )
+                            context["design_quality"] = {
+                                "total_passed": _adopted_passed,
+                                "total_failed": _adopted_failed,
+                                "agreement_rate": _adopted_agreement,
+                                "evaluated_task_count": _adopted_total,
+                            }
+                            logger.info(
+                                "DESIGN: pre-seeded design_quality from "
+                                "prior results: passed=%d, failed=%d, "
+                                "agreement_rate=%.2f",
+                                _adopted_passed,
+                                _adopted_failed,
+                                _adopted_agreement,
                             )
                     except (FileNotFoundError, ValueError, KeyError, TypeError) as exc:
                         logger.warning(
@@ -8548,6 +8606,12 @@ class Test{class_name}:
                 output["_gate5_edit_first"] = gate5_results
 
         context["implementation"] = output
+        # C-2 fix: normalize any dict entries to GenerationResult so downstream
+        # phases can safely access .cost_usd / .success without AttributeError.
+        generation_results = {
+            tid: _dict_to_gen_result(v) if isinstance(v, dict) else v
+            for tid, v in generation_results.items()
+        }
         context["generation_results"] = generation_results
         context["truncation_flags"] = truncation_flags
         output["metadata"] = self._build_implementation_metadata(context)
@@ -8627,6 +8691,42 @@ class Test{class_name}:
                 task_design = design_results.get(task_id, {})
                 design_doc = task_design.get("design_document")
                 _design_doc_missing = False
+
+                # Gate: skip tasks whose DESIGN phase explicitly failed.
+                _design_status = task_design.get("status", "")
+                if _design_status == "design_failed":
+                    _gate_mode = context.get("quality_gate_summary", {}).get(
+                        "policy_mode", "warn"
+                    )
+                    if _gate_mode == "block":
+                        logger.warning(
+                            "Inner loop task %s: DESIGN failed — skipping "
+                            "IMPLEMENT per block policy",
+                            task_id,
+                        )
+                        generation_results[task_id] = GenerationResult(
+                            text="", time_ms=0,
+                            token_usage={"input": 0, "output": 0},
+                            success=False,
+                            error="design_failed: skipped by quality gate (block)",
+                            metadata={"design_gated": True},
+                        )
+                        task_reports.append({
+                            "task_id": task_id, "status": "design_gated",
+                            "error": "DESIGN failed — skipped per block policy",
+                        })
+                        _log_task_boundary_complete(
+                            task_id, status="design_gated",
+                            phase="implement",
+                        )
+                        continue
+                    else:
+                        logger.warning(
+                            "Inner loop task %s: DESIGN failed — proceeding "
+                            "per %s policy (quality may be degraded)",
+                            task_id, _gate_mode,
+                        )
+
                 if design_doc:
                     engine_context["design_document"] = design_doc
                 else:
@@ -9079,12 +9179,29 @@ class Test{class_name}:
         truncation_flags: dict[str, dict[str, Any]] = {}
         if not _has_explicit_project_root:
             logger.info("IMPLEMENT: no explicit project_root — skipping cache load")
+        # AR-153: On retry, determine which tasks need regeneration.
+        # Only failed tasks are regenerated; passing tasks reuse cache.
+        _retry_failed_tasks: set[str] = set()
+        if _is_retry:
+            _rfb = context.get("retry_feedback")
+            if isinstance(_rfb, dict):
+                _rft = _rfb.get("failed_tasks", [])
+                if isinstance(_rft, list):
+                    _retry_failed_tasks = set(_rft)
+            # If no specific failed tasks identified, fall back to
+            # regenerating all tasks (original behavior).
+            if not _retry_failed_tasks:
+                logger.info(
+                    "IMPLEMENT: AR-153 retry with no specific failed_tasks — "
+                    "regenerating all tasks",
+                )
+
         if (
             _has_explicit_project_root
             and results_path.exists()
             and not dry_run
             and not self.config.force_implement
-            and not _is_retry  # AR-153: skip cache on retry to avoid regenerating identical output
+            and not (_is_retry and not _retry_failed_tasks)  # AR-153: skip cache only when no specific failed tasks
         ):
             try:
                 with open(results_path) as f:
@@ -9098,87 +9215,125 @@ class Test{class_name}:
                     generation_results = validated
                     current_task_ids = {t.task_id for t in tasks}
 
-                    # Fix 1: Restore downstream_map from cache
-                    downstream_map = saved.get("downstream_map", {})
-
-                    # Restore truncation_flags from cache (v3+; graceful for v2)
-                    truncation_flags = saved.get("truncation_flags", {})
-
-                    # Fix 2: Report zero cost for resumed phase (no LLM
-                    # calls were made).  Track historical cost separately.
-                    total_cost = 0.0
-                    resumed_cost = sum(
-                        r.cost_usd for tid, r in generation_results.items()
-                        if tid in current_task_ids
-                    )
-
-                    domain_tasks: dict[str, list[str]] = defaultdict(list)
-                    for task in tasks:
-                        domain_tasks[task.domain].append(task.task_id)
-
-                    task_reports: list[dict[str, Any]] = []
-                    for task in tasks:
-                        _log_task_boundary_start(task, phase="implement")
-                        gr = generation_results.get(task.task_id)
-                        report: dict[str, Any] = {
-                            "task_id": task.task_id,
-                            "feature_id": task.feature_id,
-                            "title": task.title,
-                            "domain": task.domain,
-                            "complexity_tier": "tier_2",
-                            "target_files": task.target_files,
-                            "estimated_loc": task.estimated_loc,
-                            "depends_on": task.depends_on,
-                            "prompt_constraints_count": len(task.prompt_constraints),
-                            "validators": task.post_generation_validators,
+                    # AR-153 scoped retry: evict failed tasks from cache
+                    # so they get regenerated while passing tasks are reused.
+                    if _retry_failed_tasks:
+                        _evicted = {
+                            tid for tid in _retry_failed_tasks
+                            if tid in generation_results
                         }
-                        if gr is not None:
-                            report["status"] = "generated" if gr.success else "generation_failed"
-                            report["cost"] = gr.cost_usd
-                            report["tokens"] = {
-                                "input": gr.input_tokens,
-                                "output": gr.output_tokens,
-                            }
-                            report["iterations"] = gr.iterations
-                            if gr.error:
-                                report["error"] = gr.error
-                        else:
-                            report["status"] = "not_in_saved_results"
-                        task_reports.append(report)
-                        _log_task_boundary_complete(
-                            task.task_id,
-                            status=str(report["status"]),
-                            phase="implement",
-                            cost_usd=_coerce_optional_float(report.get("cost")),
+                        for tid in _evicted:
+                            del generation_results[tid]
+                        logger.info(
+                            "IMPLEMENT: AR-153 scoped retry — evicted %d/%d "
+                            "failed task(s) from cache, reusing %d passing: %s",
+                            len(_evicted),
+                            len(_retry_failed_tasks),
+                            len(generation_results),
+                            sorted(_evicted),
+                        )
+                        # Don't mark as fully resumed — the evicted tasks
+                        # will fall through to the fresh generation path.
+                        # Store partial cache for merging after regeneration.
+                        context["_retry_cached_results"] = dict(generation_results)
+                    else:
+                        # Fix 1: Restore downstream_map from cache
+                        downstream_map = saved.get("downstream_map", {})
+
+                        # Restore truncation_flags from cache (v3+; graceful for v2)
+                        truncation_flags = saved.get("truncation_flags", {})
+
+                        # Fix 2: Report zero cost for resumed phase (no LLM
+                        # calls were made).  Track historical cost separately.
+                        total_cost = 0.0
+                        resumed_cost = sum(
+                            r.cost_usd for tid, r in generation_results.items()
+                            if tid in current_task_ids
                         )
 
-                    output: dict[str, Any] = {
-                        "task_reports": task_reports,
-                        "tasks_processed": len(task_reports),
-                        "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
-                        "total_estimated_loc": sum(t.estimated_loc for t in tasks),
-                        "total_cost": total_cost,
-                        "generation_results": {
-                            tid: {"success": r.success, "error": r.error, "cost": r.cost_usd}
-                            for tid, r in generation_results.items()
-                            if tid in current_task_ids
-                        },
-                        # Structural parity with fresh-run output
-                        "development_result_summary": "resumed from cache",
-                        "execution_order": [list(current_task_ids)],
-                    }
-                    resumed = True
+                        domain_tasks: dict[str, list[str]] = defaultdict(list)
+                        for task in tasks:
+                            domain_tasks[task.domain].append(task.task_id)
+
+                        task_reports: list[dict[str, Any]] = []
+                        for task in tasks:
+                            _log_task_boundary_start(task, phase="implement")
+                            gr = generation_results.get(task.task_id)
+                            report: dict[str, Any] = {
+                                "task_id": task.task_id,
+                                "feature_id": task.feature_id,
+                                "title": task.title,
+                                "domain": task.domain,
+                                "complexity_tier": "tier_2",
+                                "target_files": task.target_files,
+                                "estimated_loc": task.estimated_loc,
+                                "depends_on": task.depends_on,
+                                "prompt_constraints_count": len(task.prompt_constraints),
+                                "validators": task.post_generation_validators,
+                            }
+                            if gr is not None:
+                                report["status"] = "generated" if gr.success else "generation_failed"
+                                report["cost"] = gr.cost_usd
+                                report["tokens"] = {
+                                    "input": gr.input_tokens,
+                                    "output": gr.output_tokens,
+                                }
+                                report["iterations"] = gr.iterations
+                                if gr.error:
+                                    report["error"] = gr.error
+                            else:
+                                report["status"] = "not_in_saved_results"
+                            task_reports.append(report)
+                            _log_task_boundary_complete(
+                                task.task_id,
+                                status=str(report["status"]),
+                                phase="implement",
+                                cost_usd=_coerce_optional_float(report.get("cost")),
+                            )
+
+                        output: dict[str, Any] = {
+                            "task_reports": task_reports,
+                            "tasks_processed": len(task_reports),
+                            "domain_breakdown": {d: len(ids) for d, ids in domain_tasks.items()},
+                            "total_estimated_loc": sum(t.estimated_loc for t in tasks),
+                            "total_cost": total_cost,
+                            "generation_results": {
+                                tid: {"success": r.success, "error": r.error, "cost": r.cost_usd}
+                                for tid, r in generation_results.items()
+                                if tid in current_task_ids
+                            },
+                            # Structural parity with fresh-run output
+                            "development_result_summary": "resumed from cache",
+                            "execution_order": [list(current_task_ids)],
+                        }
+                        resumed = True
             except (json.JSONDecodeError, KeyError, TypeError, OSError, ValueError, UnicodeDecodeError) as exc:
                 logger.warning(
                     "IMPLEMENT --resume: could not load cache: %s — re-running",
                     exc,
                 )
 
+        _retry_cached: dict[str, Any] | None = None
+        _generation_tasks = tasks
         if not resumed:
+            # AR-153 scoped retry: filter tasks to only regenerate failed ones
+            # when partial cache was loaded above.
+            _retry_cached = context.pop("_retry_cached_results", None)
+            if _retry_cached and _retry_failed_tasks:
+                _generation_tasks = [
+                    t for t in tasks if t.task_id in _retry_failed_tasks
+                ]
+                logger.info(
+                    "IMPLEMENT: AR-153 scoped retry — regenerating %d/%d tasks: %s",
+                    len(_generation_tasks),
+                    len(tasks),
+                    [t.task_id for t in _generation_tasks],
+                )
+
             # Item 12: scaffold test files for artifact generator tasks first
             if self.config.scaffold_test_first:
                 self._ensure_test_scaffolding_for_artifact_tasks(
-                    tasks, project_root
+                    _generation_tasks, project_root
                 )
 
             # Convert SeedTasks → DevelopmentChunks (with env pre-filter)
@@ -9294,7 +9449,7 @@ class Test{class_name}:
                     context["_phantom_element_warnings"] = _phantom_warnings
 
             chunks, skipped_reports = self._tasks_to_chunks(
-                tasks,
+                _generation_tasks,
                 max_retries=2,
                 design_results=design_results,
                 calibration_map=calibration_map,
@@ -9940,8 +10095,29 @@ class Test{class_name}:
         # The IMPLEMENT phase now writes to staging_dir; INTEGRATE merges
         # into project_root and commits if auto_commit is enabled.
 
+        # AR-153 scoped retry: merge cached passing-task results back in
+        # so INTEGRATE/TEST/REVIEW see the full set of generation results.
+        if _retry_cached:
+            _merged_count = 0
+            for _cached_tid, _cached_gr in _retry_cached.items():
+                if _cached_tid not in generation_results:
+                    generation_results[_cached_tid] = _cached_gr
+                    _merged_count += 1
+            if _merged_count:
+                logger.info(
+                    "IMPLEMENT: AR-153 merged %d cached passing-task "
+                    "result(s) into generation_results",
+                    _merged_count,
+                )
+
         context["implementation"] = output
         output["metadata"] = self._build_implementation_metadata(context)
+        # C-2 fix: normalize any dict entries to GenerationResult so downstream
+        # phases can safely access .cost_usd / .success without AttributeError.
+        generation_results = {
+            tid: _dict_to_gen_result(v) if isinstance(v, dict) else v
+            for tid, v in generation_results.items()
+        }
         context["generation_results"] = generation_results
         context["truncation_flags"] = truncation_flags
 
@@ -10564,6 +10740,30 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
         if staging_dir.exists() and not dry_run:
             _shutil.rmtree(staging_dir, ignore_errors=True)
 
+        # C-4: Guard against silent empty integration_results when
+        # generation_results has successful entries.  This catches the
+        # scenario where a cache load failure causes generation_results
+        # to be empty (or mismatched) — FINALIZE would otherwise see
+        # every task as "failed integration" without any warning.
+        _successful_gen = sum(
+            1 for gr in generation_results.values() if gr.success
+        )
+        if _successful_gen > 0 and not integration_results:
+            logger.warning(
+                "INTEGRATE: generation_results has %d successful "
+                "entry(ies) but integration_results is empty — "
+                "a fresh integration pass will be performed on retry. "
+                "Cached integration results could not be loaded.",
+                _successful_gen,
+            )
+        elif not generation_results and not integration_results:
+            logger.warning(
+                "INTEGRATE: generation_results is empty — "
+                "cached generation results could not be loaded; "
+                "a fresh integration pass will be required after "
+                "re-running IMPLEMENT.",
+            )
+
         # Log skipped files summary for visibility
         skipped_total = sum(
             len(r.get("skipped_files", [])) for r in integration_results.values()
@@ -10579,16 +10779,31 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 skipped_tasks,
             )
 
-        # Validate output structure before writing to context
+        # Validate output structure before writing to context.
+        # In "block" quality gate mode, validation failure is fatal.
         from startd8.contractors.context_schema import IntegratePhaseOutput
+        _validation_failed = False
         try:
             IntegratePhaseOutput.model_validate(
                 {"integration_results": integration_results}
             )
         except Exception as exc:
-            logger.warning(
-                "INTEGRATE output validation failed (continuing): %s", exc,
+            _gate_mode = context.get("quality_gate_summary", {}).get(
+                "policy_mode", "warn"
             )
+            if _gate_mode == "block":
+                raise RuntimeError(
+                    f"INTEGRATE output validation failed (block policy): {exc}"
+                ) from exc
+            _validation_failed = True
+            logger.warning(
+                "INTEGRATE output validation failed (continuing per %s "
+                "policy): %s", _gate_mode, exc,
+            )
+        if _validation_failed:
+            for ir_val in integration_results.values():
+                if isinstance(ir_val, dict):
+                    ir_val["_validation_failed"] = True
 
         # Write to context
         context["integration_results"] = integration_results
@@ -11110,12 +11325,12 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     context.get("design_results"),
                 )
                 if cached_output is not None:
+                    # C-3 fix: assign the validated result back so that any
+                    # Pydantic validator transforms (filled defaults, coerced
+                    # types) are preserved instead of discarded.
+                    validated = ValidationPhaseOutput(test_results=cached_output)
+                    cached_output = validated.test_results
                     context["test_results"] = cached_output
-                    # Construct-to-validate: build the Pydantic model to
-                    # verify the cached dict still passes schema checks
-                    # (e.g. required keys, per_task type).  Discarded
-                    # immediately — we only need the validation side-effect.
-                    ValidationPhaseOutput(test_results=cached_output)
                     duration = time.monotonic() - start
                     logger.info(
                         "TEST phase complete (resumed from cache): "
@@ -11300,9 +11515,18 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 }
             elif entry.get("status") == "skipped_no_generation":
                 per_task[task_id] = {
-                    "status": "skipped_no_generation",
+                    "status": "skipped",
                     "passed": None,
                     "validators_run": 0,
+                    "reason": "no_successful_generation",
+                }
+            elif entry.get("status") == "skipped_integration_failed":
+                per_task[task_id] = {
+                    "status": "skipped",
+                    "passed": None,
+                    "validators_run": 0,
+                    "reason": "integration_failed",
+                    "integration_status": entry.get("integration_status"),
                 }
             elif entry.get("status") == "error":
                 per_task[task_id] = {
@@ -11329,6 +11553,10 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     per_task[task_id]["truncation_confidence"] = tf.get("max_confidence", 0.0)
                     per_task[task_id]["truncation_source"] = tf.get("source", "unknown")
 
+        total_skipped = sum(
+            1 for v in per_task.values()
+            if v.get("status") == "skipped"
+        )
         output = {
             "test_plan": test_plan,
             "total_validators": sum(len(t.post_generation_validators) for t in tasks),
@@ -11336,6 +11564,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
             "tasks_with_tests": len([t for t in test_plan if t.get("validator_count", 0) > 0 or t.get("validators_run", 0) > 0]),
             "total_passed": total_passed,
             "total_failed": total_failed,
+            "total_skipped": total_skipped,
             "per_task": per_task,
         }
 
@@ -13126,12 +13355,14 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "verdict": item.get("verdict"),
                 }
 
-        review_prompt_summary = {
+        review_prompt_summary: dict[str, Any] = {
             "tasks_with_telemetry": 0,
             "prompt_chars_total": 0,
             "dropped_sections_total": 0,
             "truncation_count_total": 0,
         }
+        _truncated_section_names: set[str] = set()
+        _dropped_section_names: set[str] = set()
         for item in review_items:
             telemetry = item.get("prompt_telemetry")
             if not isinstance(telemetry, dict):
@@ -13145,6 +13376,21 @@ PASS if score >= {pass_threshold} and no blocking issues.
             )
             review_prompt_summary["truncation_count_total"] += int(
                 telemetry.get("truncation_count", 0) or 0
+            )
+            # Collect which sections were truncated/dropped across all tasks
+            _ts = telemetry.get("truncated_sections")
+            if isinstance(_ts, dict):
+                _truncated_section_names.update(_ts.keys())
+            _ds = telemetry.get("dropped_sections")
+            if isinstance(_ds, list):
+                _dropped_section_names.update(_ds)
+        if _truncated_section_names:
+            review_prompt_summary["truncated_section_names"] = sorted(
+                _truncated_section_names
+            )
+        if _dropped_section_names:
+            review_prompt_summary["dropped_section_names"] = sorted(
+                _dropped_section_names
             )
 
         output = {

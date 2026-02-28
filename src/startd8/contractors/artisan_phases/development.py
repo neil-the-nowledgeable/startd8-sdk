@@ -282,6 +282,18 @@ _INLINE_FALLBACK_TEMPLATES: Dict[str, str] = {
         "change in the existing code \u2014 they are NOT your output format. "
         "Follow the output format instructions in your system prompt.\n"
     ),
+    "skeleton_file_guidance": (
+        "## Pre-Existing Skeleton Files\n"
+        "The following target files ALREADY EXIST with correct function/class\n"
+        "signatures (created deterministically from the design contract):\n"
+        "{skeleton_file_list}\n\n"
+        "Rules:\n"
+        "- NEVER change function signatures, class definitions, or type hints\n"
+        "- NEVER remove existing imports, decorators, or docstrings\n"
+        "- Fill in function bodies with complete implementations\n"
+        "- Replace `raise NotImplementedError` with working code\n"
+        "- Add internal helper functions/variables as needed INSIDE function bodies\n"
+    ),
 }
 
 
@@ -4770,13 +4782,17 @@ class DevelopmentPhase:
             previous_chunk_queued_mono = now
 
         semaphore = asyncio.Semaphore(max_parallel)
+        state_lock = asyncio.Lock()
 
         async def _run_with_semaphore(cid: str) -> None:
             async with semaphore:
                 chunk = chunk_map[cid]
-                state = states[cid]
+                async with state_lock:
+                    state = states[cid]
                 chunk_context = copy.deepcopy(context)  # Per-chunk deep copy to avoid race conditions
-                states[cid] = await self._execute_chunk(chunk, state, chunk_context)
+                result = await self._execute_chunk(chunk, state, chunk_context)
+                async with state_lock:
+                    states[cid] = result
 
         await asyncio.gather(*[_run_with_semaphore(cid) for cid in eligible])
 
