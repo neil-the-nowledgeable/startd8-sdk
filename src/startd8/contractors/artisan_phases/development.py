@@ -4839,7 +4839,7 @@ class DevelopmentPhase:
                 "%d of %d chunks have results in state dict. "
                 "Partial state will be returned for persistence.",
                 type(gather_exc).__name__,
-                sum(1 for s in states.values() if s.status.value in ("PASSED", "FAILED")),
+                sum(1 for s in states.values() if s.status in (ChunkStatus.PASSED, ChunkStatus.FAILED)),
                 len(eligible),
             )
             raise

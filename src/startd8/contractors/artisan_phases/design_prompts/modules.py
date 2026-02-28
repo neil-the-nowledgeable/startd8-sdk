@@ -176,12 +176,15 @@ class EnrichmentModule:
         conventions = data.get("semantic_conventions", {})
         if conventions:
             parts.append("**Semantic Conventions (naming rules):**")
-            for key, value in list(conventions.items())[:10]:
+            conv_items = list(conventions.items())
+            for key, value in conv_items[:10]:
                 if isinstance(value, dict):
                     rule = value.get("rule", value.get("convention", str(value)))
                     parts.append(f"- {key}: {rule}")
                 else:
                     parts.append(f"- {key}: {value}")
+            if len(conv_items) > 10:
+                parts.append(f"- ... and {len(conv_items) - 10} more conventions (truncated)")
 
         if not parts:
             return PromptFragment(
@@ -219,10 +222,13 @@ class PriorArtModule:
         if dep_designs:
             has_content = True
             lines.append("**Depends on:**")
-            for dep_id, summary in list(dep_designs.items())[:3]:
+            dep_items = list(dep_designs.items())
+            for dep_id, summary in dep_items[:3]:
                 # Truncate summaries to first line
                 first_line = summary.split("\n", 1)[0][:200]
                 lines.append(f"- {dep_id}: {first_line}")
+            if len(dep_items) > 3:
+                lines.append(f"- ... and {len(dep_items) - 3} more dependencies (truncated)")
 
         # Existing files with staleness
         existing = data.get("existing_files", [])
@@ -390,6 +396,8 @@ class GuidanceModule:
         goals = data.get("plan_goals", [])
         if goals:
             goal_list = ", ".join(goals[:3])
+            if len(goals) > 3:
+                goal_list += f" ... and {len(goals) - 3} more (truncated)"
             parts.append(f"**Project goals:** {goal_list}")
 
         suggestions = data.get("refine_suggestions")

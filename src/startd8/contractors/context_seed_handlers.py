@@ -10260,7 +10260,7 @@ class Test{class_name}:
         prior_summaries = context.get("_prior_impl_summaries", [])
         for task_id, gen_result in generation_results.items():
             if hasattr(gen_result, "success") and gen_result.success:
-                files = list((gen_result.files or {}).keys())[:5] if hasattr(gen_result, "files") and gen_result.files else []
+                files = [str(p) for p in (gen_result.generated_files or [])[:5]] if hasattr(gen_result, "generated_files") and gen_result.generated_files else []
                 prior_summaries.append({"task_id": task_id, "files": files})
         context["_prior_impl_summaries"] = prior_summaries[-3:]
         # Propagate downstream_map to REVIEW phase so it can distinguish
