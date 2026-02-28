@@ -185,109 +185,12 @@ class TestImplementWalkthrough:
 
 # ---------------------------------------------------------------------------
 # DESIGN walkthrough
+# NOTE: DesignDocumentationPhase walkthrough tests removed (REQ-DSR-001).
 # ---------------------------------------------------------------------------
 
 
-class TestDesignWalkthrough:
-    """Test DesignDocumentationPhase walkthrough prompt persistence."""
-
-    @pytest.mark.asyncio
-    async def test_generate_design_walkthrough_persists_prompts(self, tmp_path):
-        """_generate_design writes prompts and returns synthetic DesignDocument."""
-        from startd8.contractors.artisan_phases.design_documentation import (
-            DesignDocumentationPhase,
-            FeatureContext,
-        )
-
-        cap_dir = tmp_path / "walkthrough" / "design" / "T-1"
-
-        # Create a mock LLM backend that should NOT be called
-        mock_llm = MagicMock()
-        mock_llm.generate = AsyncMock()
-        mock_llm.total_input_tokens = 0
-        mock_llm.total_output_tokens = 0
-        mock_llm.total_cost_usd = 0.0
-
-        phase = DesignDocumentationPhase(
-            llm=mock_llm,
-            max_iterations=1,
-            prompt_capture_dir=cap_dir,
-        )
-
-        feature_ctx = FeatureContext(
-            feature_name="Test Feature",
-            description="A test feature for walkthrough",
-            target_file="src/test_feature.py",
-        )
-
-        result = await phase._generate_design(feature_ctx, iteration=1)
-
-        # LLM should NOT have been called
-        mock_llm.generate.assert_not_called()
-
-        # Verify synthetic result
-        assert result.raw_text == "[walkthrough placeholder]"
-        assert result.feature_name == "Test Feature"
-        assert result.iteration == 1
-
-        # Verify prompt files
-        assert cap_dir.exists()
-        assert (cap_dir / "generate_system_prompt.md").exists()
-        assert (cap_dir / "generate_user_prompt.md").exists()
-
-        sys_prompt = (cap_dir / "generate_system_prompt.md").read_text()
-        assert len(sys_prompt) > 0
-
-        user_prompt = (cap_dir / "generate_user_prompt.md").read_text()
-        assert "Test Feature" in user_prompt
-
-    @pytest.mark.asyncio
-    async def test_review_design_walkthrough_persists_prompts(self, tmp_path):
-        """_review_design writes review/arbiter prompts and returns synthetic verdict."""
-        from startd8.contractors.artisan_phases.design_documentation import (
-            DesignDocument,
-            DesignDocumentationPhase,
-            ReviewRole,
-        )
-        from datetime import datetime, timezone
-
-        cap_dir = tmp_path / "walkthrough" / "design" / "T-1"
-
-        mock_llm = MagicMock()
-        mock_llm.generate = AsyncMock()
-        mock_llm.total_input_tokens = 0
-        mock_llm.total_output_tokens = 0
-        mock_llm.total_cost_usd = 0.0
-
-        phase = DesignDocumentationPhase(
-            llm=mock_llm,
-            max_iterations=1,
-            prompt_capture_dir=cap_dir,
-        )
-
-        design = DesignDocument(
-            raw_text="# Design Doc\nSome content",
-            feature_name="Test Feature",
-            iteration=1,
-            sections={},
-            generated_at=datetime.now(timezone.utc),
-        )
-
-        # Test reviewer
-        verdict = await phase._review_design(design, ReviewRole.REVIEWER)
-        mock_llm.generate.assert_not_called()
-        assert verdict.approved is True
-        assert verdict.confidence == 1.0
-        assert verdict.summary == "[walkthrough placeholder]"
-        assert (cap_dir / "review_system_prompt.md").exists()
-        assert (cap_dir / "review_user_prompt.md").exists()
-
-        # Test arbiter
-        verdict2 = await phase._review_design(design, ReviewRole.ARBITER)
-        mock_llm.generate.assert_not_called()
-        assert verdict2.approved is True
-        assert (cap_dir / "arbiter_system_prompt.md").exists()
-        assert (cap_dir / "arbiter_user_prompt.md").exists()
+class TestDevelopmentWalkthrough:
+    """Test walkthrough prompt persistence for development/implement phase."""
 
     def test_walkthrough_output_directory_structure(self, tmp_path):
         """Verify the expected directory structure for walkthrough output."""

@@ -69,19 +69,13 @@ from startd8.contractors.artisan_phases.test_construction import (
     LLMTestGenerator,
 )
 
-# Re-export design documentation phase
+# Re-export design documentation types (dual-review removed in REQ-DSR-001)
 from startd8.contractors.artisan_phases.design_documentation import (
-    DesignDocumentationPhase,
     AgentLLMBackend,
-    AutoResolutionCallback,
     LLMBackend,
-    ResolutionCallback,
-    FeatureContext,
     DesignDocument,
-    DesignDocumentResult,
-    DesignDocumentationError,
-    parse_design_document,
-    parse_review_verdict,
+    DesignSectionV2,
+    V2_DESIGN_SECTIONS,
 )
 
 __all__ = [
@@ -117,18 +111,12 @@ __all__ = [
     "PostValidationIssue",
     "PostValidationResult",
     "validate_generated_code",
-    # Design Documentation
-    "DesignDocumentationPhase",
+    # Design Documentation (dual-review removed in REQ-DSR-001)
     "AgentLLMBackend",
-    "AutoResolutionCallback",
     "LLMBackend",
-    "ResolutionCallback",
-    "FeatureContext",
     "DesignDocument",
-    "DesignDocumentResult",
-    "DesignDocumentationError",
-    "parse_design_document",
-    "parse_review_verdict",
+    "DesignSectionV2",
+    "V2_DESIGN_SECTIONS",
     # Test Construction
     "TestConstructionPhase",
     "LLMTestGenerator",

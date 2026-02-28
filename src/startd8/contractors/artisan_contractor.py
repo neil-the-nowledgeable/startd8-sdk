@@ -170,7 +170,6 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "project_manifests",
     # M-2: DESIGN enrichment keys lost on resume without these:
     "design_quality", "design_enrichment",
-    "reviewer_confidence", "arbiter_confidence",
     "design_iteration_count",
     # Multi-feature aggregation: accumulated per-feature results for FINALIZE
     "completed_features", "feature_partial_results",
@@ -184,7 +183,8 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
 # ---------------------------------------------------------------------------
 _CONTRACT_QUALITY_THRESHOLDS: dict[str, list[tuple[str, float, str, str]]] = {
     "design": [
-        ("agreement_rate", 0.70, "gte", "DESIGN agreement rate below 0.70 indicates review-convergence instability"),
+        # Post-dual-review-removal: measures design generation success, not reviewer agreement
+        ("agreement_rate", 0.70, "gte", "DESIGN generation success rate below 0.70"),
     ],
     "implement": [
         ("line_count", 10, "gte", "Generation results should have meaningful content (>= 10 lines)"),

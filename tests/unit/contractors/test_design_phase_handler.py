@@ -1,13 +1,16 @@
-"""Unit tests for DesignPhaseHandler and DESIGN WorkflowPhase integration."""
+"""Unit tests for DesignPhaseHandler and DESIGN WorkflowPhase integration.
+
+Post-REQ-DSR-001: dual-review removed, V2 is the sole path.
+Tests now mock ``_run_v2_generate`` (single LLM call) instead of the removed
+``_run_design_async`` / ``_run_v2_reviews_async`` methods.
+"""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -24,15 +27,26 @@ from startd8.contractors.context_seed_handlers import (
     HandlerConfig,
     SeedTask,
 )
-from startd8.contractors.artisan_phases.design_documentation import (
-    ReviewRole,
-    ReviewVerdict,
-)
 
 
 # ============================================================================
 # Fixtures
 # ============================================================================
+
+# V2 design document with all required section headers.
+_V2_DESIGN_TEXT = (
+    "## What to Build\nImplement feature\n\n"
+    "## Files\nsrc/feature.py\n\n"
+    "## API Surface\ndef do_thing() -> bool\n\n"
+    "## Constraints\nUse type hints\n"
+)
+
+# V2 design document missing the Constraints section.
+_V2_DESIGN_MISSING_SECTION = (
+    "## What to Build\nImplement feature\n\n"
+    "## Files\nsrc/feature.py\n\n"
+    "## API Surface\ndef do_thing() -> bool\n"
+)
 
 
 def _seed_task(
@@ -66,70 +80,6 @@ def _seed_task(
         design_doc_sections=[],
         artifact_types_addressed=[],
         file_scope={},
-    )
-
-
-@dataclass
-class _FakeDesignDocument:
-    """Minimal stand-in for DesignDocument."""
-    feature_name: str
-    raw_text: str
-    sections: dict = None
-    generated_at: datetime = None
-    iteration: int = 1
-
-    def __post_init__(self):
-        if self.sections is None:
-            self.sections = {}
-        if self.generated_at is None:
-            self.generated_at = datetime.now(timezone.utc)
-
-
-@dataclass
-class _FakeDesignResult:
-    """Minimal stand-in for DesignDocumentResult."""
-    design_document: _FakeDesignDocument
-    reviewer_verdict: Any = None
-    arbiter_verdict: Any = None
-    escalation_report: Any = None
-    resolution_decision: Any = None
-    agreed: bool = True
-    iterations: int = 1
-    completed_at: datetime = None
-
-    def __post_init__(self):
-        if self.completed_at is None:
-            self.completed_at = datetime.now(timezone.utc)
-
-
-def _make_fake_result(feature_name: str = "Feature T1", agreed: bool = True) -> _FakeDesignResult:
-    reviewer = ReviewVerdict(
-        role=ReviewRole.REVIEWER,
-        approved=agreed,
-        confidence=0.95 if agreed else 0.6,
-        concerns=[] if agreed else ["needs stronger edge-case handling"],
-        suggestions=["Add explicit failure-mode coverage"] if not agreed else [],
-        summary="approved" if agreed else "rejected",
-        reviewed_at=datetime.now(timezone.utc),
-    )
-    arbiter = ReviewVerdict(
-        role=ReviewRole.ARBITER,
-        approved=agreed,
-        confidence=0.95 if agreed else 0.6,
-        concerns=[] if agreed else ["critical parameter not explicit"],
-        suggestions=["Document required parameters verbatim"] if not agreed else [],
-        summary="approved" if agreed else "rejected",
-        reviewed_at=datetime.now(timezone.utc),
-    )
-    return _FakeDesignResult(
-        design_document=_FakeDesignDocument(
-            feature_name=feature_name,
-            raw_text="## Overview\nDesign for feature\n## Architecture\nClean arch",
-        ),
-        reviewer_verdict=reviewer,
-        arbiter_verdict=arbiter,
-        agreed=agreed,
-        iterations=2,
     )
 
 
@@ -204,106 +154,57 @@ class TestDesignPhaseHandlerDryRun:
 
 
 # ============================================================================
-# SeedTask → FeatureContext mapping tests
-# ============================================================================
-
-
-class TestTaskToFeatureContext:
-    """Tests for the SeedTask → FeatureContext conversion."""
-
-    def test_maps_all_fields(self):
-        task = _seed_task("T1")
-        fc = DesignPhaseHandler._task_to_feature_context(task)
-
-        assert fc.feature_name == "Feature T1"
-        assert fc.description == "Implement feature T1"
-        assert fc.target_file == "src/feature.py"
-        assert fc.constraints == ["Use type hints", "Add docstrings"]
-        assert fc.additional_context["domain"] == "backend"
-        assert fc.additional_context["feature_id"] == "F-T1"
-
-    def test_empty_target_files_maps_to_empty_string(self):
-        task = _seed_task("T1", target_files=[])
-        fc = DesignPhaseHandler._task_to_feature_context(task)
-        assert fc.target_file == ""
-
-    def test_unknown_domain_excluded_from_context(self):
-        task = _seed_task("T1")
-        task.domain = "unknown"
-        fc = DesignPhaseHandler._task_to_feature_context(task)
-        assert "domain" not in fc.additional_context
-
-    def test_siblings_included_in_context(self):
-        task = _seed_task("T1")
-        fc = DesignPhaseHandler._task_to_feature_context(task)
-        assert "siblings" in fc.additional_context
-        assert "sibling1" in fc.additional_context["siblings"]
-
-    def test_multiple_target_files_uses_all(self):
-        task = _seed_task("T1", target_files=["scripts/fetch.py", "data/output.csv"])
-        fc = DesignPhaseHandler._task_to_feature_context(task)
-        assert fc.target_file == "scripts/fetch.py, data/output.csv"
-
-
-# ============================================================================
-# DesignPhaseHandler real-mode tests (with mocked async)
+# DesignPhaseHandler real-mode tests (REQ-DSR-001: V2 single-pass)
 # ============================================================================
 
 
 class TestDesignPhaseHandlerRealMode:
-    """Tests for DesignPhaseHandler in real mode (mocked LLM)."""
+    """Tests for DesignPhaseHandler in real mode (mocked LLM).
 
-    def test_real_mode_processes_tasks(self):
+    After REQ-DSR-001, the DESIGN phase uses a single ``_run_v2_generate()``
+    call.  ``agreed`` is always ``True``; quality is gated by parameter
+    completeness and structure validation only.
+    """
+
+    def test_single_pass_design_no_review(self):
+        """Generate doc, assert agreed=True, design_gate_passed=True, no verdict fields."""
         handler = DesignPhaseHandler(handler_config=HandlerConfig())
         context = {"tasks": [_seed_task("T1")]}
+        mock_backend = MagicMock(total_cost_usd=0.05)
 
-        fake_result = _make_fake_result()
-
-        # Mock the async bridge and LLM backend
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
         ), patch.object(
-            DesignPhaseHandler, "_get_llm_backend"
-        ) as mock_backend:
-            mock_backend.return_value = MagicMock(total_cost_usd=0.05)
-            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        assert context["design_results"]["T1"]["status"] == "designed"
-        assert context["design_results"]["T1"]["agreed"] is True
-        assert result["output"]["tasks_designed"] == 1
-        assert result["output"]["tasks_agreed"] == 1
-
-    def test_real_mode_tracks_cost_delta(self):
-        handler = DesignPhaseHandler(handler_config=HandlerConfig())
-        context = {"tasks": [_seed_task("T1")]}
-
-        fake_result = _make_fake_result()
-        mock_backend = MagicMock()
-        # Simulate cost: 0.0 before, 0.03 after
-        mock_backend.total_cost_usd = 0.0
-
-        def bump_cost(*args, **kwargs):
-            mock_backend.total_cost_usd = 0.03
-            return fake_result
-
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", side_effect=bump_cost
+            DesignPhaseHandler, "_run_v2_generate", return_value=_V2_DESIGN_TEXT
         ), patch.object(
             DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
         ):
             result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
 
-        assert context["design_results"]["T1"]["cost"] == pytest.approx(0.03)
-        assert result["cost"] == pytest.approx(0.03)
+        entry = context["design_results"]["T1"]
+        assert entry["status"] == "designed"
+        assert entry["agreed"] is True
+        assert entry.get("design_gate_passed") is True
+        assert entry["prompt_version"] == "v2"
+        # No verdict fields after dual-review removal
+        assert "reviewer_verdict" not in entry
+        assert "arbiter_verdict" not in entry
+        assert "review_gate" not in entry
+        assert result["output"]["tasks_designed"] == 1
+        assert result["output"]["tasks_agreed"] == 1
 
-    def test_real_mode_handles_design_failure(self):
+    def test_design_failure_on_llm_exception(self):
+        """LLM raises, assert status=design_failed."""
         handler = DesignPhaseHandler(handler_config=HandlerConfig())
         context = {"tasks": [_seed_task("T1")]}
-
         mock_backend = MagicMock(total_cost_usd=0.0)
 
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async",
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate",
             side_effect=RuntimeError("LLM timeout"),
         ), patch.object(
             DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
@@ -314,18 +215,42 @@ class TestDesignPhaseHandlerRealMode:
         assert "LLM timeout" in context["design_results"]["T1"]["error"]
         assert result["output"]["tasks_failed"] == 1
 
+    def test_real_mode_tracks_cost_delta(self):
+        handler = DesignPhaseHandler(handler_config=HandlerConfig())
+        context = {"tasks": [_seed_task("T1")]}
+        mock_backend = MagicMock()
+        mock_backend.total_cost_usd = 0.0
+
+        def bump_cost(*args, **kwargs):
+            mock_backend.total_cost_usd = 0.03
+            return _V2_DESIGN_TEXT
+
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", side_effect=bump_cost
+        ), patch.object(
+            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
+        ):
+            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+
+        assert context["design_results"]["T1"]["cost"] == pytest.approx(0.03)
+        assert result["cost"] == pytest.approx(0.03)
+
     def test_real_mode_writes_output_files(self, tmp_path: Path):
         handler = DesignPhaseHandler(
             handler_config=HandlerConfig(),
             output_dir=str(tmp_path),
         )
         context = {"tasks": [_seed_task("T1")]}
-
-        fake_result = _make_fake_result()
         mock_backend = MagicMock(total_cost_usd=0.0)
 
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value=_V2_DESIGN_TEXT
         ), patch.object(
             DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
         ):
@@ -333,7 +258,7 @@ class TestDesignPhaseHandlerRealMode:
 
         design_file = tmp_path / "T1-design.md"
         assert design_file.exists()
-        assert "## Overview" in design_file.read_text()
+        assert "## What to Build" in design_file.read_text()
         assert context["design_results"]["T1"]["output_file"] == str(design_file)
 
     def test_real_mode_env_blocked_skipped(self):
@@ -349,63 +274,45 @@ class TestDesignPhaseHandlerRealMode:
         handler = DesignPhaseHandler(handler_config=HandlerConfig())
         context = {"tasks": [_seed_task("T1"), _seed_task("T2")]}
         mock_backend = MagicMock(total_cost_usd=0.0)
-        fake_ok = _make_fake_result(feature_name="Feature T1", agreed=True)
-        fake_bad = _make_fake_result(feature_name="Feature T2", agreed=False)
 
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", side_effect=[fake_ok, fake_bad]
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value=_V2_DESIGN_TEXT
         ), patch.object(
             DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
         ):
             result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
 
         out = result["output"]
-        assert out["total_passed"] == 1
-        assert out["total_failed"] == 1
-        assert out["agreement_rate"] == pytest.approx(0.5)
-        assert out["per_task"]["T1"]["passed"] is True
-        assert out["per_task"]["T2"]["passed"] is False
+        # Both tasks should pass (agreed=True always, completeness passes trivially)
+        assert out["total_passed"] == 2
+        assert out["total_failed"] == 0
+        assert out["agreement_rate"] == pytest.approx(1.0)
 
-    def test_ar129_review_threshold_failure_marks_design_failed(self):
-        handler = DesignPhaseHandler(handler_config=HandlerConfig(pass_threshold=90))
+    def test_completeness_pass(self):
+        """Parameter completeness passes, design_gate_passed=True."""
+        handler = DesignPhaseHandler(handler_config=HandlerConfig())
         context = {"tasks": [_seed_task("T1")]}
         mock_backend = MagicMock(total_cost_usd=0.0)
-        fake_result = _make_fake_result()
-        fake_result.reviewer_verdict = ReviewVerdict(
-            role=ReviewRole.REVIEWER,
-            approved=True,
-            confidence=0.62,
-            concerns=["missing risk handling"],
-            suggestions=["add failure-path detail"],
-            summary="weak approval",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-        fake_result.arbiter_verdict = ReviewVerdict(
-            role=ReviewRole.ARBITER,
-            approved=True,
-            confidence=0.61,
-            concerns=["too shallow"],
-            suggestions=["expand implementation specifics"],
-            summary="weak approval",
-            reviewed_at=datetime.now(timezone.utc),
-        )
 
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value=_V2_DESIGN_TEXT
         ), patch.object(
             DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
         ):
-            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
+            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
 
         entry = context["design_results"]["T1"]
-        assert entry["status"] == "design_failed"
-        assert entry["review_gate"]["score"] == 61
-        assert entry["review_gate"]["threshold"] == 90
-        assert entry["review_gate"]["passed"] is False
-        assert entry["non_agreement_reason_code"] == "REVIEW_THRESHOLD_NOT_MET"
-        assert result["output"]["total_failed"] == 1
+        assert entry.get("design_gate_passed") is True
+        assert entry["status"] == "designed"
 
-    def test_ar139_parameter_completeness_warn_mode_marks_degraded_not_blocked(self):
+    def test_completeness_fail_warn_mode(self):
+        """Completeness fails in warn mode, continues with design_gate_passed=False."""
         handler = DesignPhaseHandler(handler_config=HandlerConfig())
         task = _seed_task("T1")
         task.artifact_types_addressed = ["dashboard"]
@@ -417,10 +324,12 @@ class TestDesignPhaseHandlerRealMode:
             "quality_gate_summary": {"policy_mode": "warn"},
         }
         mock_backend = MagicMock(total_cost_usd=0.0)
-        fake_result = _make_fake_result()
 
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value=_V2_DESIGN_TEXT
         ), patch.object(
             DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
         ):
@@ -434,7 +343,8 @@ class TestDesignPhaseHandlerRealMode:
         assert entry["quality_failure_reason"] == "PARAMETER_COMPLETENESS_DEGRADED"
         assert result["output"]["total_failed"] == 1
 
-    def test_ar139_parameter_completeness_block_mode_marks_design_failed(self):
+    def test_completeness_fail_block_mode(self):
+        """Completeness fails in block mode, design_failed=True."""
         handler = DesignPhaseHandler(handler_config=HandlerConfig())
         task = _seed_task("T1")
         task.artifact_types_addressed = ["dashboard"]
@@ -446,10 +356,12 @@ class TestDesignPhaseHandlerRealMode:
             "quality_gate_summary": {"policy_mode": "block"},
         }
         mock_backend = MagicMock(total_cost_usd=0.0)
-        fake_result = _make_fake_result()
 
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
+        with patch(
+            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
+            return_value=("sys", "user", 1024),
+        ), patch.object(
+            DesignPhaseHandler, "_run_v2_generate", return_value=_V2_DESIGN_TEXT
         ), patch.object(
             DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
         ):
@@ -459,349 +371,17 @@ class TestDesignPhaseHandlerRealMode:
         assert entry["status"] == "design_failed"
         assert entry["parameter_completeness"]["passed"] is False
         assert entry["completeness_gate_decision"] == "blocked"
-        assert entry["non_agreement_reason_code"] == "PARAMETER_COMPLETENESS_FAILED"
         assert result["output"]["total_failed"] == 1
 
-    def test_default_path_uses_v1_not_modular_v2(self):
-        handler = DesignPhaseHandler(handler_config=HandlerConfig())
-        context = {"tasks": [_seed_task("T1")]}
-        fake_result = _make_fake_result()
-        mock_backend = MagicMock(total_cost_usd=0.0)
+    def test_v2_structure_validation(self):
+        """Missing sections detected via _validate_v2_structure."""
+        result = DesignPhaseHandler._validate_v2_structure(_V2_DESIGN_MISSING_SECTION)
+        assert result["passed"] is False
+        assert "## Constraints" in result["missing_sections"]
 
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
-        ) as mock_v1, patch.object(
-            DesignPhaseHandler, "_run_v2_generate", return_value="## v2"
-        ) as mock_v2, patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        assert mock_v1.called
-        assert not mock_v2.called
-        assert context["design_results"]["T1"]["prompt_version"] == "v1"
-
-    def test_modular_path_requires_explicit_opt_in(self):
-        handler = DesignPhaseHandler(
-            handler_config=HandlerConfig(use_modular_prompts=True)
-        )
-        context = {"tasks": [_seed_task("T1")]}
-        mock_backend = MagicMock(total_cost_usd=0.0)
-
-        reviewer = ReviewVerdict(
-            role=ReviewRole.REVIEWER,
-            approved=True,
-            confidence=0.9,
-            concerns=[],
-            suggestions=[],
-            summary="ok",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-        arbiter = ReviewVerdict(
-            role=ReviewRole.ARBITER,
-            approved=True,
-            confidence=0.9,
-            concerns=[],
-            suggestions=[],
-            summary="ok",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-
-        with patch(
-            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
-            return_value=("sys", "user", 1024),
-        ), patch.object(
-            DesignPhaseHandler, "_run_v2_generate", return_value="## Overview\nv2"
-        ) as mock_v2, patch.object(
-            DesignPhaseHandler,
-            "_run_v2_reviews_async",
-            return_value=(reviewer, arbiter, []),
-        ), patch.object(
-            DesignPhaseHandler, "_get_design_phase", return_value=MagicMock()
-        ), patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        assert mock_v2.called
-        assert context["design_results"]["T1"]["prompt_version"] == "v2"
-
-    def test_variant_path_cannot_auto_agree_without_review_envelope(self):
-        handler = DesignPhaseHandler(
-            handler_config=HandlerConfig(use_modular_prompts=True)
-        )
-        context = {"tasks": [_seed_task("T1")]}
-        mock_backend = MagicMock(total_cost_usd=0.0)
-
-        reviewer = ReviewVerdict(
-            role=ReviewRole.REVIEWER,
-            approved=False,
-            confidence=0.8,
-            concerns=["missing"],
-            suggestions=[],
-            summary="reject",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-        arbiter = ReviewVerdict(
-            role=ReviewRole.ARBITER,
-            approved=False,
-            confidence=0.85,
-            concerns=["missing"],
-            suggestions=[],
-            summary="reject",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-
-        with patch(
-            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
-            return_value=("sys", "user", 1024),
-        ), patch.object(
-            DesignPhaseHandler, "_run_v2_generate", return_value="## Overview\nv2"
-        ), patch.object(
-            DesignPhaseHandler,
-            "_run_v2_reviews_async",
-            return_value=(reviewer, arbiter, []),
-        ), patch.object(
-            DesignPhaseHandler, "_get_design_phase", return_value=MagicMock()
-        ), patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        assert context["design_results"]["T1"]["agreed"] is False
-        assert (
-            context["design_results"]["T1"]["non_agreement_reason_code"]
-            == "DUAL_REJECTION"
-        )
-
-    def test_variant_path_review_failure_propagates_status(self):
-        handler = DesignPhaseHandler(
-            handler_config=HandlerConfig(use_modular_prompts=True)
-        )
-        context = {"tasks": [_seed_task("T1")]}
-        mock_backend = MagicMock(total_cost_usd=0.0)
-
-        reviewer = ReviewVerdict(
-            role=ReviewRole.REVIEWER,
-            approved=False,
-            confidence=0.9,
-            concerns=["x"],
-            suggestions=[],
-            summary="reject",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-        arbiter = ReviewVerdict(
-            role=ReviewRole.ARBITER,
-            approved=True,
-            confidence=0.9,
-            concerns=["y"],
-            suggestions=[],
-            summary="approve",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-        disagreements = [{"type": "approval_conflict"}]
-
-        with patch(
-            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
-            return_value=("sys", "user", 1024),
-        ), patch.object(
-            DesignPhaseHandler, "_run_v2_generate", return_value="## Overview\nv2"
-        ), patch.object(
-            DesignPhaseHandler,
-            "_run_v2_reviews_async",
-            return_value=(reviewer, arbiter, disagreements),
-        ), patch.object(
-            DesignPhaseHandler, "_get_design_phase", return_value=MagicMock()
-        ), patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        assert context["design_results"]["T1"]["agreed"] is False
-        assert (
-            context["design_results"]["T1"]["non_agreement_reason_code"]
-            == "DISAGREEMENT_UNRESOLVED"
-        )
-        assert result["output"]["tasks_agreed"] == 0
-
-    def test_route_policy_forces_canonical_on_high_risk_task(self):
-        handler = DesignPhaseHandler(
-            handler_config=HandlerConfig(use_modular_prompts=True)
-        )
-        risky = _seed_task("T1")
-        risky.estimated_loc = 700
-        risky.depends_on = ["T0", "T00"]
-        context = {"tasks": [risky]}
-        fake_result = _make_fake_result()
-        mock_backend = MagicMock(total_cost_usd=0.0)
-
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
-        ) as mock_v1, patch.object(
-            DesignPhaseHandler, "_run_v2_generate", return_value="## v2"
-        ) as mock_v2, patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        assert mock_v1.called
-        assert not mock_v2.called
-        route = context["design_results"]["T1"]["route_policy"]
-        assert route["selected_prompt_version"] == "v1"
-        assert route["reason"] == "policy_high_risk_canonical"
-
-    def test_route_policy_kill_switch_forces_canonical(self):
-        handler = DesignPhaseHandler(
-            handler_config=HandlerConfig(use_modular_prompts=True)
-        )
-        context = {
-            "tasks": [_seed_task("T1")],
-            "force_canonical_design_route": True,
-        }
-        fake_result = _make_fake_result()
-        mock_backend = MagicMock(total_cost_usd=0.0)
-
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
-        ) as mock_v1, patch.object(
-            DesignPhaseHandler, "_run_v2_generate", return_value="## v2"
-        ) as mock_v2, patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        assert mock_v1.called
-        assert not mock_v2.called
-        route = context["design_results"]["T1"]["route_policy"]
-        assert route["reason"] == "kill_switch_force_canonical"
-
-    def test_output_reports_path_quality_comparison(self):
-        handler = DesignPhaseHandler(
-            handler_config=HandlerConfig(use_modular_prompts=True)
-        )
-        canonical_task = _seed_task("T1")
-        canonical_task.estimated_loc = 700  # forces canonical (v1)
-        variant_task = _seed_task("T2")
-        context = {"tasks": [canonical_task, variant_task]}
-        fake_result = _make_fake_result(feature_name="Feature T1", agreed=True)
-        mock_backend = MagicMock(total_cost_usd=0.0)
-
-        reviewer = ReviewVerdict(
-            role=ReviewRole.REVIEWER,
-            approved=False,
-            confidence=0.9,
-            concerns=["x"],
-            suggestions=[],
-            summary="reject",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-        arbiter = ReviewVerdict(
-            role=ReviewRole.ARBITER,
-            approved=True,
-            confidence=0.9,
-            concerns=["y"],
-            suggestions=[],
-            summary="approve",
-            reviewed_at=datetime.now(timezone.utc),
-        )
-
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
-        ), patch(
-            "startd8.contractors.artisan_phases.design_prompts.assemble_design_prompt",
-            return_value=("sys", "user", 1024),
-        ), patch.object(
-            DesignPhaseHandler, "_run_v2_generate", return_value="## Overview\nv2"
-        ), patch.object(
-            DesignPhaseHandler,
-            "_run_v2_reviews_async",
-            return_value=(reviewer, arbiter, [{"type": "approval_conflict"}]),
-        ), patch.object(
-            DesignPhaseHandler, "_get_design_phase", return_value=MagicMock()
-        ), patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            result = handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        out = result["output"]
-        assert context["design_results"]["T1"]["path_tag"] == "canonical"
-        assert context["design_results"]["T2"]["path_tag"] == "variant"
-        assert out["path_quality"]["canonical"]["passed"] == 1
-        assert out["path_quality"]["variant"]["failed"] == 1
-        assert out["path_comparison"]["canonical"]["agreement_rate"] == pytest.approx(1.0)
-        assert out["path_comparison"]["variant"]["agreement_rate"] == pytest.approx(0.0)
-        assert out["per_task"]["T1"]["quality_outcome"] == "pass"
-        assert out["per_task"]["T2"]["quality_outcome"] == "fail"
-
-    def test_design_generation_marks_degraded_when_high_signal_floor_missing(self):
-        handler = DesignPhaseHandler(handler_config=HandlerConfig())
-        context = {"tasks": [_seed_task("T1")]}
-        fake_result = _make_fake_result()
-        mock_backend = MagicMock(total_cost_usd=0.0)
-
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
-        ), patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        entry = context["design_results"]["T1"]
-        assert entry["high_signal_floor_status"] == "degraded"
-        assert "requirements_text" in entry["high_signal_floor_missing"]
-
-    def test_design_generation_marks_ok_when_high_signal_floor_present(self):
-        handler = DesignPhaseHandler(handler_config=HandlerConfig())
-        task = _seed_task("T1")
-        task.requirements_text = "REQ: must preserve endpoint contract."
-        context = {
-            "tasks": [task],
-            "plan_goals": ["Preserve existing API behavior"],
-        }
-        fake_result = _make_fake_result()
-        mock_backend = MagicMock(total_cost_usd=0.0)
-
-        with patch.object(
-            DesignPhaseHandler, "_run_design_async", return_value=fake_result
-        ), patch.object(
-            DesignPhaseHandler, "_get_llm_backend", return_value=mock_backend
-        ):
-            handler.execute(WorkflowPhase.DESIGN, context, dry_run=False)
-
-        entry = context["design_results"]["T1"]
-        assert entry["high_signal_floor_status"] == "ok"
-        assert "high_signal_floor_missing" not in entry
-
-
-# ============================================================================
-# Serialization tests
-# ============================================================================
-
-
-class TestSerializeResult:
-    """Tests for DesignPhaseHandler._serialize_result."""
-
-    def test_serializes_all_fields(self):
-        fake_result = _make_fake_result(agreed=False)
-        fake_result.non_agreement_reason_code = "DISAGREEMENT_UNRESOLVED"
-        fake_result.final_iteration = 3
-        fake_result.resolution_audit = {"resolution_action_counts": {"merge": 1}}
-        fake_result.prompt_telemetry = {"total_calls": 2}
-        fake_result.disagreement_telemetry = {"disagreement_count": 1}
-        serialized = DesignPhaseHandler._serialize_result(fake_result)
-
-        assert serialized["agreed"] is False
-        assert serialized["iterations"] == 2
-        assert serialized["feature_name"] == "Feature T1"
-        assert "## Overview" in serialized["design_document"]
-        assert "completed_at" in serialized
-        assert serialized["non_agreement_reason_code"] == "DISAGREEMENT_UNRESOLVED"
-        assert serialized["final_iteration"] == 3
-        assert serialized["resolution_audit"]["resolution_action_counts"]["merge"] == 1
-        assert serialized["prompt_telemetry"]["total_calls"] == 2
-        assert serialized["disagreement_telemetry"]["disagreement_count"] == 1
-        assert serialized["reviewer_verdict"]["role"] == "Reviewer"
-        assert serialized["arbiter_verdict"]["role"] == "Arbiter"
+        result_ok = DesignPhaseHandler._validate_v2_structure(_V2_DESIGN_TEXT)
+        assert result_ok["passed"] is True
+        assert result_ok["missing_sections"] == []
 
 
 # ============================================================================
@@ -812,7 +392,7 @@ class TestSerializeResult:
 class TestContextSeedHandlersFactory:
     """Tests for the create_all factory including DESIGN."""
 
-    def test_create_all_returns_seven_handlers(self, tmp_path: Path):
+    def test_create_all_returns_eight_handlers(self, tmp_path: Path):
         seed = tmp_path / "seed.json"
         seed.write_text(json.dumps({
             "tasks": [{"task_id": "T1", "title": "X", "config": {}}],
@@ -919,10 +499,7 @@ class TestOrchestratorWithDesign:
         for p in phases:
             workflow.register_handler(p, DefaultPhaseHandler())
 
-        # Pre-populate context with keys required by phase entry/exit
-        # validation (context_schema.py).  DefaultPhaseHandler is a no-op
-        # that doesn't write context keys, so we supply them upfront.
-        from dataclasses import dataclass as _dc, field as _f
+        from dataclasses import dataclass as _dc
 
         @_dc
         class _FakeTask:

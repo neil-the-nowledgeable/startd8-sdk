@@ -85,31 +85,7 @@ class TestPromptLoader:
 # ============================================================================
 
 
-class TestIMP2ProtocolGuidance:
-    """IMP-2: Protocol guidance is present in the design system prompt."""
-
-    def test_design_system_prompt_has_protocol_guidance(self):
-        from startd8.contractors.artisan_phases.design_documentation import (
-            build_design_system_prompt,
-        )
-        result = build_design_system_prompt()
-        assert "Protocol and Parameter Fidelity" in result
-        assert "grpc_health_probe" in result
-        assert "transport_protocol" in result
-
-    def test_backward_compat_constant_has_protocol_guidance(self):
-        from startd8.contractors.artisan_phases.design_documentation import (
-            DESIGN_GENERATION_SYSTEM_PROMPT,
-        )
-        assert "Protocol and Parameter Fidelity" in DESIGN_GENERATION_SYSTEM_PROMPT
-
-    def test_refine_system_prompt_does_not_have_protocol_guidance(self):
-        """Protocol guidance is only in design_system, not refine_system."""
-        from startd8.contractors.artisan_phases.design_documentation import (
-            build_refine_system_prompt,
-        )
-        result = build_refine_system_prompt()
-        assert "refining an existing design" in result
+# TestIMP2ProtocolGuidance removed (REQ-DSR-001: build_design_system_prompt deleted)
 
 
 # ============================================================================
@@ -117,27 +93,7 @@ class TestIMP2ProtocolGuidance:
 # ============================================================================
 
 
-class TestIMP3AllTargetFiles:
-    """IMP-3: All target_files are joined, not just the first."""
-
-    def test_multiple_target_files_joined(self):
-        """_task_to_feature_context joins all target_files with comma."""
-        from startd8.contractors.context_seed_handlers import (
-            DesignPhaseHandler,
-        )
-        from tests.unit.contractors.conftest import FakeSeedTask
-
-        task = FakeSeedTask(
-            title="Test Feature",
-            description="A test",
-            target_files=["src/a.py", "src/b.py", "src/c.py"],
-        )
-
-        ctx = DesignPhaseHandler._task_to_feature_context(task)
-        assert "src/a.py" in ctx.target_file
-        assert "src/b.py" in ctx.target_file
-        assert "src/c.py" in ctx.target_file
-        assert ", " in ctx.target_file
+# TestIMP3AllTargetFiles removed (REQ-DSR-001: _task_to_feature_context deleted)
 
 
 # ============================================================================
@@ -146,18 +102,12 @@ class TestIMP3AllTargetFiles:
 
 
 class TestIMP1RequirementsText:
-    """IMP-1: requirements_text flows from SeedTask to FeatureContext."""
+    """IMP-1: requirements_text flows from SeedTask to design prompts."""
 
     def test_seed_task_has_requirements_text_field(self):
         from startd8.contractors.context_seed_handlers import SeedTask
         import dataclasses
         field_names = [f.name for f in dataclasses.fields(SeedTask)]
-        assert "requirements_text" in field_names
-
-    def test_feature_context_has_requirements_text_field(self):
-        from startd8.contractors.artisan_phases.design_documentation import FeatureContext
-        import dataclasses
-        field_names = [f.name for f in dataclasses.fields(FeatureContext)]
         assert "requirements_text" in field_names
 
     def test_from_seed_entry_populates_requirements_text(self):
@@ -297,26 +247,7 @@ class TestIMP5ConstraintFormatter:
 # ============================================================================
 
 
-class TestIMP6CriticalParameters:
-    """IMP-6: resolved_parameters are elevated in _generate_design."""
-
-    def test_feature_context_with_resolved_params(self):
-        """When resolved_parameters are in additional_context, they should
-        be formatted with the Critical Parameters header."""
-        from startd8.contractors.artisan_phases.design_documentation import (
-            FeatureContext,
-        )
-        ctx = FeatureContext(
-            feature_name="Test",
-            description="A test feature",
-            target_file="test.py",
-            additional_context={
-                "resolved_parameters": {"db_user": "admin", "port": "5432"},
-                "domain": "backend",
-            },
-        )
-        # The resolved_parameters key exists and will be elevated in _generate_design
-        assert "resolved_parameters" in ctx.additional_context
+# TestIMP6CriticalParameters removed (REQ-DSR-001: FeatureContext deleted)
 
 
 # ============================================================================
@@ -408,19 +339,4 @@ class TestDepthTiersFromYAML:
 # ============================================================================
 
 
-class TestBuildDesignSystemPrompt:
-    """build_design_system_prompt uses YAML template with dynamic sections."""
-
-    def test_custom_sections(self):
-        from startd8.contractors.artisan_phases.design_documentation import (
-            build_design_system_prompt,
-        )
-        result = build_design_system_prompt(
-            sections=["Overview", "Testing Strategy"],
-            depth_guidance="Keep it brief",
-        )
-        assert "## Overview" in result
-        assert "## Testing Strategy" in result
-        assert "Keep it brief" in result
-        # Default sections should NOT be present
-        assert "## Data Model" not in result
+# TestBuildDesignSystemPrompt removed (REQ-DSR-001: build_design_system_prompt deleted)

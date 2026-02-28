@@ -8,7 +8,7 @@ implementations for each WorkflowPhase.
 WorkflowPhase mapping (from artisan_contractor.py docstring):
     PLAN      → Load seed + validate + build task plan
     SCAFFOLD  → Verify target directories + resolve dependencies
-    DESIGN    → Generate design docs per task via DesignDocumentationPhase
+    DESIGN    → Generate design docs per task (single LLM call)
     IMPLEMENT → Generate code per task to staging dir
     INTEGRATE → Merge staged files into project_root with validation/rollback
     TEST      → Run post-generation validators against generated code
@@ -518,14 +518,8 @@ class HandlerConfig:
     enable_prompt_caching: bool = False
     staging_dir: Optional[str] = None  # None = .startd8/staging/
     forensic_log_level: str = "INFO"  # "DEBUG" | "INFO" | "WARNING"
-    # CCD-203: Token budget for lane-peer design context injection
-    design_lane_peer_token_budget: int = 8000
     # CCD-503: Collision resolution strategy ("warn" | "redesign" | "abort")
     design_collision_strategy: str = "warn"
-    # V2 modular design prompts (single-pass, no dual-review)
-    use_modular_prompts: bool = False
-    # REQ-PAQ-701: rollout guardrail toggles.
-    force_canonical_design_route: bool = False
     enforce_post_revision_rereview: bool = True
     # Phase 4: Manifest consumption control
     manifest_consumption_enabled: bool = True  # Kill switch (req R1-S10)
@@ -554,10 +548,10 @@ class HandlerConfig:
     # REQ-CMR-022: Gate-driven Tier 2 escalation mode (bounded to one T2 pass)
     complexity_tier2_gate_escalation: bool = False
 
-    # REQ-IME-300: Opt-in inner loop — uses implementation_engine instead of
-    # single-shot DevelopmentPhase.  Default False = no behavior change.
+    # REQ-DSR-005: Inner loop enabled by default — uses implementation_engine
+    # (spec → drafter → reviewer score loop) instead of single-shot DevelopmentPhase.
     # Cost: ~$2-5 per 10 tasks at avg 2 iterations (1 spec + up to 3 draft + 3 review).
-    enable_inner_loop: bool = False
+    enable_inner_loop: bool = True
     inner_loop_drafter: Optional[str] = None   # Override drafter agent for inner loop
     inner_loop_reviewer: Optional[str] = None  # Override reviewer agent for inner loop
     inner_loop_max_iterations: int = 3         # Max draft-review cycles per task
@@ -1355,95 +1349,6 @@ def compute_critical_path_tasks(
     }
 
 
-def _format_lane_peer_context(
-    lane_prior_designs: list[dict[str, Any]],
-    shared_file_manifest: dict[str, list[str]] | None,
-    current_task: SeedTask,
-) -> str:
-    """Format lane-peer designs with compatibility instruction (CCD-202)."""
-    if not lane_prior_designs:
-        return ""
-
-    lines = [
-        "=== LANE-PEER DESIGN CONTEXT ===",
-        "The following tasks share files with this task. Your design MUST be "
-        "compatible with their designs.\n",
-    ]
-    current_files = set(
-        _normalize_target_path(f) for f in (current_task.target_files or [])
-    )
-    for peer in lane_prior_designs:
-        tid = peer.get("task_id", "unknown")
-        title = peer.get("title", "")
-        doc = peer.get("design_document", "")
-
-        # Find shared files between current task and this peer
-        shared = []
-        if shared_file_manifest:
-            for fpath, contesting in shared_file_manifest.items():
-                if tid in contesting and fpath in current_files:
-                    shared.append(fpath)
-
-        lines.append(f"--- Peer: {tid} ({title}) ---")
-        if shared:
-            lines.append(f"  Shared files: {', '.join(sorted(shared))}")
-        lines.append(doc)
-        lines.append(f"--- End: {tid} ---\n")
-
-    lines.append("=== END LANE-PEER DESIGN CONTEXT ===")
-    return "\n".join(lines)
-
-
-def _apply_lane_peer_token_budget(
-    lane_prior_designs: list[dict[str, Any]],
-    budget_tokens: int,
-) -> tuple[list[dict[str, Any]], bool]:
-    """Apply token budget guard to lane-peer designs (CCD-203).
-
-    Estimate tokens via chars / 4. When over budget, truncate oldest
-    peers to 300-char summaries (most recent keeps full doc).
-
-    Returns:
-        (designs, was_truncated) — designs with oldest truncated if needed.
-    """
-    if not lane_prior_designs or budget_tokens <= 0:
-        return lane_prior_designs, False
-
-    total_chars = sum(
-        len(d.get("design_document", "")) for d in lane_prior_designs
-    )
-    estimated_tokens = total_chars // 4
-
-    if estimated_tokens <= budget_tokens:
-        return lane_prior_designs, False
-
-    # Truncate oldest peers first, keep most recent full
-    result = list(lane_prior_designs)
-    was_truncated = False
-    for i in range(len(result) - 1):  # Skip last (most recent)
-        doc = result[i].get("design_document", "")
-        if len(doc) > 300:
-            result[i] = {
-                **result[i],
-                "design_document": doc[:300].split("\n")[0] + " [truncated]",
-            }
-            was_truncated = True
-            # Re-check budget
-            total_chars = sum(
-                len(d.get("design_document", "")) for d in result
-            )
-            if total_chars // 4 <= budget_tokens:
-                break
-
-    if was_truncated:
-        logger.warning(
-            "CCD-203: lane-peer token budget exceeded — truncated %d/%d older peers",
-            sum(1 for d in result[:-1] if "[truncated]" in d.get("design_document", "")),
-            len(result) - 1,
-        )
-    return result, was_truncated
-
-
 def _compute_ccd_task_metadata(
     task: SeedTask,
     lane_assignments: dict[str, int],
@@ -2214,17 +2119,18 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
 
 
 class DesignPhaseHandler(AbstractPhaseHandler):
-    """DESIGN phase: Generate design docs per task via DesignDocumentationPhase.
+    """DESIGN phase: Generate design docs per task (single LLM call).
 
     In dry-run mode: reports what would be designed per task (no LLM calls).
-    In real mode: delegates to :class:`DesignDocumentationPhase` for each task,
-    running the async dual-review design pipeline via a thread-owned event loop
+    In real mode: generates a design document via ``_run_v2_generate()`` for
+    each task, running the async generation via a thread-owned event loop
     (same pattern as :class:`ImplementPhaseHandler`).
 
-    Data flow:
-        1. ``SeedTask`` → ``FeatureContext`` (per task)
-        2. ``DesignDocumentationPhase.run(context)`` → ``DesignDocumentResult``
-        3. Results serialized → ``context["design_results"]``
+    Data flow (REQ-DSR-001 — dual-review removed):
+        1. ``SeedTask`` → ``assemble_design_prompt()`` (V2 modular prompts)
+        2. ``_run_v2_generate(prompt)`` → raw design text
+        3. Quality gates: parameter completeness + structure validation
+        4. Results serialized → ``context["design_results"]``
 
     Output files:
         When ``output_dir`` is set, writes ``{task_id}-design.md`` files
@@ -2239,7 +2145,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         self.config = handler_config or HandlerConfig()
         self.output_dir = output_dir
         self._llm_backend: Any = None
-        self._design_phase: Any = None
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -2260,734 +2165,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             enable_prompt_caching=self.config.enable_prompt_caching,
         )
         return self._llm_backend
-
-    def _get_design_phase(
-        self,
-        prompt_capture_dir: Optional[Path] = None,
-    ) -> Any:
-        """Lazily create the DesignDocumentationPhase.
-
-        When ``prompt_capture_dir`` is set (walkthrough mode), a fresh
-        instance is created per call so each task gets its own capture
-        directory.  Otherwise the instance is cached.
-        """
-        if prompt_capture_dir is not None:
-            from startd8.contractors.artisan_phases.design_documentation import (
-                DesignDocumentationPhase,
-            )
-            return DesignDocumentationPhase(
-                llm=self._get_llm_backend(),
-                max_iterations=self.config.max_iterations,
-                enforce_post_revision_rereview=self.config.enforce_post_revision_rereview,
-                prompt_capture_dir=prompt_capture_dir,
-            )
-
-        if self._design_phase is not None:
-            return self._design_phase
-
-        from startd8.contractors.artisan_phases.design_documentation import (
-            DesignDocumentationPhase,
-        )
-
-        self._design_phase = DesignDocumentationPhase(
-            llm=self._get_llm_backend(),
-            max_iterations=self.config.max_iterations,
-            enforce_post_revision_rereview=self.config.enforce_post_revision_rereview,
-        )
-        return self._design_phase
-
-    @staticmethod
-    def _task_to_feature_context(
-        task: SeedTask,
-        *,
-        plan_goals: list[str] | None = None,
-        architectural_context: dict[str, Any] | None = None,
-        prior_design_summaries: list[str] | None = None,
-        calibration: dict[str, Any] | None = None,
-        design_max_tokens_override: Optional[int] = None,
-        parameter_sources: dict[str, Any] | None = None,
-        semantic_conventions: dict[str, Any] | None = None,
-        prior_design_text: str | None = None,
-        prior_quality_feedback: str | None = None,
-        inv_derivation_rules: dict[str, Any] | None = None,
-        inv_resolved_parameters: dict[str, Any] | None = None,
-        inv_output_contracts: dict[str, Any] | None = None,
-        inv_refine_suggestions: str | list[dict[str, Any]] | None = None,
-        inv_plan_document: str | None = None,
-        inv_calibration_hints: dict[str, Any] | None = None,
-        inv_open_questions: list[dict[str, Any]] | None = None,
-        inv_dependency_graph: dict[str, list[str]] | None = None,
-        scaffold_existing_files: list[str] | None = None,
-        # CCD-204: Lane-aware design context parameters
-        lane_prior_designs: list[dict[str, Any]] | None = None,
-        shared_file_manifest: dict[str, list[str]] | None = None,
-        wave_index: int | None = None,
-        lane_peer_token_budget: int = 8000,
-        # CCD-303: Task title lookup for contested file annotations
-        task_title_lookup: dict[str, str] | None = None,
-        # CCD-503: Collision resolution context for redesign
-        lane_collision_context: str | None = None,
-        # REQ-PD-002/007/008/009: Bridge context from Plan Ingestion
-        bridge_context: dict[str, Any] | None = None,
-        # Phase 5: Manifest context for DESIGN phase (CS-1 through CS-6)
-        manifest_registry: Any = None,
-        manifest_context_budget: int = 2000,
-        # Phase 6: Call graph context budget for DESIGN (CG-DS-4)
-        call_graph_context_budget: int = 2000,
-        # Phase 5: Introspect enrichment toggle for DESIGN (DS-1..DS-4)
-        enable_introspect: bool = False,
-    ) -> Any:
-        """Convert a SeedTask to a FeatureContext for the design phase.
-
-        Args:
-            task: The seed task.
-            plan_goals: Project-level goals for benefit-driven framing.
-            architectural_context: Shared context from manifest + cross-feature analysis.
-            prior_design_summaries: Summaries of earlier design docs for cross-task context.
-            calibration: Per-task calibration dict (depth_tier, sections, max_output_tokens).
-            design_max_tokens_override: Override max_output_tokens for all design tasks
-                (from HandlerConfig.design_max_tokens). Takes precedence over calibration.
-            parameter_sources: Per-artifact-type parameter origin mapping from onboarding.
-            semantic_conventions: Metric/label naming conventions from onboarding.
-        """
-        from startd8.contractors.artisan_phases.design_documentation import (
-            FeatureContext,
-        )
-
-        additional_context: dict[str, Any] = {}
-        if task.domain != "unknown":
-            additional_context["domain"] = task.domain
-        if task.domain_reasoning:
-            additional_context["domain_reasoning"] = task.domain_reasoning
-        if task.available_siblings:
-            additional_context["siblings"] = ", ".join(task.available_siblings)
-        if task.feature_id:
-            additional_context["feature_id"] = task.feature_id
-
-        # Benefit-driven framing: inject project goals
-        if plan_goals:
-            additional_context["project_goals"] = (
-                "This feature supports these project goals:\n"
-                + "\n".join(f"- {g}" for g in plan_goals[:5])
-            )
-
-        # Architectural context from manifest + cross-feature analysis
-        arch = architectural_context or {}
-        objectives = arch.get("objectives", [])
-        if objectives:
-            additional_context["objectives"] = ", ".join(
-                o.get("name", str(o)) if isinstance(o, dict) else str(o)
-                for o in objectives[:5]
-            )
-        constraints = arch.get("constraints", [])
-        if constraints:
-            additional_context["constraints_from_manifest"] = [
-                f"[{c.get('severity', 'info')}] {c.get('rule', str(c))}"
-                if isinstance(c, dict) else str(c)
-                for c in constraints
-            ]
-
-        # Shared modules (only those overlapping with this task's targets)
-        shared = arch.get("shared_modules", [])
-        if shared and task.target_files:
-            task_targets = set(task.target_files)
-            overlapping = [
-                m["path"] for m in shared
-                if isinstance(m, dict) and m.get("path") in task_targets
-            ]
-            if overlapping:
-                additional_context["shared_modules"] = (
-                    f"These files are also targeted by other features — "
-                    f"coordinate interfaces: {', '.join(overlapping)}"
-                )
-
-        domain_concepts = arch.get("domain_concepts", [])
-        if domain_concepts:
-            additional_context["domain_concepts"] = ", ".join(domain_concepts[:10])
-
-        import_conventions = arch.get("import_conventions", [])
-        if import_conventions:
-            additional_context["import_conventions"] = ", ".join(import_conventions[:5])
-
-        # CCD-201: Two-tier context model
-        # Tier 1: Lane-peer designs (full documents)
-        if lane_prior_designs:
-            budgeted, _truncated = _apply_lane_peer_token_budget(
-                lane_prior_designs, lane_peer_token_budget,
-            )
-            additional_context["lane_peer_designs"] = _format_lane_peer_context(
-                budgeted, shared_file_manifest, task,
-            )
-
-        # Tier 2: Cross-lane summaries (exclude lane peers to avoid duplication)
-        if prior_design_summaries:
-            lane_peer_ids = {d["task_id"] for d in (lane_prior_designs or [])}
-            cross_lane = [
-                s for s in prior_design_summaries
-                if not any(s.startswith(f"{pid} (") for pid in lane_peer_ids)
-            ]
-            if cross_lane:
-                additional_context["prior_designs"] = (
-                    "Previously designed tasks (other lanes):\n"
-                    + "\n".join(f"- {s}" for s in cross_lane[-5:])
-                )
-
-        # CCD-303: Contested files prompt injection
-        if shared_file_manifest and task.target_files:
-            task_contested: list[str] = []
-            for tf in task.target_files:
-                normalized_tf = _normalize_target_path(tf)
-                contesting_ids = shared_file_manifest.get(normalized_tf)
-                if contesting_ids:
-                    others = [tid for tid in contesting_ids if tid != task.task_id]
-                    if others:
-                        other_descs = [
-                            f"{tid} ({(task_title_lookup or {}).get(tid, '')})"
-                            for tid in others
-                        ]
-                        task_contested.append(
-                            f"  - `{tf}`: {', '.join(other_descs)}"
-                        )
-            if task_contested:
-                additional_context["contested_files"] = (
-                    "SHARED FILE WARNING: These files are targeted by multiple "
-                    "tasks. Coordinate your design with theirs.\n"
-                    + "\n".join(task_contested)
-                )
-
-        # CCD-503: Inject collision resolution context when redesigning
-        if lane_collision_context:
-            additional_context["collision_resolution"] = (
-                "DESIGN COLLISION ALERT: Your previous design conflicted with "
-                "another task in the same lane. Please redesign with these "
-                "constraints:\n" + lane_collision_context
-            )
-
-        # Calibration: depth guidance
-        cal = calibration or {}
-        depth_guidance = cal.get("depth_guidance")
-        if depth_guidance:
-            additional_context["depth_guidance"] = depth_guidance
-
-        # Task-specific design doc content hints (supplement structural sections)
-        if task.design_doc_sections:
-            additional_context["design_doc_sections"] = task.design_doc_sections
-
-        if prior_quality_feedback and prior_quality_feedback.strip():
-            additional_context["quality_feedback"] = (
-                "Quality feedback from previous design attempt (must be addressed):\n"
-                + prior_quality_feedback.strip()
-            )
-
-        # Fix 2c: inject parameter_sources relevant to this task's artifact types
-        all_param_sources = parameter_sources or {}
-        if all_param_sources and task.artifact_types_addressed:
-            task_param_sources = {
-                atype: all_param_sources[atype]
-                for atype in task.artifact_types_addressed
-                if atype in all_param_sources
-            }
-            if task_param_sources:
-                param_lines = ["Parameter sources (from ContextCore manifest):"]
-                for atype, sources in task_param_sources.items():
-                    param_lines.append(f"  {atype}: {json.dumps(sources, indent=2)}")
-                additional_context["parameter_sources"] = "\n".join(param_lines)
-
-        # Fix 3c: inject semantic_conventions
-        sem_conv = semantic_conventions or {}
-        if sem_conv:
-            conv_lines = ["Semantic conventions:"]
-            for key, val in sem_conv.items():
-                conv_lines.append(f"  {key}: {val}")
-            additional_context["semantic_conventions"] = "\n".join(conv_lines)
-
-        # Mottainai: inject inventory artifacts into additional_context
-        if inv_derivation_rules and task.artifact_types_addressed:
-            task_rules = {
-                atype: inv_derivation_rules[atype]
-                for atype in task.artifact_types_addressed
-                if atype in inv_derivation_rules
-            }
-            if task_rules:
-                additional_context["derivation_rules"] = task_rules
-
-        if inv_resolved_parameters and task.artifact_types_addressed:
-            # resolved_parameters may be keyed by artifact ID or artifact type
-            task_params = {
-                k: v for k, v in inv_resolved_parameters.items()
-                if any(atype in k for atype in task.artifact_types_addressed)
-            }
-            if task_params:
-                additional_context["resolved_parameters"] = task_params
-
-        if inv_output_contracts and task.artifact_types_addressed:
-            task_contracts = {
-                atype: inv_output_contracts[atype]
-                for atype in task.artifact_types_addressed
-                if atype in inv_output_contracts
-            }
-            if task_contracts:
-                additional_context["output_contracts"] = task_contracts
-
-        # Mottainai: inject refine suggestions relevant to this task
-        # IMP-8a: handle both structured List[Dict] (from REFINE forwarding)
-        # and text str (from inventory/plan document fallback)
-        if inv_refine_suggestions:
-            if isinstance(inv_refine_suggestions, list):
-                # Structured suggestions from REFINE triage forwarding
-                formatted = DesignPhaseHandler._format_structured_suggestions(
-                    inv_refine_suggestions,
-                )
-                if formatted:
-                    additional_context["refine_suggestions"] = formatted
-            else:
-                # Legacy text path: S-/F- prefix line extraction
-                task_suggestions = DesignPhaseHandler._extract_task_suggestions(
-                    inv_refine_suggestions, task.task_id,
-                    getattr(task, "feature_id", None),
-                )
-                if task_suggestions:
-                    additional_context["refine_suggestions"] = task_suggestions
-
-        # Mottainai + REQ-PD-001: inject plan architecture, risks, and
-        # verification strategy with FOUNDATION prefix instructing the LLM
-        # to elaborate rather than regenerate from scratch.
-        _FOUNDATION_PREFIX = (
-            "FOUNDATION (from Plan Ingestion TRANSFORM — elaborate and "
-            "add implementation detail, do NOT regenerate from scratch):\n"
-        )
-        if inv_plan_document:
-            arch_section = DesignPhaseHandler._extract_plan_section(
-                inv_plan_document, "Architecture",
-            )
-            risk_section = DesignPhaseHandler._extract_plan_section(
-                inv_plan_document, "Risk",
-            )
-            verification_section = DesignPhaseHandler._extract_plan_section(
-                inv_plan_document, "Verification",
-            )
-
-            # REQ-PD-001: enforce 6000-char combined cap with priority
-            # truncation: architecture (highest) > risk > verification
-            _foundation_budget = 6000
-            _foundation_parts: list[tuple[str, str]] = []
-            if arch_section:
-                _foundation_parts.append(("plan_architecture", arch_section))
-            if risk_section:
-                _foundation_parts.append(("plan_risks", risk_section))
-            if verification_section:
-                _foundation_parts.append(
-                    ("plan_verification_strategy", verification_section)
-                )
-
-            _remaining = _foundation_budget
-            for _fkey, _ftext in _foundation_parts:
-                if _remaining <= 0:
-                    break
-                truncated = _ftext[:_remaining]
-                if len(_ftext) > _remaining:
-                    truncated += "\n... (truncated)"
-                additional_context[_fkey] = _FOUNDATION_PREFIX + truncated
-                _remaining -= len(truncated)
-
-        # REQ-PD-004: inject api_signatures and protocol from seed task
-        if task.api_signatures:
-            additional_context["api_signatures"] = (
-                "PLAN-SPECIFIED API SIGNATURES (preserve exactly):\n"
-                + "\n".join(f"- {sig}" for sig in task.api_signatures)
-            )
-        if task.protocol:
-            additional_context["transport_protocol"] = (
-                f"Transport protocol constraint: {task.protocol}. "
-                "All network interfaces, health checks, and client "
-                "configurations MUST use this protocol."
-            )
-
-        # Mottainai: calibration hints override depth_guidance when not already set.
-        # When artifact_types_addressed is empty (Gap 6 / Phase 2.1), fall back
-        # to the most common depth hint across all artifact types so project-wide
-        # calibration data still reaches the DESIGN prompt.
-        if inv_calibration_hints and not depth_guidance:
-            if task.artifact_types_addressed:
-                for atype in task.artifact_types_addressed:
-                    hint = inv_calibration_hints.get(atype)
-                    if hint and hint.get("expected_depth"):
-                        depth_guidance = hint["expected_depth"]
-                        additional_context["calibration_override_source"] = (
-                            "export.calibration_hints"
-                        )
-                        break  # Use first matching type's calibration
-            else:
-                # Project-level fallback: use most common depth across all types
-                depth_counts: dict[str, int] = {}
-                for hint in inv_calibration_hints.values():
-                    if isinstance(hint, dict) and hint.get("expected_depth"):
-                        d = hint["expected_depth"]
-                        depth_counts[d] = depth_counts.get(d, 0) + 1
-                if depth_counts:
-                    depth_guidance = max(depth_counts, key=depth_counts.get)  # type: ignore[arg-type]
-                    additional_context["calibration_override_source"] = (
-                        "export.calibration_hints (project-level fallback)"
-                    )
-
-        # Mottainai: surface open questions from ContextCore guidance so DESIGN
-        # decisions are made with awareness of flagged uncertainties (Gap 7).
-        if inv_open_questions and isinstance(inv_open_questions, list):
-            formatted = "\n".join(
-                f"- {q['question'] if isinstance(q, dict) else q}"
-                for q in inv_open_questions[:10]
-            )
-            if formatted.strip():
-                additional_context["open_questions"] = (
-                    "The following questions are flagged as unresolved:\n" + formatted
-                )
-
-        # Task 9b: Inject critical parameters checklist guidance
-        # Tell the design phase to explicitly enumerate critical parameters
-        additional_context["critical_parameters_checklist"] = (
-            "IMPORTANT: Your design document MUST include a 'Critical Parameters' "
-            "section listing all configuration values, port numbers, environment "
-            "variable names, timeout values, buffer sizes, and function signatures "
-            "that the IMPLEMENT phase must preserve exactly. Format each as:\n"
-            "- `PARAM_NAME`: value (rationale)\n"
-            "This enables automated fidelity checking between design and implementation."
-        )
-
-        # Task 9d: Scope boundary instruction
-        if task.negative_scope:
-            additional_context["scope_boundary"] = (
-                "SCOPE BOUNDARY: The following items are explicitly OUT OF SCOPE "
-                "for this feature. Do NOT design or implement them:\n"
-                + "\n".join(f"- {ns}" for ns in task.negative_scope)
-                + "\nIf any of these are prerequisites, note them as external "
-                "dependencies but do not include implementation details."
-            )
-
-        # Mottainai B4: inject artifact dependency info so DESIGN decisions
-        # account for deterministic inter-artifact dependencies from export
-        # rather than re-inferring them via LLM (Gap 4).
-        if inv_dependency_graph and task.artifact_types_addressed:
-            task_deps: dict[str, list[str]] = {}
-            for atype in task.artifact_types_addressed:
-                # Graph may be keyed by artifact_id or artifact_type
-                deps = inv_dependency_graph.get(atype, [])
-                if deps:
-                    task_deps[atype] = deps
-            if task_deps:
-                formatted_deps = "; ".join(
-                    f"{k} depends on: {', '.join(v)}" for k, v in task_deps.items()
-                )
-                additional_context["artifact_dependencies"] = (
-                    f"Known artifact dependencies: {formatted_deps}"
-                )
-
-        sections = cal.get("sections")
-        max_output_tokens = (
-            design_max_tokens_override
-            if design_max_tokens_override is not None
-            else cal.get("max_output_tokens")
-        )
-
-        # ── REQ-PD-002/007/008/009: Process bridge_context ──
-        _bc = bridge_context or {}
-
-        # REQ-PD-002: Complexity-aware depth calibration
-        _complexity_dims = _bc.get("complexity_dimensions", {})
-        _complexity_composite = _bc.get("complexity_composite")
-        if _complexity_dims:
-            _high_dims = [
-                (dim, score) for dim, score in _complexity_dims.items()
-                if isinstance(score, (int, float)) and score > 70
-            ]
-            if _high_dims:
-                _guidance_parts = [
-                    f"- {dim} (score {score}): provide extra detail"
-                    for dim, score in _high_dims
-                ]
-                additional_context["complexity_guidance"] = (
-                    "COMPLEXITY ALERT — these dimensions scored high:\n"
-                    + "\n".join(_guidance_parts)
-                )
-        if (
-            _complexity_composite is not None
-            and _complexity_composite > 60
-            and not depth_guidance
-        ):
-            depth_guidance = "comprehensive"
-
-        # REQ-PD-007: Dependency-ordered cross-task context
-        _dep_designs = _bc.get("dependency_designs", {})
-        if _dep_designs:
-            _dep_parts: list[str] = []
-            for _dep_id, _dep_summary in list(_dep_designs.items())[:3]:
-                _dep_parts.append(
-                    f"- {_dep_id}: {_dep_summary[:500]}"
-                )
-            if _dep_parts:
-                additional_context["dependency_designs"] = (
-                    "DEPENDENCY DESIGNS (tasks this task depends on):\n"
-                    + "\n".join(_dep_parts)
-                )
-
-        # REQ-PD-008: Wave-aware context accumulation
-        _wave_meta = _bc.get("wave_metadata")
-        _wave_idx = _bc.get("wave_index")
-        if _wave_meta and _wave_idx is not None:
-            _wave_count = _wave_meta.get("wave_count", 1)
-            additional_context["wave_context"] = (
-                f"Wave {_wave_idx + 1} of {_wave_count}. "
-                "Tasks in the same wave execute in parallel — avoid "
-                "design decisions that create implicit ordering dependencies "
-                "with same-wave peers."
-            )
-
-        # REQ-PD-009: Staleness-aware design mode
-        _staleness = _bc.get("staleness_classification", {})
-        if _staleness and task.target_files:
-            _stale_files = [
-                f for f in task.target_files
-                if _staleness.get(f) == "stale"
-            ]
-            _current_files = [
-                f for f in task.target_files
-                if _staleness.get(f) == "current"
-            ]
-            if _stale_files:
-                additional_context["staleness_guidance"] = (
-                    "STALE FILES (older than plan seed): "
-                    + ", ".join(_stale_files)
-                    + ". Focus design on delta changes needed."
-                )
-            elif _current_files:
-                additional_context["staleness_guidance"] = (
-                    "CURRENT FILES (newer than plan seed): "
-                    + ", ".join(_current_files)
-                    + ". Minimize changes — these files are up to date."
-                )
-
-        # REQ-PD-011: Plan-delta indicator
-        if task.design_doc_sections and cal.get("sections"):
-            _plan_sections = set(task.design_doc_sections)
-            _cal_sections = set(cal["sections"])
-            if _plan_sections != _cal_sections:
-                additional_context["plan_delta"] = (
-                    "NOTE: Task design_doc_sections differ from calibration "
-                    "sections. Task sections: "
-                    + ", ".join(sorted(_plan_sections))
-                    + ". Calibration sections: "
-                    + ", ".join(sorted(_cal_sections))
-                )
-        if task.api_signatures:
-            additional_context["api_signature_verification"] = (
-                "VERIFY: Implementation must match these plan-specified "
-                "API signatures exactly: "
-                + "; ".join(task.api_signatures)
-            )
-
-        # B-6: Compute edit_mode_hint from filesystem ground truth
-        _scaffold_existing = set(scaffold_existing_files or [])
-        _existing_targets = [
-            f for f in (task.target_files or []) if f in _scaffold_existing
-        ]
-        _edit_mode_hint: str | None = None
-        if _existing_targets:
-            _edit_mode_hint = "edit"
-        elif task.target_files:
-            _edit_mode_hint = "create"
-
-        # REQ-PD-005: Compute has_plan_foundation flag
-        _foundation_keys = {
-            "plan_architecture", "plan_risks", "plan_verification_strategy",
-            "refine_suggestions", "complexity_guidance",
-        }
-        _has_plan_foundation = bool(
-            _foundation_keys & set(additional_context.keys())
-        )
-
-        # Phase 5: Manifest context injection (CS-1 through CS-6)
-        # Mirror the IMPLEMENT manifest pattern (lines 5658-5680)
-        _manifest_summary = ""
-        if manifest_registry is not None and task.target_files:
-            _mc_parts: list[str] = []
-            for tf in task.target_files:
-                try:
-                    summary = manifest_registry.file_element_summary(
-                        tf, manifest_context_budget,
-                    )
-                    if summary:
-                        _mc_parts.append(f"### {tf}\n{summary}")
-                except Exception:
-                    logger.debug(
-                        "DESIGN: manifest lookup failed for %s", tf,
-                        exc_info=True,
-                    )
-            if _mc_parts:
-                _manifest_summary = "\n\n".join(_mc_parts)
-                additional_context["manifest_context"] = _manifest_summary
-                logger.debug(
-                    "DESIGN: manifest context injected for %d/%d target files",
-                    len(_mc_parts), len(task.target_files),
-                )
-
-            # CS-4: Cross-task dependency extraction via dependency_graph()
-            try:
-                dep_graph = manifest_registry.dependency_graph()
-                if dep_graph and isinstance(dep_graph, dict):
-                    dep_lines: list[str] = []
-                    for tf in task.target_files:
-                        if tf in dep_graph:
-                            dep_lines.append(
-                                f"- {tf} imports from: "
-                                f"{', '.join(dep_graph[tf])}"
-                            )
-                    if dep_lines:
-                        additional_context["manifest_dependencies"] = (
-                            "\n".join(dep_lines)
-                        )
-            except Exception:
-                logger.debug(
-                    "DESIGN: dependency_graph() failed", exc_info=True,
-                )
-
-            # Phase 6: CG-DS-1,2,3 — call graph context for DESIGN
-            _cg_budget = call_graph_context_budget // 2  # CG-DS-4: share budget
-            try:
-                _cg_parts: list[str] = []
-                for tf in task.target_files:
-                    cg_summary = manifest_registry.call_graph_summary(tf, _cg_budget)
-                    if cg_summary:
-                        _cg_parts.append(f"### {tf}\n{cg_summary}")
-                    # CG-DS-2: For edit-mode tasks, annotate with caller counts
-                    if _edit_mode_hint == "edit":
-                        callers_map = manifest_registry.callers_of_file(tf)
-                        if callers_map:
-                            caller_lines: list[str] = []
-                            for fqn, callers in sorted(callers_map.items()):
-                                caller_lines.append(
-                                    f"- `{fqn}`: {len(callers)} external callers"
-                                )
-                            _cg_parts.append(
-                                f"**External callers of {tf}:**\n"
-                                + "\n".join(caller_lines[:10])
-                            )
-                if _cg_parts:
-                    additional_context["call_graph_context"] = "\n\n".join(_cg_parts)
-                    logger.debug(
-                        "DESIGN: call graph context injected for %d/%d target files",
-                        len(_cg_parts), len(task.target_files),
-                    )
-            except Exception:
-                logger.debug(
-                    "DESIGN: call graph context failed", exc_info=True,
-                )
-
-        # CS-3: Edit-mode manifest context key
-        if _edit_mode_hint == "edit" and _manifest_summary:
-            additional_context["manifest_edit_context"] = _manifest_summary
-
-        # Phase 5: Introspect enrichment for DESIGN context (DS-1..DS-4)
-        if enable_introspect and manifest_registry is not None and task.target_files:
-
-            # DS-1: Resolved types (T1 context). Built once; edit-mode registers
-            # manifest_edit_context separately below via its own key.
-            # C2: collapsed from two near-identical loops (edit vs non-edit path).
-            if "manifest_resolved_types" not in additional_context:
-                _rts_parts: list[str] = []
-                for tf in task.target_files:
-                    try:
-                        rts = manifest_registry.file_resolved_type_summary(tf)
-                        if rts:
-                            _rts_parts.append(f"### {tf}\n{rts}")
-                    except Exception:
-                        logger.debug(
-                            "DESIGN DS-1: resolved type summary failed for %s",
-                            tf, exc_info=True,
-                        )
-                if _rts_parts:
-                    additional_context["manifest_resolved_types"] = "\n\n".join(_rts_parts)
-
-            # DS-2: MRO chains as supplemental manifest_context annotation
-            _mro_lines: list[str] = []
-            for tf in task.target_files:
-                try:
-                    mro_map = manifest_registry.file_mro_summary(tf)
-                    for fqn, mro in sorted(mro_map.items()):
-                        chain = " \u2192 ".join(mro)
-                        _mro_lines.append(f"- {fqn}: [{chain}]")
-                except Exception:
-                    logger.debug(
-                        "DESIGN DS-2: MRO summary failed for %s",
-                        tf, exc_info=True,
-                    )
-            if _mro_lines:
-                _mro_section = "### Class Hierarchy\n" + "\n".join(_mro_lines)
-                existing_mc = additional_context.get("manifest_context", "")
-                additional_context["manifest_context"] = (
-                    existing_mc + "\n\n" + _mro_section if existing_mc else _mro_section
-                )
-
-            # DS-3: module __all__ as public_api_surface (T3 advisory)
-            _all_parts: list[str] = []
-            for tf in task.target_files:
-                try:
-                    mod_all = manifest_registry.module_all_for(tf)
-                    if mod_all:
-                        _all_parts.append(f"{tf}: [{', '.join(mod_all)}]")
-                except Exception:
-                    logger.debug(
-                        "DESIGN DS-3: module __all__ lookup failed for %s",
-                        tf, exc_info=True,
-                    )
-            if _all_parts:
-                additional_context["public_api_surface"] = "\n".join(_all_parts)
-
-            # DS-4: Runtime attributes for dataclass/namedtuple elements
-            _ra_lines: list[str] = []
-            for tf in task.target_files:
-                try:
-                    ra_map = manifest_registry.file_runtime_attributes(tf)
-                    for fqn, attrs in sorted(ra_map.items()):
-                        _ra_lines.append(
-                            f"- {fqn} (dataclass/namedtuple) \u2014 Generated members "
-                            f"(do NOT redefine): {', '.join(attrs)}"
-                        )
-                except Exception:
-                    logger.debug(
-                        "DESIGN DS-4: runtime attributes lookup failed for %s",
-                        tf, exc_info=True,
-                    )
-            if _ra_lines:
-                _ra_section = "### Generated Members (dataclass/namedtuple)\n" + "\n".join(_ra_lines)
-                existing_mc = additional_context.get("manifest_context", "")
-                additional_context["manifest_context"] = (
-                    existing_mc + "\n\n" + _ra_section if existing_mc else _ra_section
-                )
-                logger.debug(
-                    "DESIGN DS-4: injected runtime attributes for %d/%d target files",
-                    len(_ra_lines), len(task.target_files),
-                )
-
-        # DU-4 (Tier 2): ManifestDiff for redesign iterations
-        # When prior manifest snapshot is available, compute diff here
-        # via ManifestDiff.diff(old_manifest, new_manifest) and render as
-        # "### Structural Changes Since Last Design" in additional_context.
-
-        return FeatureContext(
-            feature_name=task.title,
-            description=task.description,
-            target_file=", ".join(task.target_files) if task.target_files else "",
-            constraints=list(task.prompt_constraints),
-            additional_context=additional_context,
-            sections=sections,
-            max_output_tokens=max_output_tokens,
-            depth_guidance=depth_guidance,
-            prior_design=prior_design_text,
-            requirements_text=task.requirements_text,
-            edit_mode_hint=_edit_mode_hint,
-            existing_target_files=_existing_targets,
-            has_plan_foundation=_has_plan_foundation,
-            manifest_summary=_manifest_summary,
-        )
 
     @staticmethod
     def _extract_task_suggestions(
@@ -3103,82 +2280,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         return section
 
     @staticmethod
-    def _run_design_async(
-        design_phase: Any,
-        feature_context: Any,
-        timeout: float | None = None,
-    ) -> Any:
-        """Run DesignDocumentationPhase.run() in a dedicated thread-owned event loop.
-
-        Uses the same pattern as ImplementPhaseHandler._run_development_phase()
-        to avoid nested event-loop errors.
-
-        Args:
-            design_phase: The DesignDocumentationPhase instance.
-            feature_context: The FeatureContext for the design task.
-            timeout: Maximum seconds to wait for the thread. ``None``
-                means wait indefinitely.
-        """
-        result_box: dict[str, Any] = {}
-        error_box: dict[str, Exception] = {}
-        parent_ctx = capture_context()
-        # OT-710: Capture boundary result for thread propagation
-        from startd8.contractors.forensic_log import (
-            get_boundary_result,
-            set_boundary_result,
-            reset_boundary_result,
-        )
-        parent_boundary_result = get_boundary_result()
-
-        def _runner() -> None:
-            token = attach_context(parent_ctx)
-            br_token = set_boundary_result(parent_boundary_result)
-            try:
-                loop = asyncio.new_event_loop()
-                try:
-                    asyncio.set_event_loop(loop)
-                    result_box["result"] = loop.run_until_complete(
-                        design_phase.run(feature_context)
-                    )
-                except Exception as exc:
-                    error_box["error"] = exc
-                finally:
-                    loop.close()
-                    asyncio.set_event_loop(None)
-            finally:
-                reset_boundary_result(br_token)
-                detach_context(token)
-
-        thread = threading.Thread(target=_runner, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout)
-
-        if thread.is_alive():
-            # Race guard — thread may have completed between join() and is_alive()
-            if "result" in result_box or "error" in error_box:
-                logger.debug(
-                    "_run_design_async thread reported alive after join() "
-                    "but result_box is populated — treating as completed",
-                )
-            else:
-                logger.error(
-                    "DesignDocumentationPhase did not complete within %.0fs — "
-                    "abandoning background thread (daemon=True)",
-                    timeout,
-                )
-                raise TimeoutError(
-                    f"DesignDocumentationPhase.run() did not complete within {timeout}s"
-                )
-
-        if "error" in error_box:
-            raise error_box["error"]
-        if "result" not in result_box:
-            raise RuntimeError(
-                "_run_design_async: thread completed but produced neither result nor error"
-            )
-        return result_box["result"]
-
-    @staticmethod
     def _run_v2_generate(
         backend: Any,
         prompt: str,
@@ -3252,277 +2353,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 "_run_v2_generate: thread completed but produced neither result nor error"
             )
         return result_box["result"]
-
-    @staticmethod
-    def _run_v2_reviews_async(
-        design_phase: Any,
-        design_document: Any,
-        *,
-        feature_context: Any | None = None,
-        timeout: float | None = None,
-    ) -> tuple[Any, Any, list[Any]]:
-        """Run reviewer+arbiter evaluation for v2 design output in one async loop.
-
-        Enforces the same review envelope semantics as the canonical v1 path:
-        v2 output cannot be accepted without reviewer and arbiter evidence.
-        """
-        result_box: dict[str, Any] = {}
-        error_box: dict[str, Exception] = {}
-        parent_ctx = capture_context()
-        from startd8.contractors.forensic_log import (
-            get_boundary_result,
-            set_boundary_result,
-            reset_boundary_result,
-        )
-        parent_boundary_result = get_boundary_result()
-
-        async def _run_pair() -> tuple[Any, Any, list[Any]]:
-            reviewer = await design_phase._review_design(  # noqa: SLF001
-                design_document, ReviewRole.REVIEWER, feature_context=feature_context,
-            )
-            arbiter = await design_phase._review_design(  # noqa: SLF001
-                design_document, ReviewRole.ARBITER, feature_context=feature_context,
-            )
-            disagreements = design_phase._detect_disagreements(  # noqa: SLF001
-                reviewer, arbiter,
-            )
-            return reviewer, arbiter, disagreements
-
-        def _runner() -> None:
-            token = attach_context(parent_ctx)
-            br_token = set_boundary_result(parent_boundary_result)
-            try:
-                loop = asyncio.new_event_loop()
-                try:
-                    asyncio.set_event_loop(loop)
-                    result_box["result"] = loop.run_until_complete(_run_pair())
-                except Exception as exc:
-                    error_box["error"] = exc
-                finally:
-                    loop.close()
-                    asyncio.set_event_loop(None)
-            finally:
-                reset_boundary_result(br_token)
-                detach_context(token)
-
-        thread = threading.Thread(target=_runner, daemon=True)
-        thread.start()
-        thread.join(timeout=timeout)
-
-        if thread.is_alive():
-            # Race guard — thread may have completed between join() and is_alive()
-            if "result" in result_box or "error" in error_box:
-                logger.debug(
-                    "_run_v2_reviews_async thread reported alive after join() "
-                    "but result_box is populated — treating as completed",
-                )
-            else:
-                logger.error(
-                    "v2 design review did not complete within %.0fs — "
-                    "abandoning background thread (daemon=True)",
-                    timeout,
-                )
-                raise TimeoutError(
-                    f"v2 design review did not complete within {timeout}s"
-                )
-
-        if "error" in error_box:
-            raise error_box["error"]
-        if "result" not in result_box:
-            raise RuntimeError(
-                "_run_v2_reviews_async: thread completed but produced neither result nor error"
-            )
-        return result_box["result"]
-
-    @staticmethod
-    def _serialize_result(result: Any) -> dict[str, Any]:
-        """Serialize a DesignDocumentResult to a checkpoint-safe dict."""
-        payload = {
-            "design_document": result.design_document.raw_text,
-            "feature_name": result.design_document.feature_name,
-            "agreed": result.agreed,
-            "iterations": result.iterations,
-            "completed_at": result.completed_at.isoformat(),
-        }
-        reviewer_verdict = DesignPhaseHandler._serialize_review_verdict(
-            getattr(result, "reviewer_verdict", None),
-        )
-        if reviewer_verdict:
-            payload["reviewer_verdict"] = reviewer_verdict
-        arbiter_verdict = DesignPhaseHandler._serialize_review_verdict(
-            getattr(result, "arbiter_verdict", None),
-        )
-        if arbiter_verdict:
-            payload["arbiter_verdict"] = arbiter_verdict
-        reason_code = getattr(result, "non_agreement_reason_code", None)
-        if reason_code:
-            payload["non_agreement_reason_code"] = reason_code
-        final_iteration = getattr(result, "final_iteration", None)
-        if final_iteration is not None:
-            payload["final_iteration"] = final_iteration
-        resolution_audit = getattr(result, "resolution_audit", None)
-        if resolution_audit:
-            payload["resolution_audit"] = resolution_audit
-        prompt_telemetry = getattr(result, "prompt_telemetry", None)
-        if prompt_telemetry:
-            payload["prompt_telemetry"] = prompt_telemetry
-        disagreement_telemetry = getattr(result, "disagreement_telemetry", None)
-        if disagreement_telemetry:
-            payload["disagreement_telemetry"] = disagreement_telemetry
-        return payload
-
-    @staticmethod
-    def _coerce_float(value: Any, default: float = 0.0) -> float:
-        """Best-effort float coercion with sane fallback."""
-        try:
-            if value is None:
-                return default
-            coerced = float(value)
-            if coerced != coerced:  # NaN guard
-                return default
-            return coerced
-        except (TypeError, ValueError):
-            return default
-
-    @staticmethod
-    def _serialize_review_verdict(verdict: Any) -> dict[str, Any] | None:
-        """Serialize a review verdict object into a JSON-safe dict."""
-        if verdict is None:
-            return None
-        role_value = getattr(verdict, "role", None)
-        if role_value is not None and hasattr(role_value, "value"):
-            role_value = role_value.value
-        reviewed_at = getattr(verdict, "reviewed_at", None)
-        if reviewed_at is not None and hasattr(reviewed_at, "isoformat"):
-            reviewed_at = reviewed_at.isoformat()
-        return {
-            "role": str(role_value) if role_value is not None else "",
-            "approved": bool(getattr(verdict, "approved", False)),
-            "confidence": max(
-                0.0,
-                min(
-                    1.0,
-                    DesignPhaseHandler._coerce_float(
-                        getattr(verdict, "confidence", 0.0),
-                    ),
-                ),
-            ),
-            "concerns": list(getattr(verdict, "concerns", []) or []),
-            "suggestions": list(getattr(verdict, "suggestions", []) or []),
-            "summary": str(getattr(verdict, "summary", "") or ""),
-            "reviewed_at": reviewed_at,
-        }
-
-    @staticmethod
-    def _extract_review_feedback(verdict: dict[str, Any] | None) -> list[str]:
-        """Extract actionable feedback lines from a serialized verdict."""
-        if not isinstance(verdict, dict):
-            return []
-        feedback: list[str] = []
-        summary = str(verdict.get("summary", "") or "").strip()
-        if summary:
-            feedback.append(summary)
-        for concern in verdict.get("concerns", []) or []:
-            c = str(concern or "").strip()
-            if c:
-                feedback.append(c)
-        for suggestion in verdict.get("suggestions", []) or []:
-            s = str(suggestion or "").strip()
-            if s:
-                feedback.append(s)
-        deduped: list[str] = []
-        seen: set[str] = set()
-        for item in feedback:
-            if item not in seen:
-                seen.add(item)
-                deduped.append(item)
-        return deduped
-
-    @staticmethod
-    def _build_review_gate(
-        entry: dict[str, Any],
-        *,
-        pass_threshold: int,
-    ) -> dict[str, Any]:
-        """Compute AR-129 review threshold gate from dual-review evidence."""
-        reviewer = entry.get("reviewer_verdict")
-        arbiter = entry.get("arbiter_verdict")
-        reviewer_dict = reviewer if isinstance(reviewer, dict) else {}
-        arbiter_dict = arbiter if isinstance(arbiter, dict) else {}
-
-        has_dual_verdict = bool(reviewer_dict) and bool(arbiter_dict)
-        reviewer_approved = bool(
-            reviewer_dict.get("approved", entry.get("agreed", False))
-        )
-        arbiter_approved = bool(
-            arbiter_dict.get("approved", entry.get("agreed", False))
-        )
-
-        if has_dual_verdict:
-            reviewer_conf = max(
-                0.0,
-                min(
-                    1.0,
-                    DesignPhaseHandler._coerce_float(
-                        reviewer_dict.get("confidence"),
-                        0.0,
-                    ),
-                ),
-            )
-            arbiter_conf = max(
-                0.0,
-                min(
-                    1.0,
-                    DesignPhaseHandler._coerce_float(
-                        arbiter_dict.get("confidence"),
-                        0.0,
-                    ),
-                ),
-            )
-            score = int(round(min(reviewer_conf, arbiter_conf) * 100))
-            evidence_mode = "dual_verdict"
-        else:
-            # Backward-compatible fallback for older handoff payloads/tests
-            # that only persisted "agreed" without verdict objects.
-            # Use pass_threshold as the score when agreed (not a binary 100)
-            # to avoid inflating gate outcomes.
-            score = pass_threshold if entry.get("agreed") else 0
-            reviewer_conf = (pass_threshold / 100.0) if entry.get("agreed") else 0.0
-            arbiter_conf = (pass_threshold / 100.0) if entry.get("agreed") else 0.0
-            evidence_mode = "agreement_fallback"
-
-        passed = bool(entry.get("agreed")) and reviewer_approved and arbiter_approved and (
-            score >= pass_threshold
-        )
-        feedback = []
-        if score < pass_threshold:
-            feedback.append(
-                f"Review score {score} is below pass_threshold {pass_threshold}."
-            )
-        if not reviewer_approved or not arbiter_approved:
-            feedback.append("Reviewer and Arbiter must both approve the design.")
-        feedback.extend(DesignPhaseHandler._extract_review_feedback(reviewer_dict))
-        feedback.extend(DesignPhaseHandler._extract_review_feedback(arbiter_dict))
-        deduped_feedback: list[str] = []
-        seen_feedback: set[str] = set()
-        for item in feedback:
-            if item not in seen_feedback:
-                seen_feedback.add(item)
-                deduped_feedback.append(item)
-
-        return {
-            "score": score,
-            "threshold": pass_threshold,
-            "passed": passed,
-            "verdict": "pass" if passed else "fail",
-            "evidence_mode": evidence_mode,
-            "reviewer_approved": reviewer_approved,
-            "arbiter_approved": arbiter_approved,
-            "reviewer_confidence": reviewer_conf,
-            "arbiter_confidence": arbiter_conf,
-            "iterations": int(entry.get("iterations", 0) or 0),
-            "actionable_feedback": deduped_feedback[:12],
-        }
 
     @staticmethod
     def _flatten_parameter_values(
@@ -3702,7 +2532,12 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         quality_policy_mode: str,
         dry_run: bool,
     ) -> None:
-        """Apply AR-129 and AR-139 quality gates to a task design result."""
+        """Apply quality gates to a task design result.
+
+        After dual-review removal (REQ-DSR-001), the remaining gates are:
+        - Parameter completeness (AR-139)
+        - V2 structure validation (REQ-DSR-003)
+        """
         design_text = str(entry.get("design_document", "") or "")
         if not design_text:
             design_text = str(entry.get("implementation_spec", "") or "")
@@ -3714,27 +2549,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "line_count": len(design_text.splitlines()) if design_text else 0,
         }
 
-        review_gate = self._build_review_gate(
-            entry,
-            pass_threshold=self.config.pass_threshold,
-        )
-        if dry_run:
-            entry["review_gate"] = {
-                "score": None,
-                "threshold": self.config.pass_threshold,
-                "passed": True,
-                "verdict": "not_evaluated",
-                "evidence_mode": "dry_run",
-                "actionable_feedback": [],
-            }
-            entry["review_score"] = None
-            entry["review_passed"] = True
-            entry["review_verdict"] = "not_evaluated"
-        else:
-            entry["review_gate"] = review_gate
-            entry["review_score"] = review_gate["score"]
-            entry["review_passed"] = review_gate["passed"]
-            entry["review_verdict"] = review_gate["verdict"]
+        # REQ-DSR-003: V2 structure validation (zero LLM cost)
+        structure_validation = self._validate_v2_structure(design_text)
+        entry["structure_validation"] = structure_validation
 
         completeness = self._evaluate_parameter_completeness(
             design_text,
@@ -3761,38 +2578,45 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 else feedback
             )
 
-        if not dry_run and review_gate.get("actionable_feedback"):
-            review_feedback = "\n".join(
-                f"- {line}" for line in review_gate["actionable_feedback"][:8]
+        if structure_validation.get("missing_sections"):
+            structure_feedback = (
+                "Design document is missing required sections: "
+                + ", ".join(structure_validation["missing_sections"])
             )
-            entry["review_feedback"] = review_feedback
             prior_feedback = str(entry.get("next_iteration_feedback", "") or "").strip()
             entry["next_iteration_feedback"] = (
-                f"{prior_feedback}\n{review_feedback}".strip()
+                f"{prior_feedback}\n{structure_feedback}".strip()
                 if prior_feedback
-                else review_feedback
+                else structure_feedback
             )
 
         if dry_run:
             entry["completeness_gate_decision"] = "dry_run_report_only"
             return
 
-        review_failed = not review_gate.get("passed", False)
+        # REQ-DSR-003: Structure validation gate
+        structure_failed = not structure_validation.get("passed", True)
         completeness_failed = not completeness.get("passed", True)
 
-        if review_failed:
-            entry["quality_failure_reason"] = "REVIEW_THRESHOLD_NOT_MET"
-            entry.setdefault("non_agreement_reason_code", "REVIEW_THRESHOLD_NOT_MET")
-            if entry.get("status") in ("designed", "refined", "adopted"):
-                entry["status"] = "design_failed"
-            if review_gate.get("actionable_feedback"):
+        if structure_failed:
+            if quality_policy_mode == "block":
+                entry["quality_failure_reason"] = "STRUCTURE_VALIDATION_FAILED"
+                if entry.get("status") in ("designed", "refined", "adopted"):
+                    entry["status"] = "design_failed"
                 entry["error"] = (
-                    "AR-129 threshold gate failed after "
-                    f"{int(entry.get('iterations', 0) or 0)}/{self.config.max_iterations} "
-                    "iterations. " + " ".join(review_gate["actionable_feedback"][:3])
+                    f"V2 structure validation failed for {task.task_id}: "
+                    f"missing sections: {', '.join(structure_validation['missing_sections'])}"
                 )
-            entry["completeness_gate_decision"] = "not_evaluated_due_to_review_failure"
-            return
+                entry["completeness_gate_decision"] = "not_evaluated_due_to_structure_failure"
+                return
+            else:
+                logger.warning(
+                    "DESIGN: task %s structure validation failed (missing: %s) — "
+                    "continuing per %s policy",
+                    task.task_id,
+                    ", ".join(structure_validation["missing_sections"]),
+                    quality_policy_mode,
+                )
 
         if completeness_failed:
             if quality_policy_mode == "skip":
@@ -3819,14 +2643,14 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
     @staticmethod
     def _task_quality_passed(entry: dict[str, Any]) -> bool:
-        """Return whether a DESIGN task entry passes all quality gates."""
+        """Return whether a DESIGN task entry passes all quality gates.
+
+        After dual-review removal (REQ-DSR-001), checks:
+        - Status is a success state
+        - Parameter completeness passed
+        """
         status = entry.get("status", "")
         if status not in ("designed", "refined", "adopted"):
-            return False
-        if not bool(entry.get("agreed")):
-            return False
-        review_gate = entry.get("review_gate")
-        if isinstance(review_gate, dict) and not bool(review_gate.get("passed", False)):
             return False
         completeness = entry.get("parameter_completeness")
         if isinstance(completeness, dict) and not bool(completeness.get("passed", False)):
@@ -3842,128 +2666,27 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 or entry.get("non_agreement_reason_code")
                 or "DESIGN_FAILED"
             )
-        if not bool(entry.get("agreed")):
-            return str(entry.get("non_agreement_reason_code") or "DESIGN_NOT_AGREED")
-        review_gate = entry.get("review_gate")
-        if isinstance(review_gate, dict) and not bool(review_gate.get("passed", True)):
-            return "REVIEW_THRESHOLD_NOT_MET"
         completeness = entry.get("parameter_completeness")
         if isinstance(completeness, dict) and not bool(completeness.get("passed", False)):
             decision = str(entry.get("completeness_gate_decision", "") or "")
             if decision == "degraded":
                 return "PARAMETER_COMPLETENESS_DEGRADED"
             return "PARAMETER_COMPLETENESS_FAILED"
+        structure = entry.get("structure_validation")
+        if isinstance(structure, dict) and not bool(structure.get("passed", True)):
+            return "STRUCTURE_VALIDATION_FAILED"
         return None
 
     @staticmethod
-    def _evaluate_high_signal_floor(feature_context: Any) -> list[str]:
-        """Return missing high-signal context fields for design quality floor."""
-        missing: list[str] = []
-        requirements_text = (getattr(feature_context, "requirements_text", "") or "")
-        if not requirements_text.strip():
-            missing.append("requirements_text")
-        additional_context = getattr(feature_context, "additional_context", {}) or {}
-        has_arch_or_goals = bool(
-            additional_context.get("plan_architecture")
-            or additional_context.get("project_goals")
-        )
-        if not has_arch_or_goals:
-            missing.append("plan_architecture_or_project_goals")
-        if not additional_context.get("critical_parameters_checklist"):
-            missing.append("critical_parameters_checklist")
-        return missing
+    def _validate_v2_structure(raw_text: str) -> dict[str, Any]:
+        """Check V2 design document has all required section headers.
 
-    @staticmethod
-    def _is_truthy_flag(value: Any) -> bool:
-        """Parse permissive truthy values from context/env/config."""
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, (int, float)):
-            return bool(value)
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return False
-
-    @staticmethod
-    def _select_design_route(
-        task: SeedTask,
-        *,
-        use_modular_prompts: bool,
-        force_canonical: bool,
-        shared_file_manifest: dict[str, list[str]],
-        scaffold_existing_files: set[str],
-    ) -> dict[str, Any]:
-        """Policy-driven DESIGN routing with auditable criteria values."""
-        contested_file_count = sum(
-            1 for tf in task.target_files
-            if _normalize_target_path(tf) in shared_file_manifest
-        )
-        dependency_density = len(task.depends_on) / max(1, len(task.target_files))
-        edit_mode = any(tf in scaffold_existing_files for tf in task.target_files) or bool(
-            task.existing_content_hash
-        )
-        target_file_count = len(task.target_files)
-        estimated_loc = int(task.estimated_loc or 0)
-
-        risk_signals: list[str] = []
-        risk_score = 0
-        if estimated_loc >= 500:
-            risk_signals.append("large_loc")
-            risk_score += 2
-        elif estimated_loc >= 250:
-            risk_signals.append("medium_loc")
-            risk_score += 1
-        if contested_file_count > 0:
-            risk_signals.append("contested_files")
-            risk_score += 2
-        if dependency_density >= 1.0:
-            risk_signals.append("high_dependency_density")
-            risk_score += 1
-        if edit_mode:
-            risk_signals.append("edit_mode")
-            risk_score += 1
-        if target_file_count > 2:
-            risk_signals.append("wide_file_scope")
-            risk_score += 1
-
-        route = "v1"
-        reason = "modular_disabled"
-        if force_canonical:
-            route = "v1"
-            reason = "kill_switch_force_canonical"
-        elif use_modular_prompts:
-            if risk_score >= 3:
-                route = "v1"
-                reason = "policy_high_risk_canonical"
-            else:
-                route = "v2"
-                reason = "policy_low_risk_modular"
-
-        return {
-            "selected_prompt_version": route,
-            "reason": reason,
-            "criteria": {
-                "estimated_loc": estimated_loc,
-                "contested_file_count": contested_file_count,
-                "dependency_density": round(dependency_density, 3),
-                "edit_mode": edit_mode,
-                "target_file_count": target_file_count,
-                "depends_on_count": len(task.depends_on),
-            },
-            "risk_score": risk_score,
-            "risk_signals": risk_signals,
-            "force_canonical": force_canonical,
-            "modular_opt_in": use_modular_prompts,
-        }
-
-    @staticmethod
-    def _path_tag_for_prompt_version(prompt_version: str) -> str:
-        """Normalize prompt_version into canonical/variant path tags."""
-        if prompt_version == "v1":
-            return "canonical"
-        if prompt_version == "v2":
-            return "variant"
-        return "unknown"
+        REQ-DSR-003: Zero-LLM-cost structural validation replacing the
+        dual-review gate signal.  Uses DesignSectionV2 enum sections.
+        """
+        required = ["## What to Build", "## Files", "## API Surface", "## Constraints"]
+        missing = [h for h in required if h not in raw_text]
+        return {"passed": len(missing) == 0, "missing_sections": missing}
 
     # ------------------------------------------------------------------
     # Public execute
@@ -3980,25 +2703,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         tasks: list[SeedTask] = _ensure_context_loaded(context)
 
         logger.info("DESIGN phase: processing %d tasks (dry_run=%s)", len(tasks), dry_run)
-        if self.config.use_modular_prompts:
-            logger.warning(
-                "DESIGN: modular prompt path explicitly enabled "
-                "(use_modular_prompts=True)"
-            )
-        _force_canonical_flag = context.get(
-            "force_canonical_design_route",
-            (
-                self.config.force_canonical_design_route
-                or os.getenv("STARTD8_FORCE_CANONICAL_DESIGN_ROUTE")
-            ),
-        )
-        _force_canonical_design_route = self._is_truthy_flag(_force_canonical_flag)
-        if _force_canonical_design_route:
-            logger.warning(
-                "DESIGN: canonical route kill switch enabled "
-                "(force_canonical_design_route=%r)",
-                _force_canonical_flag,
-            )
 
         # REQ-PD-010: Source checksum drift detection (advisory only)
         _source_checksum = context.get("source_checksum")
@@ -4093,9 +2797,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         tasks_refined = 0
         route_decision_counts: dict[str, int] = defaultdict(int)
         route_quality_counts: dict[str, dict[str, int]] = defaultdict(
-            lambda: {"passed": 0, "failed": 0}
-        )
-        path_quality_counts: dict[str, dict[str, int]] = defaultdict(
             lambda: {"passed": 0, "failed": 0}
         )
 
@@ -4561,26 +3262,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         **prior,
                         "status": "adopted",
                         "adopted_from": "prior_design_results",
+                        "prompt_version": "v2",
+                        "path_tag": "variant",
                     }
-                    adopted_prompt_version = adopted_entry.get(
-                        "prompt_version", "v1",
-                    )
-                    adopted_path_tag = self._path_tag_for_prompt_version(
-                        adopted_prompt_version
-                    )
-                    adopted_entry["path_tag"] = adopted_path_tag
-                    adopted_entry.setdefault(
-                        "route_policy",
-                        {
-                            "selected_prompt_version": adopted_prompt_version,
-                            "reason": "adopted_prior_result",
-                            "criteria": {},
-                            "risk_score": 0,
-                            "risk_signals": [],
-                            "force_canonical": _force_canonical_design_route,
-                            "modular_opt_in": self.config.use_modular_prompts,
-                        },
-                    )
                     self._apply_design_quality_gates(
                         task=task,
                         entry=adopted_entry,
@@ -4589,7 +3273,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         dry_run=False,
                     )
                     design_results[task.task_id] = adopted_entry
-                    route_decision_counts[adopted_prompt_version] += 1
+                    route_decision_counts["v2"] += 1
                     if adopted_entry.get("status") == "design_failed":
                         tasks_failed += 1
                     else:
@@ -4598,12 +3282,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         tasks_agreed += 1
                     adopted_quality_passed = self._task_quality_passed(adopted_entry)
                     if adopted_quality_passed:
-                        route_quality_counts[adopted_prompt_version]["passed"] += 1
-                        path_quality_counts[adopted_path_tag]["passed"] += 1
+                        route_quality_counts["v2"]["passed"] += 1
                         adopted_entry["quality_outcome"] = "pass"
                     else:
-                        route_quality_counts[adopted_prompt_version]["failed"] += 1
-                        path_quality_counts[adopted_path_tag]["failed"] += 1
+                        route_quality_counts["v2"]["failed"] += 1
                         adopted_entry["quality_outcome"] = "fail"
 
                     doc_text = prior["design_document"]
@@ -4763,22 +3445,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 retryable_status_codes=(429, 500, 502, 503, 504, 529),
             )
             _max_attempts = 1 + self.config.design_task_retries
-            route_policy = self._select_design_route(
-                task,
-                use_modular_prompts=self.config.use_modular_prompts,
-                force_canonical=_force_canonical_design_route,
-                shared_file_manifest=shared_file_manifest,
-                scaffold_existing_files=_scaffold_existing_for_route,
-            )
-            selected_prompt_version = route_policy["selected_prompt_version"]
-            logger.info(
-                "DESIGN route policy: task=%s -> %s (%s) criteria=%s risk=%d",
-                task.task_id,
-                selected_prompt_version,
-                route_policy["reason"],
-                route_policy["criteria"],
-                route_policy["risk_score"],
-            )
+            # REQ-DSR-002: V2 is the sole path (V1 removed)
+            selected_prompt_version = "v2"
 
             for _attempt in range(_max_attempts):
                 try:
@@ -4793,151 +3461,79 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             _wt_root / ".startd8" / "walkthrough"
                             / "design" / task.task_id
                         )
-                    feature_context = None
-                    if selected_prompt_version == "v2":
-                        # ── V2: modular prompt + single LLM call ──
-                        # Dual-review envelope is still required for acceptance.
-                        from startd8.contractors.artisan_phases.design_prompts import (
-                            assemble_design_prompt,
+                    # ── V2: modular prompt + single LLM call (REQ-DSR-001) ──
+                    from startd8.contractors.artisan_phases.design_prompts import (
+                        assemble_design_prompt,
+                    )
+                    from startd8.contractors.artisan_phases.design_documentation import (
+                        DesignDocument,
+                    )
+                    _v2_system, _v2_user, _v2_max_tokens = assemble_design_prompt(
+                        task,
+                        plan_goals=plan_goals,
+                        architectural_context=arch_context,
+                        prior_design_summaries=prior_summaries,
+                        calibration=task_calibration,
+                        design_max_tokens_override=self.config.design_max_tokens,
+                        dependency_designs=_dep_designs,
+                        scaffold_existing_files=context.get(
+                            "scaffold", {},
+                        ).get("existing_target_files", []),
+                        staleness_classification=_scaffold.get(
+                            "staleness_classification",
+                        ),
+                        wave_index=task.wave_index,
+                        wave_metadata=context.get("wave_metadata"),
+                        parameter_sources=context.get("parameter_sources", {}),
+                        semantic_conventions=context.get(
+                            "semantic_conventions", {},
+                        ),
+                        refine_suggestions=inv_refine_suggestions,
+                        open_questions=context.get("onboarding_open_questions"),
+                        calibration_hints=inv_calibration_hints,
+                        complexity_dimensions=context.get("complexity_dimensions"),
+                        prior_design_text=prior_design_text,
+                        # Phase 5: Manifest context for V2 path
+                        manifest_registry=_design_manifest_registry,
+                        manifest_context_budget=self.config.manifest_context_budget,
+                        enable_introspect=self.config.enable_introspect,
+                    )
+                    if carry_forward_quality_feedback:
+                        _v2_user = (
+                            _v2_user
+                            + "\n\n# Prior Quality Feedback\n"
+                            + carry_forward_quality_feedback
                         )
-                        from startd8.contractors.artisan_phases.design_documentation import (
-                            DesignDocument,
+                    _high_signal_missing: list[str] = []
+                    if not (
+                        (task.requirements_text or "").strip()
+                        or (context.get("plan_document_text") or "").strip()
+                    ):
+                        _high_signal_missing.append("requirements_text")
+                    if not (arch_context or plan_goals):
+                        _high_signal_missing.append("plan_architecture_or_project_goals")
+                    if not context.get("parameter_sources"):
+                        _high_signal_missing.append("critical_parameters_checklist")
+                    if _high_signal_missing:
+                        logger.warning(
+                            "DESIGN task %s high-signal floor degraded (v2): %s",
+                            task.task_id,
+                            ", ".join(_high_signal_missing),
                         )
-                        _v2_system, _v2_user, _v2_max_tokens = assemble_design_prompt(
-                            task,
-                            plan_goals=plan_goals,
-                            architectural_context=arch_context,
-                            prior_design_summaries=prior_summaries,
-                            calibration=task_calibration,
-                            design_max_tokens_override=self.config.design_max_tokens,
-                            dependency_designs=_dep_designs,
-                            scaffold_existing_files=context.get(
-                                "scaffold", {},
-                            ).get("existing_target_files", []),
-                            staleness_classification=_scaffold.get(
-                                "staleness_classification",
-                            ),
-                            wave_index=task.wave_index,
-                            wave_metadata=context.get("wave_metadata"),
-                            parameter_sources=context.get("parameter_sources", {}),
-                            semantic_conventions=context.get(
-                                "semantic_conventions", {},
-                            ),
-                            refine_suggestions=inv_refine_suggestions,
-                            open_questions=context.get("onboarding_open_questions"),
-                            calibration_hints=inv_calibration_hints,
-                            complexity_dimensions=context.get("complexity_dimensions"),
-                            prior_design_text=prior_design_text,
-                            # Phase 5: Manifest context for V2 path
-                            manifest_registry=_design_manifest_registry,
-                            manifest_context_budget=self.config.manifest_context_budget,
-                            enable_introspect=self.config.enable_introspect,
+                    if _wt_capture_dir is not None:
+                        _wt_capture_dir.mkdir(parents=True, exist_ok=True)
+                        (_wt_capture_dir / "generate_system_prompt.md").write_text(
+                            _v2_system,
+                            encoding="utf-8",
                         )
-                        if carry_forward_quality_feedback:
-                            _v2_user = (
-                                _v2_user
-                                + "\n\n# Prior Quality Feedback\n"
-                                + carry_forward_quality_feedback
-                            )
-                        _high_signal_missing: list[str] = []
-                        if not (
-                            (task.requirements_text or "").strip()
-                            or (context.get("plan_document_text") or "").strip()
-                        ):
-                            _high_signal_missing.append("requirements_text")
-                        if not (arch_context or plan_goals):
-                            _high_signal_missing.append("plan_architecture_or_project_goals")
-                        if not context.get("parameter_sources"):
-                            _high_signal_missing.append("critical_parameters_checklist")
-                        if _high_signal_missing:
-                            logger.warning(
-                                "DESIGN task %s high-signal floor degraded (v2): %s",
-                                task.task_id,
-                                ", ".join(_high_signal_missing),
-                            )
-                        if _wt_capture_dir is not None:
-                            _wt_capture_dir.mkdir(parents=True, exist_ok=True)
-                            (_wt_capture_dir / "generate_system_prompt.md").write_text(
-                                _v2_system,
-                                encoding="utf-8",
-                            )
-                            (_wt_capture_dir / "generate_user_prompt.md").write_text(
-                                _v2_user,
-                                encoding="utf-8",
-                            )
-                            (_wt_capture_dir / "prompt_diagnostics.json").write_text(
-                                json.dumps(
-                                    {
-                                        "generate": {
-                                            "kind": "design_generate",
-                                            "iteration": 1,
-                                            "prompt_chars": len(_v2_user),
-                                            "system_prompt_chars": len(_v2_system),
-                                            "prompt_tokens_estimate": len(_v2_user) // 4,
-                                            "system_prompt_tokens_estimate": len(_v2_system) // 4,
-                                            "max_tokens": _v2_max_tokens,
-                                        }
-                                    },
-                                    indent=2,
-                                    default=str,
-                                ),
-                                encoding="utf-8",
-                            )
-                            _v2_raw = "[walkthrough placeholder]"
-                        else:
-                            _v2_raw = self._run_v2_generate(
-                                backend, _v2_user, _v2_system,
-                                max_tokens=_v2_max_tokens,
-                                timeout=self.config.development_timeout_seconds,
-                            )
-                        _v2_design = DesignDocument(
-                            feature_name=task.title,
-                            sections={},
-                            raw_text=_v2_raw,
-                            generated_at=datetime.datetime.now(
-                                tz=datetime.timezone.utc,
-                            ),
-                            iteration=1,
+                        (_wt_capture_dir / "generate_user_prompt.md").write_text(
+                            _v2_user,
+                            encoding="utf-8",
                         )
-                        _v2_design_phase = self._get_design_phase(
-                            prompt_capture_dir=_wt_capture_dir,
-                        )
-                        _reviewer_verdict, _arbiter_verdict, _v2_disagreements = (
-                            self._run_v2_reviews_async(
-                                _v2_design_phase,
-                                _v2_design,
-                                timeout=self.config.development_timeout_seconds,
-                            )
-                        )
-                        _v2_agreed = (
-                            not _v2_disagreements
-                            and _reviewer_verdict.approved
-                            and _arbiter_verdict.approved
-                        )
-                        task_cost = backend.total_cost_usd - cost_before
-                        total_cost += task_cost
-                        serialized = {
-                            "design_document": _v2_raw,
-                            "feature_name": task.title,
-                            "agreed": _v2_agreed,
-                            "iterations": 1,
-                            "completed_at": datetime.datetime.now(
-                                tz=datetime.timezone.utc,
-                            ).isoformat(),
-                            "prompt_version": "v2",
-                            "reviewer_verdict": self._serialize_review_verdict(
-                                _reviewer_verdict
-                            ),
-                            "arbiter_verdict": self._serialize_review_verdict(
-                                _arbiter_verdict
-                            ),
-                            "reviewer_summary": _reviewer_verdict.summary,
-                            "arbiter_summary": _arbiter_verdict.summary,
-                            "review_disagreement_count": len(_v2_disagreements),
-                            "prompt_telemetry": {
-                                "total_calls": 1,
-                                "calls": [
-                                    {
+                        (_wt_capture_dir / "prompt_diagnostics.json").write_text(
+                            json.dumps(
+                                {
+                                    "generate": {
                                         "kind": "design_generate",
                                         "iteration": 1,
                                         "prompt_chars": len(_v2_user),
@@ -4946,122 +3542,57 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                         "system_prompt_tokens_estimate": len(_v2_system) // 4,
                                         "max_tokens": _v2_max_tokens,
                                     }
-                                ],
-                            },
-                            "disagreement_telemetry": {
-                                "review_pair_count": 1,
-                                "re_review_pair_count": 0,
-                                "re_review_rate": 0.0,
-                                "disagreement_iteration_count": (
-                                    1 if _v2_disagreements else 0
-                                ),
-                                "disagreement_count": len(_v2_disagreements),
-                                "disagreement_categories": [
-                                    (
-                                        d.disagreement_type.value
-                                        if hasattr(d, "disagreement_type")
-                                        else str(
-                                            (
-                                                d.get("type")
-                                                if isinstance(d, dict)
-                                                else "unknown"
-                                            )
-                                        )
-                                    )
-                                    for d in _v2_disagreements
-                                ],
-                                "max_confidence_gap": abs(
-                                    _reviewer_verdict.confidence
-                                    - _arbiter_verdict.confidence
-                                ),
-                            },
-                        }
-                        if not _v2_agreed:
-                            serialized["non_agreement_reason_code"] = (
-                                "DISAGREEMENT_UNRESOLVED"
-                                if _v2_disagreements
-                                else "DUAL_REJECTION"
-                            )
-                        serialized["high_signal_floor_status"] = (
-                            "degraded" if _high_signal_missing else "ok"
-                        )
-                        if _high_signal_missing:
-                            serialized["high_signal_floor_missing"] = _high_signal_missing
-                    else:
-                        # ── V1: monolithic context + DesignDocumentationPhase ──
-                        feature_context = self._task_to_feature_context(
-                            task,
-                            plan_goals=plan_goals,
-                            architectural_context=arch_context,
-                            prior_design_summaries=prior_summaries,
-                            calibration=task_calibration,
-                            design_max_tokens_override=self.config.design_max_tokens,
-                            parameter_sources=context.get("parameter_sources", {}),
-                            semantic_conventions=context.get("semantic_conventions", {}),
-                            prior_design_text=prior_design_text,
-                            prior_quality_feedback=(
-                                carry_forward_quality_feedback or None
+                                },
+                                indent=2,
+                                default=str,
                             ),
-                            inv_derivation_rules=inv_derivation_rules,
-                            inv_resolved_parameters=inv_resolved_parameters,
-                            inv_output_contracts=inv_output_contracts,
-                            inv_refine_suggestions=inv_refine_suggestions,
-                            inv_plan_document=inv_plan_document,
-                            inv_calibration_hints=inv_calibration_hints,
-                            inv_open_questions=context.get("onboarding_open_questions"),
-                            inv_dependency_graph=context.get("onboarding_dependency_graph"),
-                            scaffold_existing_files=context.get(
-                                "scaffold", {},
-                            ).get("existing_target_files", []),
-                            # CCD-204: Lane-aware design context
-                            lane_prior_designs=lane_prior_designs,
-                            shared_file_manifest=shared_file_manifest,
-                            wave_index=task.wave_index,
-                            lane_peer_token_budget=self.config.design_lane_peer_token_budget,
-                            task_title_lookup=_task_title_lookup,
-                            bridge_context=_bridge_context if _bridge_context else None,
-                            # Phase 5: Manifest context for DESIGN
-                            manifest_registry=_design_manifest_registry,
-                            manifest_context_budget=self.config.manifest_context_budget,
-                            # Phase 6: Call graph budget for DESIGN
-                            call_graph_context_budget=self.config.call_graph_context_budget,
-                            # Phase 5: Introspect enrichment toggle for DESIGN
-                            enable_introspect=self.config.enable_introspect,
+                            encoding="utf-8",
                         )
-                        _high_signal_missing = self._evaluate_high_signal_floor(
-                            feature_context
-                        )
-                        if _high_signal_missing:
-                            logger.warning(
-                                "DESIGN task %s high-signal floor degraded (v1): %s",
-                                task.task_id,
-                                ", ".join(_high_signal_missing),
-                            )
-                        design_phase = self._get_design_phase(
-                            prompt_capture_dir=_wt_capture_dir,
-                        )
-                        result = self._run_design_async(
-                            design_phase, feature_context,
+                        _v2_raw = "[walkthrough placeholder]"
+                    else:
+                        _v2_raw = self._run_v2_generate(
+                            backend, _v2_user, _v2_system,
+                            max_tokens=_v2_max_tokens,
                             timeout=self.config.development_timeout_seconds,
                         )
-                        task_cost = backend.total_cost_usd - cost_before
-                        total_cost += task_cost
-                        serialized = self._serialize_result(result)
-                        serialized.setdefault("prompt_version", "v1")
-                        serialized["high_signal_floor_status"] = (
-                            "degraded" if _high_signal_missing else "ok"
-                        )
-                        if _high_signal_missing:
-                            serialized["high_signal_floor_missing"] = _high_signal_missing
+                    task_cost = backend.total_cost_usd - cost_before
+                    total_cost += task_cost
+                    serialized = {
+                        "design_document": _v2_raw,
+                        "feature_name": task.title,
+                        # DEPRECATED: always True after dual-review removal; use design_gate_passed
+                        "agreed": True,
+                        "iterations": 1,
+                        "completed_at": datetime.datetime.now(
+                            tz=datetime.timezone.utc,
+                        ).isoformat(),
+                        "prompt_version": "v2",
+                        "prompt_telemetry": {
+                            "total_calls": 1,
+                            "calls": [
+                                {
+                                    "kind": "design_generate",
+                                    "iteration": 1,
+                                    "prompt_chars": len(_v2_user),
+                                    "system_prompt_chars": len(_v2_system),
+                                    "prompt_tokens_estimate": len(_v2_user) // 4,
+                                    "system_prompt_tokens_estimate": len(_v2_system) // 4,
+                                    "max_tokens": _v2_max_tokens,
+                                }
+                            ],
+                        },
+                    }
+                    serialized["high_signal_floor_status"] = (
+                        "degraded" if _high_signal_missing else "ok"
+                    )
+                    if _high_signal_missing:
+                        serialized["high_signal_floor_missing"] = _high_signal_missing
 
-                    # ── Shared post-processing (both v1 and v2) ──
+                    # ── Post-processing ──
                     serialized["status"] = "refined" if prior_design_text else "designed"
                     serialized["cost"] = task_cost
-                    serialized["prompt_version"] = selected_prompt_version
-                    serialized["path_tag"] = self._path_tag_for_prompt_version(
-                        selected_prompt_version
-                    )
-                    serialized["route_policy"] = route_policy
+                    serialized["prompt_version"] = "v2"
+                    serialized["path_tag"] = "variant"
                     self._apply_design_quality_gates(
                         task=task,
                         entry=serialized,
@@ -5087,6 +3618,15 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                 _discovered,
                             )
 
+                    # REQ-DSR-004: design_gate_passed reflects actual quality outcome
+                    _completeness_ok = bool(
+                        serialized.get("parameter_completeness", {}).get("passed", True)
+                    )
+                    _structure_ok = bool(
+                        serialized.get("structure_validation", {}).get("passed", True)
+                    )
+                    serialized["design_gate_passed"] = _completeness_ok and _structure_ok
+
                     if serialized.get("status") == "design_failed":
                         tasks_failed += 1
                     elif prior_design_text:
@@ -5095,15 +3635,13 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         tasks_designed += 1
                     if serialized.get("agreed"):
                         tasks_agreed += 1
-                    route_decision_counts[selected_prompt_version] += 1
+                    route_decision_counts["v2"] += 1
                     task_quality_passed = self._task_quality_passed(serialized)
                     if task_quality_passed:
-                        route_quality_counts[selected_prompt_version]["passed"] += 1
-                        path_quality_counts[serialized["path_tag"]]["passed"] += 1
+                        route_quality_counts["v2"]["passed"] += 1
                         serialized["quality_outcome"] = "pass"
                     else:
-                        route_quality_counts[selected_prompt_version]["failed"] += 1
-                        path_quality_counts[serialized["path_tag"]]["failed"] += 1
+                        route_quality_counts["v2"]["failed"] += 1
                         serialized["quality_outcome"] = "fail"
 
                     # Accumulate cross-task summary for progressive context
@@ -5128,41 +3666,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         )
                     )
 
-                    # REQ-PD-012/014: Foundation coverage + provenance (v1 only —
-                    # v2 modules track their own fragment-level coverage)
-                    if selected_prompt_version == "v1" and feature_context is not None:
-                        _foundation_field_keys = [
-                            "plan_architecture", "plan_risks",
-                            "plan_verification_strategy", "refine_suggestions",
-                            "complexity_guidance", "api_signatures",
-                            "transport_protocol", "dependency_designs",
-                            "wave_context", "staleness_guidance",
-                        ]
-                        _fc_additional = feature_context.additional_context
-                        _fc_count = sum(
-                            1 for k in _foundation_field_keys if k in _fc_additional
-                        )
-                        # +1 for requirements_text
-                        if feature_context.requirements_text:
-                            _fc_count += 1
-                        _foundation_coverage = _fc_count / 11.0
-                        design_results[task.task_id]["foundation_coverage"] = _foundation_coverage
-                        if _foundation_coverage < 0.3:
-                            logger.warning(
-                                "DESIGN: task %s foundation_coverage=%.1f%% (<30%%)",
-                                task.task_id, _foundation_coverage * 100,
-                            )
-                        # REQ-PD-014: Foundation provenance
-                        design_results[task.task_id]["foundation_provenance"] = {
-                            "chain_status": context.get("_pi_design_chain_status", "unknown"),
-                            "fields_consumed": [
-                                k for k in _foundation_field_keys if k in _fc_additional
-                            ] + (["requirements_text"] if feature_context.requirements_text else []),
-                            "foundation_coverage": _foundation_coverage,
-                            "source_checksum_status": context.get("_source_checksum_status", "unavailable"),
-                            "complexity_composite": context.get("complexity_composite"),
-                        }
-
                     # Write design doc to output_dir if configured
                     if self.output_dir:
                         out_path = Path(self.output_dir) / f"{task.task_id}-design.md"
@@ -5178,29 +3681,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         str(serialized.get("status", "designed")),
                     )
                     _task_span.set_attribute("task.prompt_version", selected_prompt_version)
-                    # CCD-601: lane-peer context injection attributes
-                    # Compute truncation flag: same estimation as _apply_lane_peer_token_budget
-                    _has_current_task_context = bool(
-                        lane_prior_designs
-                        and lane_prior_designs[-1].get("task_id") == task.task_id
-                    )
-                    if _has_current_task_context:
-                        _peer_count = len(lane_prior_designs) - 1
-                        _peers_before_this = lane_prior_designs[:-1]
-                    else:
-                        _peer_count = len(lane_prior_designs)
-                        _peers_before_this = lane_prior_designs
-                    _peer_chars = sum(len(d.get("design_document", "")) for d in _peers_before_this)
-                    _was_truncated = (
-                        _peer_chars // 4 > self.config.design_lane_peer_token_budget
-                        if _peers_before_this and self.config.design_lane_peer_token_budget > 0
-                        else False
-                    )
+                    # REQ-DSR-008: design_gate_passed telemetry
                     _task_span.set_attribute(
-                        "task.lane_prior_designs_count", _peer_count,
-                    )
-                    _task_span.set_attribute(
-                        "task.lane_prior_designs_truncated", _was_truncated,
+                        "design.design_gate_passed",
+                        bool(serialized.get("design_gate_passed", True)),
                     )
                     break  # success — exit retry loop
 
@@ -5232,17 +3716,13 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         "status": "design_failed",
                         "error": str(exc),
                         "cost": task_cost,
-                        "prompt_version": selected_prompt_version,
-                        "path_tag": self._path_tag_for_prompt_version(
-                            selected_prompt_version
-                        ),
+                        "prompt_version": "v2",
+                        "path_tag": "variant",
                         "quality_outcome": "fail",
+                        "design_gate_passed": False,
                     }
-                    route_decision_counts[selected_prompt_version] += 1
-                    route_quality_counts[selected_prompt_version]["failed"] += 1
-                    path_quality_counts[design_results[task.task_id]["path_tag"]][
-                        "failed"
-                    ] += 1
+                    route_decision_counts["v2"] += 1
+                    route_quality_counts["v2"]["failed"] += 1
                     break  # non-retryable or final attempt — exit retry loop
 
             # Capture span context before closing (E6 provenance linking)
@@ -5600,8 +4080,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 "prompt_version": entry.get("prompt_version", "n/a"),
                 "path_tag": entry.get("path_tag", "unknown"),
                 "quality_outcome": "pass" if passed else "fail",
-                "review_gate": entry.get("review_gate"),
                 "parameter_completeness": entry.get("parameter_completeness"),
+                "structure_validation": entry.get("structure_validation"),
+                "design_gate_passed": entry.get("design_gate_passed"),
             }
         quality_total = quality_passed + quality_failed
         agreement_rate = (
@@ -5621,11 +4102,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         prompt_tasks_with_telemetry = 0
         prompt_dropped_field_total = 0
         prompt_truncation_event_count = 0
-        disagreement_count_total = 0
-        disagreement_pair_total = 0
-        re_review_pair_total = 0
-        resolution_action_summary: dict[str, int] = defaultdict(int)
-        resolution_outcome_summary: dict[str, int] = defaultdict(int)
         for entry in design_results.values():
             if not isinstance(entry, dict):
                 continue
@@ -5647,27 +4123,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     prompt_dropped_field_total += dropped
                     if ctx_budget.get("compression_steps"):
                         prompt_truncation_event_count += 1
-            disagreement_info = entry.get("disagreement_telemetry")
-            if isinstance(disagreement_info, dict):
-                disagreement_count_total += int(
-                    disagreement_info.get("disagreement_count", 0) or 0
-                )
-                disagreement_pair_total += int(
-                    disagreement_info.get("review_pair_count", 0) or 0
-                )
-                re_review_pair_total += int(
-                    disagreement_info.get("re_review_pair_count", 0) or 0
-                )
-            resolution_info = entry.get("resolution_audit")
-            if isinstance(resolution_info, dict):
-                for action, count in (resolution_info.get("resolution_action_counts", {}) or {}).items():
-                    resolution_action_summary[action] += int(count or 0)
-                for event in resolution_info.get("events", []) or []:
-                    if not isinstance(event, dict):
-                        continue
-                    outcome = event.get("outcome")
-                    if outcome:
-                        resolution_outcome_summary[str(outcome)] += 1
 
         prompt_telemetry_summary = {
             "tasks_with_telemetry": prompt_tasks_with_telemetry,
@@ -5677,22 +4132,11 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "dropped_field_total": prompt_dropped_field_total,
             "truncation_event_count": prompt_truncation_event_count,
         }
-        disagreement_summary = {
-            "disagreement_count_total": disagreement_count_total,
-            "review_pair_total": disagreement_pair_total,
-            "re_review_pair_total": re_review_pair_total,
-            "re_review_rate": (
-                re_review_pair_total / disagreement_pair_total
-                if disagreement_pair_total > 0
-                else 0.0
-            ),
-            "resolution_action_counts": dict(resolution_action_summary),
-            "resolution_outcome_counts": dict(resolution_outcome_summary),
-        }
         route_quality_summary = {
             route: {
                 "passed": counts["passed"],
                 "failed": counts["failed"],
+                # Post-dual-review-removal: measures generation success, not reviewer agreement
                 "agreement_rate": (
                     counts["passed"] / (counts["passed"] + counts["failed"])
                     if (counts["passed"] + counts["failed"]) > 0
@@ -5701,33 +4145,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             }
             for route, counts in route_quality_counts.items()
         }
-        path_quality_summary = {
-            path_tag: {
-                "passed": counts["passed"],
-                "failed": counts["failed"],
-                "agreement_rate": (
-                    counts["passed"] / (counts["passed"] + counts["failed"])
-                    if (counts["passed"] + counts["failed"]) > 0
-                    else 0.0
-                ),
-            }
-            for path_tag, counts in path_quality_counts.items()
-        }
-        canonical_stats = path_quality_summary.get(
-            "canonical", {"passed": 0, "failed": 0, "agreement_rate": 0.0}
-        )
-        variant_stats = path_quality_summary.get(
-            "variant", {"passed": 0, "failed": 0, "agreement_rate": 0.0}
-        )
-        path_comparison = {
-            "canonical": canonical_stats,
-            "variant": variant_stats,
-            "agreement_rate_delta_canonical_minus_variant": (
-                canonical_stats["agreement_rate"] - variant_stats["agreement_rate"]
-            ),
-        }
-        context["design_path_quality"] = path_quality_summary
-        context["design_path_comparison"] = path_comparison
         output: dict[str, Any] = {
             "tasks_designed": tasks_designed,
             "tasks_refined": tasks_refined,
@@ -5742,10 +4159,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "design_quality": design_quality,
             "route_decisions": dict(route_decision_counts),
             "route_quality": route_quality_summary,
-            "path_quality": path_quality_summary,
-            "path_comparison": path_comparison,
             "prompt_telemetry": prompt_telemetry_summary,
-            "disagreement_summary": disagreement_summary,
             "total_cost": total_cost,
         }
         if self.output_dir:
@@ -14548,7 +12962,6 @@ class ContextSeedHandlers:
         tier2_agent: Optional[str] = None,
         skip_refinement: Optional[bool] = None,
         walkthrough: Optional[bool] = None,
-        force_canonical_design_route: Optional[bool] = None,
         enforce_post_revision_rereview: Optional[bool] = None,
         complexity_routing_enabled: Optional[bool] = None,
         tier3_agent: Optional[str] = None,
@@ -14588,7 +13001,6 @@ class ContextSeedHandlers:
             tier2_agent: T2 refinement agent spec (default: Sonnet).
             skip_refinement: Skip T2 refinement (use T1 draft directly).
             walkthrough: Build and persist all LLM prompts without calling LLMs.
-            force_canonical_design_route: Force canonical DESIGN path (v1) for all tasks.
             enforce_post_revision_rereview: Require reviewer+arbiter re-review after revision.
             complexity_routing_enabled: Enable/disable complexity routing.
             tier3_agent: Tier 3 drafter agent spec override.
@@ -14645,7 +13057,6 @@ class ContextSeedHandlers:
             ("tier2_agent", tier2_agent),
             ("skip_refinement", skip_refinement),
             ("walkthrough", walkthrough),
-            ("force_canonical_design_route", force_canonical_design_route),
             ("enforce_post_revision_rereview", enforce_post_revision_rereview),
             ("complexity_routing_enabled", complexity_routing_enabled),
             ("tier3_agent", tier3_agent),

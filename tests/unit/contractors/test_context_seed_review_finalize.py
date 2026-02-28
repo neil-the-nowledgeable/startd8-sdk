@@ -217,8 +217,8 @@ def test_finalize_ar166_persists_forensic_artifacts_and_manifest_pointers(tmp_pa
                 "status": "designed",
                 "implementation_spec": "spec text",
                 "design_document": "draft text",
-                "reviewer_verdict": {"approved": True, "confidence": 0.9},
-                "arbiter_verdict": {"approved": True, "confidence": 0.92},
+                "agreed": True,
+                "design_gate_passed": True,
             },
         },
         "integration_results": {

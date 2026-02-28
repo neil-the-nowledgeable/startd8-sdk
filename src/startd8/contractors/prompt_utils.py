@@ -184,7 +184,7 @@ def format_tiered_context(
     and finally truncates T1 strings.
 
     Args:
-        additional_context: The ``FeatureContext.additional_context`` dict.
+        additional_context: Additional context dict (e.g. from task metadata).
         token_budget: Soft token budget (default 4000).  Tokens estimated
             as ``len(chars) // 4``.
 

@@ -28,7 +28,6 @@ from startd8.contractors.artisan_contractor import (
 )
 from startd8.contractors.context_seed_handlers import (
     ContextSeedHandlers,
-    DesignPhaseHandler,
     HandlerConfig,
     ImplementPhaseHandler,
     ScaffoldPhaseHandler,
@@ -201,32 +200,6 @@ class TestParameterSources:
         assert result.status == WorkflowStatus.COMPLETED
         assert context.get("parameter_sources") == {}
 
-    def test_design_phase_injects_parameter_sources(self) -> None:
-        """_task_to_feature_context should inject parameter_sources into additional_context."""
-        task = SeedTask(
-            task_id="T1", title="Dashboard", task_type="task",
-            story_points=3, priority="high", labels=[], depends_on=[],
-            description="Generate dashboard", target_files=["dash.json"],
-            estimated_loc=100, feature_id="F1", domain="observability",
-            domain_reasoning="", environment_checks=[],
-            prompt_constraints=[], post_generation_validators=[],
-            available_siblings=[], existing_content_hash=None,
-            design_doc_sections=[], artifact_types_addressed=["dashboard"],
-            file_scope={},
-        )
-        param_sources = {
-            "dashboard": {"title": "from .contextcore.yaml:project.name"},
-        }
-
-        feature_ctx = DesignPhaseHandler._task_to_feature_context(
-            task, parameter_sources=param_sources,
-        )
-
-        # The additional_context should contain the parameter_sources text
-        ac = feature_ctx.additional_context
-        assert "parameter_sources" in ac
-        assert "dashboard" in ac["parameter_sources"]
-
     def test_implement_chunk_metadata_includes_parameter_sources(self) -> None:
         """parameter_sources stored in chunk metadata for _build_supplementary_context rendering."""
         task = SeedTask(
@@ -271,29 +244,6 @@ class TestSemanticConventions:
 
         assert result.status == WorkflowStatus.COMPLETED
         assert context.get("semantic_conventions") == sem_conv
-
-    def test_design_phase_injects_semantic_conventions(self) -> None:
-        """_task_to_feature_context should inject semantic_conventions."""
-        task = SeedTask(
-            task_id="T1", title="Dashboard", task_type="task",
-            story_points=3, priority="high", labels=[], depends_on=[],
-            description="Generate dashboard", target_files=["dash.json"],
-            estimated_loc=100, feature_id="F1", domain="observability",
-            domain_reasoning="", environment_checks=[],
-            prompt_constraints=[], post_generation_validators=[],
-            available_siblings=[], existing_content_hash=None,
-            design_doc_sections=[], artifact_types_addressed=["dashboard"],
-            file_scope={},
-        )
-        sem_conv = {"metric_prefix": "myapp_"}
-
-        feature_ctx = DesignPhaseHandler._task_to_feature_context(
-            task, semantic_conventions=sem_conv,
-        )
-
-        ac = feature_ctx.additional_context
-        assert "semantic_conventions" in ac
-        assert "metric_prefix" in ac["semantic_conventions"]
 
     def test_implement_chunk_metadata_includes_semantic_conventions(self) -> None:
         """semantic_conventions stored in chunk metadata for _build_supplementary_context rendering."""
