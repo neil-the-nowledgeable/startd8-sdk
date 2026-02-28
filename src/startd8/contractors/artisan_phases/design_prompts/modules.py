@@ -157,17 +157,21 @@ class EnrichmentModule:
         if param_sources:
             parts.append("**Parameter Sources (use these names exactly):**")
             ps_items = list(param_sources.items())
+            ps_omitted = 0
             if len(ps_items) > 20:
                 _logger.warning(
                     "parameter_sources truncated from %d to 20 entries",
                     len(ps_items),
                 )
+                ps_omitted = len(ps_items) - 20
             for name, source in ps_items[:20]:
                 if isinstance(source, dict):
                     origin = source.get("origin", source.get("source", ""))
                     parts.append(f"- `{name}`: {origin}")
                 else:
                     parts.append(f"- `{name}`: {source}")
+            if ps_omitted:
+                parts.append(f"- ... and {ps_omitted} more parameter sources (truncated)")
 
         conventions = data.get("semantic_conventions", {})
         if conventions:
@@ -396,6 +400,8 @@ class GuidanceModule:
                     s.get("suggestion", str(s)) if isinstance(s, dict) else str(s)
                     for s in items
                 )
+                if len(suggestions) > 5:
+                    formatted += f" ... and {len(suggestions) - 5} more suggestions (truncated)"
                 parts.append(f"**Review suggestions:** {formatted}")
             elif isinstance(suggestions, str) and suggestions.strip():
                 parts.append(f"**Review suggestions:** {suggestions[:300]}")
@@ -406,7 +412,10 @@ class GuidanceModule:
                 q["question"] if isinstance(q, dict) else str(q)
                 for q in questions[:3]
             ]
-            parts.append("**Open questions:** " + "; ".join(q_list))
+            q_text = "; ".join(q_list)
+            if len(questions) > 3:
+                q_text += f" ... and {len(questions) - 3} more questions (truncated)"
+            parts.append("**Open questions:** " + q_text)
 
         alerts = data.get("complexity_alerts", {})
         if alerts:
@@ -447,7 +456,7 @@ class ContractModule:
                 category=self.category,
                 text="",
                 token_estimate=0,
-                droppable=False,
+                droppable=True,
             )
 
         sections = ["## Interface Contracts (Cross-Task Bindings)\n"]

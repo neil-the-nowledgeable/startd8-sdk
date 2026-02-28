@@ -2550,6 +2550,12 @@ class ArtisanContractorWorkflow:
         # handler or a post-gate callback).  Skip metric thresholds entirely
         # if it is no longer a dict.
         if not isinstance(phase_result.output, dict):
+            self._logger.error(
+                "Quality gate Layer 2: phase_result.output is %s, not dict — "
+                "metric threshold checks skipped for phase %s",
+                type(phase_result.output).__name__,
+                phase,
+            )
             return
 
         _OPERATOR_MAP = {

@@ -203,16 +203,55 @@ def _extract_function_name(sig_str: str) -> Optional[str]:
     return cleaned[:paren_idx].strip()
 
 
+def _compute_binding_text_from_kwargs(kwargs: dict[str, object]) -> str:
+    """Compute binding_text directly from kwargs without creating a partial model.
+
+    Mirrors ``compute_binding_text()`` logic but reads from the kwargs dict
+    instead of an ``InterfaceContract`` instance, avoiding the need for an
+    unvalidated ``model_construct()`` call.
+    """
+    confidence = kwargs.get("confidence")
+    prefix = (
+        "[BINDING]"
+        if confidence in (ContractConfidence.EXPLICIT, ContractConfidence.INFERRED)
+        else "[ADVISORY]"
+    )
+
+    parts: list[str] = [prefix]
+
+    cat = kwargs.get("category")
+    if cat == ContractCategory.FUNCTION_NAME and kwargs.get("function_name"):
+        parts.append(f"function={kwargs['function_name']}")
+    elif cat == ContractCategory.CLASS_NAME and kwargs.get("class_name"):
+        parts.append(f"class={kwargs['class_name']}")
+        if kwargs.get("base_class"):
+            parts.append(f"base={kwargs['base_class']}")
+    elif cat == ContractCategory.API_ENDPOINT and kwargs.get("endpoint"):
+        parts.append(f"endpoint={kwargs['endpoint']}")
+    elif cat == ContractCategory.CONFIG_KEY and kwargs.get("env_var"):
+        parts.append(f"env_var={kwargs['env_var']}")
+    elif cat == ContractCategory.IMPORT_PATH and kwargs.get("import_path"):
+        parts.append(f"import_path={kwargs['import_path']}")
+    elif cat == ContractCategory.FORMULA and kwargs.get("formula"):
+        parts.append(f"formula={kwargs['formula']}")
+        if kwargs.get("constant_value"):
+            parts.append(f"value={kwargs['constant_value']}")
+    elif cat == ContractCategory.RENDER_PATTERN and kwargs.get("pattern"):
+        parts.append(f"pattern={kwargs['pattern']}")
+    elif cat == ContractCategory.INFRASTRUCTURE and kwargs.get("dependency"):
+        parts.append(f"dependency={kwargs['dependency']}")
+
+    parts.append(str(kwargs.get("description", "")))
+    return " | ".join(parts)
+
+
 def _make_contract(**kwargs: object) -> InterfaceContract:
     """Build an ``InterfaceContract`` with auto-computed ``binding_text``.
 
-    Uses ``model_construct`` to create a partial instance for
-    ``compute_binding_text()``, then constructs the validated model.
+    Computes ``binding_text`` directly from the kwargs dict, then creates
+    a single fully-validated ``InterfaceContract`` instance.
     """
-    # Build partial for binding_text computation
-    partial = InterfaceContract.model_construct(**kwargs)  # type: ignore[arg-type]
-    binding = compute_binding_text(partial)
-    kwargs["binding_text"] = binding
+    kwargs["binding_text"] = _compute_binding_text_from_kwargs(kwargs)
     return InterfaceContract(**kwargs)  # type: ignore[arg-type]
 
 

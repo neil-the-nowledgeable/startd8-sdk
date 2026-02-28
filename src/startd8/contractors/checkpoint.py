@@ -478,7 +478,7 @@ class IntegrationCheckpoint:
         # Fallback: if parsing found no counts but pytest exited successfully,
         # report a passed status (e.g. pytest output format changed)
         if passed == 0 and failed == 0 and result.returncode == 0:
-            passed = -1  # sentinel: tests passed but count unknown
+            passed = None  # Could not parse test counts from output
             logger.debug(
                 "pytest returned success but no pass/fail counts parsed; "
                 "reporting passed with unknown count"
@@ -514,10 +514,11 @@ class IntegrationCheckpoint:
                 details={"passed": passed, "failed": failed},
             )
 
+        passed_label = "unknown number of" if passed is None else str(passed)
         return CheckpointResult(
             status=CheckpointStatus.PASSED,
             name="Test Check",
-            message=f"{passed} test(s) passed",
+            message=f"{passed_label} test(s) passed",
             details={"passed": passed, "failed": failed},
         )
 

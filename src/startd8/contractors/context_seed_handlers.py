@@ -11446,7 +11446,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                         duration,
                     )
                     return {"output": cached_output, "cost": 0.0, "metadata": {"duration": duration, "resumed": True}}
-            except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, UnicodeDecodeError, Exception) as exc:
+            except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
                 logger.warning("TEST: failed to load cache from %s: %s", test_cache_path, exc)
 
         test_plan: list[dict[str, Any]] = []

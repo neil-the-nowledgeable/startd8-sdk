@@ -156,7 +156,6 @@ class PlanPhaseOutput(BaseModel):
         empty enrichment degrades DESIGN quality silently.  Log warnings so
         the gap is visible in workflow output.
         """
-        _logger = get_logger(__name__)
         task_count = len(self.tasks)
         if task_count and not self.architectural_context:
             _logger.warning(

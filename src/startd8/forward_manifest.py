@@ -170,7 +170,7 @@ class ForwardElementSpec(BaseModel):
         return Element(
             kind=self.kind,
             name=self.name,
-            fqn=self.name,
+            fqn=f"{self.parent_class}.{self.name}" if self.parent_class else self.name,
             span=Span(start_line=0, start_col=0, end_line=0, end_col=0),
             signature=self.signature,
             bases=list(self.bases),

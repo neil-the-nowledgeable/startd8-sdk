@@ -245,6 +245,10 @@ phases:
           type: dict
           severity: advisory
           description: "Per-task design mode mapping (task_id -> 'create'|'update'|'skipped'). Derived from design_results by DesignPhaseHandler for propagation to IMPLEMENT."
+        - name: design_mode_evidence
+          type: dict
+          severity: advisory
+          description: "Per-task design mode reasoning with corroborating signals from manifest, file existence, and content analysis."
         - name: design_structural_delta
           type: dict
           severity: advisory
