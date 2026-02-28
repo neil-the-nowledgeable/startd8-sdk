@@ -1565,6 +1565,22 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
             context["refine_provenance"] = _refine_prov
             logger.info("Restored refine_provenance from seed artifacts")
 
+    # R2-D7: Restore forward_manifest from seed on resume so downstream
+    # phases can access interface contracts.
+    if "forward_manifest" not in context:
+        _fm_dict = seed_data.get("forward_manifest")
+        if _fm_dict and isinstance(_fm_dict, dict):
+            try:
+                from startd8.forward_manifest import ForwardManifest
+                context["forward_manifest"] = ForwardManifest.model_validate(_fm_dict)
+                logger.info("Restored forward_manifest from seed on resume")
+            except (ImportError, ValueError, TypeError):
+                context["forward_manifest"] = _fm_dict
+                logger.debug(
+                    "Restored forward_manifest as raw dict (model validation failed)",
+                    exc_info=True,
+                )
+
     # PCA-201: re-load plan_document_text from seed artifacts
     if "plan_document_text" not in context:
         plan_doc_path_str = _artifacts.get("plan_document_path")
@@ -1578,6 +1594,47 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
                     logger.info("Restored plan_document_text from seed on resume")
                 except OSError:
                     logger.debug("Could not read file: %s", _pdp, exc_info=True)
+
+    # R2-D4: Restore scaffold data on resume.  The scaffold dict is normally
+    # populated by ScaffoldPhaseHandler and persisted via _CHECKPOINT_CONTEXT_KEYS.
+    # If it was lost (serialization failure, impl-half standalone execution),
+    # reconstruct minimal scaffold from tasks + project_root so that DESIGN
+    # can access existing_target_files, file_stubs, and assembly_degraded.
+    if "scaffold" not in context:
+        _project_root = Path(context.get("project_root", "."))
+        _existing_files = []
+        _dirs_needed: set[str] = set()
+        for _t in tasks:
+            for _tf in _t.target_files:
+                _tp = _project_root / _tf
+                if _tp.exists():
+                    _existing_files.append(_tf)
+                try:
+                    _dirs_needed.add(str(_tp.parent.relative_to(_project_root)))
+                except ValueError:
+                    pass
+        context["scaffold"] = {
+            "existing_target_files": _existing_files,
+            "file_stubs": [],
+            "file_stubs_created": 0,
+            "file_stubs_skipped": 0,
+            "file_stubs_failed": 0,
+            "assembly_degraded": False,
+            "directories_needed": sorted(_dirs_needed),
+            "directories_exist": [],
+            "directories_created": [],
+            "directories_missing": [],
+            "staleness_classification": {},
+            "skipped_targets": [],
+            "project_root": str(_project_root),
+            "extension_warnings": [],
+            "module_inventory": [],
+        }
+        logger.warning(
+            "R2-D4: scaffold data missing on resume — reconstructed minimal "
+            "scaffold with %d existing target files",
+            len(_existing_files),
+        )
 
     return _apply_runtime_task_selection(tasks)
 
@@ -1795,6 +1852,34 @@ class PlanPhaseHandler(AbstractPhaseHandler):
                     )
                 except OSError:
                     logger.debug("Could not read file: %s", plan_doc_path, exc_info=True)
+
+        # R2-D7: Extract forward_manifest from seed and deserialize into
+        # ForwardManifest model so downstream phases (SCAFFOLD, DESIGN,
+        # IMPLEMENT) can access forward interface contracts.
+        _fm_dict = seed_data.get("forward_manifest")
+        if _fm_dict and isinstance(_fm_dict, dict):
+            try:
+                from startd8.forward_manifest import ForwardManifest
+                _fm = ForwardManifest.model_validate(_fm_dict)
+                context["forward_manifest"] = _fm
+                _n_contracts = len(_fm.contracts) if _fm.contracts else 0
+                _n_file_specs = len(_fm.file_specs) if _fm.file_specs else 0
+                logger.info(
+                    "PLAN phase: loaded forward_manifest with %d contract(s), "
+                    "%d file spec(s)",
+                    _n_contracts,
+                    _n_file_specs,
+                )
+            except (ImportError, ValueError, TypeError) as exc:
+                logger.warning(
+                    "PLAN phase: could not deserialize forward_manifest — "
+                    "downstream phases will not have interface contracts: %s",
+                    exc,
+                )
+                # Fall back to raw dict so at least some consumers can use it
+                context["forward_manifest"] = _fm_dict
+        else:
+            logger.debug("PLAN phase: no forward_manifest in seed")
 
         output = {
             "plan_title": context["plan_title"],
@@ -2485,6 +2570,13 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         missing: list[dict[str, str]] = []
         present_count = 0
 
+        def _word_boundary_match(needle: str, haystack: str) -> bool:
+            """R2-D5: Use word-boundary matching instead of substring `in`.
+
+            Prevents false positives like "url" matching "base_url".
+            """
+            return bool(re.search(r'\b' + re.escape(needle) + r'\b', haystack))
+
         for param in resolved_parameters:
             key = str(param.get("key", "") or "")
             value = str(param.get("value", "") or "")
@@ -2497,10 +2589,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
             found = False
             for candidate in value_candidates:
-                if candidate and len(candidate) >= 2 and candidate in spec_lc:
+                if candidate and len(candidate) >= 2 and _word_boundary_match(candidate, spec_lc):
                     found = True
                     break
-            if not found and key_candidate and len(key_candidate) >= 3 and key_candidate in spec_lc:
+            if not found and key_candidate and len(key_candidate) >= 3 and _word_boundary_match(key_candidate, spec_lc):
                 found = True
 
             if found:
@@ -3249,7 +3341,35 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 prior.get("status") in ("designed", "adopted")
                 and prior.get("design_document")
             ):
-                if self.config.refine_design:
+                # R2-D6: Check whether task inputs have changed since the
+                # prior design was created.  If they differ, skip auto-adoption
+                # and regenerate to avoid adopting stale designs.
+                _current_input_hash = hashlib.sha256(
+                    json.dumps(
+                        {
+                            "task_id": task.task_id,
+                            "description": task.description,
+                            "target_files": sorted(task.target_files),
+                            "constraints": sorted(task.prompt_constraints),
+                        },
+                        sort_keys=True,
+                    ).encode()
+                ).hexdigest()
+                _prior_input_hash = prior.get("_task_input_hash", "")
+                _inputs_changed = (
+                    _prior_input_hash
+                    and _current_input_hash != _prior_input_hash
+                )
+                if _inputs_changed:
+                    logger.info(
+                        "DESIGN: task inputs changed for %s since prior design "
+                        "(hash %s → %s) — skipping auto-adoption, will regenerate",
+                        task.task_id,
+                        _prior_input_hash[:12],
+                        _current_input_hash[:12],
+                    )
+                    # Fall through to fresh generation below
+                elif self.config.refine_design:
                     # Refine mode: pass prior design to LLM for improvement
                     prior_design_text = prior["design_document"]
                     logger.info(
@@ -3605,6 +3725,19 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         quality_policy_mode=quality_policy_mode,
                         dry_run=False,
                     )
+                    # R2-D6: Store task input hash so future auto-adoption
+                    # can detect stale designs when inputs change.
+                    serialized["_task_input_hash"] = hashlib.sha256(
+                        json.dumps(
+                            {
+                                "task_id": task.task_id,
+                                "description": task.description,
+                                "target_files": sorted(task.target_files),
+                                "constraints": sorted(task.prompt_constraints),
+                            },
+                            sort_keys=True,
+                        ).encode()
+                    ).hexdigest()
                     design_results[task.task_id] = serialized
 
                     # PCA-605c: extract file decisions from design doc
@@ -4078,13 +4211,33 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if design_results and not dry_run and self.output_dir:
             from startd8.contractors.handoff import write_design_handoff
             try:
+                # R2-D3: Filter out design-failed tasks from handoff so that
+                # IMPLEMENT does not receive tasks without valid design documents.
+                _HANDOFF_EXCLUDE_STATUSES = frozenset({
+                    "design_failed", "error", "env_blocked",
+                })
+                handoff_design_results = {}
+                excluded_task_ids = []
+                for tid, entry in design_results.items():
+                    status = entry.get("status", "") if isinstance(entry, dict) else ""
+                    if status in _HANDOFF_EXCLUDE_STATUSES:
+                        excluded_task_ids.append(tid)
+                    else:
+                        handoff_design_results[tid] = entry
+                if excluded_task_ids:
+                    logger.warning(
+                        "DESIGN: excluding %d design-failed task(s) from handoff: %s",
+                        len(excluded_task_ids),
+                        excluded_task_ids,
+                    )
+
                 handoff_path = write_design_handoff(
                     output_dir=self.output_dir,
                     enriched_seed_path=context.get("enriched_seed_path", ""),
                     project_root=context.get("project_root", ""),
                     workflow_id=context.get("workflow_id", "unknown"),
                     completed_phases=["design"],
-                    design_results=design_results,
+                    design_results=handoff_design_results,
                     scaffold=context.get("scaffold", {}),
                     source_checksum=context.get("source_checksum"),
                     design_mode_summary=context.get("design_mode_summary", {}),
@@ -9317,6 +9470,20 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 _total_missing,
             )
 
+        # R2-O1: Before cleaning staging, update generated_files for tasks
+        # whose integration failed or was blocked — their staging paths are
+        # about to be deleted, so downstream phases must not reference them.
+        for task_id, gr in generation_results.items():
+            if not gr.success:
+                continue
+            ir = integration_results.get(task_id, {})
+            if not ir:
+                # Task had no integration attempt — clear staging paths
+                gr.generated_files = []
+            elif not ir.get("success", False):
+                # Integration failed or blocked — staging paths are stale
+                gr.generated_files = []
+
         # Clean staging dir
         if staging_dir.exists() and not dry_run:
             _shutil.rmtree(staging_dir, ignore_errors=True)
@@ -9392,17 +9559,40 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
 
         duration = time.monotonic() - start
         passed = sum(1 for r in integration_results.values() if r["success"])
-        total = len(integration_results)
+        # R2-O2: Include design-failed and other non-generated tasks in the
+        # denominator so they don't inflate the pass rate.  Tasks whose
+        # generation failed (including design_gated) are counted but not passed.
+        _design_failed_count = sum(
+            1 for gr in generation_results.values()
+            if not gr.success and getattr(gr, "metadata", None)
+            and isinstance(gr.metadata, dict)
+            and gr.metadata.get("design_gated")
+        )
+        _gen_failed_count = sum(
+            1 for gr in generation_results.values()
+            if not gr.success
+        )
+        # Total = tasks that went through integration + tasks that were
+        # skipped due to generation failure (design_gated, impl errors, etc.)
+        total = len(integration_results) + _gen_failed_count
 
         logger.info(
-            "INTEGRATE phase complete: %d/%d tasks merged (%.2fs)",
-            passed, total, duration,
+            "INTEGRATE phase complete: %d/%d tasks merged "
+            "(%d design-failed, %d gen-failed) (%.2fs)",
+            passed, total, _design_failed_count,
+            _gen_failed_count - _design_failed_count, duration,
         )
 
         return {
             "output": integration_results,
             "cost": 0.0,  # no LLM cost — only subprocess validation
-            "metadata": {"duration": duration, "passed": passed, "total": total},
+            "metadata": {
+                "duration": duration,
+                "passed": passed,
+                "total": total,
+                "design_failed": _design_failed_count,
+                "gen_failed": _gen_failed_count,
+            },
         }
 
 
@@ -10039,23 +10229,25 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     task, project_root, gen_result,
                     service_metadata=_service_metadata,
                 )
-                task_test_result["status"] = (
-                    "passed" if task_test_result["all_passed"] else "failed"
-                )
-                test_plan.append(task_test_result)
 
-                if task_test_result["all_passed"] and task_test_result.get("validators_run", 0) > 0:
+                # Determine status: distinguish zero-validator tasks from
+                # genuinely-passing tasks so they don't inflate the pass rate.
+                if task_test_result.get("validators_run", 0) == 0:
+                    # No validators ran — mark as uncovered, NOT passed
+                    task_test_result["status"] = "uncovered"
+                    _task_span.set_attribute("task.status", "uncovered")
+                    task_status = "uncovered"
+                elif task_test_result["all_passed"]:
+                    task_test_result["status"] = "passed"
                     total_passed += 1
                     _task_span.set_attribute("task.status", "passed")
                     task_status = "passed"
-                elif task_test_result.get("validators_run", 0) == 0:
-                    # No validators ran — not a validated pass
-                    _task_span.set_attribute("task.status", "uncovered")
-                    task_status = "uncovered"
                 else:
+                    task_test_result["status"] = "failed"
                     total_failed += 1
                     _task_span.set_attribute("task.status", "failed")
                     task_status = "failed"
+                test_plan.append(task_test_result)
             except Exception as exc:
                 logger.warning(
                     "TEST: unexpected error for task %s: %s",
@@ -10097,6 +10289,14 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "status": "passed",
                     "passed": True,
                     "validators_run": entry.get("validators_run", 0),
+                }
+            elif entry.get("status") == "uncovered":
+                # R2-T1: Zero-validator tasks — not a validated pass
+                per_task[task_id] = {
+                    "status": "uncovered",
+                    "passed": None,
+                    "validators_run": 0,
+                    "reason": "no_applicable_validators",
                 }
             elif entry.get("status") == "failed":
                 per_task[task_id] = {
@@ -10153,6 +10353,11 @@ class TestPhaseHandler(AbstractPhaseHandler):
             1 for v in per_task.values()
             if v.get("status") == "skipped"
         )
+        # R2-T1: Count tasks with no applicable validators separately
+        total_uncovered = sum(
+            1 for v in per_task.values()
+            if v.get("status") == "uncovered"
+        )
         output = {
             "test_plan": test_plan,
             "total_validators": sum(len(t.post_generation_validators) for t in tasks),
@@ -10161,6 +10366,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
             "total_passed": total_passed,
             "total_failed": total_failed,
             "total_skipped": total_skipped,
+            "tests_uncovered": total_uncovered,
             "per_task": per_task,
         }
 
@@ -11146,20 +11352,34 @@ PASS if score >= {pass_threshold} and no blocking issues.
         score: int | None = None
         verdict = "FAIL"
 
-        # Extract score
-        score_match = re.search(r"###\s*Score:\s*(\d+)", response)
+        # Extract score — handles bold-wrapped variants like **85**,
+        # **Score: 85**, Score: **85**/100
+        # R2-T2: \*{0,2} tolerates optional markdown bold around score digits
+        score_match = re.search(r"###\s*\*{0,2}Score:\s*\*{0,2}\s*(\d+)", response)
         if score_match:
             score = min(100, max(0, int(score_match.group(1))))
         else:
-            # Fallback: try without markdown headers
-            score_fallback = re.search(r"(?:^|\n)\s*Score\s*[:=]\s*(\d+)\s*(?:/\s*100)?\s*$", response, re.IGNORECASE | re.MULTILINE)
+            # Fallback: try without markdown headers, bold-aware
+            score_fallback = re.search(
+                r"(?:^|\n)\s*\*{0,2}Score\s*[:=]\s*\*{0,2}\s*(\d+)\s*\*{0,2}\s*(?:/\s*100)?\s*\*{0,2}",
+                response, re.IGNORECASE | re.MULTILINE,
+            )
             if score_fallback:
                 score = min(100, max(0, int(score_fallback.group(1))))
             else:
-                logger.warning(
-                    "REVIEW: could not extract score from response (score=None); "
-                    "first 200 chars: %s", response[:200],
+                # Last resort: standalone bold-wrapped number on its own line
+                # e.g. **85** as the score
+                score_bold_standalone = re.search(
+                    r"(?:^|\n)\s*\*{2}(\d+)\*{2}\s*(?:/\s*100)?\s*$",
+                    response, re.MULTILINE,
                 )
+                if score_bold_standalone:
+                    score = min(100, max(0, int(score_bold_standalone.group(1))))
+                else:
+                    logger.warning(
+                        "REVIEW: could not extract score from response (score=None); "
+                        "first 200 chars: %s", response[:200],
+                    )
 
         # Extract verdict
         verdict_match = re.search(r"###\s*Verdict:\s*\**\s*(PASS|FAIL)\s*\**", response, re.IGNORECASE)
@@ -11841,6 +12061,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     _track_onboarding_consumption(context, "architectural_context", "REVIEW")
 
                 # GAP1-A: Pre-compute FM violations so they appear in the review PROMPT
+                # R2-T3: Filter violations to only those affecting this task's files
                 _pre_fm_violations: list[Any] = []
                 if self.config.manifest_consumption_enabled:
                     _registry = self.config.manifest_registry
@@ -11848,7 +12069,21 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     if _registry is not None and _fwd_manifest is not None:
                         try:
                             from startd8.forward_manifest_validator import validate_forward_manifest
-                            _pre_fm_violations = validate_forward_manifest(_fwd_manifest, _registry) or []
+                            _all_fm_violations = validate_forward_manifest(_fwd_manifest, _registry) or []
+                            # Filter: only include violations whose file_path
+                            # matches one of this task's target files
+                            _task_files = set(task.target_files) if task.target_files else set()
+                            for _v in _all_fm_violations:
+                                _vpath = getattr(_v, "file_path", None)
+                                if _vpath is None:
+                                    # No file_path on violation — include it
+                                    # (project-wide structural violation)
+                                    _pre_fm_violations.append(_v)
+                                elif _vpath in _task_files or any(
+                                    _vpath.endswith(tf) or tf.endswith(_vpath)
+                                    for tf in _task_files
+                                ):
+                                    _pre_fm_violations.append(_v)
                         except Exception as _pre_fm_err:
                             logger.debug(
                                 "REVIEW: pre-prompt FM validation failed for %s: %s",
@@ -11878,39 +12113,53 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     review["truncation_source"] = task_truncation.get("source", "unknown")
 
                 # Phase 5: Run ForwardManifest Validator if applicable
+                # R2-T3: Filter violations per-task by target file paths
                 if self.config.manifest_consumption_enabled:
                     registry = self.config.manifest_registry
                     forward_manifest = context.get("forward_manifest")
                     if registry is not None and forward_manifest is not None:
                         from startd8.forward_manifest_validator import validate_forward_manifest
-                        
+
                         try:
                             fm_violations = validate_forward_manifest(forward_manifest, registry)
-                            
-                            error_violations = [v for v in fm_violations if v.severity == "error"]
-                            warning_violations = [v for v in fm_violations if v.severity == "warning"]
-                            
+
+                            # Filter violations to this task's target files
+                            _task_files_set = set(task.target_files) if task.target_files else set()
+                            task_fm_violations = []
+                            for v in fm_violations:
+                                _vfp = getattr(v, "file_path", None)
+                                if _vfp is None:
+                                    task_fm_violations.append(v)
+                                elif _vfp in _task_files_set or any(
+                                    _vfp.endswith(tf) or tf.endswith(_vfp)
+                                    for tf in _task_files_set
+                                ):
+                                    task_fm_violations.append(v)
+
+                            error_violations = [v for v in task_fm_violations if v.severity == "error"]
+                            warning_violations = [v for v in task_fm_violations if v.severity == "warning"]
+
                             if error_violations:
                                 review["passed"] = False
                                 review["verdict"] = "FAIL"
                                 review.setdefault("issues", []).extend([
-                                    f"[BLOCKING] Contract Violation: {v.violation_type} ({v.contract_id}) - Expected: {v.expected}, Actual: {v.actual}" 
+                                    f"[BLOCKING] Contract Violation: {v.violation_type} ({v.contract_id}) - Expected: {v.expected}, Actual: {v.actual}"
                                     for v in error_violations
                                 ])
                                 logger.warning(
-                                    "REVIEW: task %s failed ForwardManifest validation with %d error(s)", 
+                                    "REVIEW: task %s failed ForwardManifest validation with %d error(s)",
                                     task.task_id, len(error_violations)
                                 )
-                                
+
                             if warning_violations:
                                 review.setdefault("issues", []).extend([
-                                    f"[MINOR] Contract Advisory: {v.violation_type} ({v.contract_id}) - {v.expected}" 
+                                    f"[MINOR] Contract Advisory: {v.violation_type} ({v.contract_id}) - {v.expected}"
                                     for v in warning_violations
                                 ])
-                                
+
                         except Exception as val_error:
                             logger.error(
-                                "REVIEW: ForwardManifest validation engine failed for %s: %s", 
+                                "REVIEW: ForwardManifest validation engine failed for %s: %s",
                                 task.task_id, val_error, exc_info=True
                             )
                 
