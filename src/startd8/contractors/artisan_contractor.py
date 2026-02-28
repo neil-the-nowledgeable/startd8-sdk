@@ -910,6 +910,9 @@ class _CostTracker:
         self.cumulative_cost += cost
 
     def set_cumulative(self, cost: float) -> None:
+        if cost < 0:
+            logger.warning("Negative cumulative cost %s clamped to 0", cost)
+            cost = 0.0
         self.cumulative_cost = cost
 
     def check_budget(self) -> bool:
@@ -2223,6 +2226,7 @@ class ArtisanContractorWorkflow:
                     continue
                 value = context[key]
                 try:
+                    value = copy.deepcopy(value)
                     json.dumps(value)  # verify serializable
                     snapshot[key] = value
                 except (TypeError, ValueError, OverflowError):
@@ -2245,7 +2249,7 @@ class ArtisanContractorWorkflow:
                     "Checkpoint drift: %d context key(s) not in "
                     "_CHECKPOINT_CONTEXT_KEYS — may be lost on resume: %s",
                     len(_untracked),
-                    _untracked[:10],
+                    _untracked,
                 )
 
             # PCA-202: truncate plan_document_text to prevent checkpoint bloat.
@@ -3012,6 +3016,7 @@ class ArtisanContractorWorkflow:
                             self._check_quality_gate(inner_phase, phase_result)
                         except QualityGateError as exc:
                             gate_error = exc
+                            inner_results[inner_phase.value]["status"] = "quality_gate_failed"
 
                     # Surface any new quality gate violations (warn or
                     # block) into inner_results for per-phase visibility.
@@ -3168,28 +3173,37 @@ class ArtisanContractorWorkflow:
 
             # Accumulate per-feature phase outputs before cleanup so
             # FINALIZE and auto-commit can access aggregated results.
-            _feature_accumulator = context.setdefault(
-                "_all_feature_results", {},
-            )
-            _this_feature: dict[str, Any] = {}
-            for _accum_key in (
-                "implementation", "generation_results",
-                "integration_results", "test_results",
-                "review_results", "design_results",
-            ):
-                _accum_val = context.get(_accum_key)
-                if _accum_val is not None:
-                    _this_feature[_accum_key] = _accum_val
-            if _this_feature:
-                _feature_accumulator[feature_id] = _this_feature
+            # Wrapped in try/except so pop cleanup always runs even if
+            # accumulation raises (M-3).
+            try:
+                _feature_accumulator = context.setdefault(
+                    "_all_feature_results", {},
+                )
+                _this_feature: dict[str, Any] = {}
+                for _accum_key in (
+                    "implementation", "generation_results",
+                    "integration_results", "test_results",
+                    "review_results", "design_results",
+                ):
+                    _accum_val = context.get(_accum_key)
+                    if _accum_val is not None:
+                        _this_feature[_accum_key] = _accum_val
+                if _this_feature:
+                    _feature_accumulator[feature_id] = _this_feature
 
-            # H-1: Attribute quality gate violations to this feature only,
-            # using the snapshot taken at the start of _execute_feature.
-            _feature_violations = self._quality_gate_violations[
-                _feature_violation_start:
-            ]
-            if _feature_violations:
-                inner_results["_quality_gate_violations"] = _feature_violations
+                # H-1: Attribute quality gate violations to this feature only,
+                # using the snapshot taken at the start of _execute_feature.
+                _feature_violations = self._quality_gate_violations[
+                    _feature_violation_start:
+                ]
+                if _feature_violations:
+                    inner_results["_quality_gate_violations"] = _feature_violations
+            except Exception:
+                self._logger.exception(
+                    "Feature %s: error during result accumulation, "
+                    "proceeding with cleanup",
+                    feature_id,
+                )
 
             # Phase output keys that are feature-scoped — stale data from
             # feature N must not leak into feature N+1's handlers.

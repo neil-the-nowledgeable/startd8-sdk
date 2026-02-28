@@ -248,9 +248,12 @@ class DeterministicExtractor:
     ) -> list[InterfaceContract]:
         """Parse api_signatures into FUNCTION_NAME contracts + ForwardElementSpecs."""
         contracts: list[InterfaceContract] = []
+        total_signatures = len(feature.api_signatures)
+        skipped_signatures = 0
         for sig_str in feature.api_signatures:
             func_name = _extract_function_name(sig_str)
             if not func_name:
+                skipped_signatures += 1
                 logger.debug(
                     "Skipping unparseable signature in feature %s: %r",
                     feature.feature_id,
@@ -303,6 +306,20 @@ class DeterministicExtractor:
                     source_contract_id=contract_id,
                 )
                 file_elements.setdefault(target_file, []).append(spec)
+
+        # Log at INFO if >10% of signatures failed to parse
+        if (
+            skipped_signatures > 0
+            and total_signatures > 0
+            and skipped_signatures / total_signatures > 0.10
+        ):
+            logger.info(
+                "Feature %s: %d/%d API signatures failed to parse (%.0f%% skip rate)",
+                feature.feature_id,
+                skipped_signatures,
+                total_signatures,
+                100.0 * skipped_signatures / total_signatures,
+            )
 
         return contracts
 

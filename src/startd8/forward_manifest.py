@@ -157,6 +157,12 @@ class ForwardElementSpec(BaseModel):
                 f"ForwardElementSpec with parent_class must be METHOD, "
                 f"ASYNC_METHOD, or PROPERTY, got '{self.kind.value}'"
             )
+        if self.parent_class is not None and self.parent_class.count(".") > 1:
+            raise ValueError(
+                f"ForwardElementSpec parent_class has too many nesting levels: "
+                f"'{self.parent_class}' — maximum 2-level nesting allowed "
+                f"(e.g., 'Outer.Inner')"
+            )
         return self
 
     def to_element(self) -> Element:

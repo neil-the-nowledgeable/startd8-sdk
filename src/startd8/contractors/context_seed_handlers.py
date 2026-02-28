@@ -1611,7 +1611,7 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     # checkpoint serialization dropped any of them, re-extract from the seed
     # rather than silently losing them.
     _artifacts = seed_data.get("artifacts") or {}
-    context.setdefault("source_checksum", _artifacts.get("source_checksum"))
+    context.setdefault("source_checksum", _artifacts.get("source_checksum") or "")
     context.setdefault("parameter_sources", _artifacts.get("parameter_sources", {}))
     context.setdefault("semantic_conventions", _artifacts.get("semantic_conventions", {}))
     context.setdefault("output_conventions", _artifacts.get("output_conventions", {}))
@@ -1810,7 +1810,7 @@ class PlanPhaseHandler(AbstractPhaseHandler):
 
         # Fix 1a: provenance chain — source_checksum
         source_checksum = _artifacts.get("source_checksum")
-        context["source_checksum"] = source_checksum
+        context["source_checksum"] = source_checksum or ""
         if source_checksum:
             logger.info(
                 "PLAN phase: source_checksum present — provenance chain active: %s",
@@ -2899,7 +2899,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         if rts:
                             _rts_parts.append(f"### {tf}\n{rts}")
                     except Exception:
-                        pass
+                        logger.debug(
+                            "DESIGN DS-1: resolved type summary failed for %s",
+                            tf, exc_info=True,
+                        )
                 if _rts_parts:
                     additional_context["manifest_resolved_types"] = "\n\n".join(_rts_parts)
 
@@ -2912,7 +2915,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         chain = " \u2192 ".join(mro)
                         _mro_lines.append(f"- {fqn}: [{chain}]")
                 except Exception:
-                    pass
+                    logger.debug(
+                        "DESIGN DS-2: MRO summary failed for %s",
+                        tf, exc_info=True,
+                    )
             if _mro_lines:
                 _mro_section = "### Class Hierarchy\n" + "\n".join(_mro_lines)
                 existing_mc = additional_context.get("manifest_context", "")
@@ -2928,7 +2934,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     if mod_all:
                         _all_parts.append(f"{tf}: [{', '.join(mod_all)}]")
                 except Exception:
-                    pass
+                    logger.debug(
+                        "DESIGN DS-3: module __all__ lookup failed for %s",
+                        tf, exc_info=True,
+                    )
             if _all_parts:
                 additional_context["public_api_surface"] = "\n".join(_all_parts)
 
@@ -2943,7 +2952,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             f"(do NOT redefine): {', '.join(attrs)}"
                         )
                 except Exception:
-                    pass
+                    logger.debug(
+                        "DESIGN DS-4: runtime attributes lookup failed for %s",
+                        tf, exc_info=True,
+                    )
             if _ra_lines:
                 _ra_section = "### Generated Members (dataclass/namedtuple)\n" + "\n".join(_ra_lines)
                 existing_mc = additional_context.get("manifest_context", "")
@@ -6202,7 +6214,10 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                             else:
                                 stubbed.append(tf)
                     except Exception:
-                        pass
+                        logger.debug(
+                            "IMPLEMENT Gate 3: stub sentinel check failed for %s in task %s",
+                            tf, task.task_id, exc_info=True,
+                        )
 
             # Only report as issues if there are true failures (not downstream)
             has_real_issues = bool(missing_on_disk or stubbed)
@@ -7809,20 +7824,30 @@ class Test{class_name}:
         thread.join(timeout=timeout)
 
         if thread.is_alive():
-            if cancel_event:
-                cancel_event.set()
-                logger.warning(
-                    "Cancel event set — signalling background DevelopmentPhase "
-                    "thread to stop initiating new LLM calls",
+            # M-12: Race guard — the thread may have completed between
+            # join() returning and the is_alive() check.  If result_box
+            # was populated the work *did* finish; treat it as success
+            # rather than raising a false TimeoutError.
+            if "result" in result_box or "error" in error_box:
+                logger.debug(
+                    "DevelopmentPhase thread reported alive after join() "
+                    "but result_box is populated — treating as completed",
                 )
-            logger.error(
-                "DevelopmentPhase did not complete within %.0fs — "
-                "abandoning background thread (daemon=True)",
-                timeout,
-            )
-            raise TimeoutError(
-                f"DevelopmentPhase.run() did not complete within {timeout}s"
-            )
+            else:
+                if cancel_event:
+                    cancel_event.set()
+                    logger.warning(
+                        "Cancel event set — signalling background DevelopmentPhase "
+                        "thread to stop initiating new LLM calls",
+                    )
+                logger.error(
+                    "DevelopmentPhase did not complete within %.0fs — "
+                    "abandoning background thread (daemon=True)",
+                    timeout,
+                )
+                raise TimeoutError(
+                    f"DevelopmentPhase.run() did not complete within {timeout}s"
+                )
 
         if "error" in error_box:
             raise error_box["error"]
@@ -8228,7 +8253,11 @@ class Test{class_name}:
                                         "blast_radius": len(br),
                                     })
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "IMPLEMENT CMR: call graph callers enrichment "
+                                    "failed for %s in task %s",
+                                    tf, task.task_id, exc_info=True,
+                                )
                         if _cg_callers_cmr:
                             _cmr_meta["_call_graph_callers"] = _cg_callers_cmr
 
@@ -11368,7 +11397,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
                         duration,
                     )
                     return {"output": cached_output, "cost": 0.0, "metadata": {"duration": duration, "resumed": True}}
-            except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, UnicodeDecodeError) as exc:
+            except (json.JSONDecodeError, OSError, KeyError, TypeError, ValueError, UnicodeDecodeError, Exception) as exc:
                 logger.warning("TEST: failed to load cache from %s: %s", test_cache_path, exc)
 
         test_plan: list[dict[str, Any]] = []
@@ -13366,6 +13395,11 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 )
                 _task_span_cm.__exit__(None, None, None)
 
+        _SKIPPED_STATUSES = {
+            "skipped_no_generation",
+            "skipped_integration_failed",
+            "skipped_no_code",
+        }
         per_task: dict[str, Any] = {}
         for item in review_items:
             task_id = item.get("task_id")
@@ -13379,6 +13413,14 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "score": None,
                     "verdict": "ERROR",
                     "error": item.get("error", ""),
+                }
+            elif status in _SKIPPED_STATUSES:
+                per_task[task_id] = {
+                    "status": "skipped",
+                    "passed": None,
+                    "score": None,
+                    "verdict": "SKIPPED",
+                    "skip_reason": status,
                 }
             else:
                 per_task[task_id] = {

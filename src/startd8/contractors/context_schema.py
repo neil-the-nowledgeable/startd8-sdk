@@ -289,7 +289,7 @@ class ImplementPhaseOutput(BaseModel):
 
         # Check total_cost is non-negative if present
         total_cost = self.implementation.get("total_cost")
-        if total_cost is not None and total_cost < 0:
+        if total_cost is not None and isinstance(total_cost, (int, float)) and total_cost < 0:
             raise ValueError(
                 f"implementation['total_cost'] must be non-negative, "
                 f"got {total_cost}"

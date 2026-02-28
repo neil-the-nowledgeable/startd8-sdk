@@ -152,7 +152,8 @@ class TestSourceChecksum:
             result, context = _run_dryrun_workflow(tmp_path, seed_path)
 
         assert result.status == WorkflowStatus.COMPLETED
-        assert context.get("source_checksum") is None
+        # M-9 fix: source_checksum defaults to "" instead of None
+        assert context.get("source_checksum") in (None, "")
         assert any(
             "source_checksum absent" in r.message for r in caplog.records
         )
@@ -495,7 +496,8 @@ class TestFullPipelineDataFlow:
         result, context = _run_dryrun_workflow(tmp_path, seed_path)
 
         assert result.status == WorkflowStatus.COMPLETED
-        assert context.get("source_checksum") is None
+        # M-9 fix: source_checksum defaults to "" instead of None
+        assert context.get("source_checksum") in (None, "")
         assert context.get("parameter_sources") == {}
         assert context.get("semantic_conventions") == {}
         assert context.get("output_conventions") == {}

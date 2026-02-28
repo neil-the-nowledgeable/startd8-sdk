@@ -324,6 +324,9 @@ class IntegrationCheckpoint:
             except subprocess.TimeoutExpired:
                 errors.append(f"{file_path.name}: lint check timed out")
                 continue
+            except OSError as exc:
+                errors.append(f"{file_path.name}: lint check failed ({exc})")
+                continue
 
             if result.returncode != 0:
                 # Parse ruff output for errors vs warnings
@@ -398,7 +401,7 @@ class IntegrationCheckpoint:
                     after = gf.read_text()
                     if before != after:
                         logger.debug("Auto-fixed lint issues in %s", gf.name)
-                except (subprocess.TimeoutExpired, FileNotFoundError):
+                except (subprocess.TimeoutExpired, OSError):
                     logger.debug("ruff auto-fix skipped for %s (unavailable or timed out)", gf.name)
 
         # Ignore F401 (unused imports) in pre-merge validation because
@@ -455,19 +458,31 @@ class IntegrationCheckpoint:
         failed = 0
         failed_tests = []
 
-        for line in output.split("\n"):
-            if " passed" in line:
-                try:
-                    passed = int(line.split()[0])
-                except (ValueError, IndexError):
-                    pass
-            if " failed" in line:
-                try:
-                    failed = int(line.split()[0])
-                except (ValueError, IndexError):
-                    pass
-            if "FAILED" in line and "::" in line:
-                failed_tests.append(line.strip())
+        try:
+            for line in output.split("\n"):
+                if " passed" in line:
+                    try:
+                        passed = int(line.split()[0])
+                    except (ValueError, IndexError):
+                        pass
+                if " failed" in line:
+                    try:
+                        failed = int(line.split()[0])
+                    except (ValueError, IndexError):
+                        pass
+                if "FAILED" in line and "::" in line:
+                    failed_tests.append(line.strip())
+        except Exception:
+            logger.debug("Unexpected error parsing pytest output; using defaults")
+
+        # Fallback: if parsing found no counts but pytest exited successfully,
+        # report a passed status (e.g. pytest output format changed)
+        if passed == 0 and failed == 0 and result.returncode == 0:
+            passed = -1  # sentinel: tests passed but count unknown
+            logger.debug(
+                "pytest returned success but no pass/fail counts parsed; "
+                "reporting passed with unknown count"
+            )
 
         # Check for regressions
         regressions = []

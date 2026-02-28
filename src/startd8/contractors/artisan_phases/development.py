@@ -151,6 +151,30 @@ def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]
     try:
         from startd8.contractors.artisan_phases.prompts import format_prompt
 
+        # M-16: validate provided kwargs against declared placeholders
+        try:
+            from startd8.contractors.artisan_phases.prompts import _load_file
+
+            data = _load_file("implement")
+            entry = data.get("prompts", {}).get(template_name)
+            if isinstance(entry, dict) and "placeholders" in entry:
+                declared = set(entry["placeholders"])
+                provided = set(kwargs.keys())
+                missing = declared - provided
+                extra = provided - declared
+                if missing or extra:
+                    _log.debug(
+                        "implement/%s placeholder mismatch: "
+                        "declared=%s, provided=%s, missing=%s, extra=%s",
+                        template_name,
+                        sorted(declared),
+                        sorted(provided),
+                        sorted(missing),
+                        sorted(extra),
+                    )
+        except Exception:
+            pass  # Best-effort validation; don't block prompt rendering
+
         return format_prompt("implement", template_name, **kwargs)
     except (FileNotFoundError, KeyError) as exc:
         fallback = _INLINE_FALLBACK_TEMPLATES.get(template_name)
