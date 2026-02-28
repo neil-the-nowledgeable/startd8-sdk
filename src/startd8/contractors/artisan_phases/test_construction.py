@@ -987,12 +987,6 @@ def validate_pytest_collection(
             plugins=[plugin],
         )
 
-        success = (
-            exit_code == 0 or exit_code == _pytest.ExitCode.NO_TESTS_COLLECTED
-            if hasattr(exit_code, "value")
-            else exit_code == 0
-        ) and len(plugin.errors) == 0
-        # Simpler: just check exit code 0 and no errors
         success = exit_code == 0 and len(plugin.errors) == 0
         collected_count = len(plugin.collected)
         test_node_ids = [item.nodeid for item in plugin.collected]

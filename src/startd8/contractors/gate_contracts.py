@@ -82,8 +82,12 @@ class GateEmitter:
         elif isinstance(gate_result, dict):
             data = gate_result
         else:
-            logger.warning("GateEmitter.emit: unexpected type %s", type(gate_result))
-            data = {"raw": str(gate_result)}
+            logger.error(
+                "GateEmitter.emit: gate_result must be GateResult or dict, "
+                "got %s — skipping emission",
+                type(gate_result).__name__,
+            )
+            return
 
         event = Event(
             type=EventType.QUALITY_GATE_RESULT,

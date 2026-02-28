@@ -481,8 +481,8 @@ class IntegrationCheckpoint:
                         pass
                 if "FAILED" in line and "::" in line:
                     failed_tests.append(line.strip())
-        except Exception:
-            logger.debug("Unexpected error parsing pytest output; using defaults")
+        except (ValueError, IndexError, AttributeError):
+            logger.debug("Error parsing pytest output; using defaults")
 
         # Fallback: if parsing found no counts but pytest exited successfully,
         # report a passed status (e.g. pytest output format changed)

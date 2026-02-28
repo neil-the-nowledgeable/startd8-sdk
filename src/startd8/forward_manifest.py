@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from startd8.logging_config import get_logger
 from startd8.utils.code_manifest import Element, ElementKind, Signature, Span, Visibility
@@ -130,6 +130,13 @@ class ForwardElementSpec(BaseModel):
     docstring_hint: Optional[str] = None
     parent_class: Optional[str] = None
     source_contract_id: Optional[str] = None
+
+    @field_validator("parent_class", mode="before")
+    @classmethod
+    def _normalize_parent_class(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and not v.strip():
+            return None
+        return v
 
     @model_validator(mode="after")
     def _validate_kind_fields(self) -> ForwardElementSpec:
@@ -322,6 +329,14 @@ class ContractViolation:
     actual: Optional[str] = None
     file_path: Optional[str] = None
     severity: str = "error"
+
+    def __post_init__(self) -> None:
+        _VALID_SEVERITIES = {"error", "warning", "info"}
+        if self.severity not in _VALID_SEVERITIES:
+            raise ValueError(
+                f"ContractViolation severity must be one of {_VALID_SEVERITIES}, "
+                f"got {self.severity!r}"
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
