@@ -1,4 +1,4 @@
-"""Tests for walk-through mode (DESIGN + IMPLEMENT prompt persistence)."""
+"""Tests for IMPLEMENT walk-through mode prompt persistence."""
 
 from __future__ import annotations
 

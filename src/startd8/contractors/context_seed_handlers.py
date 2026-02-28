@@ -2609,24 +2609,19 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 )
                 entry["completeness_gate_decision"] = "not_evaluated_due_to_structure_failure"
                 return
-            else:
-                logger.warning(
-                    "DESIGN: task %s structure validation failed (missing: %s) — "
-                    "continuing per %s policy",
-                    task.task_id,
-                    ", ".join(structure_validation["missing_sections"]),
-                    quality_policy_mode,
-                )
+            logger.warning(
+                "DESIGN: task %s structure validation failed (missing: %s) — "
+                "continuing per %s policy",
+                task.task_id,
+                ", ".join(structure_validation["missing_sections"]),
+                quality_policy_mode,
+            )
 
         if completeness_failed:
             if quality_policy_mode == "skip":
                 entry["completeness_gate_decision"] = "skipped"
             elif quality_policy_mode == "block":
                 entry["quality_failure_reason"] = "PARAMETER_COMPLETENESS_FAILED"
-                entry.setdefault(
-                    "non_agreement_reason_code",
-                    "PARAMETER_COMPLETENESS_FAILED",
-                )
                 if entry.get("status") in ("designed", "refined", "adopted"):
                     entry["status"] = "design_failed"
                 entry["error"] = (
@@ -2653,7 +2648,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if status not in ("designed", "refined", "adopted"):
             return False
         completeness = entry.get("parameter_completeness")
-        if isinstance(completeness, dict) and not bool(completeness.get("passed", False)):
+        if isinstance(completeness, dict) and not completeness.get("passed", False):
             return False
         return True
 
@@ -2663,7 +2658,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         if entry.get("status") == "design_failed":
             return str(
                 entry.get("quality_failure_reason")
-                or entry.get("non_agreement_reason_code")
                 or "DESIGN_FAILED"
             )
         completeness = entry.get("parameter_completeness")
@@ -2673,7 +2667,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 return "PARAMETER_COMPLETENESS_DEGRADED"
             return "PARAMETER_COMPLETENESS_FAILED"
         structure = entry.get("structure_validation")
-        if isinstance(structure, dict) and not bool(structure.get("passed", True)):
+        if isinstance(structure, dict) and not structure.get("passed", False):
             return "STRUCTURE_VALIDATION_FAILED"
         return None
 
@@ -2684,7 +2678,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         REQ-DSR-003: Zero-LLM-cost structural validation replacing the
         dual-review gate signal.  Uses DesignSectionV2 enum sections.
         """
-        required = ["## What to Build", "## Files", "## API Surface", "## Constraints"]
+        from startd8.contractors.artisan_phases.design_documentation import DesignSectionV2
+        required = [f"## {s.value}" for s in DesignSectionV2]
         missing = [h for h in required if h not in raw_text]
         return {"passed": len(missing) == 0, "missing_sections": missing}
 
@@ -5543,7 +5538,6 @@ class Test{class_name}:
             if task_design.get("status") == "design_failed":
                 fail_reason = (
                     task_design.get("quality_failure_reason")
-                    or task_design.get("non_agreement_reason_code")
                     or task_design.get("error")
                     or "design_failed"
                 )
