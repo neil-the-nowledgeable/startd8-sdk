@@ -279,10 +279,10 @@ class ImplementPhaseOutput(BaseModel):
         # Check total_cost is non-negative if present in generation results
         for _tid, gr in self.generation_results.items():
             gr_dict = gr if isinstance(gr, dict) else {}
-            task_cost = gr_dict.get("cost") if gr_dict else getattr(gr, "cost", None)
+            task_cost = gr_dict.get("cost_usd") if gr_dict else getattr(gr, "cost_usd", None)
             if task_cost is not None and isinstance(task_cost, (int, float)) and task_cost < 0:
                 raise ValueError(
-                    f"generation_results['{_tid}'].cost must be non-negative, "
+                    f"generation_results['{_tid}'].cost_usd must be non-negative, "
                     f"got {task_cost}"
                 )
 

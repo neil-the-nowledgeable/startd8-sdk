@@ -299,7 +299,7 @@ class EditModeClassification:
             for k, v in per_file_raw.items()
         }
         return cls(
-            mode=data["mode"],
+            mode=data.get("mode", "create"),
             per_file=per_file,
             confidence=data.get("confidence", "low"),
             signal_conflicts=data.get("signal_conflicts", []),
@@ -8017,6 +8017,7 @@ class Test{class_name}:
                 cost_usd=data.get("cost_usd", 0.0),
                 iterations=data.get("iterations", 0),
                 model=data.get("model", "unknown"),
+                metadata=data.get("metadata", {}),
             )
 
         # Layer 4: Path validation — cached generated_files match task.target_files
