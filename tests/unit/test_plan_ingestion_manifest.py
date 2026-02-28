@@ -118,7 +118,7 @@ class TestHeuristicAssessComplexity:
 
         result = assess(plan, threshold=50, force_route=None, manifest_registry=mock_registry)
         # Should not crash — falls back to heuristic
-        # feature_count normalized to 0-100: min(100, max(10, 1 * 7)) = 10
+        # feature_count normalized 0-100: min(100, max(10, 1 * 7)) = 10
         assert result.feature_count == 10
         # cross_file_deps normalized to 0-100: min(100, max(0, 1 * 10)) = 10
         assert result.cross_file_deps == 10

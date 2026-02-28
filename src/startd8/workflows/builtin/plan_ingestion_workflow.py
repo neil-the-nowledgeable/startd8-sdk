@@ -502,6 +502,11 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
             )
         )
 
+    # Filter dependencies to only reference known feature IDs
+    known_fids = {f.feature_id for f in features}
+    for feat in features:
+        feat.dependencies = [d for d in feat.dependencies if d in known_fids]
+
     if not features:
         features = [
             ParsedFeature(
@@ -696,7 +701,7 @@ def _heuristic_assess_complexity(
                 )
 
     return ComplexityScore(
-        feature_count=feature_count_score,  # normalized 0-100
+        feature_count=feature_count_score,
         cross_file_deps=min(100, max(0, cross_file_deps * 10)),
         api_surface=api_surface,
         test_complexity=test_complexity,
@@ -811,12 +816,8 @@ def _artifact_type_from_id(artifact_id: str) -> Optional[str]:
     for suffix, artifact_type in explicit_suffix_map.items():
         if aid.endswith(suffix):
             return artifact_type
-    if "-" in aid:
-        suffix = aid.split("-", 1)[1]
-        return _normalize_artifact_type(suffix)
-    if "_" in aid:
-        suffix = aid.split("_", 1)[1]
-        return _normalize_artifact_type(suffix)
+    # Unrecognized pattern — return None rather than guessing from
+    # arbitrary ID structure (e.g., "api-gateway-v2" → "gateway_v2" is wrong).
     return None
 
 
@@ -2519,7 +2520,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             init_sub_id = None
             for idx, target_file in enumerate(ordered):
-                suffix = chr(ord("a") + idx)
+                suffix = chr(ord("a") + idx) if idx < 26 else f"-{idx + 1:02d}"
                 sub_id = f"{parent_id}{suffix}"
 
                 # Sub-task deps: parent's deps + init sub-task (if this
