@@ -124,10 +124,6 @@ from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
 
-# Fraction of cost_budget at which a warning is logged.
-# For example, 0.5 means "warn when 50% of the budget has been consumed".
-_BUDGET_WARNING_THRESHOLD_FRACTION = 0.5
-
 # PCA-202: Checkpoint size guard for plan_document_text.
 _PLAN_DOC_CHECKPOINT_MAX_CHARS = 1000
 _PLAN_DOC_TRUNCATION_MARKER = "\n... [truncated, full text in seed]"
@@ -1047,9 +1043,6 @@ class ArtisanContractorWorkflow:
 
         # Error store — writes to .startd8/task_errors/ under project_root
         self._error_store: Optional[Any] = None  # Lazy init on first error
-
-        # One-shot guard: emit budget-approaching warning at most once.
-        self._budget_warning_emitted: bool = False
 
         self._tracer: Optional[Any] = None
         # REQ-PAQ-603: runtime gate traceability.

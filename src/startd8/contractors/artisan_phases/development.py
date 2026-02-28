@@ -4818,7 +4818,15 @@ class DevelopmentPhase:
                 async with state_lock:
                     state = states[cid]
                 chunk_context = copy.deepcopy(context)  # Per-chunk deep copy to avoid race conditions
-                result = await self._execute_chunk(chunk, state, chunk_context)
+                try:
+                    result = await self._execute_chunk(chunk, state, chunk_context)
+                except Exception as exc:
+                    self.logger.exception(
+                        "Chunk %s raised unexpected exception: %s", cid, exc,
+                    )
+                    state.status = ChunkStatus.FAILED
+                    state.last_error = f"Unexpected exception: {type(exc).__name__}: {exc}"
+                    result = state
                 async with state_lock:
                     states[cid] = result
 
@@ -4827,10 +4835,11 @@ class DevelopmentPhase:
         except BaseException as gather_exc:
             self.logger.warning(
                 "asyncio.gather raised %s during concurrent chunk execution; "
-                "spans from partially-completed chunks may not have been cleaned up. "
-                "Individual chunk spans are guarded by _execute_chunk's try/except, "
-                "but any in-flight chunks at the time of failure may leak spans.",
+                "%d of %d chunks have results in state dict. "
+                "Partial state will be returned for persistence.",
                 type(gather_exc).__name__,
+                sum(1 for s in states.values() if s.status.value in ("PASSED", "FAILED")),
+                len(eligible),
             )
             raise
 

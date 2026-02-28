@@ -123,8 +123,8 @@ class IntegrationCheckpoint:
             )
         except subprocess.TimeoutExpired:
             logger.warning("Test baseline collection timed out after 60s")
-            self._test_baseline = set()
-            return self._test_baseline
+            self._test_baseline = None  # Sentinel: baseline not available
+            return set()  # Return empty set to caller but mark baseline as unavailable
 
         collected_tests = set()
         for line in result.stdout.split("\n"):
@@ -486,7 +486,7 @@ class IntegrationCheckpoint:
 
         # Check for regressions
         regressions = []
-        if self._test_baseline and failed_tests:
+        if self._test_baseline is not None and failed_tests:
             for test in failed_tests:
                 test_name = test.split()[0] if test else ""
                 if test_name in self._test_baseline:

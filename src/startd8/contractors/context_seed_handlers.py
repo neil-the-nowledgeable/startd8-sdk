@@ -708,7 +708,7 @@ class SeedTask:
                         "context.task_id": entry.get("task_id", ""),
                     })
             except Exception:
-                pass  # OTel not available — non-fatal
+                logger.debug("OTel context not available", exc_info=True)
             logger.debug(
                 "SeedTask %s: domain defaulted to 'unknown' (enrichment missing or incomplete)",
                 entry.get("task_id", "?"),
@@ -1671,7 +1671,7 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
                     context["plan_document_text"] = _pdp.read_text(encoding="utf-8")
                     logger.info("Restored plan_document_text from seed on resume")
                 except OSError:
-                    pass
+                    logger.debug("Could not read file: %s", _pdp, exc_info=True)
 
     return _apply_runtime_task_selection(tasks)
 
@@ -1888,7 +1888,7 @@ class PlanPhaseHandler(AbstractPhaseHandler):
                         len(plan_text),
                     )
                 except OSError:
-                    pass
+                    logger.debug("Could not read file: %s", plan_doc_path, exc_info=True)
 
         output = {
             "plan_title": context["plan_title"],
@@ -4286,7 +4286,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                     encoding="utf-8"
                                 )
                             except OSError:
-                                pass
+                                logger.debug("Could not read file: %s", plan_path, exc_info=True)
 
         # Mottainai fallback: when inventory lookup didn't find these fields,
         # try the onboarding-metadata forwarded through the seed by PLAN phase.
@@ -5868,7 +5868,7 @@ def _extract_complexity_signals(
     try:
         estimated_loc = int(meta.get("estimated_loc", 0) or 0)
     except (ValueError, TypeError):
-        pass
+        logger.debug("estimated_loc coercion failed", exc_info=True)
 
     # Target file count
     target_files = getattr(chunk, "file_targets", []) or []
@@ -6428,7 +6428,7 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
             from opentelemetry import trace as _trace
             _span = _trace.get_current_span()
         except ImportError:
-            pass
+            logger.debug("Optional import not available", exc_info=True)
 
         flags: dict[str, dict[str, Any]] = {}
 
@@ -6918,7 +6918,7 @@ class Test{class_name}:
                             fpath, _manifest_elem_count,
                         )
                 except (AttributeError, TypeError, OSError):
-                    pass  # graceful degradation
+                    logger.debug("Graceful degradation: file summary extraction failed", exc_info=True)
 
             # Tier 1 (weight 2): manifest.fqn_exists for api_signatures (REQ-EMM-002, PI-3)
             if manifest_registry is not None and task.api_signatures:
@@ -6938,7 +6938,7 @@ class Test{class_name}:
                             task.task_id, _matched_fqns[:3],
                         )
                 except (AttributeError, TypeError):
-                    pass  # graceful degradation
+                    logger.debug("Graceful degradation: manifest query failed", exc_info=True)
 
             # Classify this file
             if edit_weight >= 1:
@@ -8416,7 +8416,7 @@ class Test{class_name}:
                                 fp.read_text(encoding="utf-8").splitlines()
                             )
                         except (OSError, UnicodeDecodeError):
-                            pass
+                            logger.debug("Could not read file for size check: %s", fp, exc_info=True)
             if task_sizes:
                 existing_file_sizes[task.task_id] = task_sizes
 
@@ -8462,7 +8462,7 @@ class Test{class_name}:
                             encoding="utf-8", errors="replace",
                         )
                     except OSError:
-                        pass
+                        logger.debug("Could not read existing file: %s", fp, exc_info=True)
             if not chunk_efc:
                 continue
 
@@ -8482,7 +8482,7 @@ class Test{class_name}:
                             encoding="utf-8",
                         )
                     except (OSError, UnicodeDecodeError):
-                        pass
+                        logger.debug("Could not read generated file: %s", fp, exc_info=True)
             if not gen_file_contents:
                 continue
 
@@ -8519,7 +8519,7 @@ class Test{class_name}:
                     ImportError, TypeError, AttributeError,
                     RuntimeError, NameError,
                 ):
-                    pass
+                    logger.debug("Auto-lint import failed", exc_info=True)
 
                 # Lazy-resolve retry agent (once per run)
                 if _retry_agent is None:
@@ -10071,7 +10071,7 @@ class Test{class_name}:
                         _g5_span = _g5_trace.get_current_span()
                         emit_rejection_telemetry(gate_result, _g5_span)
                     except (ImportError, TypeError, AttributeError, RuntimeError, NameError):
-                        pass
+                        logger.debug("Auto-lint import failed", exc_info=True)
 
                     # REQ-EFE-023: single retry with edit-focused prompt
                     retry_succeeded = self._attempt_edit_first_retry(
@@ -10093,7 +10093,7 @@ class Test{class_name}:
                             _g5_span2 = _g5_trace2.get_current_span()
                             emit_rejection_telemetry(gate_result, _g5_span2)
                         except (ImportError, TypeError, AttributeError, RuntimeError, NameError):
-                            pass
+                            logger.debug("Auto-lint import failed", exc_info=True)
 
                 gate5_results[task.task_id] = {
                     "any_rejected": gate_result.any_rejected,
@@ -13728,7 +13728,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                     ],
                 }
         except ImportError:
-            pass  # contextcore propagation not available — use fallback
+            logger.debug("contextcore propagation not available", exc_info=True)
         except Exception as exc:
             logger.warning(
                 "Contract-based propagation validation failed, using fallback: %s", exc
@@ -13776,7 +13776,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                     ),
                 })
         except Exception:
-            pass  # OTel not available — non-fatal
+            logger.debug("OTel span not available", exc_info=True)
 
         return results
 
@@ -13976,7 +13976,7 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
                     try:
                         design_cost += float(entry.get("cost", 0.0) or 0.0)
                     except (TypeError, ValueError):
-                        pass
+                        logger.debug("Cost computation failed", exc_info=True)
 
         impl_cost = _safe_cost(implementation)
         test_cost = _safe_cost(test_results)
