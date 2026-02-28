@@ -112,6 +112,11 @@ def _parse_python_signature(sig_str: str) -> Optional[Signature]:
     """
     cleaned = _strip_def_prefix(sig_str)
 
+    # Strip trailing ": pass" body if present so wrapping doesn't produce
+    # "def foo(): pass: pass" (invalid syntax).
+    if cleaned.rstrip().endswith(": pass"):
+        cleaned = cleaned.rstrip()[: -len(": pass")].rstrip()
+
     # Wrap as a valid function so ast.parse can handle it
     source = f"def {cleaned}: pass"
     try:
