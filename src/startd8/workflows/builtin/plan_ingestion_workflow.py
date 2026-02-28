@@ -454,6 +454,16 @@ def _as_bool(raw: Any, default: bool) -> bool:
     return default
 
 
+def _safe_int(val: Any, default: int) -> int:
+    """Parse a value to int, tolerating float strings from LLM output."""
+    if val is None:
+        return default
+    try:
+        return int(float(val))
+    except (TypeError, ValueError):
+        return default
+
+
 _HEURISTIC_FALLBACK_DESCRIPTION = "Fallback parsed feature from plan text"
 
 
@@ -1550,7 +1560,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
         # Determine route from composite score (don't trust LLM's route suggestion)
-        composite = int(data.get("composite", 50))
+        composite = _safe_int(data.get("composite"), 50)
         if force_route:
             route = ContractorRoute(force_route)
         else:
@@ -1563,13 +1573,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                 )
 
         score = ComplexityScore(
-            feature_count=int(data.get("feature_count", 0)),
-            cross_file_deps=int(data.get("cross_file_deps", 0)),
-            api_surface=int(data.get("api_surface", 0)),
-            test_complexity=int(data.get("test_complexity", 0)),
-            integration_depth=int(data.get("integration_depth", 0)),
-            domain_novelty=int(data.get("domain_novelty", 0)),
-            ambiguity=int(data.get("ambiguity", 0)),
+            feature_count=_safe_int(data.get("feature_count"), 0),
+            cross_file_deps=_safe_int(data.get("cross_file_deps"), 0),
+            api_surface=_safe_int(data.get("api_surface"), 0),
+            test_complexity=_safe_int(data.get("test_complexity"), 0),
+            integration_depth=_safe_int(data.get("integration_depth"), 0),
+            domain_novelty=_safe_int(data.get("domain_novelty"), 0),
+            ambiguity=_safe_int(data.get("ambiguity"), 0),
             composite=composite,
             reasoning=data.get("reasoning", ""),
             route=route,
@@ -1934,10 +1944,12 @@ class PlanIngestionWorkflow(WorkflowBase):
         coverage = onboarding.get("coverage", {}) if isinstance(onboarding, dict) else {}
         gaps = coverage.get("gaps", []) if isinstance(coverage, dict) else []
         # Filter to entries that look like artifact IDs (not plain-text gap descriptions).
-        # Artifact IDs contain hyphens/underscores and no spaces; prose descriptions have spaces.
+        # Artifact IDs contain hyphens/underscores and no spaces; prose descriptions have spaces
+        # or are single bare words without structural separators.
         artifact_ids = [
             a for a in gaps
             if isinstance(a, str) and a.strip() and " " not in a.strip()
+            and ("-" in a or "_" in a)
         ]
         artifact_to_feature: Dict[str, List[str]] = {}
 
@@ -3709,7 +3721,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         threshold = int(config.get("complexity_threshold", 40))
         force_route = config.get("force_route")
         review_rounds = int(config.get("review_rounds", 2))
-        skip_arc_review = bool(config.get("skip_arc_review", False))
+        skip_arc_review = _as_bool(config.get("skip_arc_review"), False)
         review_quality_tier = str(config.get("review_quality_tier", "flagship"))
         contextcore_export_dir = config.get("contextcore_export_dir")
         min_export_coverage = float(config.get("min_export_coverage", 0))
