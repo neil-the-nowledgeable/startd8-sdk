@@ -571,19 +571,27 @@ def _heuristic_assess_complexity(
     """
     feature_count = len(parsed_plan.features)
     mentioned_files = {tf for f in parsed_plan.features for tf in f.target_files}
+    # M-1: Include plan-prose mentioned files when available
+    plan_mentioned = getattr(parsed_plan, "mentioned_files", None)
+    if plan_mentioned:
+        mentioned_files = mentioned_files | set(plan_mentioned)
 
     # PI-2: Use manifest dependency graph when available
     if manifest_registry is not None:
         try:
             dep_graph = manifest_registry.dependency_graph()
             # Count unique cross-file dependencies from mentioned files
-            cross_file_deps = sum(
+            total_edges = sum(
                 len(dep_graph.get(mf, set()))
                 for mf in mentioned_files
             )
+            # H-1: Normalize to average deps per file so manifest scale
+            # is comparable to the feature-based fallback scale.
+            cross_file_deps = total_edges // max(1, len(mentioned_files))
             logger.debug(
-                "PI-2: manifest dependency graph used — %d files, %d edges",
+                "PI-2: manifest dependency graph used — %d files, %d edges, avg %d",
                 len(mentioned_files),
+                total_edges,
                 cross_file_deps,
             )
         except Exception:
@@ -2592,14 +2600,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             estimated_loc = ctx.get("estimated_loc", 0)
             loc_per_file = max(estimated_loc // len(target_files), 10)
 
-            logger.info(
-                "Gate 2a: splitting task %s (%d files > max %d) into %d "
-                "sub-tasks",
-                parent_id,
-                len(target_files),
-                max_files,
-                len(target_files),
-            )
+            # Cap sub-tasks at 26 (a-z) to stay within
+            # _SAFE_TASK_ID_PATTERN.  Extra files are grouped into the
+            # last sub-task.
+            _MAX_SUB_TASKS = 26
 
             # Separate __init__.py (if any) — it becomes sub-task 'a'
             # so other sub-tasks can depend on it.
@@ -2607,9 +2611,48 @@ class PlanIngestionWorkflow(WorkflowBase):
             non_init_files = [f for f in target_files if not f.endswith("__init__.py")]
             ordered = init_files + non_init_files
 
-            init_sub_id = None
-            for idx, target_file in enumerate(ordered):
-                suffix = chr(ord("a") + idx) if idx < 26 else f"-{idx:02d}"
+            if len(ordered) > _MAX_SUB_TASKS:
+                logger.warning(
+                    "Gate 2a: task %s has %d files — capping at %d "
+                    "sub-tasks; last sub-task will contain %d files",
+                    parent_id,
+                    len(ordered),
+                    _MAX_SUB_TASKS,
+                    len(ordered) - _MAX_SUB_TASKS + 1,
+                )
+
+            # Build groups: first (_MAX_SUB_TASKS - 1) get one file each;
+            # the last group absorbs any overflow.
+            groups: List[List[str]] = []
+            for f in ordered:
+                if len(groups) < _MAX_SUB_TASKS:
+                    groups.append([f])
+                else:
+                    groups[-1].append(f)
+
+            num_sub = len(groups)
+
+            logger.info(
+                "Gate 2a: splitting task %s (%d files > max %d) into %d "
+                "sub-tasks",
+                parent_id,
+                len(target_files),
+                max_files,
+                num_sub,
+            )
+
+            # Pre-compute init sub-task ID for dependency wiring
+            # (before the loop so it is available on the first
+            # non-init iteration).
+            init_sub_id: Optional[str] = None
+            for pre_idx, pre_group in enumerate(groups):
+                if any(gf.endswith("__init__.py") for gf in pre_group):
+                    pre_suffix = chr(ord("a") + pre_idx)
+                    init_sub_id = f"{parent_id}{pre_suffix}"
+                    break
+
+            for idx, file_group in enumerate(groups):
+                suffix = chr(ord("a") + idx)
                 sub_id = f"{parent_id}{suffix}"
 
                 # Sub-task deps: parent's deps + init sub-task (if this
@@ -2618,13 +2661,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if init_sub_id and sub_id != init_sub_id:
                     sub_deps.append(init_sub_id)
 
-                if target_file.endswith("__init__.py"):
-                    init_sub_id = sub_id
+                group_loc = loc_per_file * len(file_group)
 
                 sub_ctx: Dict[str, Any] = {
                     "feature_id": ctx.get("feature_id", ""),
-                    "target_files": [target_file],
-                    "estimated_loc": loc_per_file,
+                    "target_files": file_group,
+                    "estimated_loc": group_loc,
                     "_split_from": parent_id,
                     "_split_index": idx,
                 }
@@ -2640,15 +2682,29 @@ class PlanIngestionWorkflow(WorkflowBase):
                     if key in ctx:
                         sub_ctx[key] = ctx[key]
 
-                file_name = target_file.rsplit("/", 1)[-1]
-                sub_title = f"{task['title']} — {file_name}"
+                if len(file_group) == 1:
+                    file_name = file_group[0].rsplit("/", 1)[-1]
+                    sub_title = f"{task['title']} — {file_name}"
+                    desc_detail = f"implement `{file_group[0]}` only."
+                else:
+                    sub_title = (
+                        f"{task['title']} — {len(file_group)} files "
+                        f"(group {suffix})"
+                    )
+                    file_list = ", ".join(
+                        f"`{gf}`" for gf in file_group
+                    )
+                    desc_detail = (
+                        f"implement {len(file_group)} files: "
+                        f"{file_list}."
+                    )
 
                 result.append({
                     "task_id": sub_id,
                     "title": sub_title,
                     "task_type": task.get("task_type", "task"),
                     "story_points": PlanIngestionWorkflow._estimate_story_points(
-                        loc_per_file
+                        group_loc
                     ),
                     "priority": task.get("priority", "medium"),
                     "labels": list(task.get("labels", [])),
@@ -2656,8 +2712,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "config": {
                         "task_description": (
                             f"{parent_desc}\n\n"
-                            f"[Auto-split from {parent_id}: implement "
-                            f"`{target_file}` only.]"
+                            f"[Auto-split from {parent_id}: {desc_detail}]"
                         ),
                         "requirements_text": task.get("config", {}).get("requirements_text", ""),
                         "context": sub_ctx,
@@ -2891,10 +2946,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             for raw_path in context_files:
                 p = Path(raw_path.strip()).expanduser()
                 if p.name == "onboarding-metadata.json":
-                    export_dir = p.parent if p.is_absolute() else (output_dir / p).resolve().parent
+                    export_dir = p.resolve().parent if p.is_absolute() else (output_dir / p).resolve().parent
                     break
                 if p.name == "run-provenance.json":
-                    export_dir = p.parent if p.is_absolute() else (output_dir / p).resolve().parent
+                    export_dir = p.resolve().parent if p.is_absolute() else (output_dir / p).resolve().parent
                     break
 
         # Fall back to output_dir itself
@@ -3143,7 +3198,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         root_ids = [
             fid for fid in depended_upon
             if fid in known_fids
-            and (fid not in has_deps or not dep_graph.get(fid))
+            and fid not in has_deps
         ]
 
         clusters: list[Dict[str, Any]] = []
@@ -3478,6 +3533,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                             )
                         else:
                             new_ids.append(aid)  # keep as-is — already a task ID or external ref
+                    if not new_ids:
+                        logger.warning(
+                            "Forward manifest: dropping contract %r — all applicable "
+                            "task IDs were invalidated (stale feature references)",
+                            c_dict.get("contract_id", "?"),
+                        )
+                        continue
                     if new_ids != old_ids:
                         c_copy = dict(c_dict)
                         c_copy["applicable_task_ids"] = new_ids
@@ -3513,7 +3575,6 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             if onboarding_resolved:
                 ob_var = dict(onboarding_resolved)
-                artifacts_out["onboarding"] = onboarding_resolved
                 amp = onboarding_resolved.get("artifact_manifest_path")
                 pcp = onboarding_resolved.get("project_context_path")
                 if amp:
@@ -3612,22 +3673,17 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             # Mottainai Rule 6: log propagation chain status
             _triage = review_output.get("triage", {}) if review_output else {}
-            _has_accept_decisions = any(
-                d.get("decision") == "ACCEPT"
-                for d in _triage.get("decisions", [])
-            )
-            if _triage.get("accepted", 0) > 0 and _has_accept_decisions:
-                if refine_suggestions:
-                    logger.info(
-                        "REFINE→seed chain INTACT: %d accepted suggestions forwarded",
-                        len(refine_suggestions),
-                    )
-                else:
-                    logger.warning(
-                        "REFINE→seed chain DEGRADED: %d accepted suggestions "
-                        "available but not forwarded",
-                        _triage["accepted"],
-                    )
+            if refine_suggestions:
+                logger.info(
+                    "REFINE→seed chain INTACT: %d accepted suggestions forwarded",
+                    len(refine_suggestions),
+                )
+            elif _triage.get("accepted", 0) > 0:
+                logger.warning(
+                    "REFINE→seed chain DEGRADED: %d accepted suggestions "
+                    "available but not forwarded",
+                    _triage["accepted"],
+                )
             else:
                 logger.debug("REFINE→seed chain N/A: no accepted suggestions to forward")
 
@@ -3674,22 +3730,17 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             # Mottainai Rule 6: log propagation chain status (prime)
             _triage_p = review_output.get("triage", {}) if review_output else {}
-            _has_accept_decisions_p = any(
-                d.get("decision") == "ACCEPT"
-                for d in _triage_p.get("decisions", [])
-            )
-            if _triage_p.get("accepted", 0) > 0 and _has_accept_decisions_p:
-                if refine_suggestions:
-                    logger.info(
-                        "REFINE→prime seed chain INTACT: %d accepted suggestions forwarded",
-                        len(refine_suggestions),
-                    )
-                else:
-                    logger.warning(
-                        "REFINE→prime seed chain DEGRADED: %d accepted suggestions "
-                        "available but not forwarded",
-                        _triage_p["accepted"],
-                    )
+            if refine_suggestions:
+                logger.info(
+                    "REFINE→prime seed chain INTACT: %d accepted suggestions forwarded",
+                    len(refine_suggestions),
+                )
+            elif _triage_p.get("accepted", 0) > 0:
+                logger.warning(
+                    "REFINE→prime seed chain DEGRADED: %d accepted suggestions "
+                    "available but not forwarded",
+                    _triage_p["accepted"],
+                )
             else:
                 logger.debug("REFINE→prime seed chain N/A: no accepted suggestions to forward")
 
@@ -3744,8 +3795,10 @@ class PlanIngestionWorkflow(WorkflowBase):
         contextcore_export_dir = config.get("contextcore_export_dir")
         min_export_coverage = float(config.get("min_export_coverage", 0))
         scope = config.get("scope")
-        warn_cost_usd = config.get("warn_cost_usd")
-        max_cost_usd = config.get("max_cost_usd")
+        _raw_warn = config.get("warn_cost_usd")
+        warn_cost_usd = float(_raw_warn) if _raw_warn is not None else None
+        _raw_max = config.get("max_cost_usd")
+        max_cost_usd = float(_raw_max) if _raw_max is not None else None
         context_files = _parse_context_files(config.get("context_files"))
         llm_read_timeout_seconds = float(config.get("llm_read_timeout_seconds", 300))
         llm_max_attempts = int(config.get("llm_max_attempts", 1))
@@ -3756,7 +3809,15 @@ class PlanIngestionWorkflow(WorkflowBase):
         requirements_files = _parse_file_list(config.get("requirements_files"))
         if requirements_path:
             requirements_files = [str(requirements_path)] + requirements_files
+        _VALID_QUALITY_POLICIES = {"fail", "bias_artisan"}
         low_quality_policy = str(config.get("low_quality_policy", "bias_artisan")).strip().lower()
+        if low_quality_policy not in _VALID_QUALITY_POLICIES:
+            logger.warning(
+                "Unrecognized low_quality_policy %r — defaulting to 'bias_artisan'. "
+                "Valid values: %s",
+                low_quality_policy, _VALID_QUALITY_POLICIES,
+            )
+            low_quality_policy = "bias_artisan"
         min_requirements_coverage = float(config.get("min_requirements_coverage", 70))
         min_artifact_mapping_coverage = float(config.get("min_artifact_mapping_coverage", 70))
         max_contract_conflicts = int(config.get("max_contract_conflicts", 2))
