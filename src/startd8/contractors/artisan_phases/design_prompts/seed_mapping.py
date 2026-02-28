@@ -55,9 +55,16 @@ def extract_prior_art(
     dependency_designs: dict[str, str] | None = None,
     scaffold_existing_files: list[str] | None = None,
     staleness_classification: dict[str, str] | None = None,
+    file_stubs: list[dict[str, Any]] | None = None,
+    assembly_degraded: bool = False,
 ) -> dict[str, Any] | None:
     """Extract prior art context. Returns None if nothing exists."""
     result: dict[str, Any] = {}
+
+    if file_stubs:
+        result["file_stubs"] = file_stubs
+    if assembly_degraded:
+        result["assembly_degraded"] = assembly_degraded
 
     if prior_design_summaries:
         result["summaries"] = prior_design_summaries[-5:]

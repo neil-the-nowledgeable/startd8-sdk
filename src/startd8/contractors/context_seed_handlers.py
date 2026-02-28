@@ -1505,7 +1505,7 @@ def _ensure_context_loaded(context: dict[str, Any]) -> list[SeedTask]:
     domain_counts: dict[str, int] = defaultdict(int)
     for t in tasks:
         domain_counts[t.domain] += 1
-    context["domain_summary"] = dict(domain_counts)
+    context.setdefault("domain_summary", dict(domain_counts))
     context["total_estimated_loc"] = sum(t.estimated_loc for t in tasks)
     context["example_artifacts"] = (seed_data.get("artifacts") or {}).get(
         "example_artifacts", {}
@@ -3478,6 +3478,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         staleness_classification=_scaffold.get(
                             "staleness_classification",
                         ),
+                        scaffold_file_stubs=_scaffold.get("file_stubs", []),
+                        scaffold_assembly_degraded=_scaffold.get(
+                            "assembly_degraded", False,
+                        ),
                         wave_index=task.wave_index,
                         wave_metadata=context.get("wave_metadata"),
                         parameter_sources=context.get("parameter_sources", {}),
@@ -3493,6 +3497,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         manifest_registry=_design_manifest_registry,
                         manifest_context_budget=self.config.manifest_context_budget,
                         enable_introspect=self.config.enable_introspect,
+                        forward_manifest=context.get("forward_manifest"),
                     )
                     if carry_forward_quality_feedback:
                         _v2_user = (
@@ -3818,8 +3823,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 elif _task_by_id.get(tid) and getattr(
                     _task_by_id[tid], "existing_content_hash", None
                 ) is not None:
-                    context["design_mode_summary"][tid] = "update"
-                elif entry.get("status") == "refined":
                     context["design_mode_summary"][tid] = "update"
                 else:
                     context["design_mode_summary"][tid] = "create"
@@ -5298,12 +5301,14 @@ class Test{class_name}:
             # Tier 1 (weight 2): existing_content_hash — non-None means file
             # physically existed at preflight time
             has_hash = task.existing_content_hash is not None
-            if has_hash:
-                edit_weight += 2
-                file_signals_edit.append("existing_content_hash")
 
             # Tier 1 (weight 2): scaffold.existing_target_files
             in_existing = fpath in existing_targets
+
+            # I-2: Only apply hash signal to files confirmed on disk
+            if has_hash and in_existing:
+                edit_weight += 2
+                file_signals_edit.append("existing_content_hash")
             if in_existing:
                 edit_weight += 2
                 file_signals_edit.append("scaffold.existing_target_files")
@@ -5583,7 +5588,7 @@ class Test{class_name}:
                         _design_lines += 1
                         if _dl.strip().startswith("##"):
                             _design_sections += 1
-                if not design_doc_text or _design_lines < 50:
+                if not design_doc_text or _design_lines < 10:
                     logger.warning(
                         "DESIGN→IMPLEMENT boundary: task %s has status '%s' but "
                         "design_document is empty/trivial (%d lines) — falling back "
@@ -7227,10 +7232,26 @@ class Test{class_name}:
                         continue
                     else:
                         logger.warning(
-                            "Inner loop task %s: DESIGN failed — proceeding "
-                            "per %s policy (quality may be degraded)",
+                            "Inner loop task %s: DESIGN failed — skipping "
+                            "per %s policy (no design document)",
                             task_id, _gate_mode,
                         )
+                        generation_results[task_id] = GenerationResult(
+                            text="", time_ms=0,
+                            token_usage={"input": 0, "output": 0},
+                            success=False,
+                            error=f"design_failed: skipped by quality gate ({_gate_mode})",
+                            metadata={"design_gated": True},
+                        )
+                        task_reports.append({
+                            "task_id": task_id, "status": "design_gated",
+                            "error": f"DESIGN failed — skipped per {_gate_mode} policy",
+                        })
+                        _log_task_boundary_complete(
+                            task_id, status="design_gated",
+                            phase="implement",
+                        )
+                        continue
 
                 if design_doc:
                     engine_context["design_document"] = design_doc

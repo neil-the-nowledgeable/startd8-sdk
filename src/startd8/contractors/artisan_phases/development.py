@@ -1327,6 +1327,11 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 if prod_path.exists():
                     try:
                         content = prod_path.read_text(encoding="utf-8")
+                        # I-3: Save original line count before truncation
+                        _original_line_count = len(content.splitlines())
+                        gen_ctx.setdefault(
+                            "_existing_files_original_lines", {},
+                        )[target] = _original_line_count
                         if len(content) > self._MAX_EXISTING_FILE_BYTES:
                             content = (
                                 content[: self._MAX_EXISTING_FILE_BYTES]
@@ -1342,6 +1347,11 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             if staging_path.exists():
                 try:
                     content = staging_path.read_text(encoding="utf-8")
+                    # I-3: Save original line count before truncation
+                    _original_line_count = len(content.splitlines())
+                    gen_ctx.setdefault(
+                        "_existing_files_original_lines", {},
+                    )[target] = _original_line_count
                     if len(content) > self._MAX_EXISTING_FILE_BYTES:
                         content = (
                             content[: self._MAX_EXISTING_FILE_BYTES]
@@ -1454,7 +1464,8 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         parts.extend(self._build_structural_delta(chunk))            # Gap 3
         parts.extend(self._build_existing_files(_existing, _edit_mode))
         if _existing:
-            parts.extend(self._build_edit_first_directive(_existing))
+            _orig_lines = chunk.metadata.get("_existing_files_original_lines")
+            parts.extend(self._build_edit_first_directive(_existing, _orig_lines))
         parts.extend(self._build_edit_mode_classification(_edit_mode))  # B-3 fix
         parts.extend(self._build_design_framing(chunk, _existing))      # B-5 fix
         parts.append(chunk.description)
@@ -2023,9 +2034,22 @@ class LeadContractorChunkExecutor(ChunkExecutor):
     def _build_edit_first_directive(
         cls,
         existing: Dict[str, str],
+        original_lines: Optional[Dict[str, int]] = None,
     ) -> List[str]:
-        """PCA-503/605b: Edit-First Directive with quantitative size constraint."""
-        total_lines = sum(len(c.splitlines()) for c in existing.values())
+        """PCA-503/605b: Edit-First Directive with quantitative size constraint.
+
+        Args:
+            existing: Mapping of target path to (possibly truncated) file content.
+            original_lines: Optional mapping of target path to original (pre-truncation)
+                line count.  When provided, uses these counts for accurate min_lines
+                calculation instead of counting truncated content lines (I-3 fix).
+        """
+        # I-3: Use original line counts when available to avoid under-counting
+        # after double truncation (_MAX_EXISTING_FILE_BYTES + _EXISTING_FILES_BUDGET_BYTES).
+        if original_lines:
+            total_lines = sum(original_lines.values())
+        else:
+            total_lines = sum(len(c.splitlines()) for c in existing.values())
         min_lines = int(total_lines * cls._MIN_OUTPUT_FRACTION)
 
         text = _format_implement_prompt(
@@ -2509,6 +2533,10 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             existing_files = gen_ctx.get("existing_files")
             if existing_files:
                 chunk.metadata["_existing_file_contents"] = existing_files
+            # I-3: Store original line counts for accurate min_lines calculation
+            original_lines = gen_ctx.get("_existing_files_original_lines")
+            if original_lines:
+                chunk.metadata["_existing_files_original_lines"] = original_lines
 
             task_desc = self._build_task_description(chunk, context)
 
@@ -2871,6 +2899,30 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         coding_std = _format_implement_prompt("coding_standards")
         if coding_std:
             parts.append(coding_std)
+
+        # I-4: For edit-mode tasks, include existing file signatures so T2 can
+        # verify that T1 (Haiku) preserved existing code.  Full content is
+        # excluded to keep T2 context small; signatures (def/class/import lines)
+        # give enough signal for structural verification.
+        if chunk.metadata.get("_edit_mode", {}).get("mode") == "edit":
+            existing = chunk.metadata.get("_existing_file_contents", {})
+            if existing:
+                parts.append("\n## Existing File Signatures (for edit verification)")
+                for path, content in existing.items():
+                    sig_lines = [
+                        line
+                        for line in content.splitlines()
+                        if line.strip().startswith(
+                            ("def ", "class ", "import ", "from ", "async def ")
+                        )
+                    ]
+                    parts.append(
+                        f"### `{path}` — {len(content.splitlines())} total lines"
+                    )
+                    if sig_lines:
+                        parts.append("```python")
+                        parts.append("\n".join(sig_lines[:50]))
+                        parts.append("```")
 
         return "\n".join(parts)
 
@@ -3423,7 +3475,8 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             if use_search_replace:
                 parts.extend(self._build_search_replace_directive(_existing))
             else:
-                parts.extend(self._build_edit_first_directive(_existing))
+                _orig_lines = chunk.metadata.get("_existing_files_original_lines")
+                parts.extend(self._build_edit_first_directive(_existing, _orig_lines))
 
         parts.extend(self._build_edit_mode_classification(_edit_mode))
         parts.extend(self._build_design_framing(chunk, _existing))
@@ -3633,6 +3686,10 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             existing_files = gen_ctx.get("existing_files")
             if existing_files:
                 chunk.metadata["_existing_file_contents"] = existing_files
+            # I-3: Store original line counts for accurate min_lines calculation
+            original_lines = gen_ctx.get("_existing_files_original_lines")
+            if original_lines:
+                chunk.metadata["_existing_files_original_lines"] = original_lines
 
             task_desc = self._build_task_description(chunk, context)
 
@@ -3843,7 +3900,37 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                         else:
                             chunk.metadata["_search_replace_failed_blocks"] = 0
 
-                        written_files = self._write_applied_files(applied_files, chunk)
+                        # I-6: When >30% of S/R blocks fail, the partial result
+                        # is unreliable — fall back to whole-file extraction.
+                        if blocks and len(all_failed) / len(blocks) > 0.3:
+                            self.logger.warning(
+                                "Chunk %s: %d/%d S/R blocks failed (%.0f%%) "
+                                "— falling back to whole-file extraction",
+                                chunk.chunk_id,
+                                len(all_failed),
+                                len(blocks),
+                                len(all_failed) / len(blocks) * 100,
+                            )
+                            from startd8.utils.code_extraction import (
+                                extract_code_from_response,
+                            )
+                            code = extract_code_from_response(response_text)
+                            if code and code.strip():
+                                written_files = self._write_generated_files(
+                                    code, chunk,
+                                )
+                            else:
+                                # Fallback extraction also empty — use partial S/R result
+                                self.logger.warning(
+                                    "Chunk %s: whole-file fallback also empty "
+                                    "— using partial S/R result",
+                                    chunk.chunk_id,
+                                )
+                                written_files = self._write_applied_files(
+                                    applied_files, chunk,
+                                )
+                        else:
+                            written_files = self._write_applied_files(applied_files, chunk)
                     else:
                         # Markers present but no valid blocks parsed — fall through
                         self.logger.warning(

@@ -117,6 +117,9 @@ def assemble_design_prompt(
     open_questions: list[dict[str, Any]] | None = None,
     calibration_hints: dict[str, Any] | None = None,
     complexity_dimensions: dict[str, Any] | None = None,
+    # Scaffold file stubs (D-3: thread into PriorArtModule)
+    scaffold_file_stubs: list[dict[str, Any]] | None = None,
+    scaffold_assembly_degraded: bool = False,
     # Refine path
     prior_design_text: str | None = None,
     # Budget
@@ -171,6 +174,8 @@ def assemble_design_prompt(
         dependency_designs=dependency_designs,
         scaffold_existing_files=scaffold_existing_files,
         staleness_classification=staleness_classification,
+        file_stubs=scaffold_file_stubs,
+        assembly_degraded=scaffold_assembly_degraded,
     )
     scope_data = extract_scope(
         task,
