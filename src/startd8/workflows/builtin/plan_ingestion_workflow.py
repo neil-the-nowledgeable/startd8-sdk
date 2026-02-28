@@ -3338,7 +3338,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                         logger.info(
                             "EMIT: deterministic file assembly validated %d skeleton(s) "
                             "from FLCM (%d render failures)",
-                            len(render_result.specs),
+                            len(stub_manifest),
                             len(render_result.failures),
                         )
             except Exception as exc:
@@ -3583,7 +3583,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             atomic_write_json(context_seed_path, seed_dict, indent=2)
 
             # Mottainai Rule 6: log propagation chain status
-            if review_output and review_output.get("triage", {}).get("accepted", 0) > 0:
+            _triage = review_output.get("triage", {}) if review_output else {}
+            _has_accept_decisions = any(
+                d.get("decision") == "ACCEPT"
+                for d in _triage.get("decisions", [])
+            )
+            if _triage.get("accepted", 0) > 0 and _has_accept_decisions:
                 if refine_suggestions:
                     logger.info(
                         "REFINE→seed chain INTACT: %d accepted suggestions forwarded",
@@ -3593,7 +3598,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     logger.warning(
                         "REFINE→seed chain DEGRADED: %d accepted suggestions "
                         "available but not forwarded",
-                        review_output["triage"]["accepted"],
+                        _triage["accepted"],
                     )
             else:
                 logger.debug("REFINE→seed chain N/A: no accepted suggestions to forward")
@@ -3638,7 +3643,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
 
             # Mottainai Rule 6: log propagation chain status (prime)
-            if review_output and review_output.get("triage", {}).get("accepted", 0) > 0:
+            _triage_p = review_output.get("triage", {}) if review_output else {}
+            _has_accept_decisions_p = any(
+                d.get("decision") == "ACCEPT"
+                for d in _triage_p.get("decisions", [])
+            )
+            if _triage_p.get("accepted", 0) > 0 and _has_accept_decisions_p:
                 if refine_suggestions:
                     logger.info(
                         "REFINE→prime seed chain INTACT: %d accepted suggestions forwarded",
@@ -3648,7 +3658,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     logger.warning(
                         "REFINE→prime seed chain DEGRADED: %d accepted suggestions "
                         "available but not forwarded",
-                        review_output["triage"]["accepted"],
+                        _triage_p["accepted"],
                     )
             else:
                 logger.debug("REFINE→prime seed chain N/A: no accepted suggestions to forward")
@@ -4120,7 +4130,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     review_quality_tier,
                     scope,
                     context_files,
-                    list(requirements_docs.keys()) if requirements_docs else None,
+                    list(requirements_docs.values()) if requirements_docs else None,
                     warn_cost_usd,
                     max_cost_usd,
                     enable_apply=config.get("enable_apply"),
