@@ -9,6 +9,7 @@ Pipeline:  parse → assess → transform → refine → emit
 from __future__ import annotations
 
 import json
+import os
 import re
 import time
 from hashlib import sha256
@@ -728,7 +729,16 @@ def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute
     """Deterministic fallback transform output."""
     if route == ContractorRoute.PRIME:
         tasks = []
+        fid_to_tid = {
+            f.feature_id: f"PI-{idx:03d}"
+            for idx, f in enumerate(parsed_plan.features, start=1)
+        }
         for idx, f in enumerate(parsed_plan.features, start=1):
+            deps = [
+                fid_to_tid[dep]
+                for dep in f.dependencies
+                if dep in fid_to_tid
+            ]
             tasks.append(
                 {
                     "task_id": f"PI-{idx:03d}",
@@ -737,6 +747,7 @@ def _heuristic_transform_content(parsed_plan: ParsedPlan, route: ContractorRoute
                     "priority": "medium",
                     "story_points": 3,
                     "labels": list(f.labels) or ["implementation"],
+                    "depends_on": deps,
                     "config": {
                         "task_description": f.description or f.name,
                         "context": {"feature_id": f.feature_id, "target_files": list(f.target_files)},
@@ -2154,7 +2165,9 @@ class PlanIngestionWorkflow(WorkflowBase):
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
             "quality_tier": review_quality_tier,
-            "reviewer_count": review_rounds,
+            # Arc-review maps 1 agent = 1 round; reviewer_count controls round count.
+            # Cap at 5 (arc-review's validated max).
+            "reviewer_count": min(review_rounds, 5),
             "max_suggestions": 10,
             "init_if_missing": True,
         }
@@ -3178,7 +3191,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                     if ext in ("toml", "yaml", "yml", "json", "ini", "cfg"):
                         domain = f"config-{ext.replace('yml', 'yaml')}"
                     elif ext == "py":
-                        if any("test" in tf for tf in target_files):
+                        if any(
+                            os.path.basename(tf).startswith("test_")
+                            or os.path.basename(tf).endswith("_test.py")
+                            or "/tests/" in tf
+                            or "/test/" in tf
+                            for tf in target_files
+                        ):
                             domain = "python-test"
                         else:
                             domain = "python-single-module"
@@ -3314,7 +3333,9 @@ class PlanIngestionWorkflow(WorkflowBase):
         review_config: Dict[str, Any] = {
             "document_path": str(doc_path),
             "quality_tier": review_quality_tier,
-            "reviewer_count": review_rounds,
+            # Arc-review maps 1 agent = 1 round; reviewer_count controls round count.
+            # Cap at 5 (arc-review's validated max).
+            "reviewer_count": min(review_rounds, 5),
             "max_suggestions": 10,
             "scope": scope or "",
             "init_if_missing": True,
