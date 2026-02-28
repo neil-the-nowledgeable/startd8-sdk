@@ -2319,11 +2319,16 @@ class PlanIngestionWorkflow(WorkflowBase):
                 if dep_tid and dep_tid not in deps:
                     deps.append(dep_tid)
 
-            # Priority: first third high, second third medium, rest low
-            third = max(len(features) // 3, 1)
-            if idx <= third:
+            # Priority: features with more dependents are higher priority
+            # (they block more downstream work).
+            dependent_count = sum(
+                1 for f in features
+                if feat.feature_id in dependency_graph.get(f.feature_id, [])
+                or feat.feature_id in f.dependencies
+            )
+            if dependent_count >= 2:
                 priority = "high"
-            elif idx <= 2 * third:
+            elif dependent_count == 1:
                 priority = "medium"
             else:
                 priority = "low"
@@ -2434,6 +2439,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             _requirements_text = "\n\n".join(_req_parts)
             if len(_requirements_text) > 2000:
                 _requirements_text = _requirements_text[:2000] + " [truncated]"
+            # Avoid duplicating task_description when no additional
+            # acceptance/source context was appended.
+            if _requirements_text == feat.description:
+                _requirements_text = ""
 
             tasks.append({
                 "task_id": tid,
@@ -3119,12 +3128,31 @@ class PlanIngestionWorkflow(WorkflowBase):
             }.get(tier_name, 32768)
 
             # --- WCP-005: Domain-aware token adjustment ---
+            # Prefer _enrichment from domain preflight if available;
+            # otherwise infer domain from target file extensions.
             enrichment = task.get("_enrichment", {})
-            domain = enrichment.get("domain", "unknown")
+            domain = enrichment.get("domain")
+            if not domain:
+                target_files = ctx.get("target_files", [])
+                if target_files:
+                    ext = target_files[0].rsplit(".", 1)[-1].lower() if "." in target_files[0] else ""
+                    if ext in ("toml", "yaml", "yml", "json", "ini", "cfg"):
+                        domain = f"config-{ext.replace('yml', 'yaml')}"
+                    elif ext == "py":
+                        if any("test" in tf for tf in target_files):
+                            domain = "python-test"
+                        else:
+                            domain = "python-single-module"
+                    elif ext and ext not in ("py",):
+                        domain = "non-python"
+                if not domain:
+                    domain = "unknown"
             domain_token_multipliers = {
                 "config-toml": 0.5,
                 "config-yaml": 0.5,
                 "config-json": 0.5,
+                "config-ini": 0.5,
+                "config-cfg": 0.5,
                 "non-python": 0.6,
                 "python-test": 0.8,
                 "python-single-module": 1.0,

@@ -1387,16 +1387,30 @@ class TestDeriveTasksFromFeatures:
         assert tasks[0]["depends_on"] == []
 
     def test_priority_assignment(self):
+        # With no dependencies, all features are leaf nodes → "low"
         features = [
             ParsedFeature(feature_id=f"F-{i:03d}", name=f"F{i}")
             for i in range(1, 10)
         ]
         tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, {})
         priorities = [t["priority"] for t in tasks]
-        # First third (3) = high, second third (3) = medium, rest (3) = low
-        assert priorities[:3] == ["high", "high", "high"]
-        assert priorities[3:6] == ["medium", "medium", "medium"]
-        assert priorities[6:] == ["low", "low", "low"]
+        assert all(p == "low" for p in priorities)
+
+    def test_priority_reflects_dependents(self):
+        # F-001 is depended on by F-002 and F-003 → "high"
+        # F-002 is depended on by F-003 → "medium"
+        # F-003 has no dependents → "low"
+        features = [
+            ParsedFeature(feature_id="F-001", name="Base"),
+            ParsedFeature(feature_id="F-002", name="Mid", dependencies=["F-001"]),
+            ParsedFeature(feature_id="F-003", name="Leaf", dependencies=["F-001", "F-002"]),
+        ]
+        dep_graph: dict = {}
+        tasks = PlanIngestionWorkflow._derive_tasks_from_features(features, dep_graph)
+        priority_by_id = {t["task_id"]: t["priority"] for t in tasks}
+        assert priority_by_id["PI-001"] == "high"    # 2 dependents
+        assert priority_by_id["PI-002"] == "medium"  # 1 dependent
+        assert priority_by_id["PI-003"] == "low"     # 0 dependents
 
     def test_config_context(self):
         features = [
