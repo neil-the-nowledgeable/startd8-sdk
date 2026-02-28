@@ -367,7 +367,6 @@ prompts:
 
   skeleton_file_guidance:
     description: "Body-only fill-in guidance when skeleton files exist from deterministic assembly"
-    condition: "skeleton_files_present"
     template: |
       ## Pre-Existing Skeleton Files
       The following target files ALREADY EXIST with correct function/class

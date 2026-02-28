@@ -836,12 +836,21 @@ class FinalTestingPhase:
             try:
                 with open(json_report_path, encoding="utf-8") as f:
                     report_data = json.load(f)
-                return self._extract_from_json_report(report_data, duration)
-            except Exception as e:
+            except (OSError, json.JSONDecodeError, UnicodeDecodeError) as e:
                 self.logger.warning(
-                    "Failed to parse pytest-json-report (%s); using stdout fallback",
+                    "Failed to read/parse pytest-json-report (%s); using stdout fallback",
                     e,
                 )
+            else:
+                try:
+                    return self._extract_from_json_report(report_data, duration)
+                except Exception as e:
+                    self.logger.error(
+                        "Error extracting data from pytest-json-report (%s); "
+                        "using stdout fallback",
+                        e,
+                        exc_info=True,
+                    )
 
         self.logger.debug(
             "pytest-json-report not available; using stdout fallback parsing"

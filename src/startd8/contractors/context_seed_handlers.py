@@ -9357,9 +9357,19 @@ class Test{class_name}:
                     else:
                         # Fix 1: Restore downstream_map from cache
                         downstream_map = saved.get("downstream_map", {})
+                        if not isinstance(downstream_map, dict):
+                            logger.warning(
+                                "IMPLEMENT resume: downstream_map is not a dict, resetting"
+                            )
+                            downstream_map = {}
 
                         # Restore truncation_flags from cache (v3+; graceful for v2)
                         truncation_flags = saved.get("truncation_flags", {})
+                        if not isinstance(truncation_flags, dict):
+                            logger.warning(
+                                "IMPLEMENT resume: truncation_flags is not a dict, resetting"
+                            )
+                            truncation_flags = {}
 
                         # Fix 2: Report zero cost for resumed phase (no LLM
                         # calls were made).  Track historical cost separately.

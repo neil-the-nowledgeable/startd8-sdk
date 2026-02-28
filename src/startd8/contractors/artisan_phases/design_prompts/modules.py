@@ -470,7 +470,7 @@ class ContractModule:
         for category, items in by_category.items():
             sections.append(f"### {category.replace('_', ' ').title()}\n")
             for item in items:
-                prefix = "[BINDING]" if item.get("confidence") != "tentative" else "[ADVISORY]"
+                prefix = "[BINDING]" if item.get("confidence") in ("explicit", "inferred") else "[ADVISORY]"
                 binding_text = item.get("binding_text", item.get("description", ""))
                 sections.append(f"- {prefix} {binding_text}")
                 
@@ -482,13 +482,30 @@ class ContractModule:
         if file_specs:
             sections.append("\n### Prescribed File Elements\n")
             for path, spec in file_specs.items():
+                if not isinstance(spec, dict):
+                    continue
                 sections.append(f"**{path}**:")
                 for elem in spec.get("elements", []):
                     kind = elem.get("kind", "")
                     name = elem.get("name", "")
                     # Try to stringify signature if it exists
                     sig_dict = elem.get("signature")
-                    sig_str = "()" if sig_dict else ""
+                    if sig_dict and isinstance(sig_dict, dict):
+                        params = sig_dict.get("params", [])
+                        param_strs = []
+                        for p in params:
+                            if isinstance(p, dict):
+                                pname = p.get("name", "")
+                                ptype = p.get("annotation", "")
+                                param_strs.append(f"{pname}: {ptype}" if ptype else pname)
+                        ret = sig_dict.get("return_annotation", "")
+                        sig_str = f"({', '.join(param_strs)})"
+                        if ret:
+                            sig_str += f" -> {ret}"
+                    elif sig_dict:
+                        sig_str = "()"
+                    else:
+                        sig_str = ""
                     sections.append(f"  - `{kind}` `{name}{sig_str}`")
 
         text = "\n".join(sections)

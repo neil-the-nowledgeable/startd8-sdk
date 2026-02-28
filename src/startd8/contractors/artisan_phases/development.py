@@ -163,7 +163,7 @@ def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]
                 missing = declared - provided
                 extra = provided - declared
                 if missing or extra:
-                    _log.debug(
+                    _log.warning(
                         "implement/%s placeholder mismatch: "
                         "declared=%s, provided=%s, missing=%s, extra=%s",
                         template_name,

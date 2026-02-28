@@ -331,6 +331,14 @@ class ContractViolation:
     severity: str = "error"
 
     def __post_init__(self) -> None:
+        if not self.contract_id or not isinstance(self.contract_id, str):
+            raise ValueError(
+                "ContractViolation contract_id must be a non-empty string"
+            )
+        if not self.violation_type or not isinstance(self.violation_type, str):
+            raise ValueError(
+                "ContractViolation violation_type must be a non-empty string"
+            )
         _VALID_SEVERITIES = {"error", "warning", "info"}
         if self.severity not in _VALID_SEVERITIES:
             raise ValueError(
