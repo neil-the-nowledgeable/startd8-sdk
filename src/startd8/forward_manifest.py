@@ -171,7 +171,7 @@ class ForwardElementSpec(BaseModel):
             kind=self.kind,
             name=self.name,
             fqn=f"{self.parent_class}.{self.name}" if self.parent_class else self.name,
-            span=Span(start_line=0, start_col=0, end_line=0, end_col=0),
+            span=Span(start_line=0, start_col=0, end_line=0, end_col=0),  # Sentinel: forward specs have no source location
             signature=self.signature,
             bases=list(self.bases),
             visibility=self.visibility,

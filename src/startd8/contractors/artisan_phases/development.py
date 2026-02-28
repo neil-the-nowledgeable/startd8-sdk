@@ -4835,6 +4835,7 @@ class DevelopmentPhase:
         except BaseException as gather_exc:
             self.logger.warning(
                 "asyncio.gather raised %s during concurrent chunk execution; "
+                "Chunks use context managers and exception guards for span cleanup, "
                 "%d of %d chunks have results in state dict. "
                 "Partial state will be returned for persistence.",
                 type(gather_exc).__name__,

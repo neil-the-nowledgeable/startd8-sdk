@@ -569,7 +569,7 @@ class AbstractPhaseHandler(ABC):
 
     # OT-710: Last entry boundary result for forensic logging.
     # Set by _execute_phase() after entry gate validation.
-    _last_entry_boundary_result: Any = None
+    _last_entry_boundary_result: Optional[dict] = None
 
     @abstractmethod
     def execute(
@@ -1594,26 +1594,12 @@ class ArtisanContractorWorkflow:
                 f" (feature {feature_id})" if feature_id else "",
             )
 
-        except Exception as e:  # Covers CalledProcessError, FileNotFoundError, etc.
-            # Construct a clear error message
-            if isinstance(e, subprocess.CalledProcessError):
-                stderr = e.stderr
-                if isinstance(stderr, bytes):
-                    stderr = stderr.decode()
-                stderr = stderr.strip() if stderr else ""
-
-                stdout = e.stdout
-                if isinstance(stdout, bytes):
-                    stdout = stdout.decode()
-                stdout = stdout.strip() if stdout else ""
-
-                error_msg = f"Git commit failed (exit code {e.returncode}):\nSTDOUT: {stdout}\nSTDERR: {stderr}"
-            elif isinstance(e, FileNotFoundError):
-                error_msg = "Git executable not found."
-            else:
-                error_msg = f"Unexpected error during git commit: {e}"
-
-            self._logger.error(error_msg)
+        except Exception as e:
+            self._logger.error(
+                "Auto-commit failed (%s): %s",
+                type(e).__name__,
+                getattr(e, "stderr", str(e)),
+            )
 
             # If interactive, prompt the user whether to continue
             if sys.stdin.isatty():
@@ -3105,8 +3091,7 @@ class ArtisanContractorWorkflow:
                         )
                         return False, WorkflowStatus.TIMED_OUT, inner_results
 
-                    # H-2: Budget check already performed above (before
-                    # cost_tracker.add), so no redundant check needed here.
+                    # Budget check already performed above (see budget_exceeded guard in phase loop).
                     phase_index += 1
 
                 except Exception as err:

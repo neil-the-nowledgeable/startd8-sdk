@@ -1545,7 +1545,6 @@ class DesignDocumentationPhase:
                 context.feature_name,
                 cap_dir,
             )
-            from datetime import datetime, timezone
             return DesignDocument(
                 raw_text="[walkthrough placeholder]",
                 feature_name=context.feature_name,
@@ -1735,7 +1734,6 @@ class DesignDocumentationPhase:
                 design.feature_name,
                 cap_dir,
             )
-            from datetime import datetime, timezone
             return ReviewVerdict(
                 role=role,
                 approved=True,

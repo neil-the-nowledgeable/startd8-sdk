@@ -24,6 +24,15 @@ from ..logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# ---------------------------------------------------------------------------
+# Timeout constants (seconds) for subprocess calls
+# ---------------------------------------------------------------------------
+_BASELINE_TIMEOUT_SECONDS = 60
+_SYNTAX_CHECK_TIMEOUT_SECONDS = 30
+_IMPORT_CHECK_TIMEOUT_SECONDS = 30
+_LINT_CHECK_TIMEOUT_SECONDS = 60
+_TEST_SUITE_TIMEOUT_SECONDS = 120
+
 
 class CheckpointStatus(Enum):
     """Status of an integration checkpoint."""
@@ -119,10 +128,10 @@ class IntegrationCheckpoint:
                 capture_output=True,
                 text=True,
                 cwd=self.project_root,
-                timeout=60,
+                timeout=_BASELINE_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
-            logger.warning("Test baseline collection timed out after 60s")
+            logger.warning("Test baseline collection timed out after %ds", _BASELINE_TIMEOUT_SECONDS)
             self._test_baseline = None  # Sentinel: baseline not available
             return set()  # Return empty set to caller but mark baseline as unavailable
 
@@ -183,7 +192,7 @@ class IntegrationCheckpoint:
                     capture_output=True,
                     text=True,
                     cwd=self.project_root,
-                    timeout=30,
+                    timeout=_SYNTAX_CHECK_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
                 errors.append(f"{file_path.name}: syntax check timed out")
@@ -246,7 +255,7 @@ class IntegrationCheckpoint:
                                 **os.environ,
                                 "PYTHONPATH": pythonpath,
                             },
-                            timeout=30,
+                            timeout=_IMPORT_CHECK_TIMEOUT_SECONDS,
                         )
                     except subprocess.TimeoutExpired:
                         errors.append(f"{file_path.name}: import check timed out")
@@ -319,7 +328,7 @@ class IntegrationCheckpoint:
                     capture_output=True,
                     text=True,
                     cwd=self.project_root,
-                    timeout=60,
+                    timeout=_LINT_CHECK_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
                 errors.append(f"{file_path.name}: lint check timed out")
@@ -440,13 +449,13 @@ class IntegrationCheckpoint:
                 capture_output=True,
                 text=True,
                 cwd=self.project_root,
-                timeout=120,
+                timeout=_TEST_SUITE_TIMEOUT_SECONDS,
             )
         except subprocess.TimeoutExpired:
             return CheckpointResult(
                 status=CheckpointStatus.FAILED,
                 name="Test Check",
-                message="Test suite timed out after 120s",
+                message=f"Test suite timed out after {_TEST_SUITE_TIMEOUT_SECONDS}s",
                 errors=["pytest timed out — tests may be hanging"],
             )
 
