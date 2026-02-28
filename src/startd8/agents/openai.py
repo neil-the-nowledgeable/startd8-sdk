@@ -127,7 +127,12 @@ class GPT4Agent(BaseAgent):
                     retryable_exceptions=self.retry_config.retryable_exceptions + (OpenAIAPIConnectionError,),
                 )
 
-    async def _make_api_call(self, prompt: str, system_prompt: Optional[str] = None):
+    async def _make_api_call(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ):
         """
         Make the raw API call to OpenAI.
 
@@ -138,6 +143,8 @@ class GPT4Agent(BaseAgent):
             prompt: The user prompt text
             system_prompt: Optional system prompt. If provided, prepended as a
                 ``{"role": "system", ...}`` message.
+            max_tokens: Optional per-call max_tokens override. When provided,
+                takes precedence over the instance-level ``self.max_tokens``.
         """
         messages = []
         if system_prompt is not None:
@@ -146,11 +153,16 @@ class GPT4Agent(BaseAgent):
 
         return await self.async_client.chat.completions.create(
             model=self.model,
-            max_tokens=self.max_tokens,
+            max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
             messages=messages,
         )
 
-    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
+    async def agenerate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> GenerateResult:
         """
         Generate response using GPT-4 async API.
 
@@ -162,6 +174,9 @@ class GPT4Agent(BaseAgent):
             system_prompt: Optional per-call system prompt override. When provided,
                 takes precedence over the instance-level ``self.system_prompt``.
                 If neither is set, no system message is sent.
+            max_tokens: Optional per-call max_tokens override. When provided,
+                takes precedence over the instance-level ``self.max_tokens``.
+                This is thread-safe — it avoids mutating the shared agent.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -180,9 +195,13 @@ class GPT4Agent(BaseAgent):
             # Use retry wrapper if configured
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
-                response = await make_call(prompt, system_prompt=effective_system_prompt)
+                response = await make_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                )
             else:
-                response = await self._make_api_call(prompt, system_prompt=effective_system_prompt)
+                response = await self._make_api_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                )
 
         except RetryError as e:
             # All retry attempts exhausted
@@ -553,7 +572,12 @@ class OpenAICompatibleAgent(BaseAgent):
                 )
                 pass
 
-    async def _make_api_call(self, prompt: str, system_prompt: Optional[str] = None):
+    async def _make_api_call(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ):
         """
         Make the raw API call to the OpenAI-compatible endpoint.
 
@@ -564,6 +588,8 @@ class OpenAICompatibleAgent(BaseAgent):
             prompt: The user prompt text
             system_prompt: Optional system prompt. If provided, prepended as a
                 ``{"role": "system", ...}`` message.
+            max_tokens: Optional per-call max_tokens override. When provided,
+                takes precedence over the instance-level ``self.max_tokens``.
         """
         messages = []
         if system_prompt is not None:
@@ -572,11 +598,16 @@ class OpenAICompatibleAgent(BaseAgent):
 
         return await self.async_client.chat.completions.create(
             model=self.model,
-            max_tokens=self.max_tokens,
+            max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
             messages=messages,
         )
 
-    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
+    async def agenerate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> GenerateResult:
         """
         Generate response using OpenAI-compatible API (async).
 
@@ -588,6 +619,9 @@ class OpenAICompatibleAgent(BaseAgent):
             system_prompt: Optional per-call system prompt override. When provided,
                 takes precedence over the instance-level ``self.system_prompt``.
                 If neither is set, no system message is sent.
+            max_tokens: Optional per-call max_tokens override. When provided,
+                takes precedence over the instance-level ``self.max_tokens``.
+                This is thread-safe — it avoids mutating the shared agent.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -605,9 +639,13 @@ class OpenAICompatibleAgent(BaseAgent):
             # Use retry wrapper if configured
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
-                response = await make_call(prompt, system_prompt=effective_system_prompt)
+                response = await make_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                )
             else:
-                response = await self._make_api_call(prompt, system_prompt=effective_system_prompt)
+                response = await self._make_api_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                )
 
             end_time = time.time()
             response_time_ms = int((end_time - start_time) * 1000)

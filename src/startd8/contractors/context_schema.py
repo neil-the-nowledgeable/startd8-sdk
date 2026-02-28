@@ -240,9 +240,13 @@ class DesignPhaseOutput(BaseModel):
     @field_validator("design_quality")
     @classmethod
     def design_quality_has_required_metrics(cls, v: Dict[str, Any]) -> Dict[str, Any]:
-        if not v:
-            return v
+        # M-3: An empty dict is treated the same as missing — required keys
+        # must be present for downstream gates to function.
         required = {"total_passed", "total_failed", "agreement_rate"}
+        if not v:
+            raise ValueError(
+                f"design_quality is empty; required keys: {sorted(required)}"
+            )
         missing = required - set(v.keys())
         if missing:
             raise ValueError(
@@ -256,9 +260,7 @@ class ImplementPhaseOutput(BaseModel):
 
     Note: ``generation_results`` values are ``GenerationResult`` objects
     (NamedTuples), not plain dicts.  ``arbitrary_types_allowed`` is set
-    because Pydantic cannot validate NamedTuples by default.  No
-    field validator is needed — Pydantic's ``Dict[str, Any]`` type
-    already enforces that the top-level value is a dict.
+    because Pydantic cannot validate NamedTuples by default.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -266,6 +268,33 @@ class ImplementPhaseOutput(BaseModel):
     implementation: Dict[str, Any]
     generation_results: Dict[str, Any]
     truncation_flags: Dict[str, Any] = {}
+
+    @model_validator(mode="after")
+    def check_implement_output_consistency(self) -> "ImplementPhaseOutput":
+        """Validate structural invariants of the IMPLEMENT output.
+
+        - When generation_results is non-empty (tasks were processed),
+          at least one task must have produced generated_files.
+        - total_cost in the implementation dict must be non-negative if present.
+        """
+        # Check total_cost is non-negative if present in generation results
+        for _tid, gr in self.generation_results.items():
+            gr_dict = gr if isinstance(gr, dict) else {}
+            task_cost = gr_dict.get("cost") if gr_dict else getattr(gr, "cost", None)
+            if task_cost is not None and isinstance(task_cost, (int, float)) and task_cost < 0:
+                raise ValueError(
+                    f"generation_results['{_tid}'].cost must be non-negative, "
+                    f"got {task_cost}"
+                )
+
+        # Check total_cost is non-negative if present
+        total_cost = self.implementation.get("total_cost")
+        if total_cost is not None and total_cost < 0:
+            raise ValueError(
+                f"implementation['total_cost'] must be non-negative, "
+                f"got {total_cost}"
+            )
+        return self
 
 
 class ValidationPhaseOutput(BaseModel):
@@ -386,7 +415,7 @@ PHASE_ENTRY_REQUIREMENTS: Dict[str, List[str]] = {
     "plan": ["project_root"],
     "scaffold": ["tasks", "task_index", "project_root"],
     "design": ["tasks", "task_index"],
-    "implement": ["tasks", "design_results"],
+    "implement": ["tasks", "design_results", "project_root"],
     "integrate": ["generation_results"],
     "test": ["tasks", "generation_results"],
     "review": ["generation_results"],

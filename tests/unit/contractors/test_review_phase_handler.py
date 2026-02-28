@@ -196,7 +196,7 @@ class TestReviewTask:
         result = handler._review_task(task, "code", {})
 
         assert result["task_id"] == "T-ERR"
-        assert result["score"] == 0
+        assert result["score"] is None
         assert result["verdict"] == "ERROR"
         assert result["passed"] is False
         assert result["cost"] == 0.0
@@ -435,13 +435,13 @@ class TestParseReviewResponse:
         assert "Good structure" in parsed["strengths"]
         assert any("Needs docstring" in i for i in parsed["issues"])
 
-    def test_missing_score_defaults_zero(self):
+    def test_missing_score_defaults_none(self):
         handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
         parsed = handler._parse_review_response("### Verdict: PASS\nSome text")
 
-        assert parsed["score"] == 0
+        assert parsed["score"] is None
         assert parsed["verdict"] == "PASS"
-        assert parsed["passed"] is False  # score 0 < threshold 80
+        assert parsed["passed"] is False  # None score → not passed
 
     def test_missing_verdict_defaults_fail(self):
         handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
@@ -455,7 +455,7 @@ class TestParseReviewResponse:
         handler = ReviewPhaseHandler(HandlerConfig(pass_threshold=80))
         parsed = handler._parse_review_response("")
 
-        assert parsed["score"] == 0
+        assert parsed["score"] is None
         assert parsed["verdict"] == "FAIL"
         assert parsed["passed"] is False
 

@@ -18,6 +18,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from startd8.contractors.prompt_utils import format_constraints
+from startd8.logging_config import get_logger
+
+_logger = get_logger(__name__)
 
 
 @dataclass(frozen=True)
@@ -153,7 +156,13 @@ class EnrichmentModule:
         param_sources = data.get("parameter_sources", {})
         if param_sources:
             parts.append("**Parameter Sources (use these names exactly):**")
-            for name, source in list(param_sources.items())[:20]:
+            ps_items = list(param_sources.items())
+            if len(ps_items) > 20:
+                _logger.warning(
+                    "parameter_sources truncated from %d to 20 entries",
+                    len(ps_items),
+                )
+            for name, source in ps_items[:20]:
                 if isinstance(source, dict):
                     origin = source.get("origin", source.get("source", ""))
                     parts.append(f"- `{name}`: {origin}")

@@ -188,7 +188,12 @@ class GeminiAgent(BaseAgent):
         self.safety_settings = safety_settings
         self.system_prompt = system_prompt
 
-    async def _make_api_call(self, prompt: str, system_prompt: Optional[str] = None):
+    async def _make_api_call(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ):
         """
         Make the raw API call to Gemini.
 
@@ -199,12 +204,14 @@ class GeminiAgent(BaseAgent):
             prompt: The user prompt text
             system_prompt: Optional system prompt. If provided, sent as
                 ``system_instruction`` in the GenerateContentConfig.
+            max_tokens: Optional per-call max_tokens override. When provided,
+                takes precedence over the instance-level ``self.max_tokens``.
         """
         # google.genai Client API - run in executor for async compatibility
         # Create generation config
         config_kwargs = {
             "temperature": self.temperature,
-            "max_output_tokens": self.max_tokens,
+            "max_output_tokens": max_tokens if max_tokens is not None else self.max_tokens,
         }
         if self.safety_settings:
             config_kwargs["safety_settings"] = self.safety_settings
@@ -222,7 +229,12 @@ class GeminiAgent(BaseAgent):
             )
         )
 
-    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
+    async def agenerate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> GenerateResult:
         """
         Generate response using Gemini async API.
 
@@ -234,6 +246,9 @@ class GeminiAgent(BaseAgent):
             system_prompt: Optional per-call system prompt override. When provided,
                 takes precedence over the instance-level ``self.system_prompt``.
                 If neither is set, no system instruction is sent.
+            max_tokens: Optional per-call max_tokens override. When provided,
+                takes precedence over the instance-level ``self.max_tokens``.
+                This is thread-safe — it avoids mutating the shared agent.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -253,9 +268,13 @@ class GeminiAgent(BaseAgent):
             # Use retry wrapper if configured
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
-                response = await make_call(prompt, system_prompt=effective_system_prompt)
+                response = await make_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                )
             else:
-                response = await self._make_api_call(prompt, system_prompt=effective_system_prompt)
+                response = await self._make_api_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                )
 
         except RetryError as e:
             # All retry attempts exhausted

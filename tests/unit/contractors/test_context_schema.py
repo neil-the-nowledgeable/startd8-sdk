@@ -238,6 +238,7 @@ class TestValidatePhaseEntry:
         ctx = {
             "tasks": [FakeSeedTask()],
             "design_results": {"T1": {}},
+            "project_root": "/tmp/test",
         }
         validate_phase_entry(phase, ctx)
 

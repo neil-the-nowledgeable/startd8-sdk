@@ -392,6 +392,10 @@ class WorkflowConfig:
         phase_timeout_seconds: Default per-phase timeout.
         cost_budget: Maximum cumulative cost across all phases.
         max_retries_per_phase: Number of retry attempts per phase on failure.
+        max_total_regen_retries: Workflow-scoped cap on AR-153 regeneration
+            retries across all features. Defaults to
+            ``max_retries_per_phase * 3``. Set to -1 for unlimited (per-feature
+            budget still applies).
         checkpoint_dir: Filesystem directory for JSON checkpoint files.
                         Ignored when a custom ``checkpoint_store`` is passed to
                         the orchestrator.
@@ -413,6 +417,7 @@ class WorkflowConfig:
     phase_timeout_seconds: Optional[float] = None
     cost_budget: Optional[float] = None
     max_retries_per_phase: int = 0
+    max_total_regen_retries: int = -1  # -1 = derive from max_retries_per_phase * 3
     checkpoint_dir: Optional[str] = ".startd8/checkpoints"
     tracer_name: str = "startd8.artisan_contractor"
     drafter_model: str = DRAFT_MODEL_CLAUDE_HAIKU.model_id
@@ -1914,6 +1919,12 @@ class ArtisanContractorWorkflow:
                     output = result_dict.get("output")
                     metadata = result_dict.get("metadata", {})
 
+                    # Surface exit gate violations in metadata so
+                    # downstream phases and finalize can see them.
+                    if _exit_violations:
+                        metadata["exit_gate_violations"] = _exit_violations
+                        metadata["exit_gate_passed"] = not _exit_gate_failed
+
                     if HAS_OTEL and not isinstance(span, _NoOpSpan):
                         span.set_attribute("phase.status", status.value)
                         span.set_attribute("phase.cost", cost)
@@ -2022,6 +2033,29 @@ class ArtisanContractorWorkflow:
                         },
                     )
 
+                    # Extract partial cost/output that the handler may
+                    # have written into context before the exception.
+                    _partial_cost = 0.0
+                    _partial_output = None
+                    for _ctx_key in (
+                        "implementation", "test_results",
+                        "review_results", "integration_results",
+                    ):
+                        _ctx_data = context.get(_ctx_key)
+                        if isinstance(_ctx_data, dict):
+                            for _cost_field in ("total_cost", "cost"):
+                                _raw_cost = _ctx_data.get(_cost_field)
+                                if _raw_cost is not None:
+                                    try:
+                                        _partial_cost = max(
+                                            _partial_cost, float(_raw_cost),
+                                        )
+                                    except (TypeError, ValueError):
+                                        pass
+                                    break
+                            if _partial_output is None:
+                                _partial_output = _ctx_data
+
                     return PhaseResult(
                         phase=phase,
                         status=PhaseStatus.FAILED,
@@ -2030,6 +2064,9 @@ class ArtisanContractorWorkflow:
                         duration_seconds=duration,
                         error_message=str(err),
                         retry_count=attempt,
+                        cost=_partial_cost,
+                        output=_partial_output,
+                        metadata={"partial": True},
                     )
                 finally:
                     if phase_duration_ms is None:
@@ -2755,6 +2792,8 @@ class ArtisanContractorWorkflow:
         context: dict[str, Any],
         remaining_total_timeout: Optional[float],
         cost_tracker: "_CostTracker",
+        *,
+        workflow_regen_counter: Optional[list[int]] = None,
     ) -> tuple[bool, WorkflowStatus, dict[str, dict[str, Any]]]:
         """Execute all inner phases for a single feature.
 
@@ -2766,6 +2805,9 @@ class ArtisanContractorWorkflow:
             context: Shared mutable context dict.
             remaining_total_timeout: Time budget remaining (or None for unlimited).
             cost_tracker: Cost accumulator for budget enforcement.
+            workflow_regen_counter: Mutable single-element list ``[count]``
+                shared across features to enforce the workflow-scoped
+                ``max_total_regen_retries`` cap.  Mutated in-place.
 
         Returns:
             Tuple of:
@@ -2786,6 +2828,13 @@ class ArtisanContractorWorkflow:
         context["current_feature_id"] = feature_id
         max_regen_retries = max(0, int(self.config.max_retries_per_phase))
         regen_retry_count = 0
+
+        # Workflow-scoped retry budget (shared across features)
+        _wf_counter = workflow_regen_counter or [0]
+        _max_total = self.config.max_total_regen_retries
+        if _max_total < 0:
+            # -1 sentinel = derive from per-phase budget * 3
+            _max_total = max_regen_retries * 3
         phase_index = 0
 
         try:
@@ -2823,11 +2872,22 @@ class ArtisanContractorWorkflow:
                     # Quality gate check for design/test/review in
                     # feature-serial and wave-parallel modes.
                     gate_error: Optional[QualityGateError] = None
+                    _pre_gate_violation_count = len(self._quality_gate_violations)
                     if inner_phase in self._QUALITY_GATE_PHASES:
                         try:
                             self._check_quality_gate(inner_phase, phase_result)
                         except QualityGateError as exc:
                             gate_error = exc
+
+                    # Surface any new quality gate violations (warn or
+                    # block) into inner_results for per-phase visibility.
+                    _new_violations = self._quality_gate_violations[
+                        _pre_gate_violation_count:
+                    ]
+                    if _new_violations:
+                        inner_results[inner_phase.value]["quality_gate_violations"] = (
+                            _new_violations
+                        )
 
                     # AR-153: bounded regenerate-with-feedback retries driven
                     # by INTEGRATE/TEST/REVIEW failures.
@@ -2838,8 +2898,10 @@ class ArtisanContractorWorkflow:
                         gate_error=gate_error,
                     )
                     if retry_feedback is not None:
-                        if regen_retry_count < max_regen_retries:
+                        _wf_budget_ok = _max_total == 0 or _wf_counter[0] < _max_total
+                        if regen_retry_count < max_regen_retries and _wf_budget_ok:
                             regen_retry_count += 1
+                            _wf_counter[0] += 1
                             retry_feedback["attempt"] = regen_retry_count
                             context["prior_error_feedback"] = retry_feedback[
                                 "prior_error_feedback"
@@ -2855,18 +2917,26 @@ class ArtisanContractorWorkflow:
                                     "failed_tasks": retry_feedback.get("failed_tasks", []),
                                     "summary": retry_feedback.get("summary", ""),
                                     "outcome": "retrying",
+                                    "workflow_regen_total": _wf_counter[0],
                                 },
                             )
                             self._logger.warning(
-                                "Feature %s: AR-153 retry %d/%d triggered by %s failure",
+                                "Feature %s: AR-153 retry %d/%d (workflow %d/%d) triggered by %s failure",
                                 feature_id,
                                 regen_retry_count,
                                 max_regen_retries,
+                                _wf_counter[0],
+                                _max_total,
                                 inner_phase.value,
                             )
                             phase_index = self.INNER_PHASES.index(WorkflowPhase.IMPLEMENT)
                             continue
 
+                        _exhaust_reason = (
+                            "workflow_budget_exhausted"
+                            if not _wf_budget_ok
+                            else "retry_budget_exhausted"
+                        )
                         self._append_retry_transcript(
                             context=context,
                             feature_id=feature_id,
@@ -2875,7 +2945,8 @@ class ArtisanContractorWorkflow:
                                 "source_phase": inner_phase.value,
                                 "failed_tasks": retry_feedback.get("failed_tasks", []),
                                 "summary": retry_feedback.get("summary", ""),
-                                "outcome": "retry_budget_exhausted",
+                                "outcome": _exhaust_reason,
+                                "workflow_regen_total": _wf_counter[0],
                             },
                         )
                         inner_results[inner_phase.value]["status"] = "failed"
@@ -2917,12 +2988,32 @@ class ArtisanContractorWorkflow:
                     phase_index += 1
 
                 except Exception as err:
+                    # Extract partial cost from context if the handler
+                    # accumulated any before the unexpected exception.
+                    _exc_partial_cost = 0.0
+                    for _ck in (
+                        "implementation", "test_results",
+                        "review_results", "integration_results",
+                    ):
+                        _cd = context.get(_ck)
+                        if isinstance(_cd, dict):
+                            for _cf in ("total_cost", "cost"):
+                                _rc = _cd.get(_cf)
+                                if _rc is not None:
+                                    try:
+                                        _exc_partial_cost = max(
+                                            _exc_partial_cost, float(_rc),
+                                        )
+                                    except (TypeError, ValueError):
+                                        pass
+                                    break
                     inner_results[inner_phase.value] = {
                         "status": "failed",
-                        "cost": 0.0,  # Actual cost unknown -- phase may have incurred partial cost
+                        "cost": _exc_partial_cost,
                         "timestamp": phase_start,
                         "error": str(err),
                         "artifacts": {},
+                        "partial": True,
                     }
                     self._logger.exception(
                         "Feature %s: unexpected error in inner phase %s",
@@ -3185,6 +3276,9 @@ class ArtisanContractorWorkflow:
             len(completed_features),
         )
 
+        # Shared workflow-scoped AR-153 regen counter (mutable list for pass-by-ref)
+        _workflow_regen_counter: list[int] = [0]
+
         for feature_id in feature_ids:
             # Skip already-completed features (from checkpoint)
             if feature_id in completed_set:
@@ -3216,7 +3310,8 @@ class ArtisanContractorWorkflow:
 
             # Execute the feature's inner loop
             success, terminal_status, inner_results = self._execute_feature(
-                feature_id, context, remaining, cost_tracker
+                feature_id, context, remaining, cost_tracker,
+                workflow_regen_counter=_workflow_regen_counter,
             )
 
             if success:

@@ -968,7 +968,7 @@ class IntegrationEngine:
                                 f"{source_lines} lines but target has {target_lines} "
                                 f"lines ({ratio:.0%} < "
                                 f"{effective_threshold:.0%} threshold). "
-                                f"Use --allow-size-regression to override."
+                                f"Use --force-rewrite to override."
                             )
                             logger.error(msg, extra={"unit_id": unit.id})
                             warnings.append(msg)

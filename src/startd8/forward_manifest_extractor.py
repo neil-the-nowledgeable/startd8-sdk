@@ -571,15 +571,31 @@ class ManifestMerger:
             )
 
             if new_prec > existing_prec:
-                # Higher precedence overwrites
-                seen[cid] = contract
+                # Higher precedence overwrites — but preserve task scoping
+                # from the lower-precedence contract if the winner has none.
+                if not contract.applicable_task_ids and existing.applicable_task_ids:
+                    merged_ids = list(existing.applicable_task_ids)
+                    seen[cid] = contract.model_copy(
+                        update={"applicable_task_ids": merged_ids},
+                    )
+                else:
+                    seen[cid] = contract
             elif new_prec == existing_prec:
-                # Equal precedence — retain first, log warning
+                # Equal precedence — retain first, merge task scoping
+                merged_ids = list(existing.applicable_task_ids)
+                for tid in contract.applicable_task_ids:
+                    if tid not in merged_ids:
+                        merged_ids.append(tid)
+                if merged_ids != list(existing.applicable_task_ids):
+                    seen[cid] = existing.model_copy(
+                        update={"applicable_task_ids": merged_ids},
+                    )
                 logger.warning(
                     "Duplicate contract_id '%s' at same precedence (%s); "
-                    "retaining first",
+                    "retaining first, merged applicable_task_ids=%s",
                     cid,
                     contract.source_reference,
+                    merged_ids,
                 )
             # else: lower precedence — discard
 

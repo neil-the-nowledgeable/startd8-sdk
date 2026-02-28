@@ -114,7 +114,7 @@ class TestWithContract:
 
     def test_enrichment_validation_runs(self, contract_file):
         """Entry validation should also check enrichment fields."""
-        context = {"tasks": [1], "design_results": {"a": 1}}
+        context = {"tasks": [1], "design_results": {"a": 1}, "project_root": "/tmp/test"}
         result = validate_phase_boundary(
             IMPLEMENT, context, "entry", contract_path=contract_file
         )
@@ -141,7 +141,7 @@ class TestWithoutContextCore:
     """When contextcore is not importable, validation returns None."""
 
     def test_degrades_gracefully(self, contract_file):
-        context = {"tasks": [1], "design_results": {"a": 1}}
+        context = {"tasks": [1], "design_results": {"a": 1}, "project_root": "/tmp/test"}
         with patch.dict("sys.modules", {"contextcore": None, "contextcore.contracts": None, "contextcore.contracts.propagation": None}):
             result = validate_phase_boundary(
                 IMPLEMENT, context, "entry", contract_path=contract_file

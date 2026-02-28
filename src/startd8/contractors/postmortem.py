@@ -245,10 +245,14 @@ def _extract_requirement_keywords(task_dict: Dict[str, Any]) -> List[str]:
 
     keywords: List[str] = []
     for source in sources:
-        # Split on newlines, bullets, numbered lists
-        lines = re.split(r"[\n•\-\*]|\d+\.\s", source)
+        # Split on newlines, bullet markers, and numbered lists.
+        # Hyphens are NOT used as split chars to preserve compound words
+        # like "error-handling" and "rate-limiting" (M-19).
+        lines = re.split(r"\n|•|\d+\.\s", source)
         for line in lines:
-            cleaned = line.strip().lower()
+            # Strip leading bullet markers ("- ", "* ") without splitting on
+            # mid-word hyphens.
+            cleaned = re.sub(r"^\s*[-*]\s+", "", line).strip().lower()
             # Skip very short fragments (< 3 words) — likely not a requirement
             if cleaned and len(cleaned.split()) >= 3:
                 keywords.append(cleaned)

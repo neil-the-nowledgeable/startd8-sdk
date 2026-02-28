@@ -52,6 +52,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 import logging
 import os
@@ -115,23 +116,30 @@ def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]
     except (FileNotFoundError, KeyError) as exc:
         fallback = _INLINE_FALLBACK_TEMPLATES.get(template_name)
         if fallback is not None:
-            _log.debug(
-                "YAML template implement/%s unavailable — using inline fallback: %s",
+            _log.warning(
+                "YAML template implement/%s unavailable — using inline fallback "
+                "(original error: %s: %s)",
                 template_name,
+                type(exc).__name__,
                 exc,
             )
             try:
                 return fallback.format(**kwargs)
             except KeyError as fmt_exc:
-                _log.debug(
-                    "Inline fallback for implement/%s failed to format: %s",
+                _log.warning(
+                    "Inline fallback for implement/%s failed to format "
+                    "(original load error: %s: %s, format error: %s)",
                     template_name,
+                    type(exc).__name__,
+                    exc,
                     fmt_exc,
                 )
                 return fallback  # Return unformatted rather than None
-        _log.debug(
-            "YAML template implement/%s unavailable, no inline fallback: %s",
+        _log.warning(
+            "YAML template implement/%s unavailable, no inline fallback "
+            "(error: %s: %s)",
             template_name,
+            type(exc).__name__,
             exc,
         )
         return None
@@ -908,7 +916,26 @@ class LLMChunkExecutor(ChunkExecutor):
         for target in chunk.file_targets:
             output_path = self._output_dir / target
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            content = per_file_code.get(target, code)
+            if target in per_file_code:
+                content = per_file_code[target]
+            elif per_file_code:
+                # M-13: For multi-file chunks, if a target is missing from
+                # per_file_code (edge case — stubs should cover all targets),
+                # generate a stub rather than falling back to the full code.
+                # Falling back to full code would write the primary module's
+                # preamble (imports, docstring) to secondary files.
+                from startd8.utils.code_extraction import (
+                    _generate_stub as _gen_stub,
+                )
+                content = _gen_stub(target)
+                self.logger.warning(
+                    "Multi-file fallback: generating stub for %s "
+                    "(chunk %s, not in per_file_code)",
+                    target, chunk.chunk_id,
+                )
+            else:
+                # Single-file path: per_file_code is empty, full code is correct
+                content = code
             output_path.write_text(content, encoding="utf-8")
             written.append(output_path)
             self.logger.info("Wrote generated file: %s", output_path)
@@ -2317,7 +2344,13 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         param_sources = chunk.metadata.get("parameter_sources")
         if param_sources and isinstance(param_sources, dict):
             parts.append("\n## Parameter Sources (use these names exactly)")
-            for name, source in list(param_sources.items())[:20]:
+            items = list(param_sources.items())
+            if len(items) > 20:
+                _log.warning(
+                    "parameter_sources truncated from %d to 20 entries",
+                    len(items),
+                )
+            for name, source in items[:20]:
                 if isinstance(source, dict):
                     origin = source.get("origin", source.get("source", ""))
                     parts.append(f"- `{name}`: {origin}")
@@ -2735,7 +2768,13 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         param_sources = chunk.metadata.get("parameter_sources")
         if param_sources and isinstance(param_sources, dict):
             parts.append("\n## Parameter Sources (use these names exactly)")
-            for name, source in list(param_sources.items())[:20]:
+            ps_items = list(param_sources.items())
+            if len(ps_items) > 20:
+                _log.warning(
+                    "parameter_sources truncated from %d to 20 entries",
+                    len(ps_items),
+                )
+            for name, source in ps_items[:20]:
                 if isinstance(source, dict):
                     origin = source.get("origin", source.get("source", ""))
                     parts.append(f"- `{name}`: {origin}")
@@ -3401,7 +3440,24 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         for target in chunk.file_targets:
             output_path = self._output_dir / target
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            content = per_file_code.get(target, code)
+            if target in per_file_code:
+                content = per_file_code[target]
+            elif per_file_code:
+                # M-13: For multi-file chunks, if a target is missing from
+                # per_file_code (edge case — stubs should cover all targets),
+                # generate a stub rather than falling back to the full code.
+                # Falling back to full code would write the primary module's
+                # preamble (imports, docstring) to secondary files.
+                from startd8.utils.code_extraction import _generate_stub
+                content = _generate_stub(target)
+                self.logger.warning(
+                    "Multi-file fallback: generating stub for %s "
+                    "(chunk %s, not in per_file_code)",
+                    target, chunk.chunk_id,
+                )
+            else:
+                # Single-file path: per_file_code is empty, full code is correct
+                content = code
             output_path.write_text(content, encoding="utf-8")
             written.append(output_path)
             self.logger.info("Wrote generated file: %s", output_path)
@@ -3541,9 +3597,15 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 _complexity_tier == "tier_1",
             )
 
+            # M-12: Per-task max_tokens from design calibration, passed as
+            # a per-call kwarg to avoid mutating the shared cached agent.
+            _per_task_max_tokens = chunk.metadata.get("max_output_tokens")
+
             # Call the LLM
             response_text, time_ms, token_usage = await drafter.agenerate(
-                task_desc, system_prompt=sys_prompt,
+                task_desc,
+                system_prompt=sys_prompt,
+                max_tokens=_per_task_max_tokens,
             )
 
             self.logger.info(
@@ -3629,11 +3691,12 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                     if blocks:
                         applied_files: Dict[str, str] = {}
                         all_failed: List[str] = []
+
+                        # M-10: Read full file contents for all targets first,
+                        # then scope each block to only the file(s) whose
+                        # content actually contains the search text.
+                        full_contents: Dict[str, str] = {}
                         for target, original in existing.items():
-                            # Read full file from disk — _existing_file_contents
-                            # may be truncated by _MAX_EXISTING_FILE_BYTES (60KB).
-                            # The truncated version is fine for the LLM prompt,
-                            # but edit application must use the complete file.
                             full_content = original
                             if self._project_root is not None:
                                 full_path = self._project_root / target
@@ -3649,7 +3712,37 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                                             full_path,
                                             exc,
                                         )
-                            result = apply_edit_blocks(full_content, blocks)
+                            full_contents[target] = full_content
+
+                        # Route each block to the file(s) whose content
+                        # contains its search_text.  Blocks that match no
+                        # file are recorded as unrouted failures.
+                        per_file_blocks: Dict[str, list] = {t: [] for t in full_contents}
+                        unrouted_blocks: list = []
+                        for block in blocks:
+                            routed = False
+                            for target, fc in full_contents.items():
+                                if block.search_text in fc:
+                                    per_file_blocks[target].append(block)
+                                    routed = True
+                            if not routed:
+                                unrouted_blocks.append(block)
+
+                        if unrouted_blocks:
+                            for ub in unrouted_blocks:
+                                preview = ub.search_text[:80].replace("\n", "\\n")
+                                all_failed.append(
+                                    f"(unrouted): Block {ub.block_index}: "
+                                    f"search text not found in any target file: {preview!r}"
+                                )
+
+                        for target, fc in full_contents.items():
+                            target_blocks = per_file_blocks[target]
+                            if not target_blocks:
+                                # No blocks routed to this file — keep original
+                                applied_files[target] = fc
+                                continue
+                            result = apply_edit_blocks(fc, target_blocks)
                             if result.failed:
                                 for _block, reason in result.failed:
                                     all_failed.append(f"{target}: {reason}")
@@ -3657,7 +3750,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                                     "Edit blocks partially failed for %s: %d/%d applied",
                                     target,
                                     result.applied,
-                                    len(blocks),
+                                    len(target_blocks),
                                 )
                             applied_files[target] = result.content
 
@@ -4646,7 +4739,7 @@ class DevelopmentPhase:
             async with semaphore:
                 chunk = chunk_map[cid]
                 state = states[cid]
-                chunk_context = dict(context)  # Per-chunk copy to avoid race conditions
+                chunk_context = copy.deepcopy(context)  # Per-chunk deep copy to avoid race conditions
                 states[cid] = await self._execute_chunk(chunk, state, chunk_context)
 
         await asyncio.gather(*[_run_with_semaphore(cid) for cid in eligible])

@@ -146,6 +146,8 @@ phases:
 
   design:
     description: "Design documentation generation"
+    request_schema: "DesignPhaseOutput"
+    response_schema: "DesignPhaseOutput"
     entry:
       required:
         - name: tasks
@@ -243,6 +245,8 @@ phases:
 
   implement:
     description: "Test construction + code development"
+    request_schema: "ImplementPhaseOutput"
+    response_schema: "ImplementPhaseOutput"
     entry:
       required:
         - name: tasks
@@ -256,6 +260,10 @@ phases:
             threshold: 50
             on_below: warning
             description: "Design doc should have substance (>= 50 lines); warning only since quality extractors measure str(dict)"
+        - name: project_root
+          type: str
+          severity: blocking
+          description: "Absolute path to project root directory (needed by implementation engine)"
       enrichment:
         - name: design_results.*.design_mode
           type: str
@@ -376,6 +384,8 @@ phases:
 
   test:
     description: "Final testing and validation"
+    request_schema: "ValidationPhaseOutput"
+    response_schema: "ValidationPhaseOutput"
     entry:
       required:
         - name: tasks
@@ -415,6 +425,8 @@ phases:
 
   review:
     description: "Final assembly and validation"
+    request_schema: "ReviewPhaseOutput"
+    response_schema: "ReviewPhaseOutput"
     entry:
       required:
         - name: generation_results

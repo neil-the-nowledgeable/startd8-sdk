@@ -190,7 +190,7 @@ class BaseAgent(ABC):
             pass
 
     @abstractmethod
-    async def agenerate(self, prompt: str) -> GenerateResult:
+    async def agenerate(self, prompt: str, **kwargs) -> GenerateResult:
         """
         Async generate a response to a prompt.
 
@@ -198,6 +198,10 @@ class BaseAgent(ABC):
 
         Args:
             prompt: The prompt text
+            **kwargs: Optional per-call overrides. Supported keys:
+                - ``system_prompt``: Per-call system prompt override.
+                - ``max_tokens``: Per-call max_tokens override (thread-safe
+                  alternative to mutating the agent's instance attribute).
 
         Returns:
             GenerateResult(text, time_ms, token_usage).

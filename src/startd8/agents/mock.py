@@ -42,13 +42,20 @@ class MockAgent(BaseAgent):
         self.retry_config = retry_config
         self.system_prompt = system_prompt
 
-    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
+    async def agenerate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> GenerateResult:
         """Generate mock response (async)
 
         Args:
             prompt: The prompt text
             system_prompt: Optional per-call system prompt override.
                 Stored as ``self._last_system_prompt`` for test inspection.
+            max_tokens: Optional per-call max_tokens override (accepted for
+                API compatibility; does not affect mock output).
         """
         # Resolve system prompt: call-level overrides instance-level
         effective_system_prompt = system_prompt if system_prompt is not None else self.system_prompt

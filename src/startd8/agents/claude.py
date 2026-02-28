@@ -238,7 +238,12 @@ class ClaudeAgent(BaseAgent):
                 )
                 pass
 
-    async def _make_api_call(self, prompt: str, system_prompt: Optional[str] = None):
+    async def _make_api_call(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ):
         """
         Make the raw API call to Anthropic.
 
@@ -249,10 +254,14 @@ class ClaudeAgent(BaseAgent):
             prompt: The user prompt text
             system_prompt: Optional system prompt. If provided, sent as the
                 ``system`` parameter to the Anthropic API.
+            max_tokens: Optional per-call max_tokens override. When provided,
+                takes precedence over the instance-level ``self.max_tokens``.
+                This avoids mutating the shared agent object, which is not
+                thread-safe when chunks run concurrently.
         """
         kwargs = {
             "model": self.model,
-            "max_tokens": self.max_tokens,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
             "messages": [
                 {"role": "user", "content": prompt}
             ],
@@ -270,7 +279,12 @@ class ClaudeAgent(BaseAgent):
                 kwargs["system"] = system_prompt
         return await self.async_client.messages.create(**kwargs)
 
-    async def agenerate(self, prompt: str, system_prompt: Optional[str] = None) -> GenerateResult:
+    async def agenerate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        max_tokens: Optional[int] = None,
+    ) -> GenerateResult:
         """
         Generate response using Claude async API.
 
@@ -282,6 +296,9 @@ class ClaudeAgent(BaseAgent):
             system_prompt: Optional per-call system prompt override. When provided,
                 takes precedence over the instance-level ``self.system_prompt``.
                 If neither is set, no system parameter is sent.
+            max_tokens: Optional per-call max_tokens override. When provided,
+                takes precedence over the instance-level ``self.max_tokens``.
+                This is thread-safe — it avoids mutating the shared agent.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -300,9 +317,13 @@ class ClaudeAgent(BaseAgent):
             # Use retry wrapper if configured
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
-                response = await make_call(prompt, system_prompt=effective_system_prompt)
+                response = await make_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                )
             else:
-                response = await self._make_api_call(prompt, system_prompt=effective_system_prompt)
+                response = await self._make_api_call(
+                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                )
 
         except RetryError as e:
             # All retry attempts exhausted
