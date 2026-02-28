@@ -108,24 +108,26 @@ def _sha256_file_hex(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def _validate_context_seed(data: Dict[str, Any]) -> None:
+def _validate_context_seed(data: Dict[str, Any]) -> bool:
     """Validate context seed against JSON schema before write (Item 6).
 
     Uses jsonschema if installed; no-op otherwise.
+    Returns True if valid (or jsonschema not installed), False if validation failed.
     """
     try:
         import jsonschema
 
         jsonschema.validate(data, _ARTISAN_SEED_SCHEMA)
         logger.debug("Context seed validated against schema")
+        return True
     except ImportError:
-        pass  # Graceful fallback — jsonschema not installed
+        return True  # Graceful fallback — jsonschema not installed
     except Exception as e:
         logger.warning(
             "Context seed schema validation failed: %s — writing anyway",
             str(e),
         )
-        # Log but do not raise — validation is advisory; seed may have extra keys
+        return False
 
 
 
@@ -1920,7 +1922,12 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         coverage = onboarding.get("coverage", {}) if isinstance(onboarding, dict) else {}
         gaps = coverage.get("gaps", []) if isinstance(coverage, dict) else []
-        artifact_ids = [a for a in gaps if isinstance(a, str)]
+        # Filter to entries that look like artifact IDs (not plain-text gap descriptions).
+        # Artifact IDs contain hyphens/underscores and no spaces; prose descriptions have spaces.
+        artifact_ids = [
+            a for a in gaps
+            if isinstance(a, str) and a.strip() and " " not in a.strip()
+        ]
         artifact_to_feature: Dict[str, List[str]] = {}
 
         for aid in artifact_ids:
@@ -2489,6 +2496,16 @@ class PlanIngestionWorkflow(WorkflowBase):
         tasks = PlanIngestionWorkflow._split_oversized_tasks(
             tasks, max_files=1,
         )
+
+        # ── Validate task IDs against safe pattern ──────────────────
+        for t in tasks:
+            tid = t.get("task_id", "")
+            if not _SAFE_TASK_ID_PATTERN.match(tid):
+                logger.warning(
+                    "Task ID %r does not match safe pattern — may cause "
+                    "checkpoint path issues downstream",
+                    tid,
+                )
 
         # ── Gate 2b: filter trivial test __init__.py after split ─────
         # A multi-file feature like ["tests/__init__.py", "tests/test_auth.py"]
@@ -3502,7 +3519,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
             seed_dict = seed.to_dict()
-            _validate_context_seed(seed_dict)
+            if not _validate_context_seed(seed_dict):
+                seed_dict["_schema_valid"] = False
             _log_seed_coverage(seed_dict)
             context_seed_path = output_dir / "artisan-context-seed.json"
             atomic_write_json(context_seed_path, seed_dict, indent=2)
@@ -3556,7 +3574,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
             seed_prime_dict = seed_prime.to_dict()
-            _validate_context_seed(seed_prime_dict)
+            if not _validate_context_seed(seed_prime_dict):
+                seed_prime_dict["_schema_valid"] = False
             _log_seed_coverage(seed_prime_dict, label="prime")
             prime_seed_path = output_dir / "prime-context-seed.json"
             atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
