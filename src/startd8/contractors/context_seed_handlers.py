@@ -3795,7 +3795,9 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             return
 
         if completeness_failed:
-            if quality_policy_mode == "block":
+            if quality_policy_mode == "skip":
+                entry["completeness_gate_decision"] = "skipped"
+            elif quality_policy_mode == "block":
                 entry["quality_failure_reason"] = "PARAMETER_COMPLETENESS_FAILED"
                 entry.setdefault(
                     "non_agreement_reason_code",
@@ -5105,7 +5107,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         serialized["quality_outcome"] = "fail"
 
                     # Accumulate cross-task summary for progressive context
-                    doc_text = serialized["design_document"]
+                    doc_text = serialized.get("design_document", "")
                     if serialized.get("status") != "design_failed":
                         first_line = doc_text[:300].split("\n")[0]
                         summary = f"{task.task_id} ({task.title}): {first_line}"
@@ -5575,7 +5577,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
         env_blocked = sum(
             1 for r in design_results.values()
-            if r.get("status") == "env_blocked"
+            if isinstance(r, dict) and r.get("status") == "env_blocked"
         )
         # REQ-PAQ-400: deterministic DESIGN quality metrics for gate policy.
         quality_per_task: dict[str, dict[str, Any]] = {}
@@ -5750,10 +5752,26 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             output["output_dir"] = self.output_dir
 
         # Context contract: validate DESIGN output model with quality payload.
-        DesignPhaseOutput(
-            design_results=context["design_results"],
-            design_quality=context["design_quality"],
-        )
+        # Wrap in try-except so Pydantic validation failures respect the
+        # quality gate policy (block vs warn) instead of crashing the phase.
+        try:
+            DesignPhaseOutput(
+                design_results=context["design_results"],
+                design_quality=context["design_quality"],
+            )
+        except Exception as _val_exc:
+            _gate_mode = context.get("quality_gate_summary", {}).get(
+                "policy_mode", "warn",
+            )
+            if _gate_mode == "block":
+                raise RuntimeError(
+                    f"DESIGN output validation failed (block policy): {_val_exc}"
+                ) from _val_exc
+            logger.warning(
+                "DESIGN output validation failed (continuing per %s policy): %s",
+                _gate_mode,
+                _val_exc,
+            )
 
         duration = time.monotonic() - start
         logger.info(
