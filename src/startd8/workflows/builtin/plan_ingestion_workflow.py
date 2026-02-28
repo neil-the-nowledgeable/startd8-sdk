@@ -1978,6 +1978,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             "artifact_mapped": mapped_artifacts,
             "artifact_mapping_percent": round(artifact_completeness, 2),
             "conflict_count": conflict_count,
+            "unmet_requirement_count": len(unmet_requirements),
+            "unmet_artifact_count": len(unmet_artifacts),
             "unmapped_requirements": unmet_requirements,
             "unmapped_artifacts": unmet_artifacts,
             "requirement_to_feature": req_to_feature,
@@ -2525,6 +2527,14 @@ class PlanIngestionWorkflow(WorkflowBase):
         # becomes two sub-tasks after Gate 2a.  Filter the __init__.py one.
         tasks = PlanIngestionWorkflow._filter_trivial_test_init_tasks(tasks)
 
+        if not tasks and features:
+            logger.warning(
+                "Zero tasks derived from %d features — all features may have been "
+                "filtered (trivial __init__.py, empty target_files). "
+                "Downstream seed will contain no work items.",
+                len(features),
+            )
+
         return tasks
 
     @staticmethod
@@ -2915,7 +2925,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         # refine_suggestions — stored in the plan document appendix
         if doc_path.exists():
             plan_text = doc_path.read_text(encoding="utf-8")
-            if "Appendix C" in plan_text or "refine" in plan_text.lower():
+            if "Appendix C" in plan_text or "## Architectural Review" in plan_text or "refine_suggestions" in plan_text:
                 entries.append({
                     "artifact_id": "ingestion.refine_suggestions",
                     "role": "refine_suggestions",
