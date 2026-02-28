@@ -1663,16 +1663,18 @@ class PlanIngestionWorkflow(WorkflowBase):
         out_path = output_dir / out_filename
         atomic_write(out_path, content)
 
+        _output_msg = f"Wrote {out_path}"
+        if _md_quality_warning:
+            _output_msg += f" [warning: {_md_quality_warning}]"
         step = StepResult(
             step_name="transform",
             agent_name=agent.name,
             input=prompt[:_INPUT_TRUNCATION],
-            output=f"Wrote {out_path}",
+            output=_output_msg,
             time_ms=elapsed_ms,
             input_tokens=in_tok,
             output_tokens=out_tok,
             cost=cost,
-            error=_md_quality_warning,
         )
 
         return out_path, step
@@ -2458,6 +2460,19 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "context": ctx,
                 },
             })
+
+        # ── Clean up dangling dependency references from skipped features ──
+        emitted_ids = {t["task_id"] for t in tasks}
+        for t in tasks:
+            original_deps = t.get("depends_on", [])
+            cleaned_deps = [d for d in original_deps if d in emitted_ids]
+            if len(cleaned_deps) < len(original_deps):
+                dangling = set(original_deps) - emitted_ids
+                logger.warning(
+                    "Task %s: removed %d dangling dependency reference(s): %s",
+                    t["task_id"], len(dangling), sorted(dangling),
+                )
+                t["depends_on"] = cleaned_deps
 
         # ── Gate 2a: single-file enforcement ─────────────────────────
         # Per defense-in-depth Principle 2 (adversarial thinking): even if
@@ -3530,6 +3545,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 context_files=context_files_list,
                 service_metadata=service_metadata or None,
                 forward_manifest=forward_manifest_dict,
+                project_metadata=project_metadata or None,
             )
 
             seed_prime_dict = seed_prime.to_dict()
