@@ -65,6 +65,7 @@ from startd8.contractors.context_schema import (
 )
 from startd8.contractors.protocols import (
     DRAFT_MODEL_CLAUDE_HAIKU,
+    GenerationResult,
     REVIEW_MODEL_CLAUDE_OPUS,
     VALIDATE_MODEL_CLAUDE_SONNET,
 )
@@ -133,9 +134,11 @@ _PLAN_DOC_CHECKPOINT_MAX_CHARS = 1000
 _PLAN_DOC_TRUNCATION_MARKER = "\n... [truncated, full text in seed]"
 
 # Context keys worth persisting in checkpoints for resume.
-# Excludes "tasks", "task_index", "generation_results" because they contain
-# non-serializable objects (SeedTask, Path, GenerationResult) that are reloaded
-# from seed/disk via _ensure_context_loaded().
+# Excludes "tasks", "task_index" because they contain non-serializable objects
+# (SeedTask) that are reloaded from seed/disk via _ensure_context_loaded().
+# "generation_results" is handled specially in _save_checkpoint (R2-O4):
+# serialized to plain dicts on save, deserialized back to GenerationResult
+# on restore, so INTEGRATE gets usable data after a checkpoint resume.
 _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "enriched_seed_path", "plan_title", "plan_goals", "domain_summary",
     "preflight_summary", "total_estimated_loc", "architectural_context", "project_metadata",
@@ -1310,6 +1313,46 @@ class ArtisanContractorWorkflow:
             if loaded_checkpoint.context_snapshot:
                 for key, value in loaded_checkpoint.context_snapshot.items():
                     context.setdefault(key, value)
+                # R2-O4: Deserialize generation_results from checkpoint
+                # snapshot back into GenerationResult dataclass objects so
+                # downstream phases (INTEGRATE, TEST, REVIEW) can access
+                # attributes like .success and .cost_usd.
+                _restored_gr = context.get("generation_results")
+                if isinstance(_restored_gr, dict) and _restored_gr:
+                    _first_val = next(iter(_restored_gr.values()), None)
+                    if isinstance(_first_val, dict):
+                        try:
+                            context["generation_results"] = {
+                                tid: GenerationResult(
+                                    success=gr.get("success", False),
+                                    generated_files=[
+                                        Path(p)
+                                        for p in gr.get("generated_files", [])
+                                    ],
+                                    error=gr.get("error"),
+                                    input_tokens=gr.get("input_tokens", 0),
+                                    output_tokens=gr.get("output_tokens", 0),
+                                    cost_usd=gr.get("cost_usd", 0.0),
+                                    iterations=gr.get("iterations", 1),
+                                    model=gr.get("model", ""),
+                                    metadata=gr.get("metadata", {}),
+                                )
+                                for tid, gr in _restored_gr.items()
+                                if isinstance(gr, dict)
+                            }
+                            self._logger.info(
+                                "R2-O4: Restored %d generation_results from "
+                                "checkpoint snapshot",
+                                len(context["generation_results"]),
+                            )
+                        except Exception:
+                            self._logger.warning(
+                                "R2-O4: Failed to deserialize "
+                                "generation_results from checkpoint — "
+                                "INTEGRATE will attempt .startd8/state/ cache",
+                                exc_info=True,
+                            )
+
                 # PCA-202: warn if plan_document_text was truncated in checkpoint
                 if loaded_checkpoint.context_snapshot.get("_plan_doc_truncated"):
                     self._logger.warning(
@@ -2278,10 +2321,13 @@ class ArtisanContractorWorkflow:
             # Drift detection: warn about context keys that look
             # checkpoint-worthy but are not in the whitelist.  Private
             # keys (prefixed with _) are excluded — they are transient.
+            # R2-O4: "generation_results" is handled specially above.
             _IGNORE_PREFIXES = ("_", "current_feature")
+            _SPECIAL_KEYS = {"generation_results"}
             _untracked = [
                 k for k in context
                 if k not in _CHECKPOINT_CONTEXT_KEYS
+                and k not in _SPECIAL_KEYS
                 and not k.startswith(_IGNORE_PREFIXES)
                 and isinstance(context[k], (str, int, float, bool, list, dict))
             ]
@@ -2292,6 +2338,41 @@ class ArtisanContractorWorkflow:
                     len(_untracked),
                     _untracked,
                 )
+
+            # R2-O4: Persist generation_results so INTEGRATE can access
+            # them after a checkpoint resume.  GenerationResult contains
+            # Path objects which are not JSON-serializable, so we convert
+            # each entry to a plain dict with string paths.
+            _gen_results = context.get("generation_results")
+            if isinstance(_gen_results, dict) and _gen_results:
+                try:
+                    _serialized_gr: dict[str, Any] = {}
+                    for _tid, _gr in _gen_results.items():
+                        if isinstance(_gr, GenerationResult):
+                            _serialized_gr[_tid] = {
+                                "success": _gr.success,
+                                "generated_files": [
+                                    str(p) for p in _gr.generated_files
+                                ],
+                                "error": _gr.error,
+                                "input_tokens": _gr.input_tokens,
+                                "output_tokens": _gr.output_tokens,
+                                "cost_usd": _gr.cost_usd,
+                                "iterations": _gr.iterations,
+                                "model": _gr.model,
+                                "metadata": _gr.metadata,
+                            }
+                        elif isinstance(_gr, dict):
+                            # Already a plain dict (e.g. loaded from cache)
+                            _serialized_gr[_tid] = _gr
+                    if _serialized_gr:
+                        snapshot["generation_results"] = _serialized_gr
+                except Exception:
+                    self._logger.debug(
+                        "Checkpoint: could not serialize generation_results, "
+                        "skipping — INTEGRATE will attempt to reload from "
+                        ".startd8/state/ cache",
+                    )
 
             # PCA-202: truncate plan_document_text to prevent checkpoint bloat.
             pdt = snapshot.get("plan_document_text")
@@ -2872,16 +2953,31 @@ class ArtisanContractorWorkflow:
             # Task-keyed dicts: merge across all features into one dict.
             # Always set the key (even if empty) so entry-gate validation
             # passes — it checks presence, not non-emptiness.
+            # R2-O3: detect duplicate task IDs across features and
+            # disambiguate with a ``_feat{feature_id}`` suffix so earlier
+            # features' results are never silently overwritten.
             for _merge_key in (
                 "generation_results", "design_results",
                 "integration_results",
             ):
                 if _merge_key not in context:
                     _merged: dict[str, Any] = {}
-                    for _fd in _all_feat.values():
+                    for _feat_id, _fd in _all_feat.items():
                         if isinstance(_fd, dict):
                             _fv = _fd.get(_merge_key)
                             if isinstance(_fv, dict):
+                                _overlap = _merged.keys() & _fv.keys()
+                                if _overlap:
+                                    self._logger.warning(
+                                        "R2-O3: %d duplicate task ID(s) in "
+                                        "'%s' across features — "
+                                        "disambiguating with feature suffix: %s",
+                                        len(_overlap), _merge_key,
+                                        sorted(_overlap),
+                                    )
+                                    for _dup_key in _overlap:
+                                        _safe_key = f"{_dup_key}_feat{_feat_id}"
+                                        _fv[_safe_key] = _fv.pop(_dup_key)
                                 _merged.update(_fv)
                     context[_merge_key] = _merged
 
@@ -2897,16 +2993,40 @@ class ArtisanContractorWorkflow:
             for _struct_key in ("test_results", "review_results"):
                 if _struct_key not in context:
                     _merged_struct: dict[str, Any] = {}
-                    for _fd in _all_feat.values():
+                    for _feat_id, _fd in _all_feat.items():
                         if isinstance(_fd, dict) and _struct_key in _fd:
                             _fv = _fd[_struct_key]
                             if isinstance(_fv, dict):
                                 if not _merged_struct:
                                     _merged_struct = dict(_fv)
                                 else:
-                                    _merged_struct.setdefault(
+                                    # R2-O3: safe per_task merge with
+                                    # duplicate detection (same pattern as
+                                    # the task-keyed merge above).
+                                    _existing_pt = _merged_struct.setdefault(
                                         "per_task", {},
-                                    ).update(_fv.get("per_task", {}))
+                                    )
+                                    _incoming_pt = _fv.get("per_task", {})
+                                    _pt_overlap = (
+                                        _existing_pt.keys() & _incoming_pt.keys()
+                                    )
+                                    if _pt_overlap:
+                                        self._logger.warning(
+                                            "R2-O3: %d duplicate task ID(s) "
+                                            "in '%s.per_task' across "
+                                            "features — disambiguating: %s",
+                                            len(_pt_overlap),
+                                            _struct_key,
+                                            sorted(_pt_overlap),
+                                        )
+                                        for _dup_key in _pt_overlap:
+                                            _safe_key = (
+                                                f"{_dup_key}_feat{_feat_id}"
+                                            )
+                                            _incoming_pt[_safe_key] = (
+                                                _incoming_pt.pop(_dup_key)
+                                            )
+                                    _existing_pt.update(_incoming_pt)
                                     for _nk in (
                                         "total_cost",
                                         "total_passed",

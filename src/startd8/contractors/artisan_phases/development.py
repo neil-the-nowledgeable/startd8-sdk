@@ -2044,12 +2044,34 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 line count.  When provided, uses these counts for accurate min_lines
                 calculation instead of counting truncated content lines (I-3 fix).
         """
+        # R2-I4: Only count lines from files that were actually included in
+        # the prompt (not budget-omitted).  Replicate the budget check from
+        # _build_existing_files to determine which files the LLM can see.
+        included_paths: set = set()
+        _budget_used = 0
+        for ef_path, ef_content in existing.items():
+            ef_size = len(ef_content.encode("utf-8", errors="replace"))
+            if _budget_used + ef_size <= _EXISTING_FILES_BUDGET_BYTES:
+                included_paths.add(ef_path)
+                _budget_used += ef_size
+            elif _budget_used < _EXISTING_FILES_BUDGET_BYTES:
+                # Partially included — still counts
+                included_paths.add(ef_path)
+                _budget_used = _EXISTING_FILES_BUDGET_BYTES
+            # else: omitted — don't count
+
         # I-3: Use original line counts when available to avoid under-counting
         # after double truncation (_MAX_EXISTING_FILE_BYTES + _EXISTING_FILES_BUDGET_BYTES).
         if original_lines:
-            total_lines = sum(original_lines.values())
+            total_lines = sum(
+                lc for path, lc in original_lines.items()
+                if path in included_paths
+            )
         else:
-            total_lines = sum(len(c.splitlines()) for c in existing.values())
+            total_lines = sum(
+                len(c.splitlines()) for path, c in existing.items()
+                if path in included_paths
+            )
         min_lines = int(total_lines * cls._MIN_OUTPUT_FRACTION)
 
         text = _format_implement_prompt(
@@ -2852,9 +2874,23 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             parts.append("**Target files:** " + ", ".join(f"`{f}`" for f in chunk.file_targets))
 
         # Design document (the core specification T2 must match)
+        # R2-I3: Filter the design doc to only include sections relevant
+        # to this chunk's target files, preventing cross-task leakage
+        # in multi-task features where Task B's T2 refiner would
+        # otherwise see Task A's design sections.
         design_doc = chunk.metadata.get("design_document")
         if design_doc:
+            file_targets = getattr(chunk, "file_targets", [])
+            if file_targets:
+                design_doc = LeadContractorChunkExecutor._filter_design_doc_for_targets(
+                    design_doc, file_targets,
+                )
             parts.append("\n## Design Document")
+            parts.append(
+                f"**Focus ONLY on the code for "
+                f"{', '.join(f'`{f}`' for f in file_targets) if file_targets else 'this task'}"
+                f" — ignore sections about other files.**"
+            )
             parts.append(design_doc)
 
         # Task description (chunk.description only, NOT the full assembled T1 prompt)
@@ -3761,18 +3797,19 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                         strict_mode=self._strict_truncation,
                     )
                     if trunc_result.is_truncated:
-                        if trunc_result.is_api_truncation and self._fail_on_truncation:
+                        _trunc_reason = "; ".join(trunc_result.indicators) if trunc_result.indicators else "unknown"
+                        _is_high_confidence = trunc_result.confidence >= 0.7
+                        if _is_high_confidence and self._fail_on_truncation:
                             self.logger.error(
-                                "Chunk %s: API truncation detected — failing: %s",
-                                chunk.chunk_id, trunc_result.reason,
+                                "Chunk %s: high-confidence truncation detected — failing: %s",
+                                chunk.chunk_id, _trunc_reason,
                             )
-                            return False, f"API truncation: {trunc_result.reason}"
+                            return False, f"Truncation detected (confidence={trunc_result.confidence:.0%}): {_trunc_reason}"
                         self.logger.warning(
-                            "Chunk %s: truncation detected (api=%s, heuristic=%s): %s",
+                            "Chunk %s: truncation detected (confidence=%.0f%%): %s",
                             chunk.chunk_id,
-                            trunc_result.is_api_truncation,
-                            trunc_result.is_heuristic_truncation,
-                            trunc_result.reason,
+                            trunc_result.confidence * 100,
+                            _trunc_reason,
                         )
                 except ImportError:
                     pass  # truncation_detection not available
@@ -3901,34 +3938,61 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                             chunk.metadata["_search_replace_failed_blocks"] = 0
 
                         # I-6: When >30% of S/R blocks fail, the partial result
-                        # is unreliable — fall back to whole-file extraction.
+                        # is unreliable — fall back to whole-file extraction
+                        # ONLY for create-mode tasks.  For edit-mode tasks,
+                        # whole-file fallback destroys existing code, so we
+                        # keep the partial S/R results instead.
                         if blocks and len(all_failed) / len(blocks) > 0.3:
-                            self.logger.warning(
-                                "Chunk %s: %d/%d S/R blocks failed (%.0f%%) "
-                                "— falling back to whole-file extraction",
-                                chunk.chunk_id,
-                                len(all_failed),
-                                len(blocks),
-                                len(all_failed) / len(blocks) * 100,
+                            _edit_mode_meta = chunk.metadata.get("_edit_mode")
+                            _is_edit_mode = (
+                                bool(existing)
+                                and _edit_mode_meta is not None
+                                and _edit_mode_meta.get("mode") == "edit"
                             )
-                            from startd8.utils.code_extraction import (
-                                extract_code_from_response,
-                            )
-                            code = extract_code_from_response(response_text)
-                            if code and code.strip():
-                                written_files = self._write_generated_files(
-                                    code, chunk,
-                                )
-                            else:
-                                # Fallback extraction also empty — use partial S/R result
+                            if _is_edit_mode:
+                                # R2-I2: Edit-mode — keep partial S/R results
+                                # to preserve existing code.  Whole-file
+                                # fallback would replace the entire file with
+                                # just the LLM output, losing existing code.
                                 self.logger.warning(
-                                    "Chunk %s: whole-file fallback also empty "
-                                    "— using partial S/R result",
+                                    "Chunk %s: %d/%d S/R blocks failed (%.0f%%) "
+                                    "— keeping partial S/R result (edit-mode: "
+                                    "whole-file fallback would destroy existing code)",
                                     chunk.chunk_id,
+                                    len(all_failed),
+                                    len(blocks),
+                                    len(all_failed) / len(blocks) * 100,
                                 )
                                 written_files = self._write_applied_files(
                                     applied_files, chunk,
                                 )
+                            else:
+                                self.logger.warning(
+                                    "Chunk %s: %d/%d S/R blocks failed (%.0f%%) "
+                                    "— falling back to whole-file extraction",
+                                    chunk.chunk_id,
+                                    len(all_failed),
+                                    len(blocks),
+                                    len(all_failed) / len(blocks) * 100,
+                                )
+                                from startd8.utils.code_extraction import (
+                                    extract_code_from_response,
+                                )
+                                code = extract_code_from_response(response_text)
+                                if code and code.strip():
+                                    written_files = self._write_generated_files(
+                                        code, chunk,
+                                    )
+                                else:
+                                    # Fallback extraction also empty — use partial S/R result
+                                    self.logger.warning(
+                                        "Chunk %s: whole-file fallback also empty "
+                                        "— using partial S/R result",
+                                        chunk.chunk_id,
+                                    )
+                                    written_files = self._write_applied_files(
+                                        applied_files, chunk,
+                                    )
                         else:
                             written_files = self._write_applied_files(applied_files, chunk)
                     else:
