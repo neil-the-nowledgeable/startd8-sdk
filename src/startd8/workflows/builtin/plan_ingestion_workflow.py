@@ -451,6 +451,9 @@ def _as_bool(raw: Any, default: bool) -> bool:
     return default
 
 
+_HEURISTIC_FALLBACK_DESCRIPTION = "Fallback parsed feature from plan text"
+
+
 def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
     """Deterministic fallback parser when LLM parse fails."""
     title_match = re.search(r"^\s*#\s+(.+)$", plan_text, flags=re.MULTILINE)
@@ -512,7 +515,7 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
             ParsedFeature(
                 feature_id="F-001",
                 name=title,
-                description="Fallback parsed feature from plan text",
+                description=_HEURISTIC_FALLBACK_DESCRIPTION,
                 target_files=[],
                 dependencies=[],
                 estimated_loc=120,
@@ -634,17 +637,21 @@ def _heuristic_assess_complexity(
     # Scale: 1-3 features → low, 10 → mid, 20+ → high.
     feature_count_score = min(100, max(10, feature_count * 7))
 
+    # Normalize cross_file_deps to 0-100 before composite (reused in return)
+    cross_file_deps_norm = min(100, max(0, cross_file_deps * 10))
+
     # Composite: includes feature_count_score for parity with LLM path
     if call_graph_impact > 0:
         composite = int(
-            (feature_count_score + api_surface + test_complexity
-             + integration_depth + domain_novelty + ambiguity
-             + call_graph_impact) / 7
+            (feature_count_score + cross_file_deps_norm + api_surface
+             + test_complexity + integration_depth + domain_novelty
+             + ambiguity + call_graph_impact) / 8
         )
     else:
         composite = int(
-            (feature_count_score + api_surface + test_complexity
-             + integration_depth + domain_novelty + ambiguity) / 6
+            (feature_count_score + cross_file_deps_norm + api_surface
+             + test_complexity + integration_depth + domain_novelty
+             + ambiguity) / 7
         )
 
     if force_route:
@@ -702,7 +709,7 @@ def _heuristic_assess_complexity(
 
     return ComplexityScore(
         feature_count=feature_count_score,
-        cross_file_deps=min(100, max(0, cross_file_deps * 10)),
+        cross_file_deps=cross_file_deps_norm,
         api_surface=api_surface,
         test_complexity=test_complexity,
         integration_depth=integration_depth,
@@ -1898,7 +1905,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             if isinstance(src_refs, list):
                 req_sources[rid] = [s for s in src_refs if isinstance(s, str)]
             else:
-                req_sources[rid] = list(req_acceptance[rid])
+                req_sources[rid] = []
 
         # Coverage computed from project-specific requirements only
         mapped_project_specific = sum(
@@ -3851,6 +3858,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 and len(parsed_plan.features) == 1
                 and parsed_plan.features[0].feature_id == "F-001"
                 and not parsed_plan.features[0].target_files
+                and parsed_plan.features[0].description
+                == _HEURISTIC_FALLBACK_DESCRIPTION
             )
             if _heuristic_degraded:
                 logger.warning(
@@ -3945,7 +3954,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                         + details
                         + ". Either improve mappings or use low_quality_policy=bias_artisan."
                     )
-                complexity.route = ContractorRoute.ARTISAN
+                complexity = _dataclass_replace(complexity, route=ContractorRoute.ARTISAN)
+                state.complexity = complexity
                 state.route = ContractorRoute.ARTISAN
                 steps.append(
                     StepResult(
