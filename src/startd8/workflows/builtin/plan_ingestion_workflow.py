@@ -615,7 +615,6 @@ def _heuristic_assess_complexity(
             "manifest.fallback",
             extra={"surface": "plan_ingestion", "reason": "registry_unavailable"},
         )
-    api_surface = min(100, max(10, api_surface))  # ensure bounds
     test_complexity = min(100, max(10, feature_count * 6))
     integration_depth = min(100, max(10, cross_file_deps * 10))
     domain_novelty = 40
@@ -1391,7 +1390,13 @@ class PlanIngestionWorkflow(WorkflowBase):
         )
         # Transform phase generates large YAML/markdown; bump token limit
         if hasattr(agent, "max_tokens") and agent.max_tokens < 64000:
-            agent.max_tokens = 64000
+            try:
+                agent.max_tokens = 64000
+            except (AttributeError, TypeError, ValueError) as exc:
+                logger.debug(
+                    "Could not set max_tokens on %s: %s",
+                    type(agent).__name__, exc,
+                )
         return agent
 
     # ------------------------------------------------------------------
@@ -3133,9 +3138,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             f.feature_id for f in parsed_plan.features if f.dependencies
         }
         # Roots = depended upon but have no deps of their own
+        # Filter against known feature IDs to exclude hallucinated/typo'd IDs
+        known_fids = {f.feature_id for f in parsed_plan.features}
         root_ids = [
             fid for fid in depended_upon
-            if fid not in has_deps or not dep_graph.get(fid)
+            if fid in known_fids
+            and (fid not in has_deps or not dep_graph.get(fid))
         ]
 
         clusters: list[Dict[str, Any]] = []
