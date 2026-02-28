@@ -4794,7 +4794,17 @@ class DevelopmentPhase:
                 async with state_lock:
                     states[cid] = result
 
-        await asyncio.gather(*[_run_with_semaphore(cid) for cid in eligible])
+        try:
+            await asyncio.gather(*[_run_with_semaphore(cid) for cid in eligible])
+        except BaseException as gather_exc:
+            self.logger.warning(
+                "asyncio.gather raised %s during concurrent chunk execution; "
+                "spans from partially-completed chunks may not have been cleaned up. "
+                "Individual chunk spans are guarded by _execute_chunk's try/except, "
+                "but any in-flight chunks at the time of failure may leak spans.",
+                type(gather_exc).__name__,
+            )
+            raise
 
         return states
 
@@ -4837,10 +4847,13 @@ class DevelopmentPhase:
         )
         _chunk_span = _chunk_span_cm.__enter__()
         try:
-            return await self._execute_chunk_inner(chunk, state, context, max_attempts, _chunk_span, _chunk_span_cm)
+            result = await self._execute_chunk_inner(chunk, state, context, max_attempts, _chunk_span, _chunk_span_cm)
         except BaseException:
             _chunk_span_cm.__exit__(*sys.exc_info())
             raise
+        else:
+            _chunk_span_cm.__exit__(None, None, None)
+        return result
 
     async def _execute_chunk_inner(
         self,
@@ -5033,7 +5046,6 @@ class DevelopmentPhase:
             if _chunk_span and hasattr(_chunk_span, "set_attribute"):
                 _chunk_span.set_attribute("chunk.status", "passed")
                 _chunk_span.set_attribute("chunk.attempts", state.attempts)
-            _chunk_span_cm.__exit__(None, None, None)
             return state
 
         # All retries exhausted
@@ -5046,7 +5058,6 @@ class DevelopmentPhase:
         if _chunk_span and hasattr(_chunk_span, "set_attribute"):
             _chunk_span.set_attribute("chunk.status", "failed")
             _chunk_span.set_attribute("chunk.attempts", state.attempts)
-        _chunk_span_cm.__exit__(None, None, None)
         return state
 
     def _propagate_skips(

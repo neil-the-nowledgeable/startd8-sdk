@@ -431,13 +431,31 @@ def _looks_like_init(code: str) -> bool:
 
 
 def _match_basename(candidate: str, basenames: Dict[str, str]) -> Optional[str]:
-    """Match a candidate filename against target basenames (case-insensitive)."""
+    """Match a candidate filename against target basenames (case-insensitive).
+
+    If multiple targets share the same case-insensitive basename (e.g.
+    ``Foo.ts`` and ``foo.ts``), the match is ambiguous — log a warning and
+    return ``None`` so the caller falls back to full-path matching.
+    """
     # Exact match first
     if candidate in basenames:
         return basenames[candidate]
-    # Case-insensitive fallback
+    # Case-insensitive fallback — collect ALL matches to detect ambiguity
     candidate_lower = candidate.lower()
-    for basename, target in basenames.items():
-        if basename.lower() == candidate_lower:
-            return target
+    matches = [
+        target
+        for basename, target in basenames.items()
+        if basename.lower() == candidate_lower
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        logger.warning(
+            "Ambiguous case-insensitive basename match for %r: "
+            "matched %d targets %s — falling back to full-path matching",
+            candidate,
+            len(matches),
+            matches,
+        )
+        return None
     return None

@@ -2557,6 +2557,13 @@ class ArtisanContractorWorkflow:
             self._logger.warning("QUALITY GATE WARNING: %s — %s", msg, details)
 
         # --- Layer 2: contract metric thresholds ---
+        # H-3: Defensive guard — phase_result.output may have been mutated or
+        # replaced between the Layer 1 guard and here (e.g. by a concurrent
+        # handler or a post-gate callback).  Skip metric thresholds entirely
+        # if it is no longer a dict.
+        if not isinstance(phase_result.output, dict):
+            return
+
         _OPERATOR_MAP = {
             "gte": lambda obs, thr: obs < thr,   # violated when observed < threshold
             "lte": lambda obs, thr: obs > thr,   # violated when observed > threshold
@@ -2649,6 +2656,16 @@ class ArtisanContractorWorkflow:
                 "violation_count": len(self._quality_gate_violations),
                 "violations": list(self._quality_gate_violations),
             }
+
+            # H-1: Maintain per-feature violation counts so downstream
+            # consumers (FINALIZE, diagnostics) see feature-scoped totals
+            # rather than the accumulated cross-feature count.
+            _current_fid = self._active_workflow_context.get("current_feature_id")
+            if _current_fid and outcome.get("violated"):
+                _per_feature_violations = self._active_workflow_context.setdefault(
+                    "_per_feature_quality_violations", {},
+                )
+                _per_feature_violations.setdefault(_current_fid, []).append(outcome)
 
         try:
             from startd8.contractors.forensic_log import emit_quality_gate_log
@@ -2904,6 +2921,11 @@ class ArtisanContractorWorkflow:
         """
         inner_results: dict[str, dict[str, Any]] = {}
 
+        # H-1: Snapshot the violation count so per-feature attribution is
+        # correct — violations from prior features must not be counted
+        # against this feature.
+        _feature_violation_start = len(self._quality_gate_violations)
+
         self._logger.info(
             "Feature-serial: starting feature %s (inner phases: %s)",
             feature_id,
@@ -2962,8 +2984,24 @@ class ArtisanContractorWorkflow:
                             _phase_meta.get("exit_gate_passed", True)
                         )
 
-                    # Track cost
-                    cost_tracker.add(phase_result.cost)
+                    # H-2: Check budget BEFORE committing the cost so an
+                    # over-budget phase's cost is not permanently recorded.
+                    # Probe whether adding this cost would exceed the budget
+                    # by doing the add, checking, and rolling back if needed.
+                    _phase_cost = phase_result.cost
+                    cost_tracker.add(_phase_cost)
+                    if not cost_tracker.check_budget():
+                        # Roll back the cost that pushed us over budget.
+                        cost_tracker.add(-_phase_cost)
+                        inner_results[inner_phase.value]["status"] = "budget_exceeded"
+                        self._logger.warning(
+                            "Feature %s: budget would be exceeded by inner phase %s "
+                            "(cost=%.4f), rolling back",
+                            feature_id,
+                            inner_phase.value,
+                            _phase_cost,
+                        )
+                        return False, WorkflowStatus.BUDGET_EXCEEDED, inner_results
 
                     # Quality gate check for design/test/review in
                     # feature-serial and wave-parallel modes.
@@ -3072,15 +3110,8 @@ class ArtisanContractorWorkflow:
                         )
                         return False, WorkflowStatus.TIMED_OUT, inner_results
 
-                    # Check budget after each inner phase
-                    if not cost_tracker.check_budget():
-                        inner_results[inner_phase.value]["status"] = "budget_exceeded"
-                        self._logger.warning(
-                            "Feature %s: budget exceeded during inner phase %s",
-                            feature_id,
-                            inner_phase.value,
-                        )
-                        return False, WorkflowStatus.BUDGET_EXCEEDED, inner_results
+                    # H-2: Budget check already performed above (before
+                    # cost_tracker.add), so no redundant check needed here.
                     phase_index += 1
 
                 except Exception as err:
@@ -3151,6 +3182,14 @@ class ArtisanContractorWorkflow:
                     _this_feature[_accum_key] = _accum_val
             if _this_feature:
                 _feature_accumulator[feature_id] = _this_feature
+
+            # H-1: Attribute quality gate violations to this feature only,
+            # using the snapshot taken at the start of _execute_feature.
+            _feature_violations = self._quality_gate_violations[
+                _feature_violation_start:
+            ]
+            if _feature_violations:
+                inner_results["_quality_gate_violations"] = _feature_violations
 
             # Phase output keys that are feature-scoped — stale data from
             # feature N must not leak into feature N+1's handlers.

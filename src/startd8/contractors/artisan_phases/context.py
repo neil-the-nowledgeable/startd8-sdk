@@ -6,6 +6,8 @@ from pathlib import Path
 
 from startd8.logging_config import get_logger
 
+_MAX_TOKEN_CACHE_SIZE = 1024
+
 
 class _FallbackEncoding:
     """Char-based token estimator (~4 chars/token) when tiktoken is absent."""
@@ -312,6 +314,8 @@ class TokenCounter:
             return 0
         if text in self._cache:
             return self._cache[text]
+        if len(self._cache) > _MAX_TOKEN_CACHE_SIZE:
+            self._cache.clear()
         token_count = len(self.encoding.encode(text))
         self._cache[text] = token_count
         return token_count

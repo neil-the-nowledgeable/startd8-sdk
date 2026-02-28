@@ -3108,7 +3108,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 means wait indefinitely.
         """
         result_box: dict[str, Any] = {}
-        error_box: dict[str, BaseException] = {}
+        error_box: dict[str, Exception] = {}
         parent_ctx = capture_context()
         # OT-710: Capture boundary result for thread propagation
         from startd8.contractors.forensic_log import (
@@ -3128,7 +3128,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                     result_box["result"] = loop.run_until_complete(
                         design_phase.run(feature_context)
                     )
-                except BaseException as exc:
+                except Exception as exc:
                     error_box["error"] = exc
                 finally:
                     loop.close()
@@ -3169,7 +3169,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         (no dual-review, no revision loop) for the v2 modular prompt path.
         """
         result_box: dict[str, Any] = {}
-        error_box: dict[str, BaseException] = {}
+        error_box: dict[str, Exception] = {}
         parent_ctx = capture_context()
         from startd8.contractors.forensic_log import (
             get_boundary_result,
@@ -3192,7 +3192,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                             max_tokens=max_tokens,
                         )
                     )
-                except BaseException as exc:
+                except Exception as exc:
                     error_box["error"] = exc
                 finally:
                     loop.close()
@@ -3233,7 +3233,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         v2 output cannot be accepted without reviewer and arbiter evidence.
         """
         result_box: dict[str, Any] = {}
-        error_box: dict[str, BaseException] = {}
+        error_box: dict[str, Exception] = {}
         parent_ctx = capture_context()
         from startd8.contractors.forensic_log import (
             get_boundary_result,
@@ -3262,7 +3262,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 try:
                     asyncio.set_event_loop(loop)
                     result_box["result"] = loop.run_until_complete(_run_pair())
-                except BaseException as exc:
+                except Exception as exc:
                     error_box["error"] = exc
                 finally:
                     loop.close()
@@ -5262,30 +5262,44 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         # B-6: Derive design_mode_summary from filesystem ground truth
         # (scaffold.existing_target_files) instead of design iteration status.
         # Used by chain 5 (design_mode_to_implement) for verifiable propagation.
+        _scaffold_data = context.get("scaffold", {})
         _scaffold_existing = set(
-            context.get("scaffold", {}).get("existing_target_files", [])
+            _scaffold_data.get("existing_target_files", [])
         )
         _task_by_id = {t.task_id: t for t in tasks}
 
-        context["design_mode_summary"] = {}
-        for tid, entry in design_results.items():
-            if not isinstance(entry, dict) or entry.get("status") in (
-                "design_failed", "env_blocked", "dry_run_skipped",
-            ):
-                context["design_mode_summary"][tid] = "skipped"
-            elif _task_by_id.get(tid) and any(
-                f in _scaffold_existing
-                for f in _task_by_id[tid].target_files
-            ):
-                context["design_mode_summary"][tid] = "update"
-            elif _task_by_id.get(tid) and getattr(
-                _task_by_id[tid], "existing_content_hash", None
-            ) is not None:
-                context["design_mode_summary"][tid] = "update"
-            elif entry.get("status") == "refined":
-                context["design_mode_summary"][tid] = "update"
-            else:
-                context["design_mode_summary"][tid] = "create"
+        # H-9: On DESIGN resume (auto-load from handoff.json), scaffold may
+        # not be in context.  If scaffold data is absent, mode classification
+        # cannot distinguish create vs update reliably — skip overwriting
+        # design_mode_summary so any previously-computed values are preserved.
+        if not _scaffold_data:
+            logger.warning(
+                "design_mode_summary: scaffold data missing from context — "
+                "mode classification may be inaccurate (DESIGN resume?). "
+                "Retaining existing design_mode_summary if present."
+            )
+            context.setdefault("design_mode_summary_degraded", True)
+            context.setdefault("design_mode_summary", {})
+        else:
+            context["design_mode_summary"] = {}
+            for tid, entry in design_results.items():
+                if not isinstance(entry, dict) or entry.get("status") in (
+                    "design_failed", "env_blocked", "dry_run_skipped",
+                ):
+                    context["design_mode_summary"][tid] = "skipped"
+                elif _task_by_id.get(tid) and any(
+                    f in _scaffold_existing
+                    for f in _task_by_id[tid].target_files
+                ):
+                    context["design_mode_summary"][tid] = "update"
+                elif _task_by_id.get(tid) and getattr(
+                    _task_by_id[tid], "existing_content_hash", None
+                ) is not None:
+                    context["design_mode_summary"][tid] = "update"
+                elif entry.get("status") == "refined":
+                    context["design_mode_summary"][tid] = "update"
+                else:
+                    context["design_mode_summary"][tid] = "create"
 
         # ── Gaps 1-5: Handoff enrichment extraction ────────────────────
         _design_structural_delta: dict[str, dict[str, list[dict[str, str]]]] = {}
@@ -7755,7 +7769,7 @@ class Test{class_name}:
                 thread to stop initiating new LLM calls.
         """
         result_box: dict[str, Any] = {}
-        error_box: dict[str, BaseException] = {}
+        error_box: dict[str, Exception] = {}
         parent_ctx = capture_context()
         # OT-710: Capture boundary result for thread propagation
         from startd8.contractors.forensic_log import (
@@ -7775,7 +7789,7 @@ class Test{class_name}:
                     result_box["result"] = loop.run_until_complete(
                         dev_phase.run(plan)
                     )
-                except BaseException as exc:  # pragma: no cover - propagated
+                except Exception as exc:  # pragma: no cover - propagated
                     error_box["error"] = exc
                 finally:
                     loop.close()
@@ -8981,10 +8995,19 @@ class Test{class_name}:
                     "Marking as failed (graceful degradation).",
                     task_id, exc, exc_info=True,
                 )
+                _err_tier = task_tiers.get(
+                    task_id, TaskComplexityTier.TIER_2,
+                )
                 generation_results[task_id] = GenerationResult(
                     success=False,
+                    generated_files=[],
                     error=str(exc),
+                    input_tokens=0,
+                    output_tokens=0,
+                    cost_usd=0.0,
+                    iterations=0,
                     model=drafter_spec,
+                    metadata={"_complexity_tier": _err_tier.value},
                 )
                 task_reports.append({
                     "task_id": task_id,
@@ -8992,6 +9015,11 @@ class Test{class_name}:
                     "title": task.title,
                     "status": "engine_error",
                     "error": str(exc),
+                    "iterations": 0,
+                    "review_passed": False,
+                    "cost_usd": 0.0,
+                    "files_generated": 0,
+                    "complexity_tier": _err_tier.value,
                 })
                 _log_task_boundary_complete(
                     task_id, status="error", phase="implement",
@@ -11471,6 +11499,8 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "task_id": task.task_id,
                     "title": task.title,
                     "domain": task.domain,
+                    "validators": validators,
+                    "validator_count": len(validators),
                     "validators_run": 0,
                     "all_passed": False,
                     "results": [],
@@ -12801,6 +12831,9 @@ PASS if score >= {pass_threshold} and no blocking issues.
             "error": str(exc),
             "passed": False,
             "score": None,
+            "verdict": "ERROR",
+            "cost": 0.0,
+            "tokens": {"input": 0, "output": 0},
         }
 
     # ------------------------------------------------------------------

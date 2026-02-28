@@ -245,6 +245,22 @@ phases:
           type: dict
           severity: advisory
           description: "Per-task design mode mapping (task_id -> 'create'|'update'|'skipped'). Derived from design_results by DesignPhaseHandler for propagation to IMPLEMENT."
+        - name: design_structural_delta
+          type: dict
+          severity: advisory
+          description: "Per-task structural delta (add/modify/preserve element lists) for element-level code generation guidance."
+        - name: design_referenced_elements
+          type: dict
+          severity: advisory
+          description: "Per-task manifest-validated element references for phantom-element cross-validation."
+        - name: manifest_file_checksums
+          type: dict
+          severity: advisory
+          description: "Per-file SHA-256 checksums at design time for manifest staleness detection between split runs."
+        - name: manifest_truncation_tier
+          type: str
+          severity: advisory
+          description: "Per-file manifest truncation tier used during DESIGN for accounting of potentially missing structural context."
 
   implement:
     description: "Test construction + code development"
