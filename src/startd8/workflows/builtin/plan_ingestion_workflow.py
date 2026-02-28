@@ -494,7 +494,7 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
             ParsedFeature(
                 feature_id=fid,
                 name=name,
-                description=block.strip().splitlines()[0].strip() if block.strip() else name,
+                description=block.strip().split("\n\n")[0].strip() if block.strip() else name,
                 target_files=files,
                 dependencies=deps,
                 estimated_loc=120,
@@ -703,7 +703,7 @@ def _heuristic_assess_complexity(
                 )
 
     return ComplexityScore(
-        feature_count=feature_count_score,
+        feature_count=feature_count_score,  # normalized 0-100
         cross_file_deps=min(100, max(0, cross_file_deps * 10)),
         api_surface=api_surface,
         test_complexity=test_complexity,
@@ -1248,7 +1248,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     name="llm_read_timeout_seconds",
                     type="number",
                     required=False,
-                    default=20,
+                    default=300,
                     description="LLM HTTP read timeout in seconds",
                 ),
                 WorkflowInput(
@@ -3687,8 +3687,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                     state.to_dict(),
                     indent=2,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Failed to save ingestion state: %s", exc)
 
         def _fail(error_msg: str) -> WorkflowResult:
             """Record failure in state and return error result."""
