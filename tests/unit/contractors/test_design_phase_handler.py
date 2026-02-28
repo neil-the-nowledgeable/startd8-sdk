@@ -33,19 +33,36 @@ from startd8.contractors.context_seed_handlers import (
 # Fixtures
 # ============================================================================
 
-# V2 design document with all required section headers.
+# V2 design document with all required section headers and content.
 _V2_DESIGN_TEXT = (
-    "## What to Build\nImplement feature\n\n"
-    "## Files\nsrc/feature.py\n\n"
-    "## API Surface\ndef do_thing() -> bool\n\n"
-    "## Constraints\nUse type hints\n"
+    "## What to Build\nImplement feature X.\n"
+    "This module handles user authentication.\n\n"
+    "## Files\nsrc/feature.py\n"
+    "src/feature_test.py\n\n"
+    "## API Surface\ndef do_thing() -> bool\n"
+    "def helper(x: int) -> str\n\n"
+    "## Constraints\nUse type hints.\n"
+    "Follow PEP-8 conventions.\n"
 )
 
 # V2 design document missing the Constraints section.
 _V2_DESIGN_MISSING_SECTION = (
-    "## What to Build\nImplement feature\n\n"
-    "## Files\nsrc/feature.py\n\n"
+    "## What to Build\nImplement feature X.\n"
+    "This module handles user authentication.\n\n"
+    "## Files\nsrc/feature.py\n"
+    "src/feature_test.py\n\n"
     "## API Surface\ndef do_thing() -> bool\n"
+    "def helper(x: int) -> str\n"
+)
+
+# V2 design document with headers present but empty sections.
+_V2_DESIGN_EMPTY_SECTIONS = (
+    "## What to Build\nImplement feature X.\n"
+    "This module handles user authentication.\n\n"
+    "## Files\n\n"
+    "## API Surface\ndef do_thing() -> bool\n"
+    "def helper(x: int) -> str\n\n"
+    "## Constraints\n"
 )
 
 
@@ -382,6 +399,19 @@ class TestDesignPhaseHandlerRealMode:
         result_ok = DesignPhaseHandler._validate_v2_structure(_V2_DESIGN_TEXT)
         assert result_ok["passed"] is True
         assert result_ok["missing_sections"] == []
+        assert result_ok["empty_sections"] == []
+
+    def test_v2_structure_validation_empty_sections(self):
+        """Sections with headers but no meaningful content are flagged."""
+        result = DesignPhaseHandler._validate_v2_structure(_V2_DESIGN_EMPTY_SECTIONS)
+        assert result["passed"] is False
+        assert result["missing_sections"] == []
+        # Files has 0 content lines, Constraints has 0 content lines
+        assert "## Files" in result["empty_sections"]
+        assert "## Constraints" in result["empty_sections"]
+        # What to Build and API Surface have 2+ content lines
+        assert "## What to Build" not in result["empty_sections"]
+        assert "## API Surface" not in result["empty_sections"]
 
 
 # ============================================================================

@@ -2684,6 +2684,19 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                 else structure_feedback
             )
 
+        if structure_validation.get("empty_sections"):
+            empty_feedback = (
+                "Design document has sections with insufficient content "
+                "(each section needs at least 2 non-empty lines): "
+                + ", ".join(structure_validation["empty_sections"])
+            )
+            prior_feedback = str(entry.get("next_iteration_feedback", "") or "").strip()
+            entry["next_iteration_feedback"] = (
+                f"{prior_feedback}\n{empty_feedback}".strip()
+                if prior_feedback
+                else empty_feedback
+            )
+
         if dry_run:
             entry["completeness_gate_decision"] = "dry_run_report_only"
             return
@@ -2693,21 +2706,30 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         completeness_failed = not completeness.get("passed", True)
 
         if structure_failed:
+            _missing = structure_validation.get("missing_sections", [])
+            _empty = structure_validation.get("empty_sections", [])
+            _detail_parts: list[str] = []
+            if _missing:
+                _detail_parts.append(f"missing sections: {', '.join(_missing)}")
+            if _empty:
+                _detail_parts.append(f"empty sections: {', '.join(_empty)}")
+            _detail = "; ".join(_detail_parts) if _detail_parts else "unknown"
+
             if quality_policy_mode == "block":
                 entry["quality_failure_reason"] = "STRUCTURE_VALIDATION_FAILED"
                 if entry.get("status") in ("designed", "refined", "adopted"):
                     entry["status"] = "design_failed"
                 entry["error"] = (
                     f"V2 structure validation failed for {task.task_id}: "
-                    f"missing sections: {', '.join(structure_validation['missing_sections'])}"
+                    f"{_detail}"
                 )
                 entry["completeness_gate_decision"] = "not_evaluated_due_to_structure_failure"
                 return
             logger.warning(
-                "DESIGN: task %s structure validation failed (missing: %s) — "
+                "DESIGN: task %s structure validation failed (%s) — "
                 "continuing per %s policy",
                 task.task_id,
-                ", ".join(structure_validation["missing_sections"]),
+                _detail,
                 quality_policy_mode,
             )
 
@@ -2766,11 +2788,38 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         return None
 
     @staticmethod
+    @staticmethod
+    def _section_content_lines(raw_text: str, header: str) -> int:
+        """Count non-empty content lines between *header* and the next ``##`` header.
+
+        Returns the number of non-blank lines that follow ``header`` before
+        the next ``## …`` header (or end-of-text).  Used to detect
+        placeholder-only sections that have a header but no real content.
+        """
+        pattern = rf'^{re.escape(header)}\s*$'
+        match = re.search(pattern, raw_text, re.MULTILINE)
+        if not match:
+            return 0
+        start = match.end()
+        # Find the next ## header (same or higher level)
+        next_header = re.search(r'^## ', raw_text[start:], re.MULTILINE)
+        if next_header:
+            section_body = raw_text[start:start + next_header.start()]
+        else:
+            section_body = raw_text[start:]
+        return sum(1 for line in section_body.splitlines() if line.strip())
+
+    _MIN_SECTION_CONTENT_LINES = 2
+
+    @staticmethod
     def _validate_v2_structure(raw_text: str) -> dict[str, Any]:
-        """Check V2 design document has all required section headers.
+        """Check V2 design document has all required section headers and content.
 
         REQ-DSR-003: Zero-LLM-cost structural validation replacing the
         dual-review gate signal.  Uses DesignSectionV2 enum sections.
+
+        Checks both header *presence* and that each section has at least
+        ``_MIN_SECTION_CONTENT_LINES`` non-empty lines of content.
         """
         from startd8.contractors.artisan_phases.design_documentation import DesignSectionV2
         required = [f"## {s.value}" for s in DesignSectionV2]
@@ -2778,7 +2827,23 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             h for h in required
             if not re.search(rf'^{re.escape(h)}\s*$', raw_text, re.MULTILINE)
         ]
-        return {"passed": len(missing) == 0, "missing_sections": missing}
+
+        # Check content depth for present sections
+        empty_sections: list[str] = []
+        min_lines = DesignPhaseHandler._MIN_SECTION_CONTENT_LINES
+        for h in required:
+            if h in missing:
+                continue  # already flagged as missing
+            content_lines = DesignPhaseHandler._section_content_lines(raw_text, h)
+            if content_lines < min_lines:
+                empty_sections.append(h)
+
+        passed = len(missing) == 0 and len(empty_sections) == 0
+        return {
+            "passed": passed,
+            "missing_sections": missing,
+            "empty_sections": empty_sections,
+        }
 
     # ------------------------------------------------------------------
     # Public execute
