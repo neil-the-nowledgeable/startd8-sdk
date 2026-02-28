@@ -1839,7 +1839,7 @@ class TestConstructionPhase:
         self, design: DesignDocument
     ) -> List[StubModule]:
         """Build stub modules from the parsed design."""
-        logger.info("Step 5: Building stub modules")
+        logger.info("Building stub modules from parsed design")
         stubs_by_module: Dict[str, Dict[str, list]] = {}
         for cls_spec in design.classes:
             stubs_by_module.setdefault(
@@ -1865,7 +1865,7 @@ class TestConstructionPhase:
         result: PhaseResult,
     ) -> bool:
         """Write modules to disk.  Returns False on failure."""
-        logger.info("Step 6: Writing modules to disk")
+        logger.info("Writing test and stub modules to disk")
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             write_modules_to_disk(
@@ -1890,7 +1890,7 @@ class TestConstructionPhase:
             result.status = PhaseStatus.SUCCESS
             return
 
-        logger.info("Step 7: Validating pytest collection")
+        logger.info("Validating pytest collection")
         test_dir = self.output_dir / "tests"
         stub_dir = self.output_dir / "src"
         collection = validate_pytest_collection(test_dir, stub_dir)
@@ -1937,7 +1937,7 @@ class TestConstructionPhase:
         LLM modules bypass ``render_test_module`` because the test_body
         is already complete Python source.
         """
-        logger.info("Step 6: Writing LLM-generated modules to disk")
+        logger.info("Writing LLM-generated test and stub modules to disk")
         try:
             self.output_dir.mkdir(parents=True, exist_ok=True)
 

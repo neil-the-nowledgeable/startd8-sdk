@@ -57,9 +57,22 @@ from startd8.contractors.handoff import (  # noqa: E402
     write_design_handoff,
 )
 
+# See also: src/startd8/contractors/postmortem.py for postmortem timeout constants
+# (_POSTMORTEM_THREAD_TIMEOUT, _POSTMORTEM_LLM_THREAD_TIMEOUT)
 _MIN_PHASE_TIMEOUT_SECONDS = 2400.0
 _MIN_IMPLEMENT_TIMEOUT_SECONDS = 2400.0
 _DEFAULT_TEST_TIMEOUT_SECONDS = 300
+
+# Mapping from WorkflowStatus value to single-char summary icon.
+_STATUS_ICONS: dict[str, str] = {
+    "completed": "+",
+    "dry_run": "~",
+    "skipped": "-",
+    "failed": "X",
+    "timed_out": "!",
+}
+# Icon used for quality-degraded phases (completed but with test/review failures)
+_QUALITY_WARNING_ICON = "!"
 
 
 def _handoff_extras_from_seed(seed_path: Path) -> dict[str, Any]:
@@ -147,26 +160,20 @@ def print_phase_results(result: WorkflowResult) -> None:
     print("=" * 70)
 
     for pr in result.phase_results:
-        icon = {
-            "completed": "+",
-            "dry_run": "~",
-            "skipped": "-",
-            "failed": "X",
-            "timed_out": "!",
-        }.get(pr.status.value, "?")
+        icon = _STATUS_ICONS.get(pr.status.value, "?")
 
         # Override icon for quality failures (completed but tests/review failed)
-        if icon == "+" and pr.output and isinstance(pr.output, dict):
+        if icon == _STATUS_ICONS["completed"] and pr.output and isinstance(pr.output, dict):
             if pr.phase == WorkflowPhase.TEST and pr.output.get("total_failed", 0) > 0:
-                icon = "!"
+                icon = _QUALITY_WARNING_ICON
             elif pr.phase == WorkflowPhase.REVIEW and pr.output.get("total_failed", 0) > 0:
-                icon = "!"
+                icon = _QUALITY_WARNING_ICON
             elif pr.phase == WorkflowPhase.INTEGRATE and any(
                 isinstance(ir, dict) and ir.get("_missing_files")
                 for ir in pr.output.values()
                 if isinstance(ir, dict)
             ):
-                icon = "!"
+                icon = _QUALITY_WARNING_ICON
 
         print(f"\n  [{icon}] {pr.phase.value:10s}  status={pr.status.value}  "
               f"cost=${pr.cost:.4f}  duration={pr.duration_seconds:.2f}s")

@@ -146,8 +146,7 @@ phases:
 
   design:
     description: "Design documentation generation"
-    request_schema: "DesignPhaseOutput"
-    response_schema: "DesignPhaseOutput"
+    # Schema: DesignPhaseOutput (context_schema.py)
     entry:
       required:
         - name: tasks
@@ -245,8 +244,7 @@ phases:
 
   implement:
     description: "Test construction + code development"
-    request_schema: "ImplementPhaseOutput"
-    response_schema: "ImplementPhaseOutput"
+    # Schema: ImplementPhaseOutput (context_schema.py)
     entry:
       required:
         - name: tasks
@@ -384,8 +382,7 @@ phases:
 
   test:
     description: "Final testing and validation"
-    request_schema: "ValidationPhaseOutput"
-    response_schema: "ValidationPhaseOutput"
+    # Schema: ValidationPhaseOutput (context_schema.py)
     entry:
       required:
         - name: tasks
@@ -425,8 +422,7 @@ phases:
 
   review:
     description: "Final assembly and validation"
-    request_schema: "ReviewPhaseOutput"
-    response_schema: "ReviewPhaseOutput"
+    # Schema: ReviewPhaseOutput (context_schema.py)
     entry:
       required:
         - name: generation_results

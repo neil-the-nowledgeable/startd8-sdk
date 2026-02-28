@@ -32,6 +32,7 @@ import json
 import re
 import threading
 import uuid
+from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -56,12 +57,24 @@ logger = get_logger(__name__)
 _PASS_THRESHOLD = 0.8
 _PARTIAL_THRESHOLD = 0.4
 _MAX_TASK_OUTPUT_BYTES = 50 * 1024  # 50 KB truncation ceiling for scoring
+# See also: scripts/run_artisan_workflow.py for phase/test timeout constants
+# (_MIN_PHASE_TIMEOUT_SECONDS, _MIN_IMPLEMENT_TIMEOUT_SECONDS, _DEFAULT_TEST_TIMEOUT_SECONDS)
 _POSTMORTEM_THREAD_TIMEOUT = 300.0  # rules-only
 _POSTMORTEM_LLM_THREAD_TIMEOUT = 600.0  # with LLM judge
 
-_VERDICT_PASS = "PASS"
-_VERDICT_PARTIAL = "PARTIAL"
-_VERDICT_FAIL = "FAIL"
+
+class VerdictLevel(str, Enum):
+    """Verdict classification for post-mortem evaluation results."""
+
+    PASS = "PASS"
+    PARTIAL = "PARTIAL"
+    FAIL = "FAIL"
+
+
+# Backward-compatible aliases for external consumers
+_VERDICT_PASS = VerdictLevel.PASS
+_VERDICT_PARTIAL = VerdictLevel.PARTIAL
+_VERDICT_FAIL = VerdictLevel.FAIL
 _CURRENCY_SYMBOL = "$"
 
 
@@ -87,7 +100,7 @@ class TaskPostMortem:
     anti_pattern_findings: List[Dict[str, Any]] = dataclasses.field(
         default_factory=list
     )
-    verdict: str = _VERDICT_FAIL
+    verdict: str = VerdictLevel.FAIL
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -103,7 +116,7 @@ class PostMortemReport:
     method: str  # "rules" or "hybrid"
     tasks: List[TaskPostMortem] = dataclasses.field(default_factory=list)
     aggregate_score: float = 0.0
-    aggregate_verdict: str = _VERDICT_FAIL
+    aggregate_verdict: str = VerdictLevel.FAIL
     total_tasks: int = 0
     tasks_evaluated: int = 0
     lessons: List[Dict[str, Any]] = dataclasses.field(default_factory=list)
@@ -146,7 +159,7 @@ class WalkthroughTaskPostMortem:
     requirement_coverage_score: float = 0.0
     constraint_coverage_score: float = 0.0
     prompt_quality_score: float = 0.0
-    verdict: str = _VERDICT_FAIL
+    verdict: str = VerdictLevel.FAIL
 
     def to_dict(self) -> Dict[str, Any]:
         return dataclasses.asdict(self)
@@ -163,7 +176,7 @@ class WalkthroughPostMortemReport:
     total_tasks: int = 0
     tasks_evaluated: int = 0
     aggregate_score: float = 0.0
-    aggregate_verdict: str = _VERDICT_FAIL
+    aggregate_verdict: str = VerdictLevel.FAIL
     tasks: List[WalkthroughTaskPostMortem] = dataclasses.field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -190,10 +203,10 @@ class WalkthroughPostMortemReport:
 
 def _compute_verdict(score: float) -> str:
     if score >= _PASS_THRESHOLD:
-        return _VERDICT_PASS
+        return VerdictLevel.PASS
     if score >= _PARTIAL_THRESHOLD:
-        return _VERDICT_PARTIAL
-    return _VERDICT_FAIL
+        return VerdictLevel.PARTIAL
+    return VerdictLevel.FAIL
 
 
 def _truncate_for_scoring(text: str) -> str:
@@ -372,12 +385,12 @@ class PostMortemEvaluator:
                         title=task_dict.get("title", ""),
                         requirement_score=0.0,
                         file_coverage_score=0.0,
-                        verdict=_VERDICT_FAIL,
+                        verdict=VerdictLevel.FAIL,
                     )
                 )
 
         # Aggregate
-        evaluated = [t for t in task_postmortems if t.verdict != _VERDICT_FAIL or
+        evaluated = [t for t in task_postmortems if t.verdict != VerdictLevel.FAIL or
                      t.requirement_score > 0.0 or t.file_coverage_score > 0.0]
         if task_postmortems:
             avg_req = sum(t.requirement_score for t in task_postmortems) / len(
@@ -996,9 +1009,11 @@ class WalkthroughPromptEvaluator:
         prompt_texts: List[Tuple[str, str]] = []
         implement_dir = walkthrough_root / "implement" / task_id
         design_dir = walkthrough_root / "design" / task_id
+        prime_dir = walkthrough_root / "prime" / task_id
 
         prompt_texts.extend(self._read_prompt_files(implement_dir))
         prompt_texts.extend(self._read_prompt_files(design_dir))
+        prompt_texts.extend(self._read_prompt_files(prime_dir))
 
         combined = "\n\n".join(content for _, content in prompt_texts).lower()
         prompt_files = [rel for rel, _ in prompt_texts]

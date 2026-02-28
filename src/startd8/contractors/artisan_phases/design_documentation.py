@@ -46,7 +46,7 @@ except ImportError:
 from startd8.utils.token_usage import token_usage_cost, token_usage_input, token_usage_output
 
 
-def _get_design_tracer():
+def _get_design_tracer() -> Any:
     """Lazy tracer for design phase spans."""
     if _HAS_OTEL:
         return _trace.get_tracer("startd8.artisan.design")

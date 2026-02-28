@@ -13,6 +13,7 @@ from startd8.contractors.postmortem import (
     PostMortemEvaluator,
     PostMortemReport,
     TaskPostMortem,
+    VerdictLevel,
     _PASS_THRESHOLD,
     _PARTIAL_THRESHOLD,
     _VERDICT_FAIL,

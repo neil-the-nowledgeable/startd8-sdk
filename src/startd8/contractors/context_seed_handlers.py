@@ -4651,7 +4651,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
 
             # Retry loop for transient API errors (e.g. APIConnectionError, 529)
             _design_retry_config = RetryConfig(
-                max_attempts=1,  # not used directly — we loop manually
+                max_attempts=1,  # Placeholder for API compat — retry orchestration is handled by the outer _max_attempts loop with phase-aware backoff
                 base_delay=5.0,
                 max_delay=60.0,
                 retryable_exceptions=(ConnectionError, TimeoutError, OSError),
@@ -12404,7 +12404,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             Review result dict with score, verdict, cost.
         """
         _review_retry_config = RetryConfig(
-            max_attempts=1,  # not used directly — we loop manually
+            max_attempts=1,  # Placeholder for API compat — retry orchestration is handled by the outer _max_attempts loop with phase-aware backoff
             base_delay=5.0,
             max_delay=60.0,
             retryable_exceptions=(ConnectionError, TimeoutError, OSError),

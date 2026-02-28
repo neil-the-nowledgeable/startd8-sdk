@@ -55,7 +55,21 @@ class ContractConfidence(str, Enum):
 
 
 class InterfaceContract(BaseModel):
-    """A single design-time constraint that code generation must honor."""
+    """A single design-time constraint that code generation must honor.
+
+    Captures a named, categorized constraint extracted from design documents.
+    Each contract carries a ``binding_text`` string that is injected verbatim
+    into the IMPLEMENT phase prompt so the LLM treats it as an invariant.
+
+    Attributes:
+        contract_id: Unique identifier for this contract.
+        category: Classification (function name, class name, endpoint, etc.).
+        confidence: How strongly the constraint is supported by the design.
+        description: Human-readable description of the constraint.
+        binding_text: Compact directive string injected into LLM prompts.
+        applicable_task_ids: Task IDs this contract applies to (empty = all).
+        source_reference: Optional reference to the originating design section.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -86,7 +100,24 @@ class InterfaceContract(BaseModel):
 
 
 class ForwardElementSpec(BaseModel):
-    """Forward-looking element specification that bridges to code_manifest.Element."""
+    """Forward-looking element specification that bridges to code_manifest.Element.
+
+    Represents a single code element (function, class, method, property) that
+    the design phase expects to exist after code generation.  Validated via
+    ``_validate_kind_fields`` to enforce invariants (e.g., callables must have
+    a signature, only classes may have bases).
+
+    Attributes:
+        kind: Element kind (function, class, method, etc.).
+        name: Element name as it should appear in source.
+        signature: Required for callable kinds; ``None`` for classes/constants.
+        bases: Base classes (only valid for ``CLASS`` kind).
+        visibility: Public or private visibility.
+        decorators: Expected decorator names.
+        docstring_hint: Suggested docstring content for the element.
+        parent_class: Owning class name for methods and properties.
+        source_contract_id: ID of the InterfaceContract that produced this spec.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -144,7 +175,17 @@ class ForwardElementSpec(BaseModel):
 
 
 class ForwardImportSpec(BaseModel):
-    """Forward-looking import specification."""
+    """Forward-looking import specification.
+
+    Models a single import statement expected in generated code, covering
+    both ``import module`` and ``from module import name`` forms.
+
+    Attributes:
+        kind: Import style -- ``"import"`` or ``"from"``.
+        module: Module path to import from.
+        names: Specific names imported (for ``from`` imports).
+        alias: Optional alias (``as`` clause).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -155,7 +196,16 @@ class ForwardImportSpec(BaseModel):
 
 
 class ForwardDependencies(BaseModel):
-    """Simplified forward-looking dependency listing."""
+    """Simplified forward-looking dependency listing.
+
+    Tracks the external (PyPI) and stdlib packages a generated file is
+    expected to depend on, enabling pre-generation validation of the
+    project's dependency set.
+
+    Attributes:
+        external: Third-party package names (e.g., ``["pydantic", "httpx"]``).
+        stdlib: Standard library module names (e.g., ``["json", "pathlib"]``).
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -164,7 +214,18 @@ class ForwardDependencies(BaseModel):
 
 
 class ForwardFileSpec(BaseModel):
-    """Forward-looking file specification with elements, imports, and dependencies."""
+    """Forward-looking file specification with elements, imports, and dependencies.
+
+    Groups the expected code elements, import statements, and package
+    dependencies for a single source file.  Used by the IMPLEMENT phase
+    to validate that generated code matches the design contract.
+
+    Attributes:
+        file: Relative file path within the project.
+        elements: Expected code elements (classes, functions, methods).
+        imports: Expected import statements.
+        dependencies: External and stdlib package dependencies.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -175,7 +236,22 @@ class ForwardFileSpec(BaseModel):
 
 
 class ForwardManifest(BaseModel):
-    """Top-level forward-looking code manifest — mutable during pipeline stages."""
+    """Top-level forward-looking code manifest -- mutable during pipeline stages.
+
+    Aggregates all interface contracts and per-file element specifications
+    produced by the DESIGN phase.  The IMPLEMENT phase consumes this manifest
+    as binding constraints, and ``stages_completed`` tracks which pipeline
+    stages have enriched it.
+
+    Attributes:
+        schema_version: Manifest schema version (currently ``"1.0.0"``).
+        pipeline_run_id: ID of the pipeline run that produced the manifest.
+        generated_at: ISO-8601 timestamp of manifest creation.
+        source_checksum: Checksum of the source design document.
+        contracts: Interface contracts extracted from the design.
+        file_specs: Per-file element and import specifications.
+        stages_completed: Pipeline stages that have enriched this manifest.
+    """
 
     schema_version: str = "1.0.0"
     pipeline_run_id: Optional[str] = None
@@ -220,7 +296,19 @@ class ForwardManifest(BaseModel):
 
 @dataclass(frozen=True)
 class ContractViolation:
-    """A detected violation of an interface contract."""
+    """A detected violation of an interface contract.
+
+    Produced by post-generation validation when generated code does not
+    satisfy a binding constraint from the manifest.
+
+    Attributes:
+        contract_id: ID of the violated InterfaceContract.
+        violation_type: Category of the violation (e.g., missing element).
+        expected: What the contract required.
+        actual: What was found in generated code (``None`` if absent).
+        file_path: File where the violation was detected.
+        severity: Severity level (default ``"error"``).
+    """
 
     contract_id: str
     violation_type: str

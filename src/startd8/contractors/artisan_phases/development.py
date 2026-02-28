@@ -98,6 +98,45 @@ _STALE_CONTEXT_MARKERS: Dict[str, List[str]] = {
     "service_metadata": ["HEALTHCHECK type MUST match transport_protocol"],
 }
 
+# ---------------------------------------------------------------------------
+# L-3: Module-level constants (extracted from scattered inline literals)
+# ---------------------------------------------------------------------------
+
+#: Default ``max_tokens`` override for LLM code-generation agents.
+_DEFAULT_MAX_TOKENS: int = 64_000
+
+#: Aggregate byte budget for existing-file context in prompts (PC-B3 pattern).
+_EXISTING_FILES_BUDGET_BYTES: int = 60_000
+
+#: Scope-mismatch ratio threshold — output below this fraction of design lines
+#: triggers a warning for possible partial implementation.
+_SCOPE_MISMATCH_RATIO_THRESHOLD: float = 0.25
+
+#: Minimum output lines below which scope-mismatch detection fires (combined
+#: with ``_SCOPE_MISMATCH_RATIO_THRESHOLD``).
+_SCOPE_MISMATCH_MIN_OUTPUT_LINES: int = 100
+
+#: Maximum characters for the project identity prompt section.
+_PROJECT_IDENTITY_MAX_CHARS: int = 500
+
+#: Character budget for architectural context in supplementary sections (TM-3).
+_ARCH_CTX_BUDGET: int = 4_096
+
+#: Character budget for plan_context in supplementary sections.
+_PLAN_CTX_BUDGET: int = 4_000
+
+#: Character budget for requirements text in supplementary sections (TM-3).
+_REQ_TEXT_BUDGET: int = 8_000
+
+#: Character budget for prompt constraints in supplementary sections (TM-3).
+_CONSTRAINTS_BUDGET: int = 4_000
+
+#: Maximum parameter_sources entries shown in prompts before truncation.
+_MAX_PARAMETER_SOURCES: int = 20
+
+#: Default timeout in seconds for individual test commands.
+_DEFAULT_TEST_TIMEOUT_SECONDS: int = 300
+
 
 def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]:
     """Load and format a template from ``implement.yaml``.
@@ -116,7 +155,7 @@ def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]
     except (FileNotFoundError, KeyError) as exc:
         fallback = _INLINE_FALLBACK_TEMPLATES.get(template_name)
         if fallback is not None:
-            _log.warning(
+            _log.info(
                 "YAML template implement/%s unavailable — using inline fallback "
                 "(original error: %s: %s)",
                 template_name,
@@ -126,7 +165,7 @@ def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]
             try:
                 return fallback.format(**kwargs)
             except KeyError as fmt_exc:
-                _log.warning(
+                _log.info(
                     "Inline fallback for implement/%s failed to format "
                     "(original load error: %s: %s, format error: %s)",
                     template_name,
@@ -135,7 +174,7 @@ def _format_implement_prompt(template_name: str, **kwargs: Any) -> Optional[str]
                     fmt_exc,
                 )
                 return fallback  # Return unformatted rather than None
-        _log.warning(
+        _log.info(
             "YAML template implement/%s unavailable, no inline fallback "
             "(error: %s: %s)",
             template_name,
@@ -715,7 +754,7 @@ class LLMChunkExecutor(ChunkExecutor):
         drafter_agent: str = DRAFT_MODEL_CLAUDE_HAIKU.agent_spec,
         lead_agent: Optional[str] = None,
         output_dir: Optional[Path] = None,
-        max_tokens: int = 64000,
+        max_tokens: int = _DEFAULT_MAX_TOKENS,
     ):
         """
         Initialize the LLM chunk executor.
@@ -730,8 +769,8 @@ class LLMChunkExecutor(ChunkExecutor):
             output_dir: Directory for writing generated files.
                 Defaults to ``Path("generated")``.
             max_tokens: ``max_tokens`` override passed to the provider
-                when creating agents.  Defaults to 64 000 (suitable for
-                large code generation).
+                when creating agents.  Defaults to ``_DEFAULT_MAX_TOKENS``
+                (suitable for large code generation).
         """
         self._drafter_spec = drafter_agent
         self._lead_spec = lead_agent
@@ -1416,8 +1455,8 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if text is None:
             return []
 
-        if len(text) > 500:
-            text = text[:500] + "\n..."
+        if len(text) > _PROJECT_IDENTITY_MAX_CHARS:
+            text = text[:_PROJECT_IDENTITY_MAX_CHARS] + "\n..."
         return [text, "\n---\n"]
 
     # -- helper: target files (B-1/B-7 fix) --------------------------------
@@ -1859,8 +1898,6 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if not existing:
             return []
 
-        _BUDGET_BYTES = 60_000
-
         # Priority ordering: edit files first, then by size descending
         per_file_modes: Dict[str, Dict] = {}
         if edit_mode and edit_mode.get("per_file"):
@@ -1885,16 +1922,16 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             ef_size = len(ef_content.encode("utf-8", errors="replace"))
             ef_lines = len(ef_content.splitlines())
 
-            if total_bytes + ef_size <= _BUDGET_BYTES:
+            if total_bytes + ef_size <= _EXISTING_FILES_BUDGET_BYTES:
                 # Full inclusion
                 _nonce = uuid.uuid4().hex[:8]
                 file_parts.append(f"\n### `{ef_path}` ({ef_lines} lines)")
                 file_parts.append(f"```source-{_nonce}\n{ef_content}\n```")
                 total_bytes += ef_size
                 included_count += 1
-            elif total_bytes < _BUDGET_BYTES:
+            elif total_bytes < _EXISTING_FILES_BUDGET_BYTES:
                 # Partial inclusion — truncate at budget boundary
-                remaining_budget = _BUDGET_BYTES - total_bytes
+                remaining_budget = _EXISTING_FILES_BUDGET_BYTES - total_bytes
                 lines = ef_content.splitlines()
                 included_lines: List[str] = []
                 running = 0
@@ -1913,7 +1950,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 _nonce = uuid.uuid4().hex[:8]
                 file_parts.append(f"\n### `{ef_path}` ({ef_lines} lines, truncated)")
                 file_parts.append(f"```source-{_nonce}\n{truncated_content}\n```")
-                total_bytes = _BUDGET_BYTES
+                total_bytes = _EXISTING_FILES_BUDGET_BYTES
                 included_count += 1
             else:
                 omitted.append((ef_path, ef_lines))
@@ -2237,8 +2274,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
             parts.append(completeness_warning)
 
         # PCA-300: project architecture section (AR-411: suppress stale template defaults)
-        # TM-3: capped at 4,096 chars to match prime contractor budget.
-        _ARCH_CTX_BUDGET = 4_096
+        # TM-3: capped at _ARCH_CTX_BUDGET chars to match prime contractor budget.
         arch_ctx = chunk.metadata.get("architectural_context")
         if arch_ctx and isinstance(arch_ctx, dict):
             objectives = arch_ctx.get("objectives")
@@ -2295,11 +2331,10 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         plan_context = chunk.metadata.get("plan_context")
         if plan_context and isinstance(plan_context, str):
             parts.append("\n## Plan Context")
-            parts.append(plan_context[:4000])
+            parts.append(plan_context[:_PLAN_CTX_BUDGET])
 
         # PCA-404: requirements text section (IMP-R1: authoritative framing)
-        # TM-3: capped at 8,000 chars to prevent prompt bloat.
-        _REQ_TEXT_BUDGET = 8_000
+        # TM-3: capped at _REQ_TEXT_BUDGET chars to prevent prompt bloat.
         req_text = chunk.metadata.get("requirements_text")
         if req_text and isinstance(req_text, str):
             parts.append(
@@ -2320,8 +2355,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                 parts.append(f"- {_tid}: {_files}")
 
         # IMP-5: grouped prompt constraints
-        # TM-3: capped at 4,000 chars to prevent prompt bloat.
-        _CONSTRAINTS_BUDGET = 4_000
+        # TM-3: capped at _CONSTRAINTS_BUDGET chars to prevent prompt bloat.
         constraints = chunk.metadata.get("prompt_constraints", [])
         if constraints:
             from startd8.contractors.artisan_phases.prompts import format_constraints
@@ -2345,12 +2379,13 @@ class LeadContractorChunkExecutor(ChunkExecutor):
         if param_sources and isinstance(param_sources, dict):
             parts.append("\n## Parameter Sources (use these names exactly)")
             items = list(param_sources.items())
-            if len(items) > 20:
+            if len(items) > _MAX_PARAMETER_SOURCES:
                 _log.warning(
-                    "parameter_sources truncated from %d to 20 entries",
+                    "parameter_sources truncated from %d to %d entries",
                     len(items),
+                    _MAX_PARAMETER_SOURCES,
                 )
-            for name, source in items[:20]:
+            for name, source in items[:_MAX_PARAMETER_SOURCES]:
                 if isinstance(source, dict):
                     origin = source.get("origin", source.get("source", ""))
                     parts.append(f"- `{name}`: {origin}")
@@ -2498,7 +2533,7 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                         if design_lines > 0
                         else 1.0
                     )
-                    if scope_ratio < 0.25 and total_output_lines < 100:
+                    if scope_ratio < _SCOPE_MISMATCH_RATIO_THRESHOLD and total_output_lines < _SCOPE_MISMATCH_MIN_OUTPUT_LINES:
                         self.logger.warning(
                             "SCOPE MISMATCH: chunk %s output (%d lines) is %.0f%% "
                             "of design (%d lines) — possible partial implementation",
@@ -2662,7 +2697,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         self._artisan_drafter: Optional[Any] = None
         self._artisan_refiner: Optional[Any] = None
         self._artisan_tier3_drafter: Optional[Any] = None
-        self._artisan_max_tokens = max_tokens or 64000
+        self._artisan_max_tokens = max_tokens or _DEFAULT_MAX_TOKENS
         self.logger = get_logger(__name__)
 
     # ------------------------------------------------------------------
@@ -2769,12 +2804,13 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         if param_sources and isinstance(param_sources, dict):
             parts.append("\n## Parameter Sources (use these names exactly)")
             ps_items = list(param_sources.items())
-            if len(ps_items) > 20:
+            if len(ps_items) > _MAX_PARAMETER_SOURCES:
                 _log.warning(
-                    "parameter_sources truncated from %d to 20 entries",
+                    "parameter_sources truncated from %d to %d entries",
                     len(ps_items),
+                    _MAX_PARAMETER_SOURCES,
                 )
-            for name, source in ps_items[:20]:
+            for name, source in ps_items[:_MAX_PARAMETER_SOURCES]:
                 if isinstance(source, dict):
                     origin = source.get("origin", source.get("source", ""))
                     parts.append(f"- `{name}`: {origin}")
@@ -3979,7 +4015,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                     if design_lines > 0
                     else 1.0
                 )
-                if scope_ratio < 0.25 and total_output_lines < 100:
+                if scope_ratio < _SCOPE_MISMATCH_RATIO_THRESHOLD and total_output_lines < _SCOPE_MISMATCH_MIN_OUTPUT_LINES:
                     self.logger.warning(
                         "SCOPE MISMATCH: chunk %s output (%d lines) is %.0f%% "
                         "of design (%d lines) — possible partial implementation",
@@ -4020,7 +4056,7 @@ class DefaultTestRunner(TestRunner):
     the chunk is considered failed.
     """
 
-    def __init__(self, timeout: int = 300):
+    def __init__(self, timeout: int = _DEFAULT_TEST_TIMEOUT_SECONDS):
         """
         Initialize the default test runner.
 
