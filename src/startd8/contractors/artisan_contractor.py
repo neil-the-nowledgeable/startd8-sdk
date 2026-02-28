@@ -2128,6 +2128,11 @@ class ArtisanContractorWorkflow:
         if timeout is None:
             return handler.execute(phase, context, dry_run=self.config.dry_run)
 
+        # Wire cooperative cancellation: handlers that check
+        # context["_cancel_event"].is_set() can exit early on timeout.
+        cancel_event = threading.Event()
+        context["_cancel_event"] = cancel_event
+
         # OT-103/OT-104: Propagate OTel context + boundary result to worker thread
         parent_ctx = capture_context()
         from startd8.contractors.forensic_log import (
@@ -2151,8 +2156,16 @@ class ArtisanContractorWorkflow:
             try:
                 return future.result(timeout=timeout)
             except FuturesTimeoutError:
+                cancel_event.set()
                 future.cancel()
+                self._logger.warning(
+                    "Phase %s: cooperative cancellation signalled via "
+                    "_cancel_event after %.1fs timeout",
+                    phase.value, timeout,
+                )
                 raise
+            finally:
+                context.pop("_cancel_event", None)
 
     def _persist_checkpoint(
         self,
@@ -2197,6 +2210,24 @@ class ArtisanContractorWorkflow:
                     self._logger.debug(
                         "Checkpoint context key %r not serializable, skipping", key,
                     )
+
+            # Drift detection: warn about context keys that look
+            # checkpoint-worthy but are not in the whitelist.  Private
+            # keys (prefixed with _) are excluded — they are transient.
+            _IGNORE_PREFIXES = ("_", "current_feature")
+            _untracked = [
+                k for k in context
+                if k not in _CHECKPOINT_CONTEXT_KEYS
+                and not k.startswith(_IGNORE_PREFIXES)
+                and isinstance(context[k], (str, int, float, bool, list, dict))
+            ]
+            if _untracked:
+                self._logger.info(
+                    "Checkpoint drift: %d context key(s) not in "
+                    "_CHECKPOINT_CONTEXT_KEYS — may be lost on resume: %s",
+                    len(_untracked),
+                    _untracked[:10],
+                )
 
             # PCA-202: truncate plan_document_text to prevent checkpoint bloat.
             pdt = snapshot.get("plan_document_text")
@@ -3024,6 +3055,10 @@ class ArtisanContractorWorkflow:
                         "artifacts": {},
                         "partial": True,
                     }
+                    # Feed partial cost into the workflow cost tracker
+                    # so budget checks and finalize see the real spend.
+                    if _exc_partial_cost > 0:
+                        cost_tracker.add(_exc_partial_cost)
                     self._logger.exception(
                         "Feature %s: unexpected error in inner phase %s",
                         feature_id,
@@ -3031,7 +3066,8 @@ class ArtisanContractorWorkflow:
                     )
                     return False, WorkflowStatus.FAILED, inner_results
         finally:
-            # Avoid leaking feature-scoped context into subsequent global phases.
+            # Avoid leaking feature-scoped context into subsequent features.
+            # Orchestration keys:
             context.pop("current_feature_id", None)
             context.pop("current_feature_phase", None)
             context.pop("_retry_attempt", None)
@@ -3042,6 +3078,17 @@ class ArtisanContractorWorkflow:
             # feature starts fresh.
             context.pop("last_error", None)
             context.pop("test_output", None)
+            # Phase output keys that are feature-scoped — stale data from
+            # feature N must not leak into feature N+1's handlers.
+            for _feature_key in (
+                "implementation", "generation_results",
+                "integration_results", "test_results",
+                "review_results", "truncation_flags",
+                "design_results", "design_calibration",
+                "edit_mode_classifications",
+                "_prior_impl_summaries", "_downstream_map",
+            ):
+                context.pop(_feature_key, None)
 
         # All inner phases succeeded
         self._logger.info(
