@@ -1,10 +1,11 @@
 # Prime Workflow Full-Depth OTel Tracing — Requirements
 
-> **Version:** 1.0.0
-> **Status:** Partial baseline implemented (PC-OT-000 through PC-OT-003); Planned (PC-OT-1xx through PC-OT-7xx)
+> **Version:** 1.1.0
+> **Status:** Rebuilt for Prime workflow scope; Partial baseline implemented (PC-OT-000 through PC-OT-003); Planned (PC-OT-1xx through PC-OT-7xx)
 > **Date:** 2026-02-28
 > **Scope:** Full-depth OpenTelemetry span instrumentation for `PrimeContractorWorkflow` feature lifecycle (`run → process_feature → develop_feature → integrate_feature`) including generation, staleness, merge/checkpoint, state/manifest writes, and Prime→Lead trace correlation
 > **Extends:** `PRIME_CONTRACTOR_REQUIREMENTS.md` Layer 5 (REQ-PC-013, REQ-PC-014)
+> **Complements:** `PRIME_LOGGING_REQUIREMENTS.md` (logs) and `PLAN_INGESTION_OTEL_FULL_DEPTH_TRACING_REQUIREMENTS.md` (upstream ingestion tracing)
 > **Primary sources:** `src/startd8/contractors/prime_contractor.py`, `src/startd8/contractors/integration_engine.py`, `src/startd8/contractors/adapters/contextcore.py`, `src/startd8/contractors/adapters/standalone.py`
 
 ---
@@ -639,4 +640,3 @@ Add Prime-focused tracing tests (no external collector required):
 - `src/startd8/contractors/integration_engine.py`
 - `src/startd8/contractors/adapters/contextcore.py`
 - `src/startd8/contractors/adapters/standalone.py`
-

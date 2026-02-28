@@ -6,6 +6,12 @@ Compares prompt construction across both contractors — no LLM calls are made.
 Outputs a unified comparison report (JSON + Markdown) and a flat prompt directory
 for easy side-by-side browsing.
 
+v2 adds quality analysis features (all LLM-free):
+  --postmortem   Requirement/constraint coverage via WalkthroughPromptEvaluator
+  --overlap      Context field overlap matrix (which seed fields appear in prompts)
+  --diff         Unified diffs of corresponding artisan/prime prompts
+  --full-analysis  Enable all three
+
 Usage:
     # Basic — run both workflows, compare prompts:
     python3 scripts/run_super_walkthrough.py \\
@@ -18,6 +24,11 @@ Usage:
         --project-root /tmp/test-project \\
         --task-filter PI-001
 
+    # Full v2 analysis on a single task:
+    python3 scripts/run_super_walkthrough.py \\
+        --seed seed.json --project-root /tmp/proj \\
+        --full-analysis --task-filter PI-001
+
     # Skip one workflow for focused comparison:
     python3 scripts/run_super_walkthrough.py \\
         --seed seed.json --project-root /tmp/proj --skip-prime
@@ -26,8 +37,10 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import logging
+import re
 import shutil
 import sys
 from dataclasses import dataclass, field
@@ -156,6 +169,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable debug-level logging",
+    )
+
+    # v2 quality-analysis features
+    parser.add_argument(
+        "--postmortem", action="store_true",
+        help="Run walkthrough postmortem (requirement/constraint coverage)",
+    )
+    parser.add_argument(
+        "--overlap", action="store_true",
+        help="Analyze context field overlap in prompts",
+    )
+    parser.add_argument(
+        "--diff", action="store_true",
+        help="Generate unified diffs of corresponding prompts",
+    )
+    parser.add_argument(
+        "--full-analysis", action="store_true",
+        help="Enable all three v2 features (shorthand for --postmortem --overlap --diff)",
     )
     return parser
 
@@ -559,6 +590,289 @@ def _collect_and_copy_prompts(
 
 
 # ---------------------------------------------------------------------------
+# v2: Walkthrough postmortem
+# ---------------------------------------------------------------------------
+
+
+def _run_postmortem(
+    seed_tasks: List[Dict[str, Any]],
+    walkthrough_root: Optional[Path],
+    workflow_label: str,
+    output_dir: Path,
+) -> Optional[Dict[str, Any]]:
+    """Run WalkthroughPromptEvaluator for a single workflow.
+
+    Returns a dict mapping task_id → quality metrics, or None on failure.
+    """
+    if walkthrough_root is None:
+        return None
+    try:
+        from startd8.contractors.postmortem import WalkthroughPromptEvaluator
+    except ImportError:
+        logger.warning("Cannot import WalkthroughPromptEvaluator — skipping postmortem")
+        return None
+
+    try:
+        evaluator = WalkthroughPromptEvaluator()
+        report = evaluator.evaluate(
+            seed_tasks=seed_tasks,
+            walkthrough_root=str(walkthrough_root),
+            workflow_result={},
+            output_dir=str(output_dir / f"postmortem-{workflow_label}"),
+        )
+        result: Dict[str, Any] = {}
+        for task_pm in report.tasks:
+            verdict = task_pm.verdict
+            # VerdictLevel is a str enum — extract .value for clean display
+            if hasattr(verdict, "value"):
+                verdict = verdict.value
+            result[task_pm.task_id] = {
+                "score": task_pm.prompt_quality_score,
+                "verdict": verdict,
+                "req_coverage": task_pm.requirement_coverage_score,
+                "constraint_coverage": task_pm.constraint_coverage_score,
+            }
+        return result
+    except Exception as exc:
+        logger.warning("Postmortem failed for %s: %s", workflow_label, exc)
+        return None
+
+
+# ---------------------------------------------------------------------------
+# v2: Context field overlap analysis
+# ---------------------------------------------------------------------------
+
+# Fields to check for overlap with prompt text
+_OVERLAP_FIELDS = [
+    "architectural_context",
+    "design_calibration",
+    "service_metadata",
+    "onboarding",
+    "api_signatures",
+    "protocol",
+    "negative_scope",
+    "prompt_constraints",
+    "domain",
+]
+
+
+def _extract_terms(text: str) -> List[str]:
+    """Extract significant terms (words > 3 chars) from text."""
+    if not text:
+        return []
+    return [w for w in re.findall(r"[a-z0-9_]+", text.lower()) if len(w) > 3]
+
+
+def _field_present_in_text(terms: List[str], haystack: str) -> bool:
+    """Check if at least 40% of field terms appear in the prompt text."""
+    if not terms:
+        return False
+    present = sum(1 for t in terms if t in haystack)
+    return present / len(terms) >= 0.4
+
+
+def _read_prompt_text(wt_root: Path, task_id: str, workflow: str) -> str:
+    """Read and concatenate all prompt .md files for a task+workflow."""
+    texts: List[str] = []
+    if workflow == "artisan":
+        for phase in ("design", "implement"):
+            d = wt_root / phase / task_id
+            if d.is_dir():
+                for fp in sorted(d.glob("*.md")):
+                    try:
+                        texts.append(fp.read_text(encoding="utf-8", errors="replace"))
+                    except OSError:
+                        pass
+    else:  # prime
+        d = wt_root / task_id
+        if d.is_dir():
+            for fp in sorted(d.glob("*.md")):
+                try:
+                    texts.append(fp.read_text(encoding="utf-8", errors="replace"))
+                except OSError:
+                    pass
+    return "\n\n".join(texts).lower()
+
+
+def _analyze_context_overlap(
+    seed_data: Dict[str, Any],
+    task_ids: List[str],
+    artisan_wt_root: Optional[Path],
+    prime_wt_root: Optional[Path],
+) -> Dict[str, Dict[str, Dict[str, bool]]]:
+    """Analyze which seed context fields appear in each workflow's prompts.
+
+    Returns ``{task_id: {field_name: {artisan: bool, prime: bool}}}``.
+    """
+    # Build task lookup
+    task_map: Dict[str, Dict[str, Any]] = {}
+    for t in seed_data.get("tasks", []):
+        task_map[t.get("task_id", "")] = t
+
+    results: Dict[str, Dict[str, Dict[str, bool]]] = {}
+
+    for task_id in task_ids:
+        task = task_map.get(task_id, {})
+        enrichment = task.get("_enrichment", {}) or {}
+        config = task.get("config", {}) or {}
+        config_ctx = config.get("context", {}) or {}
+
+        # Read prompt text for each workflow
+        artisan_text = (
+            _read_prompt_text(artisan_wt_root, task_id, "artisan")
+            if artisan_wt_root
+            else ""
+        )
+        prime_text = (
+            _read_prompt_text(prime_wt_root, task_id, "prime")
+            if prime_wt_root
+            else ""
+        )
+
+        task_overlap: Dict[str, Dict[str, bool]] = {}
+
+        for field_name in _OVERLAP_FIELDS:
+            # Gather field value from multiple locations
+            raw = (
+                task.get(field_name)
+                or enrichment.get(field_name)
+                or config_ctx.get(field_name)
+                or ""
+            )
+            if isinstance(raw, list):
+                raw = " ".join(str(x) for x in raw)
+            raw = str(raw)
+
+            terms = _extract_terms(raw)
+            task_overlap[field_name] = {
+                "artisan": _field_present_in_text(terms, artisan_text) if artisan_text else False,
+                "prime": _field_present_in_text(terms, prime_text) if prime_text else False,
+            }
+
+        # Also check target file names
+        target_files = task.get("target_files", []) or config.get("target_files", []) or []
+        if isinstance(target_files, list):
+            file_terms = []
+            for tf in target_files:
+                name = str(tf).rsplit("/", 1)[-1] if "/" in str(tf) else str(tf)
+                file_terms.extend(_extract_terms(name))
+            task_overlap["target_files"] = {
+                "artisan": _field_present_in_text(file_terms, artisan_text) if artisan_text else False,
+                "prime": _field_present_in_text(file_terms, prime_text) if prime_text else False,
+            }
+
+        # Task description keywords
+        desc = task.get("task_description", "") or config.get("task_description", "") or ""
+        desc_terms = _extract_terms(str(desc))
+        task_overlap["task_description"] = {
+            "artisan": _field_present_in_text(desc_terms, artisan_text) if artisan_text else False,
+            "prime": _field_present_in_text(desc_terms, prime_text) if prime_text else False,
+        }
+
+        results[task_id] = task_overlap
+
+    return results
+
+
+# ---------------------------------------------------------------------------
+# v2: Diff rendering
+# ---------------------------------------------------------------------------
+
+# Mappings: (artisan_path, prime_path, pair_label)
+_DIFF_PAIRS = [
+    ("design/generate_system_prompt.md", "spec_system_prompt.md", "design_system"),
+    ("design/generate_user_prompt.md", "spec_user_prompt.md", "design_user"),
+    ("implement/t1_system_prompt.md", "draft_system_prompt.md", "codegen_system"),
+    ("implement/t1_user_prompt.md", "draft_user_prompt.md", "codegen_user"),
+    ("design/review_system_prompt.md", "review_system_prompt.md", "review_system"),
+    ("design/review_user_prompt.md", "review_user_prompt.md", "review_user"),
+]
+
+
+def _generate_prompt_diffs(
+    task_ids: List[str],
+    artisan_wt_root: Optional[Path],
+    prime_wt_root: Optional[Path],
+    output_dir: Path,
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    """Generate unified diffs between corresponding artisan/prime prompts.
+
+    Returns ``{task_id: {pair_label: {similarity, added, removed}}}``.
+    """
+    if not artisan_wt_root or not prime_wt_root:
+        return {}
+
+    diffs_dir = output_dir / "diffs"
+    results: Dict[str, Dict[str, Dict[str, Any]]] = {}
+
+    for task_id in task_ids:
+        task_diffs: Dict[str, Dict[str, Any]] = {}
+        task_diff_dir = diffs_dir / task_id
+        task_diff_dir.mkdir(parents=True, exist_ok=True)
+
+        for artisan_rel, prime_rel, pair_label in _DIFF_PAIRS:
+            artisan_file = artisan_wt_root / artisan_rel.replace("/", f"/{task_id}/", 1)
+            # Fix: artisan files are under {wt_root}/{phase}/{task_id}/{filename}
+            parts = artisan_rel.split("/", 1)
+            if len(parts) == 2:
+                artisan_file = artisan_wt_root / parts[0] / task_id / parts[1]
+            else:
+                artisan_file = artisan_wt_root / task_id / artisan_rel
+
+            prime_file = prime_wt_root / task_id / prime_rel
+
+            artisan_lines: List[str] = []
+            prime_lines: List[str] = []
+
+            if artisan_file.is_file():
+                artisan_lines = artisan_file.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines(keepends=True)
+            if prime_file.is_file():
+                prime_lines = prime_file.read_text(
+                    encoding="utf-8", errors="replace"
+                ).splitlines(keepends=True)
+
+            if not artisan_lines and not prime_lines:
+                continue
+
+            # Compute diff
+            diff_lines = list(difflib.unified_diff(
+                artisan_lines,
+                prime_lines,
+                fromfile=f"artisan/{artisan_rel}",
+                tofile=f"prime/{prime_rel}",
+                n=3,
+            ))
+
+            # Compute similarity
+            a_text = "".join(artisan_lines)
+            p_text = "".join(prime_lines)
+            if a_text or p_text:
+                similarity = difflib.SequenceMatcher(None, a_text, p_text).ratio()
+            else:
+                similarity = 1.0
+
+            added = sum(1 for dl in diff_lines if dl.startswith("+") and not dl.startswith("+++"))
+            removed = sum(1 for dl in diff_lines if dl.startswith("-") and not dl.startswith("---"))
+
+            # Write diff file
+            diff_path = task_diff_dir / f"{pair_label}.diff"
+            diff_path.write_text("".join(diff_lines), encoding="utf-8")
+
+            task_diffs[pair_label] = {
+                "similarity": round(similarity, 4),
+                "added": added,
+                "removed": removed,
+            }
+
+        if task_diffs:
+            results[task_id] = task_diffs
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Report generation
 # ---------------------------------------------------------------------------
 
@@ -602,6 +916,11 @@ def _build_report(
     task_filter: Optional[List[str]],
     artisan_status: str,
     prime_status: str,
+    *,
+    artisan_quality: Optional[Dict[str, Any]] = None,
+    prime_quality: Optional[Dict[str, Any]] = None,
+    context_overlap: Optional[Dict[str, Dict[str, Dict[str, bool]]]] = None,
+    diff_stats: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None,
 ) -> Dict[str, Any]:
     """Build the JSON report structure."""
     tasks_data: Dict[str, Any] = {}
@@ -610,7 +929,7 @@ def _build_report(
         artisan_breakdown = _phase_breakdown(tp.artisan)
         prime_breakdown = _phase_breakdown(tp.prime)
 
-        tasks_data[tp.task_id] = {
+        task_entry: Dict[str, Any] = {
             "title": tp.title,
             "artisan_present": tp.artisan_present,
             "prime_present": tp.prime_present,
@@ -640,11 +959,65 @@ def _build_report(
             },
         }
 
+        # v2: quality scores
+        if artisan_quality and tp.task_id in artisan_quality:
+            task_entry["artisan"]["quality"] = artisan_quality[tp.task_id]
+        if prime_quality and tp.task_id in prime_quality:
+            task_entry["prime"]["quality"] = prime_quality[tp.task_id]
+
+        # v2: context overlap
+        if context_overlap and tp.task_id in context_overlap:
+            task_entry["context_overlap"] = context_overlap[tp.task_id]
+
+        # v2: diff stats
+        if diff_stats and tp.task_id in diff_stats:
+            task_entry["diffs"] = diff_stats[tp.task_id]
+
+        tasks_data[tp.task_id] = task_entry
+
     # Aggregate
     artisan_chars = [tp.artisan_total_chars for tp in comparisons if tp.artisan_present]
     prime_chars = [tp.prime_total_chars for tp in comparisons if tp.prime_present]
     artisan_lines = [tp.artisan_total_lines for tp in comparisons if tp.artisan_present]
     prime_lines = [tp.prime_total_lines for tp in comparisons if tp.prime_present]
+
+    aggregate: Dict[str, Any] = {
+        "avg_prompt_chars": {
+            "artisan": _safe_avg(artisan_chars),
+            "prime": _safe_avg(prime_chars),
+        },
+        "avg_prompt_lines": {
+            "artisan": _safe_avg(artisan_lines),
+            "prime": _safe_avg(prime_lines),
+        },
+        "tasks_with_prompts": {
+            "artisan": len(artisan_chars),
+            "prime": len(prime_chars),
+        },
+        "tasks_missing_prompts": {
+            "artisan": sum(1 for tp in comparisons if not tp.artisan_present),
+            "prime": sum(1 for tp in comparisons if not tp.prime_present),
+        },
+    }
+
+    # v2: aggregate quality scores
+    if artisan_quality or prime_quality:
+        a_scores = [v["score"] for v in (artisan_quality or {}).values()]
+        p_scores = [v["score"] for v in (prime_quality or {}).values()]
+        aggregate["avg_quality_score"] = {
+            "artisan": round(sum(a_scores) / len(a_scores), 4) if a_scores else None,
+            "prime": round(sum(p_scores) / len(p_scores), 4) if p_scores else None,
+        }
+
+    # v2: aggregate similarity
+    if diff_stats:
+        all_sims: List[float] = []
+        for task_diffs in diff_stats.values():
+            for pair_data in task_diffs.values():
+                all_sims.append(pair_data["similarity"])
+        aggregate["avg_similarity"] = (
+            round(sum(all_sims) / len(all_sims), 4) if all_sims else None
+        )
 
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -654,24 +1027,7 @@ def _build_report(
         "artisan_status": artisan_status,
         "prime_status": prime_status,
         "tasks": tasks_data,
-        "aggregate": {
-            "avg_prompt_chars": {
-                "artisan": _safe_avg(artisan_chars),
-                "prime": _safe_avg(prime_chars),
-            },
-            "avg_prompt_lines": {
-                "artisan": _safe_avg(artisan_lines),
-                "prime": _safe_avg(prime_lines),
-            },
-            "tasks_with_prompts": {
-                "artisan": len(artisan_chars),
-                "prime": len(prime_chars),
-            },
-            "tasks_missing_prompts": {
-                "artisan": sum(1 for tp in comparisons if not tp.artisan_present),
-                "prime": sum(1 for tp in comparisons if not tp.prime_present),
-            },
-        },
+        "aggregate": aggregate,
     }
 
 
@@ -770,6 +1126,100 @@ def _render_markdown(report: Dict[str, Any], output_dir: Path) -> str:
         else:
             lines.append("**Prime:** no prompts collected")
             lines.append("")
+
+    # v2: Quality section
+    has_quality = any(
+        "quality" in data.get("artisan", {}) or "quality" in data.get("prime", {})
+        for data in tasks.values()
+    )
+    if has_quality:
+        lines.append("## Quality (Postmortem)")
+        lines.append("")
+        lines.append(
+            "| Task | Artisan Score | Artisan Verdict | Prime Score | Prime Verdict |"
+        )
+        lines.append(
+            "|------|--------------|-----------------|-------------|---------------|"
+        )
+        for task_id, data in tasks.items():
+            a_q = data.get("artisan", {}).get("quality", {})
+            p_q = data.get("prime", {}).get("quality", {})
+            a_score = f"{a_q['score']:.2f}" if a_q else "n/a"
+            a_verdict = a_q.get("verdict", "n/a") if a_q else "n/a"
+            p_score = f"{p_q['score']:.2f}" if p_q else "n/a"
+            p_verdict = p_q.get("verdict", "n/a") if p_q else "n/a"
+            lines.append(
+                f"| {task_id} | {a_score} | {a_verdict} | {p_score} | {p_verdict} |"
+            )
+        lines.append("")
+
+        # Per-task coverage details
+        for task_id, data in tasks.items():
+            a_q = data.get("artisan", {}).get("quality", {})
+            p_q = data.get("prime", {}).get("quality", {})
+            if a_q or p_q:
+                lines.append(f"**{task_id} coverage:**")
+                if a_q:
+                    lines.append(
+                        f"- Artisan — req: {a_q.get('req_coverage', 0):.2f}, "
+                        f"constraint: {a_q.get('constraint_coverage', 0):.2f}"
+                    )
+                if p_q:
+                    lines.append(
+                        f"- Prime — req: {p_q.get('req_coverage', 0):.2f}, "
+                        f"constraint: {p_q.get('constraint_coverage', 0):.2f}"
+                    )
+                lines.append("")
+
+    # v2: Context overlap section
+    has_overlap = any("context_overlap" in data for data in tasks.values())
+    if has_overlap:
+        lines.append("## Context Field Overlap")
+        lines.append("")
+        # Collect all field names across tasks
+        all_fields: List[str] = []
+        for data in tasks.values():
+            co = data.get("context_overlap", {})
+            for fn in co:
+                if fn not in all_fields:
+                    all_fields.append(fn)
+
+        for task_id, data in tasks.items():
+            co = data.get("context_overlap", {})
+            if not co:
+                continue
+            lines.append(f"### {task_id}")
+            lines.append("")
+            lines.append("| Field | Artisan | Prime |")
+            lines.append("|-------|---------|-------|")
+            for fn in all_fields:
+                vals = co.get(fn, {})
+                a_mark = "Y" if vals.get("artisan") else "-"
+                p_mark = "Y" if vals.get("prime") else "-"
+                lines.append(f"| {fn} | {a_mark} | {p_mark} |")
+            lines.append("")
+
+    # v2: Diff summary section
+    has_diffs = any("diffs" in data for data in tasks.values())
+    if has_diffs:
+        lines.append("## Prompt Diffs")
+        lines.append("")
+        for task_id, data in tasks.items():
+            task_diffs = data.get("diffs", {})
+            if not task_diffs:
+                continue
+            lines.append(f"### {task_id}")
+            lines.append("")
+            lines.append("| Pair | Similarity | Added | Removed |")
+            lines.append("|------|-----------|-------|---------|")
+            for pair_label, stats in task_diffs.items():
+                sim = f"{stats['similarity']:.0%}"
+                lines.append(
+                    f"| {pair_label} | {sim} | +{stats['added']} | -{stats['removed']} |"
+                )
+            lines.append("")
+        lines.append(f"Diff files: `{output_dir / 'diffs'}`")
+        lines.append("")
 
     # Footer
     lines.append("---")
@@ -898,6 +1348,54 @@ def main() -> int:
     )
 
     # ------------------------------------------------------------------
+    # Step 5b: v2 quality analysis
+    # ------------------------------------------------------------------
+    do_postmortem = args.postmortem or args.full_analysis
+    do_overlap = args.overlap or args.full_analysis
+    do_diff = getattr(args, "diff", False) or args.full_analysis
+
+    # Re-read enriched seed for v2 analysis (needed for task dicts)
+    enriched_seed = json.loads(
+        enriched_seed_path.read_text(encoding="utf-8")
+    )
+    seed_tasks = enriched_seed.get("tasks", [])
+    # Apply task filter to seed_tasks
+    if task_filter:
+        filter_set = set(task_filter)
+        seed_tasks = [t for t in seed_tasks if t.get("task_id") in filter_set]
+
+    artisan_quality: Optional[Dict[str, Any]] = None
+    prime_quality: Optional[Dict[str, Any]] = None
+    context_overlap: Optional[Dict[str, Dict[str, Dict[str, bool]]]] = None
+    diff_stats: Optional[Dict[str, Dict[str, Dict[str, Any]]]] = None
+
+    if do_postmortem:
+        logger.info("Running walkthrough postmortem...")
+        artisan_quality = _run_postmortem(
+            seed_tasks, artisan_wt_root, "artisan", output_dir,
+        )
+        # The evaluator looks for {walkthrough_root}/prime/{task_id}/,
+        # and prime_wt_root already IS the prime/ dir, so pass parent.
+        prime_quality = _run_postmortem(
+            seed_tasks,
+            prime_wt_root.parent if prime_wt_root else None,
+            "prime",
+            output_dir,
+        )
+
+    if do_overlap:
+        logger.info("Analyzing context field overlap...")
+        context_overlap = _analyze_context_overlap(
+            enriched_seed, all_task_ids, artisan_wt_root, prime_wt_root,
+        )
+
+    if do_diff:
+        logger.info("Generating prompt diffs...")
+        diff_stats = _generate_prompt_diffs(
+            all_task_ids, artisan_wt_root, prime_wt_root, output_dir,
+        )
+
+    # ------------------------------------------------------------------
     # Step 6: Generate reports
     # ------------------------------------------------------------------
     report = _build_report(
@@ -906,6 +1404,10 @@ def main() -> int:
         task_filter=task_filter,
         artisan_status=artisan_status,
         prime_status=prime_status,
+        artisan_quality=artisan_quality,
+        prime_quality=prime_quality,
+        context_overlap=context_overlap,
+        diff_stats=diff_stats,
     )
 
     # Write JSON report
@@ -933,7 +1435,14 @@ def main() -> int:
     print()
 
     # Quick summary table
-    header = f"  {'Task':<16} {'Artisan':>12} {'Prime':>12} {'Delta':>12}"
+    has_q = artisan_quality or prime_quality
+    if has_q:
+        header = (
+            f"  {'Task':<16} {'Artisan':>12} {'Prime':>12} "
+            f"{'Delta':>12} {'A.Qual':>8} {'P.Qual':>8}"
+        )
+    else:
+        header = f"  {'Task':<16} {'Artisan':>12} {'Prime':>12} {'Delta':>12}"
     print(header)
     print("  " + "-" * (len(header) - 2))
     for tp in comparisons:
@@ -943,11 +1452,20 @@ def main() -> int:
             d_str = f"{tp.artisan_total_chars - tp.prime_total_chars:+,}"
         else:
             d_str = "n/a"
-        print(f"  {tp.task_id:<16} {a_str:>12} {p_str:>12} {d_str:>12}")
+        line = f"  {tp.task_id:<16} {a_str:>12} {p_str:>12} {d_str:>12}"
+        if has_q:
+            a_q = (artisan_quality or {}).get(tp.task_id, {})
+            p_q = (prime_quality or {}).get(tp.task_id, {})
+            a_qs = f"{a_q['score']:.2f}" if a_q else "n/a"
+            p_qs = f"{p_q['score']:.2f}" if p_q else "n/a"
+            line += f" {a_qs:>8} {p_qs:>8}"
+        print(line)
 
     print()
     print(f"  Output: {output_dir}")
     print(f"  Prompts: {output_dir / 'prompts'}")
+    if diff_stats:
+        print(f"  Diffs: {output_dir / 'diffs'}")
     print("=" * 70)
     print()
 

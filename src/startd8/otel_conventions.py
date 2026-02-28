@@ -16,6 +16,12 @@ class SpanNames:
     # Phase-level
     PHASE_PREFIX = "phase."
 
+    # Plan Ingestion workflow
+    PI_WORKFLOW = "workflow.plan-ingestion"
+    PI_PHASE_PREFIX = "ingestion."
+    PI_LLM_PREFIX = "llm.plan_ingestion."
+    PI_IO_PREFIX = "io."
+
     # Gate spans
     GATE_ENTRY = "gate.entry"
     GATE_EXIT = "gate.exit"
@@ -67,6 +73,13 @@ class AttributeKeys:
     TASK_CALLER_COUNT = "task.caller_count"
     TASK_HAS_DYNAMIC_DISPATCH = "task.has_dynamic_dispatch"
 
+    # Plan Ingestion
+    PI_HEURISTIC_FALLBACK = "phase.heuristic_fallback"
+    PI_FEATURES_COUNT = "phase.features_count"
+    PI_ROUTE = "phase.route"
+    PI_COMPOSITE_SCORE = "phase.composite_score"
+    PI_ROUNDS_COMPLETED = "phase.rounds_completed"
+
     # LLM call
     LLM_PROMPT_LENGTH = "llm.prompt_length"
     LLM_MAX_TOKENS = "llm.max_tokens"
@@ -78,6 +91,12 @@ class AttributeKeys:
 
 class EventNames:
     """Canonical event names."""
+
+    # Plan Ingestion decisions
+    PI_HEURISTIC_FALLBACK = "decision.heuristic_fallback"
+    PI_ROUTE_OVERRIDE = "decision.route_override"
+    PI_QUALITY_GATE_FAILED = "decision.quality_gate_failed"
+    PI_STATE_TRANSITION = "state.transition"
 
     LLM_CALL = "llm.call"
     LLM_CALL_START = "llm.call.start"

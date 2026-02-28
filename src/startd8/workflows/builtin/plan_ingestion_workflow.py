@@ -1432,9 +1432,15 @@ class PlanIngestionWorkflow(WorkflowBase):
         t0 = time.time()
         prompt = _PARSE_PROMPT.format(plan_text=plan_text)
 
+        _llm_ctx = _tracer.start_as_current_span("llm.plan_ingestion.parse")
+        _llm_span = _llm_ctx.__enter__()
         try:
             response_text, time_ms, token_usage = agent.generate(prompt)
         except Exception as exc:
+            if _HAS_OTEL and not isinstance(_llm_span, _NoOpSpan):
+                _llm_span.record_exception(exc)
+                _llm_span.set_status(_StatusCode.ERROR, str(exc))
+            _llm_ctx.__exit__(None, None, None)
             elapsed_ms = int((time.time() - t0) * 1000)
             return None, StepResult(
                 step_name="parse",
@@ -1449,6 +1455,13 @@ class PlanIngestionWorkflow(WorkflowBase):
         in_tok = token_usage_input(token_usage) if token_usage else 0
         out_tok = token_usage_output(token_usage) if token_usage else 0
         cost = token_usage_cost(token_usage) if token_usage else 0.0
+
+        if _HAS_OTEL and not isinstance(_llm_span, _NoOpSpan):
+            _llm_span.set_attribute("llm.response_time_ms", time_ms)
+            _llm_span.set_attribute("llm.tokens_input", in_tok)
+            _llm_span.set_attribute("llm.tokens_output", out_tok)
+            _llm_span.set_attribute("llm.cost_usd", cost)
+        _llm_ctx.__exit__(None, None, None)
 
         try:
             data = _extract_json_from_response(response_text)
@@ -1554,9 +1567,15 @@ class PlanIngestionWorkflow(WorkflowBase):
             threshold=threshold,
         )
 
+        _llm_ctx = _tracer.start_as_current_span("llm.plan_ingestion.assess")
+        _llm_span = _llm_ctx.__enter__()
         try:
             response_text, time_ms, token_usage = agent.generate(prompt)
         except Exception as exc:
+            if _HAS_OTEL and not isinstance(_llm_span, _NoOpSpan):
+                _llm_span.record_exception(exc)
+                _llm_span.set_status(_StatusCode.ERROR, str(exc))
+            _llm_ctx.__exit__(None, None, None)
             elapsed_ms = int((time.time() - t0) * 1000)
             return None, StepResult(
                 step_name="assess",
@@ -1571,6 +1590,13 @@ class PlanIngestionWorkflow(WorkflowBase):
         in_tok = token_usage_input(token_usage) if token_usage else 0
         out_tok = token_usage_output(token_usage) if token_usage else 0
         cost = token_usage_cost(token_usage) if token_usage else 0.0
+
+        if _HAS_OTEL and not isinstance(_llm_span, _NoOpSpan):
+            _llm_span.set_attribute("llm.response_time_ms", time_ms)
+            _llm_span.set_attribute("llm.tokens_input", in_tok)
+            _llm_span.set_attribute("llm.tokens_output", out_tok)
+            _llm_span.set_attribute("llm.cost_usd", cost)
+        _llm_ctx.__exit__(None, None, None)
 
         try:
             data = _extract_json_from_response(response_text)
@@ -1669,9 +1695,15 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
             out_filename = "PLAN-ingested.md"
 
+        _llm_ctx = _tracer.start_as_current_span("llm.plan_ingestion.transform")
+        _llm_span = _llm_ctx.__enter__()
         try:
             response_text, time_ms, token_usage = agent.generate(prompt)
         except Exception as exc:
+            if _HAS_OTEL and not isinstance(_llm_span, _NoOpSpan):
+                _llm_span.record_exception(exc)
+                _llm_span.set_status(_StatusCode.ERROR, str(exc))
+            _llm_ctx.__exit__(None, None, None)
             elapsed_ms = int((time.time() - t0) * 1000)
             return None, StepResult(
                 step_name="transform",
@@ -1686,6 +1718,13 @@ class PlanIngestionWorkflow(WorkflowBase):
         in_tok = token_usage_input(token_usage) if token_usage else 0
         out_tok = token_usage_output(token_usage) if token_usage else 0
         cost = token_usage_cost(token_usage) if token_usage else 0.0
+
+        if _HAS_OTEL and not isinstance(_llm_span, _NoOpSpan):
+            _llm_span.set_attribute("llm.response_time_ms", time_ms)
+            _llm_span.set_attribute("llm.tokens_input", in_tok)
+            _llm_span.set_attribute("llm.tokens_output", out_tok)
+            _llm_span.set_attribute("llm.cost_usd", cost)
+        _llm_ctx.__exit__(None, None, None)
 
         # Extract content from potential code fences
         content = extract_code_from_response(
@@ -2223,7 +2262,8 @@ class PlanIngestionWorkflow(WorkflowBase):
         if enable_triage is not None:
             review_config["enable_triage"] = enable_triage
 
-        result = review_wf.run(review_config)
+        with _tracer.start_as_current_span("ingestion.refine.review") as _review_span:
+            result = review_wf.run(review_config)
 
         review_cost = result.metrics.total_cost if result.metrics else 0.0
         rounds_completed = (
@@ -3473,7 +3513,10 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         output_dir.mkdir(parents=True, exist_ok=True)
         config_path = output_dir / "review-config.json"
-        atomic_write_json(config_path, review_config, indent=2)
+        with _tracer.start_as_current_span("io.review_config.write") as _io_span:
+            atomic_write_json(config_path, review_config, indent=2)
+            if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
+                _io_span.set_attribute("io.path", str(config_path))
 
         # --- Resolve onboarding once for both routes (eliminates
         # onboarding_early/onboarding_prime split that caused divergent
@@ -3689,7 +3732,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                 seed_dict["_schema_valid"] = False
             _log_seed_coverage(seed_dict)
             context_seed_path = output_dir / "artisan-context-seed.json"
-            atomic_write_json(context_seed_path, seed_dict, indent=2)
+            with _tracer.start_as_current_span("io.context_seed.write") as _io_span:
+                atomic_write_json(context_seed_path, seed_dict, indent=2)
+                if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
+                    _io_span.set_attribute("io.path", str(context_seed_path))
+                    _io_span.set_attribute("io.route", route.value)
+                    _io_span.set_attribute("io.task_count", len(tasks))
 
             # Mottainai Rule 6: log propagation chain status
             _triage = review_output.get("triage", {}) if review_output else {}
@@ -3746,7 +3794,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                 seed_prime_dict["_schema_valid"] = False
             _log_seed_coverage(seed_prime_dict, label="prime")
             prime_seed_path = output_dir / "prime-context-seed.json"
-            atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
+            with _tracer.start_as_current_span("io.context_seed.write") as _io_span:
+                atomic_write_json(prime_seed_path, seed_prime_dict, indent=2)
+                if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
+                    _io_span.set_attribute("io.path", str(prime_seed_path))
+                    _io_span.set_attribute("io.route", route.value)
+                    _io_span.set_attribute("io.task_count", len(tasks))
 
             # Mottainai Rule 6: log propagation chain status (prime)
             _triage_p = review_output.get("triage", {}) if review_output else {}
@@ -3785,9 +3838,15 @@ class PlanIngestionWorkflow(WorkflowBase):
         if tracking_config is not None and parsed_plan is not None:
             from .task_tracking_emitter import emit_task_tracking_artifacts
 
-            tracking_result = emit_task_tracking_artifacts(
-                parsed_plan, complexity, tasks, tracking_config, output_dir,
-            )
+            with _tracer.start_as_current_span("io.task_tracking.write") as _io_span:
+                tracking_result = emit_task_tracking_artifacts(
+                    parsed_plan, complexity, tasks, tracking_config, output_dir,
+                )
+                if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
+                    _io_span.set_attribute(
+                        "io.file_count",
+                        tracking_result.get("state_file_count", 0) if tracking_result else 0,
+                    )
 
         return EmitResult(config_path, review_config, context_seed_path, tracking_result, tasks)
 
@@ -3934,11 +3993,16 @@ class PlanIngestionWorkflow(WorkflowBase):
         def _save_state():
             """Persist current state for post-mortem debugging."""
             try:
-                atomic_write_json(
-                    state_dir / "plan_ingestion_state.json",
-                    state.to_dict(),
-                    indent=2,
-                )
+                with _tracer.start_as_current_span("io.state.write") as _io_span:
+                    atomic_write_json(
+                        state_dir / "plan_ingestion_state.json",
+                        state.to_dict(),
+                        indent=2,
+                    )
+                    if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
+                        _io_span.set_attribute(
+                            "io.path", str(state_dir / "plan_ingestion_state.json"),
+                        )
             except Exception as exc:
                 logger.debug("Failed to save ingestion state: %s", exc)
 
@@ -3954,6 +4018,14 @@ class PlanIngestionWorkflow(WorkflowBase):
         # Deferred Layer 5 capability validation failure (set before _fail was defined)
         if _cap_validation_error:
             return _fail(_cap_validation_error)
+
+        # OTel root span (manual lifecycle to avoid re-indenting 400 lines)
+        _root_span_ctx = _tracer.start_as_current_span(
+            "workflow.plan-ingestion",
+            attributes={"workflow.id": self.metadata.workflow_id},
+        )
+        root_span = _root_span_ctx.__enter__()
+        _active_phase_ctx = None  # Track open phase span for cleanup on early return
 
         try:
             # Read plan
@@ -3980,6 +4052,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                         break
 
             # --- PREFLIGHT ---
+            _active_phase_ctx = _tracer.start_as_current_span("ingestion.preflight")
+            _pf_span = _active_phase_ctx.__enter__()
+            root_span.add_event("state.transition", {"phase": "preflight"})
+
             progress("Preflight")
             preflight_step = StepResult(step_name="preflight", output="Running export contract checks")
             onboarding_metadata, preflight_evidence, preflight_warnings, preflight_errors = (
@@ -4000,6 +4076,13 @@ class PlanIngestionWorkflow(WorkflowBase):
             if preflight_errors:
                 preflight_step.error = " ; ".join(preflight_errors)
             steps.append(preflight_step)
+
+            if _HAS_OTEL and not isinstance(_pf_span, _NoOpSpan):
+                _pf_span.set_attribute("phase.warnings_count", len(preflight_warnings))
+                _pf_span.set_attribute("phase.errors_count", len(preflight_errors))
+            _active_phase_ctx.__exit__(None, None, None)
+            _active_phase_ctx = None
+
             if preflight_step.error:
                 return _fail(preflight_step.error)
             requirements_hints_index = _normalize_requirements_hints(onboarding_metadata)
@@ -4031,6 +4114,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                     logger.warning("Failed to load manifest %s: %s", contextcore_yaml, exc)
 
             # --- PARSE ---
+            _active_phase_ctx = _tracer.start_as_current_span("ingestion.parse")
+            _parse_span = _active_phase_ctx.__enter__()
+            root_span.add_event("state.transition", {"phase": "parse"})
+
             progress("Parse")
             state.current_phase = IngestionPhase.PARSE
             assessor = self._resolve_assessor_agent(
@@ -4049,6 +4136,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                     parse_step.output + "\n[heuristic fallback] parse succeeded without LLM JSON"
                 )[:_OUTPUT_TRUNCATION]
                 parse_step.metadata["heuristic_fallback"] = True
+                if _HAS_OTEL and not isinstance(_parse_span, _NoOpSpan):
+                    _parse_span.add_event("decision.heuristic_fallback", {
+                        "phase": "parse",
+                        "reason": "LLM parse failed, heuristic enabled",
+                    })
             steps.append(parse_step)
             state.total_cost += parse_step.cost
             step_costs["parse"] = parse_step.cost
@@ -4089,10 +4181,25 @@ class PlanIngestionWorkflow(WorkflowBase):
                 translation_quality["_heuristic_degraded"] = True
 
             cost_err = _check_cost("parse")
+
+            if _HAS_OTEL and not isinstance(_parse_span, _NoOpSpan):
+                _parse_span.set_attribute("phase.cost", parse_step.cost)
+                _parse_span.set_attribute("phase.heuristic_fallback", _used_heuristic_parse)
+                _parse_span.set_attribute(
+                    "phase.features_count",
+                    len(parsed_plan.features) if parsed_plan else 0,
+                )
+            _active_phase_ctx.__exit__(None, None, None)
+            _active_phase_ctx = None
+
             if cost_err:
                 return cost_err
 
             # --- ASSESS ---
+            _active_phase_ctx = _tracer.start_as_current_span("ingestion.assess")
+            _assess_span = _active_phase_ctx.__enter__()
+            root_span.add_event("state.transition", {"phase": "assess"})
+
             progress("Assess")
             state.current_phase = IngestionPhase.ASSESS
 
@@ -4112,6 +4219,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                     assess_step.output + "\n[heuristic fallback] assess succeeded deterministically"
                 )[:_OUTPUT_TRUNCATION]
                 assess_step.metadata["heuristic_fallback"] = True
+                if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
+                    _assess_span.add_event("decision.heuristic_fallback", {
+                        "phase": "assess",
+                        "reason": "LLM assess failed, heuristic enabled",
+                    })
             steps.append(assess_step)
             state.total_cost += assess_step.cost
             step_costs["assess"] = assess_step.cost
@@ -4137,6 +4249,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                         ),
                     )
                 )
+                if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
+                    _assess_span.add_event("decision.route_override", {
+                        "reason": "heuristic_degradation",
+                        "original_route": complexity.route.value,
+                        "forced_route": "artisan",
+                    })
 
             low_quality_reasons: List[str] = []
             if (
@@ -4161,6 +4279,11 @@ class PlanIngestionWorkflow(WorkflowBase):
             if not force_route and low_quality_reasons:
                 details = ", ".join(low_quality_reasons)
                 if low_quality_policy == "fail":
+                    if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
+                        _assess_span.add_event("decision.quality_gate_failed", {
+                            "policy": "fail",
+                            "details": details,
+                        })
                     return _fail(
                         "Translation quality gate failed: "
                         + details
@@ -4178,6 +4301,14 @@ class PlanIngestionWorkflow(WorkflowBase):
                         ),
                     )
                 )
+                if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
+                    _assess_span.add_event("decision.route_override", {
+                        "reason": "low_translation_quality",
+                        "policy": low_quality_policy,
+                        "details": details,
+                        "original_route": complexity.route.value,
+                        "forced_route": "artisan",
+                    })
 
             logger.debug(
                 "Complexity: %d → route=%s (threshold=%d)",
@@ -4187,6 +4318,18 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
             cost_err = _check_cost("assess")
+
+            if _HAS_OTEL and not isinstance(_assess_span, _NoOpSpan):
+                _assess_span.set_attribute("phase.cost", assess_step.cost)
+                _assess_span.set_attribute(
+                    "phase.route",
+                    complexity.route.value if complexity.route else "unknown",
+                )
+                _assess_span.set_attribute("phase.composite_score", complexity.composite)
+                _assess_span.set_attribute("phase.heuristic_fallback", _used_heuristic_assess)
+            _active_phase_ctx.__exit__(None, None, None)
+            _active_phase_ctx = None
+
             if cost_err:
                 return cost_err
 
@@ -4195,6 +4338,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                 return _fail("Assessment did not produce a route")
 
             # --- TRANSFORM ---
+            _active_phase_ctx = _tracer.start_as_current_span("ingestion.transform")
+            _transform_span = _active_phase_ctx.__enter__()
+            root_span.add_event("state.transition", {"phase": "transform"})
+
             progress("Transform")
             state.current_phase = IngestionPhase.TRANSFORM
             transformer = self._resolve_transformer_agent(
@@ -4225,10 +4372,20 @@ class PlanIngestionWorkflow(WorkflowBase):
             state.plan_document_path = str(doc_path)
 
             cost_err = _check_cost("transform")
+
+            if _HAS_OTEL and not isinstance(_transform_span, _NoOpSpan):
+                _transform_span.set_attribute("phase.cost", transform_step.cost)
+            _active_phase_ctx.__exit__(None, None, None)
+            _active_phase_ctx = None
+
             if cost_err:
                 return cost_err
 
             # --- REFINE ---
+            _active_phase_ctx = _tracer.start_as_current_span("ingestion.refine")
+            _refine_span = _active_phase_ctx.__enter__()
+            root_span.add_event("state.transition", {"phase": "refine"})
+
             progress("Refine")
             state.current_phase = IngestionPhase.REFINE
 
@@ -4255,10 +4412,22 @@ class PlanIngestionWorkflow(WorkflowBase):
             step_costs["refine"] = refine_cost
 
             cost_err = _check_cost("refine")
+
+            if _HAS_OTEL and not isinstance(_refine_span, _NoOpSpan):
+                _refine_span.set_attribute("phase.cost", refine_cost)
+                _refine_span.set_attribute("phase.rounds_completed", rounds_completed)
+                _refine_span.set_attribute("phase.skipped", skip_arc_review)
+            _active_phase_ctx.__exit__(None, None, None)
+            _active_phase_ctx = None
+
             if cost_err:
                 return cost_err
 
             # --- EMIT ---
+            _active_phase_ctx = _tracer.start_as_current_span("ingestion.emit")
+            _emit_span = _active_phase_ctx.__enter__()
+            root_span.add_event("state.transition", {"phase": "emit"})
+
             progress("Emit")
             state.current_phase = IngestionPhase.EMIT
 
@@ -4287,7 +4456,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                 quality=translation_quality,
                 checksum_evidence=preflight_evidence.get("checksums", {}),
             )
-            traceability_path = self._write_traceability_artifact(output_dir, trace_payload)
+            with _tracer.start_as_current_span("io.traceability.write") as _io_span:
+                traceability_path = self._write_traceability_artifact(output_dir, trace_payload)
+                if _HAS_OTEL and not isinstance(_io_span, _NoOpSpan):
+                    _io_span.set_attribute("io.path", str(traceability_path))
             state.review_config_path = str(emit_result.config_path)
             if emit_result.context_seed_path is not None:
                 state.context_seed_path = str(emit_result.context_seed_path)
@@ -4303,6 +4475,15 @@ class PlanIngestionWorkflow(WorkflowBase):
                 output=emit_output,
             )
             steps.append(emit_step)
+
+            if _HAS_OTEL and not isinstance(_emit_span, _NoOpSpan):
+                _emit_span.set_attribute(
+                    "phase.seed_path",
+                    str(emit_result.context_seed_path) if emit_result.context_seed_path else "",
+                )
+                _emit_span.set_attribute("phase.config_path", str(emit_result.config_path))
+            _active_phase_ctx.__exit__(None, None, None)
+            _active_phase_ctx = None
 
             # --- DONE ---
             state.current_phase = IngestionPhase.COMPLETED
@@ -4335,6 +4516,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             if emit_result.tracking_result:
                 output["task_tracking"] = emit_result.tracking_result
 
+            # OTel: finalize root span on success
+            if _HAS_OTEL and not isinstance(root_span, _NoOpSpan):
+                root_span.set_attribute("workflow.route", route.value)
+                root_span.set_attribute("workflow.total_cost", state.total_cost)
+                root_span.set_status(_StatusCode.OK)
+
             return WorkflowResult(
                 workflow_id=self.metadata.workflow_id,
                 success=True,
@@ -4352,5 +4539,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             )
 
         except Exception as exc:
+            if _HAS_OTEL and not isinstance(root_span, _NoOpSpan):
+                root_span.record_exception(exc)
+                root_span.set_status(_StatusCode.ERROR, str(exc))
             logger.error("Plan ingestion failed: %s", exc, exc_info=True)
             return _fail(str(exc))
+        finally:
+            if _active_phase_ctx is not None:
+                _active_phase_ctx.__exit__(None, None, None)
+            _root_span_ctx.__exit__(None, None, None)
