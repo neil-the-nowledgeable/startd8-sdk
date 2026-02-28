@@ -9281,14 +9281,23 @@ class Test{class_name}:
                         }
                         for tid in _evicted:
                             del generation_results[tid]
-                        logger.info(
-                            "IMPLEMENT: AR-153 scoped retry — evicted %d/%d "
-                            "failed task(s) from cache, reusing %d passing: %s",
-                            len(_evicted),
-                            len(_retry_failed_tasks),
-                            len(generation_results),
-                            sorted(_evicted),
-                        )
+                        if _evicted:
+                            logger.info(
+                                "IMPLEMENT: AR-153 scoped retry — evicted %d/%d "
+                                "failed task(s) from cache, reusing %d passing: %s",
+                                len(_evicted),
+                                len(_retry_failed_tasks),
+                                len(generation_results),
+                                sorted(_evicted),
+                            )
+                        else:
+                            logger.info(
+                                "IMPLEMENT: AR-153 scoped retry — none of %d "
+                                "failed task(s) found in cache; full regeneration "
+                                "will run: %s",
+                                len(_retry_failed_tasks),
+                                sorted(_retry_failed_tasks),
+                            )
                         # Don't mark as fully resumed — the evicted tasks
                         # will fall through to the fresh generation path.
                         # Store partial cache for merging after regeneration.
@@ -9307,6 +9316,13 @@ class Test{class_name}:
                             r.cost_usd for tid, r in generation_results.items()
                             if tid in current_task_ids
                         )
+                        if resumed_cost == 0.0:
+                            logger.info(
+                                "IMPLEMENT --resume: historical cost is $0.00 "
+                                "(%d cached results, %d current tasks)",
+                                len(generation_results),
+                                len(current_task_ids),
+                            )
 
                         domain_tasks: dict[str, list[str]] = defaultdict(list)
                         for task in tasks:
@@ -9582,7 +9598,7 @@ class Test{class_name}:
                             chunk.metadata["_call_graph_context"] = "\n\n".join(_cg_parts)
                         if _cg_callers:
                             chunk.metadata["_call_graph_callers"] = _cg_callers
-                    except Exception:
+                    except (AttributeError, TypeError, OSError, KeyError, ValueError):
                         logger.debug(
                             "IMPLEMENT: call graph enrichment failed for chunk %s",
                             getattr(chunk, "chunk_id", "?"), exc_info=True,
@@ -11630,8 +11646,24 @@ class TestPhaseHandler(AbstractPhaseHandler):
 
         context["test_results"] = output
 
-        # Context contract: validate TEST output model
-        ValidationPhaseOutput(test_results=context["test_results"])
+        # Context contract: validate TEST output model.
+        # Wrap in try-except so Pydantic validation failures respect the
+        # quality gate policy (block vs warn) instead of crashing the phase.
+        try:
+            ValidationPhaseOutput(test_results=context["test_results"])
+        except Exception as _val_exc:
+            _gate_mode = context.get("quality_gate_summary", {}).get(
+                "policy_mode", "warn",
+            )
+            if _gate_mode == "block":
+                raise RuntimeError(
+                    f"TEST output validation failed (block policy): {_val_exc}"
+                ) from _val_exc
+            logger.warning(
+                "TEST output validation failed (continuing per %s policy): %s",
+                _gate_mode,
+                _val_exc,
+            )
 
         # --- Cache write: persist test results for resume ---
         if test_cache_path and not dry_run:
@@ -13310,7 +13342,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 review["env_failures"] = len(env_fails)
                 review["env_warnings"] = len(env_warns)
                 review["review_status"] = review.get("status", "reviewed")
-                if task_truncation:
+                if task_truncation is not None:
                     review["truncation_warning"] = True
                     review["truncation_confidence"] = task_truncation.get("max_confidence", 0.0)
                     review["truncation_source"] = task_truncation.get("source", "unknown")
@@ -13486,8 +13518,24 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         context["review_results"] = output
 
-        # Context contract: validate REVIEW output model
-        ReviewPhaseOutput(review_results=context["review_results"])
+        # Context contract: validate REVIEW output model.
+        # Wrap in try-except so Pydantic validation failures respect the
+        # quality gate policy (block vs warn) instead of crashing the phase.
+        try:
+            ReviewPhaseOutput(review_results=context["review_results"])
+        except Exception as _val_exc:
+            _gate_mode = context.get("quality_gate_summary", {}).get(
+                "policy_mode", "warn",
+            )
+            if _gate_mode == "block":
+                raise RuntimeError(
+                    f"REVIEW output validation failed (block policy): {_val_exc}"
+                ) from _val_exc
+            logger.warning(
+                "REVIEW output validation failed (continuing per %s policy): %s",
+                _gate_mode,
+                _val_exc,
+            )
 
         # Persist review results for cache on re-run (v2 envelope)
         if review_cache_path and not dry_run:
