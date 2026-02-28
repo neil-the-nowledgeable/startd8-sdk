@@ -1898,10 +1898,10 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         # Match project-specific requirements against plan text
         for rid in project_specific_ids:
-            rid_lower = rid.lower()
+            rid_pattern = re.compile(r'\b' + re.escape(rid) + r'\b', re.IGNORECASE)
             matched_features = [
                 f.feature_id for f in parsed_plan.features
-                if rid_lower in f"{f.feature_id} {f.name} {f.description}".lower()
+                if rid_pattern.search(f"{f.feature_id} {f.name} {f.description}")
             ]
             req_to_feature[rid] = matched_features
 
@@ -2489,6 +2489,14 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "context": ctx,
                 },
             })
+
+        # Remove skipped features from fid_to_tid so downstream consumers
+        # (Gate 2a split, dangling-dep cleanup) never see phantom task IDs.
+        emitted_tids = {t["task_id"] for t in tasks}
+        fid_to_tid = {
+            fid: tid for fid, tid in fid_to_tid.items()
+            if tid in emitted_tids
+        }
 
         # ── Clean up dangling dependency references from skipped features ──
         emitted_ids = {t["task_id"] for t in tasks}
@@ -3500,6 +3508,9 @@ class PlanIngestionWorkflow(WorkflowBase):
             if ob_var is None:
                 ob_var = {}
             ob_var["refine_suggestions"] = refine_suggestions
+            # Keep artifacts["onboarding"] in sync with ob_var (which now includes refine_suggestions)
+            if onboarding_resolved:
+                artifacts_out["onboarding"] = ob_var
 
             if review_output:
                 apply_data = review_output.get("apply", {})
