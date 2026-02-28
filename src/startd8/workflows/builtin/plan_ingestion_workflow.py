@@ -703,8 +703,8 @@ def _heuristic_assess_complexity(
                 )
 
     return ComplexityScore(
-        feature_count=feature_count,
-        cross_file_deps=cross_file_deps,
+        feature_count=feature_count_score,
+        cross_file_deps=min(100, max(0, cross_file_deps * 10)),
         api_surface=api_surface,
         test_complexity=test_complexity,
         integration_depth=integration_depth,
@@ -1046,6 +1046,20 @@ def _context_files_with_checksums(
             entry["checksum"] = None
         result.append(entry)
     return result
+
+
+# ---------------------------------------------------------------------------
+# Emit result type
+# ---------------------------------------------------------------------------
+
+
+class EmitResult(NamedTuple):
+    """Typed return value from ``_phase_emit``."""
+    config_path: Path
+    review_config: dict
+    context_seed_path: Optional[Path]
+    tracking_result: Optional[Dict[str, Any]]
+    tasks: List[Dict[str, Any]]
 
 
 # ---------------------------------------------------------------------------
@@ -1872,9 +1886,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                 f.feature_id for f in parsed_plan.features
                 if rid_lower in f"{f.feature_id} {f.name} {f.description}".lower()
             ]
-            # fallback: requirement appears somewhere in plan text
-            if rid_lower in plan_text and not matched_features and parsed_plan.features:
-                matched_features = [parsed_plan.features[0].feature_id]
             req_to_feature[rid] = matched_features
 
         req_acceptance: Dict[str, List[str]] = {}
@@ -1917,8 +1928,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                     matched.append(feat.feature_id)
                 elif aid.lower() in f"{feat.feature_id} {feat.name} {feat.description}".lower():
                     matched.append(feat.feature_id)
-            if not matched and parsed_plan.features:
-                matched = [parsed_plan.features[0].feature_id]
             artifact_to_feature[aid] = sorted(set(matched))
 
         mapped_artifacts = sum(1 for fids in artifact_to_feature.values() if fids)
@@ -2158,7 +2167,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         result = review_wf.run(review_config)
 
         review_cost = result.metrics.total_cost if result.metrics else 0.0
-        rounds_completed = len(result.steps) if result.success else 0
+        rounds_completed = len(result.steps)
 
         refine_steps = []
         for s in result.steps:
@@ -2180,7 +2189,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 error=result.error,
             ))
 
-        review_output = result.output if result.success else {}
+        review_output = result.output or {}
         return rounds_completed, refine_steps, review_cost, review_output
 
     # ------------------------------------------------------------------
@@ -3166,10 +3175,11 @@ class PlanIngestionWorkflow(WorkflowBase):
         onboarding_metadata: Optional[Dict[str, Any]] = None,
         review_output: Optional[Dict[str, Any]] = None,
         project_metadata: Optional[Dict[str, Any]] = None,
-    ) -> Tuple[Path, dict, Optional[Path], Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+    ) -> EmitResult:
         from startd8.forward_manifest_extractor import extract_forward_contracts
 
         forward_manifest_dict: Optional[Dict[str, Any]] = None
+        forward_manifest = None
         if parsed_plan is not None and parsed_plan.features:
             try:
                 # REQ-PC-FM-001: Bridge to extractor API (features, proto_dir, etc.)
@@ -3546,7 +3556,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 parsed_plan, complexity, tasks, tracking_config, output_dir,
             )
 
-        return config_path, review_config, context_seed_path, tracking_result, tasks
+        return EmitResult(config_path, review_config, context_seed_path, tracking_result, tasks)
 
     # ------------------------------------------------------------------
     # Main execution
@@ -3855,7 +3865,8 @@ class PlanIngestionWorkflow(WorkflowBase):
             # are inflated.  Override routing to artisan unless the user
             # explicitly forced a route.
             if _heuristic_degraded and not force_route:
-                complexity.route = ContractorRoute.ARTISAN
+                complexity = _dataclass_replace(complexity, route=ContractorRoute.ARTISAN)
+                state.complexity = complexity
                 state.route = ContractorRoute.ARTISAN
                 steps.append(
                     StepResult(
@@ -3990,7 +4001,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Emit")
             state.current_phase = IngestionPhase.EMIT
 
-            config_path, review_config_data, context_seed_path, tracking_result, emit_tasks = self._phase_emit(
+            emit_result = self._phase_emit(
                 doc_path, route, complexity, output_dir,
                 review_rounds, review_quality_tier, scope, context_files,
                 warn_cost_usd, max_cost_usd,
@@ -4011,21 +4022,21 @@ class PlanIngestionWorkflow(WorkflowBase):
             trace_payload = self._build_traceability_artifact(
                 route=route,
                 parsed_plan=parsed_plan,
-                tasks=emit_tasks,
+                tasks=emit_result.tasks,
                 quality=translation_quality,
                 checksum_evidence=preflight_evidence.get("checksums", {}),
             )
             traceability_path = self._write_traceability_artifact(output_dir, trace_payload)
-            state.review_config_path = str(config_path)
-            if context_seed_path is not None:
-                state.context_seed_path = str(context_seed_path)
+            state.review_config_path = str(emit_result.config_path)
+            if emit_result.context_seed_path is not None:
+                state.context_seed_path = str(emit_result.context_seed_path)
 
-            emit_output = f"Wrote {config_path}"
-            if context_seed_path is not None:
-                emit_output += f", {context_seed_path}"
+            emit_output = f"Wrote {emit_result.config_path}"
+            if emit_result.context_seed_path is not None:
+                emit_output += f", {emit_result.context_seed_path}"
             emit_output += f", {traceability_path}"
-            if tracking_result:
-                emit_output += f", {tracking_result.get('state_file_count', 0)} tracking files"
+            if emit_result.tracking_result:
+                emit_output += f", {emit_result.tracking_result.get('state_file_count', 0)} tracking files"
             emit_step = StepResult(
                 step_name="emit",
                 output=emit_output,
@@ -4044,7 +4055,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             output: Dict[str, Any] = {
                 "route": route.value,
                 "plan_document_path": str(doc_path),
-                "review_config_path": str(config_path),
+                "review_config_path": str(emit_result.config_path),
                 "complexity_score": complexity.composite,
                 "refine_rounds_completed": rounds_completed,
                 "traceability_path": str(traceability_path),
@@ -4058,10 +4069,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                     "conflict_count": translation_quality.get("conflict_count", 0),
                 },
             }
-            if context_seed_path is not None:
-                output["context_seed_path"] = str(context_seed_path)
-            if tracking_result:
-                output["task_tracking"] = tracking_result
+            if emit_result.context_seed_path is not None:
+                output["context_seed_path"] = str(emit_result.context_seed_path)
+            if emit_result.tracking_result:
+                output["task_tracking"] = emit_result.tracking_result
 
             return WorkflowResult(
                 workflow_id=self.metadata.workflow_id,

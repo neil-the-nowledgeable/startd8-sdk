@@ -673,8 +673,9 @@ class TestRefinePhase:
             max_cost_usd=None,
         )
 
-        assert rounds == 0
-        assert review_output == {}
+        # Partial output is preserved even on failure (rounds reflect actual work)
+        assert rounds == 0  # no steps in this mock
+        assert review_output == {"triage": {"accepted": 2}}
 
 
 # ---------------------------------------------------------------------------
