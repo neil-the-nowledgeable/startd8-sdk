@@ -49,7 +49,7 @@ class IdentityModule:
 
     def render(self, data: dict[str, Any]) -> PromptFragment:
         lines = ["## Task"]
-        lines.append(f"**{data['task_id']}:** {data['title']}")
+        lines.append(f"**`{data['task_id']}`:** {data['title']}")
 
         desc = data.get("description", "")
         if desc:

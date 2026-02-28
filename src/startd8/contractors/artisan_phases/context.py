@@ -1,3 +1,5 @@
+import logging
+
 from enum import Enum
 from dataclasses import dataclass, field, replace
 from abc import ABC, abstractmethod
@@ -604,9 +606,11 @@ class ContextAssembler:
             metadata=metadata or {},
         )
         self._components.append(component)
-        logger.debug(
-            f"Added component '{name}': {token_count} tokens, priority={priority.name}"
-        )
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Added component '%s': %d tokens, priority=%s",
+                name, token_count, priority.name,
+            )
         return self
 
     def add_file_context(

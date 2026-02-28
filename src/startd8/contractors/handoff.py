@@ -51,7 +51,12 @@ DESIGN_HANDOFF_CONTRACT_FILENAME = "design-handoff-contract.json"
 SCHEMA_VERSION = 1  # Integer for backward compat; schema_version_str = ARTISAN_SCHEMA_VERSION
 
 # Map integer schema_version to string for legacy handoffs missing schema_version_str.
-_SCHEMA_VERSION_TO_STR: dict[int, str] = {1: ARTISAN_SCHEMA_VERSION}
+_SCHEMA_VERSION_TO_STR: dict[int, str] = {
+    1: "1.0.0",
+    2: "2.0.0",
+    3: "3.0.0",
+    4: ARTISAN_SCHEMA_VERSION,  # Current version
+}
 
 # Lazy import helpers for ContextCore contracts
 try:

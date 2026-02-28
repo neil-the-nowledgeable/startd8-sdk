@@ -17,7 +17,6 @@ from typing import Any, Dict, List, Optional
 
 from startd8.events.bus import EventBus
 from startd8.events.types import Event, EventPriority, EventType
-from startd8.logging_config import get_logger
 
 # ---------------------------------------------------------------------------
 # Lazy import of ContextCore contract models
@@ -41,6 +40,8 @@ except ImportError:
     GateSeverity = Any  # type: ignore[assignment,misc]
     Phase = Any  # type: ignore[assignment,misc]
     EvidenceItem = Any  # type: ignore[assignment,misc]
+
+from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
 
