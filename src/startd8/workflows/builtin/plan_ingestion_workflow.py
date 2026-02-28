@@ -504,13 +504,13 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
                 )
             )
         )
-        deps = sorted(set(re.findall(r"\b([A-Za-z]+-\d+)\b", block)))
+        deps = sorted(set(re.findall(r"\b([A-Z]{1,4}-\d+)\b", block)))
         deps = [d.upper() for d in deps if d.upper() != fid]
         features.append(
             ParsedFeature(
                 feature_id=fid,
                 name=name,
-                description=block.strip().split("\n\n")[0].strip() if block.strip() else name,
+                description=block.strip()[:1000] if block.strip() else name,
                 target_files=files,
                 dependencies=deps,
                 estimated_loc=120,
@@ -2943,7 +2943,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         # refine_suggestions — stored in the plan document appendix
         if doc_path.exists():
             plan_text = doc_path.read_text(encoding="utf-8")
-            if "Appendix C" in plan_text or "## Architectural Review" in plan_text or "refine_suggestions" in plan_text:
+            if review_output or "Appendix C" in plan_text or "## Architectural Review" in plan_text:
                 entries.append({
                     "artifact_id": "ingestion.refine_suggestions",
                     "role": "refine_suggestions",
@@ -2993,7 +2993,6 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         # design_calibration
         if design_calibration and context_seed_path.exists():
-            import hashlib as _hashlib
             cal_json = json.dumps(design_calibration, sort_keys=True, default=str)
             entries.append({
                 "artifact_id": "ingestion.design_calibration",
@@ -3003,7 +3002,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 "stage": "ingestion",
                 "source_file": context_seed_path.name,
                 "json_path": "$.design_calibration",
-                "sha256": _hashlib.sha256(cal_json.encode()).hexdigest(),
+                "sha256": sha256(cal_json.encode()).hexdigest(),
+                "checksum_scope": "calibration_data_json",
                 "produced_at": now_iso,
                 "freshness": freshness,
                 "consumers": ["artisan.design"],
@@ -3659,6 +3659,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                 onboarding=onboarding_var_prime,
                 context_files=context_files_list,
                 service_metadata=service_metadata or None,
+                wave_metadata=None,
+                lane_assignments=None,
                 forward_manifest=forward_manifest_dict,
                 project_metadata=project_metadata or None,
             )
