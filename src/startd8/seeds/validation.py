@@ -65,16 +65,17 @@ def validate_context_seed(data: Dict[str, Any]) -> bool:
     """
     try:
         import jsonschema
+    except ImportError:
+        return True
 
+    try:
         jsonschema.validate(data, CONTEXT_SEED_SCHEMA)
         logger.debug("Context seed validated against schema")
         return True
-    except ImportError:
-        return True
-    except Exception as e:
+    except jsonschema.ValidationError as e:
         logger.warning(
             "Context seed schema validation failed: %s — writing anyway",
-            str(e),
+            e.message,
         )
         return False
 

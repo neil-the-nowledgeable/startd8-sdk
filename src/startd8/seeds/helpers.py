@@ -46,7 +46,7 @@ def context_files_with_checksums(
                 entry["checksum"] = hashlib.sha256(content).hexdigest()
             else:
                 entry["checksum"] = None
-        except (OSError, PermissionError):
+        except OSError:
             entry["checksum"] = None
         result.append(entry)
     return result

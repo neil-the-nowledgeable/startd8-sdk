@@ -21,6 +21,15 @@ __all__ = ["ContextSeed", "SeedTask"]
 # Duplicated from artisan_contractor to avoid heavyweight import
 _SAFE_TASK_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# Confidence scores for dependency source provenance
+_DEPS_SOURCE_CONFIDENCE: Dict[str, float] = {
+    "pyproject": 1.0,
+    "requirements_txt": 0.85,
+    "setup_cfg": 0.85,
+    "venv_only": 0.5,
+    "stdlib_only": 0.2,
+}
+
 
 @dataclass
 class ContextSeed:
@@ -147,22 +156,15 @@ class SeedTask:
                         },
                     )
             except Exception:
-                pass
+                logger.debug("OTel span event failed", exc_info=True)
             logger.debug(
                 "SeedTask %s: domain defaulted to 'unknown'",
                 entry.get("task_id", "?"),
             )
 
         deps_source = enrichment.get("deps_source")
-        _source_confidence = {
-            "pyproject": 1.0,
-            "requirements_txt": 0.85,
-            "setup_cfg": 0.85,
-            "venv_only": 0.5,
-            "stdlib_only": 0.2,
-        }
         deps_confidence = (
-            _source_confidence.get(deps_source, 1.0) if deps_source else 1.0
+            _DEPS_SOURCE_CONFIDENCE.get(deps_source, 1.0) if deps_source else 1.0
         )
 
         raw_task_id = entry.get("task_id", "")

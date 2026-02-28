@@ -43,7 +43,12 @@ from .helpers import (
     ensure_onboarding_in_context_files,
 )
 from .models import ContextSeed
-from .validation import log_seed_coverage, validate_context_seed, validate_for_route
+from .validation import (
+    log_seed_coverage,
+    validate_context_seed,
+    validate_for_route,
+    validate_seed_field_coverage,
+)
 
 logger = get_logger(__name__)
 
@@ -83,11 +88,19 @@ class SeedBuilder:
 
     def set_plan(self, parsed_plan: Any) -> "SeedBuilder":
         """Set the plan from a ``ParsedPlan`` instance."""
+        if not hasattr(parsed_plan, "to_seed_dict"):
+            raise TypeError(
+                f"parsed_plan must have a to_seed_dict() method, got {type(parsed_plan).__name__}"
+            )
         self._plan_dict = parsed_plan.to_seed_dict()
         return self
 
     def set_complexity(self, complexity: Any) -> "SeedBuilder":
         """Set the complexity from a ``ComplexityScore`` instance."""
+        if not hasattr(complexity, "to_seed_dict"):
+            raise TypeError(
+                f"complexity must have a to_seed_dict() method, got {type(complexity).__name__}"
+            )
         self._complexity_dict = complexity.to_seed_dict()
         return self
 
@@ -190,12 +203,43 @@ class SeedBuilder:
         review_output: Optional[Dict[str, Any]] = None,
         stub_manifest: Optional[list] = None,
     ) -> "SeedBuilder":
-        """Build the artifacts dict from paths and onboarding data."""
+        """Build the artifacts dict from paths and onboarding data.
+
+        Args:
+            doc_path: Path to the plan document (stored as ``plan_document_path``).
+            config_path: Path to review config (stored as ``review_config_path``).
+            onboarding: Onboarding metadata dict — keys like
+                ``artifact_manifest_path``, ``source_checksum`` are promoted
+                into artifacts; the full dict is stored as ``_onboarding``.
+            review_output: Review/triage output — refine suggestions are
+                extracted and merged into onboarding if present. Must be
+                processed *before* onboarding to ensure suggestions are
+                available during onboarding assembly.
+            stub_manifest: List of stub file entries for the artifacts dict.
+        """
         artifacts: Dict[str, Any] = {}
         if doc_path:
             artifacts["plan_document_path"] = str(doc_path)
         if config_path:
             artifacts["review_config_path"] = str(config_path)
+
+        # Extract refine suggestions from review_output FIRST so they are
+        # available when assembling onboarding below.
+        if review_output:
+            self._refine_suggestions = extract_refine_suggestions_for_seed(
+                review_output
+            )
+
+            triage = review_output.get("triage")
+            if isinstance(triage, dict):
+                provenance: Dict[str, Any] = {
+                    "triage_accepted": triage.get("accepted", 0),
+                    "triage_rejected": triage.get("rejected", 0),
+                }
+                applied_ids = triage.get("applied_suggestion_ids", [])
+                if applied_ids:
+                    provenance["applied_suggestion_ids"] = applied_ids
+                artifacts["refine_provenance"] = provenance
 
         if onboarding:
             for key in (
@@ -213,24 +257,6 @@ class SeedBuilder:
             if self._refine_suggestions:
                 onboarding_var["refine_suggestions"] = self._refine_suggestions
             self._onboarding = onboarding_var
-
-        if review_output:
-            self._refine_suggestions = extract_refine_suggestions_for_seed(
-                review_output
-            )
-            if self._onboarding and self._refine_suggestions:
-                self._onboarding["refine_suggestions"] = self._refine_suggestions
-
-            triage = review_output.get("triage")
-            if isinstance(triage, dict):
-                provenance: Dict[str, Any] = {
-                    "triage_accepted": triage.get("accepted", 0),
-                    "triage_rejected": triage.get("rejected", 0),
-                }
-                applied_ids = triage.get("applied_suggestion_ids", [])
-                if applied_ids:
-                    provenance["applied_suggestion_ids"] = applied_ids
-                artifacts["refine_provenance"] = provenance
 
         if stub_manifest:
             artifacts["stub_manifest"] = stub_manifest
@@ -322,8 +348,6 @@ class SeedBuilder:
         warnings: List[str] = []
         if not validate_context_seed(seed_dict):
             warnings.append("base schema validation failed")
-        from .validation import validate_seed_field_coverage
-
         warnings.extend(validate_seed_field_coverage(seed_dict))
         return warnings
 
@@ -342,12 +366,16 @@ class SeedBuilder:
 
         path.parent.mkdir(parents=True, exist_ok=True)
         try:
-            from ..utils.file_operations import atomic_write_json
+            try:
+                from ..utils.file_operations import atomic_write_json
 
-            atomic_write_json(path, seed_dict)
-        except ImportError:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(seed_dict, f, indent=2)
+                atomic_write_json(path, seed_dict)
+            except ImportError:
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(seed_dict, f, indent=2)
+        except OSError as e:
+            logger.error("Failed to write context seed to %s: %s", path, e)
+            raise
 
         logger.info("Wrote context seed: %s (%d tasks)", path, len(self._tasks))
         return path

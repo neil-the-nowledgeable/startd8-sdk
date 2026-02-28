@@ -87,6 +87,15 @@ DEPTH_TIERS: Dict[str, Dict[str, Any]] = {
 }
 
 
+def _classify_complexity(loc: int) -> str:
+    """Classify task complexity from estimated LOC."""
+    if loc <= 50:
+        return "low"
+    if loc <= 150:
+        return "medium"
+    return "high"
+
+
 def estimate_story_points(estimated_loc: int) -> int:
     """Map estimated LOC to story points."""
     if estimated_loc <= 20:
@@ -238,12 +247,18 @@ def infer_service_metadata(
     languages: list[str] = []
 
     for f in features:
+        if not hasattr(f, "protocol"):
+            logger.warning(
+                "infer_service_metadata: skipping non-feature object %s",
+                type(f).__name__,
+            )
+            continue
         if f.protocol:
             protocols.append(f.protocol)
-        all_runtime_deps.extend(f.runtime_dependencies)
-        all_api_sigs.extend(f.api_signatures)
-        all_negative_scope.extend(f.negative_scope)
-        for tf in f.target_files:
+        all_runtime_deps.extend(getattr(f, "runtime_dependencies", []))
+        all_api_sigs.extend(getattr(f, "api_signatures", []))
+        all_negative_scope.extend(getattr(f, "negative_scope", []))
+        for tf in getattr(f, "target_files", []):
             ext = tf.rsplit(".", 1)[-1].lower() if "." in tf else ""
             lang = _EXT_TO_LANGUAGE.get(ext)
             if lang and lang not in languages:
@@ -309,10 +324,12 @@ def derive_tasks_from_features(
     output_path_conventions: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Convert ParsedFeatures into task dicts matching prime-route schema."""
+    # --- Stage 1: Build feature-ID → task-ID mapping ---
     fid_to_tid: Dict[str, str] = {}
     for idx, feat in enumerate(features, start=1):
         fid_to_tid[feat.feature_id] = f"PI-{idx:03d}"
 
+    # --- Stage 2: Invert requirement/artifact mappings to per-feature ---
     feature_to_requirements: Dict[str, List[str]] = {}
     for rid, fids in (requirement_to_feature or {}).items():
         if not isinstance(rid, str) or not isinstance(fids, list):
@@ -333,6 +350,7 @@ def derive_tasks_from_features(
     for fid in feature_to_artifacts:
         feature_to_artifacts[fid] = sorted(set(feature_to_artifacts[fid]))
 
+    # --- Stage 3: Build task dicts from features ---
     tasks: List[Dict[str, Any]] = []
     for idx, feat in enumerate(features, start=1):
         tid = fid_to_tid[feat.feature_id]
@@ -467,6 +485,7 @@ def derive_tasks_from_features(
             },
         })
 
+    # --- Stage 4: Clean up dangling dependency references ---
     emitted_ids = {t["task_id"] for t in tasks}
     for t in tasks:
         original_deps = t.get("depends_on", [])
@@ -479,6 +498,7 @@ def derive_tasks_from_features(
             )
             t["depends_on"] = cleaned_deps
 
+    # --- Stage 5: Post-filters (split oversized, remove trivial inits) ---
     tasks = split_oversized_tasks(tasks, max_files=1)
 
     for t in tasks:
@@ -532,6 +552,7 @@ def split_oversized_tasks(
 
         init_sub_id = None
         for idx, target_file in enumerate(ordered):
+            # a-z for first 26 sub-tasks, then numeric suffix for overflow
             suffix = chr(ord("a") + idx) if idx < 26 else f"-{idx + 1:02d}"
             sub_id = f"{parent_id}{suffix}"
 
@@ -682,7 +703,7 @@ def derive_design_calibration(
         from contextcore.agent.size_estimation import SizeEstimator
         estimator = SizeEstimator()
     except ImportError:
-        pass
+        logger.debug("SizeEstimator unavailable — using LOC-based complexity")
 
     calibration: Dict[str, Dict[str, Any]] = {}
     for task in tasks:
@@ -698,15 +719,14 @@ def derive_design_calibration(
                 )
                 complexity = estimate.complexity
             except Exception:
-                complexity = (
-                    "low" if loc <= 50
-                    else ("medium" if loc <= 150 else "high")
+                logger.debug(
+                    "SizeEstimator failed for task %s — falling back to LOC",
+                    task.get("task_id", "?"),
+                    exc_info=True,
                 )
+                complexity = _classify_complexity(loc)
         else:
-            complexity = (
-                "low" if loc <= 50
-                else ("medium" if loc <= 150 else "high")
-            )
+            complexity = _classify_complexity(loc)
 
         tier_name = {
             "low": "brief",
