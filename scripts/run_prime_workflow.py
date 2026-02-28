@@ -162,6 +162,14 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--walkthrough", action="store_true",
+        help="Build and persist all LLM prompts without calling LLMs",
+    )
+    parser.add_argument(
+        "--walkthrough-postmortem", action="store_true",
+        help="Run post-mortem evaluation on persisted walkthrough prompts",
+    )
+    parser.add_argument(
         "--mode", choices=["standalone", "pipeline"], default=None,
         help=(
             "Execution mode: 'standalone' (zero-change default) or 'pipeline' "
@@ -370,6 +378,7 @@ def main() -> int:
         auto_commit=args.auto_commit,
         code_generator=code_generator,
         cli_mode=args.mode,
+        walkthrough=args.walkthrough,
     )
 
     # Load features from seed
@@ -471,6 +480,25 @@ def main() -> int:
     # Print results
     print_results(result)
 
+    # Walkthrough postmortem
+    if args.walkthrough and args.walkthrough_postmortem:
+        try:
+            from startd8.contractors.postmortem import (
+                launch_walkthrough_postmortem_async,
+            )
+
+            walkthrough_root = str(project_root / ".startd8" / "walkthrough")
+            thread = launch_walkthrough_postmortem_async(
+                seed_path=str(seed_path),
+                workflow_result=result,
+                walkthrough_root=walkthrough_root,
+                output_dir=str(output_dir),
+            )
+            thread.join(timeout=120)
+            logger.info("Walkthrough postmortem completed")
+        except Exception as exc:
+            logger.warning("Walkthrough postmortem failed: %s", exc)
+
     # Write result JSON
     if task_filter and len(task_filter) == 1:
         result_filename = f"prime-result-{task_filter[0]}.json"
@@ -493,6 +521,7 @@ def main() -> int:
         "aborted": result.get("aborted", False),
         "abort_reason": result.get("abort_reason"),
         "dry_run": args.dry_run,
+        "walkthrough": args.walkthrough,
         "execution_mode": workflow.execution_mode,
         "seed_path": str(seed_path),
         "task_filter": task_filter,

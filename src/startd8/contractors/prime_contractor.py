@@ -506,7 +506,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False):
         """
         Initialize the Prime Contractor workflow.
 
@@ -591,6 +591,7 @@ class PrimeContractorWorkflow:
         self.seed_forward_manifest: Optional[Dict[str, Any]] = None  # REQ-PC-FM-002
         self.plan_document_text: Optional[str] = None
         self.force_regenerate: bool = False
+        self.walkthrough: bool = walkthrough
         # Validation overrides (Phase 5: --validate / --no-validate / --strict-validation)
         self._validation_override: Optional[bool] = None  # None = use mode default
         self.strict_validation: bool = False
@@ -1449,6 +1450,10 @@ class PrimeContractorWorkflow:
             if not self.develop_feature(feature):
                 return False
         if feature.status == FeatureStatus.GENERATED:
+            if self.walkthrough:
+                self.queue.complete_feature(feature.id)
+                self._save_queue_state_with_mode()
+                return True
             if feature.error_message and self.code_generator:
                 logger.info("Feature '%s' has prior error — regenerating with feedback: %s", feature.name, feature.error_message, extra={'feature_name': feature.name, 'prior_error': feature.error_message})
                 prior_error = feature.error_message
@@ -1493,10 +1498,11 @@ class PrimeContractorWorkflow:
                 self.queue.fail_feature(feature.id, f'Sub-feature {sub_id} generation failed')
                 return False
             parent_cost += getattr(sub_feature, '_cost_usd', 0.0)
-            if not self.integrate_feature(sub_feature):
-                self.on_feature_complete = saved_callback
-                self.queue.fail_feature(feature.id, f'Sub-feature {sub_id} integration failed')
-                return False
+            if not self.walkthrough:
+                if not self.integrate_feature(sub_feature):
+                    self.on_feature_complete = saved_callback
+                    self.queue.fail_feature(feature.id, f'Sub-feature {sub_id} integration failed')
+                    return False
         self.on_feature_complete = saved_callback
         feature._cost_usd = parent_cost
         self.queue.complete_feature(feature.id)
@@ -1565,6 +1571,145 @@ class PrimeContractorWorkflow:
                 classifications[fpath_str] = "current"
 
         return classifications
+
+    # ------------------------------------------------------------------
+    # Walkthrough Mode: Prompt Persistence
+    # ------------------------------------------------------------------
+
+    def _persist_walkthrough_prompts(
+        self,
+        feature: FeatureSpec,
+        gen_context: Dict[str, Any],
+    ) -> None:
+        """Persist all LLM prompts for a feature without making LLM calls.
+
+        Captures the 3 LeadContractorWorkflow phases (spec, draft, review)
+        as markdown files plus a metadata.json summary.
+
+        Output directory: .startd8/walkthrough/prime/{feature.id}/
+        """
+        wt_dir = self.project_root / ".startd8" / "walkthrough" / "prime" / feature.id
+        wt_dir.mkdir(parents=True, exist_ok=True)
+
+        # Local imports to avoid circular deps (matches existing pattern)
+        from ..implementation_engine import spec_builder
+        from ..implementation_engine.drafter import (
+            get_drafter_system_prompt,
+            build_output_format,
+            build_existing_files_section,
+        )
+        from ..implementation_engine.prompts import get_template
+
+        # --- Spec phase ---
+        try:
+            # build_spec_prompt pops keys from context, so pass a copy
+            spec_prompt = spec_builder.build_spec_prompt(
+                task_description=feature.description,
+                context=dict(gen_context),
+                output_format=None,
+            )
+        except Exception as exc:
+            spec_prompt = f"[Error building spec prompt: {exc}]"
+            logger.warning(
+                "Walkthrough: spec prompt build failed for '%s': %s",
+                feature.name, exc,
+            )
+
+        (wt_dir / "spec_user_prompt.md").write_text(spec_prompt, encoding="utf-8")
+        (wt_dir / "spec_system_prompt.md").write_text(
+            "# Spec System Prompt\n\nThe spec phase embeds the role directive "
+            "in the user prompt. There is no separate system prompt.",
+            encoding="utf-8",
+        )
+
+        # --- Draft phase ---
+        existing_files = gen_context.get("existing_files")
+        draft_system = get_drafter_system_prompt(existing_files=existing_files)
+        (wt_dir / "draft_system_prompt.md").write_text(
+            draft_system, encoding="utf-8",
+        )
+
+        is_edit = bool(existing_files)
+        template_key = "draft_edit" if is_edit else "draft"
+        try:
+            draft_template = get_template(template_key)
+        except Exception:
+            draft_template = f"[Could not load template '{template_key}']"
+
+        existing_section = build_existing_files_section(
+            existing_files=existing_files,
+        )
+        output_format = build_output_format(
+            target_files=feature.target_files,
+            existing_files=existing_files,
+        )
+        draft_user = (
+            f"# Draft User Prompt\n\n"
+            f"**Template:** `{template_key}`\n\n"
+            f"## Existing Files Section\n\n{existing_section}\n\n"
+            f"## Output Format\n\n{output_format}\n\n"
+            f"## Template (with placeholders)\n\n"
+            f"The `{{spec_output}}` placeholder will be replaced with "
+            f"the spec phase output.\n\n"
+            f"```\n{draft_template}\n```"
+        )
+        (wt_dir / "draft_user_prompt.md").write_text(
+            draft_user, encoding="utf-8",
+        )
+
+        # --- Review phase ---
+        try:
+            review_system = get_template("review_system")
+        except Exception:
+            review_system = "[Could not load review_system template]"
+        (wt_dir / "review_system_prompt.md").write_text(
+            review_system, encoding="utf-8",
+        )
+
+        try:
+            review_template = get_template("review")
+        except Exception:
+            review_template = "[Could not load review template]"
+        review_user = (
+            f"# Review User Prompt\n\n"
+            f"**Template:** `review`\n\n"
+            f"The `{{spec_output}}` and `{{implementation}}` placeholders "
+            f"will be replaced with actual spec and draft outputs at "
+            f"runtime.\n\n"
+            f"```\n{review_template}\n```"
+        )
+        (wt_dir / "review_user_prompt.md").write_text(
+            review_user, encoding="utf-8",
+        )
+
+        # --- Metadata ---
+        agent_spec = "unknown"
+        if self.code_generator and hasattr(self.code_generator, "lead_agent"):
+            agent_spec = str(self.code_generator.lead_agent)
+        drafter_spec = "unknown"
+        if self.code_generator and hasattr(
+            self.code_generator, "drafter_agent",
+        ):
+            drafter_spec = str(self.code_generator.drafter_agent)
+
+        metadata = {
+            "feature_id": feature.id,
+            "feature_name": feature.name,
+            "target_files": feature.target_files,
+            "lead_agent_spec": agent_spec,
+            "drafter_agent_spec": drafter_spec,
+            "context_keys": list(gen_context.keys()),
+            "has_existing_files": is_edit,
+            "execution_mode": self.execution_mode,
+        }
+        (wt_dir / "metadata.json").write_text(
+            json.dumps(metadata, indent=2, default=str), encoding="utf-8",
+        )
+
+        logger.info(
+            "Walkthrough: persisted prompts for '%s' -> %s",
+            feature.name, wt_dir,
+        )
 
     def develop_feature(self, feature: FeatureSpec, prior_error: Optional[str]=None) -> bool:
         """
@@ -1709,6 +1854,19 @@ class PrimeContractorWorkflow:
 
             # PC-O1: Populate existing_files for edit tasks when target_files exist
             self._populate_existing_files(feature, gen_context)
+
+            # Walkthrough mode: persist prompts, skip LLM calls
+            if self.walkthrough:
+                self._persist_walkthrough_prompts(feature, gen_context)
+                feature.generated_files = [
+                    f"walkthrough/{feature.id}/{Path(t).name}"
+                    for t in feature.target_files
+                ] if feature.target_files else [
+                    f"walkthrough/{feature.id}/code.py"
+                ]
+                feature.status = FeatureStatus.GENERATED
+                self._save_queue_state_with_mode()
+                return True
 
             # Phase 4: Staleness detection — skip generation if cached result is current
             if not self._check_staleness(feature):
