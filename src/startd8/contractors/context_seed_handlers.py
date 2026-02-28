@@ -3154,17 +3154,28 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         thread.join(timeout=timeout)
 
         if thread.is_alive():
-            logger.error(
-                "DesignDocumentationPhase did not complete within %.0fs — "
-                "abandoning background thread (daemon=True)",
-                timeout,
-            )
-            raise TimeoutError(
-                f"DesignDocumentationPhase.run() did not complete within {timeout}s"
-            )
+            # Race guard — thread may have completed between join() and is_alive()
+            if "result" in result_box or "error" in error_box:
+                logger.debug(
+                    "_run_design_async thread reported alive after join() "
+                    "but result_box is populated — treating as completed",
+                )
+            else:
+                logger.error(
+                    "DesignDocumentationPhase did not complete within %.0fs — "
+                    "abandoning background thread (daemon=True)",
+                    timeout,
+                )
+                raise TimeoutError(
+                    f"DesignDocumentationPhase.run() did not complete within {timeout}s"
+                )
 
         if "error" in error_box:
             raise error_box["error"]
+        if "result" not in result_box:
+            raise RuntimeError(
+                "_run_design_async: thread completed but produced neither result nor error"
+            )
         return result_box["result"]
 
     @staticmethod
@@ -3218,17 +3229,28 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         thread.join(timeout=timeout)
 
         if thread.is_alive():
-            logger.error(
-                "v2 design generate did not complete within %.0fs — "
-                "abandoning background thread (daemon=True)",
-                timeout,
-            )
-            raise TimeoutError(
-                f"v2 design generate did not complete within {timeout}s"
-            )
+            # Race guard — thread may have completed between join() and is_alive()
+            if "result" in result_box or "error" in error_box:
+                logger.debug(
+                    "_run_v2_generate thread reported alive after join() "
+                    "but result_box is populated — treating as completed",
+                )
+            else:
+                logger.error(
+                    "v2 design generate did not complete within %.0fs — "
+                    "abandoning background thread (daemon=True)",
+                    timeout,
+                )
+                raise TimeoutError(
+                    f"v2 design generate did not complete within {timeout}s"
+                )
 
         if "error" in error_box:
             raise error_box["error"]
+        if "result" not in result_box:
+            raise RuntimeError(
+                "_run_v2_generate: thread completed but produced neither result nor error"
+            )
         return result_box["result"]
 
     @staticmethod
@@ -3288,17 +3310,28 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         thread.join(timeout=timeout)
 
         if thread.is_alive():
-            logger.error(
-                "v2 design review did not complete within %.0fs — "
-                "abandoning background thread (daemon=True)",
-                timeout,
-            )
-            raise TimeoutError(
-                f"v2 design review did not complete within {timeout}s"
-            )
+            # Race guard — thread may have completed between join() and is_alive()
+            if "result" in result_box or "error" in error_box:
+                logger.debug(
+                    "_run_v2_reviews_async thread reported alive after join() "
+                    "but result_box is populated — treating as completed",
+                )
+            else:
+                logger.error(
+                    "v2 design review did not complete within %.0fs — "
+                    "abandoning background thread (daemon=True)",
+                    timeout,
+                )
+                raise TimeoutError(
+                    f"v2 design review did not complete within {timeout}s"
+                )
 
         if "error" in error_box:
             raise error_box["error"]
+        if "result" not in result_box:
+            raise RuntimeError(
+                "_run_v2_reviews_async: thread completed but produced neither result nor error"
+            )
         return result_box["result"]
 
     @staticmethod
