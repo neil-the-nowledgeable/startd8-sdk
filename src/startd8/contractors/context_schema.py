@@ -269,6 +269,15 @@ class ImplementPhaseOutput(BaseModel):
     truncation_flags: Dict[str, Any] = {}
 
     @model_validator(mode="after")
+    def _warn_empty_results(self) -> "ImplementPhaseOutput":
+        if not self.generation_results:
+            _logger.warning(
+                "ImplementPhaseOutput: generation_results is empty — "
+                "no tasks produced output"
+            )
+        return self
+
+    @model_validator(mode="after")
     def check_implement_output_consistency(self) -> "ImplementPhaseOutput":
         """Validate structural invariants of the IMPLEMENT output.
 

@@ -2047,9 +2047,10 @@ class ScaffoldPhaseHandler(AbstractPhaseHandler):
                     "SCAFFOLD: file assembly complete — created=%d skipped=%d failed=%d",
                     file_stubs_created, file_stubs_skipped, file_stubs_failed,
                 )
-        except Exception:
+        except (OSError, ValueError, ImportError) as exc:
             logger.warning(
-                "SCAFFOLD: deterministic file assembly failed — degrading gracefully",
+                "SCAFFOLD: deterministic file assembly failed — degrading gracefully: %s",
+                exc,
                 exc_info=True,
             )
             assembly_degraded = True
@@ -2681,7 +2682,10 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         """
         from startd8.contractors.artisan_phases.design_documentation import DesignSectionV2
         required = [f"## {s.value}" for s in DesignSectionV2]
-        missing = [h for h in required if h not in raw_text]
+        missing = [
+            h for h in required
+            if not re.search(rf'^{re.escape(h)}\s*$', raw_text, re.MULTILINE)
+        ]
         return {"passed": len(missing) == 0, "missing_sections": missing}
 
     # ------------------------------------------------------------------
@@ -9127,6 +9131,12 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
             check_truncation=self.config.check_truncation,
         )
 
+        # Capture original generated file paths before integration overwrites them
+        _original_gen_files: dict[str, list[str]] = {}
+        for task_id, gr in generation_results.items():
+            if gr.success:
+                _original_gen_files[task_id] = [str(f) for f in gr.generated_files]
+
         # Integrate each task
         integration_results: dict[str, dict[str, Any]] = {}
         for task_id, gr in generation_results.items():
@@ -9134,6 +9144,11 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 continue
             task = task_map.get(task_id)
             if not task:
+                logger.warning(
+                    "INTEGRATE: task %s has generation_results but is not in task_map "
+                    "— skipping integration (task may have been removed from seed)",
+                    task_id,
+                )
                 continue
             _log_task_boundary_start(task, phase="integrate")
 
@@ -9272,7 +9287,7 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
                 continue
 
             integrated = {str(Path(f)) for f in ir.get("integrated_files", [])}
-            expected = {str(f) for f in gr.generated_files}
+            expected = set(_original_gen_files.get(task_id, []))
 
             # Also count skipped files as "accounted for"
             skipped_paths = ir.get("skipped_files", [])
@@ -9694,7 +9709,9 @@ class TestPhaseHandler(AbstractPhaseHandler):
                     "validator": validator_name,
                     "skipped": True,
                     "reason": "unknown_validator",
+                    "passed": False,
                 })
+                all_passed = False
                 continue
 
             result = self._run_validator(
@@ -9788,6 +9805,12 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 "(cached=%s, context=%s) — skipping Layer 1 comparison",
                 "present" if cached_checksum else "absent",
                 "present" if source_checksum else "absent",
+            )
+        else:
+            # Both checksums are None — Layer 1 integrity check is disabled
+            logger.warning(
+                "Cache validation: neither cached nor current has source_checksum — "
+                "Layer 1 integrity check is disabled"
             )
 
         # Layer 1.5: Design hash — invalidate when design changes
@@ -10021,10 +10044,14 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 )
                 test_plan.append(task_test_result)
 
-                if task_test_result["all_passed"]:
+                if task_test_result["all_passed"] and task_test_result.get("validators_run", 0) > 0:
                     total_passed += 1
                     _task_span.set_attribute("task.status", "passed")
                     task_status = "passed"
+                elif task_test_result.get("validators_run", 0) == 0:
+                    # No validators ran — not a validated pass
+                    _task_span.set_attribute("task.status", "uncovered")
+                    task_status = "uncovered"
                 else:
                     total_failed += 1
                     _task_span.set_attribute("task.status", "failed")
@@ -11125,7 +11152,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
             score = min(100, max(0, int(score_match.group(1))))
         else:
             # Fallback: try without markdown headers
-            score_fallback = re.search(r"(?:^|\n)\s*Score\s*[:=]\s*(\d+)", response, re.IGNORECASE)
+            score_fallback = re.search(r"(?:^|\n)\s*Score\s*[:=]\s*(\d+)\s*(?:/\s*100)?\s*$", response, re.IGNORECASE | re.MULTILINE)
             if score_fallback:
                 score = min(100, max(0, int(score_fallback.group(1))))
             else:
@@ -11135,12 +11162,12 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 )
 
         # Extract verdict
-        verdict_match = re.search(r"###\s*Verdict:\s*(PASS|FAIL)", response, re.IGNORECASE)
+        verdict_match = re.search(r"###\s*Verdict:\s*\**\s*(PASS|FAIL)\s*\**", response, re.IGNORECASE)
         if verdict_match:
             verdict = verdict_match.group(1).upper()
         else:
             # Fallback: try without markdown headers
-            verdict_fallback = re.search(r"(?:^|\n)\s*Verdict\s*[:=]\s*(PASS|FAIL)", response, re.IGNORECASE)
+            verdict_fallback = re.search(r"(?:^|\n)\s*Verdict\s*[:=]\s*\**\s*(PASS|FAIL)\s*\**", response, re.IGNORECASE)
             if verdict_fallback:
                 verdict = verdict_fallback.group(1).upper()
             else:
@@ -11158,6 +11185,10 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 cleaned = line.strip()
                 if cleaned.startswith("- "):
                     items.append(cleaned[2:].strip())
+                elif cleaned.startswith("* "):
+                    items.append(cleaned[2:].strip())
+                elif re.match(r"^\d+\.\s+", cleaned):
+                    items.append(re.sub(r"^\d+\.\s+", "", cleaned).strip())
             return items
 
         return {
@@ -11463,6 +11494,12 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 "(cached=%s, context=%s) — skipping Layer 1 comparison",
                 "present" if cached_checksum else "absent",
                 "present" if source_checksum else "absent",
+            )
+        else:
+            # Both checksums are None — Layer 1 integrity check is disabled
+            logger.warning(
+                "Cache validation: neither cached nor current has source_checksum — "
+                "Layer 1 integrity check is disabled"
             )
 
         # Layer 1.5: Design hash — invalidate when design changes
@@ -12741,10 +12778,13 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         # Consider test/review outcomes in status rollup
         tests_failed = test_results.get("total_failed", 0)
         reviews_failed = review_results.get("total_failed", 0)
+        tests_skipped = test_results.get("total_skipped", 0)
 
         if generated_fail == 0 and generated_ok == total_tasks:
             if tests_failed > 0 or reviews_failed > 0:
                 overall_status = "quality_failed"
+            elif tests_skipped > 0:
+                overall_status = "partial"
             else:
                 overall_status = "success"
         elif generated_ok == 0:
