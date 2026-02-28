@@ -1873,14 +1873,6 @@ class PlanIngestionWorkflow(WorkflowBase):
         requirements_hints: Optional[Dict[str, Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Compute translation-quality metrics used for routing safeguards."""
-        plan_text = "\n".join(
-            [
-                parsed_plan.title,
-                parsed_plan.raw_text,
-                *(f"{f.feature_id} {f.name} {f.description}" for f in parsed_plan.features),
-            ]
-        ).lower()
-
         requirement_hints = requirements_hints or {}
         requirement_ids = sorted(requirement_hints.keys())
         if not requirement_ids:
@@ -2250,6 +2242,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             if accepted == 0:
                 return []
             return [{
+                "decision": "ACCEPT",
                 "source": "triage_summary",
                 "triage_accepted_count": accepted,
                 "triage_rejected_count": triage.get("rejected", 0),
@@ -2480,12 +2473,12 @@ class PlanIngestionWorkflow(WorkflowBase):
                     + "\n".join(f"- {r}" for r in ctx["source_references"])
                 )
             _requirements_text = "\n\n".join(_req_parts)
-            if len(_requirements_text) > 2000:
-                _requirements_text = _requirements_text[:2000] + " [truncated]"
             # Avoid duplicating task_description when no additional
             # acceptance/source context was appended.
             if _requirements_text == feat.description:
                 _requirements_text = ""
+            elif len(_requirements_text) > 2000:
+                _requirements_text = _requirements_text[:2000] + " [truncated]"
 
             tasks.append({
                 "task_id": tid,
@@ -2611,7 +2604,7 @@ class PlanIngestionWorkflow(WorkflowBase):
 
             init_sub_id = None
             for idx, target_file in enumerate(ordered):
-                suffix = chr(ord("a") + idx) if idx < 26 else f"-{idx + 1:02d}"
+                suffix = chr(ord("a") + idx) if idx < 26 else f"-{idx:02d}"
                 sub_id = f"{parent_id}{suffix}"
 
                 # Sub-task deps: parent's deps + init sub-task (if this
@@ -3129,12 +3122,16 @@ class PlanIngestionWorkflow(WorkflowBase):
 
         # dependency_clusters: root features (depended upon, no deps of their own)
         dep_graph = parsed_plan.dependency_graph
-        # Features that are depended upon by others
+        # Features that are depended upon by others (from both dep_graph and feat.dependencies)
         depended_upon: set[str] = set()
         for deps in dep_graph.values():
             depended_upon.update(deps)
-        # Features that have their own dependencies
-        has_deps: set[str] = set(dep_graph.keys())
+        for feat in parsed_plan.features:
+            depended_upon.update(feat.dependencies)
+        # Features that have their own dependencies (from either source)
+        has_deps: set[str] = set(dep_graph.keys()) | {
+            f.feature_id for f in parsed_plan.features if f.dependencies
+        }
         # Roots = depended upon but have no deps of their own
         root_ids = [
             fid for fid in depended_upon
@@ -3217,10 +3214,15 @@ class PlanIngestionWorkflow(WorkflowBase):
             if not domain:
                 target_files = ctx.get("target_files", [])
                 if target_files:
-                    ext = target_files[0].rsplit(".", 1)[-1].lower() if "." in target_files[0] else ""
-                    if ext in ("toml", "yaml", "yml", "json", "ini", "cfg"):
-                        domain = f"config-{ext.replace('yml', 'yaml')}"
-                    elif ext == "py":
+                    exts = {
+                        tf.rsplit(".", 1)[-1].lower()
+                        for tf in target_files if "." in tf
+                    }
+                    has_python = "py" in exts
+                    config_exts = {"toml", "yaml", "yml", "json", "ini", "cfg"}
+                    has_config = bool(exts & config_exts)
+
+                    if has_python:
                         if any(
                             os.path.basename(tf).startswith("test_")
                             or os.path.basename(tf).endswith("_test.py")
@@ -3231,7 +3233,13 @@ class PlanIngestionWorkflow(WorkflowBase):
                             domain = "python-test"
                         else:
                             domain = "python-single-module"
-                    elif ext and ext not in ("py",):
+                    elif has_config:
+                        # Use the first config ext for the domain label
+                        config_ext = next(
+                            e for e in exts if e in config_exts
+                        )
+                        domain = f"config-{config_ext.replace('yml', 'yaml')}"
+                    elif exts:
                         domain = "non-python"
                 if not domain:
                     domain = "unknown"
