@@ -1,3 +1,7 @@
+# Implementation-phase prompt templates.
+# Consumed by development.py via _format_implement_prompt().
+# Inline fallbacks for each template live in _INLINE_FALLBACK_TEMPLATES
+# (development.py) and are used when YAML loading fails.
 prompts:
   project_identity:
     description: "Project identity header (project name, root, goals)"

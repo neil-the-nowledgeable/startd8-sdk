@@ -2076,9 +2076,9 @@ class DesignDocumentationPhase:
         arbiter_verdict: ReviewVerdict | None = None
         last_disagreements: list[Disagreement] = []
         self._active_prompt_telemetry = []
-        review_pair_count = 0
-        re_review_pair_count = 0
-        pending_re_review_pair = False
+        review_pair_count: int = 0
+        re_review_pair_count: int = 0
+        pending_re_review_pair: bool = False
         disagreement_events: list[dict[str, Any]] = []
         resolution_events: list[dict[str, Any]] = []
         resolution_action_counts: dict[str, int] = {}
@@ -2418,11 +2418,11 @@ class DesignDocumentationPhase:
                 logger.error("Design documentation phase failed: %s", exc)
                 raise
             except Exception as exc:
-                # Retry transient API errors (connection, overload) before
-                # wrapping in DesignDocumentationError.  Defense-in-depth:
-                # the outer handler in context_seed_handlers also retries,
-                # but this inner retry prevents wasting a full handler-level
-                # attempt on a transient blip mid-iteration.
+                # Inner retry for transient API errors (connection, overload,
+                # 429) — prevents wasting a full handler-level attempt on a
+                # transient blip mid-iteration.  The outer handler in
+                # context_seed_handlers has its own retry loop, but that
+                # restarts the entire design iteration sequence.
                 _transient_retry_config = RetryConfig(
                     max_attempts=1,
                     base_delay=5.0,

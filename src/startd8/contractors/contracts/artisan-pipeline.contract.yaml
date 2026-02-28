@@ -520,6 +520,7 @@ phases:
 # End-to-end field flow declarations.  Each chain tracks a field from its
 # source phase through waypoints to its destination.
 
+# Chain IDs follow snake_case convention: {source_phase}_{field}_to_{target_phase}
 propagation_chains:
 
   - chain_id: domain_to_implement

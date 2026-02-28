@@ -11407,6 +11407,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         previous_task_started_mono: Optional[float] = None
         _service_metadata = context.get("service_metadata")
 
+        # Note: idx is ordinal position (not completed count) — may skip if tasks are filtered
         for idx, task in enumerate(tasks, start=1):
             _links = _build_provenance_links(task.task_id, context, ["design", "implement"])
             _task_span_cm = _phase_tracer.start_as_current_span(

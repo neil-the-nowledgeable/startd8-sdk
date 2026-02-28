@@ -533,7 +533,6 @@ class ContextAssembler:
             raise ValueError("Total budget cannot be negative.")
         self.token_counter = TokenCounter(encoding_name)
         self.budget = ContextBudget(total_budget, safety_margin, structural_overhead)
-        self.structural_overhead = structural_overhead
         self.encoding_name = encoding_name
         self._components: List[ContextComponent] = []
         self._compression_strategies: Dict[CompressionType, CompressionStrategy] = {

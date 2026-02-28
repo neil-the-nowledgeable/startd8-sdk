@@ -367,6 +367,10 @@ class TaskComplexityTier(str, Enum):
     TIER_3 = "tier_3"
 
 
+# Default complexity tier used when no manifest data is available.
+_DEFAULT_COMPLEXITY_TIER = TaskComplexityTier.TIER_2
+
+
 @dataclass(frozen=True)
 class TaskComplexitySignals:
     """Per-task complexity signals extracted from manifest data (REQ-CMR-001).
@@ -3631,7 +3635,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
 
             # CMR: Select drafter based on complexity tier (REQ-CMR-020/021)
             _complexity_tier = chunk.metadata.get(
-                "_complexity_tier", TaskComplexityTier.TIER_2.value,
+                "_complexity_tier", _DEFAULT_COMPLEXITY_TIER.value,
             )
             if _complexity_tier == TaskComplexityTier.TIER_3.value:
                 tier3 = self._resolve_tier3_drafter()
@@ -4893,7 +4897,7 @@ class DevelopmentPhase:
             _signals = chunk.metadata.get("_complexity_signals", {}) or {}
             _chunk_span.set_attribute(
                 AttributeKeys.TASK_COMPLEXITY_TIER,
-                chunk.metadata.get("_complexity_tier", TaskComplexityTier.TIER_2.value),
+                chunk.metadata.get("_complexity_tier", _DEFAULT_COMPLEXITY_TIER.value),
             )
             _chunk_span.set_attribute(
                 AttributeKeys.TASK_BLAST_RADIUS,
@@ -4919,11 +4923,8 @@ class DevelopmentPhase:
             )
             elapsed_m = elapsed_s / 60.0
             self.logger.info(
-                "Chunk %s: attempt %s (phase elapsed %.1fs / %.2fmin)",
-                chunk.chunk_id,
-                attempt_label,
-                elapsed_s,
-                elapsed_m,
+                f"Chunk {chunk.chunk_id}: attempt {attempt_label} "
+                f"(phase elapsed {elapsed_s:.1f}s / {elapsed_m:.2f}min)"
             )
 
             # --- QUEUED ---
@@ -4941,9 +4942,8 @@ class DevelopmentPhase:
                         context["domain"] = enrichment.domain.value
                         context["post_generation_validators"] = enrichment.post_generation_validators
                         self.logger.info(
-                            "Chunk %s: domain=%s, %d constraints injected",
-                            chunk.chunk_id, enrichment.domain.value,
-                            len(enrichment.prompt_constraints),
+                            f"Chunk {chunk.chunk_id}: domain={enrichment.domain.value}, "
+                            f"{len(enrichment.prompt_constraints)} constraints injected"
                         )
                         # --- WCP-003: Track propagation provenance ---
                         try:
@@ -4972,13 +4972,11 @@ class DevelopmentPhase:
                                 pass  # OTel not installed — non-fatal
                         except (OSError, TypeError, ValueError) as _prop_err:
                             self.logger.debug(
-                                "Chunk %s: propagation tracking failed (non-fatal): %s",
-                                chunk.chunk_id, _prop_err,
+                                f"Chunk {chunk.chunk_id}: propagation tracking failed (non-fatal): {_prop_err}"
                             )
                 except Exception as e:
                     self.logger.warning(
-                        "Chunk %s: domain checklist failed (non-fatal): %s",
-                        chunk.chunk_id, e,
+                        f"Chunk {chunk.chunk_id}: domain checklist failed (non-fatal): {e}"
                     )
 
             # --- Inject retry feedback for error-informed retries ---
@@ -4987,8 +4985,7 @@ class DevelopmentPhase:
                 if state.test_output:
                     context["test_output"] = state.test_output
                 self.logger.debug(
-                    "Chunk %s: injecting retry feedback (attempt %s)",
-                    chunk.chunk_id, attempt_label,
+                    f"Chunk {chunk.chunk_id}: injecting retry feedback (attempt {attempt_label})"
                 )
             else:
                 # Clear stale feedback from prior chunks sharing this context
@@ -5022,18 +5019,17 @@ class DevelopmentPhase:
                             if not result.passed:
                                 for issue in result.issues:
                                     self.logger.warning(
-                                        "Chunk %s: post-gen %s: %s (line %s)",
-                                        chunk.chunk_id, issue.validator,
-                                        issue.message, issue.line,
+                                        f"Chunk {chunk.chunk_id}: post-gen {issue.validator}: "
+                                        f"{issue.message} (line {issue.line})"
                                     )
                     except Exception as e:
-                        self.logger.debug("Post-validation skipped: %s", e)
+                        self.logger.debug(f"Post-validation skipped: {e}")
 
             except Exception as e:
                 self.logger.exception(
                     f"Chunk {chunk.chunk_id}: unexpected execution error: {e}"
                 )
-                state.last_error = f"Execution exception: {str(e)}"
+                state.last_error = f"Execution exception: {e}"
                 continue
 
             # --- TESTING: Run test gate ---
@@ -5058,7 +5054,7 @@ class DevelopmentPhase:
                 self.logger.exception(
                     f"Chunk {chunk.chunk_id}: unexpected test error: {e}"
                 )
-                state.last_error = f"Test exception: {str(e)}"
+                state.last_error = f"Test exception: {e}"
                 continue
 
             # --- PASSED ---

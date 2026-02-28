@@ -75,7 +75,6 @@ __all__ = [
     "WorkflowTimeoutError",
     "CostBudgetExceededError",
     "PhaseExecutionError",
-    "InvalidTaskIdError",
     "UnresolvedDependencyError",
     "WaveMergeCollisionError",
     "QualityGateError",
@@ -329,14 +328,6 @@ class CostBudgetExceededError(WorkflowError):
     """Raised when cumulative cost exceeds the configured budget."""
 
 
-class InvalidTaskIdError(ValueError):
-    """Raised when a task_id contains unsafe characters.
-
-    .. note:: Reserved for future wave/lane dependency validation.
-       Currently defined but not raised — kept for API stability.
-    """
-
-
 class UnresolvedDependencyError(ValueError):
     """Raised when depends_on references a task_id not in the task set (strict mode).
 
@@ -506,8 +497,8 @@ class FeaturePartialResult:
             ),
             "total_cost": sum(r.get("cost", 0.0) for r in self.inner_phases.values()),
             "has_design": (
-                "design" in self.inner_phases
-                and self.inner_phases["design"].get("status") == "completed"
+                WorkflowPhase.DESIGN.value in self.inner_phases
+                and self.inner_phases[WorkflowPhase.DESIGN.value].get("status") == "completed"
             ),
             "failure_reason": self.failure_reason,
         }
