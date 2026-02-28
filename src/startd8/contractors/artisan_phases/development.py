@@ -3413,6 +3413,9 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
 
         parts.extend(self._build_project_identity(chunk))
         parts.extend(self._build_target_files(chunk, is_edit))
+        parts.extend(self._build_importable_modules(chunk))          # AR-150
+        parts.extend(self._build_manifest_context(chunk))            # Phase 4
+        parts.extend(self._build_call_graph_context(chunk))          # Phase 6
         parts.extend(self._build_structural_delta(chunk))            # Gap 3
         parts.extend(self._build_existing_files(_existing, _edit_mode))
 

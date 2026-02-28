@@ -45,7 +45,7 @@ import uuid
 
 import questionary
 from abc import ABC, abstractmethod
-from collections import deque
+from collections import defaultdict, deque
 from concurrent.futures import (
     ThreadPoolExecutor,
     TimeoutError as FuturesTimeoutError,
@@ -54,7 +54,10 @@ from concurrent.futures import (
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Optional, Protocol, Sequence
+from typing import TYPE_CHECKING, Any, Optional, Protocol, Sequence
+
+if TYPE_CHECKING:
+    from startd8.contractors.context_seed_handlers import SeedTask
 
 from startd8.contractors.context_schema import (
     PhaseContextError,
@@ -91,6 +94,7 @@ __all__ = [
     "JsonFileCheckpointStore",
     "InMemoryCheckpointStore",
     "ArtisanContractorWorkflow",
+    "compute_lanes",
 ]
 
 # Observability manifest descriptor — consumed by generate_manifest(), zero runtime cost.
@@ -173,6 +177,9 @@ _CHECKPOINT_CONTEXT_KEYS = frozenset({
     "design_iteration_count",
     # Multi-feature aggregation: accumulated per-feature results for FINALIZE
     "completed_features", "feature_partial_results",
+    # O-5: _all_feature_results must survive checkpoint resume so prior
+    # features' per-task data is available for FINALIZE aggregation.
+    "_all_feature_results",
 })
 
 # ---------------------------------------------------------------------------
@@ -947,6 +954,70 @@ class _NoOpTracer:
 
     def start_as_current_span(self, name: str, **kwargs: Any) -> _NoOpSpan:
         return _NoOpSpan()
+
+
+# ============================================================================
+# CCD-100: Lane computation — group tasks sharing target files into lanes
+# ============================================================================
+
+
+def compute_lanes(tasks: list[SeedTask]) -> list[list[SeedTask]]:
+    """Group tasks into parallel execution lanes using shared-file affinity.
+
+    Tasks that target the same file(s) are placed in the same lane so they
+    execute serially (avoiding write conflicts).  Tasks with no shared files
+    each get their own lane and can run in parallel.
+
+    Uses union-find to cluster tasks by shared target files, then returns
+    one lane per connected component ordered by first task appearance.
+    """
+    if not tasks:
+        return []
+
+    id_to_task = {t.task_id: t for t in tasks}
+
+    # Union-Find helpers -------------------------------------------------
+    parent: dict[str, str] = {t.task_id: t.task_id for t in tasks}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]  # path compression
+            x = parent[x]
+        return x
+
+    def union(a: str, b: str) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[ra] = rb
+
+    # Build file -> task-id mapping and union tasks sharing a file --------
+    file_to_tasks: dict[str, list[str]] = defaultdict(list)
+    for task in tasks:
+        for tf in task.target_files or []:
+            normalized = os.path.normpath(tf).replace("\\", "/")
+            file_to_tasks[normalized].append(task.task_id)
+
+    for contesting_ids in file_to_tasks.values():
+        if len(contesting_ids) >= 2:
+            anchor = contesting_ids[0]
+            for other in contesting_ids[1:]:
+                union(anchor, other)
+
+    # Also union tasks linked by explicit depends_on ---------------------
+    for task in tasks:
+        for dep_id in task.depends_on or []:
+            if dep_id in id_to_task:
+                union(task.task_id, dep_id)
+
+    # Collect connected components (lanes) in input order ----------------
+    lanes_map: dict[str, list[SeedTask]] = {}
+    for task in tasks:
+        root = find(task.task_id)
+        if root not in lanes_map:
+            lanes_map[root] = []
+        lanes_map[root].append(task)
+
+    return list(lanes_map.values())
 
 
 # ============================================================================
@@ -2814,16 +2885,40 @@ class ArtisanContractorWorkflow:
                                 _merged.update(_fv)
                     context[_merge_key] = _merged
 
-            # Structured aggregates (implementation, test_results,
-            # review_results): last feature's value provides the shape,
-            # which is sufficient for FINALIZE summary generation.
-            for _struct_key in (
-                "implementation", "test_results", "review_results",
-            ):
+            # Structured aggregates: "implementation" is last-feature-wins
+            # (shape only), but test_results/review_results contain per_task
+            # sub-dicts and numeric aggregates that must be merged across all
+            # features (O-2).
+            if "implementation" not in context:
+                for _fd in _all_feat.values():
+                    if isinstance(_fd, dict) and "implementation" in _fd:
+                        context["implementation"] = _fd["implementation"]
+
+            for _struct_key in ("test_results", "review_results"):
                 if _struct_key not in context:
+                    _merged_struct: dict[str, Any] = {}
                     for _fd in _all_feat.values():
                         if isinstance(_fd, dict) and _struct_key in _fd:
-                            context[_struct_key] = _fd[_struct_key]
+                            _fv = _fd[_struct_key]
+                            if isinstance(_fv, dict):
+                                if not _merged_struct:
+                                    _merged_struct = dict(_fv)
+                                else:
+                                    _merged_struct.setdefault(
+                                        "per_task", {},
+                                    ).update(_fv.get("per_task", {}))
+                                    for _nk in (
+                                        "total_cost",
+                                        "total_passed",
+                                        "total_failed",
+                                    ):
+                                        if _nk in _fv:
+                                            _merged_struct[_nk] = (
+                                                _merged_struct.get(_nk, 0)
+                                                + _fv.get(_nk, 0)
+                                            )
+                    if _merged_struct:
+                        context[_struct_key] = _merged_struct
 
         # Execute global end phases (FINALIZE)
         _fs_end_kwargs = dict(
@@ -2858,6 +2953,7 @@ class ArtisanContractorWorkflow:
         WorkflowPhase.REVIEW,
     )
     RETRY_SOURCE_PHASES: tuple[WorkflowPhase, ...] = (
+        WorkflowPhase.DESIGN,
         WorkflowPhase.INTEGRATE,
         WorkflowPhase.TEST,
         WorkflowPhase.REVIEW,
@@ -3044,7 +3140,14 @@ class ArtisanContractorWorkflow:
                                 _max_total,
                                 inner_phase.value,
                             )
-                            phase_index = self.INNER_PHASES.index(WorkflowPhase.IMPLEMENT)
+                            # O-7: DESIGN failures retry from DESIGN; all
+                            # others retry from IMPLEMENT.
+                            _retry_target = (
+                                WorkflowPhase.DESIGN
+                                if inner_phase == WorkflowPhase.DESIGN
+                                else WorkflowPhase.IMPLEMENT
+                            )
+                            phase_index = self.INNER_PHASES.index(_retry_target)
                             continue
 
                         _exhaust_reason = (
@@ -3224,8 +3327,11 @@ class ArtisanContractorWorkflow:
         phase_result: PhaseResult,
         gate_error: Optional[QualityGateError] = None,
     ) -> Optional[dict[str, Any]]:
-        """AR-153: normalize INTEGRATE/TEST/REVIEW failures into retry feedback."""
+        """AR-153: normalize DESIGN/INTEGRATE/TEST/REVIEW failures into retry feedback."""
         if phase not in self.RETRY_SOURCE_PHASES:
+            return None
+        # Dry-run phases don't produce real failures — skip retry feedback.
+        if phase_result.status == PhaseStatus.DRY_RUN:
             return None
 
         failed_tasks: list[str] = []
@@ -3239,7 +3345,23 @@ class ArtisanContractorWorkflow:
             )
 
         output = phase_result.output if isinstance(phase_result.output, dict) else {}
-        if phase == WorkflowPhase.INTEGRATE:
+        if phase == WorkflowPhase.DESIGN:
+            # O-7: DESIGN output is task-keyed via design_results; each entry
+            # has a "status" key.  Collect tasks whose status != "success".
+            design_results = output.get("design_results", output)
+            if isinstance(design_results, dict):
+                for task_id, task_result in design_results.items():
+                    if isinstance(task_result, dict) and task_result.get("status") != "success":
+                        failed_tasks.append(task_id)
+            if failed_tasks:
+                details["design_failures"] = {
+                    task_id: design_results.get(task_id) for task_id in failed_tasks
+                }
+                summary = summary or (
+                    f"DESIGN failures for {len(failed_tasks)} task(s): "
+                    + ", ".join(failed_tasks)
+                )
+        elif phase == WorkflowPhase.INTEGRATE:
             for task_id, task_result in output.items():
                 if not isinstance(task_result, dict):
                     continue

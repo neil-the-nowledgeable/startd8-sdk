@@ -70,6 +70,7 @@ from startd8.contractors.artisan_contractor import (
     AbstractPhaseHandler,
     WorkflowPhase,
     _SAFE_TASK_ID_PATTERN,
+    compute_lanes,
 )
 from startd8.contractors.protocols import (
     CodeGenerator,
@@ -2856,7 +2857,7 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                                     "dry_run_skipped", "env_blocked",
                                 ):
                                     continue
-                                if _adr.get("agreed"):
+                                if DesignPhaseHandler._task_quality_passed(_adr):
                                     _adopted_passed += 1
                                 else:
                                     _adopted_failed += 1
@@ -4024,32 +4025,6 @@ class DesignPhaseHandler(AbstractPhaseHandler):
         # Context contract validation runs after aggregate quality metrics
         # are computed and attached to context.
 
-        # Persist design results for auto-adoption on re-run
-        if design_results and not dry_run and self.output_dir:
-            from startd8.contractors.handoff import write_design_handoff
-            try:
-                handoff_path = write_design_handoff(
-                    output_dir=self.output_dir,
-                    enriched_seed_path=context.get("enriched_seed_path", ""),
-                    project_root=context.get("project_root", ""),
-                    workflow_id=context.get("workflow_id", "unknown"),
-                    completed_phases=["design"],
-                    design_results=design_results,
-                    scaffold=context.get("scaffold", {}),
-                    source_checksum=context.get("source_checksum"),
-                    design_mode_summary=context.get("design_mode_summary", {}),
-                    shared_file_manifest=shared_file_manifest,
-                    design_structural_delta=_design_structural_delta,
-                    design_referenced_elements=_design_referenced_elements,
-                    manifest_file_checksums=_manifest_file_checksums,
-                    design_mode_evidence=_design_mode_evidence,
-                    manifest_truncation_tier=_manifest_truncation_tier,
-                    design_quality=context.get("design_quality"),
-                )
-                logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
-            except (OSError, ValueError, TypeError) as exc:
-                logger.warning("DESIGN: failed to write handoff: %s", exc, exc_info=True)
-
         env_blocked = sum(
             1 for r in design_results.values()
             if isinstance(r, dict) and r.get("status") == "env_blocked"
@@ -4090,6 +4065,33 @@ class DesignPhaseHandler(AbstractPhaseHandler):
             "evaluated_task_count": quality_total,
         }
         context["design_quality"] = design_quality
+
+        # Persist design results for auto-adoption on re-run
+        # (must come AFTER quality computation so handoff contains final metrics)
+        if design_results and not dry_run and self.output_dir:
+            from startd8.contractors.handoff import write_design_handoff
+            try:
+                handoff_path = write_design_handoff(
+                    output_dir=self.output_dir,
+                    enriched_seed_path=context.get("enriched_seed_path", ""),
+                    project_root=context.get("project_root", ""),
+                    workflow_id=context.get("workflow_id", "unknown"),
+                    completed_phases=["design"],
+                    design_results=design_results,
+                    scaffold=context.get("scaffold", {}),
+                    source_checksum=context.get("source_checksum"),
+                    design_mode_summary=context.get("design_mode_summary", {}),
+                    shared_file_manifest=shared_file_manifest,
+                    design_structural_delta=_design_structural_delta,
+                    design_referenced_elements=_design_referenced_elements,
+                    manifest_file_checksums=_manifest_file_checksums,
+                    design_mode_evidence=_design_mode_evidence,
+                    manifest_truncation_tier=_manifest_truncation_tier,
+                    design_quality=design_quality,
+                )
+                logger.info("DESIGN: wrote handoff for auto-adoption: %s", handoff_path)
+            except (OSError, ValueError, TypeError) as exc:
+                logger.warning("DESIGN: failed to write handoff: %s", exc, exc_info=True)
 
         prompt_calls_total = 0
         prompt_chars_total = 0

@@ -203,6 +203,7 @@ def assemble_design_prompt(
         "identity": identity_data,
         "constraints": constraints_data,
         "enrichment": enrichment_data,
+        "manifest": manifest_data,
         "prior_art": prior_art_data,
         "scope": scope_data,
         "guidance": guidance_data,
