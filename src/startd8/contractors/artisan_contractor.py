@@ -2858,6 +2858,7 @@ class ArtisanContractorWorkflow:
                         self._commit_changes(inner_phase, feature_id=feature_id, context=context)
 
                     # Record the inner phase result
+                    _phase_meta = phase_result.metadata or {}
                     inner_results[inner_phase.value] = {
                         "status": phase_result.status.value,
                         "cost": phase_result.cost,
@@ -2865,6 +2866,14 @@ class ArtisanContractorWorkflow:
                         "error": phase_result.error_message,
                         "artifacts": phase_result.output or {},
                     }
+                    # Propagate exit gate violations from PhaseResult metadata
+                    if _phase_meta.get("exit_gate_violations"):
+                        inner_results[inner_phase.value]["exit_gate_violations"] = (
+                            _phase_meta["exit_gate_violations"]
+                        )
+                        inner_results[inner_phase.value]["exit_gate_passed"] = (
+                            _phase_meta.get("exit_gate_passed", True)
+                        )
 
                     # Track cost
                     cost_tracker.add(phase_result.cost)
