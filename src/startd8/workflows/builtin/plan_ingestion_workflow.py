@@ -48,8 +48,19 @@ from .plan_ingestion_models import (
     ParsedFeature,
     ParsedPlan,
 )
-from ...contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN
+from ...contractors.artisan_contractor import _SAFE_TASK_ID_PATTERN, _NoOpSpan, _NoOpTracer
 from ...logging_config import get_logger
+
+# OTel graceful degradation (follows artisan_contractor.py pattern)
+try:
+    from opentelemetry import trace as _trace
+    from opentelemetry.trace import StatusCode as _StatusCode
+    _HAS_OTEL = True
+    _tracer = _trace.get_tracer("startd8.plan_ingestion")
+except ImportError:
+    _HAS_OTEL = False
+    _tracer = _NoOpTracer()
+    _StatusCode = None
 
 logger = get_logger(__name__)
 
@@ -485,9 +496,18 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
             if m:
                 goal_lines.append(m.group(1).strip())
 
+    # Two-pass approach: first collect all feature IDs so deps can be filtered
+    # during construction (avoids creating ParsedFeature objects with phantom deps).
+    known_fids: set = set()
+    feature_header_re = re.compile(
+        r"^\s*###\s+([A-Za-z]+-\d+)\s*:\s*(.+)$", flags=re.MULTILINE
+    )
+    for m in feature_header_re.finditer(plan_text):
+        known_fids.add(m.group(1).upper())
+
     features: List[ParsedFeature] = []
     for idx, m in enumerate(
-        re.finditer(r"^\s*###\s+([A-Za-z]+-\d+)\s*:\s*(.+)$", plan_text, flags=re.MULTILINE),
+        feature_header_re.finditer(plan_text),
         start=1,
     ):
         fid = m.group(1).upper()
@@ -505,7 +525,7 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
             )
         )
         deps = sorted(set(re.findall(r"\b([A-Z]{1,4}-\d+)\b", block)))
-        deps = [d.upper() for d in deps if d.upper() != fid]
+        deps = [d.upper() for d in deps if d.upper() != fid and d.upper() in known_fids]
         features.append(
             ParsedFeature(
                 feature_id=fid,
@@ -517,11 +537,6 @@ def _heuristic_parse_plan(plan_text: str) -> ParsedPlan:
                 labels=[],
             )
         )
-
-    # Filter dependencies to only reference known feature IDs
-    known_fids = {f.feature_id for f in features}
-    for feat in features:
-        feat.dependencies = [d for d in feat.dependencies if d in known_fids]
 
     if not features:
         features = [
@@ -1356,7 +1371,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         attempts_raw = config.get("llm_max_attempts")
         if attempts_raw is not None:
             try:
-                attempts_val = int(attempts_raw)
+                attempts_val = int(float(attempts_raw))
             except (TypeError, ValueError):
                 errors.append("llm_max_attempts must be an integer >= 1")
             else:
@@ -1697,7 +1712,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 )
         else:
             # Markdown: check for at least one heading
-            if "##" not in content and "# " not in content:
+            if not re.search(r'^#{1,6}\s', content, re.MULTILINE):
                 _md_quality_warning = "Generated markdown has no headings — may be low quality"
                 logger.warning(_md_quality_warning)
 
@@ -1955,6 +1970,7 @@ class PlanIngestionWorkflow(WorkflowBase):
             a for a in gaps
             if isinstance(a, str) and a.strip() and " " not in a.strip()
             and ("-" in a or "_" in a)
+            and re.match(r'^[a-zA-Z][\w-]{2,}$', a.strip())
         ]
         artifact_to_feature: Dict[str, List[str]] = {}
 
@@ -2210,7 +2226,10 @@ class PlanIngestionWorkflow(WorkflowBase):
         result = review_wf.run(review_config)
 
         review_cost = result.metrics.total_cost if result.metrics else 0.0
-        rounds_completed = len(result.steps)
+        rounds_completed = (
+            result.output.get("rounds_completed", len(result.steps))
+            if isinstance(result.output, dict) else len(result.steps)
+        )
 
         refine_steps = []
         for s in result.steps:
@@ -2251,7 +2270,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         decisions = triage.get("decisions", [])
         if not decisions:
             # Fallback: return aggregate summary when decisions not available
-            accepted = triage.get("accepted", 0)
+            accepted = _safe_int(triage.get("accepted"), 0)
             if accepted == 0:
                 return []
             return [{
@@ -2508,14 +2527,6 @@ class PlanIngestionWorkflow(WorkflowBase):
                 },
             })
 
-        # Remove skipped features from fid_to_tid so downstream consumers
-        # (Gate 2a split, dangling-dep cleanup) never see phantom task IDs.
-        emitted_tids = {t["task_id"] for t in tasks}
-        fid_to_tid = {
-            fid: tid for fid, tid in fid_to_tid.items()
-            if tid in emitted_tids
-        }
-
         # ── Clean up dangling dependency references from skipped features ──
         emitted_ids = {t["task_id"] for t in tasks}
         for t in tasks:
@@ -2621,8 +2632,8 @@ class PlanIngestionWorkflow(WorkflowBase):
                     len(ordered) - _MAX_SUB_TASKS + 1,
                 )
 
-            # Build groups: first (_MAX_SUB_TASKS - 1) get one file each;
-            # the last group absorbs any overflow.
+            # Build groups: first _MAX_SUB_TASKS groups each get one file;
+            # additional files accumulate in the last group.
             groups: List[List[str]] = []
             for f in ordered:
                 if len(groups) < _MAX_SUB_TASKS:
@@ -3207,6 +3218,10 @@ class PlanIngestionWorkflow(WorkflowBase):
             for fid, deps in dep_graph.items():
                 if root_id in deps:
                     dependents.append(fid)
+            # Also check feat.dependencies (may not be in dep_graph)
+            for feat in parsed_plan.features:
+                if root_id in feat.dependencies and feat.feature_id not in dependents:
+                    dependents.append(feat.feature_id)
             if dependents:
                 clusters.append({"root": root_id, "dependents": dependents})
         ctx["dependency_clusters"] = clusters
@@ -3299,7 +3314,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     elif has_config:
                         # Use the first config ext for the domain label
                         config_ext = next(
-                            e for e in exts if e in config_exts
+                            e for e in sorted(exts) if e in config_exts
                         )
                         domain = f"config-{config_ext.replace('yml', 'yaml')}"
                     elif exts:
@@ -3547,6 +3562,11 @@ class PlanIngestionWorkflow(WorkflowBase):
                     else:
                         rewritten_contracts.append(c_dict)
                 forward_manifest_dict["contracts"] = rewritten_contracts
+            elif forward_manifest_dict.get("contracts") and not actual_fid_to_tids:
+                logger.warning(
+                    "Forward manifest: skipping contract rewrite — no feature-to-task "
+                    "mappings available (all tasks may have empty feature_id)"
+                )
 
         # --- Shared derived data (both routes use the same logic) ---
         costs = step_costs or {}
@@ -4028,6 +4048,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 parse_step.output = (
                     parse_step.output + "\n[heuristic fallback] parse succeeded without LLM JSON"
                 )[:_OUTPUT_TRUNCATION]
+                parse_step.metadata["heuristic_fallback"] = True
             steps.append(parse_step)
             state.total_cost += parse_step.cost
             step_costs["parse"] = parse_step.cost
@@ -4090,6 +4111,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 assess_step.output = (
                     assess_step.output + "\n[heuristic fallback] assess succeeded deterministically"
                 )[:_OUTPUT_TRUNCATION]
+                assess_step.metadata["heuristic_fallback"] = True
             steps.append(assess_step)
             state.total_cost += assess_step.cost
             step_costs["assess"] = assess_step.cost
