@@ -218,17 +218,28 @@ class PriorArtModule:
         has_content = False
 
         # Dependency designs (non-droppable part)
+        # R2-D12: Use a total budget split across dependencies so API
+        # signatures and interface definitions survive truncation.
         dep_designs = data.get("dependency_designs", {})
         if dep_designs:
             has_content = True
             lines.append("**Depends on:**")
             dep_items = list(dep_designs.items())
-            for dep_id, summary in dep_items[:3]:
-                # Truncate summaries to first line
-                first_line = summary.split("\n", 1)[0][:200]
-                lines.append(f"- {dep_id}: {first_line}")
-            if len(dep_items) > 3:
-                lines.append(f"- ... and {len(dep_items) - 3} more dependencies (truncated)")
+            _DEP_TOTAL_BUDGET = 4000  # chars across all dependencies
+            _DEP_MAX_SHOWN = 5
+            shown_items = dep_items[:_DEP_MAX_SHOWN]
+            per_dep_budget = max(400, _DEP_TOTAL_BUDGET // len(shown_items))
+            for dep_id, summary in shown_items:
+                truncated = summary[:per_dep_budget]
+                if len(summary) > per_dep_budget:
+                    # Cut at last newline to avoid mid-line truncation
+                    last_nl = truncated.rfind("\n")
+                    if last_nl > per_dep_budget // 2:
+                        truncated = truncated[:last_nl]
+                    truncated += "\n  [... truncated]"
+                lines.append(f"- **{dep_id}:**\n{truncated}")
+            if len(dep_items) > _DEP_MAX_SHOWN:
+                lines.append(f"- ... and {len(dep_items) - _DEP_MAX_SHOWN} more dependencies (truncated)")
 
         # Existing files with staleness
         existing = data.get("existing_files", [])
@@ -303,6 +314,13 @@ class ScopeModule:
         depth = data.get("depth_tier")
         if depth:
             parts.append(f"**Depth:** {depth}")
+
+        # R2-D9: Render design doc sections (merged from calibration + per-task hints)
+        sections = data.get("sections")
+        if sections:
+            parts.append("**Required Sections:**")
+            for sec in sections:
+                parts.append(f"- {sec}")
 
         wave_index = data.get("wave_index")
         wave_count = data.get("wave_count")

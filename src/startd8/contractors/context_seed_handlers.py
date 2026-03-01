@@ -3681,6 +3681,8 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         open_questions=context.get("onboarding_open_questions"),
                         calibration_hints=inv_calibration_hints,
                         complexity_dimensions=context.get("complexity_dimensions"),
+                        # R2-D9: Thread per-task design doc section hints to prompt
+                        design_doc_sections=task.design_doc_sections,
                         prior_design_text=prior_design_text,
                         # Phase 5: Manifest context for V2 path
                         manifest_registry=_design_manifest_registry,
@@ -4296,12 +4298,21 @@ class DesignPhaseHandler(AbstractPhaseHandler):
                         excluded_task_ids,
                     )
 
+                # R2-D10: Build completed_phases dynamically from context
+                # so the implementation half knows which phases actually ran.
+                _handoff_completed_phases: list[str] = []
+                if context.get("plan_title") or context.get("plan_goals"):
+                    _handoff_completed_phases.append("plan")
+                if context.get("scaffold"):
+                    _handoff_completed_phases.append("scaffold")
+                _handoff_completed_phases.append("design")
+
                 handoff_path = write_design_handoff(
                     output_dir=self.output_dir,
                     enriched_seed_path=context.get("enriched_seed_path", ""),
                     project_root=context.get("project_root", ""),
                     workflow_id=context.get("workflow_id", "unknown"),
-                    completed_phases=["design"],
+                    completed_phases=_handoff_completed_phases,
                     design_results=handoff_design_results,
                     scaffold=context.get("scaffold", {}),
                     source_checksum=context.get("source_checksum"),
@@ -10441,8 +10452,7 @@ class TestPhaseHandler(AbstractPhaseHandler):
         context["test_results"] = output
 
         # Context contract: validate TEST output model.
-        # Wrap in try-except so Pydantic validation failures respect the
-        # quality gate policy (block vs warn) instead of crashing the phase.
+        # R2-T6: Respect gate mode — block raises, warn flags, skip ignores.
         try:
             ValidationPhaseOutput(test_results=context["test_results"])
         except Exception as _val_exc:
@@ -10458,6 +10468,10 @@ class TestPhaseHandler(AbstractPhaseHandler):
                 _gate_mode,
                 _val_exc,
             )
+            if _gate_mode == "warn":
+                # Flag the output so downstream phases know validation failed
+                output["_validation_failed"] = True
+                output["_validation_error"] = str(_val_exc)
 
         # --- Cache write: persist test results for resume ---
         if test_cache_path and not dry_run:
@@ -10717,11 +10731,19 @@ PASS if score >= {pass_threshold} and no blocking issues.
 
         # -- Enrichment sections (inserted before "## Review Instructions") --
         # Each helper returns a list of strings.  Empty list = no injection.
+        # R2-T10: Sections are ordered by priority (highest first) so that
+        # when the total budget overflows, lower-priority sections are
+        # dropped first.  FM violations and design compliance are the most
+        # actionable and must survive budget trimming.
         named_sections: list[tuple[str, str]] = []
         for text in self._build_project_context_section(project_context):
             named_sections.append(("project_context", text))
         for text in self._build_design_compliance_section(design_document):
             named_sections.append(("design_compliance", text))
+        # R2-T10: FM violations moved up — they are as important as design
+        # compliance and core review score; must not be dropped on overflow.
+        for text in self._build_forward_contract_violations_section(forward_contract_violations):
+            named_sections.append(("forward_contract_violations", text))
         for text in self._build_parameter_sources_section(parameter_sources):
             named_sections.append(("parameter_sources", text))
         for text in self._build_semantic_conventions_section(semantic_conventions):
@@ -10736,8 +10758,6 @@ PASS if score >= {pass_threshold} and no blocking issues.
             named_sections.append(("deps_advisory", text))
         for text in self._build_call_graph_section(task, generated_code):
             named_sections.append(("call_graph", text))
-        for text in self._build_forward_contract_violations_section(forward_contract_violations):
-            named_sections.append(("forward_contract_violations", text))
 
         if named_sections:
             budgeted_sections, diagnostics = self._apply_review_section_budgets(
@@ -12069,24 +12089,94 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 # Check pre-validated cache before LLM call
                 cached = cached_reviews.get(task.task_id)
                 if cached:
-                    review = {**cached, "review_status": "cached"}
-                    review["title"] = task.title
-                    review["domain"] = task.domain
-                    review["constraint_count"] = len(task.prompt_constraints)
-                    review["env_failures"] = len(env_fails)
-                    review["env_warnings"] = len(env_warns)
-                    if review.get("passed", False):
-                        total_passed += 1
+                    # R2-T5: Validate cached entry has required fields before
+                    # accepting.  If critical fields are missing the entry was
+                    # written under an older schema — fall through to fresh review.
+                    _REQUIRED_CACHED_FIELDS = {"score", "verdict", "passed", "status"}
+                    _missing_fields = _REQUIRED_CACHED_FIELDS - set(cached.keys())
+                    if _missing_fields:
+                        logger.warning(
+                            "REVIEW: cached entry for %s missing fields %s "
+                            "(schema drift) — regenerating",
+                            task.task_id, sorted(_missing_fields),
+                        )
+                        cached = None  # fall through to fresh review below
                     else:
-                        total_failed += 1
-                    review_items.append(review)
-                    task_status = "cached"
-                    task_cost = _coerce_optional_float(review.get("cost"))
-                    logger.info(
-                        "REVIEW: using cached result for %s (score=%s, passed=%s)",
-                        task.task_id, cached.get("score"), cached.get("passed"),
-                    )
-                    continue
+                        review = {**cached, "review_status": "cached"}
+                        review["title"] = task.title
+                        review["domain"] = task.domain
+                        review["constraint_count"] = len(task.prompt_constraints)
+                        review["env_failures"] = len(env_fails)
+                        review["env_warnings"] = len(env_warns)
+
+                        # R2-T8: If cached review has no FM validation data,
+                        # run FM validation now and append violations.
+                        if (
+                            "fm_violations" not in review
+                            and self.config.manifest_consumption_enabled
+                        ):
+                            _registry = self.config.manifest_registry
+                            _fwd_manifest = context.get("forward_manifest")
+                            if _registry is not None and _fwd_manifest is not None:
+                                try:
+                                    from startd8.forward_manifest_validator import validate_forward_manifest
+                                    _all_fm = validate_forward_manifest(_fwd_manifest, _registry) or []
+                                    _task_files = set(task.target_files) if task.target_files else set()
+                                    _task_fm = []
+                                    for _v in _all_fm:
+                                        _vp = getattr(_v, "file_path", None)
+                                        if _vp is None:
+                                            _task_fm.append(_v)
+                                        elif _vp in _task_files or any(
+                                            _vp.endswith(tf) or tf.endswith(_vp)
+                                            for tf in _task_files
+                                        ):
+                                            _task_fm.append(_v)
+                                    _err_v = [v for v in _task_fm if getattr(v, "severity", "error") == "error"]
+                                    _warn_v = [v for v in _task_fm if getattr(v, "severity", "error") == "warning"]
+                                    if _err_v:
+                                        review["passed"] = False
+                                        review["verdict"] = "FAIL"
+                                        review.setdefault("issues", []).extend([
+                                            f"[BLOCKING] Contract Violation: {v.violation_type} ({v.contract_id}) - Expected: {v.expected}, Actual: {v.actual}"
+                                            for v in _err_v
+                                        ])
+                                    if _warn_v:
+                                        review.setdefault("issues", []).extend([
+                                            f"[MINOR] Contract Advisory: {v.violation_type} ({v.contract_id}) - {v.expected}"
+                                            for v in _warn_v
+                                        ])
+                                    review["fm_violations"] = {
+                                        "error_count": len(_err_v),
+                                        "warning_count": len(_warn_v),
+                                        "violation_ids": [
+                                            getattr(v, "contract_id", "?") for v in _task_fm
+                                        ],
+                                        "retroactive": True,
+                                    }
+                                    logger.info(
+                                        "REVIEW: retroactively validated FM for cached %s "
+                                        "(%d errors, %d warnings)",
+                                        task.task_id, len(_err_v), len(_warn_v),
+                                    )
+                                except Exception as _fm_cache_err:
+                                    logger.debug(
+                                        "REVIEW: FM validation on cached %s failed: %s",
+                                        task.task_id, _fm_cache_err,
+                                    )
+
+                        if review.get("passed", False):
+                            total_passed += 1
+                        else:
+                            total_failed += 1
+                        review_items.append(review)
+                        task_status = "cached"
+                        task_cost = _coerce_optional_float(review.get("cost"))
+                        logger.info(
+                            "REVIEW: using cached result for %s (score=%s, passed=%s)",
+                            task.task_id, cached.get("score"), cached.get("passed"),
+                        )
+                        continue
 
                 # ── Layer 4: Thread design document into REVIEW ────────────
                 design_results = context.get("design_results", {})
@@ -12180,56 +12270,53 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     review["truncation_confidence"] = task_truncation.get("max_confidence", 0.0)
                     review["truncation_source"] = task_truncation.get("source", "unknown")
 
-                # Phase 5: Run ForwardManifest Validator if applicable
-                # R2-T3: Filter violations per-task by target file paths
-                if self.config.manifest_consumption_enabled:
-                    registry = self.config.manifest_registry
-                    forward_manifest = context.get("forward_manifest")
-                    if registry is not None and forward_manifest is not None:
-                        from startd8.forward_manifest_validator import validate_forward_manifest
+                # Phase 5: FM enforcement gate — reuse pre-computed violations
+                # from GAP1-A (above) to avoid redundant validate_forward_manifest call.
+                # R2-T4: The pre-prompt computation and this enforcement gate used
+                # identical inputs; deduplicating removes the redundant second call.
+                # R2-T3: violations are already filtered per-task by target file paths.
+                if _pre_fm_violations:
+                    try:
+                        error_violations = [
+                            v for v in _pre_fm_violations
+                            if getattr(v, "severity", "error") == "error"
+                        ]
+                        warning_violations = [
+                            v for v in _pre_fm_violations
+                            if getattr(v, "severity", "error") == "warning"
+                        ]
 
-                        try:
-                            fm_violations = validate_forward_manifest(forward_manifest, registry)
-
-                            # Filter violations to this task's target files
-                            _task_files_set = set(task.target_files) if task.target_files else set()
-                            task_fm_violations = []
-                            for v in fm_violations:
-                                _vfp = getattr(v, "file_path", None)
-                                if _vfp is None:
-                                    task_fm_violations.append(v)
-                                elif _vfp in _task_files_set or any(
-                                    _vfp.endswith(tf) or tf.endswith(_vfp)
-                                    for tf in _task_files_set
-                                ):
-                                    task_fm_violations.append(v)
-
-                            error_violations = [v for v in task_fm_violations if v.severity == "error"]
-                            warning_violations = [v for v in task_fm_violations if v.severity == "warning"]
-
-                            if error_violations:
-                                review["passed"] = False
-                                review["verdict"] = "FAIL"
-                                review.setdefault("issues", []).extend([
-                                    f"[BLOCKING] Contract Violation: {v.violation_type} ({v.contract_id}) - Expected: {v.expected}, Actual: {v.actual}"
-                                    for v in error_violations
-                                ])
-                                logger.warning(
-                                    "REVIEW: task %s failed ForwardManifest validation with %d error(s)",
-                                    task.task_id, len(error_violations)
-                                )
-
-                            if warning_violations:
-                                review.setdefault("issues", []).extend([
-                                    f"[MINOR] Contract Advisory: {v.violation_type} ({v.contract_id}) - {v.expected}"
-                                    for v in warning_violations
-                                ])
-
-                        except Exception as val_error:
-                            logger.error(
-                                "REVIEW: ForwardManifest validation engine failed for %s: %s",
-                                task.task_id, val_error, exc_info=True
+                        if error_violations:
+                            review["passed"] = False
+                            review["verdict"] = "FAIL"
+                            review.setdefault("issues", []).extend([
+                                f"[BLOCKING] Contract Violation: {v.violation_type} ({v.contract_id}) - Expected: {v.expected}, Actual: {v.actual}"
+                                for v in error_violations
+                            ])
+                            logger.warning(
+                                "REVIEW: task %s failed ForwardManifest validation with %d error(s)",
+                                task.task_id, len(error_violations)
                             )
+
+                        if warning_violations:
+                            review.setdefault("issues", []).extend([
+                                f"[MINOR] Contract Advisory: {v.violation_type} ({v.contract_id}) - {v.expected}"
+                                for v in warning_violations
+                            ])
+
+                        # R2-T8: Persist FM violation summary in review for cache consumers
+                        review["fm_violations"] = {
+                            "error_count": len(error_violations),
+                            "warning_count": len(warning_violations),
+                            "violation_ids": [
+                                getattr(v, "contract_id", "?") for v in _pre_fm_violations
+                            ],
+                        }
+                    except Exception as val_error:
+                        logger.error(
+                            "REVIEW: ForwardManifest enforcement failed for %s: %s",
+                            task.task_id, val_error, exc_info=True
+                        )
                 
                 total_cost += review.get("cost", 0.0)
                 if review.get("passed", False):
@@ -12303,11 +12390,22 @@ PASS if score >= {pass_threshold} and no blocking issues.
                     "skip_reason": status,
                 }
             else:
+                # R2-T9: Preserve detail fields in per_task rollup so
+                # downstream consumers have access to specific issues,
+                # reviewed sections, and reviewer feedback.
+                _raw_response = item.get("raw_response", "")
+                _reviewer_feedback = (
+                    _raw_response[:2000] if _raw_response else ""
+                )
                 per_task[task_id] = {
                     "status": status,
                     "passed": item.get("passed") if status in ("reviewed", "cached") else None,
                     "score": item.get("score"),
                     "verdict": item.get("verdict"),
+                    "issues": item.get("issues", []),
+                    "strengths": item.get("strengths", []),
+                    "suggestions": item.get("suggestions", []),
+                    "reviewer_feedback": _reviewer_feedback,
                 }
 
         review_prompt_summary: dict[str, Any] = {
@@ -12366,8 +12464,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
         context["review_results"] = output
 
         # Context contract: validate REVIEW output model.
-        # Wrap in try-except so Pydantic validation failures respect the
-        # quality gate policy (block vs warn) instead of crashing the phase.
+        # R2-T6: Respect gate mode — block raises, warn flags, skip ignores.
         try:
             ReviewPhaseOutput(review_results=context["review_results"])
         except Exception as _val_exc:
@@ -12383,6 +12480,10 @@ PASS if score >= {pass_threshold} and no blocking issues.
                 _gate_mode,
                 _val_exc,
             )
+            if _gate_mode == "warn":
+                # Flag the output so downstream phases know validation failed
+                output["_validation_failed"] = True
+                output["_validation_error"] = str(_val_exc)
 
         # Persist review results for cache on re-run (v2 envelope)
         if review_cache_path and not dry_run:
@@ -12396,7 +12497,7 @@ PASS if score >= {pass_threshold} and no blocking issues.
                         gen_result = generation_results.get(tid)
                         if gen_result is not None:
                             code_hash = self._hash_generated_code(gen_result)
-                        serializable_tasks[tid] = {
+                        _serialized_entry: dict[str, Any] = {
                             "task_id": tid,
                             "score": item.get("score"),
                             "verdict": item.get("verdict"),
@@ -12409,6 +12510,12 @@ PASS if score >= {pass_threshold} and no blocking issues.
                             "suggestions": item.get("suggestions", []),
                             "reviewed_code_hash": code_hash,
                         }
+                        # R2-T8: Persist FM validation data so cached reviews
+                        # can be loaded without re-running FM validation.
+                        _fm_viols = item.get("fm_violations")
+                        if _fm_viols is not None:
+                            _serialized_entry["fm_violations"] = _fm_viols
+                        serializable_tasks[tid] = _serialized_entry
                 if serializable_tasks:
                     cache_envelope: dict[str, Any] = {
                         "_cache_meta": {
@@ -12624,36 +12731,40 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         tasks: list[SeedTask] = context.get("tasks", [])
         id_to_task: dict[str, SeedTask] = {t.task_id: t for t in tasks}
 
+        # R2-T7: Collect artifacts from ALL tasks, not just fully successful
+        # ones.  Partial-success tasks may have some files generated — track
+        # per-artifact source_status so downstream consumers can distinguish.
         for task_id, result in generation_results.items():
-            if result.success:
-                task = id_to_task.get(task_id)
-                for fpath in result.generated_files:
-                    artifact: dict[str, Any] = {
-                        "task_id": task_id,
-                        "path": str(fpath),
-                        "exists": (
-                            fpath.exists() if hasattr(fpath, "exists") else False
-                        ),
-                        "domain": task.domain if task else "unknown",
-                    }
-                    if hasattr(fpath, "exists") and fpath.exists():
+            task = id_to_task.get(task_id)
+            source_status = "success" if result.success else "partial"
+            for fpath in result.generated_files:
+                artifact: dict[str, Any] = {
+                    "task_id": task_id,
+                    "path": str(fpath),
+                    "exists": (
+                        fpath.exists() if hasattr(fpath, "exists") else False
+                    ),
+                    "domain": task.domain if task else "unknown",
+                    "source_status": source_status,
+                }
+                if hasattr(fpath, "exists") and fpath.exists():
+                    try:
+                        raw_bytes = fpath.read_bytes()
+                        artifact["size_bytes"] = len(raw_bytes)
+                        artifact["sha256"] = hashlib.sha256(raw_bytes).hexdigest()
                         try:
-                            raw_bytes = fpath.read_bytes()
-                            artifact["size_bytes"] = len(raw_bytes)
-                            artifact["sha256"] = hashlib.sha256(raw_bytes).hexdigest()
-                            try:
-                                text = raw_bytes.decode("utf-8", errors="strict")
-                                artifact["line_count"] = len(text.splitlines())
-                            except (UnicodeDecodeError, ValueError):
-                                # Binary file — line count not applicable
-                                artifact["line_count"] = None
-                        except OSError as exc:
-                            logger.warning(
-                                "FINALIZE: could not read artifact %s: %s",
-                                fpath, exc,
-                            )
-                            artifact["read_error"] = str(exc)
-                    artifacts.append(artifact)
+                            text = raw_bytes.decode("utf-8", errors="strict")
+                            artifact["line_count"] = len(text.splitlines())
+                        except (UnicodeDecodeError, ValueError):
+                            # Binary file — line count not applicable
+                            artifact["line_count"] = None
+                    except OSError as exc:
+                        logger.warning(
+                            "FINALIZE: could not read artifact %s: %s",
+                            fpath, exc,
+                        )
+                        artifact["read_error"] = str(exc)
+                artifacts.append(artifact)
 
         return artifacts
 
@@ -13266,7 +13377,25 @@ class FinalizePhaseHandler(AbstractPhaseHandler):
         context["workflow_summary"] = summary
 
         # Context contract: validate FINALIZE output model
-        FinalizePhaseOutput(workflow_summary=context["workflow_summary"])
+        # R2-T6: Respect gate mode — block raises, warn flags, skip ignores.
+        try:
+            FinalizePhaseOutput(workflow_summary=context["workflow_summary"])
+        except Exception as _val_exc:
+            _gate_mode = context.get("quality_gate_summary", {}).get(
+                "policy_mode", "warn",
+            )
+            if _gate_mode == "block":
+                raise RuntimeError(
+                    f"FINALIZE output validation failed (block policy): {_val_exc}"
+                ) from _val_exc
+            logger.warning(
+                "FINALIZE output validation failed (continuing per %s policy): %s",
+                _gate_mode,
+                _val_exc,
+            )
+            if _gate_mode == "warn":
+                summary["_validation_failed"] = True
+                summary["_validation_error"] = str(_val_exc)
 
         duration = time.monotonic() - start
 

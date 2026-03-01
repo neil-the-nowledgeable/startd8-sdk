@@ -120,6 +120,8 @@ def assemble_design_prompt(
     # Scaffold file stubs (D-3: thread into PriorArtModule)
     scaffold_file_stubs: list[dict[str, Any]] | None = None,
     scaffold_assembly_degraded: bool = False,
+    # R2-D9: Per-task design doc section hints (supplement calibration sections)
+    design_doc_sections: list[str] | None = None,
     # Refine path
     prior_design_text: str | None = None,
     # Budget
@@ -183,6 +185,7 @@ def assemble_design_prompt(
         design_max_tokens_override=design_max_tokens_override,
         wave_index=wave_index,
         wave_metadata=wave_metadata,
+        design_doc_sections=design_doc_sections,
     )
     guidance_data = extract_guidance(
         task,

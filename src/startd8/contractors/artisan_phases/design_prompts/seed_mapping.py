@@ -106,13 +106,27 @@ def extract_scope(
     design_max_tokens_override: int | None = None,
     wave_index: int | None = None,
     wave_metadata: dict[str, Any] | None = None,
+    design_doc_sections: list[str] | None = None,
 ) -> dict[str, Any]:
     """Extract scope boundaries. Always succeeds (has defaults)."""
     cal = calibration or {}
+    # R2-D9: Merge calibration sections with per-task design_doc_sections.
+    # calibration.sections comes from depth-tier config; design_doc_sections
+    # comes from enriched seed per-task hints. Both supplement the LLM's
+    # understanding of what sections the design doc should contain.
+    cal_sections = cal.get("sections") or []
+    task_sections = design_doc_sections or getattr(task, "design_doc_sections", []) or []
+    # Deduplicate while preserving order (cal sections first)
+    seen: set[str] = set()
+    merged_sections: list[str] = []
+    for s in cal_sections + task_sections:
+        if s not in seen:
+            seen.add(s)
+            merged_sections.append(s)
     return {
         "estimated_loc": task.estimated_loc,
         "depth_tier": cal.get("depth_tier", "standard"),
-        "sections": cal.get("sections"),
+        "sections": merged_sections or None,
         "max_output_tokens": (
             design_max_tokens_override
             if design_max_tokens_override is not None
