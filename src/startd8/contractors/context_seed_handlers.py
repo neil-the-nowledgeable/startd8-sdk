@@ -558,6 +558,9 @@ class HandlerConfig:
     inner_loop_max_iterations: int = 3         # Max draft-review cycles per task
     inner_loop_pass_threshold: int = 80        # Min review score (0-100)
 
+    # Micro Prime: local-first code generation for TRIVIAL/SIMPLE elements (REQ-MP-503)
+    micro_prime_enabled: bool = False          # Kill switch for Micro Prime pre-pass
+
     _VALID_COLLISION_STRATEGIES = frozenset({"warn", "redesign", "abort"})
 
     def __post_init__(self) -> None:
@@ -4441,6 +4444,8 @@ def _detect_cross_file_edges(
 ) -> bool:
     """Check whether any target files have call edges to each other (C1 extract).
 
+    Delegates to ``startd8.complexity.signals.detect_cross_file_edges``.
+
     Args:
         target_files: List of relative file paths (must have len > 1).
         manifest_registry: ManifestRegistry with call_graph() method.
@@ -4449,23 +4454,11 @@ def _detect_cross_file_edges(
     Returns:
         ``True`` if any element in one target file calls an element in another.
     """
-    try:
-        forward = manifest_registry.call_graph()
-        fqn_to_file: dict[str, str] = {}
-        for tf in target_files:
-            m = manifest_registry.get(tf)
-            if m:
-                for e in flatten_fn(m.elements):
-                    if e.fqn:
-                        fqn_to_file[e.fqn] = tf
-        for fqn, file_path in fqn_to_file.items():
-            for callee in forward.get(fqn, set()):
-                callee_file = fqn_to_file.get(callee)
-                if callee_file and callee_file != file_path:
-                    return True
-    except (AttributeError, TypeError, KeyError) as exc:
-        logger.debug("CMR: cross-file edge detection failed: %s", exc)
-    return False
+    from startd8.complexity.signals import (
+        detect_cross_file_edges as _shared_detect,
+    )
+
+    return _shared_detect(target_files, manifest_registry, flatten_fn)
 
 
 def _extract_complexity_signals(
@@ -4634,10 +4627,8 @@ def _classify_complexity_tier(
 ) -> "TaskComplexityTier":
     """Classify a task into a complexity tier (REQ-CMR-011).
 
-    Pure function, stateless, deterministic. Evaluation order:
-    1. Tier 3 triggers (any one triggers)
-    2. Tier 1 eligibility (all must pass)
-    3. Default: Tier 2
+    Delegates to the shared ``startd8.complexity`` module and maps the
+    4-tier result back to the Artisan 3-tier enum.
 
     Args:
         signals: Complexity signals extracted from chunk metadata and
@@ -4647,41 +4638,28 @@ def _classify_complexity_tier(
     Returns:
         The classified ``TaskComplexityTier``.
     """
+    from startd8.complexity import (
+        ComplexityRoutingConfig,
+        ComplexityTier,
+        TaskComplexitySignals as SharedSignals,
+        classify_tier,
+    )
     from startd8.contractors.artisan_phases.development import TaskComplexityTier
 
-    # --- Tier 3: any trigger fires ---
-    if signals.blast_radius > config.complexity_blast_radius_tier3:
-        return TaskComplexityTier.TIER_3
-    if signals.has_dynamic_dispatch:
-        return TaskComplexityTier.TIER_3
-    if (
-        signals.edit_mode == "edit"
-        and signals.caller_count > config.complexity_caller_tier3
-    ):
-        return TaskComplexityTier.TIER_3
-    if signals.mro_depth > 3:
-        return TaskComplexityTier.TIER_3
-    if signals.unresolved_call_count > 2:
-        return TaskComplexityTier.TIER_3
-    if signals.estimated_loc > config.complexity_loc_tier3_min:
-        return TaskComplexityTier.TIER_3
-    if signals.target_file_count > 1 and signals.has_cross_file_edges:
-        return TaskComplexityTier.TIER_3
+    # Convert Artisan signals → shared signals via dict round-trip
+    shared_signals = SharedSignals(**signals.to_dict())
+    shared_config = ComplexityRoutingConfig.from_handler_config(config)
 
-    # --- Tier 1: all must pass ---
-    if (
-        signals.manifest_coverage == "full"
-        and signals.blast_radius == 0
-        and signals.edit_mode == "create"
-        and signals.caller_count == 0
-        and not signals.has_dynamic_dispatch
-        and signals.estimated_loc < config.complexity_loc_tier1_max
-        and signals.target_file_count == 1
-    ):
-        return TaskComplexityTier.TIER_1
+    shared_tier, _reason = classify_tier(shared_signals, shared_config)
 
-    # --- Default: Tier 2 ---
-    return TaskComplexityTier.TIER_2
+    # Map shared 4-tier → Artisan 3-tier
+    _tier_map = {
+        ComplexityTier.TRIVIAL: TaskComplexityTier.TIER_1,
+        ComplexityTier.SIMPLE: TaskComplexityTier.TIER_1,
+        ComplexityTier.MODERATE: TaskComplexityTier.TIER_2,
+        ComplexityTier.COMPLEX: TaskComplexityTier.TIER_3,
+    }
+    return _tier_map[shared_tier]
 
 
 def _set_default_complexity_metadata(
@@ -4843,6 +4821,60 @@ class ImplementPhaseHandler(AbstractPhaseHandler):
                     task.task_id,
                     len(task.target_files),
                 )
+
+    def _run_micro_prime_prepass(
+        self, context: dict[str, Any], project_root: Path,
+    ) -> None:
+        """Run Micro Prime pre-pass to fill TRIVIAL/SIMPLE element bodies.
+
+        Reads the forward manifest and skeleton files from context, runs the
+        Micro Prime engine, and stores results in context for downstream use.
+        """
+        try:
+            from startd8.micro_prime.artisan_adapter import MicroPrimePrePass
+            from startd8.micro_prime.models import MicroPrimeConfig
+        except ImportError:
+            logger.warning(
+                "IMPLEMENT: micro_prime package not available, skipping pre-pass",
+            )
+            return
+
+        manifest_path = context.get("manifest_path")
+        if not manifest_path:
+            logger.info("IMPLEMENT: no manifest_path in context, skipping Micro Prime pre-pass")
+            return
+
+        manifest = context.get("manifest")
+        skeletons = context.get("skeletons", {})
+
+        if not manifest or not skeletons:
+            logger.info("IMPLEMENT: no manifest/skeletons in context, skipping Micro Prime pre-pass")
+            return
+
+        config = MicroPrimeConfig()
+        pre_pass = MicroPrimePrePass(
+            config=config,
+            manifest=manifest,
+            skeletons=skeletons,
+            project_root=project_root,
+        )
+        result = pre_pass.run()
+
+        # Store results in context for downstream phases
+        context["micro_prime_result"] = {
+            "filled_skeletons": result.filled_skeletons,
+            "escalated_elements": result.escalated_elements,
+            "metrics": result.metrics,
+        }
+        # Update skeletons with filled versions
+        if result.filled_skeletons:
+            context["skeletons"] = result.filled_skeletons
+
+        logger.info(
+            "IMPLEMENT: Micro Prime pre-pass completed — %d local, %d escalated",
+            result.local_success_count,
+            result.escalated_count,
+        )
 
     @staticmethod
     def _validate_generation_completeness(
@@ -7922,6 +7954,10 @@ class Test{class_name}:
                 len(task_reports), duration,
             )
             return {"output": output, "cost": 0.0, "metadata": {"duration": duration, "resumed": False}}
+
+        # --- REQ-MP-503: Micro Prime pre-pass (opt-in) ---
+        if self.config.micro_prime_enabled:
+            self._run_micro_prime_prepass(context, project_root)
 
         # --- REQ-IME-300: Inner loop path (opt-in) ---
         if self.config.enable_inner_loop:

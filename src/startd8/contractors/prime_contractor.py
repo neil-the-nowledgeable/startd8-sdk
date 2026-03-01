@@ -604,6 +604,10 @@ class PrimeContractorWorkflow:
             )
         self._context_strategy = context_strategy or StandaloneContextStrategy()
         self._strict_mode = strict_mode
+        # Complexity routing (REQ-MP-807) — off by default, enabled via enable_complexity_routing()
+        self._complexity_routing_enabled = False
+        self._complexity_config: Optional[Any] = None
+        self._complexity_router: Optional[Any] = None
         # Resume state: load from disk if resuming
         self._resume_mode: Optional[str] = None
         if resume:
@@ -615,6 +619,57 @@ class PrimeContractorWorkflow:
             return str(path.relative_to(self.project_root))
         except ValueError:
             return str(path)
+
+    # -----------------------------------------------------------------------
+    # Complexity Routing (REQ-MP-807)
+    # -----------------------------------------------------------------------
+
+    def enable_complexity_routing(
+        self,
+        config: Optional[Any] = None,
+        tier3_agent: Optional[str] = None,
+    ) -> None:
+        """Enable per-feature complexity-based model routing.
+
+        Args:
+            config: A ``ComplexityRoutingConfig`` instance, or ``None``
+                for defaults.
+            tier3_agent: Agent spec for the COMPLEX tier generator.
+                When ``None`` the default code generator is used for all
+                tiers (routing still classifies, but doesn't change the
+                generator).
+        """
+        from startd8.complexity import (
+            ComplexityRoutingConfig,
+            ComplexityRouter,
+        )
+
+        self._complexity_routing_enabled = True
+        self._complexity_config = config or ComplexityRoutingConfig()
+
+        complex_generator = None
+        if tier3_agent is not None:
+            from startd8.contractors.generators import (
+                LeadContractorCodeGenerator,
+            )
+
+            complex_generator = LeadContractorCodeGenerator(
+                lead_agent=tier3_agent,
+                output_dir=(
+                    self.code_generator.output_dir
+                    if hasattr(self.code_generator, "output_dir")
+                    else Path("generated")
+                ),
+            )
+
+        self._complexity_router = ComplexityRouter(
+            moderate_generator=self.code_generator,
+            complex_generator=complex_generator or self.code_generator,
+        )
+        logger.info(
+            "Complexity routing enabled (tier3_agent=%s)",
+            tier3_agent or "default",
+        )
 
     # -----------------------------------------------------------------------
     # Context Strategy: Resolution and Validation (F-007)
@@ -1881,7 +1936,40 @@ class PrimeContractorWorkflow:
                 self._save_queue_state_with_mode()
                 return gen_context
 
-            result: GenerationResult = self.code_generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
+            # Phase 5: Complexity routing — select tier-specific generator
+            generator = self.code_generator
+            if self._complexity_routing_enabled and self._complexity_router is not None:
+                try:
+                    from startd8.complexity import (
+                        classify_tier,
+                        extract_signals_from_feature,
+                    )
+
+                    signals = extract_signals_from_feature(
+                        feature, self.project_root,
+                    )
+                    tier, reason = classify_tier(signals, self._complexity_config)
+                    generator = self._complexity_router.select(tier) or generator
+                    # Stash classification in feature metadata for forensics
+                    if not hasattr(feature, "metadata") or feature.metadata is None:
+                        feature.metadata = {}
+                    feature.metadata["_complexity_tier"] = tier.value
+                    feature.metadata["_complexity_reason"] = reason
+                    feature.metadata["_complexity_signals"] = signals.to_dict()
+                    logger.info(
+                        "Complexity routing for '%s': tier=%s, reason=%s",
+                        feature.name,
+                        tier.value,
+                        reason,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Complexity routing failed for '%s', using default generator: %s",
+                        feature.name,
+                        exc,
+                    )
+
+            result: GenerationResult = generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
             if result.success:
                 feature.generated_files = [str(f) for f in result.generated_files]
                 feature.status = FeatureStatus.GENERATED

@@ -192,6 +192,19 @@ def main() -> int:
         "--verbose", "-v", action="store_true",
         help="Enable debug logging",
     )
+    # Complexity routing (REQ-MP-807)
+    parser.add_argument(
+        "--complexity-routing", action="store_true",
+        help="Enable per-feature complexity-based model routing",
+    )
+    parser.add_argument(
+        "--tier3-agent", default=None,
+        help="Agent spec for COMPLEX tier (e.g. anthropic:claude-opus-4-6)",
+    )
+    parser.add_argument(
+        "--complexity-loc-simple-max", type=int, default=None,
+        help="Override max LOC for SIMPLE tier (default: 150)",
+    )
 
     args = parser.parse_args()
 
@@ -392,6 +405,19 @@ def main() -> int:
     seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
     workflow.load_seed_context(seed_data, cli_mode=args.mode)
     workflow.force_regenerate = args.force_regenerate
+
+    # Wire complexity routing from CLI flags (REQ-MP-807)
+    if args.complexity_routing:
+        cr_config = None
+        if args.complexity_loc_simple_max is not None:
+            from startd8.complexity import ComplexityRoutingConfig
+            cr_config = ComplexityRoutingConfig(
+                loc_simple_max=args.complexity_loc_simple_max,
+            )
+        workflow.enable_complexity_routing(
+            config=cr_config,
+            tier3_agent=args.tier3_agent,
+        )
 
     # Wire validation overrides from CLI flags (Phase 5: REQ-PEM-014)
     if args.strict_validation:
