@@ -110,6 +110,9 @@ class ClassifiedElement:
     verification_passed: Optional[bool] = None
     verification_notes: Optional[str] = None
     error: Optional[str] = None
+    indent_recovered: bool = False  # True if indentation fix saved this element
+    was_truncated: bool = False  # True if finish_reason="length" (hit token cap)
+    had_few_shot: bool = False  # True if few-shot examples were injected into the prompt
 
     @property
     def fqn(self) -> str:
@@ -129,6 +132,9 @@ class ExperimentResult:
     ollama_attempted: int = 0
     ollama_succeeded: int = 0
     ollama_syntax_valid: int = 0
+    ollama_indent_recovered: int = 0  # Elements saved by indentation fix
+    ollama_truncated: int = 0  # Elements that hit the token cap
+    ollama_few_shot: int = 0  # Elements that had few-shot examples injected
     ollama_verified: int = 0
     ollama_failed: int = 0
     total_generation_time_ms: float = 0.0
@@ -690,10 +696,17 @@ async def synthesize_manifest(
 
 
 def _build_element_stub(elem: ForwardElementSpec) -> str:
-    """Render a single element as a Python stub (what the deterministic assembler
-    would produce). This is the code the LLM sees and must fill in."""
+    """Render a single element as a Python stub for the LLM to fill in.
+
+    FIX #3: Always renders at top-level indentation (no class wrapper indent).
+    Methods are shown un-indented; the prompt header clarifies class context.
+    This prevents the model from adding extra leading whitespace.
+    """
     lines: list[str] = []
-    indent = "    " if elem.parent_class else ""
+
+    # FIX #3: Always top-level indent — no class-wrapper indent in the stub.
+    # The prompt header tells the model it's a method of a class.
+    indent = ""
 
     # Decorators
     for dec in (elem.decorators or []):
@@ -730,7 +743,7 @@ def _build_element_stub(elem: ForwardElementSpec) -> str:
         lines.append(f"{indent}{prefix} {elem.name}({sig}){ret}:")
 
     # Docstring
-    body_indent = indent + "    " if elem.kind != ElementKind.CLASS else "    "
+    body_indent = "    "
     if elem.docstring_hint:
         lines.append(f'{body_indent}"""{ elem.docstring_hint}"""')
 
@@ -740,13 +753,146 @@ def _build_element_stub(elem: ForwardElementSpec) -> str:
     return "\n".join(lines)
 
 
+def _estimate_body_lines(elem: ForwardElementSpec) -> str:
+    """Estimate expected body length for the length constraint hint."""
+    if elem.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
+        return "1-2"
+    if elem.kind == ElementKind.PROPERTY:
+        return "1-3"
+    param_count = 0
+    if elem.signature:
+        param_count = len([
+            p for p in elem.signature.params if p.name not in ("self", "cls")
+        ])
+    if param_count == 0:
+        return "3-8"
+    if param_count <= 2:
+        return "5-12"
+    return "8-15"
+
+
+def _find_few_shot_examples(
+    elem: ForwardElementSpec,
+    file_path: str,
+    completed: list[ClassifiedElement],
+    max_examples: int = 2,
+) -> list[str]:
+    """Find 1-2 successfully-generated siblings to use as few-shot examples.
+
+    Priority order:
+    1. Same class (matching parent_class) — highest signal for methods
+    2. Same file (matching file_path) — anchors output format
+    3. Same element kind across files — useful for constants
+    """
+    examples: list[str] = []
+
+    # Tier 1: Same class
+    if elem.parent_class:
+        for ce in completed:
+            if len(examples) >= max_examples:
+                break
+            if (
+                ce.syntax_valid
+                and ce.generated_code
+                and ce.element.parent_class == elem.parent_class
+                and ce.element.name != elem.name
+            ):
+                examples.append(ce.generated_code.strip())
+
+    # Tier 2: Same file, different class or standalone
+    if len(examples) < max_examples:
+        for ce in completed:
+            if len(examples) >= max_examples:
+                break
+            if (
+                ce.syntax_valid
+                and ce.generated_code
+                and ce.file_path == file_path
+                and ce.element.name != elem.name
+                # Skip if already picked in Tier 1
+                and ce.generated_code.strip() not in examples
+            ):
+                examples.append(ce.generated_code.strip())
+
+    return examples
+
+
+def _build_constant_prompt(
+    elem: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    few_shot_examples: list[str] | None = None,
+) -> str:
+    """FIX #4: Separate prompt template for constants/variables.
+
+    Constants need an assignment statement, not a function body.
+    """
+    # Render imports for context
+    import_lines = []
+    for imp in file_spec.imports:
+        if imp.kind == "from":
+            names = ", ".join(imp.names)
+            import_lines.append(f"from {imp.module} import {names}")
+        else:
+            alias = f" as {imp.alias}" if imp.alias else ""
+            import_lines.append(f"import {imp.module}{alias}")
+
+    # Build type annotation hint
+    type_hint = ""
+    if elem.signature and elem.signature.return_annotation:
+        type_hint = f": {elem.signature.return_annotation}"
+
+    doc_hint = ""
+    if elem.docstring_hint:
+        doc_hint = f"  # {elem.docstring_hint}"
+
+    sections = [
+        "# Task: Define this module-level variable.",
+        "# Output ONLY the assignment statement. 1-3 lines maximum.",
+        "# Do NOT write functions, classes, decorators, or explanations.",
+        "# Do NOT wrap output in markdown code fences.",
+        f"# Start your output directly with `{elem.name}`.",
+        "",
+    ]
+
+    if import_lines:
+        sections.append("# Available imports (use only these):")
+        sections.extend(import_lines)
+        sections.append("")
+
+    # Few-shot: show a successfully-generated constant from the same file
+    if few_shot_examples:
+        sections.append("# Example (completed):")
+        sections.append(few_shot_examples[0])
+        sections.append("")
+
+    sections.append("# Define this:")
+    sections.append(f"{elem.name}{type_hint} = ...{doc_hint}")
+
+    return "\n".join(sections)
+
+
 def _build_ollama_prompt(
     elem: ForwardElementSpec,
     file_spec: ForwardFileSpec,
     contracts: list[InterfaceContract],
+    few_shot_examples: list[str] | None = None,
 ) -> str:
-    """Build a focused prompt for Ollama to fill in a single element body."""
+    """Build a focused prompt for Ollama to fill in a single element body.
+
+    Prompt improvements applied:
+    - FIX #1: Length + stop constraints to prevent over-generation
+    - FIX #2: API surface restriction to reduce hallucination
+    - FIX #3: Top-level indentation (via _build_element_stub)
+    - FIX #4: Separate template for constants (via _build_constant_prompt)
+    - FIX #5: No-explanation format anchor
+    - FIX #6: Few-shot example injection from successfully-generated siblings
+    """
+    # FIX #4: Route constants/variables to a dedicated prompt
+    if elem.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
+        return _build_constant_prompt(elem, file_spec, few_shot_examples)
+
     stub = _build_element_stub(elem)
+    est_lines = _estimate_body_lines(elem)
 
     # Render imports for context
     import_lines = []
@@ -769,7 +915,7 @@ def _build_ollama_prompt(
                         for p in sib.signature.params
                     )
                     ret = f" -> {sib.signature.return_annotation}" if sib.signature.return_annotation else ""
-                    sibling_stubs.append(f"    def {sib.name}({params}){ret}: ...")
+                    sibling_stubs.append(f"def {sib.name}({params}){ret}: ...")
 
     # Render binding constraints
     constraint_lines = []
@@ -777,20 +923,41 @@ def _build_ollama_prompt(
         prefix = "[BINDING]" if c.confidence != ContractConfidence.TENTATIVE else "[ADVISORY]"
         constraint_lines.append(f"{prefix} {c.binding_text}")
 
+    # ── Build prompt ──
+
+    # FIX #3: Method context header (since stub is now un-indented)
+    context_header = ""
+    if elem.parent_class:
+        context_header = f"# This is a method of class `{elem.parent_class}`. Write it at the top level (no class wrapper).\n"
+
+    # FIX #5: Format anchor — use correct def keyword
+    def_keyword = "async def" if elem.kind in (
+        ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
+    ) else "def"
+
     sections = [
         "# Task: Implement the function body below.",
         "# Replace `raise NotImplementedError` with a working implementation.",
-        "# Return ONLY the complete function (with signature and body), no explanation.",
+        # FIX #1: Length + stop constraints
+        f"# The body should be approximately {est_lines} lines.",
+        "# STOP after the function ends. Do NOT write additional functions, classes, or tests.",
+        # FIX #5: Format anchor
+        "# Output ONLY Python code. No markdown fences, no explanations, no comments before or after.",
+        f"# Start directly with `{def_keyword} {elem.name}(` on the first line.",
         "",
     ]
 
+    if context_header:
+        sections.insert(0, context_header)
+
     if import_lines:
-        sections.append("# Available imports:")
+        # FIX #2: API surface restriction
+        sections.append("# Available imports (ONLY use these — do NOT invent other APIs):")
         sections.extend(import_lines)
         sections.append("")
 
     if sibling_stubs:
-        sections.append("# Other methods in this class (for context):")
+        sections.append("# Other methods in this class (for context, do not redefine):")
         sections.extend(sibling_stubs)
         sections.append("")
 
@@ -799,10 +966,105 @@ def _build_ollama_prompt(
         sections.extend(constraint_lines)
         sections.append("")
 
-    sections.append("# Implement this:")
+    # FIX #6: Few-shot example injection — anchor output format with a proven sibling
+    if few_shot_examples:
+        for i, ex in enumerate(few_shot_examples[:2]):
+            label = "Example (completed)" if i == 0 else "Another example"
+            sections.append(f"# {label}:")
+            sections.append(ex)
+            sections.append("")
+
+    sections.append("# Now implement this:")
     sections.append(stub)
 
     return "\n".join(sections)
+
+
+def _try_parse(code: str, is_method: bool = False) -> bool:
+    """Try to ast.parse() the code, return True if it succeeds.
+
+    With FIX #3 (top-level indentation), ALL elements — including methods —
+    are rendered at the top level in the prompt.  The model returns top-level
+    code, so we always parse directly.  If that fails for a method, we also
+    try wrapping in a class as a fallback (the model may still indent).
+    """
+    try:
+        ast.parse(code)
+        return True
+    except SyntaxError:
+        pass
+    # Fallback for methods: the model might still return indented code
+    if is_method:
+        try:
+            wrapped = f"class _Wrapper:\n" + textwrap.indent(code, "    ")
+            ast.parse(wrapped)
+            return True
+        except SyntaxError:
+            pass
+    return False
+
+
+def _normalize_indentation(
+    code: str,
+    is_method: bool,
+) -> tuple[Optional[str], str]:
+    """Try multiple strategies to fix indentation issues in LLM-generated code.
+
+    Returns (fixed_code, strategy_name) if any strategy works, or (None, "") if
+    all strategies fail.
+
+    Strategies tried in order:
+    1. textwrap.dedent — strips common leading whitespace, re-indents for methods
+    2. Strip first line (often explanation text) + dedent
+    3. Strip last line (often trailing comment/explanation) + dedent
+    4. Strip both first and last lines + dedent
+    5. Tab-to-spaces conversion + dedent
+    """
+    strategies: list[tuple[str, str]] = []
+
+    # Strategy 1: Straight dedent (+ re-indent for methods)
+    dedented = textwrap.dedent(code).strip()
+    strategies.append(("dedent", dedented))
+
+    # Strategy 2: Strip first line + dedent
+    # codellama often emits an explanation line before the actual code
+    lines = code.split("\n")
+    if len(lines) > 2:
+        without_first = "\n".join(lines[1:])
+        strategies.append(("strip_first_line+dedent", textwrap.dedent(without_first).strip()))
+
+    # Strategy 3: Strip last line + dedent
+    # Sometimes trailing explanation or truncated line
+    if len(lines) > 2:
+        without_last = "\n".join(lines[:-1])
+        strategies.append(("strip_last_line+dedent", textwrap.dedent(without_last).strip()))
+
+    # Strategy 4: Strip both first and last + dedent
+    if len(lines) > 3:
+        middle = "\n".join(lines[1:-1])
+        strategies.append(("strip_first_last+dedent", textwrap.dedent(middle).strip()))
+
+    # Strategy 5: Tabs → 4 spaces + dedent
+    if "\t" in code:
+        tab_fixed = code.expandtabs(4)
+        strategies.append(("tabs_to_spaces+dedent", textwrap.dedent(tab_fixed).strip()))
+
+    for name, candidate in strategies:
+        if not candidate:
+            continue
+        if _try_parse(candidate, is_method):
+            return candidate, name
+
+    return None, ""
+
+
+def _extract_syntax_error(code: str) -> str:
+    """Try ast.parse to get the SyntaxError message for reporting."""
+    try:
+        ast.parse(code)
+        return ""
+    except SyntaxError as e:
+        return f"SyntaxError: {e}"
 
 
 async def generate_with_ollama(
@@ -810,7 +1072,9 @@ async def generate_with_ollama(
     file_spec: ForwardFileSpec,
     contracts: list[InterfaceContract],
     ollama_model: str,
-    max_tokens: int = 2048,
+    max_tokens: int = 512,
+    normalize_indent: bool = False,
+    completed: list[ClassifiedElement] | None = None,
 ) -> None:
     """Generate a single element body using Ollama. Mutates elem in place."""
     try:
@@ -818,7 +1082,15 @@ async def generate_with_ollama(
             f"ollama:{ollama_model}",
             max_tokens=max_tokens,
         )
-        prompt = _build_ollama_prompt(elem.element, file_spec, contracts)
+        # FIX #6: Find few-shot examples from already-generated siblings
+        few_shot = _find_few_shot_examples(
+            elem.element, elem.file_path, completed or [],
+        )
+        if few_shot:
+            elem.had_few_shot = True
+        prompt = _build_ollama_prompt(
+            elem.element, file_spec, contracts, few_shot or None,
+        )
 
         start = time.monotonic()
         result_text, time_ms, token_usage = await agent.agenerate(prompt)
@@ -826,6 +1098,13 @@ async def generate_with_ollama(
 
         if token_usage:
             elem.generation_tokens = (token_usage.input or 0) + (token_usage.output or 0)
+            # Detect truncation: finish_reason="length" means the model hit the token cap
+            if getattr(token_usage, 'was_truncated', False):
+                elem.was_truncated = True
+                logger.warning(
+                    f"    {elem.fqn}: TRUNCATED (hit token cap, "
+                    f"output={token_usage.output} tokens)"
+                )
 
         # Extract just the function/method code
         from startd8.utils.code_extraction import extract_code_from_response
@@ -837,19 +1116,27 @@ async def generate_with_ollama(
             return
 
         elem.generated_code = code
+        is_method = bool(elem.element.parent_class)
 
         # Validate syntax
-        try:
-            # Wrap method-level code in a class for valid syntax
-            if elem.element.parent_class:
-                wrapped = f"class _Wrapper:\n" + textwrap.indent(code, "    ")
-                ast.parse(wrapped)
-            else:
-                ast.parse(code)
+        if _try_parse(code, is_method):
             elem.syntax_valid = True
-        except SyntaxError as e:
+        elif normalize_indent:
+            # Try indentation normalization strategies before giving up
+            fixed, strategy = _normalize_indentation(code, is_method)
+            if fixed is not None:
+                elem.generated_code = fixed
+                elem.syntax_valid = True
+                elem.indent_recovered = True
+                logger.info(
+                    f"    Indentation fix recovered {elem.fqn} via '{strategy}'"
+                )
+            else:
+                elem.syntax_valid = False
+                elem.error = _extract_syntax_error(code)
+        else:
             elem.syntax_valid = False
-            elem.error = f"SyntaxError: {e}"
+            elem.error = _extract_syntax_error(code)
 
     except Exception as e:
         elem.error = str(e)
@@ -1019,7 +1306,19 @@ async def run_experiment(args: argparse.Namespace) -> ExperimentResult:
         f"{len(manifest.contracts)} contracts"
     )
 
-    # ── Phase 0: Synthesize manifest if needed ──
+    # ── Phase 0: Load cached manifest or synthesize if needed ──
+    if args.manifest_cache and len(manifest.file_specs) == 0:
+        cache_path = Path(args.manifest_cache)
+        if cache_path.exists():
+            logger.info(f"Loading cached manifest from {cache_path}")
+            manifest = ForwardManifest.model_validate_json(cache_path.read_text(encoding="utf-8"))
+            logger.info(
+                f"Cached manifest: {len(manifest.file_specs)} files, "
+                f"{len(manifest.contracts)} contracts"
+            )
+        else:
+            logger.warning(f"Manifest cache not found: {cache_path}")
+
     if args.synthesize_manifest and len(manifest.file_specs) == 0:
         synth_model = args.synthesis_model  # None = use Opus (default)
         if synth_model:
@@ -1126,10 +1425,13 @@ async def run_experiment(args: argparse.Namespace) -> ExperimentResult:
     file_spec_map = manifest.file_specs
     task_ids = {t.task_id for t in tasks}
 
+    completed: list[ClassifiedElement] = []  # FIX #6: accumulate for few-shot examples
+
     for ce in simple_elements:
         file_spec = file_spec_map.get(ce.file_path)
         if not file_spec:
             ce.error = f"No file_spec for {ce.file_path}"
+            completed.append(ce)
             continue
 
         # Get applicable contracts
@@ -1147,9 +1449,17 @@ async def run_experiment(args: argparse.Namespace) -> ExperimentResult:
             ce, file_spec, contracts,
             ollama_model=args.ollama_model,
             max_tokens=args.max_tokens,
+            normalize_indent=args.normalize_indent,
+            completed=completed,
         )
 
+        completed.append(ce)
+
         status = "OK" if ce.syntax_valid else f"FAIL ({ce.error})"
+        if ce.indent_recovered:
+            status = "OK (indent-fixed)"
+        if ce.had_few_shot:
+            status += " [few-shot]"
         logger.info(
             f"  {ce.fqn}: {status} "
             f"({ce.generation_time_ms:.0f}ms, {ce.generation_tokens or 0} tokens)"
@@ -1160,16 +1470,25 @@ async def run_experiment(args: argparse.Namespace) -> ExperimentResult:
         if ce.syntax_valid:
             result.ollama_syntax_valid += 1
             result.ollama_succeeded += 1
+            if ce.indent_recovered:
+                result.ollama_indent_recovered += 1
         elif ce.error:
             result.ollama_failed += 1
+        if ce.was_truncated:
+            result.ollama_truncated += 1
+        if ce.had_few_shot:
+            result.ollama_few_shot += 1
         if ce.generation_time_ms:
             result.total_generation_time_ms += ce.generation_time_ms
         if ce.generation_tokens:
             result.total_generation_tokens += ce.generation_tokens
 
+    indent_msg = ""
+    if result.ollama_indent_recovered > 0:
+        indent_msg = f" ({result.ollama_indent_recovered} recovered via indent fix)"
     logger.info(
         f"Generation: {result.ollama_syntax_valid}/{result.ollama_attempted} syntax-valid "
-        f"({result.success_rate:.0%})"
+        f"({result.success_rate:.0%}){indent_msg}"
     )
 
     # ── Phase 3: Verify with Sonnet ──
@@ -1219,7 +1538,15 @@ def print_report(result: ExperimentResult, args: argparse.Namespace) -> None:
         print(f"\n  --- Ollama Generation ---")
         print(f"  Attempted:       {result.ollama_attempted}")
         print(f"  Syntax valid:    {result.ollama_syntax_valid} ({result.success_rate:.0%})")
+        if result.ollama_indent_recovered > 0:
+            native = result.ollama_syntax_valid - result.ollama_indent_recovered
+            print(f"    ├─ Native:     {native}")
+            print(f"    └─ Recovered:  {result.ollama_indent_recovered} (indent normalization)")
         print(f"  Failed:          {result.ollama_failed}")
+        if result.ollama_truncated > 0:
+            print(f"  Truncated:       {result.ollama_truncated} (hit token cap → escalation candidate)")
+        if result.ollama_few_shot > 0:
+            print(f"  Few-shot aided:  {result.ollama_few_shot} (had sibling examples injected)")
         print(f"  Total time:      {result.total_generation_time_ms:.0f}ms")
         print(f"  Total tokens:    {result.total_generation_tokens}")
         if result.ollama_attempted > 0:
@@ -1249,7 +1576,12 @@ def print_report(result: ExperimentResult, args: argparse.Namespace) -> None:
         ver = ""
         ms = ""
         if ce.syntax_valid is not None:
-            syn = "OK" if ce.syntax_valid else "FAIL"
+            if ce.indent_recovered:
+                syn = "FIXED"
+            elif ce.syntax_valid:
+                syn = "OK"
+            else:
+                syn = "FAIL"
         if ce.verification_passed is not None:
             ver = "PASS" if ce.verification_passed else "FAIL"
         if ce.generation_time_ms is not None:
@@ -1284,7 +1616,10 @@ def print_report(result: ExperimentResult, args: argparse.Namespace) -> None:
             "classified": result.classified,
             "ollama_attempted": result.ollama_attempted,
             "ollama_syntax_valid": result.ollama_syntax_valid,
+            "ollama_indent_recovered": result.ollama_indent_recovered,
             "ollama_verified": result.ollama_verified,
+            "ollama_truncated": result.ollama_truncated,
+            "ollama_few_shot": result.ollama_few_shot,
             "success_rate": result.success_rate,
             "verified_rate": result.verified_rate,
             "total_generation_time_ms": result.total_generation_time_ms,
@@ -1303,6 +1638,9 @@ def print_report(result: ExperimentResult, args: argparse.Namespace) -> None:
                     "verification_notes": ce.verification_notes,
                     "generation_time_ms": ce.generation_time_ms,
                     "generation_tokens": ce.generation_tokens,
+                    "indent_recovered": ce.indent_recovered,
+                    "was_truncated": ce.was_truncated,
+                    "had_few_shot": ce.had_few_shot,
                     "error": ce.error,
                 }
                 for ce in result.elements
@@ -1328,8 +1666,8 @@ def parse_args() -> argparse.Namespace:
         help="Path to enriched seed JSON (must contain forward_manifest)",
     )
     parser.add_argument(
-        "--ollama-model", default="qwen2.5-coder:7b",
-        help="Ollama model to use for SIMPLE element generation (default: qwen2.5-coder:7b)",
+        "--ollama-model", default="startd8-coder",
+        help="Ollama model to use for SIMPLE element generation (default: startd8-coder)",
     )
     parser.add_argument(
         "--project-root", default=".",
@@ -1358,8 +1696,17 @@ def parse_args() -> argparse.Namespace:
         help="Skip Sonnet verification step",
     )
     parser.add_argument(
-        "--max-tokens", type=int, default=2048,
-        help="Max tokens for Ollama generation per element (default: 2048)",
+        "--normalize-indent", action="store_true",
+        help="Try indentation normalization strategies to recover syntax-invalid code",
+    )
+    parser.add_argument(
+        "--manifest-cache", default=None,
+        help="Path to a pre-synthesized manifest JSON file (avoids re-running Opus synthesis)",
+    )
+    parser.add_argument(
+        "--max-tokens", type=int, default=512,
+        help="Max tokens for Ollama generation per element (default: 512). "
+             "Lower cap reduces over-generation from local models.",
     )
     parser.add_argument(
         "--output", default=None,

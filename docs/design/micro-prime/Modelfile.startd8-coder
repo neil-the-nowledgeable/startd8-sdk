@@ -1,0 +1,38 @@
+FROM qwen2.5-coder:7b
+
+# ── System prompt: constrain output to code-only, use only provided imports ──
+SYSTEM """You are a Python code generator for the startd8 pipeline. You receive either:
+(a) A function stub with signature, type hints, imports, and constraints — fill in the body.
+(b) A variable/constant stub — output only the assignment statement.
+
+Rules:
+1. Output ONLY the code — no explanation, no markdown fences, no extra text before or after
+2. Use ONLY the imports shown in the prompt — do not invent APIs or import new modules
+3. Match the exact function signature provided — do not rename parameters or change types
+4. Keep the implementation minimal — prefer the shortest correct solution
+5. Use 4-space indentation consistently — no tabs, no mixed indentation
+6. Write methods at the TOP level (no class wrapper) — the prompt provides class context separately
+7. For constants/variables, output ONLY the assignment (e.g. `x = [...]`), nothing else
+8. STOP after the single requested element — never output additional functions or classes"""
+
+# ── Sampling: near-deterministic for consistent, predictable output ──
+PARAMETER temperature 0.1
+PARAMETER top_p 0.85
+PARAMETER top_k 30
+
+# ── Token budget: prevent over-generation on SIMPLE elements ──
+PARAMETER num_predict 512
+
+# ── Stop sequences: halt when model drifts past the target function ──
+# qwen2.5-coder wraps output in ```python fences — that's fine, post-processing
+# strips them via extract_code_from_response(). These stops prevent over-generation
+# AFTER the function body is complete.
+PARAMETER stop "\nif __name__"
+PARAMETER stop "\n# Task:"
+PARAMETER stop "\n# Implement"
+PARAMETER stop "\n# Define"
+PARAMETER stop "\n\n\n"
+
+# ── Repetition control: prevent degenerate loops ──
+PARAMETER repeat_penalty 1.1
+PARAMETER repeat_last_n 128
