@@ -193,7 +193,7 @@ class LeadContractorWorkflow(WorkflowBase):
 
     Recommended Lead Agents:
         - anthropic:claude-sonnet-4-6 (default - best for coding/agents)
-        - anthropic:claude-opus-4-5-20251101 (most intelligent)
+        - anthropic:claude-opus-4-6 (most intelligent)
         - anthropic:claude-haiku-4-5-20251001 (fastest, near-frontier)
 
     Recommended Drafter Agents:
@@ -253,14 +253,14 @@ class LeadContractorWorkflow(WorkflowBase):
                     type="agent_spec",
                     required=False,
                     default=Models.LEAD_CONTRACTOR_LEAD,
-                    description="Lead contractor agent (Claude recommended: sonnet-4.5, opus-4.5, haiku-4.5)"
+                    description="Lead contractor agent (Claude recommended: sonnet-4.6, opus-4.6, haiku-4.5)"
                 ),
                 WorkflowInput(
                     name="drafter_agent",
                     type="agent_spec",
                     required=False,
                     default=Models.LEAD_CONTRACTOR_DRAFTER,
-                    description="Drafter agent (cost-efficient: haiku-4.5, gpt-4.1-nano, gpt-4o-mini)"
+                    description="Drafter agent (cost-efficient: haiku-4.5, gpt-4.1-nano)"
                 ),
                 WorkflowInput(
                     name="max_iterations",

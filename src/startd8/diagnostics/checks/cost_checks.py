@@ -140,12 +140,15 @@ def check_pricing_coverage() -> HealthCheck:
 
         # Models we expect to have pricing for
         expected_models = [
-            # Anthropic
+            # Anthropic (current)
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-haiku-4-5-20251001",
+            # Anthropic (legacy)
             "claude-3-opus-20240229",
             "claude-3-sonnet-20240229",
             "claude-3-haiku-20240307",
             "claude-sonnet-4-20250514",
-            "claude-opus-4-20250514",
             # OpenAI
             "gpt-4",
             "gpt-4-turbo",
