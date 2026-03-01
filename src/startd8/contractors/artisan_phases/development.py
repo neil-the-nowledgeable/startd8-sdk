@@ -3134,6 +3134,8 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 chunk.chunk_id,
                 exc,
             )
+            # R2-I8: Store error details so caller can populate t2_error.
+            chunk.metadata["_t2_failure_detail"] = str(exc)
             return None
 
     # ------------------------------------------------------------------
@@ -3789,6 +3791,8 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             )
 
             # TM-2: Output truncation detection (matches prime contractor)
+            # R2-I7: Flag used to discard last S/R block when truncated.
+            _truncation_detected = False
             if self._check_truncation:
                 try:
                     from startd8.truncation_detection import detect_truncation
@@ -3797,6 +3801,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                         strict_mode=self._strict_truncation,
                     )
                     if trunc_result.is_truncated:
+                        _truncation_detected = True
                         _trunc_reason = "; ".join(trunc_result.indicators) if trunc_result.indicators else "unknown"
                         _is_high_confidence = trunc_result.confidence >= 0.7
                         if _is_high_confidence and self._fail_on_truncation:
@@ -3861,6 +3866,24 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
 
                 if has_edit_markers(response_text):
                     blocks = parse_edit_blocks(response_text)
+
+                    # R2-I7: Discard the last S/R block when truncation
+                    # was detected — the last block is most likely to be
+                    # incomplete (search pattern present but replacement
+                    # text cut off), and applying it would corrupt code.
+                    if blocks and _truncation_detected and len(blocks) > 1:
+                        discarded = blocks[-1]
+                        blocks = blocks[:-1]
+                        preview = discarded.search_text[:80].replace("\n", "\\n")
+                        self.logger.warning(
+                            "R2-I7: Discarded last S/R block (index %d) for "
+                            "chunk %s due to truncation detection — block may "
+                            "be incomplete. Search text: %r",
+                            discarded.block_index,
+                            chunk.chunk_id,
+                            preview,
+                        )
+
                     if blocks:
                         applied_files: Dict[str, str] = {}
                         all_failed: List[str] = []
@@ -3887,17 +3910,75 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                                         )
                             full_contents[target] = full_content
 
-                        # Route each block to the file(s) whose content
-                        # contains its search_text.  Blocks that match no
-                        # file are recorded as unrouted failures.
+                        # R2-I5: Route each block to the file it was
+                        # generated for.  When a block has a file_hint
+                        # (extracted from filename comments preceding the
+                        # SEARCH marker), scope it to that file only.
+                        # Otherwise, fall back to content matching — but
+                        # when the search text appears in multiple files,
+                        # scope to the first match and warn.
                         per_file_blocks: Dict[str, list] = {t: [] for t in full_contents}
                         unrouted_blocks: list = []
                         for block in blocks:
                             routed = False
-                            for target, fc in full_contents.items():
-                                if block.search_text in fc:
-                                    per_file_blocks[target].append(block)
+
+                            # R2-I5: file_hint-based scoping (preferred)
+                            if getattr(block, "file_hint", None):
+                                hint = block.file_hint
+                                hint_basename = os.path.basename(hint)
+                                # Try exact match, then basename, then suffix
+                                for target in full_contents:
+                                    if (
+                                        target == hint
+                                        or os.path.basename(target) == hint_basename
+                                        or target.endswith("/" + hint)
+                                    ):
+                                        if block.search_text in full_contents[target]:
+                                            per_file_blocks[target].append(block)
+                                            routed = True
+                                            break
+                                # Hint matched a target but search text not found
+                                if not routed and any(
+                                    os.path.basename(t) == hint_basename
+                                    for t in full_contents
+                                ):
+                                    # Still route to the hinted file — it will
+                                    # fail during apply_edit_blocks and be
+                                    # recorded as a failed block with a clear
+                                    # error message.
+                                    for target in full_contents:
+                                        if os.path.basename(target) == hint_basename:
+                                            per_file_blocks[target].append(block)
+                                            routed = True
+                                            break
+
+                            # Content-based fallback (no file_hint or hint
+                            # didn't match any target)
+                            if not routed:
+                                matching_targets = [
+                                    t for t, fc in full_contents.items()
+                                    if block.search_text in fc
+                                ]
+                                if len(matching_targets) == 1:
+                                    per_file_blocks[matching_targets[0]].append(block)
                                     routed = True
+                                elif len(matching_targets) > 1:
+                                    # R2-I5: Multi-file match — scope to first
+                                    # match only and warn.
+                                    preview = block.search_text[:80].replace("\n", "\\n")
+                                    self.logger.warning(
+                                        "R2-I5: S/R block %d matches %d files %s "
+                                        "— scoping to first match %s only. "
+                                        "Search text: %r",
+                                        block.block_index,
+                                        len(matching_targets),
+                                        matching_targets,
+                                        matching_targets[0],
+                                        preview,
+                                    )
+                                    per_file_blocks[matching_targets[0]].append(block)
+                                    routed = True
+
                             if not routed:
                                 unrouted_blocks.append(block)
 
@@ -4070,13 +4151,31 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                     _t2_reason,
                 )
 
+            # R2-I8: Track T2 status with distinct values so downstream
+            # analysis can distinguish intentional skips from failures.
+            #   "skipped"   — T2 intentionally not attempted (with reason)
+            #   "failed"    — T2 attempted but failed (with error details)
+            #   "completed" — T2 attempted and succeeded
+            _t2_status: str = "skipped"  # default; overwritten below
+            _t2_error: Optional[str] = None
+
             if _attempt_t2:
                 refined_result = await self._refine_written_files(
                     written_files, task_desc, chunk, context,
                 )
                 if refined_result is not None:
                     written_files, refine_info = refined_result
+                    _t2_status = "completed"
                 else:
+                    # R2-I8: T2 was attempted but returned None (failed).
+                    _t2_status = "failed"
+                    _failure_detail = chunk.metadata.pop("_t2_failure_detail", None)
+                    _t2_error = (
+                        f"T2 refinement failed: {_failure_detail}"
+                        if _failure_detail
+                        else "T2 refinement returned None — extraction empty "
+                             "or refiner unavailable (keeping T1 output)"
+                    )
                     # REQ-CMR-032: record attempted-but-not-applied refinement path.
                     emit_forensic_log(
                         call_type="implement.chunk.refine",
@@ -4104,6 +4203,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                         },
                     )
             else:
+                _t2_status = "skipped"
                 # REQ-CMR-032: explicit forensic record for T2 skip decision.
                 emit_forensic_log(
                     call_type="implement.chunk.refine",
@@ -4159,6 +4259,10 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             chunk.metadata["drafter_model"] = _effective_drafter_spec
             chunk.metadata["t2_skipped"] = not bool(refine_info)
             chunk.metadata["t2_decision_reason"] = _t2_reason
+            # R2-I8: Distinct t2_status — "skipped" / "failed" / "completed"
+            chunk.metadata["t2_status"] = _t2_status
+            if _t2_error is not None:
+                chunk.metadata["t2_error"] = _t2_error
             # T2 refinement metadata
             if refine_info:
                 chunk.metadata["refine_cost_usd"] = t2_cost

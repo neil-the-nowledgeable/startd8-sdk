@@ -425,6 +425,10 @@ class GuidanceModule:
                 q_text += f" ... and {len(questions) - 3} more questions (truncated)"
             parts.append("**Open questions:** " + q_text)
 
+        depth_hint = data.get("depth_hint")
+        if depth_hint:
+            parts.append(f"**Expected depth**: {depth_hint}")
+
         alerts = data.get("complexity_alerts", {})
         if alerts:
             alert_parts = [f"{dim} ({score})" for dim, score in alerts.items()]

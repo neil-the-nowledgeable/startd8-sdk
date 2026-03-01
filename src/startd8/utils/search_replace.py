@@ -19,6 +19,8 @@ Usage::
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
@@ -43,6 +45,14 @@ class EditBlock:
 
     block_index: int
     """Ordering index (0-based)."""
+
+    file_hint: Optional[str] = None
+    """Optional file path hint extracted from context preceding the block.
+
+    When the LLM emits a filename comment or header (e.g. ``# path/to/file.py``
+    or ``## path/to/file.py``) before the SEARCH marker, this field captures
+    the path for file-scoped S/R routing (R2-I5).
+    """
 
 
 @dataclass
@@ -74,20 +84,44 @@ def parse_edit_blocks(response: str) -> Optional[List[EditBlock]]:
 
     Returns ``None`` if no markers are found (response is a whole file).
     Returns an empty list if markers are found but malformed.
+
+    R2-I5: Captures file path hints from lines preceding each SEARCH marker
+    (e.g. ``# path/to/file.py``, ``## path/to/file.py``, ``// file.ts``).
+    The ``file_hint`` is stored on each :class:`EditBlock` so callers can
+    scope S/R blocks to the intended target file.
     """
     if not has_edit_markers(response):
         return None
+
+    # R2-I5: Regex to detect file path hints preceding SEARCH blocks.
+    # Matches lines like: # path/to/file.py, ## file.ts, // Component.tsx
+    _file_hint_re = re.compile(
+        r'^(?:#{1,3}|//|#)\s+(\S+\.(?:'
+        r'ts|tsx|js|jsx|py|css|html|vue|svelte|go|rs|java|rb'
+        r'|csv|md|json|yaml|yml|toml|txt|sql|xml|cfg|ini|env|sh|bat'
+        r'))\s*$'
+    )
 
     blocks: List[EditBlock] = []
     lines = response.splitlines(keepends=True)
     i = 0
     block_index = 0
+    # R2-I5: Track the most recent file hint seen before a SEARCH marker.
+    current_file_hint: Optional[str] = None
 
     while i < len(lines):
         line = lines[i].rstrip("\n\r")
 
+        # R2-I5: Check for file path hints before SEARCH markers
+        hint_match = _file_hint_re.match(line.strip())
+        if hint_match:
+            current_file_hint = hint_match.group(1)
+
         # Look for SEARCH marker
         if line.strip() == _SEARCH_MARKER:
+            # Capture the file hint active at this SEARCH marker
+            block_file_hint = current_file_hint
+
             # Collect search text until divider
             search_lines: List[str] = []
             i += 1
@@ -134,6 +168,7 @@ def parse_edit_blocks(response: str) -> Optional[List[EditBlock]]:
                 search_text=search_text,
                 replace_text=replace_text,
                 block_index=block_index,
+                file_hint=block_file_hint,
             ))
             block_index += 1
         else:

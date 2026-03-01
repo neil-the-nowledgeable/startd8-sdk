@@ -61,6 +61,26 @@ def extract_code_from_response(response: str, language: Optional[str] = None) ->
             if len(largest) > len(extracted):
                 extracted = largest
 
+            # R2-I6: Warn about ambiguous multi-file extraction.
+            # When multiple code blocks exist, the caller may have
+            # intended extract_multi_file_code() instead.  Check for
+            # filename hints to detect multi-file responses.
+            _file_hint_pattern = re.compile(
+                r'^(?://|#)\s*(\S+\.\w+)', re.MULTILINE,
+            )
+            file_hints = _file_hint_pattern.findall(response)
+            unique_hints = set(os.path.basename(h) for h in file_hints)
+            if len(unique_hints) > 1:
+                logger.warning(
+                    "R2-I6: extract_code_from_response found %d code blocks "
+                    "with %d distinct filename hints %s — extraction may be "
+                    "ambiguous. Consider using extract_multi_file_code() for "
+                    "multi-file responses.",
+                    len(matches),
+                    len(unique_hints),
+                    sorted(unique_hints),
+                )
+
         logger.debug(
             "Extracted %d chars from code block (response was %d chars)",
             len(extracted),

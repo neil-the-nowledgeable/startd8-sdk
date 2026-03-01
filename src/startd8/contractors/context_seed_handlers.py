@@ -9348,6 +9348,9 @@ class IntegratePhaseHandler(AbstractPhaseHandler):
             allow_dirty=False,
             check_truncation=self.config.check_truncation,
         )
+        # R2-O6: Thread manifest_registry from orchestrator context so
+        # INTEGRATE can use manifest data for validation/conflict detection.
+        engine.manifest_registry = context.get("project_manifests")
 
         # Capture original generated file paths before integration overwrites them
         _original_gen_files: dict[str, list[str]] = {}

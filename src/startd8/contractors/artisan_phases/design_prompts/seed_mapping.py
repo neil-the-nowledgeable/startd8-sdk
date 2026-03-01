@@ -88,6 +88,10 @@ def extract_prior_art(
             result["staleness"] = stale
 
     if not result:
+        # file_stubs alone is sufficient prior art (scaffold skeletons are
+        # binding) — only return None when truly empty.
+        if file_stubs:
+            return {"file_stubs": file_stubs}
         logger.debug(
             "extract_prior_art: no prior art for task %s", task.task_id,
         )

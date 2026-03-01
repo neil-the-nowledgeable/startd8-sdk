@@ -289,6 +289,9 @@ class PhaseStatus(enum.Enum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
+    # R2-O9: Phase completed but exit gate had warn-mode violations.
+    # The retry system can distinguish this from a clean COMPLETED.
+    COMPLETED_WITH_WARNINGS = "completed_with_warnings"
     FAILED = "failed"
     SKIPPED = "skipped"
     TIMED_OUT = "timed_out"
@@ -1974,6 +1977,7 @@ class ArtisanContractorWorkflow:
                     # gate mode: block → FAILED, warn → WARNING + metadata,
                     # skip → ignore.
                     _exit_gate_failed = False
+                    _exit_gate_warned = False
                     if (
                         exit_result
                         and not exit_result.passed
@@ -1989,6 +1993,9 @@ class ArtisanContractorWorkflow:
                                 _exit_violations,
                             )
                         elif self._quality_gate == "warn":
+                            # R2-O9: Track warn-mode exit gate failure so the
+                            # phase gets a distinct status visible to retry.
+                            _exit_gate_warned = True
                             self._logger.warning(
                                 "EXIT GATE WARNING: phase %s completed with "
                                 "%d blocking violation(s) — continuing per "
@@ -2007,6 +2014,13 @@ class ArtisanContractorWorkflow:
                         phase_outcome = "exit_gate_blocked"
                     elif config.dry_run:
                         status = PhaseStatus.DRY_RUN
+                        phase_success = True
+                        phase_outcome = status.value
+                    elif _exit_gate_warned:
+                        # R2-O9: Distinct status so the retry system can see
+                        # that warnings occurred even though the phase
+                        # nominally completed.
+                        status = PhaseStatus.COMPLETED_WITH_WARNINGS
                         phase_success = True
                         phase_outcome = status.value
                     else:
@@ -2030,6 +2044,10 @@ class ArtisanContractorWorkflow:
                     if _exit_violations:
                         metadata["exit_gate_violations"] = _exit_violations
                         metadata["exit_gate_passed"] = not _exit_gate_failed
+                    # R2-O9: Surface warn-mode gate flag so the retry system
+                    # can distinguish clean completion from warned completion.
+                    if _exit_gate_warned:
+                        metadata["gate_warnings"] = True
 
                     if HAS_OTEL and not isinstance(span, _NoOpSpan):
                         span.set_attribute("phase.status", status.value)
@@ -2596,6 +2614,17 @@ class ArtisanContractorWorkflow:
         }
 
         if not phase_result.output or not isinstance(phase_result.output, dict):
+            # R2-O8: A gate that fails to produce output should not silently
+            # pass.  In block mode treat as failure; in warn mode log warning.
+            _none_decision = "unevaluated"
+            _none_violated = False
+            if self._quality_gate == "block":
+                _none_decision = "block"
+                _none_violated = True
+            elif self._quality_gate == "warn":
+                _none_decision = "warn"
+                _none_violated = True
+
             outcome = {
                 "gate_id": f"artisan.{phase.value}.quality",
                 "contract_signal_id": signal_map.get(phase, f"{phase.value}.quality"),
@@ -2603,11 +2632,29 @@ class ArtisanContractorWorkflow:
                 "policy_mode": self._quality_gate,
                 "threshold": {"metric": "total_failed", "operator": "eq", "value": 0},
                 "observed_value": None,
-                "decision": "unevaluated",
-                "violated": False,
+                "decision": _none_decision,
+                "violated": _none_violated,
                 "details": {"reason": "missing_or_non_dict_output"},
             }
             self._record_quality_gate_outcome(outcome)
+
+            if self._quality_gate == "block":
+                _none_msg = (
+                    f"{phase.value.upper()} quality gate: phase output is "
+                    f"None or non-dict — cannot evaluate quality"
+                )
+                self._logger.error("QUALITY GATE BLOCKED: %s", _none_msg)
+                raise QualityGateError(
+                    _none_msg, phase=phase,
+                    details={"reason": "missing_or_non_dict_output"},
+                )
+            elif self._quality_gate == "warn":
+                self._logger.warning(
+                    "QUALITY GATE WARNING: %s quality gate output is None "
+                    "or non-dict — treating as unevaluable; proceeding per "
+                    "warn policy",
+                    phase.value.upper(),
+                )
             return
 
         total_failed = int(phase_result.output.get("total_failed", 0) or 0)
@@ -3040,6 +3087,30 @@ class ArtisanContractorWorkflow:
                     if _merged_struct:
                         context[_struct_key] = _merged_struct
 
+            # R2-O7: Merge truncation_flags across all features so FINALIZE
+            # sees the complete picture.  truncation_flags is a flat
+            # task-id → flag dict, merged with duplicate detection.
+            if "truncation_flags" not in context:
+                _merged_trunc: dict[str, Any] = {}
+                for _feat_id, _fd in _all_feat.items():
+                    if isinstance(_fd, dict):
+                        _ft = _fd.get("truncation_flags")
+                        if isinstance(_ft, dict):
+                            _trunc_overlap = _merged_trunc.keys() & _ft.keys()
+                            if _trunc_overlap:
+                                self._logger.warning(
+                                    "R2-O7: %d duplicate truncation_flags "
+                                    "key(s) across features — "
+                                    "disambiguating with feature suffix: %s",
+                                    len(_trunc_overlap),
+                                    sorted(_trunc_overlap),
+                                )
+                                for _dup_key in _trunc_overlap:
+                                    _safe_key = f"{_dup_key}_feat{_feat_id}"
+                                    _ft[_safe_key] = _ft.pop(_dup_key)
+                            _merged_trunc.update(_ft)
+                context["truncation_flags"] = _merged_trunc
+
         # Execute global end phases (FINALIZE)
         _fs_end_kwargs = dict(
             completed_features=completed_features,
@@ -3074,6 +3145,7 @@ class ArtisanContractorWorkflow:
     )
     RETRY_SOURCE_PHASES: tuple[WorkflowPhase, ...] = (
         WorkflowPhase.DESIGN,
+        WorkflowPhase.IMPLEMENT,
         WorkflowPhase.INTEGRATE,
         WorkflowPhase.TEST,
         WorkflowPhase.REVIEW,
@@ -3382,6 +3454,9 @@ class ArtisanContractorWorkflow:
                     "implementation", "generation_results",
                     "integration_results", "test_results",
                     "review_results", "design_results",
+                    # R2-O7: Include truncation_flags in per-feature
+                    # accumulation so they survive cross-feature cleanup.
+                    "truncation_flags",
                 ):
                     _accum_val = context.get(_accum_key)
                     if _accum_val is not None:
@@ -3447,7 +3522,7 @@ class ArtisanContractorWorkflow:
         phase_result: PhaseResult,
         gate_error: Optional[QualityGateError] = None,
     ) -> Optional[dict[str, Any]]:
-        """AR-153: normalize DESIGN/INTEGRATE/TEST/REVIEW failures into retry feedback."""
+        """AR-153: normalize DESIGN/IMPLEMENT/INTEGRATE/TEST/REVIEW failures into retry feedback."""
         if phase not in self.RETRY_SOURCE_PHASES:
             return None
         # Dry-run phases don't produce real failures — skip retry feedback.
@@ -3479,6 +3554,24 @@ class ArtisanContractorWorkflow:
                 }
                 summary = summary or (
                     f"DESIGN failures for {len(failed_tasks)} task(s): "
+                    + ", ".join(failed_tasks)
+                )
+        elif phase == WorkflowPhase.IMPLEMENT:
+            # R2-O5: IMPLEMENT output uses generation_results keyed by task_id;
+            # each entry has a "success" attribute.
+            gen_results = output.get("generation_results", output)
+            if isinstance(gen_results, dict):
+                for task_id, task_result in gen_results.items():
+                    if isinstance(task_result, dict) and not task_result.get("success", True):
+                        failed_tasks.append(task_id)
+            total_failed = int(output.get("total_failed", 0) or 0)
+            if failed_tasks or total_failed > 0:
+                details["implementation_failures"] = {
+                    task_id: gen_results.get(task_id) for task_id in failed_tasks
+                } if isinstance(gen_results, dict) else {}
+                details["total_failed"] = total_failed or len(failed_tasks)
+                summary = summary or (
+                    f"IMPLEMENT failures for {len(failed_tasks)} task(s): "
                     + ", ".join(failed_tasks)
                 )
         elif phase == WorkflowPhase.INTEGRATE:
@@ -3692,7 +3785,9 @@ class ArtisanContractorWorkflow:
                 continue
 
             # M-1: Reset truncation_flags so stale flags from the previous
-            # feature do not leak into this iteration.
+            # feature do not leak into this iteration.  R2-O7: We still
+            # reset per-feature, but merge into the accumulator after the
+            # feature completes (see below).
             context["truncation_flags"] = {}
 
             current_feature = feature_id
