@@ -20,6 +20,7 @@ class AnthropicProvider:
     HARDCODED_MODELS = [
         # Claude 4.6 family (Latest - February 2026)
         "claude-opus-4-6",            # Claude Opus 4.6 - most intelligent model
+        "claude-sonnet-4-6",          # Claude Sonnet 4.6 - balanced quality/speed
         # Claude 4.5 family (November 2025)
         "claude-opus-4-5",            # Claude Opus 4.5 (alias)
         "claude-opus-4-5-20251101",   # Claude Opus 4.5 (dated)
@@ -81,6 +82,13 @@ class AnthropicProvider:
             "max_output_tokens": 64000,
             "cost_per_1m_input": 5.00,
             "cost_per_1m_output": 25.00,
+        },
+        "claude-sonnet-4-6": {
+            "name": "Claude Sonnet 4.6",
+            "context_window": 200000,
+            "max_output_tokens": 64000,
+            "cost_per_1m_input": 3.00,
+            "cost_per_1m_output": 15.00,
         },
         # Claude 4.5 family
         "claude-opus-4-5": {

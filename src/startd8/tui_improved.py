@@ -430,13 +430,14 @@ class CustomAgentManager:
             'name': 'Claude',
             'class': 'ClaudeAgent',
             'api_key_env': 'ANTHROPIC_API_KEY',
-            'default_model': 'claude-sonnet-4-20250514',
+            'default_model': 'claude-sonnet-4-6',
             'models': [
-                'claude-sonnet-4-20250514',
+                'claude-opus-4-6',
+                'claude-sonnet-4-6',
                 'claude-sonnet-4-5-20250929',
                 'claude-opus-4-5-20251101',
                 'claude-haiku-4-5-20251001',
-                'claude-3-5-haiku-20241022',
+                'claude-sonnet-4-20250514',
             ]
         },
         'gpt4': {

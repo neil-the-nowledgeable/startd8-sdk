@@ -65,6 +65,12 @@ class PricingService:
             input_cost_per_million=5.0,
             output_cost_per_million=25.0
         ),
+        "claude-sonnet-4-6": ModelPricing(
+            model="claude-sonnet-4-6",
+            provider="anthropic",
+            input_cost_per_million=3.0,
+            output_cost_per_million=15.0
+        ),
         # Anthropic Claude 4.5 family
         "claude-opus-4-5-20251101": ModelPricing(
             model="claude-opus-4-5-20251101",

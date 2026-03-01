@@ -54,7 +54,10 @@ class Models:
     CLAUDE_OPUS_45 = "anthropic:claude-opus-4-5-20251101"
 
     # Balanced - Good quality/cost tradeoff (recommended for most use cases)
-    CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-5-20250929"
+    CLAUDE_SONNET_LATEST = "anthropic:claude-sonnet-4-6"
+
+    # Previous balanced
+    CLAUDE_SONNET_45 = "anthropic:claude-sonnet-4-5-20250929"
 
     # Fast - Quick responses, lower cost
     CLAUDE_HAIKU_LATEST = "anthropic:claude-haiku-4-5-20251008"
@@ -146,6 +149,12 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         provider="anthropic",
         model_id="claude-opus-4-5-20251101",
         tier="flagship",
+        capabilities={"text", "vision", "code", "reasoning"},
+    ),
+    "claude-sonnet-4-6": ModelInfo(
+        provider="anthropic",
+        model_id="claude-sonnet-4-6",
+        tier="balanced",
         capabilities={"text", "vision", "code", "reasoning"},
     ),
     "claude-sonnet-4-5-20250929": ModelInfo(
