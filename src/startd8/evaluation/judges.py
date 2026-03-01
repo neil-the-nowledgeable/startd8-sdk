@@ -227,7 +227,7 @@ class LLMJudge:
 
     Example:
         >>> from startd8.agents import ClaudeAgent
-        >>> agent = ClaudeAgent(name="judge", model="claude-sonnet-4-20250514")
+        >>> agent = ClaudeAgent(name="judge", model="claude-sonnet-4-6")
         >>> judge = LLMJudge(agent=agent)
         >>> scores = await judge.evaluate(response, task)
     """

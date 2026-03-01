@@ -131,7 +131,7 @@ from startd8.contractors.generators import LeadContractorCodeGenerator
 
 workflow = PrimeContractorWorkflow(
     code_generator=LeadContractorCodeGenerator(
-        lead_agent="anthropic:claude-sonnet-4-20250514",
+        lead_agent="anthropic:claude-sonnet-4-6",
         drafter_agent="gemini:gemini-2.5-flash-lite",
     ),
 )

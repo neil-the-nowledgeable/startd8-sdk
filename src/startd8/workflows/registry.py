@@ -43,7 +43,7 @@ class WorkflowRegistry:
         # Run a workflow
         result = WorkflowRegistry.run_workflow(
             "pipeline",
-            config={"initial_input": "...", "agents": ["anthropic:claude-sonnet-4-20250514"]}
+            config={"initial_input": "...", "agents": ["anthropic:claude-sonnet-4-6"]}
         )
     """
 

@@ -225,7 +225,7 @@ class MCPGatewayConfig:
     idle_timeout_seconds: float = 60.0
     
     # MCP server settings
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
     default_max_tokens: int = 32768
     
     # Sub-component configs

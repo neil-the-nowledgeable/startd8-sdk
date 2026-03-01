@@ -411,7 +411,7 @@ class ModelCatalogEntry:
     """An entry in the model catalog describing an available AI model.
 
     Attributes:
-        model_id: Unique model identifier (e.g. 'claude-sonnet-4-5-20250929').
+        model_id: Unique model identifier (e.g. 'claude-sonnet-4-6').
         model_name: Human-readable model name.
         role: The role this model serves (draft, validate, etc.).
         provider: The model provider name (e.g. 'anthropic', 'openai').
@@ -710,15 +710,15 @@ DRAFT_MODEL_CLAUDE_HAIKU = ModelCatalogEntry(
     version='4.5',
 )
 VALIDATE_MODEL_CLAUDE_SONNET = ModelCatalogEntry(
-    model_id='claude-sonnet-4-5-20250929',
-    model_name='Claude Sonnet 4.5',
+    model_id='claude-sonnet-4-6',
+    model_name='Claude Sonnet 4.6',
     role=ModelRole.VALIDATE,
     provider='anthropic',
     description='Balanced model for validation and quality gating.',
     max_tokens=8192,
     supports_streaming=True,
     config={'temperature': 0.0},
-    version='4.5',
+    version='4.6',
 )
 REVIEW_MODEL_CLAUDE_OPUS = ModelCatalogEntry(
     model_id='claude-opus-4-6',

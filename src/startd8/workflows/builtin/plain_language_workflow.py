@@ -169,7 +169,7 @@ class PlainLanguageWorkflow(WorkflowBase):
             config={
                 "content": "Complex policy analysis text...",
                 "reading_level": "general_public",
-                "agent": "anthropic:claude-sonnet-4-20250514"
+                "agent": "anthropic:claude-sonnet-4-6"
             }
         )
     """
@@ -230,7 +230,7 @@ class PlainLanguageWorkflow(WorkflowBase):
                     name="agent",
                     type="agent_spec",
                     required=False,
-                    default="anthropic:claude-sonnet-4-20250514",
+                    default="anthropic:claude-sonnet-4-6",
                     description="Agent for single-agent mode (default)",
                 ),
                 WorkflowInput(
@@ -349,7 +349,7 @@ class PlainLanguageWorkflow(WorkflowBase):
                 )
             else:
                 self._emit_progress(on_progress, 1, 2, "Simplifying content")
-                single_agent_spec = config.get("agent", "anthropic:claude-sonnet-4-20250514")
+                single_agent_spec = config.get("agent", "anthropic:claude-sonnet-4-6")
                 resolved_agents = [
                     resolve_agent_spec(
                         single_agent_spec,

@@ -346,7 +346,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--lead-agent", default=None,
-        help="Lead agent spec (default: anthropic:claude-sonnet-4-5-20250929)",
+        help="Lead agent spec (default: anthropic:claude-sonnet-4-6)",
     )
     parser.add_argument(
         "--drafter-agent", default=None,
@@ -362,7 +362,7 @@ def main() -> int:
     )
     parser.add_argument(
         "--tier2-agent", default=None,
-        help="T2 refinement agent spec (default: anthropic:claude-sonnet-4-5-20250929)",
+        help="T2 refinement agent spec (default: anthropic:claude-sonnet-4-6)",
     )
     parser.add_argument(
         "--skip-refinement", action="store_true",

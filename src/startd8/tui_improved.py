@@ -625,7 +625,7 @@ class CustomAgentManager:
         if agent_type == 'claude':
             return ClaudeAgent(
                 name=name or 'claude',
-                model=model or 'claude-sonnet-4-20250514',
+                model=model or 'claude-sonnet-4-6',
                 max_tokens=max_tokens
             )
         elif agent_type == 'gpt4':
@@ -746,7 +746,7 @@ class CustomAgentManager:
                 elif fallback_type == 'claude':
                     return ClaudeAgent(
                         name=name or 'claude',
-                        model=model or 'claude-sonnet-4-20250514',
+                        model=model or 'claude-sonnet-4-6',
                         max_tokens=max_tokens
                     )
                 elif fallback_type == 'gemini':
@@ -785,7 +785,7 @@ class CustomAgentManager:
         if agent_type == 'claude':
             return ClaudeAgent(
                 name=kwargs.get('name', 'claude'),
-                model=kwargs.get('model', 'claude-sonnet-4-20250514'),
+                model=kwargs.get('model', 'claude-sonnet-4-6'),
                 max_tokens=kwargs.get('max_tokens', 4096)
             )
         elif agent_type == 'gpt4':
@@ -3991,7 +3991,7 @@ Enhance this prompt:
         })
         
         # Built-in: Claude
-        claude_model = 'claude-sonnet-4-20250514'
+        claude_model = 'claude-sonnet-4-6'
         claude_key = f"claude:{claude_model}"
         agents.append({
             'name': 'Claude',

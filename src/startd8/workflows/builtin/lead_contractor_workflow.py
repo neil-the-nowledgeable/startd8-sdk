@@ -192,7 +192,7 @@ class LeadContractorWorkflow(WorkflowBase):
         - Exploratory: fail_on_api_truncation=False, fail_on_heuristic_truncation=False
 
     Recommended Lead Agents:
-        - anthropic:claude-sonnet-4-5-20250929 (default - best for coding/agents)
+        - anthropic:claude-sonnet-4-6 (default - best for coding/agents)
         - anthropic:claude-opus-4-5-20251101 (most intelligent)
         - anthropic:claude-haiku-4-5-20251001 (fastest, near-frontier)
 

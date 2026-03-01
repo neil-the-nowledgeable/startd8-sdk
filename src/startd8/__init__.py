@@ -36,7 +36,7 @@ Example Usage:
     # Send to multiple agents (provider:model specs)
     ProviderRegistry.discover()
     agent_specs = [
-        "anthropic:claude-sonnet-4-20250514",
+        "anthropic:claude-sonnet-4-6",
         "openai:gpt-4o",
         "gemini:gemini-2.0-flash",
     ]

@@ -14,7 +14,7 @@ Usage:
 
     # Execute with specific agents
     python3 scripts/run_artisan_contractor.py \
-        --lead-agent anthropic:claude-sonnet-4-5-20250929 \
+        --lead-agent anthropic:claude-sonnet-4-6 \
         --drafter-agent gemini:gemini-2.5-flash-lite
 
     # Resume after failure (retry failed, skip completed)

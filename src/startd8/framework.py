@@ -321,7 +321,7 @@ class AgentFramework:
         if agent_type_lower == 'claude':
             return ClaudeAgent(
                 name=name or 'claude',
-                model=model or 'claude-sonnet-4-20250514',
+                model=model or 'claude-sonnet-4-6',
                 **agent_kwargs
             )
         elif agent_type_lower == 'gpt4':

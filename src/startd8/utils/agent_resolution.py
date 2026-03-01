@@ -1,7 +1,7 @@
 """
 Agent resolution utilities for the StartD8 SDK.
 
-Provides functions to resolve agent specifications (strings like "anthropic:claude-sonnet-4-20250514")
+Provides functions to resolve agent specifications (strings like "anthropic:claude-sonnet-4-6")
 into BaseAgent instances. Used by workflows, CLI, and other SDK components.
 """
 
@@ -45,8 +45,8 @@ def resolve_agent_spec(
 
     Supports multiple formats:
     - Provider name: "openai", "anthropic", "mock", "gemini", "ollama"
-    - Model ID: "gpt-4", "claude-sonnet-4-20250514", "mock-model"
-    - Provider:model format: "anthropic:claude-sonnet-4-20250514"
+    - Model ID: "gpt-4", "claude-sonnet-4-6", "mock-model"
+    - Provider:model format: "anthropic:claude-sonnet-4-6"
     - Legacy aliases: "claude", "gpt4"
 
     Args:
@@ -70,7 +70,7 @@ def resolve_agent_spec(
         agent = resolve_agent_spec("anthropic")
 
         # By provider:model
-        agent = resolve_agent_spec("anthropic:claude-sonnet-4-20250514")
+        agent = resolve_agent_spec("anthropic:claude-sonnet-4-6")
 
         # By model ID (auto-detects provider)
         agent = resolve_agent_spec("gpt-4")
@@ -80,7 +80,7 @@ def resolve_agent_spec(
 
         # With custom timeout and retry
         agent = resolve_agent_spec(
-            "anthropic:claude-sonnet-4-20250514",
+            "anthropic:claude-sonnet-4-6",
             timeout_config=TimeoutConfig(read=600.0),
             retry_config=RetryConfig(max_attempts=5),
         )
@@ -152,7 +152,7 @@ def resolve_agent_spec(
     raise ConfigurationError(
         f"Unknown agent/model '{spec_raw}'. "
         f"Pass a provider name (e.g. 'openai'), a model id (e.g. 'gpt-4'), "
-        f"or 'provider:model' format (e.g. 'anthropic:claude-sonnet-4-20250514'). "
+        f"or 'provider:model' format (e.g. 'anthropic:claude-sonnet-4-6'). "
         f"{_available_providers_hint()}"
     )
 
@@ -183,7 +183,7 @@ def resolve_agent_specs(
 
     Example:
         agents = resolve_agent_specs([
-            "anthropic:claude-sonnet-4-20250514",
+            "anthropic:claude-sonnet-4-6",
             "openai:gpt-4",
             "mock"
         ])
@@ -227,7 +227,7 @@ def resolve_agents(
     Example:
         # Mixed input
         agents = resolve_agents([
-            "anthropic:claude-sonnet-4-20250514",  # String spec
+            "anthropic:claude-sonnet-4-6",  # String spec
             existing_gpt_agent,                    # Pre-resolved agent
         ])
     """

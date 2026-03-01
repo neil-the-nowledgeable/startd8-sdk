@@ -513,7 +513,7 @@ class WorkflowBase:
             total = 0.0
             for name, tokens in token_estimates.items():
                 total += pricing.calculate_total_cost(
-                    "claude-sonnet-4-20250514",  # Default model for estimation
+                    "claude-sonnet-4-6",  # Default model for estimation
                     tokens["input"],
                     tokens["output"],
                 )

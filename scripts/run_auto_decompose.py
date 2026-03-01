@@ -216,8 +216,8 @@ def main():
     agent_group = parser.add_argument_group("Agent configuration")
     agent_group.add_argument(
         "--lead-agent",
-        default="anthropic:claude-sonnet-4-5-20250929",
-        help="Lead agent spec (default: claude-sonnet-4-5)",
+        default="anthropic:claude-sonnet-4-6",
+        help="Lead agent spec (default: claude-sonnet-4-6)",
     )
     agent_group.add_argument(
         "--drafter-agent",

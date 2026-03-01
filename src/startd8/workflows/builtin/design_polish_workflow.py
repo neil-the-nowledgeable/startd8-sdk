@@ -49,7 +49,7 @@ class DesignPolishWorkflow(WorkflowBase):
             config={
                 "document": "# API Design\\n...",
                 "agents": [
-                    "anthropic:claude-sonnet-4-20250514",
+                    "anthropic:claude-sonnet-4-6",
                     "openai:gpt-4o",
                     "anthropic:claude-opus-4-5-20251101"
                 ]

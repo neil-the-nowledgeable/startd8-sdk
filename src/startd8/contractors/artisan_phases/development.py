@@ -2738,7 +2738,7 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
     Example::
 
         executor = ArtisanChunkExecutor(
-            drafter_spec="anthropic:claude-sonnet-4-20250514",
+            drafter_spec="anthropic:claude-sonnet-4-6",
             output_dir=Path("staging"),
             project_root=Path("/my/project"),
         )

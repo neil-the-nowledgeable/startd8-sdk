@@ -76,7 +76,7 @@ class CriticalReviewWorkflow(WorkflowBase):
         result = workflow.run(
             config={
                 "documents": ["design.md", "architecture.md"],
-                "agents": ["anthropic:claude-sonnet-4-20250514", "openai:gpt-4o"],
+                "agents": ["anthropic:claude-sonnet-4-6", "openai:gpt-4o"],
                 "output_dir": "./reviews"
             }
         )

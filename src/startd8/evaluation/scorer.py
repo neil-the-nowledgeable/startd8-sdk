@@ -111,7 +111,7 @@ class QualityScorer:
 
         >>> # With LLM judge
         >>> from startd8.agents import ClaudeAgent
-        >>> agent = ClaudeAgent(name="judge", model="claude-sonnet-4-20250514")
+        >>> agent = ClaudeAgent(name="judge", model="claude-sonnet-4-6")
         >>> config = QualityScorerConfig(use_llm_judge=True, judge_agent=agent)
         >>> scorer = QualityScorer(config)
         >>> score = await scorer.score(response, task)

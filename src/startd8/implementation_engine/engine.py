@@ -239,7 +239,7 @@ class DefaultImplementationEngine:
         """Resolve an agent spec string to an agent instance.
 
         Args:
-            agent_spec: Agent spec (e.g. ``anthropic:claude-sonnet-4-20250514``).
+            agent_spec: Agent spec (e.g. ``anthropic:claude-sonnet-4-6``).
 
         Returns:
             Agent instance.

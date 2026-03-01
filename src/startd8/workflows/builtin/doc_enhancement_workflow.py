@@ -47,7 +47,7 @@ class DocEnhancementWorkflow(WorkflowBase):
             config={
                 "document": "# My Design\\n...",
                 "instructions": "Add accessibility considerations",
-                "agents": ["openai:gpt-4o", "anthropic:claude-sonnet-4-20250514"]
+                "agents": ["openai:gpt-4o", "anthropic:claude-sonnet-4-6"]
             }
         )
     """

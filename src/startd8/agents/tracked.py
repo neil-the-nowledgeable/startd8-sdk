@@ -17,7 +17,7 @@ Usage:
 
     agent = TrackedClaudeAgent(
         name="my-claude",
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-6",
         project_id="my-project",  # Optional: for ContextCore linking
     )
 
@@ -308,7 +308,7 @@ class TrackedAgentMixin:
             New agent instance with task context set
 
         Example:
-            agent = TrackedClaudeAgent(name="claude", model="claude-sonnet-4-20250514")
+            agent = TrackedClaudeAgent(name="claude", model="claude-sonnet-4-6")
             task_agent = agent.with_task_context("SDK-101", project_id="my-project")
 
             # All calls now linked to SDK-101
@@ -351,7 +351,7 @@ class TrackedClaudeAgent(TrackedAgentMixin, ClaudeAgent):
     Example:
         agent = TrackedClaudeAgent(
             name="claude",
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-6",
             project_id="my-project",
         )
 
@@ -421,7 +421,7 @@ def create_tracked_agent(
 
     Example:
         agent = create_tracked_agent(
-            "anthropic:claude-sonnet-4-20250514",
+            "anthropic:claude-sonnet-4-6",
             project_id="my-project",
         )
     """
@@ -439,7 +439,7 @@ def create_tracked_agent(
     # Resolve to tracked agent class
     if provider_lower in ("anthropic", "claude"):
         agent_class = TrackedClaudeAgent
-        model = model or "claude-sonnet-4-20250514"
+        model = model or "claude-sonnet-4-6"
     elif provider_lower in ("openai", "gpt", "gpt4"):
         agent_class = TrackedGPT4Agent
         model = model or "gpt-4o"

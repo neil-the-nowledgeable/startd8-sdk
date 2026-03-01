@@ -63,7 +63,7 @@ class ConfigManager:
             },
             "models": {
                 "claude": {
-                    "default": "claude-sonnet-4-20250514",
+                    "default": "claude-sonnet-4-6",
                     "max_tokens": 32768
                 },
                 "gpt4": {

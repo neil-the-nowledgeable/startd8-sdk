@@ -151,7 +151,7 @@ class EngineRequest:
         context: Additional context dict (may contain ``design_document``,
             ``existing_files``, ``edit_mode``, ``target_files``, etc.).
         drafter_agent_spec: Agent spec for drafting (e.g. ``gemini:gemini-2.5-flash-lite``).
-        reviewer_agent_spec: Agent spec for reviewing (e.g. ``anthropic:claude-sonnet-4-20250514``).
+        reviewer_agent_spec: Agent spec for reviewing (e.g. ``anthropic:claude-sonnet-4-6``).
         max_iterations: Maximum draft-review cycles.
         pass_threshold: Minimum review score to pass (0-100).
         output_format: Optional output format guidance.

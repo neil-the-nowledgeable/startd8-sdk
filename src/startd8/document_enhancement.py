@@ -106,9 +106,9 @@ class DocumentEnhancementChain:
                     order=0
                 ),
                 AgentConfig(
-                    agent_name="anthropic:claude-sonnet-4-20250514",
-                    agent_instance=anthropic.create_agent("claude-sonnet-4-20250514"),
-                    step_name="anthropic:claude-sonnet-4-20250514-refinement",
+                    agent_name="anthropic:claude-sonnet-4-6",
+                    agent_instance=anthropic.create_agent("claude-sonnet-4-6"),
+                    step_name="anthropic:claude-sonnet-4-6-refinement",
                     order=1
                 )
             ],

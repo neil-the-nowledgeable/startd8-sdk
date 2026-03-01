@@ -17,7 +17,7 @@ Usage::
     request = EngineRequest(
         task_description="Implement feature X",
         drafter_agent_spec="gemini:gemini-2.5-flash-lite",
-        reviewer_agent_spec="anthropic:claude-sonnet-4-20250514",
+        reviewer_agent_spec="anthropic:claude-sonnet-4-6",
         context={"design_document": "..."},
     )
     result = engine.build_and_execute(request)

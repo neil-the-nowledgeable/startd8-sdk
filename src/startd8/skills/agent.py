@@ -102,7 +102,7 @@ class SkillAgentConfig:
     skill_id: str
     name: str
     description: str = ""
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
     max_tokens: int = 32768
     timeout_ms: int = 30000
     cost_tracking_enabled: bool = False
@@ -187,7 +187,7 @@ class SkillAgent(BaseAgent):
         self,
         skill_id: str,
         name: Optional[str] = None,
-        model: str = "claude-sonnet-4-20250514",
+        model: str = "claude-sonnet-4-6",
         max_tokens: int = 8192,
         timeout_ms: int = 30000,
         cost_tracker: Optional['CostTracker'] = None,

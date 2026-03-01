@@ -26,7 +26,7 @@ except ImportError:
 def create_game_enhancer_agent(
     name: str = "React Game Enhancer",
     cost_tracking: bool = False,
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
 ) -> SkillAgent:
     """
     Factory function to create a game enhancer skill agent.
@@ -76,7 +76,7 @@ def create_game_enhancer_agent(
 def create_html5_game_designer_agent(
     name: str = "HTML5 Game Designer",
     cost_tracking: bool = False,
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
 ) -> SkillAgent:
     """
     Factory function to create an HTML5 game designer skill agent.
@@ -126,7 +126,7 @@ def create_html5_game_designer_agent(
 def create_code_reviewer_agent(
     name: str = "Code Reviewer",
     cost_tracking: bool = False,
-    model: str = "claude-sonnet-4-20250514"
+    model: str = "claude-sonnet-4-6"
 ) -> SkillAgent:
     """
     Factory function to create a code review skill agent.

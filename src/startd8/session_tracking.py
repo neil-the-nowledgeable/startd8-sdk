@@ -259,7 +259,7 @@ class SessionTracker:
         tracker = SessionTracker()
 
         # Start a session
-        session_id = tracker.start_session(agent_name="claude", model="claude-sonnet-4-20250514")
+        session_id = tracker.start_session(agent_name="claude", model="claude-sonnet-4-6")
 
         # Record activity
         tracker.record_request(session_id, input_tokens=100, output_tokens=500,

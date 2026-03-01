@@ -68,7 +68,7 @@ class ExternalTool(BaseModel):
             "id": "claude-code",
             "display_name": "Claude Code (CLI)",
             "provider": "anthropic",
-            "default_model": "claude-sonnet-4-20250514",
+            "default_model": "claude-sonnet-4-6",
             "pricing_type": "per_token",
             "subscription_cost": None,
             "notes": "Anthropic's official CLI tool"

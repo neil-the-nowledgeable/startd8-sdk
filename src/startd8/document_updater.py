@@ -955,7 +955,7 @@ class LangChainDocumentUpdater:
     headings don't match exactly.
     """
     
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-20250514"):
+    def __init__(self, api_key: Optional[str] = None, model: str = "claude-sonnet-4-6"):
         if not HAS_LANGCHAIN:
             raise ImportError(
                 "LangChain not installed. Install with: "

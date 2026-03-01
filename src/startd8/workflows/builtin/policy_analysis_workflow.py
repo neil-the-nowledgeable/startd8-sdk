@@ -365,7 +365,7 @@ class PolicyAnalysisWorkflow(WorkflowBase):
             config={
                 "url": "https://congress.gov/bill/118th-congress/house-bill/1234",
                 "agents": [
-                    "anthropic:claude-sonnet-4-20250514",
+                    "anthropic:claude-sonnet-4-6",
                     "openai:gpt-4o",
                     "gemini:gemini-2.5-pro"
                 ],
@@ -448,7 +448,7 @@ class PolicyAnalysisWorkflow(WorkflowBase):
                     name="synthesis_agent",
                     type="agent_spec",
                     required=False,
-                    default="anthropic:claude-sonnet-4-20250514",
+                    default="anthropic:claude-sonnet-4-6",
                     description="Agent for synthesis phase (defaults to Claude Sonnet)",
                 ),
                 WorkflowInput(
@@ -587,7 +587,7 @@ class PolicyAnalysisWorkflow(WorkflowBase):
             output_format = config.get("output_format", "both")
 
             synthesis_agent_spec = config.get(
-                "synthesis_agent", "anthropic:claude-sonnet-4-20250514"
+                "synthesis_agent", "anthropic:claude-sonnet-4-6"
             )
             synthesis_agent = resolve_agent_spec(
                 synthesis_agent_spec,

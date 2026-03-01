@@ -865,8 +865,8 @@ class UseSkillInput(BaseModel):
         max_length=50000
     )
     model: Optional[str] = Field(
-        default="claude-sonnet-4-20250514",
-        description="Claude model to use (default: claude-sonnet-4-20250514)",
+        default="claude-sonnet-4-6",
+        description="Claude model to use (default: claude-sonnet-4-6)",
         max_length=100
     )
     max_tokens: Optional[int] = Field(
@@ -939,8 +939,8 @@ class SkillPromptInput(BaseModel):
         max_length=50000,
     )
     model: Optional[str] = Field(
-        default="claude-sonnet-4-20250514",
-        description="Claude model to use (default: claude-sonnet-4-20250514)",
+        default="claude-sonnet-4-6",
+        description="Claude model to use (default: claude-sonnet-4-6)",
         max_length=100,
     )
     max_tokens: Optional[int] = Field(
@@ -2134,7 +2134,7 @@ async def startd8_use_skill(params: UseSkillInput) -> str:
         params (UseSkillInput): Parameters containing:
             - skill_name (str): Name of the skill to use
             - prompt (str): User prompt to send to the agent
-            - model (Optional[str]): Claude model (default: claude-sonnet-4-20250514)
+            - model (Optional[str]): Claude model (default: claude-sonnet-4-6)
             - max_tokens (Optional[int]): Maximum response tokens (default: 16384)
             - track_response (bool): Store in Startd8 storage (default: True)
             - response_format (ResponseFormat): 'markdown' or 'json' (default: 'markdown')

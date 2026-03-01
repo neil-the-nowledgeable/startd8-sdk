@@ -172,7 +172,7 @@ class PromptEnhancer:
     best practices, and outputs enhanced versions.
     """
     
-    DEFAULT_MODEL = "claude-sonnet-4-20250514"
+    DEFAULT_MODEL = "claude-sonnet-4-6"
     
     def __init__(
         self,
