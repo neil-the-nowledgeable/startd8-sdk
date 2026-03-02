@@ -116,6 +116,12 @@ def _render_panel(panel: PanelSpec) -> str:
             args.append(_render_expression(panel.expr))
         elif panel.query:
             args.append(_render_expression(panel.query))
+        elif panel.targets and len(panel.targets) == 1:
+            t = panel.targets[0]
+            if t.expr:
+                args.append(_render_expression(t.expr))
+            elif t.query:
+                args.append(_render_expression(t.query))
 
     # Multi-target panels: pass targets as named arg
     if ptype in _MULTI_TARGET_TYPES:
@@ -316,34 +322,48 @@ def _render_merge_block(panel: PanelSpec) -> str:
         )
 
     # fieldConfig+: deep merge — combine dataLinks and user fieldConfig
+    # Build a single defaults+: with all sub-fields to avoid Jsonnet duplicate keys
     fc_fields: List[str] = []
+    defaults_inner: List[str] = []
+
     if panel.dataLinks:
-        fc_fields.append(
-            f"defaults+: {{ links: {_render_data_links(panel.dataLinks)} }}"
+        defaults_inner.append(
+            f"links: {_render_data_links(panel.dataLinks)}"
         )
+
     if panel.fieldConfig:
-        # Merge user-provided fieldConfig keys (except defaults.links which
-        # comes from dataLinks above)
         for key, value in panel.fieldConfig.items():
-            if key == "defaults" and isinstance(value, dict) and panel.dataLinks:
-                # Deep-merge defaults — dataLinks already provides links
-                remaining = {k: v for k, v in value.items() if k != "links"}
-                if remaining:
-                    inner = ", ".join(
+            if key == "defaults" and isinstance(value, dict):
+                # Merge into defaults_inner (skip "links" if dataLinks provides it)
+                for k, v in value.items():
+                    if k == "links" and panel.dataLinks:
+                        continue  # dataLinks takes precedence
+                    defaults_inner.append(
                         f"{k}: {_render_jsonnet_value(v)}"
-                        for k, v in remaining.items()
                     )
-                    fc_fields.append(f"defaults+: {{ {inner} }}")
             else:
                 fc_fields.append(f"{key}: {_render_jsonnet_value(value)}")
+
+    if defaults_inner:
+        fc_fields.insert(0, "defaults+: { " + ", ".join(defaults_inner) + " }")
 
     if fc_fields:
         fields.append("fieldConfig+: { " + ", ".join(fc_fields) + " }")
 
+    # Single-target panels: emit instant/format via targets array in merge block
+    if panel.type in _SINGLE_TARGET_TYPES and panel.targets and len(panel.targets) == 1:
+        t = panel.targets[0]
+        target_fields: List[str] = []
+        if t.instant:
+            target_fields.append("instant: true")
+        if t.format:
+            target_fields.append(f"format: '{t.format}'")
+        if target_fields:
+            fields.append("targets: [{ " + ", ".join(target_fields) + " }]")
+
     if not fields:
         return ""
 
-    inner = ", ".join(fields)
     return "{\n    " + ",\n    ".join(fields) + ",\n  }"
 
 

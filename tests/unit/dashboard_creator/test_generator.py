@@ -419,6 +419,46 @@ class TestRenderTargetExtensions:
         assert "instant:" not in result
         assert "format:" not in result
 
+    def test_single_target_stat_panel_with_targets_array(self):
+        """Stat panel using targets: [{expr, instant}] instead of expr: renders correctly."""
+        panel = PanelSpec(
+            type="stat",
+            title="Active Users",
+            targets=[TargetSpec(expr="${metrics.activeUsers}", instant=True)],
+        )
+        result = _render_panel(panel)
+        # Expression extracted from targets[0] as positional arg
+        assert "panels.stat(" in result
+        assert "m.activeUsers" in result
+        # instant emitted in merge block targets override
+        assert "targets: [{ instant: true }]" in result
+
+    def test_single_target_gauge_with_format(self):
+        """Gauge panel using targets: [{expr, instant, format}] emits all fields."""
+        panel = PanelSpec(
+            type="gauge",
+            title="CPU",
+            targets=[TargetSpec(expr="process_cpu", instant=True, format="table")],
+        )
+        result = _render_panel(panel)
+        assert "panels.gauge(" in result
+        assert "'process_cpu'" in result
+        assert "instant: true" in result
+        assert "format: 'table'" in result
+
+    def test_single_target_no_instant_no_merge_targets(self):
+        """Single-target stat panel without instant/format does not emit targets merge."""
+        panel = PanelSpec(
+            type="stat",
+            title="Up",
+            targets=[TargetSpec(expr="up")],
+        )
+        result = _render_panel(panel)
+        assert "panels.stat(" in result
+        assert "'up'" in result
+        # No targets override needed when no instant/format
+        assert "targets:" not in result
+
 
 # ---------------------------------------------------------------------------
 # Variable extensions (includeAll, allValue, default, hide, skipUrlSync)
@@ -557,3 +597,19 @@ class TestRenderPanelExtensions:
         assert "description: 'Test panel'" in result
         assert "fieldConfig+:" in result
         assert "transformations:" in result
+
+    def test_dataLinks_plus_fieldConfig_defaults_no_duplicate(self):
+        """dataLinks + fieldConfig.defaults must produce a single defaults+: field."""
+        panel = PanelSpec(
+            type="barchart", title="Budget", targets=[TargetSpec(expr="up")],
+            dataLinks=[DataLink(title="Drill", url="http://x")],
+            fieldConfig={"defaults": {"decimals": 0, "unit": "currencyUSD"}},
+        )
+        result = _render_panel(panel)
+        # Must have exactly one defaults+: in the output
+        assert result.count("defaults+:") == 1
+        # Both dataLinks and fieldConfig.defaults content present
+        assert "links:" in result
+        assert "title: 'Drill'" in result
+        assert "decimals: 0" in result
+        assert "'currencyUSD'" in result
