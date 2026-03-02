@@ -1292,6 +1292,120 @@ def collect_elements(
     return results
 
 
+async def _run_sdk_engine_experiment(
+    manifest: ForwardManifest,
+    args: argparse.Namespace,
+) -> ExperimentResult:
+    """Run experiment using the SDK MicroPrimeEngine (--use-sdk-engine).
+
+    Maps SDK engine results back to the script's ExperimentResult format
+    for unified reporting and A/B comparison with the inline pipeline.
+    """
+    from startd8.micro_prime.engine import MicroPrimeEngine
+    from startd8.micro_prime.metrics import generate_cost_report
+    from startd8.micro_prime.models import (
+        MicroPrimeConfig,
+        TierClassification as SdkTier,
+    )
+
+    result = ExperimentResult()
+    result.total_elements = sum(
+        len([e for e in fs.elements if e.kind != ElementKind.CLASS])
+        for fs in manifest.file_specs.values()
+    )
+
+    # Configure engine from CLI args
+    config = MicroPrimeConfig(
+        model=args.ollama_model,
+        max_tokens=args.max_tokens,
+        templates_enabled=True,
+        repair_enabled=True,
+    )
+    if hasattr(args, "normalize_indent") and args.normalize_indent:
+        config = config.model_copy()
+
+    engine = MicroPrimeEngine(config=config)
+
+    # We don't have real skeletons in the experiment — build stubs with
+    # raise NotImplementedError for each element so splicing can work.
+    skeletons: dict[str, str] = {}
+    for file_path, file_spec in manifest.file_specs.items():
+        stub_lines: list[str] = []
+        for elem in file_spec.elements:
+            stub = _build_element_stub(elem)
+            stub_lines.append(stub)
+            stub_lines.append("")
+        skeletons[file_path] = "\n".join(stub_lines)
+
+    # Run the SDK engine
+    seed_result = engine.process_seed(manifest, skeletons)
+
+    # Map SDK results to ExperimentResult
+    tier_map = {
+        SdkTier.TRIVIAL: "simple",  # TRIVIAL maps to simple for reporting
+        SdkTier.SIMPLE: "simple",
+        SdkTier.MODERATE: "moderate",
+        SdkTier.COMPLEX: "complex",
+    }
+
+    for file_result in seed_result.file_results:
+        for er in file_result.element_results:
+            tier_str = tier_map.get(er.tier, "complex")
+            result.classified[tier_str] = result.classified.get(tier_str, 0) + 1
+
+            # Map to ClassifiedElement for reporting
+            # Find the original element spec
+            file_spec = manifest.file_specs.get(er.file_path)
+            elem = None
+            if file_spec:
+                for e in file_spec.elements:
+                    if e.name == er.element_name:
+                        elem = e
+                        break
+
+            if elem is None:
+                continue
+
+            complexity = Complexity.SIMPLE if tier_str == "simple" else (
+                Complexity.MODERATE if tier_str == "moderate" else Complexity.COMPLEX
+            )
+            ce = ClassifiedElement(
+                file_path=er.file_path,
+                element=elem,
+                complexity=complexity,
+                reasoning=f"SDK engine tier: {er.tier.value}",
+                generated_code=er.code,
+                generation_time_ms=er.generation_time_ms,
+                generation_tokens=er.output_tokens,
+                syntax_valid=er.success,
+            )
+            result.elements.append(ce)
+
+            if er.tier in (SdkTier.TRIVIAL, SdkTier.SIMPLE):
+                result.ollama_attempted += 1
+                if er.success:
+                    result.ollama_syntax_valid += 1
+                    result.ollama_succeeded += 1
+                    if er.template_used:
+                        ce.reasoning += " (template)"
+                else:
+                    result.ollama_failed += 1
+                    ce.error = er.escalation.detail if er.escalation else "Unknown"
+                if er.generation_time_ms:
+                    result.total_generation_time_ms += er.generation_time_ms
+                if er.output_tokens:
+                    result.total_generation_tokens += er.output_tokens
+
+    logger.info(
+        "SDK Engine: %d/%d syntax-valid (%.0f%%)",
+        result.ollama_syntax_valid,
+        result.ollama_attempted,
+        result.success_rate * 100,
+    )
+
+    return result
+
+
 async def run_experiment(args: argparse.Namespace) -> ExperimentResult:
     """Main experiment loop."""
     result = ExperimentResult()
@@ -1349,6 +1463,11 @@ async def run_experiment(args: argparse.Namespace) -> ExperimentResult:
             "extract structural elements from task descriptions."
         )
         return result
+
+    # ── SDK Engine path ──
+    if getattr(args, "use_sdk_engine", False):
+        logger.info("Using SDK MicroPrimeEngine (--use-sdk-engine)")
+        return await _run_sdk_engine_experiment(manifest, args)
 
     # ── Collect elements ──
     elements = collect_elements(manifest, tasks)
@@ -1523,7 +1642,10 @@ def print_report(result: ExperimentResult, args: argparse.Namespace) -> None:
     print(f"\n  Seed: {args.seed}")
     if hasattr(args, "ollama_model") and args.ollama_model:
         print(f"  Ollama model: {args.ollama_model}")
-    print(f"  Classifier: {'heuristic' if args.heuristic_classify else 'opus'}")
+    if getattr(args, "use_sdk_engine", False):
+        print(f"  Engine: SDK MicroPrimeEngine")
+    else:
+        print(f"  Classifier: {'heuristic' if args.heuristic_classify else 'opus'}")
 
     print(f"\n  --- Classification ---")
     print(f"  Total elements:  {result.total_elements}")
@@ -1611,6 +1733,7 @@ def print_report(result: ExperimentResult, args: argparse.Namespace) -> None:
         report = {
             "seed": str(args.seed),
             "ollama_model": getattr(args, "ollama_model", None),
+            "engine": "sdk" if getattr(args, "use_sdk_engine", False) else "inline",
             "classifier": "heuristic" if args.heuristic_classify else "opus",
             "total_elements": result.total_elements,
             "classified": result.classified,
@@ -1715,6 +1838,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable debug logging",
+    )
+    parser.add_argument(
+        "--use-sdk-engine", action="store_true",
+        help="Use MicroPrimeEngine from the SDK instead of inline logic. "
+             "Enables A/B comparison during transition.",
     )
     return parser.parse_args()
 

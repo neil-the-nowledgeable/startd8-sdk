@@ -10,7 +10,11 @@ import os
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from startd8.logging_config import get_logger
+
 from .models import TaskComplexitySignals
+
+logger = get_logger(__name__)
 
 # Maximum number of .py files to scan when computing blast_radius.
 _BLAST_RADIUS_SCAN_LIMIT = 500
@@ -49,8 +53,8 @@ def detect_cross_file_edges(
                 callee_file = fqn_to_file.get(callee)
                 if callee_file and callee_file != file_path:
                     return True
-    except (AttributeError, TypeError, KeyError):
-        pass
+    except (AttributeError, TypeError, KeyError) as exc:
+        logger.debug("Cross-file edge detection failed: %s", exc)
     return False
 
 
@@ -204,10 +208,10 @@ def _compute_blast_radius(
                         if f"import {stem}" in content or f"from {stem}" in content:
                             count += 1
                             break
-                except OSError:
-                    pass
-    except OSError:
-        pass
+                except OSError as exc:
+                    logger.debug("Blast radius scan: failed to read %s: %s", fpath, exc)
+    except OSError as exc:
+        logger.debug("Blast radius scan: os.walk failed: %s", exc)
 
     return count
 
@@ -238,8 +242,8 @@ def _check_cross_imports(
             for stem in other_stems:
                 if f"import {stem}" in content or f"from {stem}" in content:
                     return True
-        except OSError:
-            pass
+        except OSError as exc:
+            logger.debug("Cross-import check: failed to read %s: %s", tf, exc)
     return False
 
 

@@ -280,7 +280,11 @@ def _to_shared_tier(tier: TierClassification) -> "ComplexityTier":
         TierClassification.MODERATE: ComplexityTier.MODERATE,
         TierClassification.COMPLEX: ComplexityTier.COMPLEX,
     }
-    return _map[tier]
+    result = _map.get(tier)
+    if result is None:
+        logger.warning("Unknown TierClassification %r, defaulting to MODERATE", tier)
+        return ComplexityTier.MODERATE
+    return result
 
 
 def classify_element_shared(

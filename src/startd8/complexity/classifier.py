@@ -6,6 +6,7 @@ Port of ``_classify_complexity_tier()`` from Artisan's
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Dict, List, Tuple
 
 from startd8.logging_config import get_logger
@@ -108,7 +109,7 @@ def _emit(tier: ComplexityTier, reason: str) -> Tuple[ComplexityTier, str]:
         try:
             _tier_histogram.record(1, attributes={"tier": tier.value})
         except Exception:
-            pass
+            logger.debug("Failed to record OTel tier histogram", exc_info=True)
     return tier, reason
 
 
@@ -121,9 +122,7 @@ def log_tier_distribution(tiers: List[ComplexityTier]) -> Dict[str, int]:
     Returns:
         Dict mapping tier name to count.
     """
-    counts: Dict[str, int] = {}
-    for t in tiers:
-        counts[t.value] = counts.get(t.value, 0) + 1
+    counts: Dict[str, int] = dict(Counter(t.value for t in tiers))
     logger.info(
         "Tier distribution: %s (total=%d)",
         ", ".join(f"{k}={v}" for k, v in sorted(counts.items())),

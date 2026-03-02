@@ -135,6 +135,16 @@ class Models:
     # Semantic validation (Haiku pattern from lessons learned)
     SEMANTIC_VALIDATOR = CLAUDE_HAIKU_LATEST
 
+    # ==========================================================================
+    # Ollama Local Models
+    # ==========================================================================
+
+    # Micro Prime local code generation (REQ-MP-104)
+    STARTD8_CODER = "ollama:startd8-coder"
+
+    # Micro Prime: local model for SIMPLE element body generation
+    MICRO_PRIME_LOCAL = STARTD8_CODER
+
 
 # Model registry with full metadata
 _MODEL_REGISTRY: Dict[str, ModelInfo] = {
@@ -245,6 +255,13 @@ _MODEL_REGISTRY: Dict[str, ModelInfo] = {
         provider="mistral",
         model_id="mistral-small-latest",
         tier="fast",
+        capabilities={"text", "code"},
+    ),
+    # Ollama local models
+    "startd8-coder": ModelInfo(
+        provider="ollama",
+        model_id="startd8-coder",
+        tier="mini",
         capabilities={"text", "code"},
     ),
 }
