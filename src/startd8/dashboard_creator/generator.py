@@ -1,0 +1,339 @@
+"""
+Jsonnet template engine — transforms DashboardSpec into .libsonnet (DC-100–DC-104).
+
+The generator is stateless and pure — no side effects, no file I/O.
+Generated Jsonnet follows the overview.libsonnet composition pattern:
+  1. Import config, dashboards, panels, variables
+  2. Extract local m = config.metrics, ds = config.datasources, sel = config.selectors
+  3. Create baseDashboard via dashboards.dashboard()
+  4. Add templating list from variables
+  5. Call dashboards.withPanels(baseDashboard, [...])
+"""
+
+import re
+from typing import Any, List
+
+from startd8.dashboard_creator.models import (
+    DashboardSpec,
+    PanelSpec,
+    PanelType,
+    TargetSpec,
+    VariableSpec,
+    VariableType,
+)
+
+_METRIC_REF = re.compile(r"\$\{metrics\.(\w+)\}")
+_SELECTOR_REF = re.compile(r"\$\{selectors\.(\w+)\}")
+_COMBINED_REF = re.compile(r"\$\{(metrics|selectors)\.(\w+)\}")
+
+
+def generate_dashboard_jsonnet(
+    spec: DashboardSpec,
+) -> str:
+    """DC-100: Transform DashboardSpec into a .libsonnet string."""
+    lines: List[str] = []
+
+    # Imports
+    lines.append("local config = (import '../config.libsonnet')._config;")
+    lines.append("local dashboards = import '../lib/dashboards.libsonnet';")
+    lines.append("local panels = import '../lib/panels.libsonnet';")
+    lines.append("local variables = import '../lib/variables.libsonnet';")
+    lines.append("")
+    lines.append("local m = config.metrics;")
+    lines.append("local ds = config.datasources;")
+    lines.append("local sel = config.selectors;")
+    lines.append("")
+
+    # Datasource shortcuts
+    lines.append("local mimirDatasource = { type: 'prometheus', uid: '${datasource}' };")
+    lines.append("local tempoDatasource = { type: 'tempo', uid: '${tempo}' };")
+    lines.append("local lokiDatasource = { type: 'loki', uid: '${loki}' };")
+    lines.append("")
+
+    # Base dashboard
+    tags_str = ", ".join(f"'{t}'" for t in spec.tags)
+    desc_arg = ""
+    if spec.description:
+        desc_arg = f"\n  description='{_escape_jsonnet_string(spec.description)}',"
+    lines.append("local baseDashboard = dashboards.dashboard(")
+    lines.append(f"  '{_escape_jsonnet_string(spec.title)}',")
+    lines.append(f"  '{spec.uid}',{desc_arg}")
+    lines.append(f"  tags=[{tags_str}],")
+
+    # Templating
+    if spec.variables:
+        lines.append(") {")
+        lines.append("  templating: {")
+        lines.append("    list: [")
+        for var in spec.variables:
+            lines.append(f"      {_render_variable(var)},")
+        lines.append("    ],")
+        lines.append("  },")
+        lines.append("};")
+    else:
+        lines.append(");")
+
+    lines.append("")
+
+    # Panels
+    lines.append("dashboards.withPanels(baseDashboard, [")
+    for panel in spec.panels:
+        lines.append(f"  {_render_panel(panel)},")
+    lines.append("])")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_panel(panel: PanelSpec) -> str:
+    """DC-101: Render a PanelSpec as a panels.*() constructor call."""
+    ptype = panel.type
+
+    if ptype == PanelType.ROW:
+        collapsed = "true" if panel.options.get("collapsed") else "false"
+        return f"panels.row('{_escape_jsonnet_string(panel.title)}', collapsed={collapsed})"
+
+    if ptype == PanelType.TEXT:
+        content = _escape_jsonnet_string(panel.options.get("content", ""))
+        return f"panels.text('{_escape_jsonnet_string(panel.title)}', '{content}')"
+
+    constructor = _panel_constructor_name(ptype)
+    args: List[str] = [f"'{_escape_jsonnet_string(panel.title)}'"]
+
+    # Single-target panels: pass expr/query as second positional arg
+    if ptype in _SINGLE_TARGET_TYPES:
+        if panel.expr:
+            args.append(_render_expression(panel.expr))
+        elif panel.query:
+            args.append(_render_expression(panel.query))
+
+    # Multi-target panels: pass targets as named arg
+    if ptype in _MULTI_TARGET_TYPES:
+        if panel.targets:
+            args.append(_render_targets(panel.targets))
+        elif panel.expr:
+            # Single expr wrapped as target array for timeseries etc.
+            args.append(
+                f"[{{ expr: {_render_expression(panel.expr)}, refId: 'A' }}]"
+            )
+
+    # Datasource
+    ds = _datasource_for_panel(ptype)
+    if ds:
+        args.append(f"datasource={ds}")
+
+    # Unit
+    if panel.unit:
+        args.append(f"unit='{panel.unit}'")
+
+    # Thresholds
+    if panel.thresholds:
+        th_items = []
+        for step in panel.thresholds:
+            val = "null" if step.value is None else str(step.value)
+            th_items.append(f"{{ color: '{step.color}', value: {val} }}")
+        args.append(f"thresholds=[{', '.join(th_items)}]")
+
+    # Overrides
+    if panel.overrides:
+        args.append(f"overrides={_render_jsonnet_value(panel.overrides)}")
+
+    # GridPos
+    gridpos_str = ""
+    if panel.gridPos:
+        gp = panel.gridPos
+        gridpos_str = (
+            f" {{\n    gridPos: {{ h: {gp.h}, w: {gp.w}, x: {gp.x}, y: {gp.y} }},\n  }}"
+        )
+
+    sep = ",\n    "
+    call = f"panels.{constructor}(\n    {sep.join(args)},\n  )"
+    if gridpos_str:
+        call += gridpos_str
+
+    return call
+
+
+def _render_variable(variable: VariableSpec) -> str:
+    """DC-102: Render a VariableSpec as a variables.*() builder call."""
+    vtype = variable.type
+    builder = _variable_builder_name(vtype)
+
+    # Constant takes (name, value) positionally — separate path
+    if vtype == VariableType.CONSTANT:
+        return f"variables.{builder}('{variable.name}', '{_escape_jsonnet_string(variable.value or '')}')"
+
+    args: List[str] = []
+
+    # Metric-based variables: metric is first positional arg
+    if vtype in {VariableType.MODEL, VariableType.AGENT, VariableType.PROJECT}:
+        if variable.metric:
+            args.append(_render_expression(variable.metric))
+
+    # Name and label
+    if variable.name:
+        args.append(f"name='{variable.name}'")
+    if variable.label:
+        args.append(f"label='{_escape_jsonnet_string(variable.label)}'")
+
+    # Custom variable: query and multi
+    if vtype == VariableType.CUSTOM:
+        if variable.query:
+            args.append(f"query='{_escape_jsonnet_string(variable.query)}'")
+        if variable.multi:
+            args.append("multi=true")
+
+    return f"variables.{builder}({', '.join(args)})"
+
+
+def _render_expression(expr: str) -> str:
+    """Render an expression string as a Jsonnet string/concat.
+
+    Handles metric/selector refs by splitting the string into
+    literal parts and variable references:
+
+    'rate(${metrics.requestsTotal}[5m])' →
+    'rate(' + m.requestsTotal + '[5m])'
+
+    Pure metric references (no surrounding text):
+    '${metrics.activeSessions}' → m.activeSessions
+    """
+    # Check if the entire expression is a single reference
+    metric_match = re.fullmatch(r"\$\{metrics\.(\w+)\}", expr)
+    if metric_match:
+        return f"m.{metric_match.group(1)}"
+
+    selector_match = re.fullmatch(r"\$\{selectors\.(\w+)\}", expr)
+    if selector_match:
+        return f"sel.{selector_match.group(1)}"
+
+    # Mixed expression: split on references
+    parts: List[str] = []
+    last_end = 0
+
+    for match in _COMBINED_REF.finditer(expr):
+        # Literal text before this match
+        if match.start() > last_end:
+            literal = expr[last_end:match.start()]
+            parts.append(f"'{_escape_jsonnet_string(literal)}'")
+
+        # Variable reference
+        namespace = match.group(1)
+        name = match.group(2)
+        if namespace == "metrics":
+            parts.append(f"m.{name}")
+        else:
+            parts.append(f"sel.{name}")
+
+        last_end = match.end()
+
+    # Trailing literal
+    if last_end < len(expr):
+        literal = expr[last_end:]
+        parts.append(f"'{_escape_jsonnet_string(literal)}'")
+
+    if not parts:
+        return f"'{_escape_jsonnet_string(expr)}'"
+
+    if len(parts) == 1:
+        return parts[0]
+
+    return " + ".join(parts)
+
+
+def _render_targets(targets: List[TargetSpec]) -> str:
+    """Render a list of TargetSpec as a Jsonnet array of objects."""
+    items: List[str] = []
+    for i, target in enumerate(targets):
+        fields: List[str] = []
+        if target.expr:
+            fields.append(f"expr: {_render_expression(target.expr)}")
+        if target.query:
+            fields.append(f"query: {_render_expression(target.query)}")
+        if target.legendFormat:
+            fields.append(f"legendFormat: '{_escape_jsonnet_string(target.legendFormat)}'")
+        # A, B, ..., Z for first 26 targets; fallback for >26
+        ref_id = target.refId or (chr(65 + i) if i < 26 else f"REF_{i}")
+        fields.append(f"refId: '{ref_id}'")
+        if target.datasource:
+            fields.append(f"datasource: {_render_jsonnet_value(target.datasource)}")
+        if target.queryType:
+            fields.append(f"queryType: '{target.queryType}'")
+        items.append("{ " + ", ".join(fields) + " }")
+    return "[\n      " + ",\n      ".join(items) + ",\n    ]"
+
+
+def _render_jsonnet_value(obj: Any) -> str:
+    """Convert a Python value to a Jsonnet literal."""
+    if isinstance(obj, dict):
+        if not obj:
+            return "{}"
+        fields = [f"{k}: {_render_jsonnet_value(v)}" for k, v in obj.items()]
+        return "{ " + ", ".join(fields) + " }"
+    elif isinstance(obj, list):
+        if not obj:
+            return "[]"
+        items = [_render_jsonnet_value(item) for item in obj]
+        return "[" + ", ".join(items) + "]"
+    elif isinstance(obj, str):
+        return f"'{_escape_jsonnet_string(obj)}'"
+    elif isinstance(obj, bool):
+        return "true" if obj else "false"
+    elif isinstance(obj, (int, float)):
+        return str(obj)
+    elif obj is None:
+        return "null"
+    return repr(obj)
+
+
+def _escape_jsonnet_string(s: str) -> str:
+    """Escape a string for Jsonnet single-quoted string literal."""
+    return s.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def _panel_constructor_name(ptype: PanelType) -> str:
+    """Map PanelType to panels.libsonnet constructor name."""
+    return ptype.value
+
+
+def _variable_builder_name(vtype: VariableType) -> str:
+    """Map VariableType to variables.libsonnet builder name."""
+    return vtype.value
+
+
+def _datasource_for_panel(ptype: PanelType) -> str:
+    """Return the default datasource variable for a panel type."""
+    if ptype in {
+        PanelType.TRACEQL_STAT,
+        PanelType.TRACEQL_TABLE,
+        PanelType.TRACEQL_TIMESERIES,
+        PanelType.TRACEQL_GAUGE,
+        PanelType.TRACES,
+    }:
+        return "tempoDatasource"
+    if ptype == PanelType.LOGS:
+        return "lokiDatasource"
+    return "mimirDatasource"
+
+
+# Panel types that take a single expression as 2nd positional arg
+_SINGLE_TARGET_TYPES = {
+    PanelType.STAT,
+    PanelType.GAUGE,
+    PanelType.BAR_GAUGE,
+    PanelType.LOGS,
+    PanelType.TRACEQL_STAT,
+    PanelType.TRACEQL_GAUGE,
+    PanelType.TRACES,
+}
+
+# Panel types that take a targets array
+_MULTI_TARGET_TYPES = {
+    PanelType.TIMESERIES,
+    PanelType.TABLE,
+    PanelType.BARCHART,
+    PanelType.PIECHART,
+    PanelType.HISTOGRAM,
+    PanelType.TRACEQL_TABLE,
+    PanelType.TRACEQL_TIMESERIES,
+}

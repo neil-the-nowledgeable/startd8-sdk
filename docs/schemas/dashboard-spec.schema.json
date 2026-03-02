@@ -1,0 +1,448 @@
+{
+  "$defs": {
+    "GridPos": {
+      "description": "Grafana panel grid position.",
+      "properties": {
+        "h": {
+          "default": 8,
+          "title": "H",
+          "type": "integer"
+        },
+        "w": {
+          "default": 12,
+          "title": "W",
+          "type": "integer"
+        },
+        "x": {
+          "default": 0,
+          "title": "X",
+          "type": "integer"
+        },
+        "y": {
+          "default": 0,
+          "title": "Y",
+          "type": "integer"
+        }
+      },
+      "title": "GridPos",
+      "type": "object"
+    },
+    "PanelSpec": {
+      "description": "Specification for a single dashboard panel.",
+      "properties": {
+        "expr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expr"
+        },
+        "gridPos": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GridPos"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Group"
+        },
+        "options": {
+          "additionalProperties": true,
+          "title": "Options",
+          "type": "object"
+        },
+        "overrides": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Overrides",
+          "type": "array"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "targets": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/TargetSpec"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Targets"
+        },
+        "thresholds": {
+          "items": {
+            "$ref": "#/$defs/ThresholdStep"
+          },
+          "title": "Thresholds",
+          "type": "array"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/PanelType"
+        },
+        "unit": {
+          "default": "",
+          "title": "Unit",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "title"
+      ],
+      "title": "PanelSpec",
+      "type": "object"
+    },
+    "PanelType": {
+      "description": "Panel types mapped to panels.libsonnet constructors.",
+      "enum": [
+        "stat",
+        "gauge",
+        "timeseries",
+        "table",
+        "barchart",
+        "barGauge",
+        "piechart",
+        "histogram",
+        "logs",
+        "row",
+        "traceqlStat",
+        "traceqlTable",
+        "traceqlTimeseries",
+        "traceqlGauge",
+        "traces",
+        "text"
+      ],
+      "title": "PanelType",
+      "type": "string"
+    },
+    "TargetSpec": {
+      "description": "A single query target within a multi-target panel.",
+      "properties": {
+        "datasource": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Datasource"
+        },
+        "expr": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Expr"
+        },
+        "legendFormat": {
+          "default": "",
+          "title": "Legendformat",
+          "type": "string"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "queryType": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Querytype"
+        },
+        "refId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refid"
+        }
+      },
+      "title": "TargetSpec",
+      "type": "object"
+    },
+    "ThresholdStep": {
+      "description": "A single threshold step for panel coloring.",
+      "properties": {
+        "color": {
+          "default": "green",
+          "title": "Color",
+          "type": "string"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "title": "ThresholdStep",
+      "type": "object"
+    },
+    "VariableSpec": {
+      "description": "Specification for a dashboard template variable.",
+      "properties": {
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "metric": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Metric"
+        },
+        "multi": {
+          "default": false,
+          "title": "Multi",
+          "type": "boolean"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "query": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Query"
+        },
+        "type": {
+          "$ref": "#/$defs/VariableType"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Value"
+        }
+      },
+      "required": [
+        "type",
+        "name"
+      ],
+      "title": "VariableSpec",
+      "type": "object"
+    },
+    "VariableType": {
+      "description": "Variable types mapped to variables.libsonnet builders.",
+      "enum": [
+        "prometheusDatasource",
+        "tempoDatasource",
+        "lokiDatasource",
+        "serviceNameVariable",
+        "modelVariable",
+        "agentVariable",
+        "projectVariable",
+        "customVariable",
+        "constantVariable"
+      ],
+      "title": "VariableType",
+      "type": "string"
+    }
+  },
+  "description": "Primary input model for dashboard generation.\n\nCaptures everything needed to generate a single Grafana dashboard\nfrom the startd8-mixin library.",
+  "properties": {
+    "config_overrides": {
+      "additionalProperties": true,
+      "title": "Config Overrides",
+      "type": "object"
+    },
+    "datasources": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Datasources",
+      "type": "object"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "panels": {
+      "items": {
+        "$ref": "#/$defs/PanelSpec"
+      },
+      "minItems": 1,
+      "title": "Panels",
+      "type": "array"
+    },
+    "refresh": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Refresh"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "time_from": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Time From"
+    },
+    "time_to": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Time To"
+    },
+    "timezone": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Timezone"
+    },
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "uid": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Uid"
+    },
+    "variables": {
+      "items": {
+        "$ref": "#/$defs/VariableSpec"
+      },
+      "title": "Variables",
+      "type": "array"
+    }
+  },
+  "required": [
+    "title",
+    "panels"
+  ],
+  "title": "DashboardSpec",
+  "type": "object"
+}
