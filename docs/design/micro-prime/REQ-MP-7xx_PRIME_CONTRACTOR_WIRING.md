@@ -357,7 +357,7 @@ return GenerationResult(
 
 ### REQ-MP-704: Cost and Token Tracking
 
-**Status:** planned (partially implemented)
+**Status:** DONE
 **Priority:** P2
 **Depends on:** REQ-MP-703
 
@@ -421,7 +421,7 @@ This works because `GenerationResult` from the adapter already sums both paths.
 
 ### REQ-MP-705: Observability and Logging
 
-**Status:** planned
+**Status:** DONE
 **Priority:** P2
 **Depends on:** REQ-MP-700
 
