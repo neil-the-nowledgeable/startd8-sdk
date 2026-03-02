@@ -14,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import yaml
 
 from startd8.dashboard_creator.workflow import DashboardCreatorWorkflow
+from startd8.exceptions import ConfigurationError
 from startd8.logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -46,7 +47,7 @@ class BatchReport:
     def exit_code(self) -> int:
         """Exit code contract: 0 = all success, 2 = partial, 1 = all failed."""
         if self.failed == 0:
-            return 0
+            return 0  # includes total=0 (vacuous success)
         if self.succeeded == 0:
             return 1
         return 2
@@ -55,9 +56,12 @@ class BatchReport:
 def load_specs_from_directory(dir_path: Path) -> List[Dict[str, Any]]:
     """Load all YAML/JSON spec files from a directory, sorted alphabetically.
 
-    Returns a list of (spec_dict, source_path_str) tuples packed as dicts
-    with a ``_source`` metadata key.
+    Each returned dict includes a ``_source`` metadata key with the file path.
+    Invalid files are included as error placeholders with ``_error`` set.
     """
+    if not dir_path.is_dir():
+        raise ConfigurationError(f"Spec directory does not exist: {dir_path}")
+
     specs: List[Dict[str, Any]] = []
     patterns = ["*.yaml", "*.yml", "*.json"]
     files: List[Path] = []
@@ -112,6 +116,8 @@ def run_batch(
     workflow = DashboardCreatorWorkflow()
 
     for i, spec_dict in enumerate(specs):
+        # Defensive copy — avoid mutating caller's dicts via pop()
+        spec_dict = dict(spec_dict)
         source = spec_dict.pop("_source", f"spec[{i}]")
         load_error = spec_dict.pop("_error", None)
 
@@ -122,7 +128,7 @@ def run_batch(
             try:
                 on_progress(i + 1, len(specs), f"Processing {title}")
             except Exception:
-                pass
+                logger.debug("Progress callback error at %d/%d", i + 1, len(specs), exc_info=True)
 
         if load_error:
             report.dashboards.append(DashboardReport(

@@ -85,10 +85,7 @@ def update_mixin_imports(
     # Insert before the closing brace, preserving formatting
     # If block has existing content, add after last line; otherwise add on new line
     if block_content.strip():
-        # Ensure trailing newline before new entry
         insertion = f"\n{new_entry}\n"
-        if block_content.rstrip().endswith(","):
-            insertion = f"\n{new_entry}\n"
         new_content = content[:closing_brace_pos] + insertion + content[closing_brace_pos:]
     else:
         new_content = content[:closing_brace_pos] + f"\n{new_entry}\n  " + content[closing_brace_pos:]

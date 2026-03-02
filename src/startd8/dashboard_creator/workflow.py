@@ -535,7 +535,8 @@ class DashboardCreatorWorkflow(WorkflowBase):
         """Create a child span under the current OTel context (DC-205).
 
         Returns a context manager yielding the span, or ``nullcontext(None)``
-        when OTel is not installed.
+        when OTel is not installed.  Callers **must** guard span method calls
+        with ``if span:`` since the yielded value is ``None`` without OTel.
         """
         if not _tracer:
             return nullcontext(None)
