@@ -14,10 +14,13 @@ import re
 from typing import Any, List
 
 from startd8.dashboard_creator.models import (
+    DashboardLink,
     DashboardSpec,
+    DataLink,
     PanelSpec,
     PanelType,
     TargetSpec,
+    TransformSpec,
     VariableSpec,
     VariableType,
 )
@@ -60,15 +63,22 @@ def generate_dashboard_jsonnet(
     lines.append(f"  '{spec.uid}',{desc_arg}")
     lines.append(f"  tags=[{tags_str}],")
 
-    # Templating
-    if spec.variables:
+    # Merge block fields (templating, links)
+    has_merge = bool(spec.variables) or bool(spec.links)
+    if has_merge:
         lines.append(") {")
-        lines.append("  templating: {")
-        lines.append("    list: [")
-        for var in spec.variables:
-            lines.append(f"      {_render_variable(var)},")
-        lines.append("    ],")
-        lines.append("  },")
+        if spec.variables:
+            lines.append("  templating: {")
+            lines.append("    list: [")
+            for var in spec.variables:
+                lines.append(f"      {_render_variable(var)},")
+            lines.append("    ],")
+            lines.append("  },")
+        if spec.links:
+            lines.append("  links: [")
+            for link in spec.links:
+                lines.append(f"    {_render_dashboard_link(link)},")
+            lines.append("  ],")
         lines.append("};")
     else:
         lines.append(");")
@@ -138,18 +148,13 @@ def _render_panel(panel: PanelSpec) -> str:
     if panel.overrides:
         args.append(f"overrides={_render_jsonnet_value(panel.overrides)}")
 
-    # GridPos
-    gridpos_str = ""
-    if panel.gridPos:
-        gp = panel.gridPos
-        gridpos_str = (
-            f" {{\n    gridPos: {{ h: {gp.h}, w: {gp.w}, x: {gp.x}, y: {gp.y} }},\n  }}"
-        )
-
     sep = ",\n    "
     call = f"panels.{constructor}(\n    {sep.join(args)},\n  )"
-    if gridpos_str:
-        call += gridpos_str
+
+    # Build merge block for gridPos, description, fieldConfig, dataLinks, transformations
+    merge_block = _render_merge_block(panel)
+    if merge_block:
+        call += f" {merge_block}"
 
     return call
 
@@ -183,7 +188,26 @@ def _render_variable(variable: VariableSpec) -> str:
         if variable.multi:
             args.append("multi=true")
 
-    return f"variables.{builder}({', '.join(args)})"
+    # Extended variable options
+    if variable.includeAll:
+        args.append("includeAll=true")
+    if variable.allValue is not None:
+        args.append(f"allValue='{_escape_jsonnet_string(variable.allValue)}'")
+    if variable.hide != 0:
+        args.append(f"hide={variable.hide}")
+    if variable.skipUrlSync:
+        args.append("skipUrlSync=true")
+
+    call = f"variables.{builder}({', '.join(args)})"
+
+    # Default value → merge block with current: {text, value}
+    if variable.default is not None:
+        escaped = _escape_jsonnet_string(variable.default)
+        call += (
+            f" {{ current: {{ text: '{escaped}', value: '{escaped}' }} }}"
+        )
+
+    return call
 
 
 def _render_expression(expr: str) -> str:
@@ -259,8 +283,122 @@ def _render_targets(targets: List[TargetSpec]) -> str:
             fields.append(f"datasource: {_render_jsonnet_value(target.datasource)}")
         if target.queryType:
             fields.append(f"queryType: '{target.queryType}'")
+        if target.instant:
+            fields.append("instant: true")
+        if target.format:
+            fields.append(f"format: '{target.format}'")
         items.append("{ " + ", ".join(fields) + " }")
     return "[\n      " + ",\n      ".join(items) + ",\n    ]"
+
+
+def _render_merge_block(panel: PanelSpec) -> str:
+    """Build a Jsonnet merge block for extended panel fields.
+
+    Returns empty string if no merge fields are set.
+    Uses fieldConfig+: for deep merge to avoid clobbering constructor defaults.
+    """
+    fields: List[str] = []
+
+    if panel.gridPos:
+        gp = panel.gridPos
+        fields.append(
+            f"gridPos: {{ h: {gp.h}, w: {gp.w}, x: {gp.x}, y: {gp.y} }}"
+        )
+
+    if panel.description:
+        fields.append(
+            f"description: '{_escape_jsonnet_string(panel.description)}'"
+        )
+
+    if panel.transformations:
+        fields.append(
+            f"transformations: {_render_transformations(panel.transformations)}"
+        )
+
+    # fieldConfig+: deep merge — combine dataLinks and user fieldConfig
+    fc_fields: List[str] = []
+    if panel.dataLinks:
+        fc_fields.append(
+            f"defaults+: {{ links: {_render_data_links(panel.dataLinks)} }}"
+        )
+    if panel.fieldConfig:
+        # Merge user-provided fieldConfig keys (except defaults.links which
+        # comes from dataLinks above)
+        for key, value in panel.fieldConfig.items():
+            if key == "defaults" and isinstance(value, dict) and panel.dataLinks:
+                # Deep-merge defaults — dataLinks already provides links
+                remaining = {k: v for k, v in value.items() if k != "links"}
+                if remaining:
+                    inner = ", ".join(
+                        f"{k}: {_render_jsonnet_value(v)}"
+                        for k, v in remaining.items()
+                    )
+                    fc_fields.append(f"defaults+: {{ {inner} }}")
+            else:
+                fc_fields.append(f"{key}: {_render_jsonnet_value(value)}")
+
+    if fc_fields:
+        fields.append("fieldConfig+: { " + ", ".join(fc_fields) + " }")
+
+    if not fields:
+        return ""
+
+    inner = ", ".join(fields)
+    return "{\n    " + ",\n    ".join(fields) + ",\n  }"
+
+
+def _render_data_links(links: List[DataLink]) -> str:
+    """Render a list of DataLink as a Jsonnet array."""
+    items: List[str] = []
+    for link in links:
+        parts = [
+            f"title: '{_escape_jsonnet_string(link.title)}'",
+            f"url: '{_escape_jsonnet_string(link.url)}'",
+        ]
+        if link.targetBlank:
+            parts.append("targetBlank: true")
+        else:
+            parts.append("targetBlank: false")
+        items.append("{ " + ", ".join(parts) + " }")
+    return "[" + ", ".join(items) + "]"
+
+
+def _render_transformations(transforms: List[TransformSpec]) -> str:
+    """Render a list of TransformSpec as a Jsonnet array."""
+    items: List[str] = []
+    for t in transforms:
+        parts = [f"id: '{_escape_jsonnet_string(t.id)}'"]
+        if t.options:
+            parts.append(f"options: {_render_jsonnet_value(t.options)}")
+        items.append("{ " + ", ".join(parts) + " }")
+    return "[\n      " + ",\n      ".join(items) + ",\n    ]"
+
+
+def _render_dashboard_link(link: DashboardLink) -> str:
+    """Render a DashboardLink as a Jsonnet object literal."""
+    fields: List[str] = [
+        f"title: '{_escape_jsonnet_string(link.title)}'",
+    ]
+    if link.url:
+        fields.append(f"url: '{_escape_jsonnet_string(link.url)}'")
+    if link.type != "link":
+        fields.append(f"type: '{link.type}'")
+    if link.icon != "external link":
+        fields.append(f"icon: '{_escape_jsonnet_string(link.icon)}'")
+    if link.tooltip:
+        fields.append(f"tooltip: '{_escape_jsonnet_string(link.tooltip)}'")
+    if not link.targetBlank:
+        fields.append("targetBlank: false")
+    if link.tags:
+        tags_str = ", ".join(f"'{_escape_jsonnet_string(t)}'" for t in link.tags)
+        fields.append(f"tags: [{tags_str}]")
+    if link.asDropdown:
+        fields.append("asDropdown: true")
+    if link.includeVars:
+        fields.append("includeVars: true")
+    if link.keepTime:
+        fields.append("keepTime: true")
+    return "{ " + ", ".join(fields) + " }"
 
 
 def _render_jsonnet_value(obj: Any) -> str:

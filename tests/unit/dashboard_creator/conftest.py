@@ -104,3 +104,136 @@ def grouped_spec_dict():
             },
         ],
     }
+
+
+@pytest.fixture
+def michigan_budget_spec_dict():
+    """Realistic multi-panel spec exercising raw PromQL dashboard features.
+
+    Uses instant queries, fieldConfig, transformations, dataLinks,
+    dashboard links, and variable options.
+    """
+    return {
+        "title": "Michigan State Budget Overview",
+        "uid": "cc-govbudget-michigan-overview",
+        "description": "Where does Michigan's money go?",
+        "tags": ["government", "budget", "michigan"],
+        "links": [
+            {
+                "title": "USAspending.gov",
+                "url": "https://www.usaspending.gov",
+                "icon": "external link",
+                "tooltip": "Federal spending data",
+                "targetBlank": True,
+            },
+            {
+                "title": "Related Dashboards",
+                "type": "dashboards",
+                "tags": ["budget"],
+                "asDropdown": True,
+                "includeVars": True,
+                "keepTime": True,
+            },
+        ],
+        "variables": [
+            {
+                "type": "prometheusDatasource",
+                "name": "datasource",
+                "label": "Data Source",
+                "hide": 2,
+            },
+            {
+                "type": "customVariable",
+                "name": "fiscal_year",
+                "label": "Fiscal Year",
+                "query": "2024,2025,2026",
+                "multi": False,
+                "includeAll": True,
+                "allValue": ".*",
+                "default": "2026",
+                "skipUrlSync": False,
+            },
+            {
+                "type": "customVariable",
+                "name": "department",
+                "label": "Department",
+                "query": "Education,Health,Transportation,Corrections",
+                "multi": True,
+                "includeAll": True,
+                "default": "Education",
+            },
+        ],
+        "panels": [
+            {
+                "type": "stat",
+                "title": "Total Budget",
+                "expr": "gov_budget_total_dollars",
+                "unit": "currencyUSD",
+                "description": "Total state budget for selected fiscal year",
+                "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+            },
+            {
+                "type": "table",
+                "title": "Budget by Department",
+                "targets": [
+                    {
+                        "expr": "gov_budget_by_department_dollars",
+                        "legendFormat": "{{department}}",
+                        "instant": True,
+                        "format": "table",
+                        "refId": "A",
+                    },
+                ],
+                "gridPos": {"h": 10, "w": 12, "x": 0, "y": 4},
+                "fieldConfig": {
+                    "defaults": {"unit": "currencyUSD"},
+                    "overrides": [
+                        {
+                            "matcher": {"id": "byName", "options": "department"},
+                            "properties": [{"id": "custom.width", "value": 200}],
+                        }
+                    ],
+                },
+                "transformations": [
+                    {
+                        "id": "organize",
+                        "options": {
+                            "excludeByName": {"Time": True, "__name__": True},
+                        },
+                    },
+                ],
+                "dataLinks": [
+                    {
+                        "title": "View Department Detail",
+                        "url": "/d/cc-govbudget-dept-detail?var-department=${__value.text}",
+                    },
+                ],
+            },
+            {
+                "type": "timeseries",
+                "title": "Budget Trend",
+                "targets": [
+                    {
+                        "expr": "gov_budget_by_department_dollars",
+                        "legendFormat": "{{department}}",
+                    },
+                ],
+                "unit": "currencyUSD",
+                "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+                "description": "Year-over-year budget trend by department",
+            },
+            {"type": "row", "title": "Detailed Breakdown"},
+            {
+                "type": "piechart",
+                "title": "Budget Distribution",
+                "targets": [
+                    {
+                        "expr": "gov_budget_by_department_dollars",
+                        "legendFormat": "{{department}}",
+                        "instant": True,
+                    },
+                ],
+                "gridPos": {"h": 8, "w": 12, "x": 0, "y": 13},
+            },
+        ],
+    }

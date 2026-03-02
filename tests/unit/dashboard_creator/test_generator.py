@@ -9,12 +9,15 @@ from startd8.dashboard_creator.generator import (
     _render_variable,
 )
 from startd8.dashboard_creator.models import (
+    DashboardLink,
     DashboardSpec,
+    DataLink,
     GridPos,
     PanelSpec,
     PanelType,
     TargetSpec,
     ThresholdStep,
+    TransformSpec,
     VariableSpec,
     VariableType,
 )
@@ -356,3 +359,201 @@ class TestGenerateDashboardJsonnet:
         assert "refId: 'B'" in result
         assert "legendFormat: 'p50'" in result
         assert "legendFormat: 'p99'" in result
+
+    def test_with_dashboard_links(self):
+        spec = DashboardSpec(
+            title="T",
+            uid="cc-startd8-t",
+            panels=[PanelSpec(type="stat", title="Up", expr="up")],
+            links=[
+                DashboardLink(title="Docs", url="https://example.com"),
+                DashboardLink(
+                    title="Related",
+                    type="dashboards",
+                    tags=["team"],
+                    keepTime=True,
+                    includeVars=True,
+                ),
+            ],
+        )
+        result = generate_dashboard_jsonnet(spec)
+        assert "links: [" in result
+        assert "title: 'Docs'" in result
+        assert "url: 'https://example.com'" in result
+        assert "type: 'dashboards'" in result
+        assert "keepTime: true" in result
+        assert "includeVars: true" in result
+
+
+# ---------------------------------------------------------------------------
+# Target extensions (instant, format)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderTargetExtensions:
+    def test_target_instant_emitted(self):
+        panel = PanelSpec(
+            type="timeseries",
+            title="Instant",
+            targets=[TargetSpec(expr="up", instant=True)],
+        )
+        result = _render_panel(panel)
+        assert "instant: true" in result
+
+    def test_target_format_table_emitted(self):
+        panel = PanelSpec(
+            type="table",
+            title="Table",
+            targets=[TargetSpec(expr="up", instant=True, format="table")],
+        )
+        result = _render_panel(panel)
+        assert "format: 'table'" in result
+
+    def test_target_defaults_no_instant_format(self):
+        panel = PanelSpec(
+            type="timeseries",
+            title="Default",
+            targets=[TargetSpec(expr="up")],
+        )
+        result = _render_panel(panel)
+        assert "instant:" not in result
+        assert "format:" not in result
+
+
+# ---------------------------------------------------------------------------
+# Variable extensions (includeAll, allValue, default, hide, skipUrlSync)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderVariableExtensions:
+    def test_includeAll_emitted(self):
+        var = VariableSpec(
+            type="customVariable", name="env", query="a,b",
+            includeAll=True,
+        )
+        result = _render_variable(var)
+        assert "includeAll=true" in result
+
+    def test_allValue_emitted(self):
+        var = VariableSpec(
+            type="customVariable", name="env", query="a,b",
+            includeAll=True, allValue=".*",
+        )
+        result = _render_variable(var)
+        assert "allValue='.*'" in result
+
+    def test_hide_emitted(self):
+        var = VariableSpec(
+            type="prometheusDatasource", name="ds", hide=2,
+        )
+        result = _render_variable(var)
+        assert "hide=2" in result
+
+    def test_hide_zero_not_emitted(self):
+        var = VariableSpec(
+            type="prometheusDatasource", name="ds", hide=0,
+        )
+        result = _render_variable(var)
+        assert "hide=" not in result
+
+    def test_skipUrlSync_emitted(self):
+        var = VariableSpec(
+            type="prometheusDatasource", name="ds", skipUrlSync=True,
+        )
+        result = _render_variable(var)
+        assert "skipUrlSync=true" in result
+
+    def test_default_emits_current_merge_block(self):
+        var = VariableSpec(
+            type="customVariable", name="env", query="a,b",
+            default="prod",
+        )
+        result = _render_variable(var)
+        assert "current:" in result
+        assert "text: 'prod'" in result
+        assert "value: 'prod'" in result
+
+    def test_default_none_no_current(self):
+        var = VariableSpec(
+            type="customVariable", name="env", query="a,b",
+        )
+        result = _render_variable(var)
+        assert "current:" not in result
+
+
+# ---------------------------------------------------------------------------
+# Panel extensions (description, fieldConfig, dataLinks, transformations)
+# ---------------------------------------------------------------------------
+
+
+class TestRenderPanelExtensions:
+    def test_description_in_merge_block(self):
+        panel = PanelSpec(
+            type="stat", title="Up", expr="up",
+            description="Shows uptime status",
+        )
+        result = _render_panel(panel)
+        assert "description: 'Shows uptime status'" in result
+
+    def test_fieldConfig_deep_merge(self):
+        panel = PanelSpec(
+            type="stat", title="Up", expr="up",
+            fieldConfig={"defaults": {"unit": "percent"}},
+        )
+        result = _render_panel(panel)
+        assert "fieldConfig+:" in result
+
+    def test_dataLinks_in_fieldConfig_defaults_links(self):
+        panel = PanelSpec(
+            type="stat", title="Up", expr="up",
+            dataLinks=[DataLink(title="Drill", url="http://example.com/${__value.text}")],
+        )
+        result = _render_panel(panel)
+        assert "fieldConfig+:" in result
+        assert "defaults+:" in result
+        assert "links:" in result
+        assert "title: 'Drill'" in result
+
+    def test_transformations_array(self):
+        panel = PanelSpec(
+            type="table", title="Top",
+            targets=[TargetSpec(expr="up")],
+            transformations=[
+                TransformSpec(id="organize", options={"excludeByName": {"Time": True}}),
+                TransformSpec(id="calculateField"),
+            ],
+        )
+        result = _render_panel(panel)
+        assert "transformations:" in result
+        assert "id: 'organize'" in result
+        assert "id: 'calculateField'" in result
+
+    def test_gridpos_still_works_in_merge_block(self):
+        panel = PanelSpec(
+            type="stat", title="Up", expr="up",
+            gridPos=GridPos(h=4, w=6, x=12, y=0),
+        )
+        result = _render_panel(panel)
+        assert "gridPos:" in result
+        assert "h: 4" in result
+        assert "w: 6" in result
+
+    def test_no_merge_block_when_no_extensions(self):
+        panel = PanelSpec(type="stat", title="Up", expr="up")
+        result = _render_panel(panel)
+        # No merge block braces after the constructor call
+        assert result.endswith(")")
+
+    def test_combined_merge_block(self):
+        panel = PanelSpec(
+            type="stat", title="Up", expr="up",
+            gridPos=GridPos(h=4, w=6, x=0, y=0),
+            description="Test panel",
+            dataLinks=[DataLink(title="Link", url="http://x")],
+            transformations=[TransformSpec(id="organize")],
+        )
+        result = _render_panel(panel)
+        assert "gridPos:" in result
+        assert "description: 'Test panel'" in result
+        assert "fieldConfig+:" in result
+        assert "transformations:" in result

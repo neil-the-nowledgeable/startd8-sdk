@@ -4,12 +4,15 @@ import pytest
 from pydantic import ValidationError
 
 from startd8.dashboard_creator.models import (
+    DashboardLink,
     DashboardSpec,
+    DataLink,
     GridPos,
     PanelSpec,
     PanelType,
     TargetSpec,
     ThresholdStep,
+    TransformSpec,
     VariableSpec,
     VariableType,
 )
@@ -267,3 +270,262 @@ class TestDashboardSpec:
         assert "properties" in schema
         assert "title" in schema["properties"]
         assert "panels" in schema["properties"]
+
+    def test_links_default_empty(self):
+        spec = DashboardSpec(
+            title="Test",
+            panels=[PanelSpec(type="stat", title="Up", expr="up")],
+        )
+        assert spec.links == []
+
+    def test_links_populated(self):
+        spec = DashboardSpec(
+            title="Test",
+            panels=[PanelSpec(type="stat", title="Up", expr="up")],
+            links=[
+                DashboardLink(title="Docs", url="https://example.com"),
+                DashboardLink(title="Related", type="dashboards", tags=["team"]),
+            ],
+        )
+        assert len(spec.links) == 2
+        assert spec.links[0].title == "Docs"
+        assert spec.links[1].type == "dashboards"
+
+
+# ---------------------------------------------------------------------------
+# TargetSpec extensions
+# ---------------------------------------------------------------------------
+
+
+class TestTargetSpecExtensions:
+    def test_instant_default_false(self):
+        target = TargetSpec(expr="up")
+        assert target.instant is False
+
+    def test_instant_true_roundtrip(self):
+        target = TargetSpec(expr="up", instant=True)
+        assert target.instant is True
+
+    def test_format_default_none(self):
+        target = TargetSpec(expr="up")
+        assert target.format is None
+
+    def test_format_table_roundtrip(self):
+        target = TargetSpec(expr="up", format="table")
+        assert target.format == "table"
+
+    def test_format_time_series_roundtrip(self):
+        target = TargetSpec(expr="up", format="time_series")
+        assert target.format == "time_series"
+
+    def test_format_heatmap_roundtrip(self):
+        target = TargetSpec(expr="up", format="heatmap")
+        assert target.format == "heatmap"
+
+    def test_format_invalid_rejected(self):
+        with pytest.raises(ValidationError, match="format must be"):
+            TargetSpec(expr="up", format="invalid")
+
+    def test_instant_and_format_together(self):
+        target = TargetSpec(expr="up", instant=True, format="table")
+        assert target.instant is True
+        assert target.format == "table"
+
+
+# ---------------------------------------------------------------------------
+# VariableSpec extensions
+# ---------------------------------------------------------------------------
+
+
+class TestVariableSpecExtensions:
+    def test_includeAll_default_false(self):
+        var = VariableSpec(type="prometheusDatasource", name="ds")
+        assert var.includeAll is False
+
+    def test_includeAll_roundtrip(self):
+        var = VariableSpec(
+            type="customVariable", name="env", query="a,b",
+            includeAll=True,
+        )
+        assert var.includeAll is True
+
+    def test_allValue_with_includeAll(self):
+        var = VariableSpec(
+            type="customVariable", name="env", query="a,b",
+            includeAll=True, allValue=".*",
+        )
+        assert var.allValue == ".*"
+
+    def test_allValue_without_includeAll_rejected(self):
+        with pytest.raises(ValidationError, match="allValue requires includeAll"):
+            VariableSpec(
+                type="customVariable", name="env", query="a,b",
+                allValue=".*",
+            )
+
+    def test_default_roundtrip(self):
+        var = VariableSpec(
+            type="customVariable", name="env", query="a,b",
+            default="prod",
+        )
+        assert var.default == "prod"
+
+    def test_hide_default_zero(self):
+        var = VariableSpec(type="prometheusDatasource", name="ds")
+        assert var.hide == 0
+
+    def test_hide_valid_values(self):
+        for h in (0, 1, 2):
+            var = VariableSpec(type="prometheusDatasource", name="ds", hide=h)
+            assert var.hide == h
+
+    def test_hide_invalid_rejected(self):
+        with pytest.raises(ValidationError, match="hide must be"):
+            VariableSpec(type="prometheusDatasource", name="ds", hide=3)
+
+    def test_hide_negative_rejected(self):
+        with pytest.raises(ValidationError, match="hide must be"):
+            VariableSpec(type="prometheusDatasource", name="ds", hide=-1)
+
+    def test_skipUrlSync_default_false(self):
+        var = VariableSpec(type="prometheusDatasource", name="ds")
+        assert var.skipUrlSync is False
+
+    def test_skipUrlSync_roundtrip(self):
+        var = VariableSpec(
+            type="prometheusDatasource", name="ds", skipUrlSync=True,
+        )
+        assert var.skipUrlSync is True
+
+
+# ---------------------------------------------------------------------------
+# DashboardLink
+# ---------------------------------------------------------------------------
+
+
+class TestDashboardLink:
+    def test_minimal_construction(self):
+        link = DashboardLink(title="Docs")
+        assert link.title == "Docs"
+        assert link.url == ""
+        assert link.type == "link"
+
+    def test_defaults(self):
+        link = DashboardLink(title="X")
+        assert link.icon == "external link"
+        assert link.tooltip == ""
+        assert link.targetBlank is True
+        assert link.tags == []
+        assert link.asDropdown is False
+        assert link.includeVars is False
+        assert link.keepTime is False
+
+    def test_full_construction(self):
+        link = DashboardLink(
+            title="Budget Dashboard",
+            url="https://example.com/budget",
+            icon="dashboard",
+            tooltip="View budget",
+            targetBlank=False,
+            type="dashboards",
+            tags=["budget", "finance"],
+            asDropdown=True,
+            includeVars=True,
+            keepTime=True,
+        )
+        assert link.type == "dashboards"
+        assert link.asDropdown is True
+        assert link.includeVars is True
+        assert link.keepTime is True
+        assert len(link.tags) == 2
+
+
+# ---------------------------------------------------------------------------
+# DataLink
+# ---------------------------------------------------------------------------
+
+
+class TestDataLink:
+    def test_construction(self):
+        link = DataLink(title="Drill Down", url="https://example.com/${__value.text}")
+        assert link.title == "Drill Down"
+        assert link.targetBlank is True
+
+    def test_targetBlank_override(self):
+        link = DataLink(title="X", url="http://x", targetBlank=False)
+        assert link.targetBlank is False
+
+
+# ---------------------------------------------------------------------------
+# TransformSpec
+# ---------------------------------------------------------------------------
+
+
+class TestTransformSpec:
+    def test_construction_minimal(self):
+        t = TransformSpec(id="organize")
+        assert t.id == "organize"
+        assert t.options == {}
+
+    def test_construction_with_options(self):
+        t = TransformSpec(
+            id="calculateField",
+            options={"mode": "binary", "alias": "total"},
+        )
+        assert t.options["mode"] == "binary"
+
+
+# ---------------------------------------------------------------------------
+# PanelSpec extensions
+# ---------------------------------------------------------------------------
+
+
+class TestPanelSpecExtensions:
+    def test_description_default_empty(self):
+        panel = PanelSpec(type="stat", title="Up", expr="up")
+        assert panel.description == ""
+
+    def test_description_roundtrip(self):
+        panel = PanelSpec(
+            type="stat", title="Up", expr="up",
+            description="Shows uptime",
+        )
+        assert panel.description == "Shows uptime"
+
+    def test_fieldConfig_default_empty(self):
+        panel = PanelSpec(type="stat", title="Up", expr="up")
+        assert panel.fieldConfig == {}
+
+    def test_fieldConfig_roundtrip(self):
+        panel = PanelSpec(
+            type="stat", title="Up", expr="up",
+            fieldConfig={"defaults": {"unit": "percent"}},
+        )
+        assert panel.fieldConfig["defaults"]["unit"] == "percent"
+
+    def test_dataLinks_default_empty(self):
+        panel = PanelSpec(type="stat", title="Up", expr="up")
+        assert panel.dataLinks == []
+
+    def test_dataLinks_roundtrip(self):
+        panel = PanelSpec(
+            type="stat", title="Up", expr="up",
+            dataLinks=[DataLink(title="Drill", url="http://x")],
+        )
+        assert len(panel.dataLinks) == 1
+        assert panel.dataLinks[0].title == "Drill"
+
+    def test_transformations_default_empty(self):
+        panel = PanelSpec(type="stat", title="Up", expr="up")
+        assert panel.transformations == []
+
+    def test_transformations_roundtrip(self):
+        panel = PanelSpec(
+            type="table", title="Top",
+            targets=[TargetSpec(expr="up")],
+            transformations=[
+                TransformSpec(id="organize", options={"excludeByName": {"Time": True}}),
+            ],
+        )
+        assert len(panel.transformations) == 1
+        assert panel.transformations[0].id == "organize"

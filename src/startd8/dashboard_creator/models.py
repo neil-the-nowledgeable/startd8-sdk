@@ -8,7 +8,7 @@ that drives Jsonnet generation, compilation, and provisioning.
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class PanelType(str, Enum):
@@ -64,6 +64,17 @@ class TargetSpec(BaseModel):
     refId: Optional[str] = None
     datasource: Optional[Dict[str, Any]] = None
     queryType: Optional[str] = None
+    instant: bool = False  # Instant query (vs range)
+    format: Optional[str] = None  # "table", "time_series", "heatmap"
+
+    @field_validator("format")
+    @classmethod
+    def validate_format(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in {"table", "time_series", "heatmap"}:
+            raise ValueError(
+                f"format must be 'table', 'time_series', or 'heatmap', got '{v}'"
+            )
+        return v
 
 
 class ThresholdStep(BaseModel):
@@ -92,6 +103,11 @@ class PanelSpec(BaseModel):
     overrides: List[Dict[str, Any]] = Field(default_factory=list)
     # Panel-specific options (forwarded to constructor)
     options: Dict[str, Any] = Field(default_factory=dict)
+    # Extended panel fields
+    description: str = ""
+    fieldConfig: Dict[str, Any] = Field(default_factory=dict)  # Pass-through
+    dataLinks: List["DataLink"] = Field(default_factory=list)
+    transformations: List["TransformSpec"] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_target_source(self) -> "PanelSpec":
@@ -125,6 +141,21 @@ class VariableSpec(BaseModel):
     multi: bool = False
     # For constant variables
     value: Optional[str] = None
+    # Extended variable options
+    includeAll: bool = False  # "All" option in dropdown
+    allValue: Optional[str] = None  # Custom value for "All" (e.g. ".*")
+    default: Optional[str] = None  # Default selected value
+    hide: int = 0  # 0=visible, 1=label-only, 2=hidden
+    skipUrlSync: bool = False  # Exclude from URL state
+
+    @field_validator("hide")
+    @classmethod
+    def validate_hide(cls, v: int) -> int:
+        if v not in {0, 1, 2}:
+            raise ValueError(
+                f"hide must be 0 (visible), 1 (label-only), or 2 (hidden), got {v}"
+            )
+        return v
 
     @model_validator(mode="after")
     def validate_variable_params(self) -> "VariableSpec":
@@ -145,7 +176,41 @@ class VariableSpec(BaseModel):
             raise ValueError(
                 f"Variable '{self.name}' (constantVariable) requires 'value'"
             )
+        if self.allValue is not None and not self.includeAll:
+            raise ValueError(
+                f"Variable '{self.name}': allValue requires includeAll=True"
+            )
         return self
+
+
+class DashboardLink(BaseModel):
+    """A dashboard-level link (external URL or tag-based dashboard list)."""
+
+    title: str
+    url: str = ""  # Empty for type="dashboards" (tag-based)
+    icon: str = "external link"
+    tooltip: str = ""
+    targetBlank: bool = True
+    type: str = "link"  # "link" or "dashboards"
+    tags: List[str] = Field(default_factory=list)
+    asDropdown: bool = False  # Show matching dashboards as dropdown
+    includeVars: bool = False  # Forward current variable values
+    keepTime: bool = False  # Preserve current time range
+
+
+class DataLink(BaseModel):
+    """A data link attached to panel field values (e.g. drill-down URLs)."""
+
+    title: str
+    url: str
+    targetBlank: bool = True
+
+
+class TransformSpec(BaseModel):
+    """A Grafana panel transformation (e.g. organize, calculateField)."""
+
+    id: str  # e.g. "organize", "calculateField", "filterByValue"
+    options: Dict[str, Any] = Field(default_factory=dict)
 
 
 class DashboardSpec(BaseModel):
@@ -163,6 +228,7 @@ class DashboardSpec(BaseModel):
     panels: List[PanelSpec] = Field(min_length=1)
     variables: List[VariableSpec] = Field(default_factory=list)
     datasources: Dict[str, str] = Field(default_factory=dict)
+    links: List[DashboardLink] = Field(default_factory=list)
     refresh: Optional[str] = None  # Hydrated from config (DC-005)
     timezone: Optional[str] = None  # Hydrated from config (DC-005)
     time_from: Optional[str] = None  # Hydrated from config (DC-005)

@@ -132,6 +132,17 @@ def validate_spec(
             errors.append(f"Duplicate panel title: '{title}'")
         seen.add(title)
 
+    # Advisory: warn on unknown fieldConfig top-level keys
+    _KNOWN_FIELD_CONFIG_KEYS = {"defaults", "overrides"}
+    for panel in spec.panels:
+        if panel.fieldConfig:
+            unknown = set(panel.fieldConfig.keys()) - _KNOWN_FIELD_CONFIG_KEYS
+            if unknown:
+                errors.append(
+                    f"Panel '{panel.title}': unknown fieldConfig keys "
+                    f"{sorted(unknown)} (expected: defaults, overrides)"
+                )
+
     return errors
 
 
