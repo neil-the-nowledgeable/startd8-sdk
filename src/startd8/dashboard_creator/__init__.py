@@ -4,6 +4,7 @@ Dashboard Creator (dbrd-cr8r) — Generate Grafana dashboards from declarative s
 Public API for the dashboard_creator package.
 """
 
+from startd8.dashboard_creator.grafana_client import GrafanaClient, GrafanaResponse
 from startd8.dashboard_creator.models import (
     DashboardSpec,
     GridPos,
@@ -13,6 +14,12 @@ from startd8.dashboard_creator.models import (
     ThresholdStep,
     VariableSpec,
     VariableType,
+)
+from startd8.dashboard_creator.provisioning import (
+    ProvisioningResult,
+    delete_local_artifacts,
+    deprovision_dashboard,
+    provision_dashboard,
 )
 from startd8.dashboard_creator.workflow import DashboardCreatorWorkflow
 
@@ -26,4 +33,10 @@ __all__ = [
     "GridPos",
     "ThresholdStep",
     "DashboardCreatorWorkflow",
+    "GrafanaClient",
+    "GrafanaResponse",
+    "ProvisioningResult",
+    "provision_dashboard",
+    "deprovision_dashboard",
+    "delete_local_artifacts",
 ]

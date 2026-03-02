@@ -3,6 +3,7 @@ DashboardCreatorWorkflow — WorkflowBase subclass for dashboard generation (DC-
 """
 
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -89,6 +90,26 @@ class DashboardCreatorWorkflow(WorkflowBase):
                     default=False,
                     description="Validate + compile, no write",
                 ),
+                WorkflowInput(
+                    name="provision",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Push dashboard to Grafana after generation",
+                ),
+                WorkflowInput(
+                    name="grafana_url",
+                    type="string",
+                    required=False,
+                    description="Grafana instance URL for provisioning",
+                ),
+                WorkflowInput(
+                    name="allow_insecure",
+                    type="boolean",
+                    required=False,
+                    default=False,
+                    description="Allow plain HTTP connections to Grafana",
+                ),
             ],
         )
 
@@ -130,6 +151,11 @@ class DashboardCreatorWorkflow(WorkflowBase):
         if config.get("dry_run") and config.get("check"):
             errors.append("Cannot use both --dry-run and --check together")
 
+        if config.get("provision") and not os.environ.get("GRAFANA_API_TOKEN"):
+            errors.append(
+                "Provisioning requires GRAFANA_API_TOKEN environment variable"
+            )
+
         spec_input = config.get("spec")
         if spec_input is None:
             # Already caught by required-field check in validate_config
@@ -160,7 +186,8 @@ class DashboardCreatorWorkflow(WorkflowBase):
         7. Compile Jsonnet (DC-105)
         8. Validate JSON (DC-106)
         9. Persist output (DC-107) — unless dry_run/check
-        10. Return WorkflowResult with artifacts
+        10. Provision to Grafana (DC-203) — if provision=True
+        11. Return WorkflowResult with artifacts
         """
         started_at_ns = time.monotonic()
         step_results: List[StepResult] = []
@@ -327,8 +354,42 @@ class DashboardCreatorWorkflow(WorkflowBase):
             output=f"Written to {persist_result.json_path}",
         ))
 
-        self._emit_progress(on_progress, 10, 10, "Complete")
+        # 10. Provision to Grafana (DC-203)
+        dashboard_url = None
+        should_provision = config.get("provision", False) and not is_dry_run and not is_check
+        if should_provision:
+            self._emit_progress(on_progress, 9, 11, "Provisioning to Grafana")
+            try:
+                from startd8.dashboard_creator.grafana_client import GrafanaClient
+                from startd8.dashboard_creator.provisioning import provision_dashboard
 
+                grafana_url = config.get("grafana_url", "")
+                allow_insecure = config.get("allow_insecure", False)
+                client = GrafanaClient(grafana_url, allow_insecure=allow_insecure)
+                prov_result = provision_dashboard(json_result.dashboard_json, client)
+
+                if prov_result.success:
+                    dashboard_url = prov_result.dashboard_url
+                    step_results.append(StepResult(
+                        step_name="provision",
+                        output=f"Provisioned: {dashboard_url}",
+                    ))
+                else:
+                    logger.warning("Provisioning failed: %s", prov_result.error)
+                    step_results.append(StepResult(
+                        step_name="provision",
+                        output=f"Provisioning failed: {prov_result.error}",
+                    ))
+            except Exception as exc:
+                logger.warning("Provisioning error: %s", exc)
+                step_results.append(StepResult(
+                    step_name="provision",
+                    output=f"Provisioning error: {exc}",
+                ))
+
+        self._emit_progress(on_progress, 11, 11, "Complete")
+
+        panel_count = sum(1 for p in spec.panels if p.type != PanelType.ROW)
         total_ms = int((time.monotonic() - started_at_ns) * 1000)
         return WorkflowResult(
             workflow_id=self.metadata.workflow_id,
@@ -342,6 +403,8 @@ class DashboardCreatorWorkflow(WorkflowBase):
                     else None
                 ),
                 "jsonnet_source": jsonnet_source,
+                "dashboard_url": dashboard_url,
+                "panel_count": panel_count,
             },
             steps=step_results,
             metrics=WorkflowMetrics(

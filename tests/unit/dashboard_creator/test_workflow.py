@@ -199,3 +199,97 @@ class TestWorkflowExecution:
         result = workflow.run({"spec": {"panels": []}})  # Empty panels
         assert result.success is False
         assert "failed" in result.error.lower() or "validation" in result.error.lower()
+
+    def test_full_run_includes_panel_count(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain, compiled_json, tmp_path
+    ):
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin):
+            with patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain):
+                with patch("startd8.dashboard_creator.workflow.compile_jsonnet_string") as mock_compile:
+                    mock_compile.return_value = MagicMock(
+                        json_str=compiled_json,
+                        duration_ms=10,
+                        backend="binary",
+                    )
+                    result = workflow.run({
+                        "spec": valid_spec,
+                        "output_dir": str(tmp_path),
+                    })
+                    assert result.success is True
+                    assert result.output["panel_count"] == 1
+                    assert result.output["dashboard_url"] is None
+
+
+# ---------------------------------------------------------------------------
+# Provisioning integration
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowProvisioning:
+    def test_provision_without_token_fails_validation(self, workflow, valid_spec, monkeypatch):
+        monkeypatch.delenv("GRAFANA_API_TOKEN", raising=False)
+        result = workflow.validate_config({
+            "spec": valid_spec,
+            "provision": True,
+        })
+        assert not result.valid
+        assert any("GRAFANA_API_TOKEN" in e for e in result.errors)
+
+    def test_provision_calls_grafana(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain, compiled_json,
+        tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("GRAFANA_API_TOKEN", "test-token")
+
+        mock_prov_result = MagicMock()
+        mock_prov_result.success = True
+        mock_prov_result.dashboard_url = "https://grafana.local/d/test-uid/test"
+
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain), \
+             patch("startd8.dashboard_creator.workflow.compile_jsonnet_string") as mock_compile, \
+             patch("startd8.dashboard_creator.grafana_client.GrafanaClient") as MockClient, \
+             patch("startd8.dashboard_creator.provisioning.provision_dashboard", return_value=mock_prov_result):
+            mock_compile.return_value = MagicMock(
+                json_str=compiled_json, duration_ms=10, backend="binary",
+            )
+            result = workflow.run({
+                "spec": valid_spec,
+                "output_dir": str(tmp_path),
+                "provision": True,
+                "grafana_url": "https://grafana.local",
+            })
+            assert result.success is True
+            assert result.output["dashboard_url"] == "https://grafana.local/d/test-uid/test"
+            assert any(s.step_name == "provision" for s in result.steps)
+
+    def test_provision_failure_does_not_fail_workflow(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain, compiled_json,
+        tmp_path, monkeypatch,
+    ):
+        monkeypatch.setenv("GRAFANA_API_TOKEN", "test-token")
+
+        mock_prov_result = MagicMock()
+        mock_prov_result.success = False
+        mock_prov_result.error = "Connection refused"
+
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain), \
+             patch("startd8.dashboard_creator.workflow.compile_jsonnet_string") as mock_compile, \
+             patch("startd8.dashboard_creator.grafana_client.GrafanaClient") as MockClient, \
+             patch("startd8.dashboard_creator.provisioning.provision_dashboard", return_value=mock_prov_result):
+            mock_compile.return_value = MagicMock(
+                json_str=compiled_json, duration_ms=10, backend="binary",
+            )
+            result = workflow.run({
+                "spec": valid_spec,
+                "output_dir": str(tmp_path),
+                "provision": True,
+                "grafana_url": "https://grafana.local",
+            })
+            # Workflow succeeds even though provisioning failed
+            assert result.success is True
+            assert result.output["dashboard_url"] is None
+            prov_step = [s for s in result.steps if s.step_name == "provision"]
+            assert len(prov_step) == 1
+            assert "failed" in prov_step[0].output.lower()
