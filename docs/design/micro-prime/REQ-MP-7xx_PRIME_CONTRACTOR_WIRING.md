@@ -66,7 +66,7 @@ Micro Prime operates on skeleton files produced by `DeterministicFileAssembler` 
 
 ### REQ-MP-700: CLI Flags for Micro Prime Selection
 
-**Status:** planned
+**Status:** DONE
 **Priority:** P1
 **Depends on:** REQ-MP-701, REQ-MP-702, REQ-MP-703
 

@@ -103,6 +103,38 @@ class TestEnableComplexityRouting:
         assert wf._complexity_config is None
         assert wf._complexity_router is None
 
+    def test_trivial_generator_wired(self):
+        """REQ-MP-700: trivial_generator param routes TRIVIAL tier."""
+        wf, default_gen = _make_workflow()
+        trivial_gen = MagicMock()
+        wf.enable_complexity_routing(trivial_generator=trivial_gen)
+        router = wf._complexity_router
+        assert router.select(ComplexityTier.TRIVIAL) is trivial_gen
+        assert router.select(ComplexityTier.MODERATE) is default_gen
+
+    def test_simple_generator_wired(self):
+        """REQ-MP-700: simple_generator param routes SIMPLE tier."""
+        wf, default_gen = _make_workflow()
+        simple_gen = MagicMock()
+        wf.enable_complexity_routing(simple_generator=simple_gen)
+        router = wf._complexity_router
+        assert router.select(ComplexityTier.SIMPLE) is simple_gen
+        assert router.select(ComplexityTier.MODERATE) is default_gen
+
+    def test_both_low_tier_generators_wired(self):
+        """REQ-MP-700: both trivial and simple generators coexist with defaults."""
+        wf, default_gen = _make_workflow()
+        micro_prime_gen = MagicMock()
+        wf.enable_complexity_routing(
+            trivial_generator=micro_prime_gen,
+            simple_generator=micro_prime_gen,
+        )
+        router = wf._complexity_router
+        assert router.select(ComplexityTier.TRIVIAL) is micro_prime_gen
+        assert router.select(ComplexityTier.SIMPLE) is micro_prime_gen
+        assert router.select(ComplexityTier.MODERATE) is default_gen
+        assert router.select(ComplexityTier.COMPLEX) is default_gen
+
 
 # ── develop_feature with complexity routing ──────────────────────────
 
@@ -241,3 +273,45 @@ class TestDevelopFeatureRouting:
         assert feature.metadata["_complexity_tier"] == "complex"
         assert "blast_radius" in feature.metadata["_complexity_reason"]
         assert feature.metadata["_complexity_signals"]["blast_radius"] == 10
+
+    @_apply_develop_patches
+    def test_simple_feature_uses_simple_generator(self, *_mocks):
+        """REQ-MP-700: SIMPLE-tier features route to simple_generator."""
+        wf, default_gen = _make_workflow()
+        wf._context_strategy = MagicMock()
+        wf._context_strategy.resolve_task_context.return_value = {}
+        wf._context_strategy.mode = "standalone"
+        wf.queue.start_feature = MagicMock()
+
+        micro_prime_gen = MagicMock()
+        micro_prime_gen.generate.return_value = GenerationResult(
+            success=True,
+            generated_files=[Path("out.py")],
+            cost_usd=0.001,
+            input_tokens=20,
+            output_tokens=30,
+            model="micro-prime",
+        )
+
+        wf.enable_complexity_routing(simple_generator=micro_prime_gen)
+
+        feature = _make_feature(metadata={})
+        feature.generated_files = []
+
+        # SIMPLE: single new file, small LOC, full manifest coverage, no callers
+        with patch(
+            "startd8.complexity.extract_signals_from_feature",
+            return_value=TaskComplexitySignals(
+                target_file_count=1,
+                estimated_loc=20,
+                edit_mode="create",
+                manifest_coverage="full",
+                blast_radius=0,
+                caller_count=0,
+            ),
+        ):
+            wf.develop_feature(feature)
+
+        micro_prime_gen.generate.assert_called_once()
+        default_gen.generate.assert_not_called()
+        assert feature.metadata["_complexity_tier"] == "simple"

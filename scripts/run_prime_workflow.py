@@ -205,6 +205,27 @@ def main() -> int:
         "--complexity-loc-simple-max", type=int, default=None,
         help="Override max LOC for SIMPLE tier (default: 150)",
     )
+    # Micro Prime local generation (REQ-MP-700)
+    parser.add_argument(
+        "--micro-prime", action="store_true",
+        help="Enable Micro Prime as primary generator with LeadContractor fallback",
+    )
+    parser.add_argument(
+        "--micro-prime-model", default=None,
+        help="Ollama model name for Micro Prime (default: startd8-coder)",
+    )
+    parser.add_argument(
+        "--micro-prime-max-tokens", type=int, default=None,
+        help="Max output tokens per element for Micro Prime (default: 512)",
+    )
+    parser.add_argument(
+        "--micro-prime-no-templates", action="store_true",
+        help="Disable Micro Prime template registry (force all through Ollama)",
+    )
+    parser.add_argument(
+        "--micro-prime-no-repair", action="store_true",
+        help="Disable Micro Prime repair pipeline",
+    )
 
     args = parser.parse_args()
 
@@ -380,6 +401,34 @@ def main() -> int:
 
     code_generator = LeadContractorCodeGenerator(**gen_kwargs)
 
+    # Wire Micro Prime wrapping LeadContractor (REQ-MP-700)
+    if args.micro_prime:
+        from startd8.micro_prime.models import MicroPrimeConfig
+        from startd8.micro_prime.prime_adapter import MicroPrimeCodeGenerator
+
+        mp_config_kwargs: dict[str, Any] = {}
+        if args.micro_prime_model is not None:
+            mp_config_kwargs["model"] = args.micro_prime_model
+        if args.micro_prime_max_tokens is not None:
+            mp_config_kwargs["max_tokens"] = args.micro_prime_max_tokens
+        if args.micro_prime_no_templates:
+            mp_config_kwargs["templates_enabled"] = False
+        if args.micro_prime_no_repair:
+            mp_config_kwargs["repair_enabled"] = False
+
+        mp_config = MicroPrimeConfig(**mp_config_kwargs)
+        code_generator = MicroPrimeCodeGenerator(
+            config=mp_config,
+            fallback=code_generator,
+            output_dir=output_dir / "generated",
+        )
+        logger.info(
+            "Micro Prime enabled: model=%s, templates=%s, repair=%s",
+            mp_config.model,
+            mp_config.templates_enabled,
+            mp_config.repair_enabled,
+        )
+
     # ------------------------------------------------------------------
     # Build workflow
     # ------------------------------------------------------------------
@@ -414,9 +463,14 @@ def main() -> int:
             cr_config = ComplexityRoutingConfig(
                 loc_simple_max=args.complexity_loc_simple_max,
             )
+        # REQ-MP-700: When both --micro-prime and --complexity-routing are set,
+        # route TRIVIAL/SIMPLE tiers through MicroPrimeCodeGenerator.
+        mp_generator = code_generator if args.micro_prime else None
         workflow.enable_complexity_routing(
             config=cr_config,
             tier3_agent=args.tier3_agent,
+            trivial_generator=mp_generator,
+            simple_generator=mp_generator,
         )
 
     # Wire validation overrides from CLI flags (Phase 5: REQ-PEM-014)
@@ -484,6 +538,8 @@ def main() -> int:
     logger.info("Output dir: %s", output_dir)
     logger.debug("Execution mode: %s (also logged by load_seed_context)", workflow.execution_mode)
     logger.info("Dry run: %s", args.dry_run)
+    if args.micro_prime:
+        logger.info("Micro Prime: enabled (model=%s)", args.micro_prime_model or "default")
     if workflow._validation_override is not None:
         logger.info("Validation override: %s", workflow._validation_override)
     if workflow.strict_validation:

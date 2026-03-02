@@ -630,6 +630,8 @@ class PrimeContractorWorkflow:
         self,
         config: Optional[Any] = None,
         tier3_agent: Optional[str] = None,
+        trivial_generator: Optional[Any] = None,
+        simple_generator: Optional[Any] = None,
     ) -> None:
         """Enable per-feature complexity-based model routing.
 
@@ -640,6 +642,12 @@ class PrimeContractorWorkflow:
                 When ``None`` the default code generator is used for all
                 tiers (routing still classifies, but doesn't change the
                 generator).
+            trivial_generator: Code generator for TRIVIAL tier elements
+                (e.g. MicroPrimeCodeGenerator).  Falls back to moderate
+                when ``None``.
+            simple_generator: Code generator for SIMPLE tier elements
+                (e.g. MicroPrimeCodeGenerator).  Falls back to moderate
+                when ``None``.
         """
         from startd8.complexity import (
             ComplexityRoutingConfig,
@@ -665,12 +673,16 @@ class PrimeContractorWorkflow:
             )
 
         self._complexity_router = ComplexityRouter(
+            trivial_generator=trivial_generator,
+            simple_generator=simple_generator,
             moderate_generator=self.code_generator,
             complex_generator=complex_generator or self.code_generator,
         )
         logger.info(
-            "Complexity routing enabled (tier3_agent=%s)",
+            "Complexity routing enabled (tier3_agent=%s, trivial=%s, simple=%s)",
             tier3_agent or "default",
+            type(trivial_generator).__name__ if trivial_generator else "default",
+            type(simple_generator).__name__ if simple_generator else "default",
         )
 
     # -----------------------------------------------------------------------
