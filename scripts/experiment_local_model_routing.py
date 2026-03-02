@@ -1296,7 +1296,7 @@ async def _run_sdk_engine_experiment(
     manifest: ForwardManifest,
     args: argparse.Namespace,
 ) -> ExperimentResult:
-    """Run experiment using the SDK MicroPrimeEngine (--use-sdk-engine).
+    """Run experiment using the SDK MicroPrimeEngine (default path).
 
     Maps SDK engine results back to the script's ExperimentResult format
     for unified reporting and A/B comparison with the inline pipeline.
@@ -1464,10 +1464,17 @@ async def run_experiment(args: argparse.Namespace) -> ExperimentResult:
         )
         return result
 
-    # ── SDK Engine path ──
-    if getattr(args, "use_sdk_engine", False):
-        logger.info("Using SDK MicroPrimeEngine (--use-sdk-engine)")
+    # ── Routing: SDK engine (default) vs inline pipeline (legacy) ──
+    if getattr(args, "use_inline_pipeline", False):
+        logger.info("Using legacy inline pipeline (--use-inline-pipeline)")
+    else:
+        logger.info("Using SDK MicroPrimeEngine (default)")
         return await _run_sdk_engine_experiment(manifest, args)
+
+    # -----------------------------------------------------------------------
+    # Legacy inline pipeline (deprecated — use SDK engine default)
+    # Retained for A/B comparison during validation period.
+    # -----------------------------------------------------------------------
 
     # ── Collect elements ──
     elements = collect_elements(manifest, tasks)
@@ -1642,10 +1649,11 @@ def print_report(result: ExperimentResult, args: argparse.Namespace) -> None:
     print(f"\n  Seed: {args.seed}")
     if hasattr(args, "ollama_model") and args.ollama_model:
         print(f"  Ollama model: {args.ollama_model}")
-    if getattr(args, "use_sdk_engine", False):
-        print(f"  Engine: SDK MicroPrimeEngine")
-    else:
+    if getattr(args, "use_inline_pipeline", False):
+        print(f"  Engine: inline pipeline (legacy)")
         print(f"  Classifier: {'heuristic' if args.heuristic_classify else 'opus'}")
+    else:
+        print(f"  Engine: SDK MicroPrimeEngine")
 
     print(f"\n  --- Classification ---")
     print(f"  Total elements:  {result.total_elements}")
@@ -1733,7 +1741,7 @@ def print_report(result: ExperimentResult, args: argparse.Namespace) -> None:
         report = {
             "seed": str(args.seed),
             "ollama_model": getattr(args, "ollama_model", None),
-            "engine": "sdk" if getattr(args, "use_sdk_engine", False) else "inline",
+            "engine": "inline" if getattr(args, "use_inline_pipeline", False) else "sdk",
             "classifier": "heuristic" if args.heuristic_classify else "opus",
             "total_elements": result.total_elements,
             "classified": result.classified,
@@ -1840,9 +1848,14 @@ def parse_args() -> argparse.Namespace:
         help="Enable debug logging",
     )
     parser.add_argument(
-        "--use-sdk-engine", action="store_true",
-        help="Use MicroPrimeEngine from the SDK instead of inline logic. "
-             "Enables A/B comparison during transition.",
+        "--use-sdk-engine", action="store_true", default=True,
+        help="Use MicroPrimeEngine from the SDK (default: True). "
+             "Kept for backward compatibility — this is now the default.",
+    )
+    parser.add_argument(
+        "--use-inline-pipeline", action="store_true", default=False,
+        help="Use the legacy inline pipeline instead of the SDK engine. "
+             "Retained for A/B comparison during validation period.",
     )
     return parser.parse_args()
 
