@@ -194,24 +194,24 @@ def _render_variable(variable: VariableSpec) -> str:
         if variable.multi:
             args.append("multi=true")
 
-    # Extended variable options
-    if variable.includeAll:
-        args.append("includeAll=true")
-    if variable.allValue is not None:
-        args.append(f"allValue='{_escape_jsonnet_string(variable.allValue)}'")
-    if variable.hide != 0:
-        args.append(f"hide={variable.hide}")
-    if variable.skipUrlSync:
-        args.append("skipUrlSync=true")
-
     call = f"variables.{builder}({', '.join(args)})"
 
-    # Default value → merge block with current: {text, value}
+    # Extended options + default go in a merge block (not constructor args)
+    merge_fields: List[str] = []
+    if variable.includeAll:
+        merge_fields.append("includeAll: true")
+    if variable.allValue is not None:
+        merge_fields.append(f"allValue: '{_escape_jsonnet_string(variable.allValue)}'")
+    if variable.hide != 0:
+        merge_fields.append(f"hide: {variable.hide}")
+    if variable.skipUrlSync:
+        merge_fields.append("skipUrlSync: true")
     if variable.default is not None:
         escaped = _escape_jsonnet_string(variable.default)
-        call += (
-            f" {{ current: {{ text: '{escaped}', value: '{escaped}' }} }}"
-        )
+        merge_fields.append(f"current: {{ text: '{escaped}', value: '{escaped}' }}")
+
+    if merge_fields:
+        call += " { " + ", ".join(merge_fields) + " }"
 
     return call
 

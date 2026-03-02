@@ -472,7 +472,7 @@ class TestRenderVariableExtensions:
             includeAll=True,
         )
         result = _render_variable(var)
-        assert "includeAll=true" in result
+        assert "includeAll: true" in result
 
     def test_allValue_emitted(self):
         var = VariableSpec(
@@ -480,28 +480,28 @@ class TestRenderVariableExtensions:
             includeAll=True, allValue=".*",
         )
         result = _render_variable(var)
-        assert "allValue='.*'" in result
+        assert "allValue: '.*'" in result
 
     def test_hide_emitted(self):
         var = VariableSpec(
             type="prometheusDatasource", name="ds", hide=2,
         )
         result = _render_variable(var)
-        assert "hide=2" in result
+        assert "hide: 2" in result
 
     def test_hide_zero_not_emitted(self):
         var = VariableSpec(
             type="prometheusDatasource", name="ds", hide=0,
         )
         result = _render_variable(var)
-        assert "hide=" not in result
+        assert "hide:" not in result
 
     def test_skipUrlSync_emitted(self):
         var = VariableSpec(
             type="prometheusDatasource", name="ds", skipUrlSync=True,
         )
         result = _render_variable(var)
-        assert "skipUrlSync=true" in result
+        assert "skipUrlSync: true" in result
 
     def test_default_emits_current_merge_block(self):
         var = VariableSpec(
