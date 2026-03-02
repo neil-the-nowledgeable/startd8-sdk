@@ -31,6 +31,24 @@ class EscalationReason(str, Enum):
     REPAIR_EXHAUSTED = "repair_exhausted"
     EMPTY_RESPONSE = "empty_response"
     TIMEOUT = "timeout"
+    CIRCUIT_BREAKER = "circuit_breaker"
+
+
+class RepairAttribution(BaseModel):
+    """Per-step repair attribution (REQ-MP-601).
+
+    Granular boolean/int fields tracking what each repair step actually did
+    during a pipeline run. Populated by ``build_repair_attribution()`` in
+    the repair module from the list of ``RepairStepResult`` objects.
+    """
+
+    fence_stripped: bool = False
+    trimmed: bool = False
+    nodes_removed: int = 0
+    bare_wrapped: bool = False
+    indent_source: str = ""
+    params_changed: int = 0
+    return_type_restored: bool = False
 
 
 @dataclass
@@ -68,6 +86,7 @@ class ElementResult:
     escalation: Optional[EscalationResult] = None
     template_used: bool = False
     repair_steps_applied: list[str] = field(default_factory=list)
+    repair_attribution: Optional[RepairAttribution] = None
     generation_time_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -143,6 +162,7 @@ class MicroPrimeElementMetrics(BaseModel):
     success: bool
     template_used: bool = False
     repair_steps: list[str] = Field(default_factory=list)
+    repair_attribution: Optional[RepairAttribution] = None
     generation_time_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0

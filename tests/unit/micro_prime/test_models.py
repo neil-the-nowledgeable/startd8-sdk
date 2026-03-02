@@ -12,6 +12,7 @@ from startd8.micro_prime.models import (
     MicroPrimeConfig,
     MicroPrimeCostReport,
     MicroPrimeElementMetrics,
+    RepairAttribution,
     RepairStepResult,
     SeedResult,
     TierClassification,
@@ -31,7 +32,7 @@ class TestTierClassification:
 
 class TestEscalationReason:
     def test_all_reasons(self):
-        assert len(EscalationReason) == 6
+        assert len(EscalationReason) == 7
         assert EscalationReason.AST_FAILURE.value == "ast_failure"
 
 
@@ -158,6 +159,66 @@ class TestMicroPrimeCostReport:
         assert report.success_rate == 0.8
 
 
+class TestRepairAttribution:
+    """Tests for RepairAttribution model (REQ-MP-601)."""
+
+    def test_defaults(self):
+        attr = RepairAttribution()
+        assert attr.fence_stripped is False
+        assert attr.trimmed is False
+        assert attr.nodes_removed == 0
+        assert attr.bare_wrapped is False
+        assert attr.indent_source == ""
+        assert attr.params_changed == 0
+        assert attr.return_type_restored is False
+
+    def test_custom_values(self):
+        attr = RepairAttribution(
+            fence_stripped=True,
+            trimmed=True,
+            nodes_removed=3,
+            bare_wrapped=True,
+            indent_source="dedent",
+            params_changed=1,
+            return_type_restored=True,
+        )
+        assert attr.fence_stripped is True
+        assert attr.trimmed is True
+        assert attr.nodes_removed == 3
+        assert attr.bare_wrapped is True
+        assert attr.indent_source == "dedent"
+        assert attr.params_changed == 1
+        assert attr.return_type_restored is True
+
+    def test_serialization(self):
+        attr = RepairAttribution(fence_stripped=True, nodes_removed=2)
+        d = attr.model_dump()
+        assert d["fence_stripped"] is True
+        assert d["nodes_removed"] == 2
+        assert d["trimmed"] is False
+
+    def test_optional_on_element_result(self):
+        result = ElementResult(
+            element_name="foo",
+            file_path="src/foo.py",
+            tier=TierClassification.SIMPLE,
+            success=True,
+        )
+        assert result.repair_attribution is None
+
+    def test_present_on_element_result(self):
+        attr = RepairAttribution(fence_stripped=True)
+        result = ElementResult(
+            element_name="foo",
+            file_path="src/foo.py",
+            tier=TierClassification.SIMPLE,
+            success=True,
+            repair_attribution=attr,
+        )
+        assert result.repair_attribution is not None
+        assert result.repair_attribution.fence_stripped is True
+
+
 class TestMicroPrimeElementMetrics:
     def test_serialization(self):
         metrics = MicroPrimeElementMetrics(
@@ -170,3 +231,30 @@ class TestMicroPrimeElementMetrics:
         d = metrics.model_dump()
         assert d["element_name"] == "get_name"
         assert d["tier"] == "simple"
+
+    def test_serialization_with_repair_attribution(self):
+        attr = RepairAttribution(
+            fence_stripped=True,
+            trimmed=True,
+            nodes_removed=2,
+        )
+        metrics = MicroPrimeElementMetrics(
+            element_name="get_name",
+            file_path="src/utils.py",
+            tier=TierClassification.SIMPLE,
+            success=True,
+            repair_attribution=attr,
+        )
+        d = metrics.model_dump()
+        assert d["repair_attribution"] is not None
+        assert d["repair_attribution"]["fence_stripped"] is True
+        assert d["repair_attribution"]["nodes_removed"] == 2
+
+    def test_repair_attribution_none_by_default(self):
+        metrics = MicroPrimeElementMetrics(
+            element_name="get_name",
+            file_path="src/utils.py",
+            tier=TierClassification.SIMPLE,
+            success=True,
+        )
+        assert metrics.repair_attribution is None

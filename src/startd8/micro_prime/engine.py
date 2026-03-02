@@ -31,12 +31,46 @@ from startd8.micro_prime.models import (
     TierClassification,
 )
 from startd8.micro_prime.prompt_builder import build_body_prompt, find_few_shot_examples
-from startd8.micro_prime.repair import run_repair_pipeline
+from startd8.micro_prime.repair import build_repair_attribution, run_repair_pipeline
 from startd8.micro_prime.splicer import splice_body_into_skeleton
 from startd8.micro_prime.templates import TemplateRegistry
 from startd8.utils.code_manifest import ElementKind
 
 logger = get_logger(__name__)
+
+
+def build_escalation_context(
+    element_name: str,
+    file_path: str,
+    tier: TierClassification,
+    reason: EscalationReason,
+    detail: str,
+    last_code: Optional[str] = None,
+    last_error: Optional[str] = None,
+) -> EscalationResult:
+    """Build a reusable EscalationResult for element escalation.
+
+    Centralises escalation payload construction so that all call-sites
+    produce consistently structured results.
+
+    Args:
+        element_name: Name of the element being escalated.
+        file_path: Source file path for the element.
+        tier: Tier classification at time of escalation.
+        reason: Why the element is being escalated.
+        detail: Human-readable detail string.
+        last_code: Optional last generated code before escalation.
+        last_error: Optional error string.
+
+    Returns:
+        An EscalationResult populated with the provided context.
+    """
+    return EscalationResult(
+        reason=reason,
+        detail=detail,
+        last_code=last_code,
+        last_error=last_error,
+    )
 
 
 class MicroPrimeEngine:
@@ -51,6 +85,8 @@ class MicroPrimeEngine:
         metrics_collector: Optional metrics collector for observability.
     """
 
+    _CIRCUIT_BREAKER_THRESHOLD: int = 3
+
     def __init__(
         self,
         config: Optional[MicroPrimeConfig] = None,
@@ -63,6 +99,11 @@ class MicroPrimeEngine:
         )
         self._metrics = metrics_collector or MetricsCollector()
         self._completed: list[dict[str, Any]] = []
+        # Circuit breaker state (R3-S2)
+        self._consecutive_failures: int = 0
+        self._circuit_open: bool = False
+        # Element fingerprint success cache (R3-S4)
+        self._success_cache: set[str] = set()
 
     @property
     def config(self) -> MicroPrimeConfig:
@@ -71,6 +112,19 @@ class MicroPrimeEngine:
     @property
     def metrics_collector(self) -> MetricsCollector:
         return self._metrics
+
+    def reset_circuit_breaker(self) -> None:
+        """Reset the circuit breaker to closed state.
+
+        Callers should invoke this between files or runs to allow
+        local generation to resume after transient failures.
+        """
+        self._consecutive_failures = 0
+        self._circuit_open = False
+
+    def clear_cache(self) -> None:
+        """Clear the element fingerprint success cache."""
+        self._success_cache.clear()
 
     def process_element(
         self,
@@ -104,6 +158,51 @@ class MicroPrimeEngine:
             "Classified %s as %s: %s", element.name, tier.value, reasoning,
         )
 
+        # Step 1a: Check success cache (R3-S4) — skip re-generation
+        fingerprint = f"{element.name}:{file_path}:{tier.value}"
+        if fingerprint in self._success_cache:
+            logger.debug(
+                "Cache hit for %s — returning cached success", fingerprint,
+            )
+            result = ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=tier,
+                success=True,
+            )
+            result.tier = tier
+            self._metrics.record(result)
+            return result
+
+        # Step 1b: Circuit breaker (R3-S2) — escalate immediately if open
+        if self._circuit_open and tier in (
+            TierClassification.TRIVIAL,
+            TierClassification.SIMPLE,
+        ):
+            logger.warning(
+                "Circuit breaker open — escalating %s without local attempt",
+                element.name,
+            )
+            result = ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=tier,
+                success=False,
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=tier,
+                    reason=EscalationReason.CIRCUIT_BREAKER,
+                    detail=(
+                        f"Circuit breaker tripped after "
+                        f"{self._CIRCUIT_BREAKER_THRESHOLD} consecutive failures"
+                    ),
+                ),
+            )
+            result.tier = tier
+            self._metrics.record(result)
+            return result
+
         # Step 2: Route by tier
         if tier == TierClassification.TRIVIAL:
             result = self._handle_trivial(element, file_spec, skeleton, file_path)
@@ -118,11 +217,30 @@ class MicroPrimeEngine:
                 file_path=file_path,
                 tier=tier,
                 success=False,
-                escalation=EscalationResult(
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=tier,
                     reason=EscalationReason.TIER_TOO_HIGH,
                     detail=f"Tier {tier.value}: {reasoning}",
                 ),
             )
+
+        # Step 3: Update circuit breaker and cache based on result
+        if result.success:
+            self._consecutive_failures = 0
+            self._success_cache.add(fingerprint)
+        elif tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE):
+            self._consecutive_failures += 1
+            if (
+                self._consecutive_failures >= self._CIRCUIT_BREAKER_THRESHOLD
+                and not self._circuit_open
+            ):
+                self._circuit_open = True
+                logger.warning(
+                    "Circuit breaker tripped: %d consecutive local failures",
+                    self._consecutive_failures,
+                )
 
         result.tier = tier
         self._metrics.record(result)
@@ -191,7 +309,10 @@ class MicroPrimeEngine:
                 else:
                     # Splice failed — mark as escalated
                     result.success = False
-                    result.escalation = EscalationResult(
+                    result.escalation = build_escalation_context(
+                        element_name=element.name,
+                        file_path=file_spec.file,
+                        tier=result.tier,
                         reason=EscalationReason.STRUCTURAL_MISMATCH,
                         detail="Body splicing into skeleton failed",
                         last_code=result.code,
@@ -312,7 +433,10 @@ class MicroPrimeEngine:
                 tier=TierClassification.SIMPLE,
                 success=False,
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
-                escalation=EscalationResult(
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
                     reason=EscalationReason.EMPTY_RESPONSE,
                     detail=str(e),
                 ),
@@ -327,7 +451,10 @@ class MicroPrimeEngine:
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                escalation=EscalationResult(
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
                     reason=EscalationReason.EMPTY_RESPONSE,
                     detail="Empty response from Ollama",
                 ),
@@ -335,11 +462,13 @@ class MicroPrimeEngine:
 
         # Run repair pipeline
         repair_steps: list[str] = []
+        repair_attribution = None
         if self._config.repair_enabled:
             code, step_results = run_repair_pipeline(code, element, file_spec)
             repair_steps = [
                 r.step_name for r in step_results if r.modified
             ]
+            repair_attribution = build_repair_attribution(step_results)
 
         # Structural verification (REQ-MP-512)
         if not _structural_verify(code, element):
@@ -350,10 +479,14 @@ class MicroPrimeEngine:
                 success=False,
                 code=code,
                 repair_steps_applied=repair_steps,
+                repair_attribution=repair_attribution,
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
-                escalation=EscalationResult(
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
                     reason=EscalationReason.AST_FAILURE,
                     detail="Structural verification failed after repair",
                     last_code=code,
@@ -381,6 +514,7 @@ class MicroPrimeEngine:
             success=True,
             code=code,
             repair_steps_applied=repair_steps,
+            repair_attribution=repair_attribution,
             generation_time_ms=gen_time,
             input_tokens=input_tokens,
             output_tokens=output_tokens,

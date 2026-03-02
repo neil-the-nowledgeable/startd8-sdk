@@ -46,6 +46,7 @@ class MetricsCollector:
                 success=result.success,
                 template_used=result.template_used,
                 repair_steps=result.repair_steps_applied,
+                repair_attribution=result.repair_attribution,
                 generation_time_ms=result.generation_time_ms,
                 input_tokens=result.input_tokens,
                 output_tokens=result.output_tokens,

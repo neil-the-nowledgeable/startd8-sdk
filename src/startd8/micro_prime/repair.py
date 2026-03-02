@@ -22,7 +22,7 @@ from typing import Optional
 
 from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec
 from startd8.logging_config import get_logger
-from startd8.micro_prime.models import RepairStepResult
+from startd8.micro_prime.models import RepairAttribution, RepairStepResult
 from startd8.utils.code_extraction import extract_code_from_response
 from startd8.utils.code_manifest import ElementKind
 
@@ -488,6 +488,41 @@ def run_repair_pipeline(
                 current = result.code
 
     return current, results
+
+
+def build_repair_attribution(
+    step_results: list[RepairStepResult],
+) -> RepairAttribution:
+    """Build a ``RepairAttribution`` from a list of step results (REQ-MP-601).
+
+    Maps each step's ``modified`` flag and ``metrics`` dict into the
+    granular attribution fields.
+    """
+    attr = RepairAttribution()
+
+    for r in step_results:
+        if not r.modified:
+            continue
+
+        if r.step_name == "fence_strip":
+            attr.fence_stripped = True
+
+        elif r.step_name == "over_generation_trim":
+            attr.trimmed = True
+            attr.nodes_removed = r.metrics.get("nodes_removed", 0)
+
+        elif r.step_name == "bare_statement_wrap":
+            attr.bare_wrapped = True
+
+        elif r.step_name == "indent_normalize":
+            attr.indent_source = r.metrics.get("strategy", "unknown")
+
+        elif r.step_name == "signature_reconcile":
+            replaced_lines = r.metrics.get("replaced_def_lines", 0)
+            attr.params_changed = replaced_lines
+            attr.return_type_restored = replaced_lines > 0
+
+    return attr
 
 
 # ═══════════════════════════════════════════════════════════════════════════

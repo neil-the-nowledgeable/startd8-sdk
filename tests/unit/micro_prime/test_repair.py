@@ -7,6 +7,7 @@ import ast
 import pytest
 
 from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec, ForwardImportSpec
+from startd8.micro_prime.models import RepairStepResult
 from startd8.micro_prime.repair import (
     _build_def_line,
     _step_ast_validate,
@@ -17,6 +18,7 @@ from startd8.micro_prime.repair import (
     _step_over_generation_trim,
     _step_signature_reconcile,
     _try_parse,
+    build_repair_attribution,
     run_repair_pipeline,
 )
 from startd8.utils.code_manifest import ElementKind, Param, Signature
@@ -288,3 +290,132 @@ class TestTryParse:
     def test_method_without_wrapper(self):
         code = "def foo(self):\n    return 1"
         assert _try_parse(code, is_method=False) is True
+
+
+class TestBuildRepairAttribution:
+    """Tests for build_repair_attribution (REQ-MP-601)."""
+
+    def test_empty_steps_returns_defaults(self):
+        attr = build_repair_attribution([])
+        assert attr.fence_stripped is False
+        assert attr.trimmed is False
+        assert attr.nodes_removed == 0
+        assert attr.bare_wrapped is False
+        assert attr.indent_source == ""
+        assert attr.params_changed == 0
+        assert attr.return_type_restored is False
+
+    def test_fence_strip_attribution(self):
+        steps = [
+            RepairStepResult(
+                step_name="fence_strip",
+                modified=True,
+                code="def foo(): pass",
+                metrics={"had_fences": True},
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.fence_stripped is True
+        assert attr.trimmed is False
+
+    def test_over_generation_trim_attribution(self):
+        steps = [
+            RepairStepResult(
+                step_name="over_generation_trim",
+                modified=True,
+                code="def foo(): pass",
+                metrics={"nodes_removed": 3},
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.trimmed is True
+        assert attr.nodes_removed == 3
+
+    def test_bare_wrap_attribution(self):
+        steps = [
+            RepairStepResult(
+                step_name="bare_statement_wrap",
+                modified=True,
+                code="def foo():\n    return 1",
+                metrics={"wrapped_body_lines": 1},
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.bare_wrapped is True
+
+    def test_indent_normalize_attribution(self):
+        steps = [
+            RepairStepResult(
+                step_name="indent_normalize",
+                modified=True,
+                code="def foo():\n    pass",
+                metrics={"strategy": "dedent"},
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.indent_source == "dedent"
+
+    def test_signature_reconcile_attribution(self):
+        steps = [
+            RepairStepResult(
+                step_name="signature_reconcile",
+                modified=True,
+                code="def foo(x: int) -> str:\n    pass",
+                metrics={"replaced_def_lines": 1},
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.params_changed == 1
+        assert attr.return_type_restored is True
+
+    def test_unmodified_steps_ignored(self):
+        steps = [
+            RepairStepResult(
+                step_name="fence_strip",
+                modified=False,
+                code="def foo(): pass",
+                metrics={"had_fences": False},
+            ),
+            RepairStepResult(
+                step_name="over_generation_trim",
+                modified=False,
+                code="def foo(): pass",
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.fence_stripped is False
+        assert attr.trimmed is False
+
+    def test_multiple_steps_combined(self):
+        steps = [
+            RepairStepResult(
+                step_name="fence_strip",
+                modified=True,
+                code="def foo(): pass",
+                metrics={"had_fences": True},
+            ),
+            RepairStepResult(
+                step_name="over_generation_trim",
+                modified=True,
+                code="def foo(): pass",
+                metrics={"nodes_removed": 2},
+            ),
+            RepairStepResult(
+                step_name="indent_normalize",
+                modified=True,
+                code="def foo():\n    pass",
+                metrics={"strategy": "strip_first+dedent"},
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.fence_stripped is True
+        assert attr.trimmed is True
+        assert attr.nodes_removed == 2
+        assert attr.indent_source == "strip_first+dedent"
+
+    def test_pipeline_returns_attribution(self, simple_function_element, sample_file_spec):
+        """Full pipeline should produce step results usable by build_repair_attribution."""
+        code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
+        _, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        attr = build_repair_attribution(steps)
+        assert attr.fence_stripped is True
