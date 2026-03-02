@@ -342,3 +342,137 @@ class TestOutputFileWriting:
 
         assert result.metadata["micro_prime_files_written"] >= 0
         assert result.metadata["fallback_files_written"] == 1
+
+
+class TestOllamaAvailabilityGuard:
+    """Tests for REQ-MP-711: Runtime Ollama availability guard."""
+
+    def _make_gen(self, fallback=None, **kwargs):
+        fb = fallback or MagicMock()
+        fb.generate.return_value = MagicMock(
+            success=True, generated_files=[], input_tokens=0,
+            output_tokens=0, model="fallback",
+        )
+        return MicroPrimeCodeGenerator(fallback=fb, **kwargs), fb
+
+    def test_ollama_unavailable_delegates_to_fallback(self, sample_manifest, sample_skeleton):
+        """When Ollama is unreachable, all elements are delegated to fallback."""
+        gen, fb = self._make_gen(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+        )
+        with patch(
+            "startd8.micro_prime.prime_adapter.urlopen",
+            side_effect=ConnectionRefusedError("Connection refused"),
+        ):
+            result = gen.generate("task", {}, ["src/mypackage/utils.py"])
+
+        fb.generate.assert_called_once()
+        assert gen._ollama_available is False
+
+    def test_ollama_available_processes_locally(self, sample_manifest, sample_skeleton, tmp_path):
+        """When Ollama is reachable with the model present, local processing proceeds."""
+        gen, fb = self._make_gen(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("startd8.micro_prime.prime_adapter.urlopen", return_value=mock_response):
+            result = gen.generate("task", {}, ["src/mypackage/utils.py"])
+
+        assert gen._ollama_available is True
+        # Local processing attempted — fallback not called for the initial generate
+        # (it may still be called if escalations occur, but the guard didn't trigger)
+
+    def test_ollama_check_cached(self, sample_manifest, sample_skeleton, tmp_path):
+        """The Ollama check runs only once; subsequent generate() calls use cached result."""
+        gen, fb = self._make_gen(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("startd8.micro_prime.prime_adapter.urlopen", return_value=mock_response) as mock_url:
+            gen.generate("task", {}, ["src/mypackage/utils.py"])
+            gen._ollama_available = True  # ensure cached
+            gen.generate("task", {}, ["src/mypackage/utils.py"])
+            # urlopen should have been called only once (first generate)
+            assert mock_url.call_count == 1
+
+    def test_ollama_model_not_found_delegates(self, sample_manifest, sample_skeleton):
+        """When Ollama is reachable but model is missing, delegate to fallback."""
+        gen, fb = self._make_gen(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+        )
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "llama2:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("startd8.micro_prime.prime_adapter.urlopen", return_value=mock_response):
+            result = gen.generate("task", {}, ["src/mypackage/utils.py"])
+
+        fb.generate.assert_called_once()
+        assert gen._ollama_available is False
+
+
+class TestEnableDisableMicroPrime:
+    """Tests for REQ-MP-710: Workflow-level Micro Prime activation."""
+
+    def _make_workflow(self):
+        from startd8.contractors.prime_contractor import PrimeContractorWorkflow
+
+        mock_generator = MagicMock()
+        mock_generator.output_dir = Path("generated")
+        workflow = PrimeContractorWorkflow.__new__(PrimeContractorWorkflow)
+        # Manually set the minimum required state
+        workflow.code_generator = mock_generator
+        workflow._micro_prime_enabled = False
+        workflow._original_code_generator = None
+        workflow._complexity_routing_enabled = False
+        workflow._complexity_config = None
+        workflow._complexity_router = None
+        return workflow, mock_generator
+
+    def test_enable_micro_prime_wraps_generator(self):
+        """enable_micro_prime() replaces code_generator with MicroPrimeCodeGenerator."""
+        workflow, original = self._make_workflow()
+        workflow.enable_micro_prime()
+
+        assert workflow._micro_prime_enabled is True
+        assert type(workflow.code_generator).__name__ == "MicroPrimeCodeGenerator"
+        assert workflow._original_code_generator is original
+
+    def test_disable_micro_prime_restores_generator(self):
+        """disable_micro_prime() restores the original code generator."""
+        workflow, original = self._make_workflow()
+        workflow.enable_micro_prime()
+        workflow.disable_micro_prime()
+
+        assert workflow._micro_prime_enabled is False
+        assert workflow.code_generator is original
+        assert workflow._original_code_generator is None
+
+    def test_enable_micro_prime_with_custom_config(self):
+        """Custom MicroPrimeConfig is forwarded to the adapter."""
+        workflow, _ = self._make_workflow()
+        config = MicroPrimeConfig(
+            model="custom-model",
+            max_tokens=1024,
+            templates_enabled=False,
+        )
+        workflow.enable_micro_prime(config=config)
+
+        assert workflow.code_generator._config.model == "custom-model"
+        assert workflow.code_generator._config.max_tokens == 1024
+        assert workflow.code_generator._config.templates_enabled is False

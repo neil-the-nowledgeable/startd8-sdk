@@ -7,8 +7,12 @@ are delegated to a fallback ``CodeGenerator``.
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from urllib.error import URLError
+from urllib.request import urlopen
 
 from startd8.contractors.protocols import CodeGenerator, GenerationResult
 from startd8.forward_manifest import ForwardManifest
@@ -48,6 +52,7 @@ class MicroPrimeCodeGenerator:
         self._skeletons = skeletons or {}
         self._output_dir = output_dir or Path(".")
         self._engine = MicroPrimeEngine(config=self._config)
+        self._ollama_available: Optional[bool] = None
 
     def generate(
         self,
@@ -81,6 +86,11 @@ class MicroPrimeCodeGenerator:
             logger.warning(
                 "MicroPrimeCodeGenerator: no manifest, delegating to fallback",
             )
+            return self._delegate_to_fallback(task, context, target_files)
+
+        # REQ-MP-711: Ollama availability guard — check once per instance
+        if not self._check_ollama_available():
+            logger.info("Ollama unavailable — delegating all to fallback")
             return self._delegate_to_fallback(task, context, target_files)
 
         # Process target files through the engine
@@ -197,6 +207,49 @@ class MicroPrimeCodeGenerator:
                 )
 
         return skeletons
+
+    def _check_ollama_available(self) -> bool:
+        """Check if Ollama is reachable and the configured model is pulled.
+
+        Result is cached on ``self._ollama_available`` so the HTTP check
+        only fires once per adapter instance.  Uses a 5-second timeout to
+        avoid blocking generation (REQ-MP-711).
+        """
+        if self._ollama_available is not None:
+            return self._ollama_available
+
+        base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+        url = f"{base_url}/api/tags"
+        model_name = self._config.model
+
+        try:
+            with urlopen(url, timeout=5) as response:
+                data = json.loads(response.read().decode())
+
+            model_names: list[str] = []
+            for m in data.get("models", []):
+                name = m.get("name", "")
+                model_names.append(name)
+                if ":" in name:
+                    model_names.append(name.split(":")[0])
+
+            model_base = model_name.split(":")[0]
+            if model_name in model_names or model_base in model_names:
+                self._ollama_available = True
+                return True
+
+            logger.warning(
+                "Ollama model '%s' not found (available: %s)",
+                model_name,
+                sorted(set(model_names)),
+            )
+            self._ollama_available = False
+            return False
+
+        except (ConnectionRefusedError, TimeoutError, URLError, OSError) as exc:
+            logger.warning("Ollama not reachable at %s: %s", base_url, exc)
+            self._ollama_available = False
+            return False
 
     def _delegate_to_fallback(
         self,

@@ -401,34 +401,6 @@ def main() -> int:
 
     code_generator = LeadContractorCodeGenerator(**gen_kwargs)
 
-    # Wire Micro Prime wrapping LeadContractor (REQ-MP-700)
-    if args.micro_prime:
-        from startd8.micro_prime.models import MicroPrimeConfig
-        from startd8.micro_prime.prime_adapter import MicroPrimeCodeGenerator
-
-        mp_config_kwargs: dict[str, Any] = {}
-        if args.micro_prime_model is not None:
-            mp_config_kwargs["model"] = args.micro_prime_model
-        if args.micro_prime_max_tokens is not None:
-            mp_config_kwargs["max_tokens"] = args.micro_prime_max_tokens
-        if args.micro_prime_no_templates:
-            mp_config_kwargs["templates_enabled"] = False
-        if args.micro_prime_no_repair:
-            mp_config_kwargs["repair_enabled"] = False
-
-        mp_config = MicroPrimeConfig(**mp_config_kwargs)
-        code_generator = MicroPrimeCodeGenerator(
-            config=mp_config,
-            fallback=code_generator,
-            output_dir=output_dir / "generated",
-        )
-        logger.info(
-            "Micro Prime enabled: model=%s, templates=%s, repair=%s",
-            mp_config.model,
-            mp_config.templates_enabled,
-            mp_config.repair_enabled,
-        )
-
     # ------------------------------------------------------------------
     # Build workflow
     # ------------------------------------------------------------------
@@ -455,6 +427,24 @@ def main() -> int:
     workflow.load_seed_context(seed_data, cli_mode=args.mode)
     workflow.force_regenerate = args.force_regenerate
 
+    # Wire Micro Prime via workflow API (REQ-MP-710)
+    # Must be called BEFORE enable_complexity_routing() so the router
+    # sees the wrapped generator.
+    if args.micro_prime:
+        from startd8.micro_prime.models import MicroPrimeConfig
+
+        mp_config_kwargs: dict[str, Any] = {}
+        if args.micro_prime_model is not None:
+            mp_config_kwargs["model"] = args.micro_prime_model
+        if args.micro_prime_max_tokens is not None:
+            mp_config_kwargs["max_tokens"] = args.micro_prime_max_tokens
+        if args.micro_prime_no_templates:
+            mp_config_kwargs["templates_enabled"] = False
+        if args.micro_prime_no_repair:
+            mp_config_kwargs["repair_enabled"] = False
+
+        workflow.enable_micro_prime(config=MicroPrimeConfig(**mp_config_kwargs))
+
     # Wire complexity routing from CLI flags (REQ-MP-807)
     if args.complexity_routing:
         cr_config = None
@@ -464,8 +454,8 @@ def main() -> int:
                 loc_simple_max=args.complexity_loc_simple_max,
             )
         # REQ-MP-700: When both --micro-prime and --complexity-routing are set,
-        # route TRIVIAL/SIMPLE tiers through MicroPrimeCodeGenerator.
-        mp_generator = code_generator if args.micro_prime else None
+        # route TRIVIAL/SIMPLE tiers through the wrapped MicroPrimeCodeGenerator.
+        mp_generator = workflow.code_generator if args.micro_prime else None
         workflow.enable_complexity_routing(
             config=cr_config,
             tier3_agent=args.tier3_agent,

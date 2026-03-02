@@ -610,6 +610,9 @@ class PrimeContractorWorkflow:
         self._complexity_routing_enabled = False
         self._complexity_config: Optional[Any] = None
         self._complexity_router: Optional[Any] = None
+        # Micro Prime (REQ-MP-710) — off by default, enabled via enable_micro_prime()
+        self._micro_prime_enabled = False
+        self._original_code_generator = None
         # Resume state: load from disk if resuming
         self._resume_mode: Optional[str] = None
         if resume:
@@ -684,6 +687,66 @@ class PrimeContractorWorkflow:
             type(trivial_generator).__name__ if trivial_generator else "default",
             type(simple_generator).__name__ if simple_generator else "default",
         )
+
+    # -----------------------------------------------------------------------
+    # Micro Prime Activation (REQ-MP-710)
+    # -----------------------------------------------------------------------
+
+    def enable_micro_prime(self, config: Optional[Any] = None) -> None:
+        """Enable local-first generation via Micro Prime.
+
+        Wraps the current ``code_generator`` as the fallback for
+        MODERATE/COMPLEX elements.  TRIVIAL and SIMPLE elements are
+        handled locally via Ollama.
+
+        Must be called **before** ``enable_complexity_routing()`` so the
+        router sees the wrapped generator.
+
+        Args:
+            config: A ``MicroPrimeConfig`` instance, or ``None`` for defaults.
+        """
+        if self._micro_prime_enabled:
+            logger.info("Micro Prime already enabled — skipping")
+            return
+
+        try:
+            from startd8.micro_prime.models import MicroPrimeConfig
+            from startd8.micro_prime.prime_adapter import MicroPrimeCodeGenerator
+        except ImportError:
+            logger.warning(
+                "micro_prime package not available — cannot enable Micro Prime",
+            )
+            return
+
+        mp_config = config or MicroPrimeConfig()
+        self._original_code_generator = self.code_generator
+
+        output_dir = (
+            self.code_generator.output_dir
+            if hasattr(self.code_generator, "output_dir")
+            else Path("generated")
+        )
+        self.code_generator = MicroPrimeCodeGenerator(
+            config=mp_config,
+            fallback=self._original_code_generator,
+            output_dir=output_dir,
+        )
+        self._micro_prime_enabled = True
+        logger.info(
+            "Micro Prime enabled: model=%s, templates=%s, repair=%s",
+            mp_config.model,
+            mp_config.templates_enabled,
+            mp_config.repair_enabled,
+        )
+
+    def disable_micro_prime(self) -> None:
+        """Disable Micro Prime, restoring the original code generator."""
+        if not self._micro_prime_enabled or self._original_code_generator is None:
+            return
+        self.code_generator = self._original_code_generator
+        self._original_code_generator = None
+        self._micro_prime_enabled = False
+        logger.info("Micro Prime disabled — original code generator restored")
 
     # -----------------------------------------------------------------------
     # Context Strategy: Resolution and Validation (F-007)

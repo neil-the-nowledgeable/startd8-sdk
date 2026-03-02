@@ -21,8 +21,8 @@ Wire `MicroPrimeCodeGenerator` into `PrimeContractorWorkflow` as a selectable co
 | `DeterministicFileAssembler` | Production (Artisan only) | `utils/file_assembler.py` |
 | `ForwardManifest` deserialization | Available | `forward_manifest.py` |
 | Artisan → Micro Prime wiring | **ACTIVE** | `context_seed_handlers.py:7959` |
-| Prime → Micro Prime wiring | **NOT WIRED** | Zero references in `prime_contractor.py` |
-| CLI `--micro-prime` flag | **MISSING** | `run_prime_workflow.py` |
+| Prime → Micro Prime wiring | **ACTIVE** (REQ-MP-710) | `prime_contractor.py:enable_micro_prime()` |
+| CLI `--micro-prime` flag | **DONE** | `run_prime_workflow.py` |
 
 **Architecture constraint:** `PrimeContractorWorkflow` does not select generators internally. The CLI script (`run_prime_workflow.py`) instantiates the generator and injects it. All wiring changes happen at the CLI/config layer, not in the workflow core.
 
@@ -481,6 +481,90 @@ micro-prime = "startd8.micro_prime.prime_adapter:MicroPrimeCodeGenerator"
 
 ---
 
+### REQ-MP-710: Workflow-Level Micro Prime Activation API
+
+**Status:** planned
+**Priority:** P1
+**Depends on:** REQ-MP-700 (CLI flags), REQ-MP-703 (file writing)
+
+`PrimeContractorWorkflow` SHALL expose `enable_micro_prime()` and `disable_micro_prime()` methods for post-construction activation of local-first code generation, following the existing `enable_complexity_routing()` pattern.
+
+**API:**
+
+```python
+def enable_micro_prime(self, config: Optional[MicroPrimeConfig] = None) -> None:
+    """Enable local-first generation via Micro Prime.
+
+    Wraps the current code_generator as the fallback for MODERATE/COMPLEX.
+    TRIVIAL and SIMPLE elements are handled locally via Ollama.
+    """
+
+def disable_micro_prime(self) -> None:
+    """Disable Micro Prime, restoring the original code generator."""
+```
+
+**Behavior:**
+- `enable_micro_prime()` wraps `self.code_generator` with `MicroPrimeCodeGenerator(fallback=self.code_generator)`
+- `disable_micro_prime()` unwraps, restoring the original generator
+- Uses lazy imports (`from startd8.micro_prime...`) to keep `micro_prime` optional
+- Adds `self._micro_prime_enabled: bool = False` and `self._original_code_generator = None` to `__init__()`
+
+**Interaction with complexity routing:**
+- When both `enable_micro_prime()` and `enable_complexity_routing()` are active, `enable_micro_prime()` should be called FIRST, then `enable_complexity_routing()` receives the wrapped generator as its base.
+- `enable_micro_prime()` MUST be called before `enable_complexity_routing()` to ensure the router sees the wrapped generator.
+
+**Acceptance criteria:**
+- `enable_micro_prime()` changes `self.code_generator` to a `MicroPrimeCodeGenerator` instance
+- `disable_micro_prime()` restores the original `code_generator` exactly
+- Calling `enable_micro_prime()` twice is safe (second call is a no-op or re-wraps)
+- Config is forwarded to `MicroPrimeConfig` fields (model, templates_enabled, repair_enabled, etc.)
+- Lazy imports — no `ImportError` when `micro_prime` package is unavailable
+- INFO log emitted on enable/disable
+
+---
+
+### REQ-MP-711: Runtime Ollama Availability Guard
+
+**Status:** planned
+**Priority:** P1
+**Depends on:** REQ-MP-503 (Ollama Availability Check — Artisan preflight)
+**Refines:** Risk row "Ollama unavailable at runtime" in the wiring doc risk assessment
+
+`MicroPrimeCodeGenerator.generate()` SHALL check Ollama reachability and model availability once per adapter instance before processing any elements. If Ollama is unreachable or the configured model is not pulled, all elements are delegated to the fallback generator immediately.
+
+**Why distinct from REQ-MP-503:** REQ-MP-503 is an Artisan preflight check that runs during the PREFLIGHT phase (before any generation). The Prime Contractor has no preflight phase. The guard runs on the first `generate()` call and caches the result for subsequent calls.
+
+**Implementation:**
+
+```python
+def _check_ollama_available(self) -> bool:
+    """Check if Ollama is reachable and model is pulled. Cached per instance."""
+```
+
+**Check sequence:**
+1. `GET {OLLAMA_HOST}/api/tags` with 5s timeout
+2. Parse response for model list
+3. Check configured model name exists (with/without `:latest` suffix)
+4. Cache result on `self._ollama_available`
+
+**Graceful degradation:**
+- Ollama unreachable → WARNING log, delegate all to fallback, zero local processing
+- Ollama reachable but model missing → WARNING log, delegate all to fallback
+- Ollama available and model present → proceed with local processing
+- TRIVIAL elements (templates) still work regardless — they don't need Ollama. However, for simplicity, the guard delegates ALL elements to fallback when Ollama is down. Template-only processing without Ollama is a future optimization.
+
+**Pattern follows:** `preflight.py:_check_ollama_model()` (lines 1095–1156) — same endpoint, same error handling, shorter timeout (5s vs 30s).
+
+**Acceptance criteria:**
+- Pipeline completes successfully when Ollama is stopped (all elements via fallback)
+- Pipeline completes successfully when model is not pulled (all elements via fallback)
+- First call to `generate()` performs the check; subsequent calls use cached result
+- WARNING logged with `"Ollama not reachable at {url}"` or `"model '{name}' not found"`
+- No `ImportError` — uses stdlib `urllib.request` (not httpx/requests)
+- Check timeout is 5 seconds (not blocking generation for 30s)
+
+---
+
 ## Dependency Map
 
 ```
@@ -491,7 +575,10 @@ REQ-MP-701 (manifest deserialization + forwarding)
               └──→ REQ-MP-703 (file writing)
                         │
                         └──→ REQ-MP-700 (CLI flags) + REQ-MP-704 (sub-flags)
+                        │
+                        └──→ REQ-MP-710 (workflow activation API)
 
+REQ-MP-503 (Artisan preflight) ──→ REQ-MP-711 (Ollama availability guard)
 REQ-MP-704 (cost tracking)  — independent, parallel
 REQ-MP-705 (observability)  — after core wiring
 REQ-MP-706 (entry points)   — deferred
@@ -516,9 +603,9 @@ REQ-MP-706 (entry points)   — deferred
 
 | File | Changes | Phase |
 |------|---------|-------|
-| `src/startd8/contractors/prime_contractor.py` | Deserialize `ForwardManifest` in `load_seed_context()`, forward `manifest` in `develop_feature()` `gen_context` | 1 |
-| `src/startd8/micro_prime/prime_adapter.py` | Add `_generate_skeletons()`, add `output_dir` param, write files to disk, fix `cost_usd`, improve metadata | 2, 3, 5 |
-| `scripts/run_prime_workflow.py` | Add `--micro-prime` flag + sub-flags, conditional generator wrapping, complexity router integration | 4 |
+| `src/startd8/contractors/prime_contractor.py` | Deserialize `ForwardManifest` in `load_seed_context()`, forward `manifest` in `develop_feature()` `gen_context`; add `enable_micro_prime()` / `disable_micro_prime()` (REQ-MP-710) | 1, 710 |
+| `src/startd8/micro_prime/prime_adapter.py` | Add `_generate_skeletons()`, add `output_dir` param, write files to disk, fix `cost_usd`, improve metadata; add `_check_ollama_available()` guard (REQ-MP-711) | 2, 3, 5, 711 |
+| `scripts/run_prime_workflow.py` | Add `--micro-prime` flag + sub-flags, use `workflow.enable_micro_prime()` API (REQ-MP-710), complexity router integration | 4, 710 |
 | `pyproject.toml` | (Deferred) Add entry point group | — |
 
 ---
