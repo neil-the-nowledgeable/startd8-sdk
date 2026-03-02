@@ -3,7 +3,7 @@
 Wire `MicroPrimeCodeGenerator` into `PrimeContractorWorkflow` as a selectable code generation backend, enabling local-first generation for TRIVIAL/SIMPLE elements with automatic fallback to cloud-based `LeadContractorCodeGenerator` for MODERATE/COMPLEX elements.
 
 > **Parent:** [MICRO_PRIME_REQUIREMENTS.md](./MICRO_PRIME_REQUIREMENTS.md)
-> **Status:** Designed — adapter built, shared complexity router complete, 4 gaps remaining
+> **Status:** ACTIVE — core wiring DONE (REQ-MP-700–703, 710, 711), cost tracking and observability outstanding
 > **Depends on:** REQ-MP-8xx (Shared Complexity Router) — **DONE** (commit 0538aaa)
 > **Modifies:** `prime_contractor.py`, `micro_prime/prime_adapter.py`, `scripts/run_prime_workflow.py`
 
@@ -30,7 +30,7 @@ Wire `MicroPrimeCodeGenerator` into `PrimeContractorWorkflow` as a selectable co
 
 ## Gap Analysis
 
-Four gaps prevent the wiring from functioning. Each is a distinct requirement below.
+Four gaps were identified in the initial design. All four are now resolved (REQ-MP-700–703 DONE).
 
 ### Gap 1: Context Key Mismatch (REQ-MP-701)
 
@@ -483,7 +483,7 @@ micro-prime = "startd8.micro_prime.prime_adapter:MicroPrimeCodeGenerator"
 
 ### REQ-MP-710: Workflow-Level Micro Prime Activation API
 
-**Status:** planned
+**Status:** DONE
 **Priority:** P1
 **Depends on:** REQ-MP-700 (CLI flags), REQ-MP-703 (file writing)
 
@@ -525,7 +525,7 @@ def disable_micro_prime(self) -> None:
 
 ### REQ-MP-711: Runtime Ollama Availability Guard
 
-**Status:** planned
+**Status:** DONE
 **Priority:** P1
 **Depends on:** REQ-MP-503 (Ollama Availability Check — Artisan preflight)
 **Refines:** Risk row "Ollama unavailable at runtime" in the wiring doc risk assessment

@@ -1,7 +1,7 @@
 # Micro Prime — Requirements
 
-> **Version:** 0.3.0
-> **Status:** DRAFT — Quick Wins layer added (REQ-MP-7xx)
+> **Version:** 0.4.0
+> **Status:** ACTIVE — core engine built, Prime Contractor wired (REQ-MP-700–703, 710, 711 DONE)
 > **Date:** 2026-03-01
 > **Scope:** Local-model code generation with manifest-guided repair, callable from both the **Artisan workflow** and the **Prime Contractor**
 > **Depends on:** [DETERMINISTIC_FILE_ASSEMBLY_REQUIREMENTS.md](../../scaffold/DETERMINISTIC_FILE_ASSEMBLY_REQUIREMENTS.md), [LOCAL_MODEL_ROUTING_EXPERIMENT.md](../../local-model-routing/LOCAL_MODEL_ROUTING_EXPERIMENT.md), [PRIME_CONTRACTOR_REQUIREMENTS.md](../../prime/PRIME_CONTRACTOR_REQUIREMENTS.md)

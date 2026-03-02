@@ -156,7 +156,7 @@ The Modelfile SHALL define stop sequences that prevent over-generation without p
 
 ### REQ-MP-104: Model Registry Entry
 
-**Status:** planned
+**Status:** DONE
 **Priority:** P2
 **Depends on:** REQ-MP-500
 

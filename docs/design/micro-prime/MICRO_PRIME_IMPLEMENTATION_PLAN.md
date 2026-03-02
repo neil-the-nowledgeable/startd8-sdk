@@ -4,12 +4,12 @@
 
 The Micro Prime requirements (41 total across 6 layers) define a **local-first code generation engine** that routes SIMPLE elements to a tuned Ollama model (`startd8-coder`) instead of cloud models. Round 2 experiments achieved 100% syntax success and 42% verification — the remaining gap is addressed by the repair pipeline, structural verification, and escalation logic defined in these requirements.
 
-Currently: 4 requirements are implemented (model tuning REQ-MP-100–103), 1 is partial (REQ-MP-200), and **36 are planned**. The `src/startd8/micro_prime/` package does not exist yet.
+Currently: the core engine, adapters, and wiring are **implemented**. The `src/startd8/micro_prime/` package is built (~2,350 LOC) with full test coverage (~2,500 LOC). REQ-MP-700–703, 710, 711 are DONE. Remaining gaps: REQ-MP-704 (cost tracking polish), REQ-MP-705 (OTel observability), REQ-MP-706 (entry points, deferred), and R3 suggestions (untriaged).
 
-> **Status:** DRAFT — Convergent Review R1+R2 triaged (8 applied, 5 rejected)
-> **Date:** 2026-03-01
+> **Status:** ACTIVE — core package built, wiring complete, observability layer outstanding
+> **Date:** 2026-03-02
 
-**Goal:** Implement all 36 planned requirements as a new `micro_prime` package, integrated with both the Artisan workflow and Prime Contractor.
+**Goal:** Implement all planned requirements as a new `micro_prime` package, integrated with both the Artisan workflow and Prime Contractor.
 
 ---
 
