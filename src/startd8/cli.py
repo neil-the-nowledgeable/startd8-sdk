@@ -2436,7 +2436,7 @@ def dashboard_delete(
                 console.print(
                     f"[yellow]Warning: Grafana deletion failed: {result.error}[/yellow]"
                 )
-        except Exception as exc:
+        except (ConfigurationError, OSError) as exc:
             console.print(
                 f"[yellow]Warning: Could not connect to Grafana: {exc}[/yellow]"
             )

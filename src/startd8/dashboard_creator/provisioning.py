@@ -56,7 +56,7 @@ def provision_dashboard(
         )
 
     # Build clickable URL from the response 'url' field
-    grafana_url = client._url
+    grafana_url = client.base_url
     dashboard_path = resp.data.get("url", f"/d/{uid}")
     full_url = f"{grafana_url}{dashboard_path}"
 

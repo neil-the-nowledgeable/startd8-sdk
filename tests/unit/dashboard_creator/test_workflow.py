@@ -1,7 +1,6 @@
 """Tests for dashboard_creator.workflow — DashboardCreatorWorkflow."""
 
 import json
-import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 

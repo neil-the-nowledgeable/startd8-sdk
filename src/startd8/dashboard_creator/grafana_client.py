@@ -7,8 +7,7 @@ Token is read from GRAFANA_API_TOKEN env var — never logged or stored in resul
 
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
-from urllib.parse import urljoin
+from typing import Any, Dict, Optional
 
 import httpx
 
@@ -71,6 +70,11 @@ class GrafanaClient:
             timeout=httpx.Timeout(connect=_CONNECT_TIMEOUT, read=_REQUEST_TIMEOUT,
                                   write=_REQUEST_TIMEOUT, pool=_REQUEST_TIMEOUT),
         )
+
+    @property
+    def base_url(self) -> str:
+        """Base URL of the Grafana instance (no trailing slash)."""
+        return self._url
 
     # ------------------------------------------------------------------
     # Public API

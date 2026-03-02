@@ -17,7 +17,7 @@ from startd8.dashboard_creator.provisioning import (
 
 def _mock_client(url: str = "https://grafana.example.com") -> MagicMock:
     client = MagicMock()
-    client._url = url
+    client.base_url = url
     return client
 
 

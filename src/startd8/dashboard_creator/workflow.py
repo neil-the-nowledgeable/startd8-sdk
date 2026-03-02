@@ -151,10 +151,15 @@ class DashboardCreatorWorkflow(WorkflowBase):
         if config.get("dry_run") and config.get("check"):
             errors.append("Cannot use both --dry-run and --check together")
 
-        if config.get("provision") and not os.environ.get("GRAFANA_API_TOKEN"):
-            errors.append(
-                "Provisioning requires GRAFANA_API_TOKEN environment variable"
-            )
+        if config.get("provision"):
+            if not os.environ.get("GRAFANA_API_TOKEN"):
+                errors.append(
+                    "Provisioning requires GRAFANA_API_TOKEN environment variable"
+                )
+            if not config.get("grafana_url"):
+                errors.append(
+                    "Provisioning requires --grafana-url"
+                )
 
         spec_input = config.get("spec")
         if spec_input is None:
@@ -380,7 +385,7 @@ class DashboardCreatorWorkflow(WorkflowBase):
                         step_name="provision",
                         output=f"Provisioning failed: {prov_result.error}",
                     ))
-            except Exception as exc:
+            except (ConfigurationError, OSError) as exc:
                 logger.warning("Provisioning error: %s", exc)
                 step_results.append(StepResult(
                     step_name="provision",
