@@ -50,6 +50,33 @@ class TestMicroPrimeEngine:
         assert result.code is not None
         assert "self.name = name" in result.code
 
+    def test_classification_reason_populated(
+        self, init_element, sample_file_spec, sample_skeleton,
+    ):
+        """R3-S1: ElementResult must carry a non-empty classification_reason."""
+        engine = MicroPrimeEngine()
+        result = engine.process_element(
+            init_element, sample_file_spec, sample_skeleton,
+        )
+        assert result.classification_reason != ""
+        assert isinstance(result.classification_reason, str)
+
+    def test_classification_reason_on_moderate(
+        self, sample_file_spec, sample_skeleton,
+    ):
+        """R3-S1: MODERATE escalations also carry classification_reason."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="run_server",
+            signature=Signature(params=[], return_annotation="None"),
+        )
+        engine = MicroPrimeEngine()
+        result = engine.process_element(
+            elem, sample_file_spec, sample_skeleton,
+        )
+        assert result.tier == TierClassification.MODERATE
+        assert result.classification_reason != ""
+
     def test_process_moderate_element_escalates(
         self, sample_file_spec, sample_skeleton,
     ):

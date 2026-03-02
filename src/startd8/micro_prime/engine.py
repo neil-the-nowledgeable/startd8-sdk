@@ -168,6 +168,7 @@ class MicroPrimeEngine:
                 element_name=element.name,
                 file_path=file_path,
                 tier=tier,
+                classification_reason=reasoning,
                 success=True,
             )
             result.tier = tier
@@ -187,6 +188,7 @@ class MicroPrimeEngine:
                 element_name=element.name,
                 file_path=file_path,
                 tier=tier,
+                classification_reason=reasoning,
                 success=False,
                 escalation=build_escalation_context(
                     element_name=element.name,
@@ -205,10 +207,10 @@ class MicroPrimeEngine:
 
         # Step 2: Route by tier
         if tier == TierClassification.TRIVIAL:
-            result = self._handle_trivial(element, file_spec, skeleton, file_path)
+            result = self._handle_trivial(element, file_spec, skeleton, file_path, reasoning)
         elif tier == TierClassification.SIMPLE:
             result = self._handle_simple(
-                element, file_spec, skeleton, element_contracts, file_path,
+                element, file_spec, skeleton, element_contracts, file_path, reasoning,
             )
         else:
             # MODERATE/COMPLEX — return as needs_cloud
@@ -216,6 +218,7 @@ class MicroPrimeEngine:
                 element_name=element.name,
                 file_path=file_path,
                 tier=tier,
+                classification_reason=reasoning,
                 success=False,
                 escalation=build_escalation_context(
                     element_name=element.name,
@@ -367,12 +370,13 @@ class MicroPrimeEngine:
         file_spec: ForwardFileSpec,
         skeleton: str,
         file_path: str,
+        reasoning: str = "",
     ) -> ElementResult:
         """Handle TRIVIAL tier: use template registry."""
         body = self._templates.match(element, file_spec)
         if body is None:
             # Template failed — escalate to SIMPLE
-            return self._handle_simple(element, file_spec, skeleton, [], file_path)
+            return self._handle_simple(element, file_spec, skeleton, [], file_path, reasoning)
 
         # Record as completed for few-shot (REQ-MP-704)
         self._completed.append({
@@ -390,6 +394,7 @@ class MicroPrimeEngine:
             element_name=element.name,
             file_path=file_path,
             tier=TierClassification.TRIVIAL,
+            classification_reason=reasoning,
             success=True,
             code=body,
             template_used=True,
@@ -402,6 +407,7 @@ class MicroPrimeEngine:
         skeleton: str,
         contracts: list[InterfaceContract],
         file_path: str,
+        reasoning: str = "",
     ) -> ElementResult:
         """Handle SIMPLE tier: local model generation + repair."""
         start_time = time.monotonic()
@@ -431,6 +437,7 @@ class MicroPrimeEngine:
                 element_name=element.name,
                 file_path=file_path,
                 tier=TierClassification.SIMPLE,
+                classification_reason=reasoning,
                 success=False,
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
                 escalation=build_escalation_context(
@@ -447,6 +454,7 @@ class MicroPrimeEngine:
                 element_name=element.name,
                 file_path=file_path,
                 tier=TierClassification.SIMPLE,
+                classification_reason=reasoning,
                 success=False,
                 generation_time_ms=(time.monotonic() - start_time) * 1000,
                 input_tokens=input_tokens,
@@ -476,6 +484,7 @@ class MicroPrimeEngine:
                 element_name=element.name,
                 file_path=file_path,
                 tier=TierClassification.SIMPLE,
+                classification_reason=reasoning,
                 success=False,
                 code=code,
                 repair_steps_applied=repair_steps,
@@ -511,6 +520,7 @@ class MicroPrimeEngine:
             element_name=element.name,
             file_path=file_path,
             tier=TierClassification.SIMPLE,
+            classification_reason=reasoning,
             success=True,
             code=code,
             repair_steps_applied=repair_steps,

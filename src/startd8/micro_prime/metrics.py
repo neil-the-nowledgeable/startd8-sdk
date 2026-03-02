@@ -43,6 +43,7 @@ class MetricsCollector:
                 element_name=result.element_name,
                 file_path=result.file_path,
                 tier=result.tier,
+                classification_reason=result.classification_reason,
                 success=result.success,
                 template_used=result.template_used,
                 repair_steps=result.repair_steps_applied,

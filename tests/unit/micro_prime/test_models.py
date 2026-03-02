@@ -63,6 +63,25 @@ class TestElementResult:
         assert result.repair_steps_applied == []
         assert result.generation_time_ms == 0.0
 
+    def test_classification_reason_on_element_result(self):
+        """R3-S1: classification_reason defaults to empty string."""
+        result = ElementResult(
+            element_name="get_name",
+            file_path="src/utils.py",
+            tier=TierClassification.SIMPLE,
+            success=True,
+        )
+        assert result.classification_reason == ""
+
+        result_with_reason = ElementResult(
+            element_name="get_name",
+            file_path="src/utils.py",
+            tier=TierClassification.SIMPLE,
+            classification_reason="2 params; simple return (str)",
+            success=True,
+        )
+        assert result_with_reason.classification_reason == "2 params; simple return (str)"
+
     def test_with_escalation(self):
         esc = EscalationResult(
             reason=EscalationReason.AST_FAILURE,
@@ -249,6 +268,27 @@ class TestMicroPrimeElementMetrics:
         assert d["repair_attribution"] is not None
         assert d["repair_attribution"]["fence_stripped"] is True
         assert d["repair_attribution"]["nodes_removed"] == 2
+
+    def test_classification_reason_on_metrics(self):
+        """R3-S1: classification_reason defaults to empty string on metrics."""
+        metrics = MicroPrimeElementMetrics(
+            element_name="get_name",
+            file_path="src/utils.py",
+            tier=TierClassification.SIMPLE,
+            success=True,
+        )
+        assert metrics.classification_reason == ""
+
+        metrics_with_reason = MicroPrimeElementMetrics(
+            element_name="get_name",
+            file_path="src/utils.py",
+            tier=TierClassification.SIMPLE,
+            classification_reason="property accessor",
+            success=True,
+        )
+        assert metrics_with_reason.classification_reason == "property accessor"
+        d = metrics_with_reason.model_dump()
+        assert d["classification_reason"] == "property accessor"
 
     def test_repair_attribution_none_by_default(self):
         metrics = MicroPrimeElementMetrics(

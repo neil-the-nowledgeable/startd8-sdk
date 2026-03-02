@@ -82,6 +82,7 @@ class ElementResult:
     file_path: str
     tier: TierClassification
     success: bool
+    classification_reason: str = ""
     code: Optional[str] = None
     escalation: Optional[EscalationResult] = None
     template_used: bool = False
@@ -160,6 +161,7 @@ class MicroPrimeElementMetrics(BaseModel):
     file_path: str
     tier: TierClassification
     success: bool
+    classification_reason: str = ""
     template_used: bool = False
     repair_steps: list[str] = Field(default_factory=list)
     repair_attribution: Optional[RepairAttribution] = None

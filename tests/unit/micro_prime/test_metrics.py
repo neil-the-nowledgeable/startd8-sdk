@@ -78,6 +78,19 @@ class TestMetricsCollector:
         assert collector.metrics[0].element_name == "foo"
         assert collector.metrics[0].generation_time_ms == 100.0
 
+    def test_record_forwards_classification_reason(self):
+        """R3-S1: classification_reason flows from ElementResult to metrics."""
+        collector = MetricsCollector()
+        result = ElementResult(
+            element_name="foo",
+            file_path="src/foo.py",
+            tier=TierClassification.SIMPLE,
+            classification_reason="2 params; simple return (str)",
+            success=True,
+        )
+        collector.record(result)
+        assert collector.metrics[0].classification_reason == "2 params; simple return (str)"
+
     def test_record_with_escalation(self):
         collector = MetricsCollector()
         result = ElementResult(
