@@ -95,6 +95,7 @@ def _make_workflow(tmp_path: Path, **overrides: Any) -> PrimeContractorWorkflow:
     wf.seed_design_calibration = {}
     wf.seed_service_metadata = {}
     wf.seed_forward_manifest = None
+    wf._forward_manifest = None  # REQ-MP-701: deserialized ForwardManifest
     wf.plan_document_text = None
     wf._seed_context = None
 

@@ -604,6 +604,8 @@ class PrimeContractorWorkflow:
             )
         self._context_strategy = context_strategy or StandaloneContextStrategy()
         self._strict_mode = strict_mode
+        # ForwardManifest (REQ-MP-701) — deserialized once in load_seed_context()
+        self._forward_manifest = None
         # Complexity routing (REQ-MP-807) — off by default, enabled via enable_complexity_routing()
         self._complexity_routing_enabled = False
         self._complexity_config: Optional[Any] = None
@@ -1190,6 +1192,29 @@ class PrimeContractorWorkflow:
         self.seed_design_calibration = design_calibration
         self.seed_service_metadata = service_metadata
         self.seed_forward_manifest = forward_manifest if isinstance(forward_manifest, dict) else None
+
+        # Deserialize raw dict to ForwardManifest once at load time (REQ-MP-701).
+        # Stored separately from seed_forward_manifest (raw dict kept for
+        # backward compatibility with context strategies).
+        self._forward_manifest = None
+        if self.seed_forward_manifest:
+            try:
+                from startd8.forward_manifest import ForwardManifest
+
+                self._forward_manifest = ForwardManifest.model_validate(
+                    self.seed_forward_manifest
+                )
+                logger.info(
+                    "ForwardManifest deserialized: %d file specs, %d contracts",
+                    len(self._forward_manifest.file_specs),
+                    len(self._forward_manifest.contracts),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to deserialize ForwardManifest, "
+                    "micro-prime will delegate to fallback: %s",
+                    exc,
+                )
 
         # Plan document text (not part of SeedContext — load if referenced)
         plan_doc_path = (seed_data.get("artifacts") or {}).get(
@@ -1917,6 +1942,10 @@ class PrimeContractorWorkflow:
             # PC-O1: Populate existing_files for edit tasks when target_files exist
             self._populate_existing_files(feature, gen_context)
 
+            # REQ-MP-701: Forward deserialized ForwardManifest for Micro Prime
+            if self._forward_manifest is not None:
+                gen_context["manifest"] = self._forward_manifest
+
             # Walkthrough mode: persist prompts, skip LLM calls
             if self.walkthrough:
                 self._persist_walkthrough_prompts(feature, gen_context)
@@ -1951,7 +1980,7 @@ class PrimeContractorWorkflow:
                     tier, reason = classify_tier(signals, self._complexity_config)
                     generator = self._complexity_router.select(tier) or generator
                     # Stash classification in feature metadata for forensics
-                    if not hasattr(feature, "metadata") or feature.metadata is None:
+                    if feature.metadata is None:
                         feature.metadata = {}
                     feature.metadata["_complexity_tier"] = tier.value
                     feature.metadata["_complexity_reason"] = reason
@@ -1962,11 +1991,12 @@ class PrimeContractorWorkflow:
                         tier.value,
                         reason,
                     )
-                except Exception as exc:
+                except Exception as exc:  # Catch-all: graceful fallback to default generator
                     logger.warning(
                         "Complexity routing failed for '%s', using default generator: %s",
                         feature.name,
                         exc,
+                        exc_info=True,
                     )
 
             result: GenerationResult = generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
