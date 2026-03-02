@@ -1,7 +1,7 @@
 # Micro Prime — Requirements
 
-> **Version:** 0.2.0
-> **Status:** DRAFT — Round 2 validated (100% syntax, 42% verified)
+> **Version:** 0.3.0
+> **Status:** DRAFT — Quick Wins layer added (REQ-MP-7xx)
 > **Date:** 2026-03-01
 > **Scope:** Local-model code generation with manifest-guided repair, callable from both the **Artisan workflow** and the **Prime Contractor**
 > **Depends on:** [DETERMINISTIC_FILE_ASSEMBLY_REQUIREMENTS.md](../../scaffold/DETERMINISTIC_FILE_ASSEMBLY_REQUIREMENTS.md), [LOCAL_MODEL_ROUTING_EXPERIMENT.md](../../local-model-routing/LOCAL_MODEL_ROUTING_EXPERIMENT.md), [PRIME_CONTRACTOR_REQUIREMENTS.md](../../prime/PRIME_CONTRACTOR_REQUIREMENTS.md)
@@ -20,10 +20,11 @@
 7. [Layer 4 — Manifest-Guided Repair (REQ-MP-4xx)](#7-layer-4--manifest-guided-repair-req-mp-4xx)
 8. [Layer 5 — Routing & Integration (REQ-MP-5xx)](#8-layer-5--routing--integration-req-mp-5xx)
 9. [Layer 6 — Observability & Metrics (REQ-MP-6xx)](#9-layer-6--observability--metrics-req-mp-6xx)
-10. [Data Flow](#10-data-flow)
-11. [Traceability Matrix](#11-traceability-matrix)
-12. [Verification Strategy](#12-verification-strategy)
-13. [Related Documents](#13-related-documents)
+10. [Layer 7 — Quick Wins & Acceleration (REQ-MP-7xx)](#10-layer-7--quick-wins--acceleration-req-mp-7xx)
+11. [Data Flow](#11-data-flow)
+12. [Traceability Matrix](#12-traceability-matrix)
+13. [Verification Strategy](#13-verification-strategy)
+14. [Related Documents](#14-related-documents)
 
 ---
 
@@ -91,7 +92,8 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 | Manifest-Guided Repair | REQ-MP-4xx | 8 | 0 | 0 | 8 |
 | Routing & Integration | REQ-MP-5xx | 13 | 0 | 0 | 13 |
 | Observability & Metrics | REQ-MP-6xx | 4 | 0 | 0 | 4 |
-| **Total** | | **41** | **4** | **1** | **36** |
+| Quick Wins & Acceleration | REQ-MP-7xx | 9 | 0 | 0 | 9 |
+| **Total** | | **50** | **4** | **1** | **45** |
 
 ---
 
@@ -107,6 +109,7 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 The micro-prime pipeline SHALL use `qwen2.5-coder:7b` as the base local model. Selection criteria: best-in-class code completion at 7B parameter count, strong type signature adherence, compatible resource footprint with Apple Silicon development hardware (≤8 GB RAM at inference).
 
 **Acceptance criteria:**
+
 - Model is available via `ollama pull qwen2.5-coder:7b`
 - Inference completes in <6s per element on M1 Pro 32GB
 
@@ -126,6 +129,7 @@ Inference parameters SHALL be configured via an Ollama Modelfile that creates a 
 | `repeat_penalty` | 1.1 | Prevent degenerate repetition loops |
 
 **Acceptance criteria:**
+
 - `ollama create startd8-coder -f Modelfile.startd8-coder` succeeds
 - 3 consecutive runs of the same prompt produce identical output (determinism)
 - Model listed via `ollama list` with expected size (~4.7 GB)
@@ -136,6 +140,7 @@ Inference parameters SHALL be configured via an Ollama Modelfile that creates a 
 **Priority:** P0
 
 The Modelfile SHALL include a SYSTEM prompt that constrains the model to:
+
 1. Output only code — no explanation, no markdown fences, no extra text
 2. Use only imports shown in the prompt — do not invent APIs
 3. Match the exact function signature provided
@@ -148,6 +153,7 @@ The Modelfile SHALL include a SYSTEM prompt that constrains the model to:
 **v2 changes:** Role broadened from "function body generator" to "code generator for the startd8 pipeline" (handles constants/variables); Rule 6 aligned with top-level method rendering (FIX #3); Rules 7-8 added for constants and explicit stop.
 
 **Acceptance criteria:**
+
 - Model does not hallucinate imports not present in the prompt context
 - Model does not emit explanatory text between code blocks
 - Model generates constants as single assignment statements (not full functions)
@@ -160,16 +166,19 @@ The Modelfile SHALL include a SYSTEM prompt that constrains the model to:
 The Modelfile SHALL define stop sequences that halt generation at natural code boundaries without killing the first output token.
 
 **Valid stop sequences (validated in Round 2):**
+
 - `"\nif __name__"` — common Python trailer
 - `"\n# Task:"` / `"\n# Implement"` / `"\n# Define"` — prompt template echo
 - `"\n\n\n"` — triple newline (generation exhausted)
 
 **Constraints (validated empirically — see Appendix B in OLLAMA_MODEL_TUNING.md):**
+
 - `"```"` MUST NOT be used — qwen2.5-coder starts output with ` ```python `, triggering immediate stop
 - `"\ndef "` and `"\nclass "` MUST NOT be used — fires on the target function's own definition
 - `"\n\ndef "` MUST NOT be used — response starts with `\n` then `\ndef`, matching immediately
 
 **Acceptance criteria:**
+
 - Model generates complete function bodies without premature truncation
 - Model does not generate secondary functions/classes after the target element
 - Zero elements truncated in Round 2 experiment (24/24 complete)
@@ -183,6 +192,7 @@ The Modelfile SHALL define stop sequences that halt generation at natural code b
 The `startd8-coder` model SHALL be registered in the SDK's model catalog (`model_catalog.py`) with appropriate defaults: `max_tokens=512`, `context_window=32768`, `provider=ollama`.
 
 **Acceptance criteria:**
+
 - `resolve_agent_spec("ollama:startd8-coder")` returns a valid agent
 - Agent defaults match Modelfile parameters where applicable
 
@@ -201,6 +211,7 @@ The `startd8-coder` model SHALL be registered in the SDK's model catalog (`model
 The prompt builder SHALL use the rendered skeleton from `DeterministicFileAssembler.render_file()` as the structural context for the local model, rather than reconstructing the function stub from raw `ForwardElementSpec` fields.
 
 **Acceptance criteria:**
+
 - Prompt includes the complete rendered element (decorators, class wrapper, signature, docstring) from the skeleton
 - The `raise NotImplementedError` line is clearly marked as the replacement target
 
@@ -212,7 +223,8 @@ The prompt builder SHALL use the rendered skeleton from `DeterministicFileAssemb
 The prompt SHALL instruct the model to generate ONLY the function body — not the `def` line, not the class wrapper, not the docstring. The prompt SHALL specify the exact indentation level expected.
 
 **Acceptance criteria:**
-- Model output does not contain `def ` or `class ` lines when following the prompt correctly
+
+- Model output does not contain `def` or `class` lines when following the prompt correctly
 - Prompt specifies indent depth in spaces (e.g., "indented with 8 spaces for a class method")
 
 ### REQ-MP-202: Body Splicing
@@ -224,6 +236,7 @@ The prompt SHALL instruct the model to generate ONLY the function body — not t
 After generation, the pipeline SHALL splice the generated body into the skeleton source by replacing the `raise NotImplementedError` line at the target element's location.
 
 **Splicing algorithm:**
+
 1. Parse the skeleton via `ast.parse()` to locate the target element's body
 2. Identify the `raise NotImplementedError` statement by AST node type and line number
 3. Dedent the generated body via `textwrap.dedent()`
@@ -232,6 +245,7 @@ After generation, the pipeline SHALL splice the generated body into the skeleton
 6. Validate the result via `ast.parse()`
 
 **Acceptance criteria:**
+
 - A correctly-generated body produces a syntactically valid file after splicing
 - An incorrectly-indented body is normalized to the skeleton's indent level before splicing
 - The skeleton's structure (imports, other elements, `__all__`) is preserved unchanged
@@ -242,6 +256,7 @@ After generation, the pipeline SHALL splice the generated body into the skeleton
 **Priority:** P1
 
 The prompt builder SHALL extract the target element's rendered source from the skeleton to provide as context, including:
+
 - All decorator lines
 - The class definition line (if method)
 - The `def` line with full signature
@@ -249,6 +264,7 @@ The prompt builder SHALL extract the target element's rendered source from the s
 - The `raise NotImplementedError` stub
 
 **Acceptance criteria:**
+
 - Extracted context matches the exact text from `render_file()` output
 - Sibling methods in the same class are included as signature-only stubs (for context)
 
@@ -260,10 +276,12 @@ The prompt builder SHALL extract the target element's rendered source from the s
 When the model returns output that includes the `def` line (ignoring the body-only instruction), the repair pipeline (Layer 4) SHALL detect and strip the redundant structure rather than failing.
 
 **Detection:**
+
 - Parse the output; if it contains a `FunctionDef`/`AsyncFunctionDef` node matching the target name, extract only its body statements
 - If the output is unparseable, fall through to indentation normalization (REQ-MP-402)
 
 **Acceptance criteria:**
+
 - Model output containing `def target_name(...):` followed by body is handled without error
 - The body is extracted and spliced as if the model had followed the body-only instruction
 
@@ -277,6 +295,7 @@ When the same file contains elements that have already been successfully generat
 **Round 2 validation:** 17 of 24 elements had few-shot examples injected. Two-tier priority: same-class examples first (highest signal for methods), then same-file. Examples accumulate during sequential generation — earlier successes benefit later elements.
 
 **Acceptance criteria:**
+
 - Examples are drawn from the same `ForwardFileSpec` (same file, same import context)
 - Examples are limited to 2 maximum to avoid prompt bloat
 - Examples show only body lines at the correct indentation level
@@ -295,11 +314,13 @@ When the same file contains elements that have already been successfully generat
 A `CodeTemplate` registry SHALL provide deterministic code generation for TRIVIAL elements — those whose implementation can be fully derived from manifest data and contracts without any model inference.
 
 **Registry entry structure:**
+
 - `name: str` — template identifier (e.g., `"config_constant"`, `"flask_app_instance"`)
 - `match_fn` — predicate: `(ForwardElementSpec, ForwardFileSpec, list[InterfaceContract]) → bool`
 - `render_fn` — generator: `(ForwardElementSpec, ForwardFileSpec, list[InterfaceContract]) → str`
 
 **Acceptance criteria:**
+
 - Templates produce syntactically valid code (`ast.parse()` passes)
 - Templates use only information available in the manifest and contracts (zero LLM)
 - Template output is deterministic (same input → same output)
@@ -310,12 +331,14 @@ A `CodeTemplate` registry SHALL provide deterministic code generation for TRIVIA
 **Priority:** P1
 
 Elements matching ALL of the following SHALL be generated by the `config_constant` template:
+
 - `ForwardElementSpec.kind == CONSTANT`
 - An `InterfaceContract` with `category == CONFIG_KEY` and `constant_value` is non-None
 
 **Output:** `{name}: {type} = {constant_value}`
 
 **Acceptance criteria:**
+
 - String values are properly quoted
 - Numeric values are rendered as literals
 - Boolean values render as `True`/`False`
@@ -326,15 +349,18 @@ Elements matching ALL of the following SHALL be generated by the `config_constan
 **Priority:** P1
 
 Elements matching ALL of the following SHALL be generated by the `app_instance` template:
+
 - `ForwardElementSpec.kind == CONSTANT`
 - `ForwardElementSpec.name` in `{"app", "application", "server", "api"}`
 - `ForwardFileSpec.imports` contains a framework import (Flask, FastAPI, etc.)
 
 **Output patterns:**
+
 - Flask: `app = Flask(__name__)`
 - FastAPI: `app = FastAPI()`
 
 **Acceptance criteria:**
+
 - Template selects the correct framework constructor based on import analysis
 - Only fires when the framework import is present (no hallucination)
 
@@ -346,6 +372,7 @@ Elements matching ALL of the following SHALL be generated by the `app_instance` 
 Elements with `kind == TYPE_ALIAS` SHALL be generated deterministically when the alias definition is derivable from the element's `type_annotation` or `value_repr` fields.
 
 **Acceptance criteria:**
+
 - `NewType` aliases rendered as `TypeName = NewType("TypeName", BaseType)`
 - Simple aliases rendered as `TypeName = BaseType`
 
@@ -358,11 +385,13 @@ Elements with `kind == TYPE_ALIAS` SHALL be generated deterministically when the
 Template matching SHALL be attempted BEFORE complexity classification. If a template matches, the element is classified as TRIVIAL and skips all model inference.
 
 **Routing order:**
+
 1. Template registry → match → TRIVIAL (deterministic, $0.00, <1ms)
 2. Heuristic classifier → SIMPLE → local model
 3. Heuristic classifier → MODERATE/COMPLEX → cloud model
 
 **Acceptance criteria:**
+
 - Template-matched elements never reach `generate_with_ollama()` or cloud agents
 - Template match results are recorded in per-element metadata
 
@@ -380,6 +409,7 @@ Template matching SHALL be attempted BEFORE complexity classification. If a temp
 A repair pipeline SHALL process local model output through a sequence of deterministic steps before `ast.parse()` validation. Each step uses the Forward Manifest as structural ground truth.
 
 **Pipeline order:**
+
 1. Fence stripping (existing `extract_code_from_response`)
 2. Over-generation trimming (REQ-MP-401)
 3. Bare statement wrapping (REQ-MP-407)
@@ -389,6 +419,7 @@ A repair pipeline SHALL process local model output through a sequence of determi
 7. AST validation (REQ-MP-405)
 
 **Acceptance criteria:**
+
 - Steps execute in order; each step receives the output of the previous step
 - A step that cannot improve the code passes it through unchanged
 - The pipeline never makes code worse (no destructive transforms)
@@ -401,12 +432,14 @@ A repair pipeline SHALL process local model output through a sequence of determi
 When the model generates more code than the target element, the repair pipeline SHALL parse the output and extract ONLY the node matching the target `ForwardElementSpec` by name and kind.
 
 **Algorithm:**
+
 1. Attempt `ast.parse()` on the raw output
 2. Walk top-level nodes; find the node where `node.name == target.name` and AST type matches `target.kind`
 3. Extract source lines for that node only
 4. If parse fails, pass through to indentation normalization
 
 **Acceptance criteria:**
+
 - An output containing `get_secret` + `list_secrets` + `if __name__` is trimmed to just `get_secret`
 - An output containing a class wrapper around the target method extracts just the method
 - Trimming preserves the target element's exact source text (no re-rendering)
@@ -420,12 +453,14 @@ When the model generates more code than the target element, the repair pipeline 
 When splicing a body into the skeleton, the repair pipeline SHALL normalize indentation to match the skeleton's body indent level rather than using heuristic multi-strategy recovery.
 
 **Algorithm:**
+
 1. Determine the target indent from the skeleton (parse skeleton → find `raise NotImplementedError` node → read its column offset)
 2. `textwrap.dedent()` the generated body to remove all leading whitespace
 3. `textwrap.indent()` with the target indent string
 4. Validate via `ast.parse()` after splicing
 
 **Acceptance criteria:**
+
 - A body indented at 12 spaces (model imagined 3 levels of nesting) is normalized to 8 spaces (method in a class)
 - Mixed tabs and spaces are normalized to 4-space indentation
 - The heuristic 5-strategy recovery (`_normalize_indentation`) is superseded by this single deterministic operation
@@ -438,14 +473,17 @@ When splicing a body into the skeleton, the repair pipeline SHALL normalize inde
 When the model's output includes a function signature that differs from the manifest's `ForwardElementSpec.signature`, the repair pipeline SHALL replace the generated signature with the manifest's canonical version.
 
 **Detection:**
+
 - Parse the generated code's AST
 - Compare the generated `FunctionDef.args` against `ForwardElementSpec.signature.params` for: parameter names, annotations, defaults, parameter kinds
 
 **Repair:**
+
 - Render the canonical signature from the manifest using the same `_render_signature()` logic as `DeterministicFileAssembler`
 - Replace the `def` line in the source
 
 **Acceptance criteria:**
+
 - A generated function with `def format(self, rec)` is reconciled to `def format(self, record: logging.LogRecord) -> str`
 - Return type annotations are preserved from the manifest even if the model dropped them
 - Reconciliation fires only when signatures differ (no-op when they match)
@@ -458,6 +496,7 @@ When the model's output includes a function signature that differs from the mani
 When the generated body references names that are available in `ForwardFileSpec.imports` but not imported in the generated code, the repair pipeline SHALL add the missing imports.
 
 **Algorithm:**
+
 1. Parse the generated code; collect all `ast.Name` nodes (referenced identifiers)
 2. Collect all imported names from the code's `ast.Import` / `ast.ImportFrom` nodes
 3. For each referenced-but-not-imported name, check if any `ForwardImportSpec` in the file spec provides it
@@ -466,6 +505,7 @@ When the generated body references names that are available in `ForwardFileSpec.
 **Scope constraint:** This step adds imports that the manifest already specifies. It does NOT invent new imports — that would be the model's job, and failure to use manifest-provided imports is the specific defect being repaired.
 
 **Acceptance criteria:**
+
 - A body using `json.dumps()` without `import json` gets the import added (when `json` is in `ForwardFileSpec.imports`)
 - A body using `OrderedDict` without `from collections import OrderedDict` gets the import added
 - Imports not in the manifest are never added
@@ -484,6 +524,7 @@ After all repair steps, the repaired code SHALL be validated via `ast.parse()`. 
 | `SyntaxError` | Escalate to cloud model with error context |
 
 **Acceptance criteria:**
+
 - Syntax-valid repaired code proceeds to verification without re-generation
 - Syntax-invalid code after repair is escalated with: the original model output, the repair attempt, and the `SyntaxError` message — all injected into the cloud model's prompt context
 
@@ -501,6 +542,7 @@ input_code → attempt repair → ast.parse(result)
 ```
 
 **Acceptance criteria:**
+
 - If code passes `ast.parse()` before a repair step, it still passes after
 - If a repair step introduces a syntax error, the step's changes are discarded
 
@@ -514,6 +556,7 @@ input_code → attempt repair → ast.parse(result)
 When the model outputs bare statements without a `def` wrapper (the body of a function without the function definition), the repair pipeline SHALL detect and wrap them using the manifest's canonical signature. Sits between over-generation trimming (Step 2) and indentation normalization (Step 4) in the repair pipeline.
 
 **Acceptance criteria:**
+
 - Bare statements detected when output has no `FunctionDef` but target is a function/method
 - Wrapping uses the manifest's canonical signature (params, types, return annotation)
 - Constants/variables are never wrapped (bare by design)
@@ -540,6 +583,7 @@ The element routing system SHALL support four tiers:
 | COMPLEX | Sonnet / Opus | ~$0.05-0.10 | ~10s | Heuristic score > 2, or multi-service orchestration |
 
 **Acceptance criteria:**
+
 - Template-matched elements never invoke any model
 - SIMPLE elements invoke only the local Ollama model
 - Failed SIMPLE elements escalate to MODERATE (not retried locally)
@@ -552,17 +596,20 @@ The element routing system SHALL support four tiers:
 The heuristic classifier SHALL add an import-based complexity signal: if the file's imports include external libraries with complex APIs, the element's complexity score SHALL be bumped to prevent local model routing.
 
 **External API packages (initial set):**
+
 ```
 grpc, grpcio, flask, fastapi, jinja2, django, google.cloud, google.auth,
 boto3, azure, sqlalchemy, alembic, celery, redis, locust
 ```
 
 **Gate logic:**
+
 - Count distinct external API packages in `ForwardFileSpec.imports`
 - Add count to the heuristic complexity score
 - If any `[BINDING]` constraint references an external API, add +2
 
 **Acceptance criteria:**
+
 - An element in a file importing `grpc` and `google.cloud` gets +2 to complexity score
 - An element in a file importing only `json` and `logging` (stdlib) is unaffected
 - The gate catches elements that would have been Sonnet-FAIL in Round 1 (8 of 12 failures were external API related)
@@ -583,6 +630,7 @@ When a SIMPLE element fails both local generation and repair, it SHALL be escala
 This reuses the existing `last_error` / `test_output` injection pattern in `_execute_chunk_inner()`.
 
 **Acceptance criteria:**
+
 - The cloud model receives enough context to avoid repeating the local model's specific error
 - Escalated elements are tracked separately in metrics (REQ-MP-600)
 
@@ -592,6 +640,7 @@ This reuses the existing `last_error` / `test_output` injection pattern in `_exe
 **Priority:** P1
 
 At pipeline preflight, the system SHALL check that:
+
 1. Ollama is running (`http://localhost:11434/api/tags` responds)
 2. The `startd8-coder` model is available in the model list
 3. If either check fails, all SIMPLE elements are routed to MODERATE (graceful degradation)
@@ -599,6 +648,7 @@ At pipeline preflight, the system SHALL check that:
 This extends the existing Ollama preflight check in `artisan_phases/preflight.py` (lines 1095-1156).
 
 **Acceptance criteria:**
+
 - Pipeline does not fail if Ollama is unavailable — it degrades to cloud-only
 - A warning is logged when Ollama is unavailable
 
@@ -611,11 +661,13 @@ This extends the existing Ollama preflight check in `artisan_phases/preflight.py
 The `ArtisanChunkExecutor` SHALL support per-element agent selection within a single chunk. Today, a chunk is routed to one agent (drafter). With micro-prime, a chunk may contain elements at different tiers.
 
 **Options (choose one during implementation):**
+
 - (a) Split SIMPLE elements into a separate pre-pass before the chunk executor runs
 - (b) Add an `ollama_spec` to `ArtisanChunkExecutor` alongside `drafter_spec` / `refiner_spec`
 - (c) Process TRIVIAL and SIMPLE elements during the SCAFFOLD phase extension, before IMPLEMENT
 
 **Acceptance criteria:**
+
 - SIMPLE elements are processed by the local model regardless of which option is chosen
 - MODERATE/COMPLEX elements in the same chunk are unaffected
 - The skeleton file has SIMPLE bodies filled in before cloud models process MODERATE/COMPLEX elements in the same file
@@ -630,6 +682,7 @@ When multiple elements in the same file are processed by different tiers (TRIVIA
 **Ordering constraint:** TRIVIAL and SIMPLE elements SHOULD be processed before MODERATE/COMPLEX elements, so that cloud models receive a partially-filled skeleton with working examples as context.
 
 **Acceptance criteria:**
+
 - A file with 3 TRIVIAL, 2 SIMPLE, and 4 MODERATE elements has all 9 bodies spliced into a single coherent file
 - The skeleton's import block, `__all__`, and structure are never modified by body splicing
 - `ast.parse()` passes on the final assembled file
@@ -656,6 +709,7 @@ class MicroPrimeEngine:
 ```
 
 **Acceptance criteria:**
+
 - Engine has no imports from `contractors/artisan_phases/` or `contractors/prime_contractor.py`
 - Engine depends only on `forward_manifest`, `utils/file_assembler`, `utils/code_templates`, `utils/manifest_repair`
 - Both adapters produce identical results for the same input elements
@@ -690,6 +744,7 @@ class MicroPrimeCodeGenerator(CodeGenerator):
 | `feature_name` | `FeatureSpec.name` | Prompt context |
 
 **Acceptance criteria:**
+
 - `MicroPrimeCodeGenerator` can be passed as `code_generator=` to `PrimeContractorWorkflow`
 - Returns `GenerationResult` with `success`, `generated_files`, `cost_usd`, `input_tokens`, `output_tokens`
 - Works in both standalone and pipeline execution modes
@@ -705,6 +760,7 @@ An `ArtisanMicroPrimeAdapter` SHALL integrate the `MicroPrimeEngine` into the Ar
 **Integration point:** Between skeleton rendering (SCAFFOLD) and chunk execution (IMPLEMENT).
 
 **Acceptance criteria:**
+
 - MODERATE/COMPLEX elements are unaffected — existing `ArtisanChunkExecutor` behavior is preserved
 - Cloud models receive partially-filled skeletons with TRIVIAL/SIMPLE bodies as in-context examples
 - Adapter reuses the existing `_execute_chunk_inner()` retry/escalation pattern for SIMPLE failures
@@ -742,6 +798,7 @@ class MicroPrimeContext:
 Each adapter (Artisan, Prime) maps its workflow-specific context into this shape.
 
 **Acceptance criteria:**
+
 - `MicroPrimeEngine` never inspects workflow-specific context keys
 - Artisan adapter builds `MicroPrimeContext` from phase pipeline data
 - Prime adapter builds `MicroPrimeContext` from `gen_context` dict
@@ -769,11 +826,13 @@ GenerationResult(
 **Artisan path:** Write assembled files to the chunk's output directory and populate `exec_output` for the existing phase pipeline.
 
 **Cost tracking:**
+
 - TRIVIAL/SIMPLE elements report `cost_usd=0.00` for cloud cost
 - Escalated elements report the actual cloud cost of the fallback generation
 - Both adapters populate `input_tokens` and `output_tokens` for local model usage (informational)
 
 **Acceptance criteria:**
+
 - Prime adapter returns `GenerationResult` with all required fields
 - Artisan adapter's output is compatible with `_execute_chunk_inner()` expectations
 - Cost tracking distinguishes local (free) from escalated (cloud cost) elements
@@ -788,6 +847,7 @@ GenerationResult(
 The complexity gate SHALL analyze per-element API dependencies rather than relying solely on file-level imports. A file may import external libraries, but individual elements within that file may not use them. Implements a two-pass algorithm: Pass 1 (REQ-MP-501) is the coarse file-level scan; Pass 2 (REQ-MP-511) refines per-element using binding constraints, docstring hints, and name/signature patterns.
 
 **Acceptance criteria:**
+
 - Elements in external-import files that don't use external APIs in their body are classified as SIMPLE
 - File-level gate (REQ-MP-501) still applies as coarse first pass; per-element refinement can override downward
 - Projected impact: routes ~14 elements locally (vs 6 file-level only) at ~71% verified rate (vs 33%)
@@ -801,6 +861,7 @@ The complexity gate SHALL analyze per-element API dependencies rather than relyi
 The pipeline SHALL implement a verification-gated escalation flow: generate locally → repair (REQ-MP-400) → AST validate (REQ-MP-405) → structural verify → accept or escalate to cloud. Includes a zero-cost structural verification mode (AST-based: checks for return statements, no `NotImplementedError`, non-empty body) and batch escalation per file with partially-filled skeleton as context.
 
 **Acceptance criteria:**
+
 - Elements passing both AST and structural verification are accepted without cloud calls
 - Failed elements are escalated with full `EscalationContext` (REQ-MP-502)
 - Escalation is batched per-file; cloud model receives partially-filled skeleton as examples
@@ -834,6 +895,7 @@ Each element's generation SHALL be tracked with:
 | `template_name` | str | Template used (TRIVIAL elements only) |
 
 **Acceptance criteria:**
+
 - Metrics are emitted for every element regardless of tier
 - Metrics are serializable to JSON for experiment result files
 
@@ -854,6 +916,7 @@ Each repair step SHALL record whether it modified the code, enabling analysis of
 | Import completion | `imports_added: int`, `import_names: list[str]` |
 
 **Acceptance criteria:**
+
 - After an experiment run, the user can answer: "How many elements were recovered by indentation normalization vs signature reconciliation?"
 
 ### REQ-MP-602: Cost Accounting
@@ -869,6 +932,7 @@ The pipeline SHALL track cost per tier and report savings relative to an all-clo
 - **Local model cost:** $0.00 (reported for completeness)
 
 **Acceptance criteria:**
+
 - Cost report is included in experiment output JSON
 - Cost report shows per-tier breakdown
 
@@ -910,14 +974,129 @@ Experiment runs SHALL produce a JSON result file with schema:
 ```
 
 **Acceptance criteria:**
+
 - Schema is versioned (`schema_version` field)
 - Result files from different runs can be compared programmatically
 
 ---
 
-## 10. Data Flow
+## 10. Layer 7 — Quick Wins & Acceleration (REQ-MP-7xx)
 
-### 10.1 Dual Entry Points
+> Detailed requirements: [`REQ-MP-7xx_QUICK_WINS.md`](./REQ-MP-7xx_QUICK_WINS.md)
+
+This layer identifies the smallest changes that unlock the most value. Most Micro Prime subsystems are 70-95% already built as production utilities, experiment script logic, or manifest models. The remaining gap is ~687 lines of glue code — but the **order** in which those lines are written determines how much cumulative value is delivered at each step.
+
+### REQ-MP-700: Existing Code Delegation Contracts
+
+**Status:** planned
+**Priority:** P0
+
+The implementation SHALL delegate to existing production code rather than reimplementing. Mandatory contracts: fence stripping → `extract_code_from_response()`, skeleton rendering → `DeterministicFileAssembler.render_file()`, element metadata → `ForwardElementSpec` fields, signature rendering → `DeterministicFileAssembler._render_signature()`, agent resolution → `resolve_agent_spec()`.
+
+**Acceptance criteria:**
+- No delegation target is modified to accommodate Micro Prime (consume-only contracts)
+- `micro_prime/repair.py` does not contain regex-based fence stripping
+
+### REQ-MP-701: Experiment Script Extraction Map
+
+**Status:** planned
+**Priority:** P0
+
+Validated functions from the experiment script (~319 lines across 7 functions) SHALL be extracted to the `micro_prime` package rather than rewritten. Key extractions: `classify_element_heuristic()` → `classifier.py`, `_try_parse()` / `_normalize_indentation()` / `_extract_syntax_error()` → `repair.py`, `_find_few_shot_examples()` / `_estimate_body_lines()` → `prompt_builder.py`, `collect_elements()` → `classifier.py`.
+
+**Acceptance criteria:**
+- Extracted functions retain validated behavior (unit tests compare output against experiment script)
+- No extracted function exceeds 20% diff from its experiment script source
+
+### REQ-MP-702: splice_body() on DeterministicFileAssembler
+
+**Status:** planned
+**Priority:** P0
+**Extends:** REQ-MP-202, REQ-MP-505
+
+The `DeterministicFileAssembler` SHALL expose a `splice_body()` method (~25 lines) that replaces a specific element's `raise NotImplementedError` stub with generated body code. This is the keystone that bridges generation to output — all tiers (template, local model, cloud) share one insertion mechanism.
+
+**Acceptance criteria:**
+- Splicing preserves all other elements, imports, `__all__`, and class structure
+- Multiple sequential splices into the same skeleton produce a valid file
+- Incorrect indentation in body input is corrected to match stub indent level
+
+### REQ-MP-703: Non-Destructive Repair Step Decorator
+
+**Status:** planned
+**Priority:** P0
+**Implements:** REQ-MP-406
+
+A `@repair_step` decorator SHALL wrap any repair function with before/after AST validation and automatic rollback. This enables incremental delivery: ship with 2 steps, add more later, each independently safe.
+
+**Acceptance criteria:**
+- Repair step that turns valid Python into invalid Python has changes discarded
+- Adding a new step requires only: write function + decorate + append to step list
+
+### REQ-MP-704: Compound Value Chain — Template-to-Few-Shot Pipeline
+
+**Status:** planned
+**Priority:** P1
+**Depends on:** REQ-MP-300, REQ-MP-205, REQ-MP-505
+
+TRIVIAL elements filled by template SHALL be immediately available as few-shot examples for subsequent SIMPLE generation. Processing order within each file: TRIVIAL first (always correct, $0), then SIMPLE (with accumulated few-shot examples). Each success improves the next generation — a self-reinforcing quality cycle.
+
+**Acceptance criteria:**
+- A file with 2 TRIVIAL + 5 SIMPLE elements: first SIMPLE receives 2 few-shot examples from TRIVIAL bodies
+- Processing order is deterministic: TRIVIAL first (alphabetical), then SIMPLE (alphabetical)
+
+### REQ-MP-705: Accelerated Build Order
+
+**Status:** planned
+**Priority:** P1
+
+Implementation SHALL follow a sequence maximizing cumulative value: (1) `splice_body()` ~25 lines → (2) template registry ~100 lines → (3) model catalog entry ~12 lines → (4) `@repair_step` + fence strip + indent normalize ~90 lines → (5) classifier extraction ~170 lines → (6) few-shot wiring ~60 lines → (7) element-level import gate ~30 lines → (8) remaining repair steps ~200 lines.
+
+**Acceptance criteria:**
+- Each step is independently shippable (no step depends on a later step)
+- Each step has an integration test gate that passes before proceeding
+
+### REQ-MP-706: Incremental Repair Pipeline Delivery
+
+**Status:** planned
+**Priority:** P1
+**Depends on:** REQ-MP-703
+
+The repair pipeline SHALL be delivered in phases: MVP (fence strip + indent normalize, ~60% recovery), Phase 2 (+ over-gen trim + bare wrap, ~80%), Phase 3 (+ sig reconcile + import complete, ~90%). Each step is feature-flaggable via `RepairConfig.enabled_steps`.
+
+**Acceptance criteria:**
+- Pipeline with only MVP steps produces measurable improvement over raw model output
+- Removing a step requires only removing its name from `enabled_steps`
+
+### REQ-MP-707: Model Catalog Ollama Provider Section
+
+**Status:** planned
+**Priority:** P1
+**Implements:** REQ-MP-104
+
+~12 lines total: `Models.OLLAMA_STARTD8_CODER` constant, `_MODEL_REGISTRY` entry (`provider="ollama"`, `tier="fast"`, `capabilities={"text", "code"}`), and `get_latest_model()` tier mapping for Ollama.
+
+**Acceptance criteria:**
+- `resolve_agent_spec("ollama:startd8-coder")` returns a valid agent
+- `get_latest_model("ollama", "fast")` returns `"ollama:startd8-coder"`
+
+### REQ-MP-708: Element-Level Import Gate Refinement
+
+**Status:** planned
+**Priority:** P2
+**Refines:** REQ-MP-511
+
+Per-element import gate uses three signals: binding constraints referencing external packages (+2), parameter types from external packages (+2), and name patterns combined with file-level external imports (+1). Recovers elements like `HealthCheck.Check` that the file-level gate incorrectly blocks.
+
+**Acceptance criteria:**
+- Elements in external-import files whose constraints don't reference those packages are classified as SIMPLE
+- Recovers at least 2 additional elements per seed compared to file-level only
+
+---
+
+## 11. Data Flow
+
+### 11.1 Dual Entry Points
 
 ```
 ┌─────────────────────────────┐    ┌──────────────────────────────────┐
@@ -947,7 +1126,7 @@ Experiment runs SHALL produce a JSON result file with schema:
                             ▼
 ```
 
-### 10.2 Engine Internals
+### 11.2 Engine Internals
 
 ```
 MicroPrimeEngine.process_elements()
@@ -994,7 +1173,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 11. Traceability Matrix
+## 12. Traceability Matrix
 
 | Requirement | Implementation File | Test File | Status |
 |------------|-------------------|-----------|--------|
@@ -1039,12 +1218,21 @@ MicroPrimeEngine.process_elements()
 | REQ-MP-601 | `src/startd8/utils/manifest_repair.py` | Unit test | planned |
 | REQ-MP-602 | `scripts/experiment_local_model_routing.py` | Experiment run | planned |
 | REQ-MP-603 | `scripts/experiment_local_model_routing.py` | Schema validation test | planned |
+| REQ-MP-700 | Cross-cutting (delegation contracts) | Code review | planned |
+| REQ-MP-701 | `src/startd8/micro_prime/` (multiple) | Unit tests comparing against experiment script | planned |
+| REQ-MP-702 | `src/startd8/utils/file_assembler.py` | `tests/unit/utils/test_file_assembler.py` | planned |
+| REQ-MP-703 | `src/startd8/micro_prime/repair.py` | `tests/unit/micro_prime/test_repair.py` | planned |
+| REQ-MP-704 | `src/startd8/micro_prime/engine.py` | `tests/integration/test_compound_chain.py` | planned |
+| REQ-MP-705 | Implementation plan (build order) | Integration test gates per step | planned |
+| REQ-MP-706 | `src/startd8/micro_prime/repair.py` | `tests/unit/micro_prime/test_repair.py` | planned |
+| REQ-MP-707 | `src/startd8/model_catalog.py` | `tests/unit/test_model_catalog.py` | planned |
+| REQ-MP-708 | `src/startd8/micro_prime/classifier.py` | `tests/unit/micro_prime/test_classifier.py` | planned |
 
 ---
 
-## 12. Verification Strategy
+## 13. Verification Strategy
 
-### 12.1 Experiment Rounds (Pre-Integration)
+### 13.1 Experiment Rounds (Pre-Integration)
 
 | Round | Focus | Measures |
 |-------|-------|----------|
@@ -1053,7 +1241,7 @@ MicroPrimeEngine.process_elements()
 | 2c | Repair pipeline (Layer 4) | Recovery rate per step, net syntax rate |
 | 2d | Combined (all layers) | End-to-end usable rate, cost savings |
 
-### 12.2 Unit Tests (~60 tests across 4 files)
+### 13.2 Unit Tests (~60 tests across 4 files)
 
 | File | Count | Coverage |
 |------|-------|----------|
@@ -1062,7 +1250,7 @@ MicroPrimeEngine.process_elements()
 | `test_body_splicing.py` | ~10 | Splice into skeleton, indent normalization, multi-element files |
 | `test_experiment_integration.py` | ~10 | End-to-end: manifest → template/generate → repair → validate |
 
-### 12.3 Integration Acceptance Criteria
+### 13.3 Integration Acceptance Criteria
 
 | Criterion | Measurement |
 |-----------|-------------|
@@ -1073,7 +1261,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 13. Related Documents
+## 14. Related Documents
 
 | Document | Relationship |
 |----------|-------------|
@@ -1085,3 +1273,79 @@ MicroPrimeEngine.process_elements()
 | `src/startd8/forward_manifest.py` | Schema — ForwardManifest, ForwardElementSpec, InterfaceContract |
 | `src/startd8/utils/file_assembler.py` | Implementation — DeterministicFileAssembler |
 | `src/startd8/utils/code_extraction.py` | Implementation — extract_code_from_response, STUB_SENTINEL |
+| [MICRO_PRIME_IMPLEMENTATION_PLAN.md](./MICRO_PRIME_IMPLEMENTATION_PLAN.md) | Implementation plan — phased build order, package structure, existing assets |
+| `scripts/experiment_local_model_routing.py` | Experiment script — source for extraction targets (REQ-MP-701) |
+| `src/startd8/model_catalog.py` | Model registry — target for Ollama provider section (REQ-MP-707) |
+
+---
+
+## Appendix: Iterative Review Log (Applied / Rejected Suggestions)
+
+This appendix is intentionally **append-only**. New reviewers (human or model) should add suggestions to Appendix C, and then once validated, record the final disposition in Appendix A (applied) or Appendix B (rejected with rationale).
+
+### Reviewer Instructions (for humans + models)
+
+- **Before suggesting changes**: Scan Appendix A and Appendix B first. Do **not** re-suggest items already applied or explicitly rejected.
+- **When proposing changes**: Append them to Appendix C using a unique suggestion ID (`R{round}-S{n}`).
+- **When endorsing prior suggestions**: If you agree with an untriaged suggestion from a prior round, list it in an **Endorsements** section after your suggestion table. This builds consensus signal - suggestions endorsed by multiple reviewers should be prioritized during triage.
+- **When validating**: For each suggestion, append a row to Appendix A (if applied) or Appendix B (if rejected) referencing the suggestion ID. Endorsement counts inform priority but do not auto-apply suggestions.
+- **If rejecting**: Record **why** (specific rationale) so future models don't re-propose the same idea.
+
+### Appendix A: Applied Suggestions
+
+| ID | Suggestion | Source | Implementation / Validation Notes | Date |
+|----|------------|--------|----------------------------------|------|
+| (none yet) |  |  |  |  |
+
+### Appendix B: Rejected Suggestions (with Rationale)
+
+| ID | Suggestion | Source | Rejection Rationale | Date |
+|----|------------|--------|---------------------|------|
+| (none yet) |  |  |  |
+
+### Appendix C: Incoming Suggestions (Untriaged, append-only)
+
+#### Review Round R1
+
+- **Reviewer**: codex (gpt-5)
+- **Date**: 2026-03-01 19:12:31 UTC
+- **Scope**: Requirements-quality review for clarity, execution risk, and testability before implementation
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R1-F1 | Architecture | high | Replace REQ-MP-504's "choose one during implementation" options with a single normative integration path and move alternatives into an ADR note. | Leaving three implementation options in a requirement makes it ambiguous and weakens testability across teams. | Section 8, REQ-MP-504 | Verify REQ-MP-504 specifies one required path and no longer uses unresolved option bullets. |
+| R1-F2 | Interfaces | high | Define explicit partial-success semantics for `GenerationResult` when some elements are escalated, including where escalated element metadata is surfaced to callers. | Adapter consumers need a stable contract for mixed local/cloud outcomes; current wording focuses on success fields but not mixed-state shape. | Section 8, REQ-MP-507 and REQ-MP-510 | Verify one example shows a mixed local/escalated result and names required fields for escalated elements. |
+| R1-F3 | Data | high | Refactor the Traceability Matrix to point at the new `src/startd8/micro_prime/` module layout and add an ownership/update rule to keep mappings current. | The matrix currently references several legacy files that conflict with the proposed package structure, making it unreliable for execution tracking. | Section 11, Traceability Matrix | Verify each REQ-MP row maps to an existing planned file and test artifact in the implementation plan. |
+| R1-F4 | Risks | high | Extend REQ-MP-503 with runtime health-failure handling (not just preflight), including mid-run Ollama outage behavior and fallback guarantees. | Preflight-only checks do not cover long runs where local model availability can change during execution. | Section 8, REQ-MP-503 | Validate a test scenario where Ollama becomes unavailable after preflight and elements still degrade safely to cloud routing. |
+| R1-F5 | Validation | medium | Add explicit compatibility rules for REQ-MP-603 result schema (`schema_version` bump policy and minimum supported reader versions). | The document requires a version field but does not define how version changes are managed or validated over time. | Section 9, REQ-MP-603 | Verify the schema section states backward-compatible vs breaking changes and the required version increment behavior. |
+| R1-F6 | Ops | high | Add requirements for local inference resource governance: max concurrent SIMPLE requests, per-element timeout, and queue/backpressure policy. | Without operational guardrails, local routing can starve CPU/RAM or introduce nondeterministic latency under load. | Section 8, Layer 5 (new REQ-MP-513 or extension to REQ-MP-500/503) | Verify load tests assert bounded concurrency and timeout behavior with deterministic fallback when limits are hit. |
+| R1-F7 | Security | high | Add prompt and telemetry sanitization requirements to prevent secrets from `existing_files` or bindings leaking into logs/metrics/escalation payloads. | The design forwards rich context into prompts and escalation payloads but does not define redaction controls for sensitive data. | Section 8 (REQ-MP-502/509) and Section 9 (REQ-MP-600/603) | Validate tests that inject secret-like values and assert redaction/hashing before persistence or telemetry emission. |
+| R1-F8 | Architecture | medium | Add a source-of-truth requirement for shared utilities (`code_templates`, `manifest_repair`) to avoid long-term duplication between legacy utils and new `micro_prime` modules. | Both reuse and rewrite paths are described across docs; without a migration rule, drift and divergent fixes are likely. | Section 8, REQ-MP-506 and Section 13 related docs | Verify one canonical module is declared for each subsystem and any compatibility wrappers are explicitly temporary. |
+
+#### Review Round R2
+
+- **Reviewer**: Antigravity
+- **Date**: 2026-03-01
+- **Scope**: Requirements review for consistency, completeness, and error robustness.
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R2-S1 | Templates | medium | Clarify handling of `async` functions in Layer 3 (Template Registry). | Modern frameworks (FastAPI, etc.) rely heavily on `async`, but templates currently only show sync examples. | REQ-MP-3xx | Verify templates correctly emit `async def` when manifest specifies `is_async=True`. |
+| R2-S2 | Repair | low | Add explicit handling for `pass` bodies in REQ-MP-401 (Over-Generation Trimming). | If a model generates `pass` as a placeholder, it might satisfy syntax but fail intent. Should be treated as failure or specifically stripped. | REQ-MP-401 | Add test case where model returns `pass` and ensure it escalates if functionality was expected. |
+| R2-S3 | Repair | low | Extend REQ-MP-404 (Import Completion) to handle relative imports. | Manifests often use relative imports for local package components. The repair logic should ensure relative context is preserved. | REQ-MP-404 | Test repair with `from .utils import foo` and verify it's correctly completed if used but missing. |
+| R2-S4 | Lifecycle | medium | Add a "Requirement Retirement" policy for when REQs are superseded by implementation realities. | As 36 REQs are planned, some may prove redundant. A process for marking REQs as `superseded` would preserve traceability. | New Section 14 | Update REQ-MP-xxx with `Status: superseded by REQ-MP-yyy`. |
+| R2-S5 | Routing | high | Define fallback behavior if Ollama is running but the specific `startd8-coder` model is missing and cannot be pulled (e.g., offline). | REQ-MP-503 mentions checking for the model, but not the "cannot pull" edge case in restricted environments. | REQ-MP-503 | Test preflight with no internet and no local model; verify immediate graceful degradation to cloud. |
+
+#### Review Round R3
+
+- **Reviewer**: codex (gpt-5)
+- **Date**: 2026-03-01 21:08:26 UTC
+- **Scope**: Novel low-effort/high-value opportunities beyond REQ-MP-7xx quick wins and prior rounds
+
+| ID | Area | Severity | Suggestion | Rationale | Proposed Placement | Validation Approach |
+| ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| R3-F1 | Interfaces | high | Add a `classification_reason_codes` requirement so each tier decision carries machine-readable reasons (for example: `template_match`, `external_api_gate`, `binding_signal`, `timeout_fallback`). | This is a small extension to existing classifier outputs and unlocks fast debugging/tuning without new generation infrastructure. | Layer 5, REQ-MP-500/501/511 (or new REQ-MP-709) | Verify per-element metrics and experiment JSON include stable reason codes for every routing decision. |
+| R3-F2 | Ops | high | Add a run-level local failure circuit breaker: after N consecutive SIMPLE failures/timeouts, auto-route remaining SIMPLE elements to cloud for that run. | A few lines of control logic can prevent long degraded runs when local model quality or runtime health collapses mid-execution. | Layer 5, REQ-MP-503/512 (or new REQ-MP-710) | Simulate repeated local failures and assert deterministic trip behavior plus automatic cloud fallback. |
+| R3-F3 | Validation | high | Add bounded escalation-context rules with deterministic priority ordering and a hard token budget for fallback prompts. | Escalation quality improves when context is prioritized; cost/latency improves when oversized payloads are trimmed predictably. | Layer 5, REQ-MP-502 (or new REQ-MP-711) | Verify escalation payload never exceeds budget and always retains required high-priority fields (error, signature, imports, target stub). |
+| R3-F4 | Data | medium | Add a strict output reuse cache for successful SIMPLE generations keyed by element fingerprint (FQN + signature hash + constraint hash + stub hash). | Minimal in-memory/disk caching can eliminate duplicate local inference across retries/re-runs for unchanged elements. | Layer 5/6, REQ-MP-506 and REQ-MP-600 (or new REQ-MP-712) | Re-run the same seed with unchanged fingerprints and verify cached hits skip local generation while preserving identical assembled output. |
+| R3-F5 | Validation | medium | Add a tiny golden corpus regression requirement: a fixed set of representative SIMPLE/TRIVIAL elements replayed in CI to detect classifier/repair regressions quickly. | Small curated fixtures provide outsized protection against accidental regressions while keeping CI cost low. | Verification Strategy + Layer 6 (or new REQ-MP-713) | Ensure CI fails if pass rate, routing decisions, or repair outcomes drift beyond defined tolerances on the corpus. |
