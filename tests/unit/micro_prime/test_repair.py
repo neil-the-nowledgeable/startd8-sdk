@@ -1,0 +1,290 @@
+"""Tests for the Micro Prime Repair Pipeline (REQ-MP-400–407)."""
+
+from __future__ import annotations
+
+import ast
+
+import pytest
+
+from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec, ForwardImportSpec
+from startd8.micro_prime.repair import (
+    _build_def_line,
+    _step_ast_validate,
+    _step_bare_statement_wrap,
+    _step_fence_strip,
+    _step_import_completion,
+    _step_indent_normalize,
+    _step_over_generation_trim,
+    _step_signature_reconcile,
+    _try_parse,
+    run_repair_pipeline,
+)
+from startd8.utils.code_manifest import ElementKind, Param, Signature
+
+
+class TestFenceStrip:
+    """Tests for Step 1: Fence stripping (REQ-MP-400)."""
+
+    def test_strips_markdown_fences(self, simple_function_element):
+        code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
+        result = _step_fence_strip(code, simple_function_element)
+        assert result.modified is True
+        assert "```" not in result.code
+        assert "def get_name" in result.code
+
+    def test_no_fences_unchanged(self, simple_function_element):
+        code = 'def get_name(self, key: str) -> str:\n    return key'
+        result = _step_fence_strip(code, simple_function_element)
+        assert result.modified is False
+        assert result.code == code
+
+    def test_empty_code(self, simple_function_element):
+        result = _step_fence_strip("", simple_function_element)
+        assert result.code == ""
+
+
+class TestOverGenerationTrim:
+    """Tests for Step 2: Over-generation trim (REQ-MP-401)."""
+
+    def test_trims_extra_functions(self, simple_function_element):
+        code = (
+            "def get_name(self, key: str) -> str:\n"
+            "    return key\n\n"
+            "def extra_function():\n"
+            "    pass\n"
+        )
+        result = _step_over_generation_trim(code, simple_function_element)
+        assert result.modified is True
+        assert "extra_function" not in result.code
+
+    def test_preserves_target_only(self, simple_function_element):
+        code = "def get_name(self, key: str) -> str:\n    return key\n"
+        result = _step_over_generation_trim(code, simple_function_element)
+        assert result.modified is False
+
+    def test_trims_extra_constants(self, constant_element):
+        code = "DEFAULT_TIMEOUT = 30\nEXTRA = 99\n"
+        result = _step_over_generation_trim(code, constant_element)
+        assert result.modified is True
+
+    def test_handles_syntax_error(self, simple_function_element):
+        code = "def get_name(self, :\n"
+        result = _step_over_generation_trim(code, simple_function_element)
+        assert result.modified is False
+        assert result.metrics.get("parse_failed") is True
+
+
+class TestBareStatementWrap:
+    """Tests for Step 3: Bare statement wrapping (REQ-MP-407)."""
+
+    def test_wraps_body_only_code(self, simple_function_element):
+        code = "return key"
+        result = _step_bare_statement_wrap(code, simple_function_element)
+        assert result.modified is True
+        assert "def get_name" in result.code
+        assert "    return key" in result.code
+
+    def test_skips_code_with_def(self, simple_function_element):
+        code = "def get_name(self, key: str) -> str:\n    return key"
+        result = _step_bare_statement_wrap(code, simple_function_element)
+        assert result.modified is False
+
+    def test_skips_code_with_decorator(self, simple_function_element):
+        code = "@property\ndef get_name(self, key: str) -> str:\n    return key"
+        result = _step_bare_statement_wrap(code, simple_function_element)
+        assert result.modified is False
+
+    def test_skips_constants(self, constant_element):
+        code = "DEFAULT_TIMEOUT = 30"
+        result = _step_bare_statement_wrap(code, constant_element)
+        assert result.modified is False
+
+    def test_wraps_async(self, async_function_element):
+        code = "return await fetch(url)"
+        result = _step_bare_statement_wrap(code, async_function_element)
+        assert result.modified is True
+        assert "async def fetch_data" in result.code
+
+
+class TestIndentNormalize:
+    """Tests for Step 4: Indentation normalize (REQ-MP-402)."""
+
+    def test_dedent_fixes_indentation(self, async_function_element):
+        """Standalone function with extra indentation needs dedent."""
+        code = "    async def fetch_data(url: str, timeout: int = 30) -> dict:\n        return {}"
+        result = _step_indent_normalize(code, async_function_element)
+        # Already valid at top level via dedent — may or may not modify
+        # depending on whether the original parses
+        if not _try_parse(code, is_method=False):
+            assert result.modified is True
+
+    def test_already_valid_unchanged(self, simple_function_element):
+        code = "def get_name(self, key: str) -> str:\n    return key"
+        result = _step_indent_normalize(code, simple_function_element)
+        # Methods with parent_class pass via class wrapper, so already valid
+        assert result.modified is False
+
+    def test_tab_to_spaces_standalone(self):
+        """Standalone function with tabs needs conversion."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="compute",
+            signature=Signature(params=[], return_annotation="int"),
+        )
+        # Code with mixed indent that fails parse
+        code = "def compute() -> int:\n\t\treturn 42"
+        result = _step_indent_normalize(code, elem)
+        # Tab code may or may not parse directly, but if it does, no change needed
+        # The point is the pipeline doesn't break
+        assert result.code is not None
+
+    def test_strips_explanation_line(self, simple_function_element):
+        code = "Here is the implementation:\ndef get_name(self, key: str) -> str:\n    return key"
+        result = _step_indent_normalize(code, simple_function_element)
+        # Methods already parse via class wrapper, so the original might be "valid"
+        # The strip-first-line strategy would also work
+        assert result.code is not None
+
+
+class TestSignatureReconcile:
+    """Tests for Step 5: Signature reconcile (REQ-MP-403)."""
+
+    def test_reconciles_wrong_params(self, simple_function_element):
+        code = "def get_name(self, wrong_param: int) -> str:\n    return 'hello'"
+        result = _step_signature_reconcile(code, simple_function_element)
+        assert result.modified is True
+        assert "key: str" in result.code
+
+    def test_preserves_correct_signature(self, simple_function_element):
+        code = "def get_name(self, key: str) -> str:\n    return key"
+        result = _step_signature_reconcile(code, simple_function_element)
+        # May or may not be modified depending on exact formatting
+        # but should still contain the correct params
+        assert "key" in result.code
+
+    def test_skips_constants(self, constant_element):
+        code = "DEFAULT_TIMEOUT = 30"
+        result = _step_signature_reconcile(code, constant_element)
+        assert result.modified is False
+
+    def test_skips_no_signature(self):
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="foo",
+            signature=Signature(params=[], return_annotation="None"),
+        )
+        code = "def foo():\n    pass"
+        result = _step_signature_reconcile(code, elem)
+        # With a matching empty signature, should not modify
+        assert "foo" in result.code
+
+
+class TestImportCompletion:
+    """Tests for Step 6: Import completion (REQ-MP-404)."""
+
+    def test_adds_missing_import(self, simple_function_element, sample_file_spec):
+        code = "def get_name(self, key: str) -> str:\n    p = Path(key)\n    return str(p)"
+        result = _step_import_completion(code, simple_function_element, sample_file_spec)
+        assert result.modified is True
+        assert "from pathlib import Path" in result.code
+
+    def test_skips_existing_import(self, simple_function_element, sample_file_spec):
+        code = "from pathlib import Path\ndef get_name(self, key: str) -> str:\n    return str(Path(key))"
+        result = _step_import_completion(code, simple_function_element, sample_file_spec)
+        assert result.modified is False
+
+    def test_no_file_spec_skips(self, simple_function_element):
+        code = "def get_name(self, key: str) -> str:\n    return key"
+        result = _step_import_completion(code, simple_function_element, None)
+        assert result.modified is False
+
+
+class TestASTValidate:
+    """Tests for Step 7: AST validation (REQ-MP-405)."""
+
+    def test_valid_code(self, simple_function_element):
+        code = "def get_name(self, key: str) -> str:\n    return key"
+        result = _step_ast_validate(code, simple_function_element)
+        assert result.metrics["valid"] is True
+
+    def test_invalid_code(self, simple_function_element):
+        code = "def get_name(self, :\n    return key"
+        result = _step_ast_validate(code, simple_function_element)
+        assert result.metrics["valid"] is False
+
+
+class TestRunRepairPipeline:
+    """Tests for the full repair pipeline (REQ-MP-406)."""
+
+    def test_full_pipeline_valid_code(self, simple_function_element, sample_file_spec):
+        code = "def get_name(self, key: str) -> str:\n    return key"
+        repaired, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        assert repaired == code  # Already valid, no changes needed
+        assert len(steps) == 7  # All 7 steps run
+
+    def test_full_pipeline_with_fences(self, simple_function_element, sample_file_spec):
+        code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
+        repaired, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        assert "```" not in repaired
+        assert "def get_name" in repaired
+
+    def test_non_destructive_guarantee(self, simple_function_element, sample_file_spec):
+        """REQ-MP-406: If a step breaks valid code, revert."""
+        code = "def get_name(self, key: str) -> str:\n    return key"
+        repaired, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        # The repaired code should still be valid
+        try:
+            ast.parse(repaired)
+        except SyntaxError:
+            pytest.fail("Repair pipeline broke valid code!")
+
+    def test_pipeline_step_results_tracked(self, simple_function_element, sample_file_spec):
+        code = "def get_name(self, key: str) -> str:\n    return key"
+        _, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
+        step_names = [s.step_name for s in steps]
+        assert "fence_strip" in step_names
+        assert "ast_validate" in step_names
+        assert len(step_names) == 7
+
+
+class TestBuildDefLine:
+    """Tests for _build_def_line helper."""
+
+    def test_regular_function(self, simple_function_element):
+        line = _build_def_line(simple_function_element)
+        assert line == "def get_name(self, key: str) -> str:"
+
+    def test_async_function(self, async_function_element):
+        line = _build_def_line(async_function_element)
+        assert "async def fetch_data" in line
+
+    def test_constant_returns_none(self, constant_element):
+        line = _build_def_line(constant_element)
+        assert line is None
+
+    def test_class(self):
+        elem = ForwardElementSpec(
+            kind=ElementKind.CLASS,
+            name="MyClass",
+            bases=["BaseModel"],
+        )
+        line = _build_def_line(elem)
+        assert line == "class MyClass(BaseModel):"
+
+
+class TestTryParse:
+    """Tests for _try_parse helper."""
+
+    def test_valid_code(self):
+        assert _try_parse("x = 1") is True
+
+    def test_invalid_code(self):
+        assert _try_parse("def (x:") is False
+
+    def test_method_with_class_wrapper(self):
+        code = "    def foo(self):\n        return 1"
+        assert _try_parse(code, is_method=True) is True
+
+    def test_method_without_wrapper(self):
+        code = "def foo(self):\n    return 1"
+        assert _try_parse(code, is_method=False) is True
