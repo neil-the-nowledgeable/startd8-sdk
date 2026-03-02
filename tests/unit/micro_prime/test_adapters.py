@@ -1,7 +1,8 @@
-"""Tests for the Micro Prime workflow adapters (REQ-MP-503–504)."""
+"""Tests for the Micro Prime workflow adapters (REQ-MP-503–504, 705)."""
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -344,6 +345,76 @@ class TestOutputFileWriting:
         assert result.metadata["fallback_files_written"] == 1
 
 
+class TestCostTracking:
+    """Tests for REQ-MP-704: Cost and token tracking polish."""
+
+    def test_local_only_cost_is_zero(self, tmp_path, sample_manifest, sample_skeleton):
+        """Local-only generation reports cost_usd == 0.0."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        with patch("startd8.micro_prime.prime_adapter.urlopen", return_value=mock_response):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+        assert result.cost_usd == 0.0
+
+    def test_fallback_cost_forwarded(self, tmp_path, sample_manifest, sample_skeleton):
+        """Fallback cost_usd is forwarded to the final GenerationResult."""
+        fallback = MagicMock()
+        fallback.generate.return_value = MagicMock(
+            success=True,
+            generated_files=[Path("fb_out.py")],
+            input_tokens=100,
+            output_tokens=200,
+            model="fallback-model",
+            cost_usd=0.05,
+        )
+
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            fallback=fallback,
+            output_dir=tmp_path,
+        )
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        with patch("startd8.micro_prime.prime_adapter.urlopen", return_value=mock_response):
+            result = gen.generate(
+                "Implement utils",
+                {},
+                ["src/mypackage/utils.py", "src/unknown.py"],
+            )
+        assert result.cost_usd == 0.05
+
+    def test_metadata_element_counts(self, tmp_path, sample_manifest, sample_skeleton):
+        """Metadata contains element-level counter keys."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        with patch("startd8.micro_prime.prime_adapter.urlopen", return_value=mock_response):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+        assert "micro_prime_elements" in result.metadata
+        assert "micro_prime_template_hits" in result.metadata
+        assert "micro_prime_ollama_generations" in result.metadata
+
+
 class TestOllamaAvailabilityGuard:
     """Tests for REQ-MP-711: Runtime Ollama availability guard."""
 
@@ -476,3 +547,74 @@ class TestEnableDisableMicroPrime:
         assert workflow.code_generator._config.model == "custom-model"
         assert workflow.code_generator._config.max_tokens == 1024
         assert workflow.code_generator._config.templates_enabled is False
+
+
+class TestObservabilityLogging:
+    """Tests for REQ-MP-705: Observability and Logging."""
+
+    def _make_ollama_mock(self):
+        """Create a mock urlopen that reports startd8-coder:latest as available."""
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        return mock_response
+
+    def test_per_feature_summary_logged(
+        self, sample_manifest, sample_skeleton, tmp_path, caplog,
+    ):
+        """generate() emits an INFO log summarising local vs escalated element counts."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        with caplog.at_level(logging.INFO), patch(
+            "startd8.micro_prime.prime_adapter.urlopen",
+            return_value=self._make_ollama_mock(),
+        ):
+            gen.generate("Implement utils", {}, ["src/mypackage/utils.py"])
+
+        summary_messages = [
+            r.message
+            for r in caplog.records
+            if "elements local" in r.message and "escalated to fallback" in r.message
+        ]
+        assert len(summary_messages) >= 1, (
+            f"Expected summary log with 'elements local ... escalated to fallback', "
+            f"got: {[r.message for r in caplog.records]}"
+        )
+
+    def test_otel_counters_not_required(
+        self, sample_manifest, sample_skeleton, tmp_path,
+    ):
+        """generate() succeeds when OTel counters are None (no opentelemetry installed)."""
+        import startd8.micro_prime.prime_adapter as pa
+
+        saved_local = pa._elements_local_counter
+        saved_escalated = pa._elements_escalated_counter
+        saved_template = pa._template_hits_counter
+        try:
+            pa._elements_local_counter = None
+            pa._elements_escalated_counter = None
+            pa._template_hits_counter = None
+
+            gen = MicroPrimeCodeGenerator(
+                manifest=sample_manifest,
+                skeletons={"src/mypackage/utils.py": sample_skeleton},
+                output_dir=tmp_path,
+            )
+
+            with patch(
+                "startd8.micro_prime.prime_adapter.urlopen",
+                return_value=self._make_ollama_mock(),
+            ):
+                result = gen.generate("Implement utils", {}, ["src/mypackage/utils.py"])
+
+            # Should complete without AttributeError
+            assert result is not None
+        finally:
+            pa._elements_local_counter = saved_local
+            pa._elements_escalated_counter = saved_escalated
+            pa._template_hits_counter = saved_template

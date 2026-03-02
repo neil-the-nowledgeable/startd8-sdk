@@ -22,6 +22,27 @@ from startd8.micro_prime.models import MicroPrimeConfig
 
 logger = get_logger(__name__)
 
+# OTel metrics (REQ-MP-705) — optional dependency
+try:
+    from opentelemetry import metrics as otel_metrics
+    _meter = otel_metrics.get_meter("startd8.micro_prime")
+    _elements_local_counter = _meter.create_counter(
+        "micro_prime.elements_local",
+        description="Elements processed locally by Micro Prime",
+    )
+    _elements_escalated_counter = _meter.create_counter(
+        "micro_prime.elements_escalated",
+        description="Elements escalated to fallback generator",
+    )
+    _template_hits_counter = _meter.create_counter(
+        "micro_prime.template_hits",
+        description="Elements resolved by template registry",
+    )
+except ImportError:
+    _elements_local_counter = None
+    _elements_escalated_counter = None
+    _template_hits_counter = None
+
 
 class MicroPrimeCodeGenerator:
     """``CodeGenerator`` implementation using the Micro Prime engine.
@@ -98,6 +119,10 @@ class MicroPrimeCodeGenerator:
         total_input = 0
         total_output = 0
         has_escalations = False
+        local_element_count = 0
+        template_count = 0
+        ollama_count = 0
+        escalated_element_count = 0
 
         for file_path in target_files:
             file_spec = manifest.file_specs.get(file_path)
@@ -124,15 +149,46 @@ class MicroPrimeCodeGenerator:
                     sum(1 for er in file_result.element_results if er.success),
                 )
 
-            # Track tokens
+            # Track tokens and element counts
             for er in file_result.element_results:
                 total_input += er.input_tokens
                 total_output += er.output_tokens
+                if er.success:
+                    local_element_count += 1
+                    if er.template_used:
+                        template_count += 1
+                    else:
+                        ollama_count += 1
+                if er.escalation is not None:
+                    escalated_element_count += 1
+
+            # OTel metrics (REQ-MP-705)
+            if _elements_local_counter is not None:
+                for er in file_result.element_results:
+                    if er.success:
+                        _elements_local_counter.add(
+                            1, {"tier": er.tier.value, "file_path": file_path},
+                        )
+                        if er.template_used and _template_hits_counter is not None:
+                            _template_hits_counter.add(
+                                1, {"file_path": file_path},
+                            )
+                    if er.escalation is not None and _elements_escalated_counter is not None:
+                        _elements_escalated_counter.add(
+                            1,
+                            {"reason": er.escalation.reason.value, "file_path": file_path},
+                        )
 
             if file_result.escalated_count > 0:
                 has_escalations = True
 
         local_file_count = len(generated_files)
+
+        logger.info(
+            "Micro Prime: %d elements local, %d escalated to fallback",
+            local_element_count,
+            escalated_element_count,
+        )
 
         # If there are escalations and we have a fallback, delegate remaining.
         # Fallback writes its own files — we only collect paths, no double-write.
@@ -148,10 +204,17 @@ class MicroPrimeCodeGenerator:
                 generated_files=generated_files,
                 input_tokens=total_input,
                 output_tokens=total_output,
+                cost_usd=fallback_result.cost_usd,
                 model=f"micro-prime+{fallback_result.model}",
                 metadata={
                     "micro_prime_files_written": local_file_count,
                     "fallback_files_written": len(fallback_result.generated_files),
+                    "micro_prime_elements": local_element_count,
+                    "micro_prime_template_hits": template_count,
+                    "micro_prime_ollama_generations": ollama_count,
+                    "fallback_elements": escalated_element_count,
+                    "micro_prime_cost_usd": 0.0,
+                    "fallback_cost_usd": fallback_result.cost_usd,
                 },
             )
 
@@ -160,10 +223,15 @@ class MicroPrimeCodeGenerator:
             generated_files=generated_files,
             input_tokens=total_input,
             output_tokens=total_output,
+            cost_usd=0.0,
             model=f"{self._config.provider}:{self._config.model}",
             metadata={
                 "micro_prime_only": True,
                 "micro_prime_files_written": local_file_count,
+                "micro_prime_elements": local_element_count,
+                "micro_prime_template_hits": template_count,
+                "micro_prime_ollama_generations": ollama_count,
+                "micro_prime_cost_usd": 0.0,
             },
         )
 
