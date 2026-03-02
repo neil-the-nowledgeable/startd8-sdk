@@ -197,7 +197,7 @@ if self._forward_manifest is not None:
 
 ### REQ-MP-702: On-the-Fly Skeleton Generation
 
-**Status:** planned
+**Status:** DONE
 **Priority:** P0
 **Depends on:** REQ-MP-701
 
