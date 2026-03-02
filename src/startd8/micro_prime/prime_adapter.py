@@ -31,6 +31,7 @@ class MicroPrimeCodeGenerator:
         fallback: Fallback code generator for elements beyond local capability.
         manifest: Forward manifest for element metadata.
         skeletons: Dict of file path -> skeleton content.
+        output_dir: Directory for writing generated files.  Defaults to cwd.
     """
 
     def __init__(
@@ -39,11 +40,13 @@ class MicroPrimeCodeGenerator:
         fallback: Optional[CodeGenerator] = None,
         manifest: Optional[ForwardManifest] = None,
         skeletons: Optional[dict[str, str]] = None,
+        output_dir: Optional[Path] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._fallback = fallback
         self._manifest = manifest
         self._skeletons = skeletons or {}
+        self._output_dir = output_dir or Path(".")
         self._engine = MicroPrimeEngine(config=self._config)
 
     def generate(
@@ -97,9 +100,19 @@ class MicroPrimeCodeGenerator:
             file_result = self._engine.process_file(file_spec, manifest, skeleton)
 
             if file_result.filled_skeleton:
-                # Write the filled skeleton
-                output_path = Path(file_path)
+                # REQ-MP-703: Write filled skeleton to disk
+                output_path = self._output_dir / file_path
+                output_path.parent.mkdir(parents=True, exist_ok=True)
+                output_path.write_text(
+                    file_result.filled_skeleton, encoding="utf-8",
+                )
                 generated_files.append(output_path)
+                logger.info(
+                    "Micro Prime wrote %s (%d lines, %d elements filled)",
+                    file_path,
+                    file_result.filled_skeleton.count("\n") + 1,
+                    sum(1 for er in file_result.element_results if er.success),
+                )
 
             # Track tokens
             for er in file_result.element_results:
@@ -109,12 +122,14 @@ class MicroPrimeCodeGenerator:
             if file_result.escalated_count > 0:
                 has_escalations = True
 
-        # If there are escalations and we have a fallback, delegate remaining
+        local_file_count = len(generated_files)
+
+        # If there are escalations and we have a fallback, delegate remaining.
+        # Fallback writes its own files — we only collect paths, no double-write.
         if has_escalations and self._fallback is not None:
             fallback_result = self._delegate_to_fallback(
                 task, context, target_files,
             )
-            # Merge results
             generated_files.extend(fallback_result.generated_files)
             total_input += fallback_result.input_tokens
             total_output += fallback_result.output_tokens
@@ -125,18 +140,21 @@ class MicroPrimeCodeGenerator:
                 output_tokens=total_output,
                 model=f"micro-prime+{fallback_result.model}",
                 metadata={
-                    "micro_prime_files": len(generated_files) - len(fallback_result.generated_files),
-                    "fallback_files": len(fallback_result.generated_files),
+                    "micro_prime_files_written": local_file_count,
+                    "fallback_files_written": len(fallback_result.generated_files),
                 },
             )
 
         return GenerationResult(
-            success=len(generated_files) > 0,
+            success=local_file_count > 0,
             generated_files=generated_files,
             input_tokens=total_input,
             output_tokens=total_output,
             model=f"{self._config.provider}:{self._config.model}",
-            metadata={"micro_prime_only": True},
+            metadata={
+                "micro_prime_only": True,
+                "micro_prime_files_written": local_file_count,
+            },
         )
 
     def _generate_skeletons(

@@ -284,7 +284,7 @@ __all__ = ["MyService"]
 
 ### REQ-MP-703: Output File Writing
 
-**Status:** planned
+**Status:** DONE
 **Priority:** P0
 **Depends on:** REQ-MP-702
 

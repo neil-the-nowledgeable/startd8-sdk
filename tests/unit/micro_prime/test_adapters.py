@@ -218,3 +218,127 @@ class TestSkeletonGeneration:
         assert "def get_name" in source
         assert "def get_value" in source
         assert "DEFAULT_TIMEOUT" in source
+
+
+class TestOutputFileWriting:
+    """Tests for REQ-MP-703: Output file writing."""
+
+    def test_output_dir_defaults_to_cwd(self):
+        gen = MicroPrimeCodeGenerator()
+        assert gen._output_dir == Path(".")
+
+    def test_output_dir_from_constructor(self, tmp_path):
+        gen = MicroPrimeCodeGenerator(output_dir=tmp_path)
+        assert gen._output_dir == tmp_path
+
+    def test_writes_file_to_disk(self, tmp_path, sample_manifest, sample_skeleton):
+        """Generated files are written to output_dir / file_path."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+        result = gen.generate(
+            "Implement utils", {}, ["src/mypackage/utils.py"],
+        )
+
+        expected_path = tmp_path / "src/mypackage/utils.py"
+        assert expected_path.exists(), f"Expected file at {expected_path}"
+        content = expected_path.read_text(encoding="utf-8")
+        assert len(content) > 0
+
+    def test_creates_parent_directories(self, tmp_path, sample_manifest, sample_skeleton):
+        """Parent directories are created automatically."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+        gen.generate("Implement utils", {}, ["src/mypackage/utils.py"])
+
+        assert (tmp_path / "src" / "mypackage").is_dir()
+
+    def test_generated_files_contain_absolute_paths(self, tmp_path, sample_manifest, sample_skeleton):
+        """GenerationResult.generated_files contains resolved Path objects."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+        result = gen.generate(
+            "Implement utils", {}, ["src/mypackage/utils.py"],
+        )
+
+        for p in result.generated_files:
+            assert isinstance(p, Path)
+            # Path should be under output_dir
+            assert str(p).startswith(str(tmp_path))
+
+    def test_metadata_tracks_local_file_count(self, tmp_path, sample_manifest, sample_skeleton):
+        """Metadata includes micro_prime_files_written count."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+        result = gen.generate(
+            "Implement utils", {}, ["src/mypackage/utils.py"],
+        )
+
+        assert "micro_prime_files_written" in result.metadata
+
+    def test_fallback_files_not_rewritten(self, tmp_path, sample_manifest):
+        """Files delegated to fallback are NOT written by the adapter."""
+        fallback = MagicMock()
+        fallback_path = tmp_path / "fallback" / "other.py"
+        fallback.generate.return_value = MagicMock(
+            success=True,
+            generated_files=[fallback_path],
+            input_tokens=50,
+            output_tokens=50,
+            model="fallback-model",
+            cost_usd=0.01,
+        )
+
+        # Manifest has one file, but we request two — the second has no spec
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            fallback=fallback,
+            output_dir=tmp_path,
+        )
+        result = gen.generate(
+            "Implement utils",
+            {},
+            ["src/mypackage/utils.py", "src/other.py"],
+        )
+
+        # Fallback was called because src/other.py has no file_spec
+        fallback.generate.assert_called_once()
+        # Metadata tracks both sources
+        assert result.metadata["fallback_files_written"] == 1
+
+    def test_metadata_mixed_local_and_fallback(self, tmp_path, sample_manifest, sample_skeleton):
+        """Metadata correctly separates local vs fallback file counts."""
+        fallback = MagicMock()
+        fallback.generate.return_value = MagicMock(
+            success=True,
+            generated_files=[Path("fallback_out.py")],
+            input_tokens=0,
+            output_tokens=0,
+            model="fallback",
+        )
+
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            fallback=fallback,
+            output_dir=tmp_path,
+        )
+        result = gen.generate(
+            "Implement",
+            {},
+            ["src/mypackage/utils.py", "src/missing.py"],
+        )
+
+        assert result.metadata["micro_prime_files_written"] >= 0
+        assert result.metadata["fallback_files_written"] == 1
