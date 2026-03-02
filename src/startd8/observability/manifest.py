@@ -164,15 +164,19 @@ class DashboardRef:
     file_path: str
     datasources: List[str] = field(default_factory=list)
     metrics_used: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d: Dict[str, Any] = {
             "uid": self.uid,
             "title": self.title,
             "file_path": self.file_path,
             "datasources": self.datasources,
             "metrics_used": self.metrics_used,
         }
+        if self.tags:
+            d["tags"] = self.tags
+        return d
 
     @classmethod
     def from_dict(cls, d: Dict[str, Any]) -> "DashboardRef":
@@ -182,6 +186,7 @@ class DashboardRef:
             file_path=d["file_path"],
             datasources=d.get("datasources", []),
             metrics_used=d.get("metrics_used", []),
+            tags=d.get("tags", []),
         )
 
 

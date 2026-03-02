@@ -5,6 +5,7 @@ DashboardCreatorWorkflow — WorkflowBase subclass for dashboard generation (DC-
 import json
 import os
 import time
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -19,6 +20,9 @@ from startd8.dashboard_creator.config_merge import (
 from startd8.dashboard_creator.discovery import discover_mixin, detect_toolchain
 from startd8.dashboard_creator.generator import generate_dashboard_jsonnet
 from startd8.dashboard_creator.json_validator import validate_dashboard_json
+from startd8.dashboard_creator.layout import apply_layout
+from startd8.dashboard_creator.manifest_sync import sync_manifest
+from startd8.dashboard_creator.mixin_update import derive_mixin_entry, update_mixin_imports
 from startd8.dashboard_creator.models import DashboardSpec, PanelType
 from startd8.dashboard_creator.output import persist_dashboard
 from startd8.dashboard_creator.validation import enforce_uid, validate_spec
@@ -36,6 +40,15 @@ from startd8.workflows.models import (
 )
 
 logger = get_logger(__name__)
+
+# Graceful OTel import — child spans under WorkflowBase's root span (DC-205)
+try:
+    from opentelemetry import trace as _otel_trace
+
+    _tracer = _otel_trace.get_tracer("startd8.dashboard_creator")
+except ImportError:
+    _otel_trace = None  # type: ignore[assignment]
+    _tracer = None
 
 
 class DashboardCreatorWorkflow(WorkflowBase):
@@ -109,6 +122,12 @@ class DashboardCreatorWorkflow(WorkflowBase):
                     required=False,
                     default=False,
                     description="Allow plain HTTP connections to Grafana",
+                ),
+                WorkflowInput(
+                    name="manifest_path",
+                    type="string",
+                    required=False,
+                    description="Path to observability-manifest.yaml for sync",
                 ),
             ],
         )
@@ -235,6 +254,10 @@ class DashboardCreatorWorkflow(WorkflowBase):
 
         logger.info("Dashboard UID: %s", spec.uid)
 
+        # Set root span attributes + ContextCore enrichment (DC-205, DC-207)
+        self._set_root_span_attrs(spec)
+        self._enrich_span_with_contextcore()
+
         # 4. Merge config + hydrate defaults
         self._emit_progress(on_progress, 3, 10, "Merging config")
         base_config = parse_config_libsonnet(mixin.config_path)
@@ -264,10 +287,23 @@ class DashboardCreatorWorkflow(WorkflowBase):
             output="Spec validation passed",
         ))
 
+        # 5.5 Apply layout (DC-108, DC-109) — group rows + auto-position
+        has_groups = any(p.group is not None for p in spec.panels)
+        has_missing_gridpos = any(
+            p.gridPos is None and p.type != PanelType.ROW for p in spec.panels
+        )
+        if has_groups or has_missing_gridpos:
+            spec = apply_layout(spec)
+            step_results.append(StepResult(
+                step_name="layout",
+                output=f"Applied layout ({len(spec.panels)} panels)",
+            ))
+
         # 6. Generate Jsonnet
         self._emit_progress(on_progress, 5, 10, "Generating Jsonnet")
         gen_start = time.monotonic()
-        jsonnet_source = generate_dashboard_jsonnet(spec)
+        with self._child_span("generate", panel_count=len(spec.panels)):
+            jsonnet_source = generate_dashboard_jsonnet(spec)
         gen_ms = int((time.monotonic() - gen_start) * 1000)
 
         step_results.append(StepResult(
@@ -291,14 +327,21 @@ class DashboardCreatorWorkflow(WorkflowBase):
 
         # 7. Compile Jsonnet
         self._emit_progress(on_progress, 6, 10, "Compiling Jsonnet")
-        try:
-            comp_result = compile_jsonnet_string(
-                jsonnet_source, mixin, toolchain
-            )
-        except (CompilationError, TimeoutError, OSError) as exc:
-            return WorkflowResult.from_error(
-                self.metadata.workflow_id, f"Compilation failed: {exc}"
-            )
+        with self._child_span("compile") as compile_span:
+            try:
+                comp_result = compile_jsonnet_string(
+                    jsonnet_source, mixin, toolchain
+                )
+                if compile_span:
+                    compile_span.set_attribute("compilation.duration_ms", comp_result.duration_ms)
+                    compile_span.set_attribute("compilation.backend", comp_result.backend)
+            except (CompilationError, TimeoutError, OSError) as exc:
+                if compile_span and _otel_trace:
+                    compile_span.set_status(_otel_trace.StatusCode.ERROR, str(exc))
+                    compile_span.record_exception(exc)
+                return WorkflowResult.from_error(
+                    self.metadata.workflow_id, f"Compilation failed: {exc}"
+                )
 
         step_results.append(StepResult(
             step_name="compile",
@@ -346,51 +389,90 @@ class DashboardCreatorWorkflow(WorkflowBase):
         output_dir = Path(config["output_dir"]) if config.get("output_dir") else None
         persist_source = config.get("persist_source", False)
 
-        persist_result = persist_dashboard(
-            dashboard_json=json_result.dashboard_json,
-            uid=spec.uid,
-            output_dir=output_dir,
-            libsonnet_source=jsonnet_source if persist_source else None,
-            libsonnet_dir=mixin.dashboards_dir if persist_source else None,
-        )
+        with self._child_span("persist"):
+            persist_result = persist_dashboard(
+                dashboard_json=json_result.dashboard_json,
+                uid=spec.uid,
+                output_dir=output_dir,
+                libsonnet_source=jsonnet_source if persist_source else None,
+                libsonnet_dir=mixin.dashboards_dir if persist_source else None,
+            )
 
         step_results.append(StepResult(
             step_name="persist",
             output=f"Written to {persist_result.json_path}",
         ))
 
+        # 9.5 Manifest sync (DC-201) — non-fatal
+        manifest_path_str = config.get("manifest_path")
+        if manifest_path_str:
+            try:
+                manifest_path = Path(manifest_path_str)
+                synced = sync_manifest(spec, persist_result.json_path, manifest_path)
+                if synced:
+                    step_results.append(StepResult(
+                        step_name="manifest_sync",
+                        output=f"Synced to {manifest_path}",
+                    ))
+            except Exception as exc:
+                logger.warning("Manifest sync failed (non-fatal): %s", exc)
+
+        # 9.6 Mixin auto-update (DC-204) — non-fatal, only when persist_source=True
+        if persist_source and mixin.mixin_libsonnet:
+            try:
+                json_fn, libsonnet_rel = derive_mixin_entry(spec.uid or "")
+                updated = update_mixin_imports(
+                    mixin.mixin_libsonnet, json_fn, libsonnet_rel
+                )
+                if updated:
+                    step_results.append(StepResult(
+                        step_name="mixin_update",
+                        output=f"Added {json_fn} to mixin.libsonnet",
+                    ))
+            except Exception as exc:
+                logger.warning("Mixin update failed (non-fatal): %s", exc)
+
         # 10. Provision to Grafana (DC-203)
         dashboard_url = None
         should_provision = config.get("provision", False) and not is_dry_run and not is_check
         if should_provision:
             self._emit_progress(on_progress, 9, 11, "Provisioning to Grafana")
-            try:
-                from startd8.dashboard_creator.grafana_client import GrafanaClient
-                from startd8.dashboard_creator.provisioning import provision_dashboard
+            with self._child_span("provision") as prov_span:
+                try:
+                    from startd8.dashboard_creator.grafana_client import GrafanaClient
+                    from startd8.dashboard_creator.provisioning import provision_dashboard
 
-                grafana_url = config.get("grafana_url", "")
-                allow_insecure = config.get("allow_insecure", False)
-                client = GrafanaClient(grafana_url, allow_insecure=allow_insecure)
-                prov_result = provision_dashboard(json_result.dashboard_json, client)
+                    grafana_url = config.get("grafana_url", "")
+                    allow_insecure = config.get("allow_insecure", False)
+                    client = GrafanaClient(grafana_url, allow_insecure=allow_insecure)
+                    prov_result = provision_dashboard(json_result.dashboard_json, client)
 
-                if prov_result.success:
-                    dashboard_url = prov_result.dashboard_url
+                    if prov_result.success:
+                        dashboard_url = prov_result.dashboard_url
+                        step_results.append(StepResult(
+                            step_name="provision",
+                            output=f"Provisioned: {dashboard_url}",
+                        ))
+                    else:
+                        logger.warning("Provisioning failed: %s", prov_result.error)
+                        if prov_span and _otel_trace:
+                            prov_span.set_status(
+                                _otel_trace.StatusCode.ERROR,
+                                prov_result.error or "unknown",
+                            )
+                        step_results.append(StepResult(
+                            step_name="provision",
+                            output=f"Provisioning failed: {prov_result.error}",
+                        ))
+                except (ConfigurationError, OSError) as exc:
+                    logger.warning("Provisioning error: %s", exc)
+                    if prov_span and _otel_trace:
+                        prov_span.set_status(_otel_trace.StatusCode.ERROR, str(exc))
+                        prov_span.record_exception(exc)
                     step_results.append(StepResult(
                         step_name="provision",
-                        output=f"Provisioned: {dashboard_url}",
+                        output=f"Provisioning error: {exc}",
                     ))
-                else:
-                    logger.warning("Provisioning failed: %s", prov_result.error)
-                    step_results.append(StepResult(
-                        step_name="provision",
-                        output=f"Provisioning failed: {prov_result.error}",
-                    ))
-            except (ConfigurationError, OSError) as exc:
-                logger.warning("Provisioning error: %s", exc)
-                step_results.append(StepResult(
-                    step_name="provision",
-                    output=f"Provisioning error: {exc}",
-                ))
 
         self._emit_progress(on_progress, 11, 11, "Complete")
 
@@ -448,6 +530,77 @@ class DashboardCreatorWorkflow(WorkflowBase):
             f"Cannot parse spec: expected a dict, file path, or YAML string, "
             f"got {type(spec_input).__name__}"
         )
+
+    def _child_span(self, name: str, **attrs: Any):
+        """Create a child span under the current OTel context (DC-205).
+
+        Returns a context manager yielding the span, or ``nullcontext(None)``
+        when OTel is not installed.
+        """
+        if not _tracer:
+            return nullcontext(None)
+        return _tracer.start_as_current_span(
+            f"dashboard_creator.{name}",
+            attributes={f"dashboard_creator.{k}": v for k, v in attrs.items()},
+        )
+
+    def _set_root_span_attrs(self, spec: DashboardSpec) -> None:
+        """Set dashboard-specific attributes on the current root span (DC-205)."""
+        if not _otel_trace:
+            return
+        span = _otel_trace.get_current_span()
+        if span and span.is_recording():
+            span.set_attribute("dashboard.uid", spec.uid or "")
+            span.set_attribute("dashboard.title", spec.title)
+            span.set_attribute("dashboard.panel_count", len(spec.panels))
+
+    @staticmethod
+    def _load_contextcore_context() -> Optional[Dict[str, str]]:
+        """DC-207: Load project context from ``.contextcore.yaml``.
+
+        Walks up to 3 parent directories from CWD looking for the file.
+        Returns a dict with ``project.id`` and ``project.name`` keys,
+        or None if the file is absent or malformed.
+        """
+        search = Path.cwd()
+        for _ in range(4):  # cwd + 3 parents
+            candidate = search / ".contextcore.yaml"
+            if candidate.is_file():
+                try:
+                    data = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+                    if not isinstance(data, dict):
+                        return None
+                    spec_block = data.get("spec", {})
+                    project = spec_block.get("project", {})
+                    pid = project.get("id")
+                    pname = project.get("name")
+                    if pid or pname:
+                        ctx: Dict[str, str] = {}
+                        if pid:
+                            ctx["project.id"] = str(pid)
+                        if pname:
+                            ctx["project.name"] = str(pname)
+                        return ctx
+                except Exception:
+                    logger.debug("Failed to parse %s", candidate, exc_info=True)
+                return None
+            parent = search.parent
+            if parent == search:
+                break
+            search = parent
+        return None
+
+    def _enrich_span_with_contextcore(self) -> None:
+        """DC-207: Set ContextCore attributes on the current span."""
+        if not _otel_trace:
+            return
+        ctx = self._load_contextcore_context()
+        if not ctx:
+            return
+        span = _otel_trace.get_current_span()
+        if span and span.is_recording():
+            for key, value in ctx.items():
+                span.set_attribute(f"io.contextcore.{key}", value)
 
     def _emit_progress(self, on_progress, current, total, message):
         """Safely emit progress callback."""

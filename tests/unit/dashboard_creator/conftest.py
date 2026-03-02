@@ -74,3 +74,33 @@ def full_spec_dict():
             {"type": "prometheusDatasource", "name": "datasource", "label": "Data Source"},
         ],
     }
+
+
+@pytest.fixture
+def grouped_spec_dict():
+    """Spec with grouped panels for layout testing (DC-108)."""
+    return {
+        "title": "Grouped Dashboard",
+        "tags": ["grouped"],
+        "panels": [
+            {"type": "stat", "title": "Global Metric", "expr": "up"},
+            {
+                "type": "stat",
+                "title": "Infra CPU",
+                "expr": "${metrics.requestsTotal}",
+                "group": "Infrastructure",
+            },
+            {
+                "type": "stat",
+                "title": "Infra Memory",
+                "expr": "${metrics.tokensTotal}",
+                "group": "Infrastructure",
+            },
+            {
+                "type": "stat",
+                "title": "Cost Total",
+                "expr": "${metrics.costTotal}",
+                "group": "+Costs",
+            },
+        ],
+    }

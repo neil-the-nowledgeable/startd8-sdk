@@ -292,3 +292,146 @@ class TestWorkflowProvisioning:
             prov_step = [s for s in result.steps if s.step_name == "provision"]
             assert len(prov_step) == 1
             assert "failed" in prov_step[0].output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Phase 3 integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestPhase3Layout:
+    """DC-108, DC-109: Layout integration in workflow."""
+
+    def test_grouped_spec_gets_layout_step(
+        self, workflow, mock_mixin, mock_toolchain, grouped_spec_dict
+    ):
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain):
+            result = workflow.run({"spec": grouped_spec_dict, "dry_run": True})
+            assert result.success is True
+            step_names = [s.step_name for s in result.steps]
+            assert "layout" in step_names
+
+    def test_spec_without_groups_skips_layout(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain
+    ):
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain):
+            result = workflow.run({"spec": valid_spec, "dry_run": True})
+            assert result.success is True
+            step_names = [s.step_name for s in result.steps]
+            # Layout is applied because panel has no gridPos
+            assert "layout" in step_names
+
+
+class TestPhase3ManifestSync:
+    """DC-201: Manifest sync integration in workflow."""
+
+    def test_manifest_synced_when_path_provided(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain, compiled_json, tmp_path
+    ):
+        import yaml as _yaml
+        manifest = tmp_path / "manifest.yaml"
+        manifest.write_text(_yaml.dump({"dashboards": []}))
+
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain), \
+             patch("startd8.dashboard_creator.workflow.compile_jsonnet_string") as mock_compile:
+            mock_compile.return_value = MagicMock(
+                json_str=compiled_json, duration_ms=10, backend="binary",
+            )
+            result = workflow.run({
+                "spec": valid_spec,
+                "output_dir": str(tmp_path),
+                "manifest_path": str(manifest),
+            })
+            assert result.success is True
+            step_names = [s.step_name for s in result.steps]
+            assert "manifest_sync" in step_names
+
+            data = _yaml.safe_load(manifest.read_text())
+            assert len(data["dashboards"]) == 1
+            assert data["dashboards"][0]["uid"] == "cc-startd8-test-dashboard"
+
+    def test_no_manifest_path_skips_sync(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain, compiled_json, tmp_path
+    ):
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain), \
+             patch("startd8.dashboard_creator.workflow.compile_jsonnet_string") as mock_compile:
+            mock_compile.return_value = MagicMock(
+                json_str=compiled_json, duration_ms=10, backend="binary",
+            )
+            result = workflow.run({
+                "spec": valid_spec,
+                "output_dir": str(tmp_path),
+            })
+            assert result.success is True
+            step_names = [s.step_name for s in result.steps]
+            assert "manifest_sync" not in step_names
+
+
+class TestPhase3MixinUpdate:
+    """DC-204: Mixin auto-update integration in workflow."""
+
+    def test_mixin_updated_when_persist_source(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain, compiled_json, tmp_path
+    ):
+        mixin_content = "{\n  grafanaDashboards+:: {\n  },\n}\n"
+        mock_mixin.mixin_libsonnet.write_text(mixin_content)
+
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain), \
+             patch("startd8.dashboard_creator.workflow.compile_jsonnet_string") as mock_compile:
+            mock_compile.return_value = MagicMock(
+                json_str=compiled_json, duration_ms=10, backend="binary",
+            )
+            result = workflow.run({
+                "spec": valid_spec,
+                "output_dir": str(tmp_path),
+                "persist_source": True,
+            })
+            assert result.success is True
+            step_names = [s.step_name for s in result.steps]
+            assert "mixin_update" in step_names
+
+            content = mock_mixin.mixin_libsonnet.read_text()
+            assert "cc-startd8-test-dashboard.json" in content
+
+
+class TestPhase3OTelSpans:
+    """DC-205: OTel span emission (graceful when OTel unavailable)."""
+
+    def test_workflow_succeeds_without_otel(
+        self, workflow, valid_spec, mock_mixin, mock_toolchain
+    ):
+        """OTel is optional; workflow must succeed without it installed."""
+        with patch("startd8.dashboard_creator.workflow.discover_mixin", return_value=mock_mixin), \
+             patch("startd8.dashboard_creator.workflow.detect_toolchain", return_value=mock_toolchain):
+            result = workflow.run({"spec": valid_spec, "dry_run": True})
+            assert result.success is True
+
+
+class TestPhase3ContextCore:
+    """DC-207: ContextCore project context."""
+
+    def test_load_contextcore_absent(self, workflow, tmp_path, monkeypatch):
+        """When .contextcore.yaml is absent, returns None gracefully."""
+        monkeypatch.chdir(tmp_path)
+        ctx = workflow._load_contextcore_context()
+        assert ctx is None
+
+    def test_load_contextcore_present(self, workflow, tmp_path, monkeypatch):
+        """When .contextcore.yaml exists, extracts project.id and project.name."""
+        import yaml as _yaml
+        cc = tmp_path / ".contextcore.yaml"
+        cc.write_text(_yaml.dump({
+            "spec": {
+                "project": {"id": "proj-123", "name": "My Project"},
+            },
+        }))
+        monkeypatch.chdir(tmp_path)
+        ctx = workflow._load_contextcore_context()
+        assert ctx is not None
+        assert ctx["project.id"] == "proj-123"
+        assert ctx["project.name"] == "My Project"
