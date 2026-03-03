@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import textwrap
-import warnings
 from pathlib import Path
 
 import pytest
@@ -181,11 +180,9 @@ class TestParseTransformations:
         assert len(transforms) == 0
 
     def test_chained(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            transforms = _parse_transformations(
-                "joinByField (department_display, outer) → organize (exclude Time) → sortBy (GF/GP, desc)"
-            )
+        transforms = _parse_transformations(
+            "joinByField (department_display, outer) → organize (exclude Time) → sortBy (GF/GP, desc)"
+        )
         assert len(transforms) == 3
         assert transforms[0].id == "joinByField"
         assert transforms[2].id == "sortBy"
@@ -325,7 +322,7 @@ class TestParseVariableTable:
 
 
 def _load_golden(path: Path) -> dict:
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
@@ -415,12 +412,12 @@ class TestIntroGoldenFile:
             assert v.name == g["name"], f"Var {i}: {v.name} != {g['name']}"
 
     def test_link_titles(self, parsed, golden):
-        for i, (l, g) in enumerate(zip(parsed.links, golden["links"])):
-            assert l.title == g["title"], f"Link {i}: {l.title} != {g['title']}"
+        for i, (lnk, g) in enumerate(zip(parsed.links, golden["links"])):
+            assert lnk.title == g["title"], f"Link {i}: {lnk.title} != {g['title']}"
 
     def test_link_urls(self, parsed, golden):
-        for i, (l, g) in enumerate(zip(parsed.links, golden["links"])):
-            assert l.url == g["url"], f"Link {i}: {l.url} != {g['url']}"
+        for i, (lnk, g) in enumerate(zip(parsed.links, golden["links"])):
+            assert lnk.url == g["url"], f"Link {i}: {lnk.url} != {g['url']}"
 
     def test_piechart_options(self, parsed):
         pie_panels = [p for p in parsed.panels if p.type == PanelType.PIECHART]
@@ -523,9 +520,7 @@ class TestOverviewParsing:
 
     @pytest.fixture(scope="class")
     def parsed(self):
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            return parse_requirements(_OVERVIEW_REQ)
+        return parse_requirements(_OVERVIEW_REQ)
 
     def test_panel_count(self, parsed):
         assert len(parsed.panels) == 32  # 7 rows + 25 content panels, but overview has 26 panels per header

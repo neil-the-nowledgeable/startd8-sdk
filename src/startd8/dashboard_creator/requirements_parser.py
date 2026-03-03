@@ -13,12 +13,13 @@ Public API:
 from __future__ import annotations
 
 import re
-import warnings
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from startd8.exceptions import ConfigurationError
+from startd8.logging_config import get_logger
 from startd8.dashboard_creator.models import (
     DashboardLink,
     DashboardSpec,
@@ -32,6 +33,8 @@ from startd8.dashboard_creator.models import (
     VariableSpec,
     VariableType,
 )
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # UID transform
@@ -80,16 +83,17 @@ _UID_RE = re.compile(r"\*\*Dashboard UID\*\*:\s*`([^`]+)`")
 _TITLE_RE = re.compile(r"\*\*Title\*\*:\s*(.+)")
 
 
-def _parse_header(text: str) -> Tuple[str, str, str]:
-    """Extract uid, title, description from header block."""
+def _parse_header(text: str) -> Tuple[str, str]:
+    """Extract uid and title from header block."""
     uid_m = _UID_RE.search(text)
     title_m = _TITLE_RE.search(text)
     uid = uid_m.group(1).strip() if uid_m else ""
     title = title_m.group(1).strip() if title_m else ""
-
-    # Description: first paragraph of ## 1 or from Dashboard-Specific Question
-    description = ""
-    return uid, title, description
+    if not uid:
+        logger.warning("No Dashboard UID found in header")
+    if not title:
+        logger.warning("No Title found in header")
+    return uid, title
 
 
 def _extract_description(section1: str) -> str:
@@ -165,7 +169,14 @@ def _parse_thresholds(s: str) -> List[ThresholdStep]:
             continue
         color = m.group(1)
         val_str = m.group(2).strip()
-        value = None if val_str in ("null", "") else float(val_str)
+        if val_str in ("null", ""):
+            value = None
+        else:
+            try:
+                value = float(val_str)
+            except ValueError:
+                logger.warning("Non-numeric threshold value %r for color %r, skipping step", val_str, color)
+                continue
         steps.append(ThresholdStep(value=value, color=color))
     return steps
 
@@ -173,11 +184,6 @@ def _parse_thresholds(s: str) -> List[ThresholdStep]:
 # ---------------------------------------------------------------------------
 # Field config parser
 # ---------------------------------------------------------------------------
-
-_THRESHOLD_INLINE_RE = re.compile(
-    r"threshold[s]?\s*[:=]\s*(.+?)(?:,\s*(?=[a-zA-Z_])|$)"
-)
-
 
 def _parse_legend_shorthand(s: str) -> Dict[str, Any]:
     """Parse legend shorthand 'table+right with value+percent' into structured dict.
@@ -205,13 +211,18 @@ def _parse_legend_shorthand(s: str) -> Dict[str, Any]:
 def _parse_field_config(s: str) -> Dict[str, Any]:
     """Parse field config string into structured dict.
 
-    Input examples:
+    Input examples::
+
         'unit=currencyUSD, decimals=0, threshold=blue(null)'
         'unit=percentunit, decimals=1, min=0, max=1, thresholds: red(null)→orange(0.15)→green(0.50)'
         'unit=currencyUSD, decimals=0, horizontal, palette-classic, barWidth=0.7'
-        'unit=currencyUSD, decimals=0, horizontal, color=blue, barWidth=0.7'
 
-    Returns dict with keys: unit, fieldConfig, thresholds, options.
+    Returns:
+        Dict with optional keys:
+        - ``unit`` (str): Grafana unit string, or ``""`` for unit=none.
+        - ``fieldConfig`` (dict): ``{"defaults": {"decimals": int, "min": float, ...}}``.
+        - ``thresholds`` (list): ``[ThresholdStep, ...]`` parsed from threshold chain.
+        - ``options`` (dict): Panel options — orientation, barWidth, pieType, legend, etc.
     """
     result: Dict[str, Any] = {}
 
@@ -249,13 +260,25 @@ def _parse_field_config(s: str) -> Dict[str, Any]:
                 # unit=none means no unit, not the literal string "none"
                 result["unit"] = "" if val.lower() == "none" else val
             elif key == "decimals":
-                field_config.setdefault("defaults", {})["decimals"] = int(val)
+                try:
+                    field_config.setdefault("defaults", {})["decimals"] = int(val)
+                except ValueError:
+                    logger.warning("Non-numeric decimals value: %r", val)
             elif key == "min":
-                field_config.setdefault("defaults", {})["min"] = float(val)
+                try:
+                    field_config.setdefault("defaults", {})["min"] = float(val)
+                except ValueError:
+                    logger.warning("Non-numeric min value: %r", val)
             elif key == "max":
-                field_config.setdefault("defaults", {})["max"] = float(val)
+                try:
+                    field_config.setdefault("defaults", {})["max"] = float(val)
+                except ValueError:
+                    logger.warning("Non-numeric max value: %r", val)
             elif key == "barWidth":
-                options["barWidth"] = float(val)
+                try:
+                    options["barWidth"] = float(val)
+                except ValueError:
+                    logger.warning("Non-numeric barWidth value: %r", val)
             elif key == "color":
                 field_config.setdefault("defaults", {})["color"] = {
                     "mode": "fixed",
@@ -271,6 +294,7 @@ def _parse_field_config(s: str) -> Dict[str, Any]:
             elif key == "pieType":
                 options["pieType"] = val
             else:
+                logger.debug("Unrecognized field config key: %s=%s", key, val)
                 options[key] = val
         else:
             # Standalone keywords
@@ -279,6 +303,8 @@ def _parse_field_config(s: str) -> Dict[str, Any]:
                 options["orientation"] = "horizontal"
             elif part_lower == "palette-classic":
                 pass  # default Grafana behavior, no explicit config needed
+            elif part_lower:
+                logger.debug("Unrecognized field config keyword: %r", part)
 
     if field_config:
         result["fieldConfig"] = field_config
@@ -352,7 +378,7 @@ def _split_transform_chain(s: str) -> List[str]:
             depth += 1
             current.append(ch)
         elif ch == ")":
-            depth -= 1
+            depth = max(0, depth - 1)
             current.append(ch)
         elif depth == 0 and (s[i:i+1] == "→" or s[i:i+2] == "->"):
             parts.append("".join(current).strip())
@@ -384,7 +410,7 @@ def _parse_transformations(s: str) -> List[TransformSpec]:
             continue
         m = _TRANSFORM_RE.match(part)
         if not m:
-            warnings.warn(f"Unparseable transformation: {part!r}", stacklevel=2)
+            logger.warning("Unparseable transformation: %r", part)
             continue
 
         tid = m.group(1)
@@ -401,9 +427,9 @@ def _parse_transformations(s: str) -> List[TransformSpec]:
             ))
         else:
             # Complex transforms — store raw description
-            warnings.warn(
-                f"Complex transformation '{tid}' stored as raw description: {opts_str!r}",
-                stacklevel=2,
+            logger.warning(
+                "Complex transformation '%s' stored as raw description: %r",
+                tid, opts_str,
             )
             transforms.append(TransformSpec(id=tid, options={"_raw": opts_str}))
 
@@ -541,7 +567,15 @@ def _split_row_groups(
 
 
 def _parse_single_panel(block: str, row_title: str) -> Optional[PanelSpec]:
-    """Parse a single #### Panel block into a PanelSpec."""
+    """Parse a single ``#### Panel N: Title`` block into a PanelSpec.
+
+    Extracts field bullets (``- **Key**: Value``) from the block, then
+    dispatches to type-specific handling: row panels get collapsed flag,
+    text panels get content blocks, and metric panels get PromQL targets,
+    field config, transformations, data links, and color overrides.
+
+    Returns None (with a warning log) if the panel type is unrecognized.
+    """
     lines = block.split("\n")
 
     # Extract panel title from header
@@ -588,7 +622,7 @@ def _parse_single_panel(block: str, row_title: str) -> Optional[PanelSpec]:
     try:
         panel_type = PanelType(type_str)
     except ValueError:
-        warnings.warn(f"Unknown panel type '{type_str}' for '{panel_title}'", stacklevel=2)
+        logger.warning("Unknown panel type %r for panel %r", type_str, panel_title)
         return None
 
     # Build panel kwargs
@@ -600,7 +634,10 @@ def _parse_single_panel(block: str, row_title: str) -> Optional[PanelSpec]:
     # Grid
     grid_str = fields.get("Grid", "")
     if grid_str:
-        kwargs["gridPos"] = _parse_grid(grid_str)
+        try:
+            kwargs["gridPos"] = _parse_grid(grid_str)
+        except ValueError:
+            logger.warning("Malformed gridPos %r for panel %r, skipping grid", grid_str, panel_title)
 
     # Description
     desc = fields.get("Description", "").strip().strip('"')
@@ -713,6 +750,9 @@ def _parse_panels(section4: str) -> List[PanelSpec]:
             block = group_text[start:end]
             panel = _parse_single_panel(block, row_title)
             if panel is None:
+                # Extract panel header for diagnostic logging
+                header_line = block.split("\n", 1)[0] if block else "<empty>"
+                logger.warning("Skipped unparseable panel in row %r: %s", row_title, header_line)
                 continue
 
             if panel.type == PanelType.ROW:
@@ -736,10 +776,9 @@ def _parse_panels(section4: str) -> List[PanelSpec]:
         # Validate: content panel y > row y
         for cp in content_panels:
             if cp.gridPos and cp.gridPos.y <= row_y:
-                warnings.warn(
-                    f"Panel '{cp.title}' has gridPos.y={cp.gridPos.y} "
-                    f"<= row y={row_y}",
-                    stacklevel=2,
+                logger.warning(
+                    "Panel %r has gridPos.y=%d <= row y=%d",
+                    cp.title, cp.gridPos.y, row_y,
                 )
 
         # Emit: row panel first, then content panels
@@ -857,8 +896,12 @@ def _parse_variable_table(block: str, var_name: str) -> VariableSpec:
         kwargs["default"] = default_clean
 
     # hide
-    hide = props.get("hide", "0")
-    kwargs["hide"] = int(hide.strip("`"))
+    hide = props.get("hide", "0").strip("`")
+    try:
+        kwargs["hide"] = int(hide)
+    except ValueError:
+        logger.warning("Non-numeric hide value %r for variable %r, defaulting to 0", hide, var_name)
+        kwargs["hide"] = 0
 
     return VariableSpec(**kwargs)
 
@@ -989,14 +1032,26 @@ def parse_requirements(path: str | Path) -> DashboardSpec:
 
     Returns:
         DashboardSpec ready for YAML serialization or workflow processing.
+
+    Raises:
+        ConfigurationError: If the file does not exist or cannot be read.
     """
     path = Path(path)
-    text = path.read_text(encoding="utf-8")
+    if not path.is_file():
+        raise ConfigurationError(f"Requirements file not found: {path}")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise ConfigurationError(
+            f"Cannot read {path}: encoding error ({exc.reason})"
+        ) from exc
 
+    logger.info("Parsing requirements from %s", path)
     header, sections = _split_sections(text)
+    logger.debug("Found %d numbered sections", len(sections))
 
     # Header extraction
-    uid, title, _ = _parse_header(header)
+    uid, title = _parse_header(header)
     transformed_uid = _uid_transform(uid)
 
     # Description from Section 1
@@ -1007,6 +1062,10 @@ def parse_requirements(path: str | Path) -> DashboardSpec:
 
     # Panels from Section 4
     panels = _parse_panels(sections.get(4, ""))
+    logger.info(
+        "Parsed %d panels, %d sections from %s",
+        len(panels), len(sections), path.name,
+    )
 
     # Variables from Section 6
     variables = _parse_variables(sections.get(6, ""))

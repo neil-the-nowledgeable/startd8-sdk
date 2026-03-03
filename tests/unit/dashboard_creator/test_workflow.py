@@ -435,3 +435,36 @@ class TestPhase3ContextCore:
         assert ctx is not None
         assert ctx["project.id"] == "proj-123"
         assert ctx["project.name"] == "My Project"
+
+
+class TestParseSpecMarkdown:
+    """_parse_spec routes .md files through requirements_parser."""
+
+    def test_md_file_calls_parse_requirements(self, workflow, tmp_path):
+        """When spec input is a .md file path, _parse_spec delegates to parse_requirements."""
+        md_file = tmp_path / "test-requirements.md"
+        md_file.write_text("# placeholder")
+
+        from startd8.dashboard_creator.models import DashboardSpec
+        from unittest.mock import patch
+
+        fake_spec = DashboardSpec(
+            title="From MD",
+            panels=[{"type": "stat", "title": "P1", "expr": "up"}],
+        )
+        with patch(
+            "startd8.dashboard_creator.requirements_parser.parse_requirements",
+            return_value=fake_spec,
+        ) as mock_parse:
+            result = workflow._parse_spec(str(md_file))
+
+        mock_parse.assert_called_once_with(md_file)
+        assert result.title == "From MD"
+
+    def test_yaml_file_not_routed_to_parser(self, workflow, tmp_path):
+        """YAML files continue through the existing YAML parsing path."""
+        yaml_file = tmp_path / "test.spec.yaml"
+        yaml_file.write_text("title: From YAML\npanels:\n  - type: stat\n    title: P1\n    expr: up\n")
+
+        result = workflow._parse_spec(str(yaml_file))
+        assert result.title == "From YAML"
