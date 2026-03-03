@@ -1759,6 +1759,70 @@ def workflow_run(
         None, "--onboarding",
         help="Path to onboarding-metadata.json for Capability injection"
     ),
+    seed: Optional[Path] = typer.Option(
+        None, "--seed",
+        help="Context seed JSON path (prime-contractor)"
+    ),
+    project_root: Optional[Path] = typer.Option(
+        None, "--project-root",
+        help="Target project root (prime-contractor)"
+    ),
+    micro_prime: bool = typer.Option(
+        False, "--micro-prime",
+        help="Enable micro-prime local generation"
+    ),
+    micro_prime_model: Optional[str] = typer.Option(
+        None, "--micro-prime-model",
+        help="Ollama model for micro-prime"
+    ),
+    micro_prime_max_tokens: Optional[int] = typer.Option(
+        None, "--micro-prime-max-tokens",
+        help="Max tokens for micro-prime"
+    ),
+    micro_prime_no_templates: bool = typer.Option(
+        False, "--micro-prime-no-templates",
+        help="Disable micro-prime templates"
+    ),
+    micro_prime_no_repair: bool = typer.Option(
+        False, "--micro-prime-no-repair",
+        help="Disable micro-prime repair"
+    ),
+    complexity_routing: bool = typer.Option(
+        False, "--complexity-routing",
+        help="Enable complexity-based routing"
+    ),
+    cost_budget: Optional[float] = typer.Option(
+        None, "--cost-budget",
+        help="Max cost in USD"
+    ),
+    task_filter: Optional[str] = typer.Option(
+        None, "--task-filter",
+        help="Comma-separated task IDs to process"
+    ),
+    auto_commit: bool = typer.Option(
+        False, "--auto-commit",
+        help="Commit each feature after integration"
+    ),
+    max_features: Optional[int] = typer.Option(
+        None, "--max-features",
+        help="Max features to process"
+    ),
+    lead_agent: Optional[str] = typer.Option(
+        None, "--lead-agent",
+        help="Lead agent spec (provider:model)"
+    ),
+    drafter_agent: Optional[str] = typer.Option(
+        None, "--drafter-agent",
+        help="Drafter agent spec (provider:model)"
+    ),
+    walkthrough: bool = typer.Option(
+        False, "--walkthrough",
+        help="Persist prompts without LLM calls"
+    ),
+    force_regenerate: bool = typer.Option(
+        False, "--force-regenerate",
+        help="Force regeneration ignoring cache"
+    ),
 ):
     """Run a workflow with the given configuration"""
     import json
@@ -1808,6 +1872,40 @@ def workflow_run(
             console.print(f"[red]Onboarding metadata file not found: {onboarding}[/red]")
             raise typer.Exit(1)
         config["onboarding_path"] = str(onboarding)
+
+    # Prime-contractor specific flags
+    if seed:
+        config["seed_path"] = str(seed)
+    if project_root:
+        config["project_root"] = str(project_root)
+    if micro_prime:
+        config["micro_prime"] = True
+    if micro_prime_model:
+        config["micro_prime_model"] = micro_prime_model
+    if micro_prime_max_tokens is not None:
+        config["micro_prime_max_tokens"] = micro_prime_max_tokens
+    if micro_prime_no_templates:
+        config["micro_prime_no_templates"] = True
+    if micro_prime_no_repair:
+        config["micro_prime_no_repair"] = True
+    if complexity_routing:
+        config["complexity_routing"] = True
+    if cost_budget is not None:
+        config["cost_budget"] = cost_budget
+    if task_filter:
+        config["task_filter"] = task_filter
+    if auto_commit:
+        config["auto_commit"] = True
+    if max_features is not None:
+        config["max_features"] = max_features
+    if lead_agent:
+        config["lead_agent"] = lead_agent
+    if drafter_agent:
+        config["drafter_agent"] = drafter_agent
+    if walkthrough:
+        config["walkthrough"] = True
+    if force_regenerate:
+        config["force_regenerate"] = True
 
     # Progress callback
     def on_progress(current: int, total: int, message: str):

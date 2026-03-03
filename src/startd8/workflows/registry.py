@@ -276,6 +276,13 @@ class WorkflowRegistry:
         except ImportError as e:
             logger.debug(f"DomainPreflight workflow not available: {e}")
 
+        try:
+            from .builtin.prime_contractor_workflow import PrimeContractorWorkflowAdapter
+            cls.register(PrimeContractorWorkflowAdapter())
+            logger.debug("Registered built-in PrimeContractor workflow")
+        except ImportError as e:
+            logger.debug(f"PrimeContractor workflow not available: {e}")
+
     @classmethod
     def get_workflow(cls, workflow_id: str) -> Optional[Workflow]:
         """
