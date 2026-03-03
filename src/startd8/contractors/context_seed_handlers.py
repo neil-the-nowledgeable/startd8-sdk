@@ -5717,6 +5717,8 @@ class Test{class_name}:
         module_inventory: list[str] | None = None,
         # Scaffold output for skeleton file detection
         scaffold_output: dict[str, Any] | None = None,
+        # Micro Prime pre-pass results for local-first skip / partial injection
+        micro_prime_result: dict[str, Any] | None = None,
         **kwargs: Any,  # Allow forward_manifest via kwargs to avoid massive signature change
     ) -> tuple[list[Any], list[dict[str, Any]]]:
         """Convert SeedTasks to DevelopmentChunks, pre-filtering env-blocked.
@@ -6297,6 +6299,22 @@ class Test{class_name}:
                         len(_task_skeleton_lines), task.task_id,
                     )
 
+            # Micro Prime pre-pass: determine if this chunk was fully filled locally
+            _mp_complete = False
+            _mp_skeletons: dict[str, str] | None = None
+            _mp_escalated: list[dict[str, Any]] | None = None
+            if micro_prime_result:
+                _mp_filled = micro_prime_result.get("filled_skeletons") or {}
+                _mp_esc_all = micro_prime_result.get("escalated_elements") or []
+                _target_set = set(effective_targets)
+                _mp_skeletons = {t: _mp_filled[t] for t in effective_targets if t in _mp_filled}
+                _mp_escalated = [e for e in _mp_esc_all if e.get("file_path") in _target_set]
+                _mp_complete = (
+                    len(_mp_skeletons) == len(effective_targets)
+                    and len(effective_targets) > 0
+                    and len(_mp_escalated) == 0
+                )
+
             chunks.append(DevelopmentChunk(
                 chunk_id=task.task_id,
                 description=task.description,
@@ -6355,6 +6373,10 @@ class Test{class_name}:
                     "skeleton_files_present": _skeleton_files_present,
                     # REQ-CMR-042: per-task override from seed JSON
                     "complexity_tier_override": task.complexity_tier_override,
+                    # Micro Prime pre-pass: per-chunk fill status
+                    "_micro_prime_complete": _mp_complete,
+                    "_micro_prime_filled_skeletons": _mp_skeletons if _mp_skeletons else None,
+                    "_micro_prime_escalated": _mp_escalated if _mp_escalated else None,
                 },
             ))
 
@@ -8313,6 +8335,8 @@ class Test{class_name}:
                 scaffold_output=context.get("scaffold", {}),
                 # Phase 5: Forward interface contracts
                 forward_manifest=context.get("forward_manifest"),
+                # Micro Prime pre-pass results
+                micro_prime_result=context.get("micro_prime_result"),
             )
 
             # Phase 4: Enrich chunks with manifest context (IM-1 through IM-4)
@@ -8593,6 +8617,14 @@ class Test{class_name}:
                     "DevelopmentPhase returned an invalid result "
                     f"(type={type(dev_result).__name__}). "
                     "Expected DevelopmentResult with chunk_states attribute."
+                )
+
+            mp_result = context.get("micro_prime_result")
+            if mp_result:
+                logger.info(
+                    "IMPLEMENT: Micro Prime savings — %d local ($0), %d escalated to cloud",
+                    (mp_result.get("metrics") or {}).get("local_success_count", 0),
+                    len(mp_result.get("escalated_elements") or []),
                 )
 
             # Map results back to downstream contract

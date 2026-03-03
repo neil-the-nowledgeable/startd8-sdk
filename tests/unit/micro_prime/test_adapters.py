@@ -618,3 +618,162 @@ class TestObservabilityLogging:
             pa._elements_local_counter = saved_local
             pa._elements_escalated_counter = saved_escalated
             pa._template_hits_counter = saved_template
+
+
+# ── Micro Prime chunk wiring tests ──────────────────────────────────
+
+
+class TestMicroPrimeChunkWiring:
+    """Tests for Micro Prime pre-pass ↔ chunk executor wiring."""
+
+    def _make_chunk(self, metadata=None, file_targets=None):
+        """Build a minimal DevelopmentChunk for testing."""
+        from startd8.contractors.artisan_phases.development import DevelopmentChunk
+
+        return DevelopmentChunk(
+            chunk_id="task-001",
+            description="Implement utils",
+            dependencies=[],
+            file_targets=file_targets or ["src/utils.py"],
+            implementation_prompt="Implement the module",
+            test_commands=[],
+            metadata=metadata or {},
+        )
+
+    def test_chunk_metadata_micro_prime_complete(self):
+        """Chunk gets _micro_prime_complete=True when all targets are filled and none escalated."""
+        from startd8.contractors.context_seed_handlers import ImplementPhaseHandler
+
+        micro_prime_result = {
+            "filled_skeletons": {"src/a.py": "# filled a", "src/b.py": "# filled b"},
+            "escalated_elements": [],
+            "metrics": {"local_success_count": 2},
+        }
+
+        # Create minimal SeedTasks via mock
+        task = MagicMock()
+        task.task_id = "t1"
+        task.description = "desc"
+        task.target_files = ["src/a.py", "src/b.py"]
+        task.feature_id = "f1"
+        task.domain = "sdk"
+        task.estimated_loc = 50
+        task.post_generation_validators = []
+        task.title = "Task 1"
+        task.requirements_text = None
+        task.complexity_tier_override = None
+        task.artifact_types_addressed = []
+
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            [task], micro_prime_result=micro_prime_result,
+        )
+
+        assert len(chunks) == 1
+        meta = chunks[0].metadata
+        assert meta["_micro_prime_complete"] is True
+        assert meta["_micro_prime_filled_skeletons"] == {
+            "src/a.py": "# filled a",
+            "src/b.py": "# filled b",
+        }
+        assert meta["_micro_prime_escalated"] is None or len(meta["_micro_prime_escalated"]) == 0
+
+    def test_chunk_metadata_micro_prime_partial(self):
+        """_micro_prime_complete=False when some elements are escalated."""
+        from startd8.contractors.context_seed_handlers import ImplementPhaseHandler
+
+        micro_prime_result = {
+            "filled_skeletons": {"src/a.py": "# filled a"},
+            "escalated_elements": [
+                {"file_path": "src/a.py", "element_name": "complex_fn", "tier": "COMPLEX", "reason": "too complex"},
+            ],
+            "metrics": {"local_success_count": 1},
+        }
+
+        task = MagicMock()
+        task.task_id = "t1"
+        task.description = "desc"
+        task.target_files = ["src/a.py"]
+        task.feature_id = "f1"
+        task.domain = "sdk"
+        task.estimated_loc = 50
+        task.post_generation_validators = []
+        task.title = "Task 1"
+        task.requirements_text = None
+        task.complexity_tier_override = None
+        task.artifact_types_addressed = []
+
+        chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
+            [task], micro_prime_result=micro_prime_result,
+        )
+
+        assert len(chunks) == 1
+        meta = chunks[0].metadata
+        assert meta["_micro_prime_complete"] is False
+        assert meta["_micro_prime_filled_skeletons"] == {"src/a.py": "# filled a"}
+        assert len(meta["_micro_prime_escalated"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_executor_skips_llm_for_complete_chunk(self, tmp_path):
+        """agenerate() is NOT called when _micro_prime_complete=True."""
+        from startd8.contractors.artisan_phases.development import ArtisanChunkExecutor
+
+        executor = ArtisanChunkExecutor(
+            output_dir=tmp_path,
+        )
+        chunk = self._make_chunk(
+            metadata={
+                "_micro_prime_complete": True,
+                "_micro_prime_filled_skeletons": {"src/utils.py": "# filled content"},
+            },
+            file_targets=["src/utils.py"],
+        )
+        context: dict = {}
+
+        with patch.object(executor, "_build_generation_context") as mock_ctx:
+            success, msg = await executor.execute(chunk, context)
+
+        assert success is True
+        assert "Micro Prime" in msg
+        # _build_generation_context should NOT be called — skipped entirely
+        mock_ctx.assert_not_called()
+
+    def test_executor_writes_filled_skeletons_to_staging(self, tmp_path):
+        """_write_micro_prime_files writes correct files to output_dir."""
+        from startd8.contractors.artisan_phases.development import ArtisanChunkExecutor
+
+        executor = ArtisanChunkExecutor(output_dir=tmp_path)
+        filled = {"src/utils.py": "def hello():\n    return 'world'\n"}
+        chunk = self._make_chunk(file_targets=["src/utils.py"])
+
+        written = executor._write_micro_prime_files(filled, chunk)
+
+        assert len(written) == 1
+        expected = tmp_path / "src/utils.py"
+        assert expected.exists()
+        assert expected.read_text(encoding="utf-8") == "def hello():\n    return 'world'\n"
+
+    def test_partial_chunk_injects_existing_files(self, tmp_path):
+        """Pre-filled skeleton flows into _build_generation_context() as existing file content."""
+        from startd8.contractors.artisan_phases.development import ArtisanChunkExecutor
+
+        executor = ArtisanChunkExecutor(output_dir=tmp_path)
+        chunk = self._make_chunk(
+            metadata={
+                "_micro_prime_complete": False,
+                "_micro_prime_filled_skeletons": {"src/utils.py": "# partial skeleton"},
+                "_micro_prime_escalated": [
+                    {"file_path": "src/utils.py", "element_name": "hard_fn"},
+                ],
+                "feature_id": "f1",
+                "domain": "sdk",
+                "estimated_loc": 50,
+            },
+            file_targets=["src/utils.py"],
+        )
+        context: dict = {}
+
+        gen_ctx = executor._build_generation_context(chunk, context)
+
+        existing = gen_ctx.get("existing_files", {})
+        assert "src/utils.py" in existing
+        assert existing["src/utils.py"] == "# partial skeleton"

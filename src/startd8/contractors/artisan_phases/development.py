@@ -1363,6 +1363,15 @@ class LeadContractorChunkExecutor(ChunkExecutor):
                         "Could not read existing file %s: %s", staging_path, exc,
                     )
 
+        # Micro Prime: inject pre-filled skeletons as existing content for partial chunks.
+        # Only injects files NOT already loaded from production/staging above so that
+        # real on-disk content always takes precedence over the pre-pass output.
+        mp_skeletons = chunk.metadata.get("_micro_prime_filled_skeletons")
+        if mp_skeletons and not chunk.metadata.get("_micro_prime_complete"):
+            for fp, content in mp_skeletons.items():
+                if fp not in gen_ctx.get("existing_files", {}):
+                    gen_ctx.setdefault("existing_files", {})[fp] = content
+
         # Inject retry feedback from orchestrator context
         last_error = context.get("last_error")
         test_output = context.get("test_output")
@@ -3533,6 +3542,43 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
     # File writing helpers
     # ------------------------------------------------------------------
 
+    def _write_micro_prime_files(
+        self,
+        filled_skeletons: Dict[str, str],
+        chunk: DevelopmentChunk,
+    ) -> List[Path]:
+        """Write Micro Prime filled skeletons to staging directory.
+
+        Args:
+            filled_skeletons: Mapping of relative file paths to filled
+                source code from the Micro Prime pre-pass.
+            chunk: The chunk whose ``file_targets`` determine which
+                skeletons to write.
+
+        Returns:
+            List of paths that were successfully written.
+        """
+        written: List[Path] = []
+        for file_path in chunk.file_targets:
+            if Path(file_path).is_absolute():
+                self.logger.warning(
+                    "Micro Prime: skipping absolute path %s", file_path,
+                )
+                continue
+            content = filled_skeletons.get(file_path)
+            if content is not None:
+                out = self._output_dir / file_path
+                try:
+                    out.parent.mkdir(parents=True, exist_ok=True)
+                    out.write_text(content, encoding="utf-8")
+                    written.append(out)
+                except OSError as exc:
+                    self.logger.error(
+                        "Micro Prime: failed to write %s: %s",
+                        out, exc,
+                    )
+        return written
+
     def _write_generated_files(
         self,
         code: str,
@@ -3715,6 +3761,23 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
         if context.get("dry_run", False):
             self.logger.debug("[DRY-RUN] Artisan chunk %s", chunk.chunk_id)
             return True, "Dry-run: Artisan execution skipped"
+
+        # Micro Prime short-circuit: all elements filled locally
+        if chunk.metadata.get("_micro_prime_complete"):
+            filled = chunk.metadata.get("_micro_prime_filled_skeletons") or {}
+            if not filled:
+                self.logger.warning(
+                    "Micro Prime: chunk %s marked complete but has no filled skeletons — "
+                    "falling through to normal execution",
+                    chunk.chunk_id,
+                )
+            else:
+                written = self._write_micro_prime_files(filled, chunk)
+                self.logger.info(
+                    "Micro Prime: chunk %s fully local — %d file(s), 0 tokens",
+                    chunk.chunk_id, len(written),
+                )
+                return True, f"Micro Prime: {len(written)} file(s) filled locally"
 
         try:
             # Build context + description
