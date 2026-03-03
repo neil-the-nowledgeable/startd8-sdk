@@ -3559,15 +3559,16 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
             List of paths that were successfully written.
         """
         written: List[Path] = []
+        resolved_base = self._output_dir.resolve()
         for file_path in chunk.file_targets:
-            if Path(file_path).is_absolute():
+            out = (self._output_dir / file_path).resolve()
+            if not out.is_relative_to(resolved_base):
                 self.logger.warning(
-                    "Micro Prime: skipping absolute path %s", file_path,
+                    "Micro Prime: skipping path traversal %s", file_path,
                 )
                 continue
             content = filled_skeletons.get(file_path)
             if content is not None:
-                out = self._output_dir / file_path
                 try:
                     out.parent.mkdir(parents=True, exist_ok=True)
                     out.write_text(content, encoding="utf-8")
@@ -3773,6 +3774,20 @@ class ArtisanChunkExecutor(LeadContractorChunkExecutor):
                 )
             else:
                 written = self._write_micro_prime_files(filled, chunk)
+                expected = len(chunk.file_targets)
+                if len(written) < expected:
+                    written_rel = {
+                        str(p.relative_to(self._output_dir.resolve()))
+                        for p in written
+                    }
+                    missing = sorted(
+                        set(chunk.file_targets) - written_rel,
+                    )
+                    self.logger.warning(
+                        "Micro Prime: chunk %s wrote %d/%d file(s), missing: %s",
+                        chunk.chunk_id, len(written), expected,
+                        ", ".join(missing) or "(unknown)",
+                    )
                 self.logger.info(
                     "Micro Prime: chunk %s fully local — %d file(s), 0 tokens",
                     chunk.chunk_id, len(written),

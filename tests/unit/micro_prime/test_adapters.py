@@ -640,6 +640,23 @@ class TestMicroPrimeChunkWiring:
             metadata=metadata or {},
         )
 
+    @staticmethod
+    def _make_seed_task(target_files, **overrides):
+        """Build a minimal mock SeedTask for _tasks_to_chunks tests."""
+        task = MagicMock()
+        task.task_id = overrides.get("task_id", "t1")
+        task.description = overrides.get("description", "desc")
+        task.target_files = target_files
+        task.feature_id = overrides.get("feature_id", "f1")
+        task.domain = overrides.get("domain", "sdk")
+        task.estimated_loc = overrides.get("estimated_loc", 50)
+        task.post_generation_validators = []
+        task.title = overrides.get("title", "Task 1")
+        task.requirements_text = None
+        task.complexity_tier_override = None
+        task.artifact_types_addressed = []
+        return task
+
     def test_chunk_metadata_micro_prime_complete(self):
         """Chunk gets _micro_prime_complete=True when all targets are filled and none escalated."""
         from startd8.contractors.context_seed_handlers import ImplementPhaseHandler
@@ -649,20 +666,7 @@ class TestMicroPrimeChunkWiring:
             "escalated_elements": [],
             "metrics": {"local_success_count": 2},
         }
-
-        # Create minimal SeedTasks via mock
-        task = MagicMock()
-        task.task_id = "t1"
-        task.description = "desc"
-        task.target_files = ["src/a.py", "src/b.py"]
-        task.feature_id = "f1"
-        task.domain = "sdk"
-        task.estimated_loc = 50
-        task.post_generation_validators = []
-        task.title = "Task 1"
-        task.requirements_text = None
-        task.complexity_tier_override = None
-        task.artifact_types_addressed = []
+        task = self._make_seed_task(["src/a.py", "src/b.py"])
 
         chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
             [task], micro_prime_result=micro_prime_result,
@@ -688,19 +692,7 @@ class TestMicroPrimeChunkWiring:
             ],
             "metrics": {"local_success_count": 1},
         }
-
-        task = MagicMock()
-        task.task_id = "t1"
-        task.description = "desc"
-        task.target_files = ["src/a.py"]
-        task.feature_id = "f1"
-        task.domain = "sdk"
-        task.estimated_loc = 50
-        task.post_generation_validators = []
-        task.title = "Task 1"
-        task.requirements_text = None
-        task.complexity_tier_override = None
-        task.artifact_types_addressed = []
+        task = self._make_seed_task(["src/a.py"])
 
         chunks, _ = ImplementPhaseHandler._tasks_to_chunks(
             [task], micro_prime_result=micro_prime_result,
@@ -736,6 +728,8 @@ class TestMicroPrimeChunkWiring:
         assert "Micro Prime" in msg
         # _build_generation_context should NOT be called — skipped entirely
         mock_ctx.assert_not_called()
+        # Verify the file was actually written to staging
+        assert (tmp_path / "src/utils.py").exists()
 
     def test_executor_writes_filled_skeletons_to_staging(self, tmp_path):
         """_write_micro_prime_files writes correct files to output_dir."""
