@@ -11,7 +11,7 @@ Generated Jsonnet follows the overview.libsonnet composition pattern:
 """
 
 import re
-from typing import Any, List
+from typing import Any, List, Optional
 
 from startd8.dashboard_creator.models import (
     DashboardLink,
@@ -32,12 +32,32 @@ _COMBINED_REF = re.compile(r"\$\{(metrics|selectors)\.(\w+)\}")
 
 def generate_dashboard_jsonnet(
     spec: DashboardSpec,
+    config_overlay_filename: Optional[str] = None,
 ) -> str:
-    """DC-100: Transform DashboardSpec into a .libsonnet string."""
+    """DC-100: Transform DashboardSpec into a .libsonnet string.
+
+    Args:
+        spec: Validated DashboardSpec.
+        config_overlay_filename: If set, the generated Jsonnet merges a config
+            overlay on top of the base ``config.libsonnet`` so that
+            ``config_overrides`` take effect during compilation (DC-005 AC3).
+    """
     lines: List[str] = []
 
-    # Imports
-    lines.append("local config = (import '../config.libsonnet')._config;")
+    # Imports — merge config overlay when overrides are present
+    if config_overlay_filename:
+        # Guard against path traversal — only bare filenames are safe
+        if "/" in config_overlay_filename or "\\" in config_overlay_filename or ".." in config_overlay_filename:
+            raise ValueError(
+                f"config_overlay_filename must be a bare filename, "
+                f"got: {config_overlay_filename!r}"
+            )
+        lines.append(
+            f"local config = ((import '../config.libsonnet') + "
+            f"(import '../{config_overlay_filename}'))._config;"
+        )
+    else:
+        lines.append("local config = (import '../config.libsonnet')._config;")
     lines.append("local dashboards = import '../lib/dashboards.libsonnet';")
     lines.append("local panels = import '../lib/panels.libsonnet';")
     lines.append("local variables = import '../lib/variables.libsonnet';")

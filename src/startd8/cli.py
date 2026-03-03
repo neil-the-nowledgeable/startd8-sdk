@@ -7,6 +7,7 @@
 Command-line interface for StartDate Agent Framework
 """
 
+import os
 import typer
 from typing import Optional, List
 from pathlib import Path
@@ -2432,7 +2433,11 @@ def dashboard_create(
         return
 
     if spec_file is None:
-        console.print("[red]Error: spec_file argument is required (or use --print-template)[/red]")
+        console.print(
+            "[red]Error: SPEC_FILE argument is required.[/red]\n"
+            "Usage: startd8 dashboard create [OPTIONS] SPEC_FILE\n"
+            "       startd8 dashboard create --print-template"
+        )
         raise typer.Exit(1)
 
     if not spec_file.is_file():
@@ -2456,6 +2461,8 @@ def dashboard_create(
         wf_config["provision"] = True
     if grafana_url:
         wf_config["grafana_url"] = grafana_url
+    elif os.environ.get("GRAFANA_URL"):
+        wf_config["grafana_url"] = os.environ["GRAFANA_URL"]
     if allow_insecure:
         wf_config["allow_insecure"] = True
 

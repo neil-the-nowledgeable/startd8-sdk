@@ -60,12 +60,11 @@ class TestValidateDashboardJson:
         assert result.valid is False
         assert any("UID mismatch" in e for e in result.errors)
 
-    def test_unsupported_schema_version_warning(self):
+    def test_unsupported_schema_version_is_error(self):
         data = _valid_dashboard(schemaVersion=99)
         result = validate_dashboard_json(json.dumps(data), "cc-startd8-test")
-        assert result.valid is True  # Warning, not error
-        assert len(result.warnings) == 1
-        assert "schemaVersion" in result.warnings[0]
+        assert result.valid is False  # DC-106 AC3: must be within supported range
+        assert any("schemaVersion" in e for e in result.errors)
 
     def test_panels_not_a_list(self):
         data = _valid_dashboard(panels="not-a-list")

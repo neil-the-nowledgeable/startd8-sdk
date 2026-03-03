@@ -5,9 +5,11 @@ Jsonnet compilation — binary and Python backends (DC-105).
 import json
 import subprocess
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import List, Optional
 
 from startd8.dashboard_creator.discovery import MixinContext, ToolchainInfo
 from startd8.exceptions import Startd8Error
@@ -143,9 +145,10 @@ def _compile_python(
 ) -> str:
     """Compile using the _gojsonnet Python package.
 
-    Note: timeout_seconds is accepted for API consistency with the binary
-    backend but is not enforced — _gojsonnet.evaluate_file() does not
-    support timeouts.
+    Timeout is enforced via a daemon thread — if evaluation exceeds the
+    limit, TimeoutError is raised.  The background thread cannot be
+    cancelled (C-extension limitation) but is marked daemon so it won't
+    block process exit.
     """
     try:
         import _gojsonnet  # type: ignore[import-untyped]
@@ -161,12 +164,37 @@ def _compile_python(
         str(mixin.mixin_dir),
     ]
 
-    try:
-        return _gojsonnet.evaluate_file(
-            str(source_path),
-            jpathdir=jpathdir,
+    result_box: List[Optional[str]] = [None]
+    error_box: List[Optional[Exception]] = [None]
+
+    def _worker() -> None:
+        try:
+            result_box[0] = _gojsonnet.evaluate_file(
+                str(source_path),
+                jpathdir=jpathdir,
+            )
+        except Exception as exc:
+            error_box[0] = exc
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+
+    if thread.is_alive():
+        raise TimeoutError(
+            f"Jsonnet compilation timed out after {timeout_seconds}s "
+            f"(Python backend)"
         )
-    except RuntimeError as exc:
+
+    if error_box[0] is not None:
         raise CompilationError(
-            str(exc), source_path=str(source_path)
+            str(error_box[0]), source_path=str(source_path)
         )
+
+    if result_box[0] is None:
+        raise CompilationError(
+            "Jsonnet evaluation returned no output (Python backend)",
+            source_path=str(source_path),
+        )
+
+    return result_box[0]

@@ -31,7 +31,7 @@ def validate_dashboard_json(
     1. JSON is parseable
     2. Required top-level keys present (title, uid, panels, templating, schemaVersion)
     3. uid matches expected_uid
-    4. schemaVersion in supported range (warning, not error)
+    4. schemaVersion in supported range
     5. panels is a list
     6. Panel count matches expected (excluding auto-generated rows)
     """
@@ -64,10 +64,10 @@ def validate_dashboard_json(
             f"UID mismatch: expected '{expected_uid}', got '{actual_uid}'"
         )
 
-    # Schema version (advisory)
+    # Schema version — must be within supported range (DC-106 AC3)
     schema_version = data.get("schemaVersion")
     if schema_version is not None and schema_version not in _SUPPORTED_SCHEMA_VERSIONS:
-        warnings.append(
+        errors.append(
             f"Unsupported schemaVersion {schema_version} "
             f"(expected {_SUPPORTED_SCHEMA_VERSIONS.start}–{_SUPPORTED_SCHEMA_VERSIONS.stop - 1})"
         )

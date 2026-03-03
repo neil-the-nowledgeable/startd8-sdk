@@ -16,6 +16,7 @@ from startd8.dashboard_creator.config_merge import (
     hydrate_spec_defaults,
     merge_config_overrides,
     parse_config_libsonnet,
+    write_config_overlay,
 )
 from startd8.dashboard_creator.discovery import discover_mixin, detect_toolchain
 from startd8.dashboard_creator.generator import generate_dashboard_jsonnet
@@ -40,6 +41,8 @@ from startd8.workflows.models import (
 )
 
 logger = get_logger(__name__)
+
+_OVERLAY_FILENAME = "_dc_config_overlay.libsonnet"
 
 # Graceful OTel import — child spans under WorkflowBase's root span (DC-205)
 try:
@@ -175,9 +178,9 @@ class DashboardCreatorWorkflow(WorkflowBase):
                 errors.append(
                     "Provisioning requires GRAFANA_API_TOKEN environment variable"
                 )
-            if not config.get("grafana_url"):
+            if not config.get("grafana_url") and not os.environ.get("GRAFANA_URL"):
                 errors.append(
-                    "Provisioning requires --grafana-url"
+                    "Provisioning requires --grafana-url or GRAFANA_URL environment variable"
                 )
 
         spec_input = config.get("spec")
@@ -273,6 +276,20 @@ class DashboardCreatorWorkflow(WorkflowBase):
 
         spec = hydrate_spec_defaults(spec, merged_config)
 
+        # 4.5 Write config overlay for the compiler (DC-005 AC3)
+        config_overlay_filename = None
+        if spec.config_overrides:
+            try:
+                overlay_path = mixin.mixin_dir / _OVERLAY_FILENAME
+                write_config_overlay(merged_config, overlay_path)
+                config_overlay_filename = _OVERLAY_FILENAME
+            except OSError as exc:
+                return WorkflowResult.from_error(
+                    self.metadata.workflow_id,
+                    f"Failed to write config overlay: {exc}. "
+                    f"Config overrides will not take effect.",
+                )
+
         # 5. Validate spec
         self._emit_progress(on_progress, 4, 10, "Validating spec")
         validation_errors = validate_spec(spec, merged_config)
@@ -300,48 +317,57 @@ class DashboardCreatorWorkflow(WorkflowBase):
             ))
 
         # 6. Generate Jsonnet
-        self._emit_progress(on_progress, 5, 10, "Generating Jsonnet")
-        gen_start = time.monotonic()
-        with self._child_span("generate", panel_count=len(spec.panels)):
-            jsonnet_source = generate_dashboard_jsonnet(spec)
-        gen_ms = int((time.monotonic() - gen_start) * 1000)
-
-        step_results.append(StepResult(
-            step_name="generate",
-            output=f"Generated {len(jsonnet_source)} chars of Jsonnet",
-            time_ms=gen_ms,
-        ))
-
-        if is_dry_run:
-            self._emit_progress(on_progress, 10, 10, "Dry run complete")
-            return WorkflowResult(
-                workflow_id=self.metadata.workflow_id,
-                success=True,
-                output={"jsonnet_source": jsonnet_source, "uid": spec.uid},
-                steps=step_results,
-                metrics=WorkflowMetrics(
-                    total_time_ms=int((time.monotonic() - started_at_ns) * 1000),
-                    step_count=len(step_results),
-                ),
-            )
-
-        # 7. Compile Jsonnet
-        self._emit_progress(on_progress, 6, 10, "Compiling Jsonnet")
-        with self._child_span("compile") as compile_span:
-            try:
-                comp_result = compile_jsonnet_string(
-                    jsonnet_source, mixin, toolchain
+        # Overlay cleanup is consolidated in a single finally block covering
+        # both the dry-run early return and the compile path.
+        try:
+            self._emit_progress(on_progress, 5, 10, "Generating Jsonnet")
+            gen_start = time.monotonic()
+            with self._child_span("generate", panel_count=len(spec.panels)):
+                jsonnet_source = generate_dashboard_jsonnet(
+                    spec, config_overlay_filename=config_overlay_filename
                 )
-                if compile_span:
-                    compile_span.set_attribute("compilation.duration_ms", comp_result.duration_ms)
-                    compile_span.set_attribute("compilation.backend", comp_result.backend)
-            except (CompilationError, TimeoutError, OSError) as exc:
-                if compile_span and _otel_trace:
-                    compile_span.set_status(_otel_trace.StatusCode.ERROR, str(exc))
-                    compile_span.record_exception(exc)
-                return WorkflowResult.from_error(
-                    self.metadata.workflow_id, f"Compilation failed: {exc}"
+            gen_ms = int((time.monotonic() - gen_start) * 1000)
+
+            step_results.append(StepResult(
+                step_name="generate",
+                output=f"Generated {len(jsonnet_source)} chars of Jsonnet",
+                time_ms=gen_ms,
+            ))
+
+            if is_dry_run:
+                self._emit_progress(on_progress, 10, 10, "Dry run complete")
+                return WorkflowResult(
+                    workflow_id=self.metadata.workflow_id,
+                    success=True,
+                    output={"jsonnet_source": jsonnet_source, "uid": spec.uid},
+                    steps=step_results,
+                    metrics=WorkflowMetrics(
+                        total_time_ms=int((time.monotonic() - started_at_ns) * 1000),
+                        step_count=len(step_results),
+                    ),
                 )
+
+            # 7. Compile Jsonnet
+            self._emit_progress(on_progress, 6, 10, "Compiling Jsonnet")
+            with self._child_span("compile") as compile_span:
+                try:
+                    comp_result = compile_jsonnet_string(
+                        jsonnet_source, mixin, toolchain
+                    )
+                    if compile_span:
+                        compile_span.set_attribute("compilation.duration_ms", comp_result.duration_ms)
+                        compile_span.set_attribute("compilation.backend", comp_result.backend)
+                except (CompilationError, TimeoutError, OSError) as exc:
+                    if compile_span and _otel_trace:
+                        compile_span.set_status(_otel_trace.StatusCode.ERROR, str(exc))
+                        compile_span.record_exception(exc)
+                    return WorkflowResult.from_error(
+                        self.metadata.workflow_id, f"Compilation failed: {exc}"
+                    )
+        finally:
+            # Clean up temp config overlay (DC-005 AC3)
+            if config_overlay_filename:
+                (mixin.mixin_dir / config_overlay_filename).unlink(missing_ok=True)
 
         step_results.append(StepResult(
             step_name="compile",
@@ -442,7 +468,7 @@ class DashboardCreatorWorkflow(WorkflowBase):
                     from startd8.dashboard_creator.grafana_client import GrafanaClient
                     from startd8.dashboard_creator.provisioning import provision_dashboard
 
-                    grafana_url = config.get("grafana_url", "")
+                    grafana_url = config.get("grafana_url") or os.environ.get("GRAFANA_URL", "")
                     allow_insecure = config.get("allow_insecure", False)
                     client = GrafanaClient(grafana_url, allow_insecure=allow_insecure)
                     prov_result = provision_dashboard(json_result.dashboard_json, client)
@@ -464,8 +490,8 @@ class DashboardCreatorWorkflow(WorkflowBase):
                             step_name="provision",
                             output=f"Provisioning failed: {prov_result.error}",
                         ))
-                except (ConfigurationError, OSError) as exc:
-                    logger.warning("Provisioning error: %s", exc)
+                except Exception as exc:
+                    logger.warning("Provisioning error: %s", exc, exc_info=True)
                     if prov_span and _otel_trace:
                         prov_span.set_status(_otel_trace.StatusCode.ERROR, str(exc))
                         prov_span.record_exception(exc)
@@ -501,7 +527,7 @@ class DashboardCreatorWorkflow(WorkflowBase):
         )
 
     def _parse_spec(self, spec_input: Any) -> DashboardSpec:
-        """Parse spec from dict, YAML/JSON file path, or string."""
+        """Parse spec from dict, YAML/JSON file path, markdown requirements, or string."""
         if isinstance(spec_input, dict):
             return DashboardSpec(**spec_input)
 
@@ -511,6 +537,9 @@ class DashboardCreatorWorkflow(WorkflowBase):
         # Treat as file path
         path = Path(str(spec_input))
         if path.is_file():
+            if path.suffix == ".md":
+                from startd8.dashboard_creator.requirements_parser import parse_requirements
+                return parse_requirements(path)  # may raise ConfigurationError
             content = path.read_text(encoding="utf-8")
             if path.suffix in {".yaml", ".yml"}:
                 data = yaml.safe_load(content)

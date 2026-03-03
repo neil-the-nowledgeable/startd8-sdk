@@ -36,14 +36,30 @@ def provision_dashboard(
 ) -> ProvisioningResult:
     """Upsert a dashboard to Grafana and return a clickable URL.
 
+    Verifies Grafana version compatibility (DC-202 AC4) before attempting
+    the upsert.  All failures — including version mismatch — are returned
+    as ``ProvisioningResult(success=False)``; callers decide severity.
+
     Args:
         dashboard_json: Compiled dashboard JSON (dict).
         client: Authenticated GrafanaClient instance.
 
     Returns:
-        ProvisioningResult with dashboard_url on success.
+        ProvisioningResult with dashboard_url on success, or
+        ProvisioningResult(success=False) on any failure.
     """
     uid = dashboard_json.get("uid", "unknown")
+
+    # DC-202 AC4: Verify Grafana version before provisioning
+    version_resp = client.check_version()
+    if not version_resp.success:
+        logger.warning("Grafana version check failed for %s: %s", uid, version_resp.error)
+        return ProvisioningResult(
+            success=False,
+            uid=uid,
+            error=f"Grafana version check failed: {version_resp.error}",
+            details={"status_code": version_resp.status_code},
+        )
 
     resp: GrafanaResponse = client.upsert_dashboard(dashboard_json)
     if not resp.success:

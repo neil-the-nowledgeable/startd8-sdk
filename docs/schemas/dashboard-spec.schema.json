@@ -1,5 +1,90 @@
 {
   "$defs": {
+    "DashboardLink": {
+      "description": "A dashboard-level link (external URL or tag-based dashboard list).",
+      "properties": {
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "default": "",
+          "title": "Url",
+          "type": "string"
+        },
+        "icon": {
+          "default": "external link",
+          "title": "Icon",
+          "type": "string"
+        },
+        "tooltip": {
+          "default": "",
+          "title": "Tooltip",
+          "type": "string"
+        },
+        "targetBlank": {
+          "default": true,
+          "title": "Targetblank",
+          "type": "boolean"
+        },
+        "type": {
+          "default": "link",
+          "title": "Type",
+          "type": "string"
+        },
+        "tags": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Tags",
+          "type": "array"
+        },
+        "asDropdown": {
+          "default": false,
+          "title": "Asdropdown",
+          "type": "boolean"
+        },
+        "includeVars": {
+          "default": false,
+          "title": "Includevars",
+          "type": "boolean"
+        },
+        "keepTime": {
+          "default": false,
+          "title": "Keeptime",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "title": "DashboardLink",
+      "type": "object"
+    },
+    "DataLink": {
+      "description": "A data link attached to panel field values (e.g. drill-down URLs).",
+      "properties": {
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
+        "url": {
+          "title": "Url",
+          "type": "string"
+        },
+        "targetBlank": {
+          "default": true,
+          "title": "Targetblank",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "title",
+        "url"
+      ],
+      "title": "DataLink",
+      "type": "object"
+    },
     "GridPos": {
       "description": "Grafana panel grid position.",
       "properties": {
@@ -30,6 +115,13 @@
     "PanelSpec": {
       "description": "Specification for a single dashboard panel.",
       "properties": {
+        "type": {
+          "$ref": "#/$defs/PanelType"
+        },
+        "title": {
+          "title": "Title",
+          "type": "string"
+        },
         "expr": {
           "anyOf": [
             {
@@ -41,42 +133,6 @@
           ],
           "default": null,
           "title": "Expr"
-        },
-        "gridPos": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/GridPos"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "group": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Group"
-        },
-        "options": {
-          "additionalProperties": true,
-          "title": "Options",
-          "type": "object"
-        },
-        "overrides": {
-          "items": {
-            "additionalProperties": true,
-            "type": "object"
-          },
-          "title": "Overrides",
-          "type": "array"
         },
         "query": {
           "anyOf": [
@@ -105,6 +161,34 @@
           "default": null,
           "title": "Targets"
         },
+        "gridPos": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GridPos"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "group": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Group"
+        },
+        "unit": {
+          "default": "",
+          "title": "Unit",
+          "type": "string"
+        },
         "thresholds": {
           "items": {
             "$ref": "#/$defs/ThresholdStep"
@@ -112,17 +196,42 @@
           "title": "Thresholds",
           "type": "array"
         },
-        "title": {
-          "title": "Title",
-          "type": "string"
+        "overrides": {
+          "items": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "title": "Overrides",
+          "type": "array"
         },
-        "type": {
-          "$ref": "#/$defs/PanelType"
+        "options": {
+          "additionalProperties": true,
+          "title": "Options",
+          "type": "object"
         },
-        "unit": {
+        "description": {
           "default": "",
-          "title": "Unit",
+          "title": "Description",
           "type": "string"
+        },
+        "fieldConfig": {
+          "additionalProperties": true,
+          "title": "Fieldconfig",
+          "type": "object"
+        },
+        "dataLinks": {
+          "items": {
+            "$ref": "#/$defs/DataLink"
+          },
+          "title": "Datalinks",
+          "type": "array"
+        },
+        "transformations": {
+          "items": {
+            "$ref": "#/$defs/TransformSpec"
+          },
+          "title": "Transformations",
+          "type": "array"
         }
       },
       "required": [
@@ -158,19 +267,6 @@
     "TargetSpec": {
       "description": "A single query target within a multi-target panel.",
       "properties": {
-        "datasource": {
-          "anyOf": [
-            {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Datasource"
-        },
         "expr": {
           "anyOf": [
             {
@@ -200,6 +296,31 @@
           "default": null,
           "title": "Query"
         },
+        "refId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Refid"
+        },
+        "datasource": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Datasource"
+        },
         "queryType": {
           "anyOf": [
             {
@@ -212,7 +333,12 @@
           "default": null,
           "title": "Querytype"
         },
-        "refId": {
+        "instant": {
+          "default": false,
+          "title": "Instant",
+          "type": "boolean"
+        },
+        "format": {
           "anyOf": [
             {
               "type": "string"
@@ -222,7 +348,7 @@
             }
           ],
           "default": null,
-          "title": "Refid"
+          "title": "Format"
         }
       },
       "title": "TargetSpec",
@@ -231,11 +357,6 @@
     "ThresholdStep": {
       "description": "A single threshold step for panel coloring.",
       "properties": {
-        "color": {
-          "default": "green",
-          "title": "Color",
-          "type": "string"
-        },
         "value": {
           "anyOf": [
             {
@@ -247,14 +368,45 @@
           ],
           "default": null,
           "title": "Value"
+        },
+        "color": {
+          "default": "green",
+          "title": "Color",
+          "type": "string"
         }
       },
       "title": "ThresholdStep",
       "type": "object"
     },
+    "TransformSpec": {
+      "description": "A Grafana panel transformation (e.g. organize, calculateField).",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "options": {
+          "additionalProperties": true,
+          "title": "Options",
+          "type": "object"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "title": "TransformSpec",
+      "type": "object"
+    },
     "VariableSpec": {
       "description": "Specification for a dashboard template variable.",
       "properties": {
+        "type": {
+          "$ref": "#/$defs/VariableType"
+        },
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
         "label": {
           "default": "",
           "title": "Label",
@@ -272,15 +424,6 @@
           "default": null,
           "title": "Metric"
         },
-        "multi": {
-          "default": false,
-          "title": "Multi",
-          "type": "boolean"
-        },
-        "name": {
-          "title": "Name",
-          "type": "string"
-        },
         "query": {
           "anyOf": [
             {
@@ -293,8 +436,10 @@
           "default": null,
           "title": "Query"
         },
-        "type": {
-          "$ref": "#/$defs/VariableType"
+        "multi": {
+          "default": false,
+          "title": "Multi",
+          "type": "boolean"
         },
         "value": {
           "anyOf": [
@@ -307,6 +452,45 @@
           ],
           "default": null,
           "title": "Value"
+        },
+        "includeAll": {
+          "default": false,
+          "title": "Includeall",
+          "type": "boolean"
+        },
+        "allValue": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Allvalue"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Default"
+        },
+        "hide": {
+          "default": 0,
+          "title": "Hide",
+          "type": "integer"
+        },
+        "skipUrlSync": {
+          "default": false,
+          "title": "Skipurlsync",
+          "type": "boolean"
         }
       },
       "required": [
@@ -335,10 +519,48 @@
   },
   "description": "Primary input model for dashboard generation.\n\nCaptures everything needed to generate a single Grafana dashboard\nfrom the startd8-mixin library.",
   "properties": {
-    "config_overrides": {
-      "additionalProperties": true,
-      "title": "Config Overrides",
-      "type": "object"
+    "title": {
+      "title": "Title",
+      "type": "string"
+    },
+    "uid": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Uid"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "tags": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Tags",
+      "type": "array"
+    },
+    "panels": {
+      "items": {
+        "$ref": "#/$defs/PanelSpec"
+      },
+      "minItems": 1,
+      "title": "Panels",
+      "type": "array"
+    },
+    "variables": {
+      "items": {
+        "$ref": "#/$defs/VariableSpec"
+      },
+      "title": "Variables",
+      "type": "array"
     },
     "datasources": {
       "additionalProperties": {
@@ -347,17 +569,11 @@
       "title": "Datasources",
       "type": "object"
     },
-    "description": {
-      "default": "",
-      "title": "Description",
-      "type": "string"
-    },
-    "panels": {
+    "links": {
       "items": {
-        "$ref": "#/$defs/PanelSpec"
+        "$ref": "#/$defs/DashboardLink"
       },
-      "minItems": 1,
-      "title": "Panels",
+      "title": "Links",
       "type": "array"
     },
     "refresh": {
@@ -372,12 +588,17 @@
       "default": null,
       "title": "Refresh"
     },
-    "tags": {
-      "items": {
-        "type": "string"
-      },
-      "title": "Tags",
-      "type": "array"
+    "timezone": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Timezone"
     },
     "time_from": {
       "anyOf": [
@@ -403,40 +624,10 @@
       "default": null,
       "title": "Time To"
     },
-    "timezone": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Timezone"
-    },
-    "title": {
-      "title": "Title",
-      "type": "string"
-    },
-    "uid": {
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
-      ],
-      "default": null,
-      "title": "Uid"
-    },
-    "variables": {
-      "items": {
-        "$ref": "#/$defs/VariableSpec"
-      },
-      "title": "Variables",
-      "type": "array"
+    "config_overrides": {
+      "additionalProperties": true,
+      "title": "Config Overrides",
+      "type": "object"
     }
   },
   "required": [
