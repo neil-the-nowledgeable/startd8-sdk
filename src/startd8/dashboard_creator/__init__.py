@@ -25,6 +25,10 @@ from startd8.dashboard_creator.provisioning import (
     deprovision_dashboard,
     provision_dashboard,
 )
+from startd8.dashboard_creator.requirements_parser import (
+    parse_requirements,
+    requirements_to_yaml,
+)
 from startd8.dashboard_creator.workflow import DashboardCreatorWorkflow
 
 __all__ = [
@@ -61,4 +65,7 @@ __all__ = [
     "provision_dashboard",
     "deprovision_dashboard",
     "delete_local_artifacts",
+    # Requirements parser (DC-301)
+    "parse_requirements",
+    "requirements_to_yaml",
 ]

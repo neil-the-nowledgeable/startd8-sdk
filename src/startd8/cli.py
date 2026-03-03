@@ -2492,6 +2492,71 @@ def dashboard_create(
         console.print(f"  URL: [link={dashboard_url}]{dashboard_url}[/link]")
 
 
+@dashboard_app.command("from-requirements")
+def dashboard_from_requirements(
+    path: Path = typer.Argument(..., help="Path to requirements markdown file"),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Output YAML file path"
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Print YAML to stdout without writing"
+    ),
+    no_uid_transform: bool = typer.Option(
+        False, "--no-uid-transform", help="Keep original UID without cc-govbudget- prefix"
+    ),
+):
+    """Parse a requirements markdown document into a DashboardSpec YAML.
+
+    Examples:
+
+        startd8 dashboard from-requirements design/intro-requirements.md --dry-run
+
+        startd8 dashboard from-requirements design/intro-requirements.md -o dashboards/intro.spec.yaml
+    """
+    if not path.is_file():
+        console.print(f"[red]Error: file not found: {path}[/red]")
+        raise typer.Exit(1)
+
+    from .dashboard_creator.requirements_parser import (
+        parse_requirements,
+        _spec_to_dict,
+    )
+
+    spec = parse_requirements(path)
+
+    if no_uid_transform and spec.uid:
+        # Restore original UID from the requirements doc header
+        import re as _re
+
+        header_text = path.read_text(encoding="utf-8")
+        uid_m = _re.search(r"\*\*Dashboard UID\*\*:\s*`([^`]+)`", header_text)
+        if uid_m:
+            spec = spec.model_copy(update={"uid": uid_m.group(1).strip()})
+
+    import yaml as _yaml
+
+    data = _spec_to_dict(spec)
+    yaml_str = _yaml.dump(data, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+    panel_count = len(spec.panels)
+    var_count = len(spec.variables)
+
+    if dry_run:
+        console.print(yaml_str)
+        console.print(
+            f"\n[green]Parsed: {panel_count} panels, {var_count} variables "
+            f"— UID: {spec.uid}[/green]"
+        )
+        return
+
+    out_path = output or path.with_suffix(".spec.yaml")
+    out_path.write_text(yaml_str, encoding="utf-8")
+    console.print(
+        f"[green]Wrote {out_path} — {panel_count} panels, {var_count} variables "
+        f"— UID: {spec.uid}[/green]"
+    )
+
+
 @dashboard_app.command("delete")
 def dashboard_delete(
     uid: str = typer.Argument(..., help="Dashboard UID to delete"),
