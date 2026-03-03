@@ -1,7 +1,6 @@
 """Tests for PrimeContractorWorkflowAdapter — WorkflowBase wrapper."""
 
 import json
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -9,7 +8,6 @@ import pytest
 from startd8.workflows.builtin.prime_contractor_workflow import (
     PrimeContractorWorkflowAdapter,
 )
-from startd8.workflows.models import WorkflowResult
 
 
 @pytest.fixture

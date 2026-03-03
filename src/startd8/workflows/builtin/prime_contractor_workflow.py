@@ -8,10 +8,9 @@ Pattern follows lead_contractor_workflow.py.
 """
 
 import json
-import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
 from ..base import WorkflowBase, ProgressCallback
 from ..models import (
@@ -22,6 +21,9 @@ from ..models import (
     AgentCount,
 )
 from ...logging_config import get_logger
+
+if TYPE_CHECKING:
+    from ...agents import BaseAgent
 
 logger = get_logger(__name__)
 
@@ -134,10 +136,18 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
     def _execute(
         self,
         config: Dict[str, Any],
-        agents: Optional[List[Any]],
+        agents: Optional[List["BaseAgent"]],
         on_progress: Optional[ProgressCallback],
     ) -> WorkflowResult:
-        """Execute the Prime Contractor workflow."""
+        """Execute the Prime Contractor workflow.
+
+        Stages:
+            1. Initialize PrimeContractorWorkflow with code generator
+            2. Load seed context and feature queue from seed JSON
+            3. Enable micro-prime local generation (if requested)
+            4. Enable complexity-based routing (if requested)
+            5. Apply task filter, run workflow, convert result
+        """
         from ...contractors.prime_contractor import PrimeContractorWorkflow
         from ...contractors.generators.lead_contractor import LeadContractorCodeGenerator
         from ...contractors.queue import FeatureStatus
@@ -176,9 +186,15 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
             )
             workflow.force_regenerate = force_regenerate
 
-            # Load seed
+            # Load seed — parse JSON with specific error handling
             self._emit_progress(on_progress, 2, 5, "Loading seed context")
-            seed_data = json.loads(Path(seed_path).read_text())
+            seed_file = Path(seed_path)
+            try:
+                seed_data = json.loads(seed_file.read_text())
+            except json.JSONDecodeError as e:
+                return WorkflowResult.from_error(
+                    wf_id, f"Invalid JSON in seed file {seed_path}: {e}"
+                )
             workflow.queue.add_features_from_seed(seed_path)
             workflow.load_seed_context(seed_data)
 
@@ -202,10 +218,13 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
 
                 workflow.enable_micro_prime(mp_config)
 
-            # Enable complexity routing if requested
+            # Enable complexity routing if requested — use getattr for private attrs
             if config.get("complexity_routing"):
                 mp_generator = None
-                if workflow._micro_prime_enabled and workflow._original_code_generator:
+                if (
+                    getattr(workflow, "_micro_prime_enabled", False)
+                    and getattr(workflow, "_original_code_generator", None)
+                ):
                     mp_generator = workflow.code_generator
                 workflow.enable_complexity_routing(
                     trivial_generator=mp_generator,
@@ -216,10 +235,16 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
             task_filter_str = config.get("task_filter")
             if task_filter_str:
                 allowed_ids = {t.strip() for t in task_filter_str.split(",") if t.strip()}
+                kept = 0
                 for fid, feature in workflow.queue.features.items():
                     if fid not in allowed_ids:
                         feature.status = FeatureStatus.COMPLETE
-                logger.info("Task filter applied: %d tasks selected", len(allowed_ids))
+                    else:
+                        kept += 1
+                logger.info(
+                    "Task filter applied: %d IDs requested, %d tasks kept",
+                    len(allowed_ids), kept,
+                )
 
             # Run
             self._emit_progress(on_progress, 4, 5, "Running workflow")
@@ -232,10 +257,9 @@ class PrimeContractorWorkflowAdapter(WorkflowBase):
 
             self._emit_progress(on_progress, 5, 5, "Complete")
 
-            # Convert to WorkflowResult
-            succeeded = result_dict.get("succeeded", 0)
+            # Convert to WorkflowResult — failed==0 is success (even if queue was empty)
             failed = result_dict.get("failed", 0)
-            success = failed == 0 and succeeded > 0
+            success = failed == 0
 
             metrics = WorkflowMetrics(
                 total_time_ms=int((datetime.now(timezone.utc) - started_at).total_seconds() * 1000),
