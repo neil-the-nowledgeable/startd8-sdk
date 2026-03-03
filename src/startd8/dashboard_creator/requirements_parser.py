@@ -462,7 +462,7 @@ def _parse_data_link(s: str) -> Optional[DataLink]:
     url_parts = [f"/d/{target_uid}"]
     query_parts = []
     for var_name, var_value in var_params:
-        query_parts.append(f"{var_name}={var_value.strip()}")
+        query_parts.append(f"{var_name}={var_value.strip().strip('`')}")
 
     # Always append time range and variables macros
     query_parts.append("${__url_time_range}")
