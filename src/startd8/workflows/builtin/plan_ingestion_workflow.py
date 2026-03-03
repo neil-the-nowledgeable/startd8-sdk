@@ -260,7 +260,11 @@ Return a JSON object (no markdown fences) with exactly these keys:
       "estimated_loc": 100,
       "labels": ["label"],
       "design_doc_sections": ["optional task-specific design hints e.g. Parameter validation", "Error handling"],
-      "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"]
+      "artifact_types_addressed": ["optional artifact types e.g. servicemonitor", "prometheus_rule"],
+      "api_signatures": ["Class MyClass(BaseClass)", "def my_function(arg: str) -> bool", "Method serve(request, context)"],
+      "protocol": "grpc or http or cli or library or none",
+      "runtime_dependencies": ["grpcio==1.60.0", "flask>=3.0"],
+      "negative_scope": ["things explicitly excluded from this feature"]
     }}
   ],
   "mentioned_files": ["every file path mentioned in the plan"],
@@ -281,6 +285,10 @@ Rules for target_files:
 
 design_doc_sections: optional list of content hints to emphasize in the design doc (e.g. parameter validation, error handling). Omit or empty if not applicable.
 artifact_types_addressed: optional list of artifact types this feature generates (e.g. servicemonitor, prometheus_rule, dashboard). Omit or empty if not applicable.
+api_signatures: list of class, function, and method signatures defined or implemented by this feature. Extract these from "Implementation contract", "API", "Interface", or signature sections in the plan. Use the format "Class ClassName(BaseClass)", "def function_name(param: type) -> return_type", or "Method name(params)". Include ALL signatures mentioned for the feature.
+protocol: transport protocol — one of "grpc", "http", "cli", "library", or "none". Infer from the plan (e.g. gRPC service → "grpc", Flask/REST → "http", CLI tool → "cli", utility module → "library").
+runtime_dependencies: list of third-party packages with version constraints mentioned in the plan for this feature (e.g. "grpcio==1.60.0", "flask>=3.0"). Only include explicit dependencies, not stdlib.
+negative_scope: list of things explicitly excluded or out-of-scope for this feature, if mentioned in the plan.
 
 Be thorough. Extract every feature, file reference, and dependency.
 """
@@ -1490,6 +1498,10 @@ class PlanIngestionWorkflow(WorkflowBase):
                 labels=f.get("labels", []),
                 design_doc_sections=f.get("design_doc_sections", []),
                 artifact_types_addressed=f.get("artifact_types_addressed", []),
+                api_signatures=f.get("api_signatures", []),
+                protocol=f.get("protocol", ""),
+                runtime_dependencies=f.get("runtime_dependencies", []),
+                negative_scope=f.get("negative_scope", []),
             ))
 
         parsed = ParsedPlan(
