@@ -325,10 +325,22 @@ class MicroPrimeCodeGenerator:
         context: Dict[str, Any],
         target_files: List[str],
     ) -> GenerationResult:
-        """Delegate to the fallback code generator."""
+        """Delegate to the fallback code generator.
+
+        Sanitizes the context dict before delegation: Pydantic models
+        (e.g. ForwardManifest) are converted to dicts so downstream
+        ``json.dumps(context)`` calls in the spec builder don't crash.
+        """
         if self._fallback is None:
             return GenerationResult(
                 success=False,
                 error="No fallback generator configured and elements need cloud processing",
             )
-        return self._fallback.generate(task, context, target_files)
+        # Sanitize: convert Pydantic models to dicts for JSON compatibility
+        clean_context = {}
+        for key, value in context.items():
+            if hasattr(value, "model_dump"):
+                clean_context[key] = value.model_dump()
+            else:
+                clean_context[key] = value
+        return self._fallback.generate(task, clean_context, target_files)
