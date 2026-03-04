@@ -678,10 +678,10 @@ class TestObservabilityLogging:
         summary_messages = [
             r.message
             for r in caplog.records
-            if "elements local" in r.message and "escalated to fallback" in r.message
+            if "elements local" in r.message and "escalated" in r.message
         ]
         assert len(summary_messages) >= 1, (
-            f"Expected summary log with 'elements local ... escalated to fallback', "
+            f"Expected summary log with 'elements local ... escalated', "
             f"got: {[r.message for r in caplog.records]}"
         )
 
@@ -870,6 +870,151 @@ class TestMicroPrimeChunkWiring:
         existing = gen_ctx.get("existing_files", {})
         assert "src/utils.py" in existing
         assert existing["src/utils.py"] == "# partial skeleton"
+
+
+class TestElementLevelEscalation:
+    """Tests for element-level (not file-level) escalation."""
+
+    def _make_ollama_mock(self):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        return mock_response
+
+    def test_partial_success_keeps_skeleton(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """When some elements succeed locally, the file is NOT sent to fallback."""
+        from startd8.micro_prime.models import (
+            ElementResult,
+            EscalationResult,
+            EscalationReason,
+            FileResult,
+            TierClassification,
+        )
+
+        fallback = MagicMock()
+        fallback.generate.return_value = MagicMock(
+            success=True,
+            generated_files=[],
+            input_tokens=0,
+            output_tokens=0,
+            model="fallback",
+            cost_usd=0.10,
+        )
+
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            fallback=fallback,
+            output_dir=tmp_path,
+        )
+
+        # Mock engine to return mixed results: 1 success + 1 escalated
+        partial_result = FileResult(file_path="src/mypackage/utils.py")
+        partial_result.element_results = [
+            ElementResult(
+                element_name="get_name",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.SIMPLE,
+                success=True,
+                code="return key.upper()",
+            ),
+            ElementResult(
+                element_name="get_value",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.MODERATE,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Too complex",
+                ),
+            ),
+        ]
+        partial_result.filled_skeleton = sample_skeleton  # has some fills
+
+        with patch.object(gen._engine, "process_file", return_value=partial_result), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.urlopen",
+                 return_value=self._make_ollama_mock(),
+             ):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        # Fallback should NOT be called — partial success means keep local work
+        fallback.generate.assert_not_called()
+        # File was written locally
+        assert len(result.generated_files) == 1
+        assert result.cost_usd == 0.0
+
+    def test_zero_success_delegates_to_fallback(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """When all elements fail, the file IS sent to fallback."""
+        from startd8.micro_prime.models import (
+            ElementResult,
+            EscalationResult,
+            EscalationReason,
+            FileResult,
+            TierClassification,
+        )
+
+        fallback = MagicMock()
+        fallback.generate.return_value = MagicMock(
+            success=True,
+            generated_files=[tmp_path / "fb.py"],
+            input_tokens=50,
+            output_tokens=100,
+            model="fallback",
+            cost_usd=0.05,
+        )
+
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            fallback=fallback,
+            output_dir=tmp_path,
+        )
+
+        # All elements escalated
+        all_fail_result = FileResult(file_path="src/mypackage/utils.py")
+        all_fail_result.element_results = [
+            ElementResult(
+                element_name="get_name",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.MODERATE,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Too complex",
+                ),
+            ),
+            ElementResult(
+                element_name="get_value",
+                file_path="src/mypackage/utils.py",
+                tier=TierClassification.COMPLEX,
+                success=False,
+                escalation=EscalationResult(
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Too complex",
+                ),
+            ),
+        ]
+        all_fail_result.filled_skeleton = sample_skeleton
+
+        with patch.object(gen._engine, "process_file", return_value=all_fail_result), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.urlopen",
+                 return_value=self._make_ollama_mock(),
+             ):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        # Fallback should be called — zero local successes
+        fallback.generate.assert_called_once()
 
 
 class TestDesignDocSectionsPassedToEngine:

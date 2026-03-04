@@ -77,12 +77,22 @@ def _splice_function_body(
     # Extract just the body from the generated code
     extracted_body = _extract_body(body, element)
 
-    # Re-indent the body to match the stub's indentation
+    # Re-indent the body to match the stub's indentation while preserving
+    # relative indentation (e.g. nested if/else, loops within the body).
     body_lines = extracted_body.splitlines()
+    # Find minimum indentation of non-empty lines in the body.
+    indents = [
+        len(line) - len(line.lstrip())
+        for line in body_lines
+        if line.strip()
+    ]
+    min_indent = min(indents) if indents else 0
+
     reindented = []
     for line in body_lines:
         if line.strip():
-            reindented.append(stub_indent + line.lstrip())
+            # Strip the base indentation, then prepend stub's indentation.
+            reindented.append(stub_indent + line[min_indent:])
         else:
             reindented.append("")
 
@@ -170,10 +180,59 @@ def _find_def_line(
 
 
 def _find_stub_after_def(lines: list[str], def_idx: int) -> Optional[int]:
-    """Find the raise NotImplementedError line after a def."""
-    for i in range(def_idx + 1, min(def_idx + 20, len(lines))):
+    """Find the raise NotImplementedError line after a def.
+
+    Uses AST to locate the function body boundary, then searches within
+    that range.  Falls back to scanning until the next top-level statement
+    if AST parsing fails.  This replaces the old 20-line window which
+    missed stubs pushed beyond long docstrings.
+    """
+    # Strategy 1: Use AST to find the function's body range.
+    body_end = _ast_body_end(lines, def_idx)
+
+    search_end = body_end if body_end is not None else len(lines)
+    for i in range(def_idx + 1, search_end):
         if "raise NotImplementedError" in lines[i]:
             return i
+
+    return None
+
+
+def _ast_body_end(lines: list[str], def_idx: int) -> Optional[int]:
+    """Return the line index just past the function body starting at *def_idx*.
+
+    Parses the skeleton starting from *def_idx* through the end of the file.
+    Returns the ``end_lineno`` of the function (exclusive) so callers can
+    search [def_idx+1, end) for stubs.  Returns ``None`` on parse failure.
+    """
+    # Determine the indentation level of the def line so we can dedent the
+    # slice to column 0 (necessary when the def is inside a class).
+    def_line = lines[def_idx]
+    def_indent = len(def_line) - len(def_line.lstrip())
+
+    snippet_lines = lines[def_idx:]
+    if def_indent > 0:
+        # Dedent so the function starts at column 0 for ast.parse.
+        snippet_lines = []
+        for line in lines[def_idx:]:
+            if line.strip():
+                snippet_lines.append(line[min(def_indent, len(line)):])
+            else:
+                snippet_lines.append("")
+
+    snippet = "\n".join(snippet_lines)
+    try:
+        tree = ast.parse(snippet)
+    except SyntaxError:
+        return None
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # end_lineno is 1-based and inclusive; convert to absolute line index (exclusive).
+            if node.end_lineno is not None:
+                return def_idx + node.end_lineno
+            break
+
     return None
 
 
@@ -182,12 +241,28 @@ def _extract_body(code: str, element: ForwardElementSpec) -> str:
 
     If the code includes a def line, extract only the body.
     If it's body-only, return as-is.
+
+    Handles the case where imports precede the def line (e.g., from
+    over_generation_trim preserving imports alongside the target element).
     """
     stripped = code.strip()
 
-    # Check if it starts with def/async def
-    first_line = stripped.split("\n")[0].lstrip()
+    # Skip leading import lines to find the actual first code line.
+    # The over_generation_trim step may preserve imports before the def.
+    lines = stripped.split("\n")
+    first_code_idx = 0
+    for i, line in enumerate(lines):
+        lstripped = line.lstrip()
+        if lstripped and not lstripped.startswith(("import ", "from ")):
+            first_code_idx = i
+            break
+
+    first_line = lines[first_code_idx].lstrip() if first_code_idx < len(lines) else ""
     has_def = first_line.startswith(("def ", "async def "))
+
+    # If there were leading imports, strip them — they belong at file level
+    if has_def and first_code_idx > 0:
+        stripped = "\n".join(lines[first_code_idx:]).strip()
 
     if not has_def:
         # Body-only — return as-is

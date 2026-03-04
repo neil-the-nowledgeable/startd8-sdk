@@ -8,6 +8,7 @@ import pytest
 
 from startd8.forward_manifest import ForwardElementSpec
 from startd8.micro_prime.splicer import (
+    _ast_body_end,
     _extract_body,
     _find_def_line,
     _find_stub_after_def,
@@ -135,3 +136,167 @@ class TestExtractBody:
         body = _extract_body(code, simple_function_element)
         assert "result = key.upper()" in body
         assert "return result" in body
+
+    def test_skips_leading_imports_before_def(self, simple_function_element):
+        """Imports before def line should be stripped — they belong at file level."""
+        code = (
+            "import grpc\n"
+            "from flask import Flask\n\n"
+            "def get_name(self, key: str) -> str:\n"
+            "    return key.upper()\n"
+        )
+        body = _extract_body(code, simple_function_element)
+        assert "return key.upper()" in body
+        # Import lines should not be in the extracted body
+        assert "import grpc" not in body
+        assert "from flask" not in body
+        # def line should also not be in the body
+        assert "def get_name" not in body
+
+    def test_skips_future_import_before_def(self, simple_function_element):
+        """from __future__ before def should be stripped."""
+        code = (
+            "from __future__ import annotations\n\n"
+            "def get_name(self, key: str) -> str:\n"
+            "    return key.upper()\n"
+        )
+        body = _extract_body(code, simple_function_element)
+        assert "return key.upper()" in body
+        assert "from __future__" not in body
+
+
+class TestStubBeyond20Lines:
+    """Tests for AST-based stub finding beyond the old 20-line window."""
+
+    def test_long_docstring_method(self):
+        """Stub beyond 20 lines (pushed by a long docstring) is still found."""
+        # Build a skeleton where the docstring is 25 lines long,
+        # pushing raise NotImplementedError well past line 20.
+        docstring_lines = "\n".join(f"    Line {i} of docs." for i in range(25))
+        skeleton = (
+            "class Formatter:\n"
+            f'    def add_fields(self, log_record, record, message_dict):\n'
+            f'        """Long docstring.\n\n'
+            f"{docstring_lines}\n"
+            f'        """\n'
+            f"        raise NotImplementedError\n"
+            "\n"
+            "    def format(self, record):\n"
+            '        """Format a record."""\n'
+            "        raise NotImplementedError\n"
+        )
+        lines = skeleton.splitlines()
+        def_idx = _find_def_line("add_fields", ElementKind.METHOD, lines)
+        assert def_idx is not None
+        stub_idx = _find_stub_after_def(lines, def_idx)
+        assert stub_idx is not None
+        assert "raise NotImplementedError" in lines[stub_idx]
+
+    def test_ast_body_end_for_class_method(self):
+        """_ast_body_end correctly identifies end of a method inside a class."""
+        skeleton = (
+            "class Foo:\n"
+            "    def bar(self):\n"
+            '        """Docs."""\n'
+            "        raise NotImplementedError\n"
+            "\n"
+            "    def baz(self):\n"
+            "        pass\n"
+        )
+        lines = skeleton.splitlines()
+        def_idx = _find_def_line("bar", ElementKind.METHOD, lines)
+        end = _ast_body_end(lines, def_idx)
+        assert end is not None
+        # end should be past the stub but before "def baz"
+        baz_idx = _find_def_line("baz", ElementKind.METHOD, lines)
+        assert end <= baz_idx
+
+    def test_ast_body_end_top_level_function(self):
+        """_ast_body_end works for top-level functions (no class wrapper)."""
+        skeleton = (
+            "def get_logger(name):\n"
+            '    """Get a logger."""\n'
+            "    raise NotImplementedError\n"
+            "\n"
+            "def other():\n"
+            "    pass\n"
+        )
+        lines = skeleton.splitlines()
+        def_idx = _find_def_line("get_logger", ElementKind.FUNCTION, lines)
+        end = _ast_body_end(lines, def_idx)
+        assert end is not None
+
+    def test_fallback_when_ast_fails(self):
+        """When AST parsing fails, _find_stub_after_def still searches to end of file."""
+        # A skeleton with invalid syntax — AST parse will fail,
+        # but the stub should still be found via the fallback search.
+        skeleton = (
+            "def broken(:\n"  # Invalid syntax
+            "    x = 1\n"
+            "    raise NotImplementedError\n"
+        )
+        lines = skeleton.splitlines()
+        # _ast_body_end will return None, so search_end = len(lines)
+        stub_idx = _find_stub_after_def(lines, 0)
+        assert stub_idx == 2
+        assert "raise NotImplementedError" in lines[stub_idx]
+
+
+class TestRelativeIndentationPreservation:
+    """Tests that splicing preserves relative indentation within the body."""
+
+    def test_nested_if_else_preserved(self):
+        """Body with nested if/else retains its relative indentation."""
+        skeleton = (
+            "class MyClass:\n"
+            "    def process(self, x: int) -> str:\n"
+            '        """Process x."""\n'
+            "        raise NotImplementedError\n"
+        )
+        element = ForwardElementSpec(
+            kind=ElementKind.METHOD,
+            name="process",
+            signature=Signature(
+                params=[
+                    Param(name="self"),
+                    Param(name="x", annotation="int"),
+                ],
+                return_annotation="str",
+            ),
+            parent_class="MyClass",
+        )
+        # Body with nested control flow
+        body = (
+            "if x > 0:\n"
+            "    return 'positive'\n"
+            "else:\n"
+            "    return 'non-positive'"
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        ast.parse(result)
+        # Check the nested indentation is correct (8-space base + 4 for inner)
+        assert "        if x > 0:" in result
+        assert "            return 'positive'" in result
+
+    def test_multiline_dict_preserved(self):
+        """Body with a multi-line dict literal preserves indentation."""
+        skeleton = (
+            "def build_record(self):\n"
+            '    """Build a record."""\n'
+            "    raise NotImplementedError\n"
+        )
+        element = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="build_record",
+            signature=Signature(params=[Param(name="self")], return_annotation="dict"),
+        )
+        body = (
+            "return {\n"
+            "    'a': 1,\n"
+            "    'b': 2,\n"
+            "}"
+        )
+        result = splice_body_into_skeleton(body, element, skeleton)
+        assert result is not None
+        ast.parse(result)

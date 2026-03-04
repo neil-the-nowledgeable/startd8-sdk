@@ -15,12 +15,11 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from startd8.contractors.protocols import CodeGenerator, GenerationResult
-from startd8.forward_manifest import ForwardManifest, InterfaceContract
+from startd8.forward_manifest import ForwardManifest
 from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element
 from startd8.micro_prime.engine import MicroPrimeEngine
 from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
-from startd8.micro_prime.templates import TemplateRegistry
 
 logger = get_logger(__name__)
 
@@ -135,7 +134,7 @@ class MicroPrimeCodeGenerator:
         generated_files: list[Path] = []
         total_input = 0
         total_output = 0
-        has_escalations = False
+        escalated_files: list[str] = []
         local_element_count = 0
         template_count = 0
         ollama_count = 0
@@ -146,7 +145,7 @@ class MicroPrimeCodeGenerator:
             skeleton = skeletons.get(file_path, "")
 
             if file_spec is None or not skeleton:
-                has_escalations = True
+                escalated_files.append(file_path)
                 continue
 
             # REQ-DDS-002: Thread design_doc_sections to engine
@@ -171,7 +170,7 @@ class MicroPrimeCodeGenerator:
                             "vs %d existing (%.0f%%) — escalating to fallback",
                             file_path, filled_lines, existing_lines, ratio * 100,
                         )
-                        has_escalations = True
+                        escalated_files.append(file_path)
                         continue
 
                 # REQ-MP-703: Write filled skeleton to disk
@@ -218,22 +217,34 @@ class MicroPrimeCodeGenerator:
                             {"reason": er.escalation.reason.value, "file_path": file_path},
                         )
 
-            if file_result.escalated_count > 0:
-                has_escalations = True
+            # Element-level escalation: only delegate the whole file to
+            # fallback when ZERO elements succeeded locally.  When some
+            # elements were filled successfully, keep the partial skeleton
+            # (Mottainai — don't waste locally-produced assets).
+            if file_result.escalated_count > 0 and file_result.success_count == 0:
+                escalated_files.append(file_path)
 
         local_file_count = len(generated_files)
 
+        partial_files = sum(
+            1 for fp in target_files
+            if fp not in escalated_files and fp not in [str(p) for p in generated_files]
+        )
         logger.info(
-            "Micro Prime: %d elements local, %d escalated to fallback",
+            "Micro Prime: %d elements local (%d files), %d escalated "
+            "(%d files to fallback, %d partial kept)",
             local_element_count,
+            local_file_count,
             escalated_element_count,
+            len(escalated_files),
+            partial_files,
         )
 
-        # If there are escalations and we have a fallback, delegate remaining.
-        # Fallback writes its own files — we only collect paths, no double-write.
-        if has_escalations and self._fallback is not None:
+        # Mottainai: only delegate files that had escalations to the fallback.
+        # Files where all elements were handled locally are kept as-is.
+        if escalated_files and self._fallback is not None:
             fallback_result = self._delegate_to_fallback(
-                task, context, target_files,
+                task, context, escalated_files,
             )
             generated_files.extend(fallback_result.generated_files)
             total_input += fallback_result.input_tokens
@@ -247,6 +258,7 @@ class MicroPrimeCodeGenerator:
                 model=f"micro-prime+{fallback_result.model}",
                 metadata={
                     "micro_prime_files_written": local_file_count,
+                    "fallback_files_delegated": len(escalated_files),
                     "fallback_files_written": len(fallback_result.generated_files),
                     "micro_prime_elements": local_element_count,
                     "micro_prime_template_hits": template_count,
@@ -335,12 +347,12 @@ class MicroPrimeCodeGenerator:
 
                 template_hit = templates.match(element, file_spec) is not None if templates else False
 
-                is_local = tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE)
-                if is_local and ollama_available:
+                # Routing: TRIVIAL with template works without Ollama;
+                # SIMPLE requires Ollama; MODERATE/COMPLEX always escalate.
+                if tier == TierClassification.TRIVIAL and template_hit:
                     file_local += 1
                     total_local += 1
-                elif tier == TierClassification.TRIVIAL and template_hit:
-                    # Template match works without Ollama
+                elif tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE) and ollama_available:
                     file_local += 1
                     total_local += 1
                 else:
@@ -363,9 +375,43 @@ class MicroPrimeCodeGenerator:
                 "escalated": file_escalated,
             })
 
-        # ── Print formatted report ──
-        local_pct = (total_local / total_elements * 100) if total_elements else 0
+        # Print bypasses log-level filtering — this is a user-facing report.
+        report = self._format_dry_run_report(
+            per_file, tier_totals, total_elements, total_local,
+            ollama_available, model_name, base_url,
+        )
+        print(report)
 
+        return GenerationResult(
+            success=True,
+            generated_files=[],
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=0.0,
+            model="micro-prime-dry-run",
+            metadata={
+                "dry_run": True,
+                "ollama_available": ollama_available,
+                "total_elements": total_elements,
+                "total_local": total_local,
+                "total_escalated": total_escalated,
+                "tier_totals": {t.value: c for t, c in tier_totals.items()},
+                "per_file": per_file,
+            },
+        )
+
+    @staticmethod
+    def _format_dry_run_report(
+        per_file: list[dict[str, Any]],
+        tier_totals: dict[TierClassification, int],
+        total_elements: int,
+        total_local: int,
+        ollama_available: bool,
+        model_name: str,
+        base_url: str,
+    ) -> str:
+        """Format the dry-run classification report as a box-drawing string."""
+        local_pct = (total_local / total_elements * 100) if total_elements else 0
         ollama_status = (
             f"available ({model_name} @ {base_url})"
             if ollama_available
@@ -393,21 +439,19 @@ class MicroPrimeCodeGenerator:
                 f"skeleton: {pf['skeleton_lines']} lines)"
             )
             for el in pf.get("elements", []):
-                tag = "[T]" if el["template_hit"] else "   "
-                lines.append(f"    {el['tier']:<10} {el['name']:<35} {el['reason']}")
+                line = f"    {el['tier']:<10} {el['name']:<35} {el['reason']}"
                 if el["template_hit"]:
-                    lines[-1] += "  [template]"
+                    line += "  [template]"
+                lines.append(line)
             lines.append(
                 f"    -> {pf['local']} local, "
                 f"{pf['escalated']} escalated"
             )
             lines.append("")
 
+        file_count = sum(1 for p in per_file if not p.get("skipped"))
         lines.append("  " + "-" * 60)
-        lines.append(
-            f"  Summary: {len([p for p in per_file if not p.get('skipped')])} files, "
-            f"{total_elements} elements"
-        )
+        lines.append(f"  Summary: {file_count} files, {total_elements} elements")
         lines.append(
             f"    TRIVIAL:  {tier_totals[TierClassification.TRIVIAL]:>3}  (template match)"
         )
@@ -426,27 +470,7 @@ class MicroPrimeCodeGenerator:
             f"({local_pct:.0f}%)"
         )
         lines.append("")
-
-        # Print bypasses log-level filtering — this is a user-facing report.
-        print("\n".join(lines))
-
-        return GenerationResult(
-            success=True,
-            generated_files=[],
-            input_tokens=0,
-            output_tokens=0,
-            cost_usd=0.0,
-            model=f"micro-prime-dry-run",
-            metadata={
-                "dry_run": True,
-                "ollama_available": ollama_available,
-                "total_elements": total_elements,
-                "total_local": total_local,
-                "total_escalated": total_escalated,
-                "tier_totals": {t.value: c for t, c in tier_totals.items()},
-                "per_file": per_file,
-            },
-        )
+        return "\n".join(lines)
 
     def _generate_skeletons(
         self,
