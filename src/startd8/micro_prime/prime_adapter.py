@@ -15,10 +15,12 @@ from urllib.error import URLError
 from urllib.request import urlopen
 
 from startd8.contractors.protocols import CodeGenerator, GenerationResult
-from startd8.forward_manifest import ForwardManifest
+from startd8.forward_manifest import ForwardManifest, InterfaceContract
 from startd8.logging_config import get_logger
+from startd8.micro_prime.classifier import classify_element
 from startd8.micro_prime.engine import MicroPrimeEngine
-from startd8.micro_prime.models import MicroPrimeConfig
+from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
+from startd8.micro_prime.templates import TemplateRegistry
 
 logger = get_logger(__name__)
 
@@ -117,7 +119,12 @@ class MicroPrimeCodeGenerator:
             return self._delegate_to_fallback(task, context, target_files)
 
         # REQ-MP-711: Ollama availability guard — check once per instance
-        if not self._check_ollama_available():
+        ollama_ok = self._check_ollama_available()
+
+        if self._config.dry_run:
+            return self._dry_run_classify(manifest, skeletons, target_files, ollama_ok)
+
+        if not ollama_ok:
             logger.info("Ollama unavailable — delegating all to fallback")
             return self._delegate_to_fallback(task, context, target_files)
 
@@ -264,6 +271,180 @@ class MicroPrimeCodeGenerator:
                 "micro_prime_template_hits": template_count,
                 "micro_prime_ollama_generations": ollama_count,
                 "micro_prime_cost_usd": 0.0,
+            },
+        )
+
+    def _dry_run_classify(
+        self,
+        manifest: ForwardManifest,
+        skeletons: dict[str, str],
+        target_files: List[str],
+        ollama_available: bool,
+    ) -> GenerationResult:
+        """Run classification on all elements and print a report without generating code.
+
+        Iterates every target file's elements through ``classify_element()`` and
+        the template registry, collecting tier counts and per-file summaries.
+        Prints a formatted console report and returns a zero-cost result with
+        classification metadata.
+        """
+        base_url = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+        model_name = self._config.model
+        templates = self._engine._templates if self._config.templates_enabled else None
+
+        per_file: list[dict[str, Any]] = []
+        tier_totals = {t: 0 for t in TierClassification}
+        total_elements = 0
+        total_local = 0
+        total_escalated = 0
+
+        for file_path in target_files:
+            file_spec = manifest.file_specs.get(file_path)
+            skeleton = skeletons.get(file_path, "")
+            if file_spec is None:
+                per_file.append({
+                    "file": file_path,
+                    "skipped": True,
+                    "reason": "no file_spec in manifest",
+                })
+                continue
+            if not skeleton:
+                per_file.append({
+                    "file": file_path,
+                    "skipped": True,
+                    "reason": "no skeleton generated",
+                })
+                continue
+
+            skeleton_lines = skeleton.count("\n") + 1
+            elements_info: list[dict[str, str]] = []
+            file_local = 0
+            file_escalated = 0
+
+            for element in file_spec.elements:
+                contracts = self._engine._get_element_contracts(
+                    element, file_spec, manifest,
+                )
+                tier, reason = classify_element(
+                    element, file_spec, contracts,
+                    template_registry=templates,
+                    config=self._config,
+                )
+                tier_totals[tier] += 1
+                total_elements += 1
+
+                template_hit = templates.match(element, file_spec) is not None if templates else False
+
+                is_local = tier in (TierClassification.TRIVIAL, TierClassification.SIMPLE)
+                if is_local and ollama_available:
+                    file_local += 1
+                    total_local += 1
+                elif tier == TierClassification.TRIVIAL and template_hit:
+                    # Template match works without Ollama
+                    file_local += 1
+                    total_local += 1
+                else:
+                    file_escalated += 1
+                    total_escalated += 1
+
+                elements_info.append({
+                    "name": element.name,
+                    "tier": tier.value.upper(),
+                    "reason": reason,
+                    "template_hit": template_hit,
+                })
+
+            per_file.append({
+                "file": file_path,
+                "element_count": len(file_spec.elements),
+                "skeleton_lines": skeleton_lines,
+                "elements": elements_info,
+                "local": file_local,
+                "escalated": file_escalated,
+            })
+
+        # ── Print formatted report ──
+        local_pct = (total_local / total_elements * 100) if total_elements else 0
+
+        ollama_status = (
+            f"available ({model_name} @ {base_url})"
+            if ollama_available
+            else f"unavailable ({base_url})"
+        )
+
+        lines = [
+            "",
+            "\u2554" + "\u2550" * 62 + "\u2557",
+            "\u2551  Micro Prime \u2014 Dry Run Classification Report" + " " * 17 + "\u2551",
+            "\u255a" + "\u2550" * 62 + "\u255d",
+            "",
+            f"  Ollama: {ollama_status}",
+            "",
+        ]
+
+        for pf in per_file:
+            if pf.get("skipped"):
+                lines.append(f"  {pf['file']}  [SKIPPED: {pf['reason']}]")
+                lines.append("")
+                continue
+
+            lines.append(
+                f"  {pf['file']} ({pf['element_count']} elements, "
+                f"skeleton: {pf['skeleton_lines']} lines)"
+            )
+            for el in pf.get("elements", []):
+                tag = "[T]" if el["template_hit"] else "   "
+                lines.append(f"    {el['tier']:<10} {el['name']:<35} {el['reason']}")
+                if el["template_hit"]:
+                    lines[-1] += "  [template]"
+            lines.append(
+                f"    -> {pf['local']} local, "
+                f"{pf['escalated']} escalated"
+            )
+            lines.append("")
+
+        lines.append("  " + "-" * 60)
+        lines.append(
+            f"  Summary: {len([p for p in per_file if not p.get('skipped')])} files, "
+            f"{total_elements} elements"
+        )
+        lines.append(
+            f"    TRIVIAL:  {tier_totals[TierClassification.TRIVIAL]:>3}  (template match)"
+        )
+        lines.append(
+            f"    SIMPLE:   {tier_totals[TierClassification.SIMPLE]:>3}  (Ollama local)"
+        )
+        lines.append(
+            f"    MODERATE: {tier_totals[TierClassification.MODERATE]:>3}  (cloud fallback)"
+        )
+        lines.append(
+            f"    COMPLEX:  {tier_totals[TierClassification.COMPLEX]:>3}  (cloud fallback)"
+        )
+        lines.append("")
+        lines.append(
+            f"  Local generation: {total_local}/{total_elements} elements "
+            f"({local_pct:.0f}%)"
+        )
+        lines.append("")
+
+        # Print bypasses log-level filtering — this is a user-facing report.
+        print("\n".join(lines))
+
+        return GenerationResult(
+            success=True,
+            generated_files=[],
+            input_tokens=0,
+            output_tokens=0,
+            cost_usd=0.0,
+            model=f"micro-prime-dry-run",
+            metadata={
+                "dry_run": True,
+                "ollama_available": ollama_available,
+                "total_elements": total_elements,
+                "total_local": total_local,
+                "total_escalated": total_escalated,
+                "tier_totals": {t.value: c for t, c in tier_totals.items()},
+                "per_file": per_file,
             },
         )
 

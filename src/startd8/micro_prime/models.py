@@ -123,6 +123,7 @@ class MicroPrimeConfig(BaseModel):
     few_shot_enabled: bool = True
     max_few_shot_examples: int = 2
     escalation_enabled: bool = True
+    dry_run: bool = False
     # Classifier thresholds
     max_simple_imports: int = 8
     max_simple_params: int = 4

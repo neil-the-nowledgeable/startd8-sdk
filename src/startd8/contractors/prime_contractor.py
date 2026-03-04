@@ -1304,7 +1304,7 @@ class PrimeContractorWorkflow:
 
                 all_targets = list({
                     f
-                    for feat in self.queue.all_features()
+                    for feat in self.queue.features.values()
                     for f in (feat.target_files or [])
                 })
                 reconciler = SourceReconciler()
@@ -1635,6 +1635,8 @@ class PrimeContractorWorkflow:
         if feature.status == FeatureStatus.PENDING:
             if not self.develop_feature(feature):
                 return False
+        if feature.status == FeatureStatus.COMPLETE:
+            return True  # Dry-run or other early-completion path
         if feature.status == FeatureStatus.GENERATED:
             if self.walkthrough:
                 self.queue.complete_feature(feature.id)
@@ -2120,6 +2122,11 @@ class PrimeContractorWorkflow:
                 feature._cost_usd = result.cost_usd  # stash for history
                 self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
                 logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model})
+                # Micro Prime dry-run: classification-only, skip integration
+                if result.metadata and result.metadata.get("dry_run"):
+                    self.queue.complete_feature(feature.id)
+                    self._save_queue_state_with_mode()
+                    return True
                 return True
             else:
                 error_msg = result.error or 'Code generation failed'

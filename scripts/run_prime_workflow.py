@@ -226,14 +226,18 @@ def main() -> int:
         "--micro-prime-no-repair", action="store_true",
         help="Disable Micro Prime repair pipeline",
     )
-    # Post-generation repair pipeline (REQ-RPL-200)
     parser.add_argument(
-        "--repair", action="store_true",
-        help="Enable post-generation repair pipeline (deterministic fix before LLM retry)",
+        "--micro-prime-dry-run", action="store_true",
+        help="Classify elements and check Ollama without generating code",
+    )
+    # Post-generation repair pipeline (REQ-RPL-200) — enabled by default
+    parser.add_argument(
+        "--repair", action="store_true", default=True,
+        help="Enable post-generation repair pipeline (default: on)",
     )
     parser.add_argument(
         "--no-repair", action="store_true",
-        help="Explicitly disable post-generation repair pipeline",
+        help="Disable post-generation repair pipeline",
     )
 
     args = parser.parse_args()
@@ -415,10 +419,11 @@ def main() -> int:
     # ------------------------------------------------------------------
     # Post-generation repair pipeline (REQ-RPL-200)
     repair_config = None
-    if args.repair and not args.no_repair:
+    if not args.no_repair:
         from startd8.repair.config import RepairConfig
         repair_config = RepairConfig()
-        logger.info("Repair pipeline: enabled")
+    else:
+        logger.info("Repair pipeline: disabled (--no-repair)")
 
     workflow = PrimeContractorWorkflow(
         project_root=project_root,
@@ -442,11 +447,14 @@ def main() -> int:
     # after the auto-enrichment block above.
     seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
     workflow.load_seed_context(seed_data, cli_mode=args.mode)
-    workflow.force_regenerate = args.force_regenerate
+    workflow.force_regenerate = args.force_regenerate or args.micro_prime_dry_run
 
     # Wire Micro Prime via workflow API (REQ-MP-710)
     # Must be called BEFORE enable_complexity_routing() so the router
     # sees the wrapped generator.
+    # --micro-prime-dry-run implies --micro-prime
+    if args.micro_prime_dry_run:
+        args.micro_prime = True
     if args.micro_prime:
         from startd8.micro_prime.models import MicroPrimeConfig
 
@@ -459,6 +467,8 @@ def main() -> int:
             mp_config_kwargs["templates_enabled"] = False
         if args.micro_prime_no_repair:
             mp_config_kwargs["repair_enabled"] = False
+        if args.micro_prime_dry_run:
+            mp_config_kwargs["dry_run"] = True
 
         workflow.enable_micro_prime(config=MicroPrimeConfig(**mp_config_kwargs))
 
@@ -503,16 +513,24 @@ def main() -> int:
     reset_count = 0
     reuse_count = 0
     for fid, feature in workflow.queue.features.items():
-        if feature.status in (FeatureStatus.FAILED, FeatureStatus.BLOCKED):
-            has_files = feature.generated_files and all(
-                (Path(f) if Path(f).is_absolute() else Path(f).resolve()).exists()
-                for f in feature.generated_files
-            )
-            if has_files:
-                feature.status = FeatureStatus.GENERATED
-                reuse_count += 1
-            else:
+        if feature.status in (
+            FeatureStatus.FAILED, FeatureStatus.BLOCKED, FeatureStatus.DEVELOPING,
+        ):
+            # DEVELOPING means generation was interrupted — files are stale,
+            # always regenerate.  --force-regenerate also overrides Mottainai
+            # reuse for FAILED/BLOCKED.
+            if feature.status == FeatureStatus.DEVELOPING or workflow.force_regenerate:
                 feature.status = FeatureStatus.PENDING
+            else:
+                has_files = feature.generated_files and all(
+                    (Path(f) if Path(f).is_absolute() else Path(f).resolve()).exists()
+                    for f in feature.generated_files
+                )
+                if has_files:
+                    feature.status = FeatureStatus.GENERATED
+                    reuse_count += 1
+                else:
+                    feature.status = FeatureStatus.PENDING
             feature.integration_attempts = 0
             reset_count += 1
     # Also un-mark features that a prior --task-filter run marked COMPLETE
@@ -547,6 +565,8 @@ def main() -> int:
     logger.info("Dry run: %s", args.dry_run)
     if args.micro_prime:
         logger.info("Micro Prime: enabled (model=%s)", args.micro_prime_model or "default")
+    if args.micro_prime_dry_run:
+        logger.info("Micro Prime dry-run: classification only, no code generation")
     if repair_config is not None:
         logger.info("Repair pipeline: enabled (categories=%s)", sorted(repair_config.repairable_categories))
     if workflow._validation_override is not None:
