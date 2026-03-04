@@ -7,7 +7,6 @@ them with repaired function bodies, then validates the result via AST.
 from __future__ import annotations
 
 import ast
-import re
 from typing import Optional
 
 from startd8.forward_manifest import ForwardElementSpec
@@ -19,8 +18,27 @@ logger = get_logger(__name__)
 # Sentinel comment marking skeleton files (from file_assembler.py)
 _SKELETON_SENTINEL = "# [STARTD8-SKELETON]"
 
-# Pattern to match raise NotImplementedError stubs
-_STUB_PATTERN = re.compile(r"^(\s*)raise NotImplementedError.*$", re.MULTILINE)
+
+def _dedent_lines(lines: list[str]) -> list[str]:
+    """Strip common leading whitespace from *lines*, preserving relative indentation.
+
+    Empty lines are preserved as empty strings.  Returns the original list
+    unchanged if all lines are blank.
+    """
+    indents = [
+        len(line) - len(line.lstrip())
+        for line in lines
+        if line.strip()
+    ]
+    if not indents:
+        return lines
+    min_indent = min(indents)
+    if min_indent == 0:
+        return lines
+    return [
+        line[min_indent:] if line.strip() else ""
+        for line in lines
+    ]
 
 
 def splice_body_into_skeleton(
@@ -79,22 +97,11 @@ def _splice_function_body(
 
     # Re-indent the body to match the stub's indentation while preserving
     # relative indentation (e.g. nested if/else, loops within the body).
-    body_lines = extracted_body.splitlines()
-    # Find minimum indentation of non-empty lines in the body.
-    indents = [
-        len(line) - len(line.lstrip())
-        for line in body_lines
-        if line.strip()
+    dedented = _dedent_lines(extracted_body.splitlines())
+    reindented = [
+        stub_indent + line if line.strip() else ""
+        for line in dedented
     ]
-    min_indent = min(indents) if indents else 0
-
-    reindented = []
-    for line in body_lines:
-        if line.strip():
-            # Strip the base indentation, then prepend stub's indentation.
-            reindented.append(stub_indent + line[min_indent:])
-        else:
-            reindented.append("")
 
     # Replace the stub line with the body
     new_lines = lines[:stub_idx] + reindented + lines[stub_idx + 1:]
@@ -164,18 +171,24 @@ def _find_def_line(
     kind: ElementKind,
     lines: list[str],
 ) -> Optional[int]:
-    """Find the line index of the def/class statement for the named element."""
+    """Find the line index of the def/class statement for the named element.
+
+    Uses ``(`` and ``:``) terminators after the name to avoid false-matching
+    longer names that share a prefix (e.g. ``def name_extended``).
+    """
+    # Terminators: ``def foo(`` or ``def foo:`` (single-line ``def foo: ...``)
+    # and ``class Foo(`` or ``class Foo:``.
+    if kind == ElementKind.CLASS:
+        prefixes = (f"class {name}(", f"class {name}:")
+    elif kind in (ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD):
+        prefixes = (f"async def {name}(",)
+    else:
+        prefixes = (f"def {name}(",)
+
     for i, line in enumerate(lines):
         stripped = line.lstrip()
-        if kind == ElementKind.CLASS:
-            if stripped.startswith(f"class {name}"):
-                return i
-        elif kind in (ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD):
-            if stripped.startswith(f"async def {name}"):
-                return i
-        else:
-            if stripped.startswith(f"def {name}"):
-                return i
+        if any(stripped.startswith(p) for p in prefixes):
+            return i
     return None
 
 
@@ -205,6 +218,9 @@ def _ast_body_end(lines: list[str], def_idx: int) -> Optional[int]:
     Returns the ``end_lineno`` of the function (exclusive) so callers can
     search [def_idx+1, end) for stubs.  Returns ``None`` on parse failure.
     """
+    if def_idx >= len(lines):
+        return None
+
     # Determine the indentation level of the def line so we can dedent the
     # slice to column 0 (necessary when the def is inside a class).
     def_line = lines[def_idx]
@@ -213,6 +229,7 @@ def _ast_body_end(lines: list[str], def_idx: int) -> Optional[int]:
     snippet_lines = lines[def_idx:]
     if def_indent > 0:
         # Dedent so the function starts at column 0 for ast.parse.
+        # min() guards against lines shorter than def_indent (e.g. partial indentation).
         snippet_lines = []
         for line in lines[def_idx:]:
             if line.strip():
@@ -287,43 +304,24 @@ def _extract_body(code: str, element: ForwardElementSpec) -> str:
                 body_start = func.body[1].lineno - 1
 
             body_lines = all_lines[body_start:]
-            # Dedent body
-            if body_lines:
-                # Find minimum indentation
-                indents = [
-                    len(line) - len(line.lstrip())
-                    for line in body_lines
-                    if line.strip()
-                ]
-                if indents:
-                    min_indent = min(indents)
-                    body_lines = [
-                        line[min_indent:] if line.strip() else ""
-                        for line in body_lines
-                    ]
-            return "\n".join(body_lines)
+            return "\n".join(_dedent_lines(body_lines))
     except SyntaxError:
-        pass
+        logger.debug(
+            "AST extraction failed for %s, falling back to line-based",
+            element.name,
+        )
 
     # Fallback: skip first line (the def line)
     rest_lines = stripped.splitlines()[1:]
-    if rest_lines:
-        indents = [
-            len(line) - len(line.lstrip())
-            for line in rest_lines
-            if line.strip()
-        ]
-        if indents:
-            min_indent = min(indents)
-            rest_lines = [
-                line[min_indent:] if line.strip() else ""
-                for line in rest_lines
-            ]
-    return "\n".join(rest_lines)
+    return "\n".join(_dedent_lines(rest_lines))
 
 
 def _validate_skeleton(skeleton: str) -> bool:
-    """Validate that the full skeleton passes ast.parse()."""
+    """Validate that the full skeleton passes ``ast.parse()``.
+
+    Intentionally validates the entire file (not just the spliced region)
+    so that interaction effects between elements are caught early.
+    """
     try:
         ast.parse(skeleton)
         return True

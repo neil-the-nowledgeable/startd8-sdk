@@ -226,9 +226,10 @@ class MicroPrimeCodeGenerator:
 
         local_file_count = len(generated_files)
 
+        generated_paths = {str(p) for p in generated_files}
         partial_files = sum(
             1 for fp in target_files
-            if fp not in escalated_files and fp not in [str(p) for p in generated_files]
+            if fp not in escalated_files and fp not in generated_paths
         )
         logger.info(
             "Micro Prime: %d elements local (%d files), %d escalated "
@@ -533,6 +534,8 @@ class MicroPrimeCodeGenerator:
 
             model_names: list[str] = []
             for m in data.get("models", []):
+                if not isinstance(m, dict):
+                    continue
                 name = m.get("name", "")
                 model_names.append(name)
                 if ":" in name:
