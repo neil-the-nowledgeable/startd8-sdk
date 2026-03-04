@@ -115,6 +115,17 @@ def _splice_function_body(
     return result
 
 
+def _is_name_boundary(text: str, name: str) -> bool:
+    """Return True if *name* at the start of *text* ends at a word boundary.
+
+    Prevents false-matching ``MY_CONST`` against ``MY_CONST_EXTENDED``.
+    """
+    if len(text) <= len(name):
+        return True  # name is the entire text
+    next_char = text[len(name)]
+    return not (next_char.isalnum() or next_char == "_")
+
+
 def _splice_constant(
     body: str,
     element: ForwardElementSpec,
@@ -128,11 +139,21 @@ def _splice_constant(
     for i, line in enumerate(lines):
         stripped = line.strip()
         # Look for patterns like: MY_CONST = ... or MY_CONST: Type = ...
-        if stripped.startswith(element.name) and "NotImplementedError" in stripped:
+        # Use word-boundary check to avoid false-matching longer names
+        # (e.g. matching ``MY_CONST`` against ``MY_CONST_EXTENDED``).
+        if (
+            stripped.startswith(element.name)
+            and _is_name_boundary(stripped, element.name)
+            and "NotImplementedError" in stripped
+        ):
             target_idx = i
             break
         # Also try: MY_CONST: Type = <sentinel>
-        if stripped.startswith(element.name) and "STARTD8_AUTO_STUB" in stripped:
+        if (
+            stripped.startswith(element.name)
+            and _is_name_boundary(stripped, element.name)
+            and "STARTD8_AUTO_STUB" in stripped
+        ):
             target_idx = i
             break
 
@@ -266,7 +287,7 @@ def _extract_body(code: str, element: ForwardElementSpec) -> str:
 
     # Skip leading import lines to find the actual first code line.
     # The over_generation_trim step may preserve imports before the def.
-    lines = stripped.split("\n")
+    lines = stripped.splitlines()
     first_code_idx = 0
     for i, line in enumerate(lines):
         lstripped = line.lstrip()

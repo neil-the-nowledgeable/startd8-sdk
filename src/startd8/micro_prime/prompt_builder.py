@@ -49,10 +49,11 @@ def build_body_prompt(
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         return _build_constant_prompt(element, file_spec, few_shot_examples)
 
-    return _build_function_prompt(
+    prompt = _build_function_prompt(
         element, file_spec, contracts, skeleton, few_shot_examples,
         design_doc_sections=design_doc_sections,
     )
+    return _truncate_to_budget(prompt, token_budget)
 
 
 def _build_function_prompt(
@@ -359,3 +360,64 @@ def find_few_shot_examples(
                 examples.append(ce["code"].strip())
 
     return examples
+
+
+# ── Token budget enforcement (REQ-MP-205) ──
+
+
+# Rough chars-per-token estimate for code prompts.
+_CHARS_PER_TOKEN = 4
+
+
+def _truncate_to_budget(prompt: str, token_budget: int) -> str:
+    """Trim prompt sections to stay within *token_budget*.
+
+    Removes sections in priority order (least valuable first):
+    few-shot examples → sibling stubs → design-doc context.
+    The core instructions and target element are never trimmed.
+    """
+    est_tokens = len(prompt) // _CHARS_PER_TOKEN
+    if est_tokens <= token_budget:
+        return prompt
+
+    lines = prompt.splitlines()
+
+    # Identify removable sections by their comment headers.
+    # Each entry: (header, priority) — higher priority removed first.
+    _REMOVABLE = [
+        ("# Example (completed):", 1),
+        ("# Another example:", 1),
+        ("# Other methods in this class", 2),
+        ("# Implementation context:", 3),
+    ]
+
+    for header, _ in _REMOVABLE:
+        est_tokens = len(prompt) // _CHARS_PER_TOKEN
+        if est_tokens <= token_budget:
+            break
+
+        # Remove from header line to next blank line (section boundary).
+        new_lines: list[str] = []
+        skipping = False
+        for line in lines:
+            if line.startswith(header):
+                skipping = True
+                continue
+            if skipping and line.strip() == "":
+                skipping = False
+                continue
+            if not skipping:
+                new_lines.append(line)
+
+        lines = new_lines
+        prompt = "\n".join(lines)
+
+    if len(prompt) // _CHARS_PER_TOKEN > token_budget:
+        logger.debug(
+            "Prompt still exceeds token budget after truncation "
+            "(%d est. tokens > %d budget)",
+            len(prompt) // _CHARS_PER_TOKEN,
+            token_budget,
+        )
+
+    return prompt
