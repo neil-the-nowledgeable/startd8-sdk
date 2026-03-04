@@ -1,6 +1,6 @@
 """Manifest-Guided Repair Pipeline (REQ-MP-400–407).
 
-A 7-step ordered pipeline that repairs LLM-generated code before splicing
+An 8-step ordered pipeline that repairs LLM-generated code before splicing
 into skeleton files. Each step is non-destructive: if it would break
 previously valid code, its changes are reverted (REQ-MP-406).
 
@@ -8,13 +8,14 @@ Steps:
     1. Fence stripping — remove markdown code fences
     2. Over-generation trim — remove AST nodes not matching target FQN
     3. Bare statement wrapping — wrap body-only output in def/class
-    4. Indentation normalize — re-indent to 4-space
-    5. Signature reconcile — restore canonical signature from manifest
-    6. Import completion — add missing imports
-    7. AST validation — final gate
+    4. Future import reorder — move ``from __future__`` to file top
+    5. Indentation normalize — re-indent to 4-space
+    6. Signature reconcile — restore canonical signature from manifest
+    7. Import completion — add missing imports
+    8. AST validation — final gate
 
-Shared steps (1, 4, 6, 7) delegate to ``startd8.repair.steps``.
-Micro-prime-specific steps (2, 3, 5) remain local.
+Shared steps (1, 4, 5, 7, 8) delegate to ``startd8.repair.steps``.
+Micro-prime-specific steps (2, 3, 6) remain local.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from startd8.micro_prime.models import RepairAttribution, RepairStepResult
 from startd8.repair.models import ElementContext, RepairContext
 from startd8.repair.steps.ast_validate import AstValidateStep
 from startd8.repair.steps.fence_strip import FenceStripStep
+from startd8.repair.steps.future_import_reorder import FutureImportReorderStep
 from startd8.repair.steps.import_completion import ManifestImportCompletion
 from startd8.repair.steps.indent_normalize import IndentNormalizeStep
 from startd8.utils.code_extraction import extract_code_from_response
@@ -39,6 +41,7 @@ logger = get_logger(__name__)
 
 # Shared step instances
 _shared_fence_strip = FenceStripStep()
+_shared_future_import_reorder = FutureImportReorderStep()
 _shared_indent_normalize = IndentNormalizeStep()
 _shared_import_completion = ManifestImportCompletion()
 _shared_ast_validate = AstValidateStep()
@@ -99,7 +102,9 @@ def _step_over_generation_trim(
                             kept_nodes.append(node)
                             break
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                # Skip from __future__ imports — they're always in the skeleton
+                # Skip from __future__ imports — the skeleton already has them
+                # at file level; keeping them in an element snippet would place
+                # them mid-file after splicing, causing SyntaxError.
                 if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                     continue
                 kept_nodes.append(node)
@@ -124,7 +129,9 @@ def _step_over_generation_trim(
                 if node.name == target_name:
                     kept_nodes.append(node)
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
-                # Skip from __future__ imports — they're always in the skeleton
+                # Skip from __future__ imports — the skeleton already has them
+                # at file level; keeping them in an element snippet would place
+                # them mid-file after splicing, causing SyntaxError.
                 if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                     continue
                 kept_nodes.append(node)
@@ -194,12 +201,25 @@ def _step_bare_statement_wrap(
     )
 
 
+def _step_future_import_reorder(
+    code: str,
+    element: ForwardElementSpec,
+    file_spec: Optional[ForwardFileSpec] = None,
+) -> RepairStepResult:
+    """Step 4: Move ``from __future__`` imports to file top (REQ-RPL-107).
+
+    Delegates to shared ``FutureImportReorderStep``.
+    """
+    ctx = RepairContext()
+    return _shared_future_import_reorder(code, ctx, Path("<element>"))
+
+
 def _step_indent_normalize(
     code: str,
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
 ) -> RepairStepResult:
-    """Step 4: Normalize indentation to 4-space (REQ-MP-402).
+    """Step 5: Normalize indentation to 4-space (REQ-MP-402).
 
     Delegates to shared ``IndentNormalizeStep``.
     """
@@ -213,7 +233,7 @@ def _step_signature_reconcile(
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
 ) -> RepairStepResult:
-    """Step 5: Reconcile signature against manifest (REQ-MP-403).
+    """Step 6: Reconcile signature against manifest (REQ-MP-403).
 
     If the generated function has a different signature than the manifest
     specifies, replace it with the canonical signature.
@@ -266,7 +286,7 @@ def _step_signature_reconcile(
             if stripped.startswith(("def ", "async def ")):
                 def_start = i
                 paren_depth += line.count("(") - line.count(")")
-                if paren_depth <= 0 and ":" in line.split(")")[-1]:
+                if paren_depth <= 0 and stripped.rstrip().endswith(":"):
                     def_end = i
                     break
         else:
@@ -305,7 +325,7 @@ def _step_import_completion(
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
 ) -> RepairStepResult:
-    """Step 6: Add missing imports from manifest (REQ-MP-404).
+    """Step 7: Add missing imports from manifest (REQ-MP-404).
 
     Delegates to shared ``ManifestImportCompletion``.
     """
@@ -320,7 +340,7 @@ def _step_ast_validate(
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
 ) -> RepairStepResult:
-    """Step 7: Final AST validation gate (REQ-MP-405).
+    """Step 8: Final AST validation gate (REQ-MP-405).
 
     Delegates to shared ``AstValidateStep``.
     """
@@ -338,6 +358,7 @@ _REPAIR_STEPS = [
     _step_fence_strip,
     _step_over_generation_trim,
     _step_bare_statement_wrap,
+    _step_future_import_reorder,
     _step_indent_normalize,
     _step_signature_reconcile,
     _step_import_completion,
@@ -350,7 +371,7 @@ def run_repair_pipeline(
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
 ) -> tuple[str, list[RepairStepResult]]:
-    """Run the full 7-step repair pipeline.
+    """Run the full 8-step repair pipeline.
 
     Non-destructive guarantee (REQ-MP-406): if a step breaks previously
     valid code, its changes are reverted.
@@ -422,6 +443,9 @@ def build_repair_attribution(
             replaced_lines = r.metrics.get("replaced_def_lines", 0)
             attr.params_changed = replaced_lines
             attr.return_type_restored = replaced_lines > 0
+
+        elif r.step_name == "import_completion":
+            attr.imports_added = r.metrics.get("imports_added", 0)
 
     return attr
 

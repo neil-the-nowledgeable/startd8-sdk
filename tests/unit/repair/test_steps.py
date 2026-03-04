@@ -9,6 +9,7 @@ from startd8.repair.models import (
 )
 from startd8.repair.steps.ast_validate import AstValidateStep
 from startd8.repair.steps.fence_strip import FenceStripStep
+from startd8.repair.steps.future_import_reorder import FutureImportReorderStep
 from startd8.repair.steps.import_completion import (
     ErrorDrivenImportCompletion,
     ManifestImportCompletion,
@@ -249,6 +250,130 @@ class TestImportInsertion:
     def test_find_insertion_line_hashbang(self):
         lines = ["#!/usr/bin/env python3", "import os"]
         assert _find_import_insertion_line(lines) == 1
+
+
+class TestFutureImportReorderStep:
+    def test_moves_future_import_before_regular_import(self):
+        """Exact scenario from the bug: skeleton import before from __future__."""
+        step = FutureImportReorderStep()
+        code = (
+            "from flask import Flask\n"
+            "\n"
+            "# [STARTD8-SKELETON]\n"
+            "\n"
+            "from __future__ import annotations\n"
+            "\n"
+            "\n"
+            "def create_app():\n"
+            "    return Flask(__name__)\n"
+        )
+        ctx = RepairContext()
+        result = step(code, ctx, Path("app.py"))
+        assert result.modified is True
+        # Must compile without SyntaxError
+        compile(result.code, "<test>", "exec")
+        # Future import must come before Flask import
+        lines = result.code.splitlines()
+        future_idx = next(i for i, l in enumerate(lines) if "from __future__" in l)
+        flask_idx = next(i for i, l in enumerate(lines) if "from flask" in l)
+        assert future_idx < flask_idx
+
+    def test_no_future_import_unchanged(self):
+        step = FutureImportReorderStep()
+        code = "from flask import Flask\n\ndef create_app():\n    pass\n"
+        ctx = RepairContext()
+        result = step(code, ctx, Path("app.py"))
+        assert result.modified is False
+
+    def test_future_import_already_at_top(self):
+        step = FutureImportReorderStep()
+        code = "from __future__ import annotations\n\nfrom flask import Flask\n"
+        ctx = RepairContext()
+        result = step(code, ctx, Path("app.py"))
+        assert result.modified is False
+
+    def test_future_import_after_docstring_and_regular_import(self):
+        step = FutureImportReorderStep()
+        code = (
+            '"""Module docstring."""\n'
+            "\n"
+            "import os\n"
+            "from __future__ import annotations\n"
+            "\n"
+            "x = 1\n"
+        )
+        ctx = RepairContext()
+        result = step(code, ctx, Path("app.py"))
+        assert result.modified is True
+        compile(result.code, "<test>", "exec")
+        lines = result.code.splitlines()
+        future_idx = next(i for i, l in enumerate(lines) if "from __future__" in l)
+        os_idx = next(i for i, l in enumerate(lines) if "import os" in l)
+        assert future_idx < os_idx
+
+    def test_preserves_hashbang(self):
+        step = FutureImportReorderStep()
+        code = (
+            "#!/usr/bin/env python3\n"
+            "import sys\n"
+            "from __future__ import annotations\n"
+            "\n"
+            "print(sys.argv)\n"
+        )
+        ctx = RepairContext()
+        result = step(code, ctx, Path("script.py"))
+        assert result.modified is True
+        lines = result.code.splitlines()
+        assert lines[0] == "#!/usr/bin/env python3"
+        future_idx = next(i for i, l in enumerate(lines) if "from __future__" in l)
+        sys_idx = next(i for i, l in enumerate(lines) if "import sys" in l)
+        assert future_idx < sys_idx
+
+    def test_orphaned_blank_line_after_removed_future_import(self):
+        """Fix 2: Blank line immediately after a removed future import is cleaned up."""
+        step = FutureImportReorderStep()
+        code = (
+            "import os\n"
+            "from __future__ import annotations\n"
+            "\n"  # orphaned blank line after the future import
+            "x = 1\n"
+        )
+        ctx = RepairContext()
+        result = step(code, ctx, Path("app.py"))
+        assert result.modified is True
+        # The result should not have a double blank line where the future import was
+        lines = result.code.splitlines()
+        # No two consecutive blank lines
+        for i in range(len(lines) - 1):
+            assert not (lines[i].strip() == "" and lines[i + 1].strip() == ""), (
+                f"Double blank line at lines {i}-{i+1}"
+            )
+
+    def test_multi_line_parenthesized_future_import(self):
+        """Fix 6: Multi-line parenthesized from __future__ import."""
+        step = FutureImportReorderStep()
+        code = (
+            "import os\n"
+            "from __future__ import (\n"
+            "    annotations,\n"
+            "    division,\n"
+            ")\n"
+            "\n"
+            "x = 1\n"
+        )
+        ctx = RepairContext()
+        result = step(code, ctx, Path("app.py"))
+        assert result.modified is True
+        compile(result.code, "<test>", "exec")
+        lines = result.code.splitlines()
+        # Future import block should come before 'import os'
+        future_start = next(i for i, l in enumerate(lines) if "from __future__" in l)
+        os_idx = next(i for i, l in enumerate(lines) if "import os" in l)
+        assert future_start < os_idx
+
+    def test_protocol_name(self):
+        step = FutureImportReorderStep()
+        assert step.name == "future_import_reorder"
 
 
 class TestAstValidateStep:

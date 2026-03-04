@@ -122,6 +122,7 @@ class RepairAttribution(BaseModel):
     indent_source: str = ""
     params_changed: int = 0
     return_type_restored: bool = False
+    imports_added: int = 0
 
 
 @dataclass

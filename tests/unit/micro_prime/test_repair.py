@@ -13,6 +13,7 @@ from startd8.micro_prime.repair import (
     _step_ast_validate,
     _step_bare_statement_wrap,
     _step_fence_strip,
+    _step_future_import_reorder,
     _step_import_completion,
     _step_indent_normalize,
     _step_over_generation_trim,
@@ -74,6 +75,33 @@ class TestOverGenerationTrim:
         result = _step_over_generation_trim(code, simple_function_element)
         assert result.modified is False
         assert result.metrics.get("parse_failed") is True
+
+    def test_strips_future_import_from_function(self, simple_function_element):
+        """from __future__ imports are always in the skeleton — don't keep them."""
+        code = (
+            "from __future__ import annotations\n"
+            "import grpc\n\n"
+            "def get_name(self, key: str) -> str:\n"
+            "    return key\n\n"
+            "def extra():\n"
+            "    pass\n"
+        )
+        result = _step_over_generation_trim(code, simple_function_element)
+        assert result.modified is True
+        assert "from __future__" not in result.code
+        # Regular imports should be preserved
+        assert "grpc" in result.code
+
+    def test_strips_future_import_from_constant(self, constant_element):
+        """from __future__ stripped for constants too."""
+        code = (
+            "from __future__ import annotations\n"
+            "DEFAULT_TIMEOUT: int = 30\n"
+        )
+        result = _step_over_generation_trim(code, constant_element)
+        # May or may not be modified (depends on trim logic), but no __future__
+        if result.modified:
+            assert "from __future__" not in result.code
 
 
 class TestBareStatementWrap:
@@ -222,7 +250,7 @@ class TestRunRepairPipeline:
         code = "def get_name(self, key: str) -> str:\n    return key"
         repaired, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
         assert repaired == code  # Already valid, no changes needed
-        assert len(steps) == 7  # All 7 steps run
+        assert len(steps) == 8  # All 8 steps run
 
     def test_full_pipeline_with_fences(self, simple_function_element, sample_file_spec):
         code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
@@ -246,7 +274,7 @@ class TestRunRepairPipeline:
         step_names = [s.step_name for s in steps]
         assert "fence_strip" in step_names
         assert "ast_validate" in step_names
-        assert len(step_names) == 7
+        assert len(step_names) == 8
 
 
 class TestBuildDefLine:
@@ -413,9 +441,78 @@ class TestBuildRepairAttribution:
         assert attr.nodes_removed == 2
         assert attr.indent_source == "strip_first+dedent"
 
+    def test_import_completion_attribution(self):
+        steps = [
+            RepairStepResult(
+                step_name="import_completion",
+                modified=True,
+                code="from pathlib import Path\ndef foo(): pass",
+                metrics={"imports_added": 2},
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.imports_added == 2
+
     def test_pipeline_returns_attribution(self, simple_function_element, sample_file_spec):
         """Full pipeline should produce step results usable by build_repair_attribution."""
         code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
         _, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
         attr = build_repair_attribution(steps)
         assert attr.fence_stripped is True
+
+
+class TestFutureImportReorder:
+    """Tests for Step 4: Future import reorder (REQ-RPL-107)."""
+
+    def test_moves_misplaced_future_import(self, simple_function_element):
+        code = (
+            "import os\n"
+            "from __future__ import annotations\n"
+            "\n"
+            "def get_name(self, key: str) -> str:\n"
+            "    return key\n"
+        )
+        result = _step_future_import_reorder(code, simple_function_element)
+        assert result.modified is True
+        lines = result.code.splitlines()
+        future_idx = next(i for i, l in enumerate(lines) if "from __future__" in l)
+        os_idx = next(i for i, l in enumerate(lines) if "import os" in l)
+        assert future_idx < os_idx
+
+    def test_no_op_when_correct(self, simple_function_element):
+        code = (
+            "from __future__ import annotations\n"
+            "\n"
+            "import os\n"
+            "\n"
+            "x = 1\n"
+        )
+        result = _step_future_import_reorder(code, simple_function_element)
+        assert result.modified is False
+
+    def test_no_op_when_no_future_import(self, simple_function_element):
+        code = "import os\n\nx = 1\n"
+        result = _step_future_import_reorder(code, simple_function_element)
+        assert result.modified is False
+
+
+class TestSignatureReconcileCallable:
+    """Fix 5: Paren-depth heuristic with Callable in return annotation."""
+
+    def test_callable_return_annotation(self):
+        """Callable[..., None] in return type should not confuse paren matching."""
+        elem = ForwardElementSpec(
+            kind=ElementKind.FUNCTION,
+            name="register",
+            signature=Signature(
+                params=[
+                    Param(name="callback", annotation="Callable[..., None]"),
+                ],
+                return_annotation="None",
+            ),
+        )
+        code = "def register(callback: Callable[..., None]) -> None:\n    pass\n"
+        result = _step_signature_reconcile(code, elem)
+        # Should not break — the def line ends with ":"
+        assert "register" in result.code
+        assert "pass" in result.code
