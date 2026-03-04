@@ -38,6 +38,12 @@ from startd8.utils.code_manifest import ElementKind
 
 logger = get_logger(__name__)
 
+_CODE_GEN_SYSTEM_PROMPT = (
+    "You are an expert Python developer. Generate ONLY the requested function body. "
+    "Do NOT include markdown fences, explanations, or any text outside the code. "
+    "Do NOT repeat the function signature unless asked for a complete definition."
+)
+
 
 def build_escalation_context(
     element_name: str,
@@ -104,6 +110,8 @@ class MicroPrimeEngine:
         self._circuit_open: bool = False
         # Element fingerprint success cache (R3-S4)
         self._success_cache: set[str] = set()
+        # Cached Ollama agent (C-1: avoid re-creation per element)
+        self._ollama_agent: Optional[Any] = None
 
     @property
     def config(self) -> MicroPrimeConfig:
@@ -161,7 +169,7 @@ class MicroPrimeEngine:
         )
 
         # Step 1a: Check success cache (R3-S4) — skip re-generation
-        fingerprint = f"{element.name}:{file_path}:{tier.value}"
+        fingerprint = f"{element.parent_class or ''}:{element.name}:{file_path}:{tier.value}"
         if fingerprint in self._success_cache:
             logger.debug(
                 "Cache hit for %s — returning cached success", fingerprint,
@@ -276,6 +284,7 @@ class MicroPrimeEngine:
             FileResult with all element results and updated skeleton.
         """
         file_result = FileResult(file_path=file_spec.file)
+        self.reset_circuit_breaker()
         current_skeleton = skeleton
 
         # Pre-classify to determine processing order (REQ-MP-704)
@@ -543,13 +552,19 @@ class MicroPrimeEngine:
 
         Returns (code, input_tokens, output_tokens).
         """
-        from startd8.utils.agent_resolution import resolve_agent_spec
         from startd8.utils.code_extraction import extract_code_from_response
 
-        agent_spec = f"{self._config.provider}:{self._config.model}"
-        agent = resolve_agent_spec(agent_spec, max_tokens=self._config.max_tokens)
+        if self._ollama_agent is None:
+            from startd8.utils.agent_resolution import resolve_agent_spec
 
-        result_text, time_ms, token_usage = agent.generate(prompt)
+            agent_spec = f"{self._config.provider}:{self._config.model}"
+            self._ollama_agent = resolve_agent_spec(
+                agent_spec, max_tokens=self._config.max_tokens,
+            )
+
+        result_text, time_ms, token_usage = self._ollama_agent.generate(
+            prompt, system_prompt=_CODE_GEN_SYSTEM_PROMPT,
+        )
 
         code = extract_code_from_response(result_text)
 
@@ -574,8 +589,8 @@ class MicroPrimeEngine:
                 c for c in manifest.contracts
                 if c.contract_id == element.source_contract_id
             ]
-        # Fall back to all contracts (filtered by applicable task IDs if available)
-        return manifest.contracts
+        # No source_contract_id — return empty rather than all contracts
+        return []
 
 
 def _structural_verify(code: str, element: ForwardElementSpec) -> bool:

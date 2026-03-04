@@ -52,6 +52,17 @@ _SIZE_REGRESSION_THRESHOLD = 0.60
 _MIN_EXISTING_LINES = 50
 
 
+def _sanitize_for_json(value: Any) -> Any:
+    """Recursively convert Pydantic models to dicts for JSON compatibility."""
+    if hasattr(value, "model_dump"):
+        return value.model_dump()
+    if isinstance(value, dict):
+        return {k: _sanitize_for_json(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_sanitize_for_json(v) for v in value]
+    return value
+
+
 class MicroPrimeCodeGenerator:
     """``CodeGenerator`` implementation using the Micro Prime engine.
 
@@ -132,6 +143,7 @@ class MicroPrimeCodeGenerator:
 
         # Process target files through the engine
         generated_files: list[Path] = []
+        written_file_paths: set[str] = set()  # relative paths that were successfully written
         total_input = 0
         total_output = 0
         escalated_files: list[str] = []
@@ -180,6 +192,7 @@ class MicroPrimeCodeGenerator:
                     file_result.filled_skeleton, encoding="utf-8",
                 )
                 generated_files.append(output_path)
+                written_file_paths.add(file_path)
                 logger.info(
                     "Micro Prime wrote %s (%d lines, %d elements filled)",
                     file_path,
@@ -226,10 +239,9 @@ class MicroPrimeCodeGenerator:
 
         local_file_count = len(generated_files)
 
-        generated_paths = {str(p) for p in generated_files}
         partial_files = sum(
             1 for fp in target_files
-            if fp not in escalated_files and fp not in generated_paths
+            if fp not in escalated_files and fp not in written_file_paths
         )
         logger.info(
             "Micro Prime: %d elements local (%d files), %d escalated "
@@ -576,11 +588,6 @@ class MicroPrimeCodeGenerator:
                 success=False,
                 error="No fallback generator configured and elements need cloud processing",
             )
-        # Sanitize: convert Pydantic models to dicts for JSON compatibility
-        clean_context = {}
-        for key, value in context.items():
-            if hasattr(value, "model_dump"):
-                clean_context[key] = value.model_dump()
-            else:
-                clean_context[key] = value
+        # Sanitize: recursively convert Pydantic models to dicts for JSON compatibility
+        clean_context = _sanitize_for_json(context)
         return self._fallback.generate(task, clean_context, target_files)

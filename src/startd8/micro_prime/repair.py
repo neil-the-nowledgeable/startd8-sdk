@@ -99,15 +99,19 @@ def _step_over_generation_trim(
                             kept_nodes.append(node)
                             break
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                # Skip from __future__ imports — they're always in the skeleton
+                if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                    continue
                 kept_nodes.append(node)
         if kept_nodes and len(kept_nodes) < len(tree.body):
+            original_count = len(tree.body)
             tree.body = kept_nodes
             trimmed = ast.unparse(tree)
             return RepairStepResult(
                 step_name="over_generation_trim",
                 modified=True,
                 code=trimmed,
-                metrics={"nodes_removed": len(tree.body) - len(kept_nodes)},
+                metrics={"nodes_removed": original_count - len(kept_nodes)},
             )
     else:
         # For functions/methods, keep only the target definition
@@ -120,15 +124,19 @@ def _step_over_generation_trim(
                 if node.name == target_name:
                     kept_nodes.append(node)
             elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                # Skip from __future__ imports — they're always in the skeleton
+                if isinstance(node, ast.ImportFrom) and node.module == "__future__":
+                    continue
                 kept_nodes.append(node)
         if kept_nodes and len(kept_nodes) < len(tree.body):
+            original_count = len(tree.body)
             tree.body = kept_nodes
             trimmed = ast.unparse(tree)
             return RepairStepResult(
                 step_name="over_generation_trim",
                 modified=True,
                 code=trimmed,
-                metrics={"nodes_removed": len(tree.body) - len(kept_nodes)},
+                metrics={"nodes_removed": original_count - len(kept_nodes)},
             )
 
     return RepairStepResult(

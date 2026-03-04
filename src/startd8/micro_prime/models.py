@@ -116,7 +116,7 @@ class MicroPrimeConfig(BaseModel):
     model: str = "startd8-coder"
     provider: str = "ollama"
     temperature: float = 0.1
-    max_tokens: int = 512
+    max_tokens: int = 2048
     input_token_budget: int = 1024
     templates_enabled: bool = True
     repair_enabled: bool = True
@@ -127,6 +127,10 @@ class MicroPrimeConfig(BaseModel):
     # Classifier thresholds
     max_simple_imports: int = 8
     max_simple_params: int = 4
+    # Scoring tuning knobs
+    class_score_bonus: int = 1
+    simple_threshold: int = 0
+    docstring_length_threshold: int = 200
 
 
 class MicroPrimeElementMetrics(BaseModel):

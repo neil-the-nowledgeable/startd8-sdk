@@ -150,7 +150,7 @@ class TestMicroPrimeConfig:
         assert config.model == "startd8-coder"
         assert config.provider == "ollama"
         assert config.temperature == 0.1
-        assert config.max_tokens == 512
+        assert config.max_tokens == 2048
         assert config.templates_enabled is True
         assert config.repair_enabled is True
 

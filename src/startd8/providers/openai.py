@@ -353,7 +353,11 @@ class OllamaProvider:
         if name is None:
             name = f"ollama-{model}"
         
-        base_url = config.get('base_url', 'http://localhost:11434/v1')
+        default_host = os.environ.get('OLLAMA_HOST', 'http://localhost:11434')
+        # Ensure the /v1 suffix for OpenAI-compatible endpoint
+        if not default_host.rstrip('/').endswith('/v1'):
+            default_host = default_host.rstrip('/') + '/v1'
+        base_url = config.get('base_url', default_host)
         
         return OpenAICompatibleAgent(
             name=name,
