@@ -28,6 +28,7 @@ def build_body_prompt(
     skeleton: Optional[str] = None,
     few_shot_examples: Optional[list[str]] = None,
     token_budget: int = 1024,
+    design_doc_sections: Optional[list[str]] = None,
 ) -> str:
     """Build a prompt for a local model to generate a single element body.
 
@@ -38,6 +39,8 @@ def build_body_prompt(
         skeleton: Optional skeleton file content for context.
         few_shot_examples: Optional list of completed sibling code.
         token_budget: Maximum input tokens (REQ-MP-205). Used for truncation.
+        design_doc_sections: Optional design doc sections for implementation
+            context (REQ-DDS-001). Rendered as ``# Implementation context:``.
 
     Returns:
         The constructed prompt string.
@@ -48,6 +51,7 @@ def build_body_prompt(
 
     return _build_function_prompt(
         element, file_spec, contracts, skeleton, few_shot_examples,
+        design_doc_sections=design_doc_sections,
     )
 
 
@@ -57,6 +61,7 @@ def _build_function_prompt(
     contracts: list[InterfaceContract],
     skeleton: Optional[str],
     few_shot_examples: Optional[list[str]],
+    design_doc_sections: Optional[list[str]] = None,
 ) -> str:
     """Build prompt for function/method body generation (REQ-MP-200–203)."""
     stub = _build_element_stub(element)
@@ -102,6 +107,13 @@ def _build_function_prompt(
     if import_lines:
         sections.append("# Available imports (ONLY use these — do NOT invent other APIs):")
         sections.extend(import_lines)
+        sections.append("")
+
+    # Implementation context from design doc sections (REQ-DDS-001)
+    if design_doc_sections:
+        sections.append("# Implementation context:")
+        for ds in design_doc_sections:
+            sections.append(f"# - {ds}")
         sections.append("")
 
     # Sibling context (REQ-MP-201)

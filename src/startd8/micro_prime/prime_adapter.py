@@ -44,6 +44,13 @@ except ImportError:
     _template_hits_counter = None
 
 
+# Size-regression threshold: if filled skeleton is below this ratio of the
+# existing target file, escalate to the fallback generator.  Matches the
+# integration engine's _INTEGRATION_SIZE_REGRESSION_THRESHOLD.
+_SIZE_REGRESSION_THRESHOLD = 0.60
+_MIN_EXISTING_LINES = 50
+
+
 class MicroPrimeCodeGenerator:
     """``CodeGenerator`` implementation using the Micro Prime engine.
 
@@ -114,6 +121,9 @@ class MicroPrimeCodeGenerator:
             logger.info("Ollama unavailable — delegating all to fallback")
             return self._delegate_to_fallback(task, context, target_files)
 
+        # Existing target files for size-regression escalation guard
+        existing_files: Dict[str, str] = context.get("existing_files") or {}
+
         # Process target files through the engine
         generated_files: list[Path] = []
         total_input = 0
@@ -132,9 +142,31 @@ class MicroPrimeCodeGenerator:
                 has_escalations = True
                 continue
 
-            file_result = self._engine.process_file(file_spec, manifest, skeleton)
+            # REQ-DDS-002: Thread design_doc_sections to engine
+            _dds = context.get("design_doc_sections") or []
+            file_result = self._engine.process_file(
+                file_spec, manifest, skeleton,
+                design_doc_sections=_dds if _dds else None,
+            )
 
             if file_result.filled_skeleton:
+                # Size-regression escalation guard: if the filled skeleton is
+                # significantly smaller than the existing target file, escalate
+                # to the fallback generator instead of writing a tiny skeleton.
+                existing_content = existing_files.get(file_path, "")
+                if existing_content:
+                    filled_lines = file_result.filled_skeleton.count("\n") + 1
+                    existing_lines = existing_content.count("\n") + 1
+                    ratio = filled_lines / existing_lines if existing_lines > 0 else 1.0
+                    if ratio < _SIZE_REGRESSION_THRESHOLD and existing_lines >= _MIN_EXISTING_LINES:
+                        logger.warning(
+                            "Micro Prime size-regression guard: %s has %d lines "
+                            "vs %d existing (%.0f%%) — escalating to fallback",
+                            file_path, filled_lines, existing_lines, ratio * 100,
+                        )
+                        has_escalations = True
+                        continue
+
                 # REQ-MP-703: Write filled skeleton to disk
                 output_path = self._output_dir / file_path
                 output_path.parent.mkdir(parents=True, exist_ok=True)

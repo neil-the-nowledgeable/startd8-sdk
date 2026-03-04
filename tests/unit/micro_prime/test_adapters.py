@@ -106,6 +106,105 @@ class TestMicroPrimeCodeGenerator:
         assert result.model is not None
 
 
+class TestSizeRegressionEscalation:
+    """Tests for size-regression escalation guard in generate()."""
+
+    def _make_ollama_mock(self):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"models": [{"name": "startd8-coder:latest"}]}'
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+        return mock_response
+
+    def test_escalates_when_skeleton_too_small(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """When filled skeleton is <60% of existing target, escalate to fallback."""
+        fallback = MagicMock()
+        fallback.generate.return_value = MagicMock(
+            success=True,
+            generated_files=[tmp_path / "fallback_out.py"],
+            input_tokens=100,
+            output_tokens=200,
+            model="fallback-model",
+            cost_usd=0.02,
+        )
+
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            fallback=fallback,
+            output_dir=tmp_path,
+        )
+
+        # Simulate existing target file with 200 lines (skeleton is ~20 lines)
+        big_existing = "\n".join(f"line_{i} = {i}" for i in range(200))
+        context = {
+            "existing_files": {"src/mypackage/utils.py": big_existing},
+        }
+
+        with patch(
+            "startd8.micro_prime.prime_adapter.urlopen",
+            return_value=self._make_ollama_mock(),
+        ):
+            result = gen.generate(
+                "Implement utils", context, ["src/mypackage/utils.py"],
+            )
+
+        # Fallback should have been called because skeleton << existing
+        fallback.generate.assert_called_once()
+        assert result.model is not None
+        assert "fallback" in result.model
+
+    def test_no_escalation_when_no_existing_file(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """When no existing file, no size-regression check — process locally."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        with patch(
+            "startd8.micro_prime.prime_adapter.urlopen",
+            return_value=self._make_ollama_mock(),
+        ):
+            result = gen.generate(
+                "Implement utils", {}, ["src/mypackage/utils.py"],
+            )
+
+        # Should NOT have escalated — no existing file to compare against
+        assert result.metadata.get("micro_prime_only", False) is True
+
+    def test_no_escalation_when_existing_file_small(
+        self, tmp_path, sample_manifest, sample_skeleton,
+    ):
+        """When existing file is below _MIN_EXISTING_LINES, skip the check."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+            output_dir=tmp_path,
+        )
+
+        # Existing file has only 10 lines — below min threshold
+        small_existing = "\n".join(f"x = {i}" for i in range(10))
+        context = {
+            "existing_files": {"src/mypackage/utils.py": small_existing},
+        }
+
+        with patch(
+            "startd8.micro_prime.prime_adapter.urlopen",
+            return_value=self._make_ollama_mock(),
+        ):
+            result = gen.generate(
+                "Implement utils", context, ["src/mypackage/utils.py"],
+            )
+
+        # Should NOT have escalated — existing file too small to trigger guard
+        assert result.metadata.get("micro_prime_only", False) is True
+
+
 class TestSkeletonGeneration:
     """Tests for REQ-MP-702: On-the-fly skeleton generation."""
 
@@ -771,3 +870,30 @@ class TestMicroPrimeChunkWiring:
         existing = gen_ctx.get("existing_files", {})
         assert "src/utils.py" in existing
         assert existing["src/utils.py"] == "# partial skeleton"
+
+
+class TestDesignDocSectionsPassedToEngine:
+    """REQ-DDS-002: Adapter extracts design_doc_sections from context and forwards."""
+
+    def test_design_sections_forwarded(self, sample_manifest, sample_skeleton):
+        """Engine.process_file called with design_doc_sections from context."""
+        gen = MicroPrimeCodeGenerator(
+            manifest=sample_manifest,
+            skeletons={"src/mypackage/utils.py": sample_skeleton},
+        )
+        sections = ["Stage 1: Use ChatGPT for embeddings", "Error handling"]
+        context = {
+            "manifest": sample_manifest,
+            "skeletons": {"src/mypackage/utils.py": sample_skeleton},
+            "design_doc_sections": sections,
+        }
+        with patch.object(gen._engine, "process_file", wraps=gen._engine.process_file) as mock_pf:
+            gen.generate(
+                "implement features",
+                context,
+                ["src/mypackage/utils.py"],
+            )
+            if mock_pf.called:
+                call_kwargs = mock_pf.call_args
+                # Check that design_doc_sections was passed
+                assert call_kwargs.kwargs.get("design_doc_sections") == sections

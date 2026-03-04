@@ -13,12 +13,21 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from startd8.logging_config import get_logger
-from startd8.utils.code_manifest import Element, ElementKind, Signature, Span, Visibility
+from startd8.utils.code_manifest import (
+    Dependencies,
+    Element,
+    ElementKind,
+    ImportEntry,
+    Signature,
+    Span,
+    Visibility,
+)
 
 logger = get_logger(__name__)
 
@@ -274,6 +283,7 @@ class ForwardManifest(BaseModel):
     contracts: list[InterfaceContract] = Field(default_factory=list)
     file_specs: dict[str, ForwardFileSpec] = Field(default_factory=dict)
     stages_completed: list[str] = Field(default_factory=list)
+    metadata: dict[str, object] = Field(default_factory=dict)
 
     def contracts_for_task(self, task_id: str) -> list[InterfaceContract]:
         """Return project-wide contracts plus those specific to *task_id*."""
@@ -392,6 +402,136 @@ def compute_binding_text(contract: InterfaceContract) -> str:
     return " | ".join(parts)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Conversion functions (AST Element/ImportEntry/Dependencies → Forward specs)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def forward_element_spec_from_element(
+    element: Element,
+    source_contract_id: Optional[str] = None,
+) -> ForwardElementSpec:
+    """Convert an AST ``Element`` to a ``ForwardElementSpec``.
+
+    Skips CONSTANT/VARIABLE kinds (no signature for callables).
+    Derives ``parent_class`` from ``element.fqn`` if dotted.
+
+    Args:
+        element: AST-derived element from ``code_manifest``.
+        source_contract_id: Provenance ID. When ``None`` a rich ID is NOT
+            set — callers should provide ``"flcm-ast-{relpath}:{line}:{fqn}"``.
+
+    Returns:
+        A validated ``ForwardElementSpec``.
+
+    Raises:
+        ValueError: If the element kind is CONSTANT or VARIABLE.
+    """
+    if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
+        raise ValueError(
+            f"Cannot convert {element.kind.value} element '{element.name}' "
+            "to ForwardElementSpec (no callable signature)"
+        )
+
+    # Derive parent_class only for method/property kinds.
+    # For top-level elements, fqn includes module path (e.g. "app.main.func")
+    # which is NOT a parent class. Only method-like elements nested in a class
+    # should have parent_class set. The SourceReconciler overrides this for
+    # class children, but we do a best-effort here: if the kind is METHOD-like
+    # and the fqn contains a dot, use the last dotted component before the name.
+    parent_class: Optional[str] = None
+    method_kinds = {
+        ElementKind.METHOD,
+        ElementKind.ASYNC_METHOD,
+        ElementKind.PROPERTY,
+    }
+    if element.kind in method_kinds and "." in element.fqn:
+        # Extract just the immediate parent (class name), not the full module path
+        # e.g. "app.main.MyClass.get_data" → "MyClass"
+        parts = element.fqn.rsplit(".", 1)
+        if parts[0]:
+            # Take the last component of the prefix as the class name
+            parent_class = parts[0].rsplit(".", 1)[-1]
+
+    return ForwardElementSpec(
+        kind=element.kind,
+        name=element.name,
+        signature=element.signature,
+        bases=list(element.bases) if element.bases else [],
+        visibility=element.visibility,
+        decorators=list(element.decorators) if element.decorators else [],
+        docstring_hint=element.docstring,
+        parent_class=parent_class,
+        source_contract_id=source_contract_id,
+    )
+
+
+def forward_import_spec_from_entry(
+    entry: ImportEntry,
+    project_root: Optional[Path] = None,
+    file_path: Optional[Path] = None,
+) -> Optional[ForwardImportSpec]:
+    """Convert an AST ``ImportEntry`` to a ``ForwardImportSpec``.
+
+    Relative imports (``is_relative=True``) are normalized to absolute module
+    paths using ``project_root`` and ``file_path``. If normalization fails or
+    the required paths are not provided, the import is dropped (returns ``None``).
+
+    Args:
+        entry: AST-derived import from ``code_manifest``.
+        project_root: Project root for relative import resolution.
+        file_path: Source file path for relative import resolution.
+
+    Returns:
+        A ``ForwardImportSpec`` or ``None`` if the import should be dropped.
+    """
+    module = entry.module
+
+    if entry.is_relative:
+        if project_root is None or file_path is None:
+            return None
+        try:
+            project_root = Path(project_root)
+            file_path = Path(file_path)
+            # Compute package from file location.
+            # Strip "src" directory since it's a common layout convention
+            # (e.g., src/mypackage/utils.py → mypackage.utils) and is not
+            # part of the Python package path.
+            rel = file_path.parent.relative_to(project_root)
+            package_parts = [p for p in rel.parts if p != "src"]
+            if module:
+                package_parts.append(module)
+            module = ".".join(package_parts)
+            if not module:
+                return None
+        except (ValueError, TypeError):
+            return None
+
+    return ForwardImportSpec(
+        kind=entry.kind,
+        module=module,
+        names=list(entry.names) if entry.names else [],
+        alias=entry.alias,
+    )
+
+
+def forward_dependencies_from_deps(deps: Dependencies) -> ForwardDependencies:
+    """Convert AST ``Dependencies`` to ``ForwardDependencies``.
+
+    Maps external and stdlib; drops internal and conditional.
+
+    Args:
+        deps: AST-derived dependency summary from ``code_manifest``.
+
+    Returns:
+        A ``ForwardDependencies`` with external and stdlib only.
+    """
+    return ForwardDependencies(
+        external=list(deps.external) if deps.external else [],
+        stdlib=list(deps.stdlib) if deps.stdlib else [],
+    )
+
+
 __all__ = [
     "ContractCategory",
     "ContractConfidence",
@@ -403,4 +543,7 @@ __all__ = [
     "ForwardManifest",
     "ContractViolation",
     "compute_binding_text",
+    "forward_element_spec_from_element",
+    "forward_import_spec_from_entry",
+    "forward_dependencies_from_deps",
 ]

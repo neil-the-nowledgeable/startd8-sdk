@@ -132,6 +132,7 @@ class MicroPrimeEngine:
         file_spec: ForwardFileSpec,
         skeleton: str,
         contracts: Optional[list[InterfaceContract]] = None,
+        design_doc_sections: Optional[list[str]] = None,
     ) -> ElementResult:
         """Process a single element through the pipeline.
 
@@ -140,6 +141,7 @@ class MicroPrimeEngine:
             file_spec: File spec for context.
             skeleton: Current skeleton file content.
             contracts: Binding constraints for this element.
+            design_doc_sections: Optional design doc sections for prompt context.
 
         Returns:
             ElementResult with success/failure and optional code.
@@ -211,6 +213,7 @@ class MicroPrimeEngine:
         elif tier == TierClassification.SIMPLE:
             result = self._handle_simple(
                 element, file_spec, skeleton, element_contracts, file_path, reasoning,
+                design_doc_sections=design_doc_sections,
             )
         else:
             # MODERATE/COMPLEX — return as needs_cloud
@@ -254,6 +257,7 @@ class MicroPrimeEngine:
         file_spec: ForwardFileSpec,
         manifest: ForwardManifest,
         skeleton: str,
+        design_doc_sections: Optional[list[str]] = None,
     ) -> FileResult:
         """Process all elements in a file.
 
@@ -266,6 +270,7 @@ class MicroPrimeEngine:
             file_spec: File spec with elements to process.
             manifest: Full manifest for contract lookup.
             skeleton: Skeleton file content.
+            design_doc_sections: Optional design doc sections for prompt context.
 
         Returns:
             FileResult with all element results and updated skeleton.
@@ -299,6 +304,7 @@ class MicroPrimeEngine:
         for _, _, element, contracts in classified:
             result = self.process_element(
                 element, file_spec, current_skeleton, contracts,
+                design_doc_sections=design_doc_sections,
             )
             file_result.element_results.append(result)
 
@@ -408,6 +414,7 @@ class MicroPrimeEngine:
         contracts: list[InterfaceContract],
         file_path: str,
         reasoning: str = "",
+        design_doc_sections: Optional[list[str]] = None,
     ) -> ElementResult:
         """Handle SIMPLE tier: local model generation + repair."""
         start_time = time.monotonic()
@@ -426,6 +433,7 @@ class MicroPrimeEngine:
             skeleton=skeleton,
             few_shot_examples=few_shot or None,
             token_budget=self._config.input_token_budget,
+            design_doc_sections=design_doc_sections,
         )
 
         # Generate via Ollama

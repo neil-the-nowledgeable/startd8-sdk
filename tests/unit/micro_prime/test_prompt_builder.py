@@ -362,3 +362,48 @@ class TestFindFewShotExamples:
         assert "return 'class'" in examples[0]
         # Tier 2 (same file) should fill the second slot
         assert "return 'file'" in examples[1]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Design Doc Sections (REQ-DDS-001)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestDesignDocSections:
+    def test_prompt_builder_with_design_sections(
+        self, simple_function_element, sample_file_spec, sample_contracts,
+    ):
+        """# Implementation context: section rendered when sections provided."""
+        sections = [
+            "Stage 1: ChatGoogleGenerativeAI gemini-1.5-flash with HumanMessage",
+            "Error handling returning HTTP error responses per stage",
+        ]
+        prompt = build_body_prompt(
+            simple_function_element,
+            sample_file_spec,
+            sample_contracts,
+            design_doc_sections=sections,
+        )
+        assert "# Implementation context:" in prompt
+        assert "ChatGoogleGenerativeAI" in prompt
+        assert "Error handling" in prompt
+
+    def test_prompt_builder_without_design_sections(
+        self, simple_function_element, sample_file_spec, sample_contracts,
+    ):
+        """No section when empty/None."""
+        prompt = build_body_prompt(
+            simple_function_element,
+            sample_file_spec,
+            sample_contracts,
+            design_doc_sections=None,
+        )
+        assert "# Implementation context:" not in prompt
+
+        prompt_empty = build_body_prompt(
+            simple_function_element,
+            sample_file_spec,
+            sample_contracts,
+            design_doc_sections=[],
+        )
+        assert "# Implementation context:" not in prompt_empty

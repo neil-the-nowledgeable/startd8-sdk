@@ -1294,6 +1294,33 @@ class PrimeContractorWorkflow:
                     exc,
                 )
 
+        # Fallback SOURCE_RECONCILE: enrich manifest with AST if not already done
+        if (
+            self._forward_manifest is not None
+            and "SOURCE_RECONCILE" not in self._forward_manifest.stages_completed
+        ):
+            try:
+                from startd8.forward_manifest_extractor import SourceReconciler
+
+                all_targets = list({
+                    f
+                    for feat in self.queue.all_features()
+                    for f in (feat.target_files or [])
+                })
+                reconciler = SourceReconciler()
+                stats = reconciler.reconcile(
+                    self._forward_manifest, self.project_root, all_targets,
+                )
+                self._forward_manifest.stages_completed.append("SOURCE_RECONCILE")
+                logger.info(
+                    "Fallback SOURCE_RECONCILE: +%d elements, +%d imports from %d files",
+                    stats.elements_added,
+                    stats.imports_added,
+                    stats.files_scanned,
+                )
+            except Exception as exc:
+                logger.warning("Fallback SOURCE_RECONCILE failed: %s", exc, exc_info=True)
+
         # Plan document text (not part of SeedContext — load if referenced)
         plan_doc_path = (seed_data.get("artifacts") or {}).get(
             "plan_document_path"
@@ -2023,6 +2050,11 @@ class PrimeContractorWorkflow:
             # REQ-MP-701: Forward deserialized ForwardManifest for Micro Prime
             if self._forward_manifest is not None:
                 gen_context["manifest"] = self._forward_manifest
+
+            # REQ-DDS-002: Thread design_doc_sections from feature metadata
+            _design_sections = feature.metadata.get("design_doc_sections", [])
+            if _design_sections:
+                gen_context["design_doc_sections"] = _design_sections
 
             # Walkthrough mode: persist prompts, skip LLM calls
             if self.walkthrough:

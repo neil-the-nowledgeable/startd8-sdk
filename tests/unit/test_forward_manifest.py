@@ -21,10 +21,15 @@ from startd8.forward_manifest import (
     ForwardManifest,
     InterfaceContract,
     compute_binding_text,
+    forward_dependencies_from_deps,
+    forward_element_spec_from_element,
+    forward_import_spec_from_entry,
 )
 from startd8.utils.code_manifest import (
+    Dependencies,
     Element,
     ElementKind,
+    ImportEntry,
     Param,
     Signature,
     Span,
@@ -687,3 +692,87 @@ class TestContractViolation:
             expected="foo",
         )
         assert v1 != v2
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Metadata field
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestForwardManifestMetadata:
+    def test_metadata_defaults_to_empty_dict(self):
+        m = ForwardManifest()
+        assert m.metadata == {}
+
+    def test_metadata_round_trip(self):
+        m = ForwardManifest(metadata={"reconcile_stats": {"elements_added": 5}})
+        dumped = m.model_dump()
+        assert dumped["metadata"]["reconcile_stats"]["elements_added"] == 5
+        restored = ForwardManifest.model_validate(dumped)
+        assert restored.metadata["reconcile_stats"]["elements_added"] == 5
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Conversion functions
+# ═══════════════════════════════════════════════════════════════════════════
+
+_SENTINEL_SPAN = Span(start_line=0, start_col=0, end_line=0, end_col=0)
+
+
+class TestConversionFunctions:
+    def test_forward_element_spec_from_element(self):
+        elem = Element(
+            kind=ElementKind.FUNCTION,
+            name="greet",
+            fqn="greet",
+            span=_SENTINEL_SPAN,
+            signature=Signature(
+                params=[Param(name="name", annotation="str")],
+                return_annotation="str",
+            ),
+            visibility=Visibility.PUBLIC,
+            decorators=["lru_cache"],
+            docstring="Say hello.",
+        )
+        spec = forward_element_spec_from_element(elem, source_contract_id="ast-001")
+        assert spec.kind == ElementKind.FUNCTION
+        assert spec.name == "greet"
+        assert spec.docstring_hint == "Say hello."
+        assert spec.decorators == ["lru_cache"]
+        assert spec.source_contract_id == "ast-001"
+        assert spec.parent_class is None
+
+    def test_forward_import_spec_from_entry(self):
+        entry = ImportEntry(
+            kind="from",
+            module="os.path",
+            names=["join"],
+            span=_SENTINEL_SPAN,
+        )
+        spec = forward_import_spec_from_entry(entry)
+        assert spec is not None
+        assert spec.kind == "from"
+        assert spec.module == "os.path"
+        assert spec.names == ["join"]
+
+    def test_forward_import_spec_drops_relative_without_context(self):
+        entry = ImportEntry(
+            kind="from",
+            module="utils",
+            names=["helper"],
+            span=_SENTINEL_SPAN,
+            is_relative=True,
+        )
+        spec = forward_import_spec_from_entry(entry)
+        assert spec is None
+
+    def test_forward_dependencies_from_deps(self):
+        deps = Dependencies(
+            external=["httpx"],
+            stdlib=["json"],
+            internal=["myapp"],
+            conditional=["uvloop"],
+        )
+        fwd = forward_dependencies_from_deps(deps)
+        assert fwd.external == ["httpx"]
+        assert fwd.stdlib == ["json"]

@@ -18,21 +18,30 @@ See docs/design/forward-manifest/Phase_3_Forward_Manifest_Extractor_Requirements
 from __future__ import annotations
 
 import ast
+import fnmatch
 import re
+import time
 from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 import yaml
+from pydantic import ValidationError
 
 from startd8.forward_manifest import (
     ContractCategory,
     ContractConfidence,
+    ForwardDependencies,
     ForwardElementSpec,
     ForwardFileSpec,
+    ForwardImportSpec,
     ForwardManifest,
     InterfaceContract,
     compute_binding_text,
+    forward_dependencies_from_deps,
+    forward_element_spec_from_element,
+    forward_import_spec_from_entry,
 )
 from startd8.logging_config import get_logger
 from startd8.utils.code_manifest import ElementKind, Param, ParamKind, Signature
@@ -58,6 +67,7 @@ _CATEGORY_ABBREV: dict[ContractCategory, str] = {
 
 # Higher numeric value = higher precedence (wins on duplicate contract_id).
 _SOURCE_PRECEDENCE: dict[str, int] = {
+    "source-ast": 0,       # AST-derived from existing files — fills gaps only
     "deterministic": 1,
     "proto": 2,
     "human-yaml": 3,
@@ -269,9 +279,18 @@ class DeterministicExtractor:
     """Extract contracts from ``ParsedFeature`` fields deterministically."""
 
     def extract(
-        self, features: list[ParsedFeature]
+        self,
+        features: list[ParsedFeature],
+        prior_file_specs: Optional[dict[str, ForwardFileSpec]] = None,
     ) -> tuple[list[InterfaceContract], dict[str, list[ForwardElementSpec]]]:
-        """Return (contracts, file_elements) from parsed features."""
+        """Return (contracts, file_elements) from parsed features.
+
+        Args:
+            features: Parsed features from plan ingestion.
+            prior_file_specs: Optional file specs from a prior enriched manifest.
+                When provided, plan-derived specs are supplemented with richer
+                data (return annotations, decorators, docstrings) from prior specs.
+        """
         contracts: list[InterfaceContract] = []
         file_elements: dict[str, list[ForwardElementSpec]] = {}
 
@@ -283,7 +302,51 @@ class DeterministicExtractor:
         # Shared files across features
         contracts.extend(self._extract_shared_files(features))
 
+        # Field-level supplement from prior specs
+        if prior_file_specs:
+            self._supplement_from_prior(file_elements, prior_file_specs)
+
         return contracts, file_elements
+
+    def _supplement_from_prior(
+        self,
+        file_elements: dict[str, list[ForwardElementSpec]],
+        prior_file_specs: dict[str, ForwardFileSpec],
+    ) -> None:
+        """Supplement plan-derived specs with richer data from prior specs."""
+        for filepath, specs in file_elements.items():
+            prior_spec = prior_file_specs.get(filepath)
+            if prior_spec is None:
+                continue
+            prior_by_key = {
+                (e.name, e.parent_class): e for e in prior_spec.elements
+            }
+            updated: list[ForwardElementSpec] = []
+            for spec in specs:
+                key = (spec.name, spec.parent_class)
+                prior = prior_by_key.get(key)
+                if prior is None:
+                    updated.append(spec)
+                    continue
+                updates: dict[str, object] = {}
+                if (
+                    spec.signature
+                    and spec.signature.return_annotation is None
+                    and prior.signature
+                    and prior.signature.return_annotation is not None
+                ):
+                    updates["signature"] = spec.signature.model_copy(
+                        update={"return_annotation": prior.signature.return_annotation}
+                    )
+                if not spec.decorators and prior.decorators:
+                    updates["decorators"] = list(prior.decorators)
+                if spec.docstring_hint is None and prior.docstring_hint is not None:
+                    updates["docstring_hint"] = prior.docstring_hint
+                if updates:
+                    updated.append(spec.model_copy(update=updates))
+                else:
+                    updated.append(spec)
+            file_elements[filepath] = updated
 
     def _extract_api_signatures(
         self,
@@ -597,6 +660,376 @@ class ProtoExtractor:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# SOURCE_RECONCILE — AST-enriched ForwardManifest
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class SourceReconcileConfig:
+    """Configuration for the SOURCE_RECONCILE stage.
+
+    Attributes:
+        enabled: Master switch for reconciliation.
+        max_file_size_bytes: Skip files exceeding this byte size (default 1 MB).
+        max_line_count: Reserved for future LOC-based filtering.
+        exclude_patterns: Glob patterns for paths to skip (matched via fnmatch).
+    """
+
+    enabled: bool = True
+    max_file_size_bytes: int = 1_000_000  # 1 MB cap
+    max_line_count: int = 10_000
+    exclude_patterns: list[str] = field(
+        default_factory=lambda: [".venv/*", "vendor/*", "node_modules/*"],
+    )
+
+
+@dataclass
+class ReconciliationStats:
+    """Statistics from a SOURCE_RECONCILE run.
+
+    Attributes:
+        files_scanned: Files successfully parsed and merged.
+        files_skipped: Files skipped (missing, oversized, symlink, cached, etc.).
+        files_with_errors: Files that failed AST parsing.
+        elements_added: New elements merged from AST.
+        elements_skipped: Elements already present in plan-derived specs.
+        specs_invalid: Elements that failed ``ForwardElementSpec`` validation.
+        imports_added: New imports merged from AST.
+        imports_skipped: Imports already present or dropped (relative normalization).
+        dependencies_added: Files whose dependencies were filled from AST.
+        wall_clock_ms: Total reconciliation wall-clock time in milliseconds.
+        file_fingerprints: SHA-256 digests keyed by relpath for cache-skip on rerun.
+    """
+
+    files_scanned: int = 0
+    files_skipped: int = 0
+    files_with_errors: int = 0
+    elements_added: int = 0
+    elements_skipped: int = 0
+    specs_invalid: int = 0
+    imports_added: int = 0
+    imports_skipped: int = 0
+    dependencies_added: int = 0
+    wall_clock_ms: float = 0.0
+    file_fingerprints: dict[str, str] = field(default_factory=dict)
+
+
+class SourceReconciler:
+    """Enrich ForwardManifest with AST-derived elements from existing source files.
+
+    Mottainai Rule 5: prefer deterministic (AST) over stochastic (LLM).
+    Only fills GAPS — plan-derived elements have higher precedence.
+    """
+
+    def reconcile(
+        self,
+        manifest: ForwardManifest,
+        project_root: Path,
+        target_files: Optional[list[str]] = None,
+        config: Optional[SourceReconcileConfig] = None,
+        design_doc_sections: Optional[dict[str, list[str]]] = None,
+    ) -> ReconciliationStats:
+        """Run SOURCE_RECONCILE on existing target files.
+
+        Args:
+            manifest: The ForwardManifest to enrich (mutated in place via
+                dict reassignment of file_specs values).
+            project_root: Project root directory.
+            target_files: Additional file paths to scan beyond manifest keys.
+            config: Reconciliation configuration.
+            design_doc_sections: Per-file design doc sections for docstring
+                enrichment (REQ-DDS-004). Keys are file paths.
+
+        Returns:
+            ReconciliationStats with counts of added/skipped items.
+        """
+        config = config or SourceReconcileConfig()
+        stats = ReconciliationStats()
+
+        if not config.enabled:
+            return stats
+
+        start = time.monotonic()
+
+        # Collect all file paths to scan
+        all_paths: set[str] = set(manifest.file_specs.keys())
+        if target_files:
+            all_paths.update(target_files)
+
+        project_root = Path(project_root).resolve()
+        cached_fingerprints: dict[str, str] = (
+            manifest.metadata.get("file_fingerprints") or {}  # type: ignore[assignment]
+        )
+        already_reconciled = "SOURCE_RECONCILE" in manifest.stages_completed
+
+        for relpath in sorted(all_paths):
+            self._reconcile_file(
+                relpath, project_root, manifest, config, stats,
+                cached_fingerprints, already_reconciled, design_doc_sections,
+            )
+
+        # [R1-S6] Provenance + [R3-S6] timing
+        stats.wall_clock_ms = (time.monotonic() - start) * 1000
+        manifest.metadata["reconcile_stats"] = {
+            "files_scanned": stats.files_scanned,
+            "files_skipped": stats.files_skipped,
+            "files_with_errors": stats.files_with_errors,
+            "elements_added": stats.elements_added,
+            "elements_skipped": stats.elements_skipped,
+            "specs_invalid": stats.specs_invalid,
+            "imports_added": stats.imports_added,
+            "imports_skipped": stats.imports_skipped,
+            "dependencies_added": stats.dependencies_added,
+            "wall_clock_ms": stats.wall_clock_ms,
+        }
+        manifest.metadata["file_fingerprints"] = dict(stats.file_fingerprints)
+
+        if stats.wall_clock_ms > 2000:
+            logger.warning(
+                "SOURCE_RECONCILE took %.0fms (>2000ms budget)",
+                stats.wall_clock_ms,
+            )
+
+        return stats
+
+    def _reconcile_file(
+        self,
+        relpath: str,
+        project_root: Path,
+        manifest: ForwardManifest,
+        config: SourceReconcileConfig,
+        stats: ReconciliationStats,
+        cached_fingerprints: dict[str, str],
+        already_reconciled: bool,
+        design_doc_sections: Optional[dict[str, list[str]]],
+    ) -> None:
+        """Validate, parse, and merge AST data for a single file.
+
+        Mutates *manifest* and *stats* in place.  Returns early if the file
+        should be skipped (missing, oversized, symlink, outside root, cached).
+        """
+        from startd8.utils.code_manifest import generate_file_manifest
+
+        raw_path = project_root / relpath
+
+        # [R1-S7] Safety: reject symlinks before resolving
+        if raw_path.is_symlink():
+            logger.debug("Skipping symlink: %s", relpath)
+            stats.files_skipped += 1
+            return
+
+        resolved = raw_path.resolve()
+        try:
+            if not resolved.is_relative_to(project_root):
+                logger.warning("Path outside project root, skipping: %s", relpath)
+                stats.files_skipped += 1
+                return
+        except (TypeError, ValueError):
+            stats.files_skipped += 1
+            return
+
+        if not resolved.is_file():
+            stats.files_skipped += 1
+            return
+
+        # [R1-S4] Exclude patterns
+        if any(fnmatch.fnmatch(relpath, pat) for pat in config.exclude_patterns):
+            stats.files_skipped += 1
+            return
+
+        # [R1-S4] Size cap
+        try:
+            file_size = resolved.stat().st_size
+        except OSError as exc:
+            logger.debug("Cannot stat %s: %s", relpath, exc)
+            stats.files_skipped += 1
+            return
+        if file_size > config.max_file_size_bytes:
+            logger.debug("File too large (%d bytes), skipping: %s", file_size, relpath)
+            stats.files_skipped += 1
+            return
+
+        # Run AST analysis
+        try:
+            file_manifest = generate_file_manifest(
+                resolved, project_root, mode="ast_only",
+            )
+        except Exception as exc:
+            logger.warning("AST parse failed for %s: %s", relpath, exc)
+            stats.files_with_errors += 1
+            return
+
+        if file_manifest.errors:
+            logger.warning(
+                "AST parse errors in %s: %s",
+                relpath,
+                [e.message for e in file_manifest.errors],
+            )
+            stats.files_with_errors += 1
+            return
+
+        # Store fingerprint
+        stats.file_fingerprints[relpath] = file_manifest.digest
+
+        # [R3-S1] Cache check — must be after successful parse to get digest
+        if (
+            already_reconciled
+            and cached_fingerprints.get(relpath) == file_manifest.digest
+        ):
+            stats.files_skipped += 1
+            return
+
+        stats.files_scanned += 1
+
+        # Get or create ForwardFileSpec
+        file_spec = manifest.file_specs.get(relpath)
+        existing_elements = list(file_spec.elements) if file_spec else []
+        existing_imports = list(file_spec.imports) if file_spec else []
+        existing_deps = file_spec.dependencies if file_spec else None
+
+        # Build existing key sets
+        existing_element_keys: set[tuple[Optional[str], str]] = {
+            (spec.parent_class, spec.name) for spec in existing_elements
+        }
+        existing_import_keys: set[tuple[str, tuple[str, ...]]] = {
+            (spec.module, tuple(sorted(spec.names)))
+            for spec in existing_imports
+        }
+
+        merged_elements = list(existing_elements)
+        merged_imports = list(existing_imports)
+
+        # Per-file design doc sections for docstring enrichment
+        file_sections = (
+            (design_doc_sections or {}).get(relpath) or []
+        )
+
+        # Process top-level elements from AST
+        for element in file_manifest.elements:
+            # Skip CONSTANT/VARIABLE — no callable signature
+            if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
+                continue
+
+            # Rich provenance ID: flcm-ast-{relpath}:{start_line}:{fqn}
+            source_id = (
+                f"flcm-ast-{relpath}:{element.span.start_line}:{element.fqn}"
+            )
+
+            key = (None, element.name)
+            if key not in existing_element_keys:
+                try:
+                    spec = forward_element_spec_from_element(
+                        element, source_contract_id=source_id,
+                    )
+                    # REQ-DDS-004: Enrich docstring_hint from design sections
+                    if spec.docstring_hint is None and file_sections:
+                        hint = _match_design_section(element.name, file_sections)
+                        if hint:
+                            spec = spec.model_copy(update={"docstring_hint": hint})
+                    merged_elements.append(spec)
+                    existing_element_keys.add(key)
+                    stats.elements_added += 1
+                except (ValueError, ValidationError) as exc:
+                    logger.warning(
+                        "Invalid spec for %s in %s: %s",
+                        element.name, relpath, exc,
+                    )
+                    stats.specs_invalid += 1
+            else:
+                stats.elements_skipped += 1
+
+            # Process class children (methods)
+            if element.kind == ElementKind.CLASS:
+                for child in element.children:
+                    if child.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
+                        continue
+                    child_key = (element.name, child.name)
+                    if child_key not in existing_element_keys:
+                        child_source_id = (
+                            f"flcm-ast-{relpath}:{child.span.start_line}:{child.fqn}"
+                        )
+                        try:
+                            child_spec = forward_element_spec_from_element(
+                                child, source_contract_id=child_source_id,
+                            )
+                            # Ensure parent_class is set correctly
+                            if child_spec.parent_class != element.name:
+                                child_spec = child_spec.model_copy(
+                                    update={"parent_class": element.name}
+                                )
+                            # REQ-DDS-004
+                            if child_spec.docstring_hint is None and file_sections:
+                                hint = _match_design_section(child.name, file_sections)
+                                if hint:
+                                    child_spec = child_spec.model_copy(
+                                        update={"docstring_hint": hint},
+                                    )
+                            merged_elements.append(child_spec)
+                            existing_element_keys.add(child_key)
+                            stats.elements_added += 1
+                        except (ValueError, ValidationError) as exc:
+                            logger.warning(
+                                "Invalid spec for %s.%s in %s: %s",
+                                element.name, child.name, relpath, exc,
+                            )
+                            stats.specs_invalid += 1
+                    else:
+                        stats.elements_skipped += 1
+
+        # Process imports from AST
+        for imp_entry in file_manifest.imports:
+            imp_key = (imp_entry.module, tuple(sorted(imp_entry.names)))
+            if imp_key not in existing_import_keys:
+                fwd_imp = forward_import_spec_from_entry(
+                    imp_entry, project_root, resolved,
+                )
+                if fwd_imp is not None:
+                    merged_imports.append(fwd_imp)
+                    existing_import_keys.add(imp_key)
+                    stats.imports_added += 1
+                else:
+                    stats.imports_skipped += 1
+            else:
+                stats.imports_skipped += 1
+
+        # Dependencies
+        merged_deps = existing_deps
+        if existing_deps is None and file_manifest.dependencies:
+            merged_deps = forward_dependencies_from_deps(file_manifest.dependencies)
+            stats.dependencies_added += 1
+
+        # [R1-S5] Deterministic ordering
+        merged_elements.sort(key=lambda e: (e.parent_class or "", e.name))
+        merged_imports.sort(key=lambda i: (i.module, tuple(sorted(i.names))))
+
+        # [R2-S4] Frozen model — create new ForwardFileSpec
+        new_file_spec = ForwardFileSpec(
+            file=relpath,
+            elements=merged_elements,
+            imports=merged_imports,
+            dependencies=merged_deps,
+        )
+        manifest.file_specs[relpath] = new_file_spec
+
+
+def _match_design_section(
+    element_name: str, sections: list[str],
+) -> Optional[str]:
+    """Best-effort word-boundary match of element name in design sections.
+
+    Returns the first matching section text, or ``None``.
+    Uses ``\\b`` word boundaries to avoid partial matches (e.g., ``"get"``
+    should not match ``"get_name"``).  Deterministic only — no fuzzy
+    matching (Mottainai Rule 5).
+    """
+    pattern = re.compile(r"\b" + re.escape(element_name) + r"\b")
+    for section in sections:
+        if pattern.search(section):
+            return section
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Merger
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -682,6 +1115,8 @@ def extract_forward_contracts(
     yaml_text: Optional[str] = None,
     proto_dir: Optional[Path] = None,
     tentative_contracts: Optional[list[InterfaceContract]] = None,
+    project_root: Optional[Path] = None,
+    prior_file_specs: Optional[dict[str, ForwardFileSpec]] = None,
 ) -> ForwardManifest:
     """Orchestrate all extractors and merge into a ``ForwardManifest``.
 
@@ -695,10 +1130,18 @@ def extract_forward_contracts(
         Optional directory containing ``.proto`` files.
     tentative_contracts:
         Optional pre-existing tentative contracts to include.
+    project_root:
+        Optional project root. When provided, triggers SOURCE_RECONCILE
+        to enrich the manifest with AST-derived elements from existing files.
+    prior_file_specs:
+        Optional file specs from a prior enriched manifest for field-level
+        supplement of plan-derived specs.
     """
     try:
         det = DeterministicExtractor()
-        det_contracts, file_elements = det.extract(features)
+        det_contracts, file_elements = det.extract(
+            features, prior_file_specs=prior_file_specs,
+        )
 
         yaml_contracts: list[InterfaceContract] = []
         if yaml_text:
@@ -722,6 +1165,21 @@ def extract_forward_contracts(
         # Record stage completion
         manifest.stages_completed.append("EXTRACT")
 
+        # SOURCE_RECONCILE: enrich with AST-derived elements from existing files
+        if project_root is not None:
+            all_targets = list({
+                f for feat in features for f in feat.target_files
+            })
+            reconciler = SourceReconciler()
+            stats = reconciler.reconcile(manifest, project_root, all_targets)
+            manifest.stages_completed.append("SOURCE_RECONCILE")
+            logger.info(
+                "SOURCE_RECONCILE: +%d elements, +%d imports from %d files",
+                stats.elements_added,
+                stats.imports_added,
+                stats.files_scanned,
+            )
+
         return manifest
     except (OSError, ValueError, KeyError, TypeError) as exc:
         logger.exception(
@@ -740,5 +1198,8 @@ __all__ = [
     "HumanYamlExtractor",
     "ProtoExtractor",
     "ManifestMerger",
+    "SourceReconciler",
+    "SourceReconcileConfig",
+    "ReconciliationStats",
     "extract_forward_contracts",
 ]

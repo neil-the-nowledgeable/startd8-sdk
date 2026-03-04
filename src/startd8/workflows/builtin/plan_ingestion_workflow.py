@@ -3424,6 +3424,7 @@ class PlanIngestionWorkflow(WorkflowBase):
         onboarding_metadata: Optional[Dict[str, Any]] = None,
         review_output: Optional[Dict[str, Any]] = None,
         project_metadata: Optional[Dict[str, Any]] = None,
+        project_root: Optional[Path] = None,
     ) -> EmitResult:
         from startd8.forward_manifest_extractor import extract_forward_contracts
 
@@ -3462,6 +3463,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                     yaml_text=yaml_text,
                     proto_dir=proto_dir,
                     tentative_contracts=tentative_contracts,
+                    project_root=project_root,
                 )
 
                 forward_manifest_dict = forward_manifest.model_dump()
@@ -4443,6 +4445,12 @@ class PlanIngestionWorkflow(WorkflowBase):
             progress("Emit")
             state.current_phase = IngestionPhase.EMIT
 
+            _emit_project_root = (
+                Path(config.get("project_root"))
+                if config.get("project_root")
+                else None
+            )
+
             emit_result = self._phase_emit(
                 doc_path, route, complexity, output_dir,
                 review_rounds, review_quality_tier, scope, context_files,
@@ -4456,6 +4464,7 @@ class PlanIngestionWorkflow(WorkflowBase):
                 onboarding_metadata=onboarding_metadata,
                 review_output=review_output,
                 project_metadata=project_metadata,
+                project_root=_emit_project_root,
             )
 
             # Emit deterministic traceability report for downstream auditing.
