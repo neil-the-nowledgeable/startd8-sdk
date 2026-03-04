@@ -226,6 +226,15 @@ def main() -> int:
         "--micro-prime-no-repair", action="store_true",
         help="Disable Micro Prime repair pipeline",
     )
+    # Post-generation repair pipeline (REQ-RPL-200)
+    parser.add_argument(
+        "--repair", action="store_true",
+        help="Enable post-generation repair pipeline (deterministic fix before LLM retry)",
+    )
+    parser.add_argument(
+        "--no-repair", action="store_true",
+        help="Explicitly disable post-generation repair pipeline",
+    )
 
     args = parser.parse_args()
 
@@ -404,6 +413,13 @@ def main() -> int:
     # ------------------------------------------------------------------
     # Build workflow
     # ------------------------------------------------------------------
+    # Post-generation repair pipeline (REQ-RPL-200)
+    repair_config = None
+    if args.repair and not args.no_repair:
+        from startd8.repair.config import RepairConfig
+        repair_config = RepairConfig()
+        logger.info("Repair pipeline: enabled")
+
     workflow = PrimeContractorWorkflow(
         project_root=project_root,
         dry_run=args.dry_run,
@@ -413,6 +429,7 @@ def main() -> int:
         code_generator=code_generator,
         cli_mode=args.mode,
         walkthrough=args.walkthrough,
+        repair_config=repair_config,
     )
 
     # Load features from seed
@@ -530,6 +547,8 @@ def main() -> int:
     logger.info("Dry run: %s", args.dry_run)
     if args.micro_prime:
         logger.info("Micro Prime: enabled (model=%s)", args.micro_prime_model or "default")
+    if repair_config is not None:
+        logger.info("Repair pipeline: enabled (categories=%s)", sorted(repair_config.repairable_categories))
     if workflow._validation_override is not None:
         logger.info("Validation override: %s", workflow._validation_override)
     if workflow.strict_validation:
