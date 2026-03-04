@@ -1,0 +1,99 @@
+"""Failure routing table (REQ-RPL-002).
+
+Maps diagnostic categories to ordered repair step sequences.
+Returns the union of matched steps, deduplicated, in canonical order.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, List
+
+from .models import Diagnostic, RepairRoute
+from .steps import (
+    AstValidateStep,
+    ErrorDrivenImportCompletion,
+    FenceStripStep,
+    IndentNormalizeStep,
+)
+
+if TYPE_CHECKING:
+    from .config import RepairConfig
+    from .protocol import RepairStep
+
+# Canonical step order — steps are always applied in this sequence
+# regardless of which diagnostics matched them.
+_CANONICAL_ORDER = [
+    "fence_strip",
+    "indent_normalize",
+    "import_completion",
+    "ast_validate",
+]
+
+# Routing table: category → (matched_pattern, step_names, confidence)
+_ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
+    ("syntax", "syntax_error", ["fence_strip", "indent_normalize", "ast_validate"], "HIGH"),
+    ("import", "missing_import", ["import_completion", "ast_validate"], "HIGH"),
+    ("lint", "lint_violation", ["fence_strip", "indent_normalize", "ast_validate"], "MEDIUM"),
+]
+
+# Step name → step class constructor
+_STEP_FACTORIES: dict[str, type] = {
+    "fence_strip": FenceStripStep,
+    "indent_normalize": IndentNormalizeStep,
+    "import_completion": ErrorDrivenImportCompletion,
+    "ast_validate": AstValidateStep,
+}
+
+
+def route_failures(
+    diagnostics: List[Diagnostic],
+    config: "RepairConfig",
+) -> RepairRoute:
+    """Route diagnostics to an ordered sequence of repair steps.
+
+    Args:
+        diagnostics: Parsed checkpoint diagnostics.
+        config: Repair pipeline configuration.
+
+    Returns:
+        RepairRoute with matched patterns, ordered steps, and confidence.
+    """
+    matched_patterns: list[str] = []
+    step_names: set[str] = set()
+    min_confidence = "HIGH"
+    confidence_rank = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+
+    categories = {d.category for d in diagnostics}
+
+    for cat, pattern, steps, confidence in _ROUTING_TABLE:
+        if cat in categories and cat in config.repairable_categories:
+            matched_patterns.append(pattern)
+            step_names.update(steps)
+            if confidence_rank.get(confidence, 0) < confidence_rank.get(min_confidence, 0):
+                min_confidence = confidence
+
+    if not step_names:
+        return RepairRoute(
+            matched_patterns=[],
+            steps=[],
+            confidence="LOW",
+        )
+
+    # Sort by canonical order
+    ordered_steps = [s for s in _CANONICAL_ORDER if s in step_names]
+
+    return RepairRoute(
+        matched_patterns=matched_patterns,
+        steps=ordered_steps,
+        confidence=min_confidence,
+    )
+
+
+def create_steps_from_route(route: RepairRoute) -> List["RepairStep"]:
+    """Instantiate RepairStep objects from a RepairRoute."""
+    steps: list[RepairStep] = []
+    for step_name in route.steps:
+        factory = _STEP_FACTORIES.get(step_name)
+        if factory:
+            steps.append(factory())
+    return steps

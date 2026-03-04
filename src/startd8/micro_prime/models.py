@@ -34,34 +34,8 @@ class EscalationReason(str, Enum):
     CIRCUIT_BREAKER = "circuit_breaker"
 
 
-class RepairAttribution(BaseModel):
-    """Per-step repair attribution (REQ-MP-601).
-
-    Granular boolean/int fields tracking what each repair step actually did
-    during a pipeline run. Populated by ``build_repair_attribution()`` in
-    the repair module from the list of ``RepairStepResult`` objects.
-    """
-
-    fence_stripped: bool = False
-    trimmed: bool = False
-    nodes_removed: int = 0
-    bare_wrapped: bool = False
-    indent_source: str = ""
-    params_changed: int = 0
-    return_type_restored: bool = False
-
-
-@dataclass
-class RepairStepResult:
-    """Result from a single repair pipeline step.
-
-    Provides per-step attribution for observability (REQ-MP-601).
-    """
-
-    step_name: str
-    modified: bool
-    code: str
-    metrics: dict[str, Any] = field(default_factory=dict)
+# Re-export from shared repair package for backward compatibility.
+from startd8.repair.models import RepairAttribution, RepairStepResult  # noqa: F401
 
 
 @dataclass

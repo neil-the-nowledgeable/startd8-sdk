@@ -12,21 +12,36 @@ Steps:
     5. Signature reconcile — restore canonical signature from manifest
     6. Import completion — add missing imports
     7. AST validation — final gate
+
+Shared steps (1, 4, 6, 7) delegate to ``startd8.repair.steps``.
+Micro-prime-specific steps (2, 3, 5) remain local.
 """
 
 from __future__ import annotations
 
 import ast
 import textwrap
+from pathlib import Path
 from typing import Optional
 
 from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec
 from startd8.logging_config import get_logger
 from startd8.micro_prime.models import RepairAttribution, RepairStepResult
+from startd8.repair.models import ElementContext, RepairContext
+from startd8.repair.steps.ast_validate import AstValidateStep
+from startd8.repair.steps.fence_strip import FenceStripStep
+from startd8.repair.steps.import_completion import ManifestImportCompletion
+from startd8.repair.steps.indent_normalize import IndentNormalizeStep
 from startd8.utils.code_extraction import extract_code_from_response
 from startd8.utils.code_manifest import ElementKind
 
 logger = get_logger(__name__)
+
+# Shared step instances
+_shared_fence_strip = FenceStripStep()
+_shared_indent_normalize = IndentNormalizeStep()
+_shared_import_completion = ManifestImportCompletion()
+_shared_ast_validate = AstValidateStep()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -41,16 +56,10 @@ def _step_fence_strip(
 ) -> RepairStepResult:
     """Step 1: Strip markdown code fences (REQ-MP-400).
 
-    Delegates to the existing ``extract_code_from_response()`` utility.
+    Delegates to shared ``FenceStripStep``.
     """
-    stripped = extract_code_from_response(code)
-    modified = stripped != code
-    return RepairStepResult(
-        step_name="fence_strip",
-        modified=modified,
-        code=stripped,
-        metrics={"had_fences": modified},
-    )
+    ctx = RepairContext()
+    return _shared_fence_strip(code, ctx, Path("<element>"))
 
 
 def _step_over_generation_trim(
@@ -184,65 +193,11 @@ def _step_indent_normalize(
 ) -> RepairStepResult:
     """Step 4: Normalize indentation to 4-space (REQ-MP-402).
 
-    Applies multiple strategies from the experiment script:
-    1. textwrap.dedent
-    2. Strip first line + dedent
-    3. Strip last line + dedent
-    4. Strip both + dedent
-    5. Tab-to-spaces + dedent
+    Delegates to shared ``IndentNormalizeStep``.
     """
-    is_method = bool(element.parent_class)
-
-    # If already valid, skip
-    if _try_parse(code, is_method):
-        return RepairStepResult(
-            step_name="indent_normalize", modified=False, code=code,
-        )
-
-    strategies: list[tuple[str, str]] = []
-    lines = code.split("\n")
-
-    # Strategy 1: Straight dedent
-    dedented = textwrap.dedent(code).strip()
-    strategies.append(("dedent", dedented))
-
-    # Strategy 2: Strip first line + dedent
-    if len(lines) > 2:
-        without_first = "\n".join(lines[1:])
-        strategies.append(("strip_first+dedent", textwrap.dedent(without_first).strip()))
-
-    # Strategy 3: Strip last line + dedent
-    if len(lines) > 2:
-        without_last = "\n".join(lines[:-1])
-        strategies.append(("strip_last+dedent", textwrap.dedent(without_last).strip()))
-
-    # Strategy 4: Strip both + dedent
-    if len(lines) > 3:
-        middle = "\n".join(lines[1:-1])
-        strategies.append(("strip_both+dedent", textwrap.dedent(middle).strip()))
-
-    # Strategy 5: Tab → 4 spaces + dedent
-    if "\t" in code:
-        tab_fixed = code.expandtabs(4)
-        strategies.append(("tabs_to_spaces+dedent", textwrap.dedent(tab_fixed).strip()))
-
-    for name, candidate in strategies:
-        if not candidate:
-            continue
-        if _try_parse(candidate, is_method):
-            return RepairStepResult(
-                step_name="indent_normalize",
-                modified=True,
-                code=candidate,
-                metrics={"strategy": name},
-            )
-
-    return RepairStepResult(
-        step_name="indent_normalize",
-        modified=False,
-        code=code,
-        metrics={"all_strategies_failed": True},
-    )
+    ec = ElementContext(parent_class=element.parent_class)
+    ctx = RepairContext()
+    return _shared_indent_normalize(code, ctx, Path("<element>"), ec)
 
 
 def _step_signature_reconcile(
@@ -344,72 +299,12 @@ def _step_import_completion(
 ) -> RepairStepResult:
     """Step 6: Add missing imports from manifest (REQ-MP-404).
 
-    Checks for names used in the code that correspond to manifest imports
-    and adds any missing import statements at the top.
+    Delegates to shared ``ManifestImportCompletion``.
     """
-    if file_spec is None:
-        return RepairStepResult(
-            step_name="import_completion", modified=False, code=code,
-        )
-
-    try:
-        tree = ast.parse(code)
-    except SyntaxError:
-        return RepairStepResult(
-            step_name="import_completion", modified=False, code=code,
-        )
-
-    # Collect existing import names
-    existing_imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                existing_imports.add(alias.asname or alias.name)
-        elif isinstance(node, ast.ImportFrom):
-            for alias in node.names:
-                existing_imports.add(alias.asname or alias.name)
-
-    # Collect all Name references in code
-    used_names: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            used_names.add(node.id)
-        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
-            used_names.add(node.value.id)
-
-    # Find manifest imports that provide used names but are missing
-    missing_imports: list[str] = []
-    for imp in file_spec.imports:
-        if imp.kind == "from":
-            for name in imp.names:
-                if name in used_names and name not in existing_imports:
-                    names_str = ", ".join(imp.names)
-                    missing_imports.append(f"from {imp.module} import {names_str}")
-                    existing_imports.update(imp.names)
-                    break
-        else:
-            mod_base = imp.module.split(".")[0]
-            effective_name = imp.alias or mod_base
-            if effective_name in used_names and effective_name not in existing_imports:
-                alias_str = f" as {imp.alias}" if imp.alias else ""
-                missing_imports.append(f"import {imp.module}{alias_str}")
-                existing_imports.add(effective_name)
-
-    if not missing_imports:
-        return RepairStepResult(
-            step_name="import_completion", modified=False, code=code,
-        )
-
-    # Prepend missing imports
-    import_block = "\n".join(missing_imports)
-    new_code = import_block + "\n\n" + code
-
-    return RepairStepResult(
-        step_name="import_completion",
-        modified=True,
-        code=new_code,
-        metrics={"imports_added": len(missing_imports)},
-    )
+    imports = file_spec.imports if file_spec else None
+    ec = ElementContext(imports=imports)
+    ctx = RepairContext()
+    return _shared_import_completion(code, ctx, Path("<element>"), ec)
 
 
 def _step_ast_validate(
@@ -417,15 +312,13 @@ def _step_ast_validate(
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
 ) -> RepairStepResult:
-    """Step 7: Final AST validation gate (REQ-MP-405)."""
-    is_method = bool(element.parent_class)
-    valid = _try_parse(code, is_method)
-    return RepairStepResult(
-        step_name="ast_validate",
-        modified=False,
-        code=code,
-        metrics={"valid": valid},
-    )
+    """Step 7: Final AST validation gate (REQ-MP-405).
+
+    Delegates to shared ``AstValidateStep``.
+    """
+    ec = ElementContext(parent_class=element.parent_class)
+    ctx = RepairContext()
+    return _shared_ast_validate(code, ctx, Path("<element>"), ec)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

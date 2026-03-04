@@ -506,7 +506,7 @@ class PrimeContractorWorkflow:
         )
         return resolved
 
-    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False):
+    def __init__(self, project_root: Optional[Path]=None, dry_run: bool=False, auto_commit: bool=False, strict_checkpoints: bool=False, max_retries: int=6, allow_dirty: bool=False, auto_stash: bool=False, code_generator: Optional[CodeGenerator]=None, instrumentor: Optional[Instrumentor]=None, size_estimator: Optional[SizeEstimator]=None, merge_strategy: Optional[MergeStrategy]=None, on_feature_complete: Optional[FeatureCompleteCallback]=None, on_checkpoint_failed: Optional[CheckpointFailedCallback]=None, max_lines_per_feature: int=150, max_tokens_per_feature: int=500, check_truncation: bool=True, resume: bool=False, cli_mode: Optional[str]=None, force_mode: Optional[str]=None, context_strategy: Optional[ContextResolutionStrategy]=None, strict_mode: bool=False, walkthrough: bool=False, repair_config: Optional[Any]=None):
         """
         Initialize the Prime Contractor workflow.
 
@@ -564,6 +564,8 @@ class PrimeContractorWorkflow:
         self.total_cost_usd: float = 0.0
         self.total_input_tokens: int = 0
         self.total_output_tokens: int = 0
+        # Repair pipeline config (REQ-RPL-200)
+        self._repair_config = repair_config
         # IntegrationEngine — delegates snapshot/merge/checkpoint/rollback
         self._engine = IntegrationEngine(
             project_root=self.project_root,
@@ -574,6 +576,7 @@ class PrimeContractorWorkflow:
             allow_dirty=self.allow_dirty,
             check_truncation=self.check_truncation,
             strict_checkpoints=self.strict_checkpoints,
+            repair_config=self._repair_config,
         )
         self._prime_listener = PrimeContractorListener(
             queue=self.queue,
@@ -2170,6 +2173,13 @@ class PrimeContractorWorkflow:
         )
 
         if result.success:
+            # R2-S4: If repair succeeded, the listener already incremented
+            # integration_attempts via start_integration(). Decrement to
+            # avoid consuming a retry slot for a successful repair.
+            if result.metadata.get("repair_success"):
+                feature.integration_attempts = max(
+                    0, feature.integration_attempts - 1,
+                )
             self.queue.complete_feature(feature.id)
             self.integration_history.append({
                 'feature_name': feature.name,
@@ -2183,6 +2193,18 @@ class PrimeContractorWorkflow:
                 self.on_feature_complete(feature)
             return True
         else:
+            # REQ-RPL-204: If repair was attempted but failed, enrich
+            # error context for subsequent LLM retry
+            if result.metadata.get("repair_attempted") and not result.metadata.get("repair_success"):
+                repair_detail = (
+                    f"Repair attempted (steps: {result.metadata.get('repair_steps', [])}) "
+                    f"but failed"
+                )
+                if result.metadata.get("repair_error"):
+                    repair_detail += f": {result.metadata['repair_error']}"
+                feature.error_message = (
+                    (feature.error_message or "") + f" | {repair_detail}"
+                ).lstrip(" | ")
             if result.checkpoint_results and self.on_checkpoint_failed:
                 self.on_checkpoint_failed(feature, result.checkpoint_results)
             return False

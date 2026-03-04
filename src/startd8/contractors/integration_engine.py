@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -27,6 +28,16 @@ from .protocols import (
     IntegrationUnit,
     MergeStrategy,
 )
+
+# Repair pipeline imports — optional, guarded (R2-S5)
+try:
+    from ..repair.diagnostics import classify_checkpoint_category, parse_checkpoint_diagnostics
+    from ..repair.orchestrator import run_file_repair
+    from ..repair.staging import create_staging
+
+    _HAS_REPAIR = True
+except ImportError:
+    _HAS_REPAIR = False
 
 # PCA-604: Size regression guard thresholds (configurable).
 _INTEGRATION_SIZE_REGRESSION_THRESHOLD = 0.60
@@ -75,6 +86,7 @@ class IntegrationEngine:
         allow_dirty: bool = False,
         check_truncation: bool = True,
         strict_checkpoints: bool = False,
+        repair_config: Optional[Any] = None,
     ) -> None:
         self.project_root = project_root
         self.merge_strategy = merge_strategy
@@ -88,6 +100,8 @@ class IntegrationEngine:
         # Phase 4: Manifest-based pre-merge diff
         self.manifest_registry: Any = None
         self.element_retention_threshold: float = 0.80
+        # Repair pipeline (REQ-RPL-200)
+        self._repair_config = repair_config
 
     # ------------------------------------------------------------------
     # Phase 4: Manifest diff (IN-1 through IN-3)
@@ -618,6 +632,182 @@ class IntegrationEngine:
         return unresolved
 
     # ------------------------------------------------------------------
+    # Repair pipeline (REQ-RPL-200)
+    # ------------------------------------------------------------------
+
+    def _attempt_repair(
+        self,
+        results: List[Any],
+        integrated_files: List[Path],
+        unit: IntegrationUnit,
+        attempt: int,
+        result_obj_metadata: Dict[str, Any],
+    ) -> tuple[list[Any], bool]:
+        """Attempt deterministic repair on failed checkpoint results.
+
+        Args:
+            results: Checkpoint results (may contain FAILED entries).
+            integrated_files: Files that were merged into the project.
+            unit: Integration unit being processed.
+            attempt: Current integration attempt number.
+            result_obj_metadata: Mutable metadata dict — repair keys are
+                added in-place.
+
+        Returns:
+            Tuple of (possibly-updated results, repair_success bool).
+        """
+        repair_success = False
+        repair_attempted = False
+
+        if not (
+            _HAS_REPAIR
+            and self._repair_config is not None
+            and getattr(self._repair_config, "repair_enabled", False)
+        ):
+            return results, False
+
+        failed_checks = [
+            r for r in results
+            if r.status == CheckpointStatus.FAILED
+        ]
+        categories = {
+            classify_checkpoint_category(r) for r in failed_checks
+        }
+        repairable = categories & set(
+            self._repair_config.repairable_categories
+        )
+
+        if not (repairable and failed_checks):
+            return results, False
+
+        repair_start = time.monotonic()
+        try:
+            diagnostics = parse_checkpoint_diagnostics(failed_checks)
+            files_to_repair: Dict[Path, str] = {}
+            for ifile in integrated_files:
+                if ifile.suffix == ".py" and ifile.exists():
+                    files_to_repair[ifile] = ifile.read_text(
+                        encoding="utf-8",
+                    )
+
+            # R3-S1: Truncation pre-filter
+            truncation_skipped: List[str] = []
+            try:
+                from ..truncation_detection import (
+                    CONFIDENCE_TRUNCATION_BLOCKED,
+                    detect_truncation,
+                )
+                for fpath in list(files_to_repair):
+                    tr = detect_truncation(files_to_repair[fpath])
+                    if tr.confidence >= CONFIDENCE_TRUNCATION_BLOCKED:
+                        del files_to_repair[fpath]
+                        truncation_skipped.append(str(fpath))
+            except (ImportError, OSError, ValueError):
+                pass  # truncation detection is advisory
+
+            if files_to_repair:
+                staging_root = (
+                    self._repair_config.staging_root
+                    or self.project_root / ".startd8" / "repair"
+                )
+                with create_staging(
+                    files_to_repair,
+                    staging_root,
+                    unit.name,
+                    attempt,
+                    project_root=self.project_root,
+                ) as staged:
+                    outcome = run_file_repair(
+                        staged.files,
+                        diagnostics,
+                        self._repair_config,
+                        self.project_root,
+                    )
+                    repair_attempted = True
+
+                    if outcome.any_modified:
+                        staged.write_repaired(outcome.repaired_files)
+                        # R2-S2: Engine drives re-checkpoint
+                        recheckpoint_results = (
+                            self.checkpoint.run_all_checkpoints(
+                                staged.paths, unit.name,
+                            )
+                        )
+                        if self.checkpoint.summarize_results(
+                            recheckpoint_results,
+                        ):
+                            # R1-S4: Atomic swap
+                            staged.apply_atomic()
+                            results = recheckpoint_results
+                            repair_success = True
+
+                # R3-S2: Cost measurement
+                repair_duration_ms = (
+                    (time.monotonic() - repair_start) * 1000
+                )
+                result_obj_metadata.update({
+                    "repair_attempted": True,
+                    "repair_success": repair_success,
+                    "repair_duration_ms": repair_duration_ms,
+                    "repair_steps": outcome.steps_applied,
+                    "repair_files_modified": [
+                        str(p) for p in outcome.repaired_files
+                    ],
+                })
+                if truncation_skipped:
+                    result_obj_metadata["truncation_skipped"] = (
+                        truncation_skipped
+                    )
+
+                # R3-S5: EventBus emission
+                try:
+                    from ..events import Event, EventBus, EventType
+                    EventBus.emit(Event(
+                        type=EventType.PIPELINE_STEP_COMPLETE,
+                        source="repair",
+                        data={
+                            "success": repair_success,
+                            "duration_ms": repair_duration_ms,
+                            "files_repaired": len(outcome.repaired_files),
+                            "steps": outcome.steps_applied,
+                        },
+                    ))
+                except (ImportError, AttributeError, TypeError) as ebus_exc:
+                    logger.debug(
+                        "EventBus repair emission skipped: %s", ebus_exc,
+                    )
+
+        except Exception as exc:
+            # R2-S5 + R3-S7: Defensive guard
+            logger.error(
+                "Repair pipeline failed: %s", exc,
+                exc_info=True,
+                extra={"unit_id": unit.id},
+            )
+            result_obj_metadata["repair_attempted"] = repair_attempted
+            result_obj_metadata["repair_success"] = False
+            result_obj_metadata["repair_error"] = str(exc)
+
+            # R3-S6: Persist to TaskErrorStore
+            try:
+                from ..storage.error_store import TaskErrorStore
+                TaskErrorStore(
+                    project_root=self.project_root,
+                ).record_error(
+                    workflow_id=unit.id,
+                    source="repair",
+                    error_message=str(exc),
+                    context={"categories": sorted(repairable)},
+                )
+            except (ImportError, OSError, ValueError) as store_exc:
+                logger.debug(
+                    "TaskErrorStore repair persistence skipped: %s",
+                    store_exc,
+                )
+
+        return results, repair_success
+
+    # ------------------------------------------------------------------
     # Git commit
     # ------------------------------------------------------------------
 
@@ -1094,22 +1284,30 @@ class IntegrationEngine:
                 integrated_files, unit.name,
             )
 
-            # Import Check and Lint Check are advisory — downgrade FAILED → WARNING
-            for r in results:
-                if (
-                    r.name in ("Import Check", "Lint Check")
-                    and r.status == CheckpointStatus.FAILED
-                ):
-                    for err in r.errors or []:
-                        logger.warning(
-                            "Advisory %s: %s", r.name.lower(), err,
-                            extra={"unit_id": unit.id},
-                        )
-                    r.status = CheckpointStatus.WARNING
-                    r.warnings = (r.warnings or []) + (r.errors or [])
-                    r.errors = []
+            # ── Repair pipeline hook (REQ-RPL-200, R6-S1, R6-S2) ──
+            results, repair_success = self._attempt_repair(
+                results, integrated_files, unit, attempt, result_obj_metadata,
+            )
 
-            # Emit GateResult for each checkpoint
+            # Advisory downgrade (only if repair not attempted or failed)
+            # R6-S1: When repair succeeds, skip downgrade — results are
+            # already replaced with passing re-checkpoint results
+            if not repair_success:
+                for r in results:
+                    if (
+                        r.name in ("Import Check", "Lint Check")
+                        and r.status == CheckpointStatus.FAILED
+                    ):
+                        for err in r.errors or []:
+                            logger.warning(
+                                "Advisory %s: %s", r.name.lower(), err,
+                                extra={"unit_id": unit.id},
+                            )
+                        r.status = CheckpointStatus.WARNING
+                        r.warnings = (r.warnings or []) + (r.errors or [])
+                        r.errors = []
+
+            # R2-S8: GateEmitter AFTER repair decision — emits final results
             for cr in results:
                 try:
                     gate = GateEmitter.from_checkpoint_result(
@@ -1123,7 +1321,10 @@ class IntegrationEngine:
                 listener.on_checkpoint_result(unit, cr)
 
             checkpoint_results = results
-            all_passed = self.checkpoint.summarize_results(results)
+            all_passed = (
+                True if repair_success
+                else self.checkpoint.summarize_results(results)
+            )
 
             if not all_passed:
                 # Rollback
