@@ -656,6 +656,13 @@ class IntegrationEngine:
             and self._repair_config is not None
             and getattr(self._repair_config, "repair_enabled", False)
         ):
+            logger.debug(
+                "Pre-merge repair skipped: _HAS_REPAIR=%s, "
+                "repair_config=%s, repair_enabled=%s",
+                _HAS_REPAIR,
+                self._repair_config is not None,
+                getattr(self._repair_config, "repair_enabled", "N/A"),
+            )
             return None
 
         try:

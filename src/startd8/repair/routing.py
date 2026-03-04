@@ -33,7 +33,7 @@ _CANONICAL_ORDER = [
 _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
     ("syntax", "syntax_error", ["fence_strip", "indent_normalize", "ast_validate"], "HIGH"),
     ("import", "missing_import", ["import_completion", "ast_validate"], "HIGH"),
-    ("lint", "lint_violation", ["fence_strip", "indent_normalize", "ast_validate"], "MEDIUM"),
+    ("lint", "lint_violation", ["fence_strip", "indent_normalize", "import_completion", "ast_validate"], "MEDIUM"),
 ]
 
 # Step name → step class constructor

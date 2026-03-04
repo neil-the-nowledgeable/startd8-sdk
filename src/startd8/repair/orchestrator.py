@@ -240,7 +240,9 @@ def run_file_repair(
         # Build per-file diagnostics
         file_diags = [
             d for d in diagnostics
-            if d.file == str(file_path) or d.file == file_path.name
+            if d.file == str(file_path)
+            or d.file == file_path.name
+            or Path(d.file).name == file_path.name
         ]
 
         ctx = RepairContext(

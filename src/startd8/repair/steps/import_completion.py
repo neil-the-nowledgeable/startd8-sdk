@@ -25,6 +25,83 @@ from ..models import (
 )
 
 
+def _find_import_insertion_line(lines: list[str]) -> int:
+    """Find the line index where new imports should be inserted.
+
+    Skips past:
+    - Encoding declarations (``# -*- coding: ...``)
+    - Hashbang lines (``#!/...``)
+    - Module docstrings (triple-quoted)
+    - Comments and blank lines at the top
+    - ``from __future__ import ...`` statements
+
+    Returns the 0-based line index where new imports should go.
+    """
+    i = 0
+    n = len(lines)
+
+    # Skip hashbang
+    if i < n and lines[i].startswith("#!"):
+        i += 1
+
+    # Skip leading comments, blank lines, encoding declarations
+    while i < n:
+        stripped = lines[i].strip()
+        if stripped == "" or stripped.startswith("#"):
+            i += 1
+        else:
+            break
+
+    # Skip module docstring (triple-quoted)
+    if i < n:
+        stripped = lines[i].strip()
+        for quote in ('"""', "'''"):
+            if stripped.startswith(quote):
+                if stripped.count(quote) >= 2 and stripped.endswith(quote) and len(stripped) > len(quote):
+                    # Single-line docstring
+                    i += 1
+                else:
+                    # Multi-line docstring — find closing quote
+                    i += 1
+                    while i < n and quote not in lines[i]:
+                        i += 1
+                    if i < n:
+                        i += 1  # skip the closing line
+                break
+
+    # Skip blank lines after docstring
+    while i < n and lines[i].strip() == "":
+        i += 1
+
+    # Skip from __future__ imports
+    while i < n and lines[i].strip().startswith("from __future__"):
+        i += 1
+
+    return i
+
+
+def _insert_imports(code: str, import_block: str) -> str:
+    """Insert import statements at the correct position in the file."""
+    lines = code.splitlines(keepends=True)
+    insert_at = _find_import_insertion_line(
+        [line.rstrip("\n\r") for line in lines],
+    )
+
+    before = "".join(lines[:insert_at])
+    after = "".join(lines[insert_at:])
+
+    # Ensure blank line separation
+    if before and not before.endswith("\n\n"):
+        if not before.endswith("\n"):
+            before += "\n"
+        before += "\n"
+
+    if after and not after.startswith("\n"):
+        import_block += "\n"
+
+    return before + import_block + "\n" + after
+
+
 def _collect_existing_imports(tree: ast.Module) -> set[str]:
     """Collect all imported names from an AST tree."""
     names: set[str] = set()
@@ -100,7 +177,7 @@ class ManifestImportCompletion:
             )
 
         import_block = "\n".join(missing_imports)
-        new_code = import_block + "\n\n" + code
+        new_code = _insert_imports(code, import_block)
 
         return RepairStepResult(
             step_name=self.name,
@@ -133,7 +210,11 @@ class ErrorDrivenImportCompletion:
         import_diagnostics = [
             d for d in context.diagnostics
             if isinstance(d, ImportDiagnostic)
-            and (d.file == str(file_path) or d.file == file_path.name)
+            and (
+                d.file == str(file_path)
+                or d.file == file_path.name
+                or Path(d.file).name == file_path.name
+            )
         ]
 
         if not import_diagnostics:
@@ -179,7 +260,7 @@ class ErrorDrivenImportCompletion:
             )
 
         import_block = "\n".join(missing_imports)
-        new_code = import_block + "\n\n" + code
+        new_code = _insert_imports(code, import_block)
 
         return RepairStepResult(
             step_name=self.name,

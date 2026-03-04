@@ -34,7 +34,22 @@ class TestRouteFailures:
         config = RepairConfig()
         route = route_failures(diags, config)
         assert "lint_violation" in route.matched_patterns
+        assert "import_completion" in route.steps
         assert route.confidence == "MEDIUM"
+
+    def test_f821_dual_diagnostic_routes_import_completion(self):
+        """F821 emits both lint and import diagnostics; import_completion step is routed."""
+        diags = [
+            LintDiagnostic(category="lint", file="app.py", message="Undefined name `Flask`", rule="F821", line=7),
+            ImportDiagnostic(category="import", file="app.py", message="Undefined name `Flask`", module="flask", name="Flask"),
+        ]
+        config = RepairConfig()
+        route = route_failures(diags, config)
+        assert "lint_violation" in route.matched_patterns
+        assert "missing_import" in route.matched_patterns
+        assert "import_completion" in route.steps
+        assert "fence_strip" in route.steps
+        assert "ast_validate" in route.steps
 
     def test_non_repairable_category_empty(self):
         """Test, size categories are not repairable."""

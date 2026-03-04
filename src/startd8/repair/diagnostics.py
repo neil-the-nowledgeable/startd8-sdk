@@ -68,6 +68,51 @@ _LINT_RULE = re.compile(
     r"(?P<file>[^:]+):(?P<line>\d+):(?P<col>\d+):\s*(?P<rule>\w+)\s+(?P<message>.+)",
 )
 
+# F821: "Undefined name `Flask`" or "Undefined name 'Flask'"
+_F821_NAME = re.compile(
+    r"Undefined name [`'](?P<name>[^`']+)[`']",
+)
+
+# Well-known name → (module, import_name) for F821 repair.
+# Covers common frameworks whose class names don't match their package names.
+_WELL_KNOWN_IMPORTS: dict[str, tuple[str, str]] = {
+    # Flask
+    "Flask": ("flask", "Flask"),
+    "Blueprint": ("flask", "Blueprint"),
+    "Request": ("flask", "Request"),
+    "Response": ("flask", "Response"),
+    "jsonify": ("flask", "jsonify"),
+    "request": ("flask", "request"),
+    "render_template": ("flask", "render_template"),
+    "abort": ("flask", "abort"),
+    "redirect": ("flask", "redirect"),
+    "url_for": ("flask", "url_for"),
+    # FastAPI
+    "FastAPI": ("fastapi", "FastAPI"),
+    "APIRouter": ("fastapi", "APIRouter"),
+    "Depends": ("fastapi", "Depends"),
+    "HTTPException": ("fastapi", "HTTPException"),
+    "Body": ("fastapi", "Body"),
+    "Query": ("fastapi", "Query"),
+    # Pydantic
+    "BaseModel": ("pydantic", "BaseModel"),
+    "Field": ("pydantic", "Field"),
+    "validator": ("pydantic", "validator"),
+    "field_validator": ("pydantic", "field_validator"),
+    # Standard library (commonly missed)
+    "Path": ("pathlib", "Path"),
+    "Optional": ("typing", "Optional"),
+    "List": ("typing", "List"),
+    "Dict": ("typing", "Dict"),
+    "Any": ("typing", "Any"),
+    "Union": ("typing", "Union"),
+    "Tuple": ("typing", "Tuple"),
+    # gRPC
+    "grpc": ("grpc", ""),
+    "dataclass": ("dataclasses", "dataclass"),
+    "field": ("dataclasses", "field"),
+}
+
 
 def classify_checkpoint_category(result: Any) -> str:
     """Classify a checkpoint result into a repair category.
@@ -201,7 +246,11 @@ def _parse_import_errors(text: str) -> list[Diagnostic]:
 
 
 def _parse_lint_errors(text: str) -> list[Diagnostic]:
-    """Parse lint check output into LintDiagnostic instances."""
+    """Parse lint check output into LintDiagnostic instances.
+
+    F821 (undefined name) also emits an ``ImportDiagnostic`` so the
+    ``import_completion`` step can resolve the missing name.
+    """
     results: list[Diagnostic] = []
     for match in _LINT_RULE.finditer(text):
         rule = match.group("rule")
@@ -215,6 +264,32 @@ def _parse_lint_errors(text: str) -> list[Diagnostic]:
             line=int(match.group("line")),
             fixable=fixable,
         ))
+
+        # F821 "Undefined name 'X'" → also emit ImportDiagnostic so
+        # import_completion can attempt to resolve the missing name.
+        if rule == "F821":
+            undef_match = _F821_NAME.search(match.group("message"))
+            if undef_match:
+                undef_name = undef_match.group("name")
+                pkg = _WELL_KNOWN_IMPORTS.get(undef_name)
+                if pkg is not None:
+                    mod, name = pkg
+                elif undef_name[0].isupper():
+                    # PascalCase → likely a class; heuristic: from <lower> import <Name>
+                    mod = undef_name.lower()
+                    name = undef_name
+                else:
+                    # lowercase → likely a module; heuristic: import <name>
+                    mod = undef_name
+                    name = ""
+                results.append(ImportDiagnostic(
+                    category="import",
+                    file=match.group("file"),
+                    message=match.group("message"),
+                    module=mod,
+                    name=name,
+                ))
+
     if not results:
         results.append(LintDiagnostic(
             category="lint",

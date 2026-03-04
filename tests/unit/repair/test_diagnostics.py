@@ -148,6 +148,85 @@ class TestParseCheckpointDiagnostics:
         assert isinstance(diags[0], LintDiagnostic)
         assert diags[0].fixable is False
 
+    def test_f821_emits_import_diagnostic(self):
+        """F821 (undefined name) produces both LintDiagnostic and ImportDiagnostic."""
+        r = _FakeResult(
+            "Lint Check",
+            _FakeStatus("failed"),
+            errors=["app.py:7:12: F821 Undefined name `Flask`"],
+        )
+        diags = parse_checkpoint_diagnostics([r])
+        assert len(diags) == 2
+        lint_diags = [d for d in diags if isinstance(d, LintDiagnostic)]
+        import_diags = [d for d in diags if isinstance(d, ImportDiagnostic)]
+        assert len(lint_diags) == 1
+        assert lint_diags[0].rule == "F821"
+        assert len(import_diags) == 1
+        assert import_diags[0].module == "flask"
+        assert import_diags[0].name == "Flask"
+
+    def test_f821_well_known_import_mapping(self):
+        """F821 for well-known names maps to correct module."""
+        r = _FakeResult(
+            "Lint Check",
+            _FakeStatus("failed"),
+            errors=["x.py:1:1: F821 Undefined name `BaseModel`"],
+        )
+        diags = parse_checkpoint_diagnostics([r])
+        import_diags = [d for d in diags if isinstance(d, ImportDiagnostic)]
+        assert len(import_diags) == 1
+        assert import_diags[0].module == "pydantic"
+        assert import_diags[0].name == "BaseModel"
+
+    def test_f821_unknown_pascalcase_heuristic(self):
+        """F821 for unknown PascalCase name uses lowercase heuristic."""
+        r = _FakeResult(
+            "Lint Check",
+            _FakeStatus("failed"),
+            errors=["x.py:1:1: F821 Undefined name `MyWidget`"],
+        )
+        diags = parse_checkpoint_diagnostics([r])
+        import_diags = [d for d in diags if isinstance(d, ImportDiagnostic)]
+        assert len(import_diags) == 1
+        assert import_diags[0].module == "mywidget"
+        assert import_diags[0].name == "MyWidget"
+
+    def test_f821_unknown_lowercase_heuristic(self):
+        """F821 for unknown lowercase name uses plain import heuristic."""
+        r = _FakeResult(
+            "Lint Check",
+            _FakeStatus("failed"),
+            errors=["x.py:1:1: F821 Undefined name `foobar`"],
+        )
+        diags = parse_checkpoint_diagnostics([r])
+        import_diags = [d for d in diags if isinstance(d, ImportDiagnostic)]
+        assert len(import_diags) == 1
+        assert import_diags[0].module == "foobar"
+        assert import_diags[0].name == ""
+
+    def test_f821_single_quote_variant(self):
+        """F821 with single quotes (older ruff) still matches."""
+        r = _FakeResult(
+            "Lint Check",
+            _FakeStatus("failed"),
+            errors=["x.py:1:1: F821 Undefined name 'Flask'"],
+        )
+        diags = parse_checkpoint_diagnostics([r])
+        import_diags = [d for d in diags if isinstance(d, ImportDiagnostic)]
+        assert len(import_diags) == 1
+        assert import_diags[0].module == "flask"
+
+    def test_non_f821_lint_no_import_diagnostic(self):
+        """F401 and other lint rules do NOT emit ImportDiagnostic."""
+        r = _FakeResult(
+            "Lint Check",
+            _FakeStatus("failed"),
+            errors=["x.py:1:1: F401 'os' imported but unused"],
+        )
+        diags = parse_checkpoint_diagnostics([r])
+        import_diags = [d for d in diags if isinstance(d, ImportDiagnostic)]
+        assert len(import_diags) == 0
+
     def test_unknown_category_passthrough(self):
         r = _FakeResult(
             "Test Runner",

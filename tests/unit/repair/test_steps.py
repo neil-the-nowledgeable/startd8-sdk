@@ -12,6 +12,8 @@ from startd8.repair.steps.fence_strip import FenceStripStep
 from startd8.repair.steps.import_completion import (
     ErrorDrivenImportCompletion,
     ManifestImportCompletion,
+    _find_import_insertion_line,
+    _insert_imports,
 )
 from startd8.repair.steps.indent_normalize import IndentNormalizeStep
 
@@ -166,6 +168,87 @@ class TestErrorDrivenImportCompletion:
         )
         result = step("import os\nos.path.join('a')", ctx, Path("t.py"))
         assert result.modified is False
+
+    def test_relative_path_diagnostic_matches_absolute_file(self):
+        """Diagnostic with relative path matches absolute file_path via basename."""
+        step = ErrorDrivenImportCompletion()
+        diag = ImportDiagnostic(
+            category="import",
+            file="pipeline-output/gen/src/app.py",
+            message="Undefined name",
+            module="flask",
+            name="Flask",
+        )
+        ctx = RepairContext(diagnostics=[diag])
+        abs_path = Path("/Users/dev/project/pipeline-output/gen/src/app.py")
+        result = step("app = Flask(__name__)", ctx, abs_path)
+        assert result.modified is True
+        assert "from flask import Flask" in result.code
+
+    def test_f821_flask_import_added(self):
+        """End-to-end: F821 ImportDiagnostic adds 'from flask import Flask'."""
+        step = ErrorDrivenImportCompletion()
+        diag = ImportDiagnostic(
+            category="import",
+            file="app.py",
+            message="Undefined name `Flask`",
+            module="flask",
+            name="Flask",
+        )
+        ctx = RepairContext(diagnostics=[diag])
+        code = "app = Flask(__name__)"
+        result = step(code, ctx, Path("app.py"))
+        assert result.modified is True
+        assert "from flask import Flask" in result.code
+        assert result.metrics.get("imports_added") == 1
+
+
+class TestImportInsertion:
+    """Tests for _find_import_insertion_line and _insert_imports."""
+
+    def test_inserts_after_future_import(self):
+        code = "# comment\n\nfrom __future__ import annotations\n\ndef foo():\n    pass\n"
+        result = _insert_imports(code, "import os")
+        lines = result.splitlines()
+        future_idx = next(i for i, l in enumerate(lines) if "from __future__" in l)
+        os_idx = next(i for i, l in enumerate(lines) if l.strip() == "import os")
+        assert os_idx > future_idx
+
+    def test_inserts_after_skeleton_comment_and_future(self):
+        code = "# [STARTD8-SKELETON]\n\nfrom __future__ import annotations\n\ndef create_app():\n    return Flask(__name__)\n"
+        result = _insert_imports(code, "from flask import Flask")
+        # Must not cause SyntaxError
+        compile(result, "<test>", "exec")
+        assert "from flask import Flask" in result
+
+    def test_inserts_at_top_when_no_future(self):
+        code = "def foo():\n    pass\n"
+        result = _insert_imports(code, "import os")
+        assert result.startswith("import os")
+
+    def test_inserts_after_docstring(self):
+        code = '"""Module docstring."""\n\ndef foo():\n    pass\n'
+        result = _insert_imports(code, "import os")
+        lines = result.splitlines()
+        doc_idx = next(i for i, l in enumerate(lines) if "docstring" in l)
+        os_idx = next(i for i, l in enumerate(lines) if l.strip() == "import os")
+        assert os_idx > doc_idx
+
+    def test_inserts_after_multiline_docstring(self):
+        code = '"""\nModule\ndocstring.\n"""\n\nfrom __future__ import annotations\n\nx = 1\n'
+        result = _insert_imports(code, "import os")
+        compile(result, "<test>", "exec")
+        lines = result.splitlines()
+        future_idx = next(i for i, l in enumerate(lines) if "from __future__" in l)
+        os_idx = next(i for i, l in enumerate(lines) if l.strip() == "import os")
+        assert os_idx > future_idx
+
+    def test_find_insertion_line_empty(self):
+        assert _find_import_insertion_line([]) == 0
+
+    def test_find_insertion_line_hashbang(self):
+        lines = ["#!/usr/bin/env python3", "import os"]
+        assert _find_import_insertion_line(lines) == 1
 
 
 class TestAstValidateStep:
