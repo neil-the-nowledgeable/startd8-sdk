@@ -92,6 +92,12 @@ class MicroPrimeEngine:
     """
 
     _CIRCUIT_BREAKER_THRESHOLD: int = 3
+    _TIER_PRIORITY: dict[TierClassification, int] = {
+        TierClassification.TRIVIAL: 0,
+        TierClassification.SIMPLE: 1,
+        TierClassification.MODERATE: 2,
+        TierClassification.COMPLEX: 3,
+    }
 
     def __init__(
         self,
@@ -144,6 +150,11 @@ class MicroPrimeEngine:
     ) -> ElementResult:
         """Process a single element through the pipeline.
 
+        Classifies the element, then delegates to ``_process_element_with_tier``.
+        Use this entry point when the tier is not yet known.  When calling
+        from ``process_file`` (which pre-classifies for sorting), prefer
+        ``_process_element_with_tier`` directly to avoid double classification.
+
         Args:
             element: Manifest element to process.
             file_spec: File spec for context.
@@ -154,15 +165,49 @@ class MicroPrimeEngine:
         Returns:
             ElementResult with success/failure and optional code.
         """
-        file_path = file_spec.file
         element_contracts = contracts or []
 
-        # Step 1: Classify tier
         tier, reasoning = classify_element(
             element, file_spec, element_contracts,
             template_registry=self._templates,
             config=self._config,
         )
+
+        return self._process_element_with_tier(
+            element, file_spec, skeleton, element_contracts,
+            tier=tier, reasoning=reasoning,
+            design_doc_sections=design_doc_sections,
+        )
+
+    def _process_element_with_tier(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        tier: TierClassification,
+        reasoning: str,
+        design_doc_sections: Optional[list[str]] = None,
+    ) -> ElementResult:
+        """Process a single element with a pre-computed tier classification.
+
+        This is the core processing method.  ``process_element`` classifies
+        first, then calls here.  ``process_file`` pre-classifies for sorting
+        and calls here directly, avoiding redundant classification.
+
+        Args:
+            element: Manifest element to process.
+            file_spec: File spec for context.
+            skeleton: Current skeleton file content.
+            contracts: Binding constraints for this element.
+            tier: Pre-computed tier classification.
+            reasoning: Classification reasoning string.
+            design_doc_sections: Optional design doc sections for prompt context.
+
+        Returns:
+            ElementResult with success/failure and optional code.
+        """
+        file_path = file_spec.file
 
         logger.debug(
             "Classified %s as %s: %s", element.name, tier.value, reasoning,
@@ -181,7 +226,6 @@ class MicroPrimeEngine:
                 classification_reason=reasoning,
                 success=True,
             )
-            result.tier = tier
             self._metrics.record(result)
             return result
 
@@ -211,7 +255,6 @@ class MicroPrimeEngine:
                     ),
                 ),
             )
-            result.tier = tier
             self._metrics.record(result)
             return result
 
@@ -220,7 +263,7 @@ class MicroPrimeEngine:
             result = self._handle_trivial(element, file_spec, skeleton, file_path, reasoning)
         elif tier == TierClassification.SIMPLE:
             result = self._handle_simple(
-                element, file_spec, skeleton, element_contracts, file_path, reasoning,
+                element, file_spec, skeleton, contracts, file_path, reasoning,
                 design_doc_sections=design_doc_sections,
             )
         else:
@@ -256,7 +299,6 @@ class MicroPrimeEngine:
                     self._consecutive_failures,
                 )
 
-        result.tier = tier
         self._metrics.record(result)
         return result
 
@@ -287,32 +329,30 @@ class MicroPrimeEngine:
         self.reset_circuit_breaker()
         current_skeleton = skeleton
 
-        # Pre-classify to determine processing order (REQ-MP-704)
-        _TIER_PRIORITY = {
-            TierClassification.TRIVIAL: 0,
-            TierClassification.SIMPLE: 1,
-            TierClassification.MODERATE: 2,
-            TierClassification.COMPLEX: 3,
-        }
+        # Pre-classify to determine processing order (REQ-MP-704).
+        # Classification results are cached to avoid redundant work in
+        # process_element() — each element is classified exactly once.
         classified: list[
-            tuple[int, str, ForwardElementSpec, list[InterfaceContract]]
+            tuple[int, str, ForwardElementSpec, list[InterfaceContract],
+                  TierClassification, str]
         ] = []
 
         for element in file_spec.elements:
             contracts = self._get_element_contracts(element, file_spec, manifest)
-            tier, _ = classify_element(
+            tier, reasoning = classify_element(
                 element, file_spec, contracts,
                 template_registry=self._templates,
                 config=self._config,
             )
-            priority = _TIER_PRIORITY.get(tier, 2)
-            classified.append((priority, element.name, element, contracts))
+            priority = self._TIER_PRIORITY.get(tier, 2)
+            classified.append((priority, element.name, element, contracts, tier, reasoning))
 
         classified.sort(key=lambda x: (x[0], x[1]))
 
-        for _, _, element, contracts in classified:
-            result = self.process_element(
+        for _, _, element, contracts, pre_tier, pre_reasoning in classified:
+            result = self._process_element_with_tier(
                 element, file_spec, current_skeleton, contracts,
+                tier=pre_tier, reasoning=pre_reasoning,
                 design_doc_sections=design_doc_sections,
             )
             file_result.element_results.append(result)
