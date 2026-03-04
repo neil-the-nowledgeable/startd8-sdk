@@ -183,6 +183,199 @@ class TestRepairConfigDefaults:
         assert config.repair_enabled is False
 
 
+class TestPreMergeRepair:
+    """Tests for _attempt_pre_merge_repair hook."""
+
+    @patch("startd8.contractors.integration_engine.run_file_repair")
+    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
+    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
+    def test_pre_merge_lint_failure_repaired(
+        self, mock_classify, mock_parse, mock_repair, tmp_path,
+    ):
+        """F821-style lint failure is repaired before merge."""
+        from startd8.contractors.checkpoint import CheckpointStatus, CheckpointResult
+        from startd8.repair.models import RepairOutcome, RepairRoute
+
+        config = RepairConfig()
+        checkpoint = MagicMock()
+
+        # check_syntax passes, check_lint fails
+        syntax_ok = CheckpointResult(
+            status=CheckpointStatus.PASSED, name="Syntax Check",
+            message="ok",
+        )
+        lint_fail = CheckpointResult(
+            status=CheckpointStatus.FAILED, name="Lint Check",
+            message="1 error(s)", errors=["a.py:1:1: F821 Undefined name 'Flask'"],
+        )
+        checkpoint.check_syntax.return_value = syntax_ok
+        checkpoint.check_lint.return_value = lint_fail
+
+        # After repair, pre_validate passes
+        repaired_result = CheckpointResult(
+            status=CheckpointStatus.PASSED, name="Pre-Merge Validation",
+            message="1 generated file(s) passed",
+        )
+        checkpoint.pre_validate.return_value = repaired_result
+
+        mock_classify.return_value = "lint"
+        mock_parse.return_value = []
+
+        py_file = tmp_path / "gen.py"
+        py_file.write_text("app = Flask(__name__)")
+
+        mock_repair.return_value = RepairOutcome(
+            route=RepairRoute(matched_patterns=[], steps=["fix_lint"], confidence="high"),
+            any_modified=True,
+            repaired_files={py_file: "from flask import Flask\napp = Flask(__name__)"},
+        )
+
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+        unit = _FakeUnit()
+
+        result = engine._attempt_pre_merge_repair([py_file], unit)
+
+        assert result is not None
+        assert result.status == CheckpointStatus.PASSED
+        mock_repair.assert_called_once()
+        checkpoint.pre_validate.assert_called_once_with([py_file])
+
+    @patch("startd8.contractors.integration_engine.run_file_repair")
+    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
+    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
+    def test_pre_merge_syntax_error_repaired(
+        self, mock_classify, mock_parse, mock_repair, tmp_path,
+    ):
+        """Syntax error in generated file is repaired before merge."""
+        from startd8.contractors.checkpoint import CheckpointStatus, CheckpointResult
+        from startd8.repair.models import RepairOutcome, RepairRoute
+
+        config = RepairConfig()
+        checkpoint = MagicMock()
+
+        syntax_fail = CheckpointResult(
+            status=CheckpointStatus.FAILED, name="Syntax Check",
+            message="1 file(s) have syntax errors",
+            errors=["gen.py: SyntaxError: unexpected EOF"],
+        )
+        lint_ok = CheckpointResult(
+            status=CheckpointStatus.PASSED, name="Lint Check", message="ok",
+        )
+        checkpoint.check_syntax.return_value = syntax_fail
+        checkpoint.check_lint.return_value = lint_ok
+
+        repaired_result = CheckpointResult(
+            status=CheckpointStatus.PASSED, name="Pre-Merge Validation",
+            message="1 generated file(s) passed",
+        )
+        checkpoint.pre_validate.return_value = repaired_result
+
+        mock_classify.return_value = "syntax"
+        mock_parse.return_value = []
+
+        py_file = tmp_path / "gen.py"
+        py_file.write_text("def foo(:\n    pass")
+
+        mock_repair.return_value = RepairOutcome(
+            route=RepairRoute(matched_patterns=[], steps=["fix_syntax"], confidence="high"),
+            any_modified=True,
+            repaired_files={py_file: "def foo():\n    pass"},
+        )
+
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+        result = engine._attempt_pre_merge_repair([py_file], _FakeUnit())
+
+        assert result is not None
+        assert result.status == CheckpointStatus.PASSED
+
+    def test_pre_merge_repair_skipped_when_disabled(self, tmp_path):
+        """With repair_enabled=False, no repair is attempted."""
+        from dataclasses import replace as dc_replace
+
+        config = dc_replace(RepairConfig(), repair_enabled=False)
+        checkpoint = MagicMock()
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+
+        result = engine._attempt_pre_merge_repair(
+            [tmp_path / "gen.py"], _FakeUnit(),
+        )
+
+        assert result is None
+        checkpoint.check_syntax.assert_not_called()
+
+    def test_pre_merge_repair_skipped_when_no_config(self, tmp_path):
+        """Without repair config, no repair is attempted."""
+        checkpoint = MagicMock()
+        engine = _make_engine(tmp_path, repair_config=None, checkpoint=checkpoint)
+
+        result = engine._attempt_pre_merge_repair(
+            [tmp_path / "gen.py"], _FakeUnit(),
+        )
+
+        assert result is None
+        checkpoint.check_syntax.assert_not_called()
+
+    @patch("startd8.contractors.integration_engine.run_file_repair")
+    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
+    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
+    def test_pre_merge_repair_exception_returns_none(
+        self, mock_classify, mock_parse, mock_repair, tmp_path,
+    ):
+        """Exception in repair pipeline returns None (defensive guard)."""
+        from startd8.contractors.checkpoint import CheckpointStatus, CheckpointResult
+
+        config = RepairConfig()
+        checkpoint = MagicMock()
+
+        lint_fail = CheckpointResult(
+            status=CheckpointStatus.FAILED, name="Lint Check",
+            message="error", errors=["gen.py:1:1: F821 bad"],
+        )
+        checkpoint.check_syntax.return_value = CheckpointResult(
+            status=CheckpointStatus.PASSED, name="Syntax Check", message="ok",
+        )
+        checkpoint.check_lint.return_value = lint_fail
+
+        mock_classify.return_value = "lint"
+        mock_parse.side_effect = RuntimeError("boom")
+
+        py_file = tmp_path / "gen.py"
+        py_file.write_text("x = 1")
+
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+        result = engine._attempt_pre_merge_repair([py_file], _FakeUnit())
+
+        assert result is None
+
+    @patch("startd8.contractors.integration_engine.run_file_repair")
+    @patch("startd8.contractors.integration_engine.parse_checkpoint_diagnostics")
+    @patch("startd8.contractors.integration_engine.classify_checkpoint_category")
+    def test_pre_merge_no_repair_when_checks_pass(
+        self, mock_classify, mock_parse, mock_repair, tmp_path,
+    ):
+        """When both checks pass, no repair is attempted."""
+        from startd8.contractors.checkpoint import CheckpointStatus, CheckpointResult
+
+        config = RepairConfig()
+        checkpoint = MagicMock()
+
+        checkpoint.check_syntax.return_value = CheckpointResult(
+            status=CheckpointStatus.PASSED, name="Syntax Check", message="ok",
+        )
+        checkpoint.check_lint.return_value = CheckpointResult(
+            status=CheckpointStatus.PASSED, name="Lint Check", message="ok",
+        )
+
+        py_file = tmp_path / "gen.py"
+        py_file.write_text("x = 1")
+
+        engine = _make_engine(tmp_path, repair_config=config, checkpoint=checkpoint)
+        result = engine._attempt_pre_merge_repair([py_file], _FakeUnit())
+
+        assert result is None
+        mock_repair.assert_not_called()
+
+
 class TestRepairWithMockedPipeline:
     """End-to-end tests with mocked repair components."""
 

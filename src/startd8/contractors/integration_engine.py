@@ -635,6 +635,97 @@ class IntegrationEngine:
     # Repair pipeline (REQ-RPL-200)
     # ------------------------------------------------------------------
 
+    def _attempt_pre_merge_repair(
+        self,
+        gen_paths: List[Path],
+        unit: IntegrationUnit,
+    ) -> Optional[Any]:
+        """Attempt repair on generated files BEFORE merge.
+
+        Runs syntax and lint checks individually (not aggregated via
+        ``pre_validate``) so that ``classify_checkpoint_category`` can
+        route diagnostics correctly.  Import repair is excluded because
+        generated files are not yet under ``src_dirs``.
+
+        Returns a replacement ``CheckpointResult`` from re-running
+        ``pre_validate`` after successful repair, or ``None`` if repair
+        was not attempted or failed.
+        """
+        if not (
+            _HAS_REPAIR
+            and self._repair_config is not None
+            and getattr(self._repair_config, "repair_enabled", False)
+        ):
+            return None
+
+        try:
+            # Run checks individually for proper diagnostic routing
+            syntax_result = self.checkpoint.check_syntax(gen_paths)
+            lint_result = self.checkpoint.check_lint(
+                gen_paths, ignore_codes=["F401"],
+            )
+
+            failed_results = [
+                r for r in (syntax_result, lint_result)
+                if r.status == CheckpointStatus.FAILED
+            ]
+            if not failed_results:
+                return None
+
+            categories = {
+                classify_checkpoint_category(r) for r in failed_results
+            }
+            repairable = categories & set(
+                self._repair_config.repairable_categories
+            )
+            if not repairable:
+                return None
+
+            logger.info(
+                "Pre-merge repair: attempting %s for %s",
+                sorted(repairable), unit.name,
+                extra={"unit_id": unit.id},
+            )
+
+            diagnostics = parse_checkpoint_diagnostics(failed_results)
+            files_to_repair: Dict[Path, str] = {}
+            for gp in gen_paths:
+                if gp.suffix == ".py" and gp.exists():
+                    files_to_repair[gp] = gp.read_text(encoding="utf-8")
+
+            if not files_to_repair:
+                return None
+
+            outcome = run_file_repair(
+                files_to_repair,
+                diagnostics,
+                self._repair_config,
+                self.project_root,
+            )
+
+            if outcome.any_modified:
+                # Write repaired content back in-place (no staging needed)
+                for fpath, content in outcome.repaired_files.items():
+                    fpath.write_text(content, encoding="utf-8")
+
+                # Re-run pre_validate to verify
+                new_result = self.checkpoint.pre_validate(gen_paths)
+                logger.info(
+                    "Pre-merge repair result for %s: %s",
+                    unit.name, new_result.status.value,
+                    extra={"unit_id": unit.id},
+                )
+                return new_result
+
+        except Exception as exc:
+            logger.warning(
+                "Pre-merge repair failed for %s: %s",
+                unit.name, exc,
+                extra={"unit_id": unit.id},
+            )
+
+        return None
+
     def _attempt_repair(
         self,
         results: List[Any],
@@ -915,6 +1006,14 @@ class IntegrationEngine:
                     logger.warning(
                         "Failed to emit pre-validate gate result: %s", gate_exc,
                     )
+                if pre_result.status == CheckpointStatus.FAILED:
+                    # Attempt pre-merge repair before giving up
+                    repaired_result = self._attempt_pre_merge_repair(
+                        gen_paths, unit,
+                    )
+                    if repaired_result is not None:
+                        pre_result = repaired_result
+
                 if pre_result.status == CheckpointStatus.FAILED:
                     error_msg = pre_result.message
                     if pre_result.errors:
