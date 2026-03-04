@@ -563,7 +563,9 @@ class MicroPrimeEngine:
             )
 
         result_text, time_ms, token_usage = self._ollama_agent.generate(
-            prompt, system_prompt=_CODE_GEN_SYSTEM_PROMPT,
+            prompt,
+            system_prompt=_CODE_GEN_SYSTEM_PROMPT,
+            temperature=self._config.temperature,
         )
 
         code = extract_code_from_response(result_text)

@@ -10,7 +10,7 @@ import asyncio
 import logging
 import os
 import time
-from typing import Optional, Tuple
+from typing import Any, Optional, Tuple
 
 from ..models import TokenUsage, GenerateResult
 from ..utils.retry import RetryConfig, RetryError, with_retry
@@ -132,6 +132,7 @@ class GPT4Agent(BaseAgent):
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
     ):
         """
         Make the raw API call to OpenAI.
@@ -145,23 +146,30 @@ class GPT4Agent(BaseAgent):
                 ``{"role": "system", ...}`` message.
             max_tokens: Optional per-call max_tokens override. When provided,
                 takes precedence over the instance-level ``self.max_tokens``.
+            temperature: Optional sampling temperature override. When provided,
+                passed to the API call. If None, the API default is used.
         """
         messages = []
         if system_prompt is not None:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        return await self.async_client.chat.completions.create(
-            model=self.model,
-            max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
-            messages=messages,
-        )
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+            "messages": messages,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
+        return await self.async_client.chat.completions.create(**kwargs)
 
     async def agenerate(
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
     ) -> GenerateResult:
         """
         Generate response using GPT-4 async API.
@@ -177,6 +185,8 @@ class GPT4Agent(BaseAgent):
             max_tokens: Optional per-call max_tokens override. When provided,
                 takes precedence over the instance-level ``self.max_tokens``.
                 This is thread-safe — it avoids mutating the shared agent.
+            temperature: Optional sampling temperature override. When provided,
+                passed to the API call. If None, the API default is used.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -196,11 +206,13 @@ class GPT4Agent(BaseAgent):
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
                 response = await make_call(
-                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    prompt, system_prompt=effective_system_prompt,
+                    max_tokens=max_tokens, temperature=temperature,
                 )
             else:
                 response = await self._make_api_call(
-                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    prompt, system_prompt=effective_system_prompt,
+                    max_tokens=max_tokens, temperature=temperature,
                 )
 
         except RetryError as e:
@@ -577,6 +589,7 @@ class OpenAICompatibleAgent(BaseAgent):
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
     ):
         """
         Make the raw API call to the OpenAI-compatible endpoint.
@@ -590,23 +603,30 @@ class OpenAICompatibleAgent(BaseAgent):
                 ``{"role": "system", ...}`` message.
             max_tokens: Optional per-call max_tokens override. When provided,
                 takes precedence over the instance-level ``self.max_tokens``.
+            temperature: Optional sampling temperature override. When provided,
+                passed to the API call. If None, the API default is used.
         """
         messages = []
         if system_prompt is not None:
             messages.append({"role": "system", "content": system_prompt})
         messages.append({"role": "user", "content": prompt})
 
-        return await self.async_client.chat.completions.create(
-            model=self.model,
-            max_tokens=max_tokens if max_tokens is not None else self.max_tokens,
-            messages=messages,
-        )
+        kwargs: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens if max_tokens is not None else self.max_tokens,
+            "messages": messages,
+        }
+        if temperature is not None:
+            kwargs["temperature"] = temperature
+
+        return await self.async_client.chat.completions.create(**kwargs)
 
     async def agenerate(
         self,
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
     ) -> GenerateResult:
         """
         Generate response using OpenAI-compatible API (async).
@@ -622,6 +642,8 @@ class OpenAICompatibleAgent(BaseAgent):
             max_tokens: Optional per-call max_tokens override. When provided,
                 takes precedence over the instance-level ``self.max_tokens``.
                 This is thread-safe — it avoids mutating the shared agent.
+            temperature: Optional sampling temperature override. When provided,
+                passed to the API call. If None, the API default is used.
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -640,11 +662,13 @@ class OpenAICompatibleAgent(BaseAgent):
             if self.retry_config is not None:
                 make_call = with_retry(self.retry_config)(self._make_api_call)
                 response = await make_call(
-                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    prompt, system_prompt=effective_system_prompt,
+                    max_tokens=max_tokens, temperature=temperature,
                 )
             else:
                 response = await self._make_api_call(
-                    prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    prompt, system_prompt=effective_system_prompt,
+                    max_tokens=max_tokens, temperature=temperature,
                 )
 
             end_time = time.time()
