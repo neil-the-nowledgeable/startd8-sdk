@@ -28,6 +28,7 @@ class TestRouteFailures:
         route = route_failures(diags, config)
         assert "missing_import" in route.matched_patterns
         assert "import_completion" in route.steps
+        assert "duplicate_removal" in route.steps
         assert "ast_validate" in route.steps
 
     def test_lint_error_routes_correctly(self):
@@ -71,7 +72,7 @@ class TestRouteFailures:
         assert "syntax_error" in route.matched_patterns
         assert "missing_import" in route.matched_patterns
         # Steps deduplicated and in canonical order
-        assert route.steps == ["fence_strip", "future_import_reorder", "indent_normalize", "import_completion", "ast_validate"]
+        assert route.steps == ["fence_strip", "future_import_reorder", "indent_normalize", "import_completion", "duplicate_removal", "ast_validate"]
 
     def test_canonical_step_order(self):
         """Steps always appear in canonical order regardless of input order."""
@@ -81,7 +82,7 @@ class TestRouteFailures:
         ]
         config = RepairConfig()
         route = route_failures(diags, config)
-        expected_order = ["fence_strip", "future_import_reorder", "indent_normalize", "import_completion", "ast_validate"]
+        expected_order = ["fence_strip", "future_import_reorder", "indent_normalize", "import_completion", "duplicate_removal", "ast_validate"]
         assert route.steps == expected_order
 
     def test_disabled_category_not_routed(self):

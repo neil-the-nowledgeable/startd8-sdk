@@ -13,6 +13,7 @@ from pathlib import Path
 from startd8.forward_manifest import (
     ContractCategory,
     ContractConfidence,
+    ForwardImportSpec,
     InterfaceContract,
 )
 from startd8.forward_manifest_extractor import (
@@ -20,6 +21,8 @@ from startd8.forward_manifest_extractor import (
     HumanYamlExtractor,
     ManifestMerger,
     ProtoExtractor,
+    _compute_bound_names,
+    _deduplicate_imports_by_bound_name,
     _make_contract,
     _parse_python_signature,
     extract_forward_contracts,
@@ -392,3 +395,58 @@ shared_contracts:
         assert manifest.contracts == []
         assert manifest.file_specs == {}
         assert "EXTRACT" in manifest.stages_completed
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Group 7: Semantic Import Dedup (REQ-FLCM-P4-IMPORT-DEDUP)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestComputeBoundNames:
+    """Tests for _compute_bound_names helper."""
+
+    def test_bare_import(self):
+        spec = ForwardImportSpec(kind="import", module="demo_pb2")
+        assert _compute_bound_names(spec) == {"demo_pb2"}
+
+    def test_dotted_import(self):
+        spec = ForwardImportSpec(kind="import", module="os.path")
+        assert _compute_bound_names(spec) == {"os"}
+
+    def test_from_import(self):
+        spec = ForwardImportSpec(kind="from", module="flask", names=["Flask"])
+        assert _compute_bound_names(spec) == {"Flask"}
+
+    def test_alias(self):
+        spec = ForwardImportSpec(kind="import", module="foo", alias="bar")
+        assert _compute_bound_names(spec) == {"bar"}
+
+    def test_from_import_multiple_names(self):
+        spec = ForwardImportSpec(kind="from", module="typing", names=["Optional", "List"])
+        assert _compute_bound_names(spec) == {"Optional", "List"}
+
+
+class TestDeduplicateImportsByBoundName:
+    """Tests for _deduplicate_imports_by_bound_name helper."""
+
+    def test_semantic_duplicate_from_wins_over_bare(self):
+        """from-import replaces bare import when they bind the same name."""
+        bare = ForwardImportSpec(kind="import", module="demo_pb2")
+        from_imp = ForwardImportSpec(kind="from", module="pkg", names=["demo_pb2"])
+        result = _deduplicate_imports_by_bound_name([bare, from_imp])
+        assert len(result) == 1
+        assert result[0].kind == "from"
+
+    def test_no_conflict(self):
+        imp1 = ForwardImportSpec(kind="import", module="os")
+        imp2 = ForwardImportSpec(kind="from", module="pathlib", names=["Path"])
+        result = _deduplicate_imports_by_bound_name([imp1, imp2])
+        assert len(result) == 2
+
+    def test_same_kind_first_wins(self):
+        """Two from-imports binding same name → first kept."""
+        imp1 = ForwardImportSpec(kind="from", module="pkg1", names=["Foo"])
+        imp2 = ForwardImportSpec(kind="from", module="pkg2", names=["Foo"])
+        result = _deduplicate_imports_by_bound_name([imp1, imp2])
+        assert len(result) == 1
+        assert result[0].module == "pkg1"

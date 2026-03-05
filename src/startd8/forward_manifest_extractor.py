@@ -1002,6 +1002,9 @@ class SourceReconciler:
         merged_elements.sort(key=lambda e: (e.parent_class or "", e.name))
         merged_imports.sort(key=lambda i: (i.module, tuple(sorted(i.names))))
 
+        # REQ-FLCM-P4: Semantic dedup by bound Python name
+        merged_imports = _deduplicate_imports_by_bound_name(merged_imports)
+
         # [R2-S4] Frozen model — create new ForwardFileSpec
         new_file_spec = ForwardFileSpec(
             file=relpath,
@@ -1010,6 +1013,87 @@ class SourceReconciler:
             dependencies=merged_deps,
         )
         manifest.file_specs[relpath] = new_file_spec
+
+
+def _compute_bound_names(spec: "ForwardImportSpec") -> set[str]:
+    """Compute the Python names an import binds into scope.
+
+    - ``kind="import"`` → ``{alias}`` or ``{module.split(".")[0]}``
+    - ``kind="from"`` → ``{alias}`` or ``set(names)``
+    """
+    if spec.alias:
+        return {spec.alias}
+    if spec.kind == "import":
+        return {spec.module.split(".")[0]}
+    # kind == "from"
+    return set(spec.names) if spec.names else {spec.module.split(".")[-1]}
+
+
+def _deduplicate_imports_by_bound_name(
+    imports: list["ForwardImportSpec"],
+) -> list["ForwardImportSpec"]:
+    """Post-pass dedup: remove imports that bind already-claimed Python names.
+
+    When a bare ``import`` and a ``from`` import bind the same name,
+    the ``from`` import wins (more specific).  Otherwise first-wins.
+
+    For multi-name ``from`` imports where only *some* names conflict,
+    the entire import is kept (novel names still need it).
+    """
+    # seen: bound_name → index into `result` list
+    seen: dict[str, int] = {}
+    result: list["ForwardImportSpec"] = []
+
+    for spec in imports:
+        bound = _compute_bound_names(spec)
+
+        # Partition bound names into novel vs conflicting
+        novel_names = {b for b in bound if b not in seen}
+        conflict_names = bound - novel_names
+
+        if not conflict_names:
+            # All names are novel — keep as-is
+            result_idx = len(result)
+            result.append(spec)
+            for bname in bound:
+                seen[bname] = result_idx
+            continue
+
+        if not novel_names:
+            # All names conflict — check if from-import should replace bare
+            # Only replace when *every* conflicting name points to a bare import
+            replace_indices: set[int] = set()
+            should_replace = spec.kind == "from"
+            if should_replace:
+                for bname in conflict_names:
+                    prev_idx = seen[bname]
+                    if result[prev_idx].kind == "import":
+                        replace_indices.add(prev_idx)
+                    else:
+                        should_replace = False
+                        break
+
+            if should_replace and replace_indices:
+                # Remove previous bare-import entries (by marking None, compact later)
+                for ri in replace_indices:
+                    result[ri] = None  # type: ignore[assignment]
+                result_idx = len(result)
+                result.append(spec)
+                for bname in bound:
+                    seen[bname] = result_idx
+            # else: first-wins — discard current
+            continue
+
+        # Mixed: some names conflict, some are novel.
+        # Keep the import for its novel names; conflicting names are harmless
+        # at the FLCM level (the repair step handles actual code dedup).
+        result_idx = len(result)
+        result.append(spec)
+        for bname in novel_names:
+            seen[bname] = result_idx
+
+    # Compact: remove None entries left by replacements
+    return [s for s in result if s is not None]
 
 
 def _match_design_section(

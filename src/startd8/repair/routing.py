@@ -11,8 +11,10 @@ from typing import TYPE_CHECKING, List
 from .models import Diagnostic, RepairRoute
 from .steps import (
     AstValidateStep,
+    DuplicateRemovalStep,
     ErrorDrivenImportCompletion,
     FenceStripStep,
+    FutureImportReorderStep,
     IndentNormalizeStep,
 )
 
@@ -24,23 +26,27 @@ if TYPE_CHECKING:
 # regardless of which diagnostics matched them.
 _CANONICAL_ORDER = [
     "fence_strip",
+    "future_import_reorder",
     "indent_normalize",
     "import_completion",
+    "duplicate_removal",
     "ast_validate",
 ]
 
 # Routing table: category → (matched_pattern, step_names, confidence)
 _ROUTING_TABLE: list[tuple[str, str, list[str], str]] = [
-    ("syntax", "syntax_error", ["fence_strip", "indent_normalize", "ast_validate"], "HIGH"),
-    ("import", "missing_import", ["import_completion", "ast_validate"], "HIGH"),
-    ("lint", "lint_violation", ["fence_strip", "indent_normalize", "import_completion", "ast_validate"], "MEDIUM"),
+    ("syntax", "syntax_error", ["fence_strip", "future_import_reorder", "indent_normalize", "ast_validate"], "HIGH"),
+    ("import", "missing_import", ["import_completion", "duplicate_removal", "ast_validate"], "HIGH"),
+    ("lint", "lint_violation", ["fence_strip", "future_import_reorder", "indent_normalize", "import_completion", "duplicate_removal", "ast_validate"], "MEDIUM"),
 ]
 
 # Step name → step class constructor
 _STEP_FACTORIES: dict[str, type] = {
     "fence_strip": FenceStripStep,
+    "future_import_reorder": FutureImportReorderStep,
     "indent_normalize": IndentNormalizeStep,
     "import_completion": ErrorDrivenImportCompletion,
+    "duplicate_removal": DuplicateRemovalStep,
     "ast_validate": AstValidateStep,
 }
 

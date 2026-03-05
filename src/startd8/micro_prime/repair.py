@@ -30,6 +30,7 @@ from startd8.logging_config import get_logger
 from startd8.micro_prime.models import RepairAttribution, RepairStepResult
 from startd8.repair.models import ElementContext, RepairContext
 from startd8.repair.steps.ast_validate import AstValidateStep
+from startd8.repair.steps.duplicate_removal import DuplicateRemovalStep
 from startd8.repair.steps.fence_strip import FenceStripStep
 from startd8.repair.steps.future_import_reorder import FutureImportReorderStep
 from startd8.repair.steps.import_completion import ManifestImportCompletion
@@ -44,6 +45,7 @@ _shared_fence_strip = FenceStripStep()
 _shared_future_import_reorder = FutureImportReorderStep()
 _shared_indent_normalize = IndentNormalizeStep()
 _shared_import_completion = ManifestImportCompletion()
+_shared_duplicate_removal = DuplicateRemovalStep()
 _shared_ast_validate = AstValidateStep()
 
 
@@ -335,12 +337,25 @@ def _step_import_completion(
     return _shared_import_completion(code, ctx, Path("<element>"), ec)
 
 
+def _step_duplicate_removal(
+    code: str,
+    element: ForwardElementSpec,
+    file_spec: Optional[ForwardFileSpec] = None,
+) -> RepairStepResult:
+    """Step 8: Remove duplicate imports (REQ-RPL-104).
+
+    Delegates to shared ``DuplicateRemovalStep``.
+    """
+    ctx = RepairContext()
+    return _shared_duplicate_removal(code, ctx, Path("<element>"))
+
+
 def _step_ast_validate(
     code: str,
     element: ForwardElementSpec,
     file_spec: Optional[ForwardFileSpec] = None,
 ) -> RepairStepResult:
-    """Step 8: Final AST validation gate (REQ-MP-405).
+    """Step 9: Final AST validation gate (REQ-MP-405).
 
     Delegates to shared ``AstValidateStep``.
     """
@@ -362,6 +377,7 @@ _REPAIR_STEPS = [
     _step_indent_normalize,
     _step_signature_reconcile,
     _step_import_completion,
+    _step_duplicate_removal,
     _step_ast_validate,
 ]
 
@@ -446,6 +462,9 @@ def build_repair_attribution(
 
         elif r.step_name == "import_completion":
             attr.imports_added = r.metrics.get("imports_added", 0)
+
+        elif r.step_name == "duplicate_removal":
+            attr.imports_removed = r.metrics.get("imports_removed", 0)
 
     return attr
 

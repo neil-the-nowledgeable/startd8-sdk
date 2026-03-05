@@ -12,6 +12,7 @@ from startd8.micro_prime.repair import (
     _build_def_line,
     _step_ast_validate,
     _step_bare_statement_wrap,
+    _step_duplicate_removal,
     _step_fence_strip,
     _step_future_import_reorder,
     _step_import_completion,
@@ -250,7 +251,7 @@ class TestRunRepairPipeline:
         code = "def get_name(self, key: str) -> str:\n    return key"
         repaired, steps = run_repair_pipeline(code, simple_function_element, sample_file_spec)
         assert repaired == code  # Already valid, no changes needed
-        assert len(steps) == 8  # All 8 steps run
+        assert len(steps) == 9  # All 9 steps run
 
     def test_full_pipeline_with_fences(self, simple_function_element, sample_file_spec):
         code = '```python\ndef get_name(self, key: str) -> str:\n    return key\n```'
@@ -274,7 +275,7 @@ class TestRunRepairPipeline:
         step_names = [s.step_name for s in steps]
         assert "fence_strip" in step_names
         assert "ast_validate" in step_names
-        assert len(step_names) == 8
+        assert len(step_names) == 9
 
 
 class TestBuildDefLine:
@@ -440,6 +441,18 @@ class TestBuildRepairAttribution:
         assert attr.trimmed is True
         assert attr.nodes_removed == 2
         assert attr.indent_source == "strip_first+dedent"
+
+    def test_duplicate_removal_attribution(self):
+        steps = [
+            RepairStepResult(
+                step_name="duplicate_removal",
+                modified=True,
+                code="import os\n",
+                metrics={"imports_removed": 2},
+            ),
+        ]
+        attr = build_repair_attribution(steps)
+        assert attr.imports_removed == 2
 
     def test_import_completion_attribution(self):
         steps = [
