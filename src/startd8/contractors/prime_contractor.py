@@ -599,6 +599,8 @@ class PrimeContractorWorkflow:
         # Kaizen prompt capture (REQ-KZ-200) — off by default, enabled via --kaizen flag
         self._kaizen_enabled: bool = False
         self._kaizen_prompt_dir: Optional[Path] = None
+        # Kaizen config (REQ-KZ-502) — loaded from kaizen-config.json when --kaizen-config is set
+        self._kaizen_config: Optional[dict] = None
         # Validation overrides (Phase 5: --validate / --no-validate / --strict-validation)
         self._validation_override: Optional[bool] = None  # None = use mode default
         self.strict_validation: bool = False
@@ -1965,6 +1967,86 @@ class PrimeContractorWorkflow:
             json.dumps(metadata, indent=2, default=str), encoding="utf-8",
         )
 
+    # -----------------------------------------------------------------------
+    # Kaizen: Config Loading and Hint Injection (REQ-KZ-502)
+    # -----------------------------------------------------------------------
+
+    #: Maximum prompt hints to inject per phase (REQ-KZ-502 dedup/cap)
+    _MAX_KAIZEN_HINTS_PER_PHASE: int = 5
+
+    def _load_kaizen_config(self, path: str) -> Optional[dict]:
+        """Load and validate kaizen-config.json. Fail-open (returns None on error).
+
+        Validates schema_version == '1.0' and that prompt_hints is a list.
+        Logs a warning and returns None on any error so that the workflow
+        continues as if no config were present (REQ-KZ-502 fail-open).
+        """
+        try:
+            config = json.loads(Path(path).read_text(encoding="utf-8"))
+            if not isinstance(config, dict):
+                logger.warning("Kaizen config must be a JSON object — ignoring: %s", path)
+                return None
+            if config.get("schema_version") != "1.0":
+                logger.warning(
+                    "Kaizen config schema_version != '1.0' — ignoring: %s (got %s)",
+                    path, config.get("schema_version"),
+                )
+                return None
+            if "prompt_hints" in config and not isinstance(config["prompt_hints"], list):
+                logger.warning("Kaizen config prompt_hints must be a list — ignoring: %s", path)
+                return None
+            logger.info("Kaizen config loaded: %s (%d hints)", path, len(config.get("prompt_hints") or []))
+            return config
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Kaizen config invalid — proceeding without it: %s", exc)
+            return None
+
+    def _apply_kaizen_hints(self, gen_context: Dict[str, Any]) -> None:
+        """Inject kaizen prompt hints from _kaizen_config into gen_context (REQ-KZ-502).
+
+        Deduplicates by SHA-256 content hash (truncated to 16 hex chars) and
+        caps at _MAX_KAIZEN_HINTS_PER_PHASE hints per phase.  Phase "all" applies
+        to every feature.  Hints are injected as gen_context["kaizen_hints"],
+        a newline-joined bullet list.
+
+        Failures are non-fatal — logged and silently ignored.
+        """
+        if not self._kaizen_config:
+            return
+        try:
+            seen_hashes: set = set()
+            phase_counts: Dict[str, int] = {}
+            hints_collected: list = []
+
+            for h in self._kaizen_config.get("prompt_hints") or []:
+                if not isinstance(h, dict):
+                    continue
+                phase = h.get("phase", "all")
+                hint_text = h.get("hint", "")
+                if not hint_text:
+                    continue
+                # Deduplicate by content hash
+                content_hash = hashlib.sha256(hint_text.encode("utf-8")).hexdigest()[:16]
+                if content_hash in seen_hashes:
+                    continue
+                seen_hashes.add(content_hash)
+                # Per-phase cap
+                count = phase_counts.get(phase, 0)
+                if count >= self._MAX_KAIZEN_HINTS_PER_PHASE:
+                    continue
+                phase_counts[phase] = count + 1
+                hints_collected.append(hint_text)
+
+            if hints_collected:
+                gen_context["kaizen_hints"] = "\n".join(f"- {h}" for h in hints_collected)
+                logger.debug(
+                    "Kaizen: injected %d hint(s) into gen_context for '%s'",
+                    len(hints_collected),
+                    gen_context.get("feature_name", "?"),
+                )
+        except Exception as exc:
+            logger.warning("Kaizen: hint injection failed (non-fatal): %s", exc)
+
     def _persist_kaizen_prompts(
         self,
         feature: "FeatureSpec",
@@ -2516,6 +2598,10 @@ class PrimeContractorWorkflow:
                         exc,
                         exc_info=True,
                     )
+
+            # Kaizen prompt hints injection (REQ-KZ-502) — non-fatal, hints added to gen_context
+            if self._kaizen_config:
+                self._apply_kaizen_hints(gen_context)
 
             result: GenerationResult = generator.generate(task=feature.description, context=gen_context, target_files=feature.target_files)
             if result.success:

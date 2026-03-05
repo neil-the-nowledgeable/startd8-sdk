@@ -264,6 +264,13 @@ def main() -> int:
             "Matched text in captured responses is replaced with [REDACTED]."
         ),
     )
+    parser.add_argument(
+        "--kaizen-config", default=None,
+        help=(
+            "Path to kaizen-config.json for prompt hint injection (REQ-KZ-502). "
+            "Hints in the config are injected into LLM prompts to improve successive runs."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -539,6 +546,10 @@ def main() -> int:
         if args.kaizen_redactions:
             import os as _os
             _os.environ["KAIZEN_REDACTIONS"] = str(Path(args.kaizen_redactions).resolve())
+
+    # Wire Kaizen config hint injection (REQ-KZ-502)
+    if args.kaizen_config:
+        workflow._kaizen_config = workflow._load_kaizen_config(args.kaizen_config)
 
     # Reset failed and blocked features so they are retried.
     # The state file persists FAILED/BLOCKED from prior runs, but the
