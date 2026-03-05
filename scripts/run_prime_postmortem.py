@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -114,6 +115,16 @@ def main():
         default=Path("."),
         help="Output directory for report files.",
     )
+    parser.add_argument(
+        "--emit-metrics",
+        action="store_true",
+        help="Write kaizen-metrics.json alongside postmortem report (REQ-KZ-300).",
+    )
+    parser.add_argument(
+        "--emit-suggestions",
+        action="store_true",
+        help="Write kaizen-suggestions.json alongside postmortem report (REQ-KZ-501).",
+    )
     args = parser.parse_args()
 
     # Discover or use explicit paths
@@ -163,6 +174,12 @@ def main():
         output_dir=str(output_dir),
     )
 
+    if args.emit_metrics:
+        _emit_kaizen_metrics(report, output_dir)
+
+    if args.emit_suggestions:
+        _emit_kaizen_suggestions(report, output_dir)
+
     # Print summary
     print()
     print("=" * 60)
@@ -183,6 +200,185 @@ def main():
     print(f"  Report:   {output_dir}/prime-postmortem-report.json")
     print(f"  Summary:  {output_dir}/prime-postmortem-summary.md")
     print()
+
+
+# ---------------------------------------------------------------------------
+# Kaizen: Metrics emission (REQ-KZ-300)
+# ---------------------------------------------------------------------------
+
+# All 16 RootCause values mapped to prompt hints (REQ-KZ-501 / R2-S6).
+_CAUSE_TO_SUGGESTION: dict[str, dict] = {
+    "duplicate_import": {
+        "phase": "draft",
+        "hint": "Check for existing imports before adding new ones. Deduplicate at file top.",
+    },
+    "unfilled_stub": {
+        "phase": "draft",
+        "hint": "Replace every stub/placeholder with real implementation before returning.",
+    },
+    "scope_corruption": {
+        "phase": "draft",
+        "hint": "Preserve the existing function and class structure. Do not reorganize scopes.",
+    },
+    "phantom_import": {
+        "phase": "draft",
+        "hint": "Validate all imports exist in the target project before referencing them.",
+    },
+    "indentation_error": {
+        "phase": "draft",
+        "hint": "Match the indentation style of the surrounding file exactly.",
+    },
+    "splicer_mismatch": {
+        "phase": "draft",
+        "hint": "Ensure generated code anchors (function/class names) match the target file exactly.",
+    },
+    "tier_escalation": {
+        "phase": "spec",
+        "hint": "Decompose complex features into smaller, independently implementable units.",
+    },
+    "ast_failure": {
+        "phase": "draft",
+        "hint": "Emit syntactically valid Python at all times; run a mental parse check before returning.",
+    },
+    "size_regression": {
+        "phase": "draft",
+        "hint": "Do not generate significantly more lines than the original file; prefer surgical edits.",
+    },
+    "generation_error": {
+        "phase": "draft",
+        "hint": "If generation fails, emit a minimal valid stub rather than an error string.",
+    },
+    "dependency_blocked": {
+        "phase": "spec",
+        "hint": "Declare dependencies explicitly in the spec so blocked features are skipped early.",
+    },
+    "unknown": {
+        "phase": "draft",
+        "hint": "Inspect the failure message and add a targeted fix rather than regenerating the whole file.",
+    },
+}
+
+
+def _extract_top_root_causes(report: object) -> list:
+    """Aggregate root causes from pipeline_attribution stages."""
+    cause_counts: dict[str, int] = {}
+    attribution = getattr(report, "pipeline_attribution", None) or []
+    for attr in attribution:
+        root_causes = getattr(attr, "root_causes", {}) or {}
+        for cause, count in root_causes.items():
+            cause_counts[cause] = cause_counts.get(cause, 0) + count
+    return [
+        {"cause": cause, "count": count}
+        for cause, count in sorted(cause_counts.items(), key=lambda x: -x[1])[:5]
+    ]
+
+
+def _emit_kaizen_metrics(report: object, output_dir: Path) -> None:
+    """Extract standardized Kaizen metrics from post-mortem report (REQ-KZ-300)."""
+    # Read run context from env (set by run-atomic.sh) to avoid shell interpolation.
+    run_id = os.environ.get("KAIZEN_RUN_ID") or getattr(report, "report_id", "")
+    kaizen_enabled = os.environ.get("KAIZEN_ENABLED", "false").lower() == "true"
+    kaizen_source_run = os.environ.get("KAIZEN_SOURCE_RUN", "")
+
+    cost = getattr(report, "cost_summary", None)
+    micro = getattr(report, "micro_prime_analysis", None)
+    total = getattr(report, "total_features", 0) or 0
+    passed = getattr(report, "successful_features", 0) or 0
+
+    # Null-guard pipeline_attribution (R3-S5 / R2-S8)
+    attribution = getattr(report, "pipeline_attribution", None) or []
+    pipeline_attr = [
+        {
+            "stage": str(getattr(a.stage, "value", a.stage)),
+            "failures": a.failure_count,
+        }
+        for a in attribution
+        if getattr(a, "failure_count", 0) > 0
+    ]
+
+    metrics: dict = {
+        "schema_version": "1.0",
+        "run_id": run_id,
+        "timestamp": getattr(report, "timestamp", ""),
+        "route": "prime",
+        "kaizen_enabled": kaizen_enabled,
+        "kaizen_config_source_run": kaizen_source_run,
+        "success_rate": passed / total if total > 0 else 0.0,
+        "pass_count": passed,
+        "fail_count": getattr(report, "failed_features", 0) or 0,
+        "total_features": total,
+        "total_cost_usd": getattr(cost, "total_usd", 0.0) if cost else 0.0,
+        "cost_per_success_usd": (
+            cost.total_usd / max(passed, 1) if cost else 0.0
+        ),
+        "verdict": getattr(report, "aggregate_verdict", ""),
+        "aggregate_score": getattr(report, "aggregate_score", 0.0),
+        "top_root_causes": _extract_top_root_causes(report),
+        "pipeline_attribution": pipeline_attr,
+        "lesson_count": len(getattr(report, "lessons", []) or []),
+    }
+
+    if micro:
+        metrics["micro_prime"] = {
+            "total_elements": micro.total_elements,
+            "successful_elements": micro.successful_elements,
+            "escalated_elements": micro.escalated_elements,
+            "tier_distribution": micro.tier_distribution,
+            "avg_generation_time_ms": micro.avg_generation_time_ms,
+        }
+        if micro.total_elements > 0:
+            metrics["escalation_rate"] = micro.escalated_elements / micro.total_elements
+
+    metrics_path = output_dir / "kaizen-metrics.json"
+    metrics_path.write_text(
+        json.dumps(metrics, indent=2, default=str),
+        encoding="utf-8",
+    )
+    print(f"  Kaizen metrics: {metrics_path}")
+
+
+# ---------------------------------------------------------------------------
+# Kaizen: Suggestion emission (REQ-KZ-501)
+# ---------------------------------------------------------------------------
+
+
+def _emit_kaizen_suggestions(report: object, output_dir: Path) -> None:
+    """Generate structured improvement suggestions from cross-feature patterns (REQ-KZ-501)."""
+    suggestions = []
+    for pattern in getattr(report, "cross_feature_patterns", []) or []:
+        if getattr(pattern, "frequency", 0) < 2:
+            continue
+        # Match on pattern_type (structured field), not description (free text) — avoids false positives.
+        pattern_type = getattr(pattern, "pattern_type", None)
+        template = _CAUSE_TO_SUGGESTION.get(pattern_type)
+        if not template:
+            print(
+                f"  [kaizen] No suggestion template for pattern type '{pattern_type}' — skipping.",
+                file=sys.stderr,
+            )
+            continue
+        suggestions.append({
+            "pattern": getattr(pattern, "description", ""),
+            "pattern_type": pattern_type,
+            "frequency": pattern.frequency,
+            "suggested_action": template["hint"],
+            "config_key": "prompt_hints",
+            "phase": template["phase"],
+            "confidence": "high" if pattern.frequency >= 3 else "medium",
+            "auto_applicable": False,
+        })
+
+    output = {
+        "schema_version": "1.0",
+        "source_run": os.environ.get("KAIZEN_RUN_ID") or getattr(report, "report_id", ""),
+        "suggestions": suggestions,
+    }
+    suggestions_path = output_dir / "kaizen-suggestions.json"
+    suggestions_path.write_text(
+        json.dumps(output, indent=2, default=str),
+        encoding="utf-8",
+    )
+    print(f"  Kaizen suggestions: {suggestions_path} ({len(suggestions)} generated)")
 
 
 if __name__ == "__main__":
