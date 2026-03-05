@@ -883,11 +883,37 @@ class MicroPrimeEngine:
         repair_steps: list[str] = []
         repair_attribution = None
         if self._config.repair_enabled:
-            code, step_results = run_repair_pipeline(code, element, file_spec)
-            repair_steps = [
-                r.step_name for r in step_results if r.modified
-            ]
-            repair_attribution = build_repair_attribution(step_results)
+            repair_result = run_repair_pipeline(
+                code, element, file_spec, skeleton_source=skeleton,
+            )
+            code = repair_result.code
+            repair_steps = repair_result.steps_applied
+            repair_attribution = build_repair_attribution(
+                repair_result.step_results,
+            )
+            if not repair_result.ast_valid:
+                return ElementResult(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.SIMPLE,
+                    classification_reason=reasoning,
+                    success=False,
+                    code=code,
+                    repair_steps_applied=repair_steps,
+                    repair_attribution=repair_attribution,
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    escalation=build_escalation_context(
+                        element_name=element.name,
+                        file_path=file_path,
+                        tier=TierClassification.SIMPLE,
+                        reason=EscalationReason.AST_FAILURE,
+                        detail="AST validation failed after repair",
+                        last_code=code,
+                        last_error=repair_result.last_error or "ast.parse() failed",
+                    ),
+                )
 
         # Structural verification (REQ-MP-512)
         if not _structural_verify(code, element):
