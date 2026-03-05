@@ -362,6 +362,8 @@ class MicroPrimeCodeGenerator:
         # and splice results into the partial skeleton (REQ-MP-505/512).
         element_escalation_cost = 0.0
         element_escalation_count = 0
+        element_escalation_attempt_cost = 0.0
+        element_escalation_attempt_count = 0
         partial_escalation_candidates = [
             fp for fp in target_files
             if fp not in escalated_files
@@ -387,8 +389,11 @@ class MicroPrimeCodeGenerator:
                     if esc_result:
                         total_input += esc_result.input_tokens
                         total_output += esc_result.output_tokens
-                        element_escalation_cost += esc_result.cost_usd
-                        element_escalation_count += 1
+                        element_escalation_attempt_cost += esc_result.cost_usd
+                        element_escalation_attempt_count += 1
+                        if esc_result.success:
+                            element_escalation_cost += esc_result.cost_usd
+                            element_escalation_count += 1
                 except (OSError, ValueError, RuntimeError, TypeError):
                     # Narrow catch per [SDK Leg 11 #28] — let
                     # KeyboardInterrupt / SystemExit propagate.
@@ -438,7 +443,7 @@ class MicroPrimeCodeGenerator:
                 generated_files=generated_files,
                 input_tokens=total_input,
                 output_tokens=total_output,
-                cost_usd=fallback_result.cost_usd + element_escalation_cost,
+                cost_usd=fallback_result.cost_usd + element_escalation_attempt_cost,
                 model=f"micro-prime+{fallback_result.model}",
                 metadata={
                     "micro_prime_files_written": local_file_count,
@@ -456,6 +461,8 @@ class MicroPrimeCodeGenerator:
                     "fallback_cost_usd": fallback_result.cost_usd,
                     "element_escalation_cost_usd": element_escalation_cost,
                     "element_escalation_count": element_escalation_count,
+                    "element_escalation_attempt_cost_usd": element_escalation_attempt_cost,
+                    "element_escalation_attempt_count": element_escalation_attempt_count,
                     "micro_prime_file_results": [
                         _serialize_file_result(fr) for fr in all_file_results
                     ],
@@ -467,10 +474,10 @@ class MicroPrimeCodeGenerator:
             generated_files=generated_files,
             input_tokens=total_input,
             output_tokens=total_output,
-            cost_usd=element_escalation_cost,
+            cost_usd=element_escalation_attempt_cost,
             model=f"{self._config.provider}:{self._config.model}",
             metadata={
-                "micro_prime_only": element_escalation_count == 0,
+                "micro_prime_only": element_escalation_attempt_count == 0,
                 "micro_prime_files_written": local_file_count,
                 "effective_file_count": effective_file_count,
                 "incomplete_files": incomplete_files,
@@ -482,6 +489,8 @@ class MicroPrimeCodeGenerator:
                 "micro_prime_cost_usd": 0.0,
                 "element_escalation_cost_usd": element_escalation_cost,
                 "element_escalation_count": element_escalation_count,
+                "element_escalation_attempt_cost_usd": element_escalation_attempt_cost,
+                "element_escalation_attempt_count": element_escalation_attempt_count,
                 "micro_prime_file_results": [
                     _serialize_file_result(fr) for fr in all_file_results
                 ],
@@ -620,7 +629,10 @@ class MicroPrimeCodeGenerator:
                 tier_totals[tier] += 1
                 total_elements += 1
 
-                template_hit = templates.match(element, file_spec) is not None if templates else False
+                template_hit = (
+                    templates.match(element, file_spec, contracts) is not None
+                    if templates else False
+                )
 
                 # Routing: TRIVIAL with template works without Ollama;
                 # SIMPLE requires Ollama; MODERATE/COMPLEX always escalate.
@@ -895,6 +907,7 @@ class MicroPrimeCodeGenerator:
         skeleton: str,
         escalation_reason: str = "",
         last_error: str = "",
+        retry_context: str = "",
     ) -> Optional[tuple[str, int, int]]:
         """Single direct LLM call for one escalated element.
 
@@ -913,6 +926,8 @@ class MicroPrimeCodeGenerator:
             prompt += f"\n\n# Escalation context: {escalation_reason}"
         if last_error:
             prompt += f"\n# Previous error: {last_error}"
+        if retry_context:
+            prompt += f"\n\n# Retry context: {retry_context}"
 
         agent = self._get_cloud_agent()
         result_text, _time_ms, token_usage = agent.generate(
@@ -963,12 +978,26 @@ class MicroPrimeCodeGenerator:
         if file_spec is None:
             return None
 
-        # Collect escalated element results and their specs
+        # Collect escalated element results and their specs.
+        # Key by (name, parent_class) to avoid collisions when multiple
+        # classes define methods with the same name (e.g. SendOrderConfirmation).
         escalated_elements = []
-        spec_by_name = {e.name: e for e in file_spec.elements}
+        spec_by_key: dict[tuple[str, Optional[str]], ForwardElementSpec] = {
+            (e.name, e.parent_class): e for e in file_spec.elements
+        }
         for er in file_result.element_results:
-            if er.escalation is not None and er.element_name in spec_by_name:
-                escalated_elements.append((er, spec_by_name[er.element_name]))
+            if er.escalation is None:
+                continue
+            key = (er.element_name, er.parent_class)
+            spec = spec_by_key.get(key)
+            if spec is None:
+                # Fallback: match by name only (backward compat)
+                spec = next(
+                    (e for e in file_spec.elements if e.name == er.element_name),
+                    None,
+                )
+            if spec is not None:
+                escalated_elements.append((er, spec))
 
         if not escalated_elements:
             return None
@@ -984,6 +1013,16 @@ class MicroPrimeCodeGenerator:
         total_input = 0
         total_output = 0
         spliced_count = 0
+
+        max_attempts = max(1, int(self._config.cloud_escalation_max_attempts))
+        strategy = (self._config.cloud_escalation_retry_strategy or "same_prompt").lower()
+        if strategy not in ("same_prompt", "append_error"):
+            logger.warning(
+                "Unknown cloud escalation retry strategy '%s' — defaulting to same_prompt",
+                strategy,
+            )
+            strategy = "same_prompt"
+        retry_max_chars = max(0, int(self._config.cloud_escalation_retry_max_chars))
 
         for er, spec in escalated_elements:
             # Class elements don't have raise NotImplementedError stubs —
@@ -1002,42 +1041,81 @@ class MicroPrimeCodeGenerator:
                 )
                 # er.escalation is guaranteed non-None by the filter on L848-850
                 escalation_reason = er.escalation.reason.value
-                last_error = er.escalation.last_error or ""
+                prompt_error = er.escalation.last_error or ""
+                last_error = prompt_error
 
-                gen_result = self._direct_cloud_generate(
-                    er.element_name, spec, file_spec, contracts,
-                    updated_skeleton,
-                    escalation_reason=escalation_reason,
-                    last_error=last_error or "",
-                )
-                if gen_result is None:
-                    logger.debug(
-                        "Cloud generation returned nothing for %s", er.element_name,
+                attempts = 0
+                success = False
+                while attempts < max_attempts and not success:
+                    attempts += 1
+
+                    retry_context = ""
+                    if attempts > 1 and strategy == "append_error":
+                        retry_context = (
+                            f"Retry attempt {attempts}/{max_attempts}. "
+                            f"Previous failure: {last_error or 'unknown'}"
+                        )
+                        if retry_max_chars and len(retry_context) > retry_max_chars:
+                            retry_context = retry_context[:retry_max_chars]
+                    if attempts > 1:
+                        logger.info(
+                            "Cloud escalation retry for %s in %s (attempt %d/%d, strategy=%s)",
+                            er.element_name,
+                            file_path,
+                            attempts,
+                            max_attempts,
+                            strategy,
+                        )
+
+                    gen_result = self._direct_cloud_generate(
+                        er.element_name, spec, file_spec, contracts,
+                        updated_skeleton,
+                        escalation_reason=escalation_reason,
+                        last_error=prompt_error or "",
+                        retry_context=retry_context,
                     )
-                    continue
+                    if gen_result is None:
+                        last_error = "empty_response"
+                        if attempts < max_attempts:
+                            continue
+                        break
 
-                code, inp_tokens, out_tokens = gen_result
-                total_input += inp_tokens
-                total_output += out_tokens
+                    code, inp_tokens, out_tokens = gen_result
+                    total_input += inp_tokens
+                    total_output += out_tokens
 
-                # Try AST extraction first (in case cloud returned full def)
-                kind_str = spec.kind.value
-                if kind_str in _FUNCTION_LIKE_KINDS:
-                    kind_str = "function"
-                extracted = _extract_element_from_generated(
-                    code, er.element_name, kind_str,
-                )
-                splice_source = extracted if extracted is not None else code
+                    # Try AST extraction first (in case cloud returned full def)
+                    kind_str = spec.kind.value
+                    if kind_str in _FUNCTION_LIKE_KINDS:
+                        kind_str = "function"
+                    extracted = _extract_element_from_generated(
+                        code, er.element_name, kind_str,
+                    )
+                    extraction_failed = extracted is None
+                    splice_source = extracted if extracted is not None else code
 
-                spliced = splice_body_into_skeleton(
-                    splice_source, spec, updated_skeleton,
-                )
-                if spliced is not None:
-                    updated_skeleton = spliced
-                    spliced_count += 1
-                else:
+                    spliced = splice_body_into_skeleton(
+                        splice_source, spec, updated_skeleton,
+                    )
+                    if spliced is not None:
+                        updated_skeleton = spliced
+                        spliced_count += 1
+                        success = True
+                        break
+
+                    last_error = "extraction_failed" if extraction_failed else "splice_failed"
+
+                er.cloud_retry_attempts = attempts
+                er.cloud_retry_success = success
+                er.cloud_retry_strategy = strategy
+                er.cloud_retry_last_error = last_error or None
+
+                if not success:
                     logger.debug(
-                        "Splice failed for escalated element %s", er.element_name,
+                        "Cloud escalation failed for %s after %d/%d attempts",
+                        er.element_name,
+                        attempts,
+                        max_attempts,
                     )
             except (OSError, ValueError, RuntimeError, TypeError):
                 logger.warning(

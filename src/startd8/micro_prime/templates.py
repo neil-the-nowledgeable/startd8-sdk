@@ -1,16 +1,22 @@
 """Template Registry for TRIVIAL element generation (REQ-MP-300–304).
 
 Provides deterministic code templates for common patterns like ``__init__``,
-``__repr__``, ``__eq__``, ``__hash__``, constants, and simple properties.
-These bypass LLM generation entirely.
+``__repr__``, ``__eq__``, ``__hash__``, constants, app instances, type aliases,
+and simple properties. These bypass LLM generation entirely.
 """
 
 from __future__ import annotations
 
 import ast
+from dataclasses import dataclass
 from typing import Callable, Optional
 
-from startd8.forward_manifest import ForwardElementSpec, ForwardFileSpec
+from startd8.forward_manifest import (
+    ContractCategory,
+    ForwardElementSpec,
+    ForwardFileSpec,
+    InterfaceContract,
+)
 from startd8.logging_config import get_logger
 from startd8.utils.code_manifest import ElementKind
 
@@ -18,8 +24,59 @@ logger = get_logger(__name__)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Built-in template functions (REQ-MP-301)
+# Template entry + registry helpers (REQ-MP-300)
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+@dataclass(frozen=True)
+class CodeTemplate:
+    """Deterministic code template entry."""
+
+    name: str
+    match_fn: Callable[
+        [ForwardElementSpec, ForwardFileSpec, list[InterfaceContract]],
+        bool,
+    ]
+    render_fn: Callable[
+        [ForwardElementSpec, ForwardFileSpec, list[InterfaceContract]],
+        str,
+    ]
+
+
+@dataclass(frozen=True)
+class TemplateMatch:
+    """Template match result."""
+
+    name: str
+    code: str
+
+
+def _safe_match(
+    template: CodeTemplate,
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+) -> bool:
+    """Call match_fn with guardrails; never raise."""
+    try:
+        return bool(template.match_fn(element, file_spec, contracts))
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Template match_fn failed for %s: %s", template.name, exc)
+        return False
+
+
+def _safe_render(
+    template: CodeTemplate,
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+) -> Optional[str]:
+    """Call render_fn with guardrails; never raise."""
+    try:
+        return template.render_fn(element, file_spec, contracts)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("Template render_fn failed for %s: %s", template.name, exc)
+        return None
 
 
 def _template_init(elem: ForwardElementSpec) -> Optional[str]:
@@ -96,8 +153,108 @@ def _template_property_getter(elem: ForwardElementSpec) -> Optional[str]:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# Template Registry (REQ-MP-300, 302, 303, 304)
+# Template implementations (REQ-MP-301–303)
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+def _coerce_constant_value(value: str) -> str:
+    """Coerce a contract constant_value to a safe Python literal string."""
+    try:
+        parsed = ast.literal_eval(value)
+        return repr(parsed)
+    except Exception:
+        return repr(value)
+
+
+def _find_config_contract(
+    elem: ForwardElementSpec,
+    contracts: list[InterfaceContract],
+) -> Optional[InterfaceContract]:
+    """Find a CONFIG_KEY contract that applies to this element."""
+    for c in contracts:
+        if c.category != ContractCategory.CONFIG_KEY:
+            continue
+        if c.constant_value is None:
+            continue
+        if elem.source_contract_id and c.contract_id == elem.source_contract_id:
+            return c
+        if c.env_var and c.env_var == elem.name:
+            return c
+        binding = c.binding_text or ""
+        desc = c.description or ""
+        if elem.name in binding or elem.name in desc:
+            return c
+    return None
+
+
+def _template_config_constant(
+    elem: ForwardElementSpec,
+    _file: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+) -> Optional[str]:
+    """Generate constant from CONFIG_KEY contract (REQ-MP-301)."""
+    contract = _find_config_contract(elem, contracts)
+    if contract is None:
+        return None
+    rendered = _coerce_constant_value(contract.constant_value or "")
+    annotation = (
+        elem.signature.return_annotation
+        if elem.signature and elem.signature.return_annotation
+        else None
+    )
+    if annotation:
+        return f"{elem.name}: {annotation} = {rendered}"
+    return f"{elem.name} = {rendered}"
+
+
+_APP_INSTANCE_NAMES = {"app", "application", "server", "api"}
+_FRAMEWORK_IMPORTS = {
+    ("flask", "Flask"): "Flask(__name__)",
+    ("fastapi", "FastAPI"): "FastAPI()",
+    ("starlette.applications", "Starlette"): "Starlette()",
+    ("django.core.wsgi", "get_wsgi_application"): "get_wsgi_application()",
+}
+
+
+def _detect_framework_constructor(file_spec: ForwardFileSpec) -> Optional[str]:
+    """Detect framework constructor from imports (REQ-MP-302)."""
+    for imp in file_spec.imports:
+        if imp.kind != "from":
+            continue
+        for name in imp.names:
+            key = (imp.module, name)
+            ctor = _FRAMEWORK_IMPORTS.get(key)
+            if ctor:
+                return ctor
+    return None
+
+
+def _template_app_instance(
+    elem: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    _contracts: list[InterfaceContract],
+) -> Optional[str]:
+    """Generate app/server instance based on framework imports (REQ-MP-302)."""
+    if elem.name.lower() not in _APP_INSTANCE_NAMES:
+        return None
+    ctor = _detect_framework_constructor(file_spec)
+    if ctor is None:
+        return None
+    return f"{elem.name} = {ctor}"
+
+
+def _template_type_alias(
+    elem: ForwardElementSpec,
+    _file: ForwardFileSpec,
+    _contracts: list[InterfaceContract],
+) -> Optional[str]:
+    """Generate a type alias deterministically (REQ-MP-303)."""
+    type_ann = getattr(elem, "type_annotation", None)
+    value_repr = getattr(elem, "value_repr", None)
+    alias = type_ann or value_repr
+    if not alias:
+        return None
+    return f"{elem.name} = {alias}"
 
 # Mapping from dunder method names to template generators
 _DUNDER_TEMPLATES: dict[str, Callable[[ForwardElementSpec], Optional[str]]] = {
@@ -107,6 +264,85 @@ _DUNDER_TEMPLATES: dict[str, Callable[[ForwardElementSpec], Optional[str]]] = {
     "__eq__": _template_eq,
     "__hash__": _template_hash,
 }
+
+
+TEMPLATES: list[CodeTemplate] = [
+    CodeTemplate(
+        name="config_constant",
+        match_fn=lambda e, _f, c: (
+            e.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE)
+            and _find_config_contract(e, c) is not None
+        ),
+        render_fn=lambda e, f, c: _template_config_constant(e, f, c) or "",
+    ),
+    CodeTemplate(
+        name="app_instance",
+        match_fn=lambda e, f, _c: (
+            e.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE)
+            and e.name.lower() in _APP_INSTANCE_NAMES
+            and _detect_framework_constructor(f) is not None
+        ),
+        render_fn=lambda e, f, c: _template_app_instance(e, f, c) or "",
+    ),
+    CodeTemplate(
+        name="type_alias",
+        match_fn=lambda e, _f, _c: (
+            e.kind == ElementKind.TYPE_ALIAS
+            and (getattr(e, "type_annotation", None) or getattr(e, "value_repr", None))
+        ),
+        render_fn=lambda e, f, c: _template_type_alias(e, f, c) or "",
+    ),
+    CodeTemplate(
+        name="property_getter",
+        match_fn=lambda e, _f, _c: e.kind == ElementKind.PROPERTY,
+        render_fn=lambda e, f, c: _template_property_getter(e) or "",
+    ),
+    CodeTemplate(
+        name="dunder_method",
+        match_fn=lambda e, _f, _c: e.name in _DUNDER_TEMPLATES,
+        render_fn=lambda e, f, c: _DUNDER_TEMPLATES[e.name](e) or "",
+    ),
+    CodeTemplate(
+        name="typed_constant_default",
+        match_fn=lambda e, _f, _c: (
+            e.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE)
+            and _template_constant(e) is not None
+        ),
+        render_fn=lambda e, f, c: _template_constant(e) or "",
+    ),
+]
+
+
+def try_template_match(
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+) -> Optional[str]:
+    """Try to match and render a template; return code or None (REQ-MP-300)."""
+    match = try_template_match_with_name(element, file_spec, contracts)
+    return match.code if match else None
+
+
+def try_template_match_with_name(
+    element: ForwardElementSpec,
+    file_spec: ForwardFileSpec,
+    contracts: list[InterfaceContract],
+) -> Optional[TemplateMatch]:
+    """Try to match and render a template; return TemplateMatch or None."""
+    for template in TEMPLATES:
+        if not _safe_match(template, element, file_spec, contracts):
+            continue
+        body = _safe_render(template, element, file_spec, contracts)
+        if not body:
+            continue
+        if not _validate_ast(body, element):
+            logger.warning(
+                "Template output for %s failed AST validation, skipping",
+                element.name,
+            )
+            continue
+        return TemplateMatch(name=template.name, code=body)
+    return None
 
 
 class TemplateRegistry:
@@ -134,7 +370,8 @@ class TemplateRegistry:
         self,
         element: ForwardElementSpec,
         file_spec: Optional[ForwardFileSpec] = None,
-    ) -> Optional[str]:
+        contracts: Optional[list[InterfaceContract]] = None,
+    ) -> Optional[TemplateMatch]:
         """Attempt to match an element to a template.
 
         Returns the generated code body if a template matches and produces
@@ -149,73 +386,50 @@ class TemplateRegistry:
         """
         if not self._enabled:
             return None
-
-        body = self._try_match(element, file_spec)
-        if body is None:
+        if file_spec is None:
             return None
-
-        # REQ-MP-304: Validate output passes ast.parse()
-        if not self._validate_ast(body, element):
-            logger.warning(
-                "Template output for %s failed AST validation, skipping",
-                element.name,
-            )
-            return None
-
-        return body
+        contracts = contracts or []
+        return try_template_match_with_name(element, file_spec, contracts)
 
     def _try_match(
         self,
         element: ForwardElementSpec,
         file_spec: Optional[ForwardFileSpec],
-    ) -> Optional[str]:
-        """Internal matching logic — returns raw body or None."""
-        # Constants and variables (REQ-MP-301)
-        if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
-            return _template_constant(element)
-
-        # Properties (REQ-MP-301)
-        if element.kind == ElementKind.PROPERTY:
-            return _template_property_getter(element)
-
-        # Dunder methods (REQ-MP-301)
-        if element.name in _DUNDER_TEMPLATES:
-            template_fn = _DUNDER_TEMPLATES[element.name]
-            return template_fn(element)
-
+        contracts: list[InterfaceContract],
+    ) -> Optional[CodeTemplate]:
+        """Internal matching logic — returns template or None."""
+        if file_spec is None:
+            return None
+        for template in TEMPLATES:
+            if _safe_match(template, element, file_spec, contracts):
+                return template
         return None
 
-    def _validate_ast(self, body: str, element: ForwardElementSpec) -> bool:
-        """Validate that the template output is valid Python (REQ-MP-304).
-
-        For function/method bodies, wraps in a function definition before parsing.
-        For constants, parses directly.
-        """
-        if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
-            # Constants are full assignment statements
-            return _try_parse(body)
-
-        # Function/method bodies need a wrapper to parse
-        wrapper = "def _check():\n"
-        indented_body = "\n".join(
-            f"    {line}" for line in body.splitlines()
-        )
-        return _try_parse(wrapper + indented_body)
-
-    def is_trivial(self, element: ForwardElementSpec) -> bool:
-        """Check if an element would match a template without generating code.
-
-        Useful for classification without the cost of generation + validation.
-        """
+    def is_trivial(
+        self,
+        element: ForwardElementSpec,
+        file_spec: Optional[ForwardFileSpec] = None,
+        contracts: Optional[list[InterfaceContract]] = None,
+    ) -> bool:
+        """Check if an element would match a template without rendering."""
         if not self._enabled:
             return False
-        if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
-            return True
-        if element.kind == ElementKind.PROPERTY:
-            return True
-        if element.name in _DUNDER_TEMPLATES:
-            return True
-        return False
+        if file_spec is None:
+            return False
+        contracts = contracts or []
+        return self._try_match(element, file_spec, contracts) is not None
+
+
+def _validate_ast(body: str, element: ForwardElementSpec) -> bool:
+    """Validate that the template output is valid Python (REQ-MP-304)."""
+    if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE, ElementKind.TYPE_ALIAS):
+        return _try_parse(body)
+
+    wrapper = "def _check():\n"
+    indented_body = "\n".join(
+        f"    {line}" for line in body.splitlines()
+    )
+    return _try_parse(wrapper + indented_body)
 
 
 def _try_parse(code: str) -> bool:

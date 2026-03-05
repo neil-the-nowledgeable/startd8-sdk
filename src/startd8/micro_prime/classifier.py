@@ -79,7 +79,9 @@ def classify_element(
     cfg = config or MicroPrimeConfig()
 
     # ── TRIVIAL gate: template match (REQ-MP-500a) ──
-    if template_registry and template_registry.is_trivial(element):
+    if template_registry and template_registry.is_trivial(
+        element, file_spec=file_spec, contracts=contracts,
+    ):
         return TierClassification.TRIVIAL, "matches template registry"
 
     # ── Property: almost always simple ──

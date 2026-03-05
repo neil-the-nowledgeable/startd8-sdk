@@ -46,6 +46,7 @@ class MetricsCollector:
                 classification_reason=result.classification_reason,
                 success=result.success,
                 template_used=result.template_used,
+                template_name=result.template_name,
                 repair_steps=result.repair_steps_applied,
                 repair_attribution=result.repair_attribution,
                 generation_time_ms=result.generation_time_ms,

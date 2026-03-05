@@ -59,11 +59,17 @@ class ElementResult:
     tier: TierClassification
     success: bool
     classification_reason: str = ""
+    parent_class: Optional[str] = None
     code: Optional[str] = None
     escalation: Optional[EscalationResult] = None
     template_used: bool = False
+    template_name: Optional[str] = None
     repair_steps_applied: list[str] = field(default_factory=list)
     repair_attribution: Optional[RepairAttribution] = None
+    cloud_retry_attempts: int = 0
+    cloud_retry_success: bool = False
+    cloud_retry_strategy: Optional[str] = None
+    cloud_retry_last_error: Optional[str] = None
     generation_time_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
@@ -126,6 +132,9 @@ class MicroPrimeConfig(BaseModel):
     few_shot_enabled: bool = True
     max_few_shot_examples: int = 2
     escalation_enabled: bool = True
+    cloud_escalation_max_attempts: int = 1
+    cloud_escalation_retry_strategy: str = "same_prompt"
+    cloud_escalation_retry_max_chars: int = 512
     dry_run: bool = False
     # Classifier thresholds
     max_simple_imports: int = 8
@@ -141,6 +150,8 @@ class MicroPrimeConfig(BaseModel):
     decomposition_confidence_threshold: float = 0.6
     class_decompose_enabled: bool = True
     function_chain_enabled: bool = True
+    # Post-generation success criteria (REQ-MP-504)
+    min_element_fill_rate: float = 0.5
 
 
 class MicroPrimeElementMetrics(BaseModel):
@@ -152,6 +163,7 @@ class MicroPrimeElementMetrics(BaseModel):
     success: bool
     classification_reason: str = ""
     template_used: bool = False
+    template_name: Optional[str] = None
     repair_steps: list[str] = Field(default_factory=list)
     repair_attribution: Optional[RepairAttribution] = None
     generation_time_ms: float = 0.0

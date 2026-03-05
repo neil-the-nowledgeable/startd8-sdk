@@ -265,7 +265,9 @@ class MicroPrimeEngine:
 
         # Step 2: Route by tier
         if tier == TierClassification.TRIVIAL:
-            result = self._handle_trivial(element, file_spec, skeleton, file_path, reasoning)
+            result = self._handle_trivial(
+                element, file_spec, skeleton, contracts, file_path, reasoning,
+            )
         elif tier == TierClassification.SIMPLE:
             result = self._handle_simple(
                 element, file_spec, skeleton, contracts, file_path, reasoning,
@@ -293,6 +295,9 @@ class MicroPrimeEngine:
                     detail=f"Tier {tier.value}: {reasoning}",
                 ),
             )
+
+        # Stamp parent_class for downstream spec lookup (e.g. cloud escalation)
+        result.parent_class = element.parent_class
 
         # Step 3: Update circuit breaker and cache based on result
         if result.success:
@@ -769,14 +774,17 @@ class MicroPrimeEngine:
         element: ForwardElementSpec,
         file_spec: ForwardFileSpec,
         skeleton: str,
+        contracts: list[InterfaceContract],
         file_path: str,
         reasoning: str = "",
     ) -> ElementResult:
         """Handle TRIVIAL tier: use template registry."""
-        body = self._templates.match(element, file_spec)
-        if body is None:
+        match = self._templates.match(element, file_spec, contracts)
+        if match is None:
             # Template failed — escalate to SIMPLE
             return self._handle_simple(element, file_spec, skeleton, [], file_path, reasoning)
+
+        body = match.code
 
         # Record as completed for few-shot (REQ-MP-704)
         self._completed.append({
@@ -798,6 +806,7 @@ class MicroPrimeEngine:
             success=True,
             code=body,
             template_used=True,
+            template_name=match.name,
         )
 
     def _handle_simple(
@@ -1027,6 +1036,14 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> bool:
             return True
         return False
 
-    # For functions, just AST validity is sufficient
-    # (the repair pipeline already ensures the def exists)
-    return True
+    # For functions/methods: verify the target name exists in the AST.
+    # This catches cross-contamination where Ollama generates a body for
+    # a different function than the one requested.
+    target = element.name
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name == target:
+                return True
+    # The repair pipeline's bare-statement-wrap may have wrapped the body
+    # under the correct name; if we reach here the name is missing.
+    return False
