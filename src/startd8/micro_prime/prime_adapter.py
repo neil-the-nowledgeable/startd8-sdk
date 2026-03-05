@@ -7,6 +7,7 @@ are delegated to a fallback ``CodeGenerator``.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 from pathlib import Path
@@ -50,6 +51,18 @@ except ImportError:
 # integration engine's _INTEGRATION_SIZE_REGRESSION_THRESHOLD.
 _SIZE_REGRESSION_THRESHOLD = 0.60
 _MIN_EXISTING_LINES = 50
+
+
+def _serialize_file_result(fr: Any) -> dict:
+    """Serialize a FileResult dataclass to dict, truncating code to avoid bloat."""
+    result = dataclasses.asdict(fr)
+    for er in result.get("element_results", []):
+        code = er.get("code")
+        if code and len(code) > 500:
+            er["code"] = code[:500] + "... [truncated]"
+    # Drop filled_skeleton from serialization — too large for metadata
+    result.pop("filled_skeleton", None)
+    return result
 
 
 def _sanitize_for_json(value: Any) -> Any:
@@ -142,6 +155,7 @@ class MicroPrimeCodeGenerator:
         existing_files: Dict[str, str] = context.get("existing_files") or {}
 
         # Process target files through the engine
+        all_file_results: list = []
         generated_files: list[Path] = []
         written_file_paths: set[str] = set()  # relative paths that were successfully written
         total_input = 0
@@ -166,6 +180,7 @@ class MicroPrimeCodeGenerator:
                 file_spec, manifest, skeleton,
                 design_doc_sections=_dds if _dds else None,
             )
+            all_file_results.append(file_result)
 
             if file_result.filled_skeleton:
                 # Size-regression escalation guard: if the filled skeleton is
@@ -279,6 +294,9 @@ class MicroPrimeCodeGenerator:
                     "fallback_elements": escalated_element_count,
                     "micro_prime_cost_usd": 0.0,
                     "fallback_cost_usd": fallback_result.cost_usd,
+                    "micro_prime_file_results": [
+                        _serialize_file_result(fr) for fr in all_file_results
+                    ],
                 },
             )
 
@@ -296,6 +314,9 @@ class MicroPrimeCodeGenerator:
                 "micro_prime_template_hits": template_count,
                 "micro_prime_ollama_generations": ollama_count,
                 "micro_prime_cost_usd": 0.0,
+                "micro_prime_file_results": [
+                    _serialize_file_result(fr) for fr in all_file_results
+                ],
             },
         )
 

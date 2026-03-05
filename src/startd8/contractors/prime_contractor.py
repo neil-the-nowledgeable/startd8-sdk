@@ -1059,7 +1059,13 @@ class PrimeContractorWorkflow:
         Calls queue.save_state() to persist features, then augments the state
         file with execution_mode. This is called after features are queued
         to ensure the mode is persisted for potential resume scenarios.
+
+        In dry-run mode, state is NOT persisted — dry-run should not leave
+        side effects that cause ``--list`` to report tasks as done.
         """
+        if self.dry_run:
+            return
+
         import json
 
         # First, let the queue save its state normally
@@ -1213,6 +1219,7 @@ class PrimeContractorWorkflow:
         self,
         seed_data: Dict[str, Any],
         cli_mode: Optional[str] = None,
+        seed_path: Optional[str] = None,
     ) -> None:
         """Load seed context from raw seed data with mode auto-detection.
 
@@ -1228,7 +1235,12 @@ class PrimeContractorWorkflow:
             seed_data: Raw seed JSON dictionary (from prime-context-seed.json).
             cli_mode: CLI-specified execution mode override ('standalone' or
                 'pipeline'). When None, mode is auto-detected from seed signals.
+            seed_path: Path to the seed file, stashed for postmortem use.
         """
+        # Stash seed path for postmortem requirement matching
+        if seed_path:
+            self._seed_path = str(seed_path)
+
         # Extract context fields
         onboarding = seed_data.get("onboarding") or {}
         architectural_context = seed_data.get("architectural_context") or {}
@@ -2120,6 +2132,10 @@ class PrimeContractorWorkflow:
                 self.total_input_tokens += result.input_tokens
                 self.total_output_tokens += result.output_tokens
                 feature._cost_usd = result.cost_usd  # stash for history
+                if result.metadata:
+                    if feature.metadata is None:
+                        feature.metadata = {}
+                    feature.metadata["_generation_result_metadata"] = result.metadata
                 self.instrumentor.emit_metric('prime_contractor.feature_cost', result.cost_usd, {'feature_name': feature.name, 'model': result.model})
                 logger.info("Code generated for '%s': cost=$%.4f, tokens=%d in / %d out", feature.name, result.cost_usd, result.input_tokens, result.output_tokens, extra={'feature_name': feature.name, 'cost_usd': result.cost_usd, 'input_tokens': result.input_tokens, 'output_tokens': result.output_tokens, 'model': result.model})
                 # Micro Prime dry-run: classification-only, skip integration
@@ -2226,6 +2242,7 @@ class PrimeContractorWorkflow:
                 'success': True,
                 'cost_usd': getattr(feature, '_cost_usd', 0.0),
                 'files': [str(f) for f in result.integrated_files],
+                'generation_metadata': (feature.metadata or {}).get('_generation_result_metadata', {}),
                 'timestamp': datetime.now().isoformat(),
             })
             if self.on_feature_complete:
@@ -2324,7 +2341,7 @@ class PrimeContractorWorkflow:
                 features_succeeded += 1
             else:
                 features_failed += 1
-                self.integration_history.append({'feature_name': feature.name, 'feature_id': feature.id, 'success': False, 'cost_usd': getattr(feature, '_cost_usd', 0.0), 'error': feature.error_message, 'timestamp': datetime.now().isoformat()})
+                self.integration_history.append({'feature_name': feature.name, 'feature_id': feature.id, 'success': False, 'cost_usd': getattr(feature, '_cost_usd', 0.0), 'error': feature.error_message, 'generation_metadata': (feature.metadata or {}).get('_generation_result_metadata', {}), 'timestamp': datetime.now().isoformat()})
                 if stop_on_failure:
                     logger.error("STOPPING: Feature '%s' failed", feature.name, extra={'feature_name': feature.name})
                     break
@@ -2351,6 +2368,19 @@ class PrimeContractorWorkflow:
         # Phase 4: Write generation manifest (pipeline mode only)
         result_dict = {'processed': features_processed, 'succeeded': features_succeeded, 'failed': features_failed, 'progress': self.queue.get_progress(), 'history': self.integration_history, 'total_cost_usd': self.total_cost_usd, 'total_input_tokens': self.total_input_tokens, 'total_output_tokens': self.total_output_tokens}
         self._write_generation_manifest(result_dict)
+
+        # Launch async post-mortem evaluation
+        try:
+            from .prime_postmortem import launch_prime_postmortem_async
+            launch_prime_postmortem_async(
+                result_dict=result_dict,
+                queue=self.queue,
+                seed_path=getattr(self, '_seed_path', None),
+                output_dir=str(self._manifest_path().parent),
+            )
+        except Exception:
+            logger.warning("Prime postmortem launch failed", exc_info=True)
+
         return result_dict
 
     def run_single_feature(self, feature_id: str) -> bool:

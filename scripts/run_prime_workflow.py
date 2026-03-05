@@ -446,7 +446,7 @@ def main() -> int:
     # Re-read required: seed_path may have changed to an enriched version
     # after the auto-enrichment block above.
     seed_data = json.loads(Path(seed_path).read_text(encoding="utf-8"))
-    workflow.load_seed_context(seed_data, cli_mode=args.mode)
+    workflow.load_seed_context(seed_data, cli_mode=args.mode, seed_path=str(seed_path))
     workflow.force_regenerate = args.force_regenerate or args.micro_prime_dry_run
 
     # Wire Micro Prime via workflow API (REQ-MP-710)
