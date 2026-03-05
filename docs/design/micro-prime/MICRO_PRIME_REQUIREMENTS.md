@@ -21,10 +21,12 @@
 8. [Layer 5 — Routing & Integration (REQ-MP-5xx)](#8-layer-5--routing--integration-req-mp-5xx)
 9. [Layer 6 — Observability & Metrics (REQ-MP-6xx)](#9-layer-6--observability--metrics-req-mp-6xx)
 10. [Layer 7 — Quick Wins & Acceleration (REQ-MP-7xx)](#10-layer-7--quick-wins--acceleration-req-mp-7xx)
-11. [Data Flow](#11-data-flow)
-12. [Traceability Matrix](#12-traceability-matrix)
-13. [Verification Strategy](#13-verification-strategy)
-14. [Related Documents](#14-related-documents)
+11. [Layer 8 — Shared Complexity Router (REQ-MP-8xx)](#11-layer-8--shared-complexity-router-req-mp-8xx)
+12. [Layer 9 — Moderate Decomposer (REQ-MP-9xx)](#12-layer-9--moderate-decomposer-req-mp-9xx)
+13. [Data Flow](#13-data-flow)
+14. [Traceability Matrix](#14-traceability-matrix)
+15. [Verification Strategy](#15-verification-strategy)
+16. [Related Documents](#16-related-documents)
 
 ---
 
@@ -93,7 +95,9 @@ The IMPLEMENT phase currently sends all code generation to cloud models regardle
 | Routing & Integration | REQ-MP-5xx | 13 | 0 | 0 | 13 |
 | Observability & Metrics | REQ-MP-6xx | 4 | 0 | 0 | 4 |
 | Quick Wins & Acceleration | REQ-MP-7xx | 9 | 0 | 0 | 9 |
-| **Total** | | **50** | **4** | **1** | **45** |
+| Shared Complexity Router | REQ-MP-8xx | — | 0 | 0 | — |
+| Moderate Decomposer | REQ-MP-9xx | 10 | 0 | 0 | 10 |
+| **Total** | | **60** | **4** | **1** | **55** |
 
 ---
 
@@ -1094,7 +1098,38 @@ Per-element import gate uses three signals: binding constraints referencing exte
 
 ---
 
-## 11. Data Flow
+## 11. Layer 8 — Shared Complexity Router (REQ-MP-8xx)
+
+> Detailed requirements: [`REQ-MP-8xx_SHARED_COMPLEXITY_ROUTER.md`](./REQ-MP-8xx_SHARED_COMPLEXITY_ROUTER.md)
+
+Extracts Artisan's complexity routing into a shared module, creating a unified 4-tier classification system across all code generation paths.
+
+---
+
+## 12. Layer 9 — Moderate Decomposer (REQ-MP-9xx)
+
+> Detailed requirements: [`REQ-MP-9xx_MODERATE_DECOMPOSER.md`](./REQ-MP-9xx_MODERATE_DECOMPOSER.md)
+
+Pre-escalation decomposition of MODERATE elements into SIMPLE sub-elements that Ollama can generate serially. Introduces pluggable decomposition strategies (class decomposition, function chaining) with assembly and verification. Extends the Mottainai principle: don't spend cloud budget on work that can be decomposed and done locally.
+
+### Summary of Requirements
+
+| ID | Name | Priority | Status |
+|----|------|----------|--------|
+| REQ-MP-900 | Moderate Decomposer Module | P0 | planned |
+| REQ-MP-901 | Class Decomposition Strategy | P0 | planned |
+| REQ-MP-902 | Function Decomposition Strategy | P1 | planned |
+| REQ-MP-903 | Engine Integration — `_handle_moderate` | P0 | planned |
+| REQ-MP-904 | Assembly Strategies | P0 | planned |
+| REQ-MP-905 | Synthetic Element Spec Construction | P1 | planned |
+| REQ-MP-906 | Decomposition Metrics and Observability | P1 | planned |
+| REQ-MP-907 | Decomposition Strategy Registry | P1 | planned |
+| REQ-MP-908 | Configuration | P2 | planned |
+| REQ-MP-909 | Prime Adapter Integration | P0 | planned |
+
+---
+
+## 13. Data Flow
 
 ### 11.1 Dual Entry Points
 
@@ -1173,7 +1208,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 12. Traceability Matrix
+## 14. Traceability Matrix
 
 | Requirement | Implementation File | Test File | Status |
 |------------|-------------------|-----------|--------|
@@ -1230,7 +1265,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 13. Verification Strategy
+## 15. Verification Strategy
 
 ### 13.1 Experiment Rounds (Pre-Integration)
 
@@ -1261,7 +1296,7 @@ MicroPrimeEngine.process_elements()
 
 ---
 
-## 14. Related Documents
+## 16. Related Documents
 
 | Document | Relationship |
 |----------|-------------|

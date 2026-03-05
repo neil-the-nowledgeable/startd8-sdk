@@ -143,6 +143,94 @@ def complex_function_element() -> ForwardElementSpec:
 
 
 @pytest.fixture
+def class_element_with_methods() -> ForwardElementSpec:
+    """A class element whose methods are separate elements."""
+    return ForwardElementSpec(
+        kind=ElementKind.CLASS,
+        name="CustomJsonFormatter",
+        bases=["logging.Formatter"],
+        docstring_hint=(
+            "Formats log records as single-line JSON objects "
+            "with timestamp, severity, name, and message fields."
+        ),
+    )
+
+
+@pytest.fixture
+def class_file_spec(class_element_with_methods) -> ForwardFileSpec:
+    """File spec with a class + its methods as separate elements."""
+    return ForwardFileSpec(
+        file="src/emailservice/logger.py",
+        imports=[
+            ForwardImportSpec(kind="import", module="logging"),
+            ForwardImportSpec(kind="import", module="json"),
+            ForwardImportSpec(kind="from", module="datetime", names=["datetime"]),
+        ],
+        elements=[
+            class_element_with_methods,
+            ForwardElementSpec(
+                kind=ElementKind.METHOD,
+                name="add_fields",
+                signature=Signature(
+                    params=[
+                        Param(name="self"),
+                        Param(name="log_record"),
+                        Param(name="record"),
+                        Param(name="message_dict"),
+                    ],
+                    return_annotation="None",
+                ),
+                parent_class="CustomJsonFormatter",
+            ),
+            ForwardElementSpec(
+                kind=ElementKind.METHOD,
+                name="format",
+                signature=Signature(
+                    params=[
+                        Param(name="self"),
+                        Param(name="record", annotation="logging.LogRecord"),
+                    ],
+                    return_annotation="str",
+                ),
+                parent_class="CustomJsonFormatter",
+            ),
+        ],
+    )
+
+
+@pytest.fixture
+def class_skeleton() -> str:
+    """Skeleton for the logger file with class + methods."""
+    return '''# [STARTD8-SKELETON]
+import logging
+import json
+from datetime import datetime
+
+class CustomJsonFormatter(logging.Formatter):
+    """Formats log records as single-line JSON objects."""
+    raise NotImplementedError
+
+    def add_fields(self, log_record, record, message_dict) -> None:
+        """Add custom fields."""
+        raise NotImplementedError
+
+    def format(self, record: logging.LogRecord) -> str:
+        """Format a log record."""
+        raise NotImplementedError
+'''
+
+
+@pytest.fixture
+def class_manifest(class_file_spec) -> ForwardManifest:
+    """A manifest for the class decomposition test."""
+    return ForwardManifest(
+        schema_version="1.0.0",
+        file_specs={"src/emailservice/logger.py": class_file_spec},
+        contracts=[],
+    )
+
+
+@pytest.fixture
 def sample_file_spec() -> ForwardFileSpec:
     """A sample file spec with imports and elements."""
     return ForwardFileSpec(

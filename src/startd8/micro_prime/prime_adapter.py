@@ -7,6 +7,7 @@ are delegated to a fallback ``CodeGenerator``.
 
 from __future__ import annotations
 
+import ast
 import dataclasses
 import json
 import os
@@ -15,12 +16,27 @@ from typing import Any, Dict, List, Optional
 from urllib.error import URLError
 from urllib.request import urlopen
 
-from startd8.contractors.protocols import CodeGenerator, GenerationResult
-from startd8.forward_manifest import ForwardManifest
+from startd8.agents.base import BaseAgent
+from startd8.contractors.protocols import (
+    CodeGenerator,
+    DRAFT_MODEL_CLAUDE_HAIKU,
+    GenerationResult,
+)
+from startd8.forward_manifest import (
+    ForwardElementSpec,
+    ForwardFileSpec,
+    ForwardManifest,
+    InterfaceContract,
+)
 from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element
-from startd8.micro_prime.engine import MicroPrimeEngine
-from startd8.micro_prime.models import MicroPrimeConfig, TierClassification
+from startd8.micro_prime.engine import MicroPrimeEngine, _CODE_GEN_SYSTEM_PROMPT
+from startd8.micro_prime.models import (
+    EscalationReason,
+    FileResult,
+    MicroPrimeConfig,
+    TierClassification,
+)
 
 logger = get_logger(__name__)
 
@@ -51,6 +67,13 @@ except ImportError:
 # integration engine's _INTEGRATION_SIZE_REGRESSION_THRESHOLD.
 _SIZE_REGRESSION_THRESHOLD = 0.60
 _MIN_EXISTING_LINES = 50
+
+# ElementKind values that map to ast.FunctionDef / ast.AsyncFunctionDef
+# rather than ast.ClassDef.  Used by _extract_element_from_generated and
+# _escalate_elements_to_cloud to translate manifest kinds to AST node types.
+_FUNCTION_LIKE_KINDS = frozenset({
+    "function", "async_function", "method", "async_method", "property",
+})
 
 
 def _serialize_file_result(fr: Any) -> dict:
@@ -88,6 +111,43 @@ def _sanitize_for_json(value: Any) -> Any:
     return value
 
 
+def _extract_element_from_generated(
+    source: str, element_name: str, element_kind: str,
+) -> Optional[str]:
+    """Extract a named function/class from *source* using AST.
+
+    Returns the source lines for the matching element (including the def/class
+    line), suitable for feeding into ``splice_body_into_skeleton()``.  Returns
+    ``None`` if the element cannot be found or *source* fails to parse.
+
+    Args:
+        source: Complete Python source text (e.g. fallback-generated file).
+        element_name: Name of the function or class to extract.
+        element_kind: ``"class"`` for ClassDef, or any value in
+            ``_FUNCTION_LIKE_KINDS`` for FunctionDef/AsyncFunctionDef.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+
+    target_types: tuple[type, ...] = (
+        (ast.ClassDef,) if element_kind == "class"
+        else (ast.FunctionDef, ast.AsyncFunctionDef)
+    )
+
+    # ast.walk visits in no guaranteed order.  This is acceptable because
+    # fallback-generated files are typically flat (no duplicate names).
+    source_lines = source.splitlines()
+    for node in ast.walk(tree):
+        if isinstance(node, target_types) and node.name == element_name:
+            start = node.lineno - 1
+            end = node.end_lineno or len(source_lines)
+            return "\n".join(source_lines[start:end])
+
+    return None
+
+
 class MicroPrimeCodeGenerator:
     """``CodeGenerator`` implementation using the Micro Prime engine.
 
@@ -101,6 +161,10 @@ class MicroPrimeCodeGenerator:
         manifest: Forward manifest for element metadata.
         skeletons: Dict of file path -> skeleton content.
         output_dir: Directory for writing generated files.  Defaults to cwd.
+        cloud_agent_spec: Optional agent spec (e.g. ``"anthropic:claude-haiku-4-5-20251001"``)
+            for direct per-element cloud escalation.  When set, escalated elements
+            use a single LLM call instead of the full fallback pipeline.  Falls back
+            to ``fallback.drafter_agent`` or ``DRAFT_MODEL_CLAUDE_HAIKU``.
     """
 
     def __init__(
@@ -110,6 +174,7 @@ class MicroPrimeCodeGenerator:
         manifest: Optional[ForwardManifest] = None,
         skeletons: Optional[dict[str, str]] = None,
         output_dir: Optional[Path] = None,
+        cloud_agent_spec: Optional[str] = None,
     ) -> None:
         self._config = config or MicroPrimeConfig()
         self._fallback = fallback
@@ -118,6 +183,8 @@ class MicroPrimeCodeGenerator:
         self._output_dir = output_dir or Path(".")
         self._engine = MicroPrimeEngine(config=self._config)
         self._ollama_available: Optional[bool] = None
+        self._cloud_agent_spec = cloud_agent_spec
+        self._cloud_agent: Optional[BaseAgent] = None
 
     def generate(
         self,
@@ -168,6 +235,7 @@ class MicroPrimeCodeGenerator:
 
         # Process target files through the engine
         all_file_results: list = []
+        file_results_by_path: Dict[str, Any] = {}
         generated_files: list[Path] = []
         written_file_paths: set[str] = set()  # relative paths that were successfully written
         total_input = 0
@@ -177,6 +245,8 @@ class MicroPrimeCodeGenerator:
         template_count = 0
         ollama_count = 0
         escalated_element_count = 0
+        decomposed_count = 0
+        decomposition_failure_count = 0
 
         for file_path in target_files:
             file_spec = manifest.file_specs.get(file_path)
@@ -193,6 +263,7 @@ class MicroPrimeCodeGenerator:
                 design_doc_sections=_dds if _dds else None,
             )
             all_file_results.append(file_result)
+            file_results_by_path[file_path] = file_result
 
             if file_result.filled_skeleton:
                 # Size-regression escalation guard: if the filled skeleton is
@@ -239,6 +310,10 @@ class MicroPrimeCodeGenerator:
                         ollama_count += 1
                 if er.escalation is not None:
                     escalated_element_count += 1
+                    if er.escalation.reason == EscalationReason.DECOMPOSITION_FAILED:
+                        decomposition_failure_count += 1
+                if er.decomposition_metadata is not None:
+                    decomposed_count += 1
 
             # OTel metrics (REQ-MP-705)
             if _elements_local_counter is not None:
@@ -280,6 +355,47 @@ class MicroPrimeCodeGenerator:
             partial_files,
         )
 
+        # Element-level escalation: for files where SOME elements succeeded
+        # but others were escalated, delegate escalated elements to cloud
+        # and splice results into the partial skeleton (REQ-MP-505/512).
+        element_escalation_cost = 0.0
+        element_escalation_count = 0
+        partial_escalation_candidates = [
+            fp for fp in target_files
+            if fp not in escalated_files
+            and (fr := file_results_by_path.get(fp))
+            and fr.escalated_count > 0 and fr.success_count > 0
+        ]
+        cloud_escalation_available = (
+            self._cloud_agent_spec is not None
+            or self._fallback is not None
+        )
+        if partial_escalation_candidates and not cloud_escalation_available:
+            logger.debug(
+                "Skipping element-level escalation for %d file(s) — no cloud agent or fallback configured",
+                len(partial_escalation_candidates),
+            )
+        if cloud_escalation_available:
+            for fp in partial_escalation_candidates:
+                fr = file_results_by_path[fp]
+                try:
+                    esc_result = self._escalate_elements_to_cloud(
+                        fp, fr, task, context, manifest,
+                    )
+                    if esc_result:
+                        total_input += esc_result.input_tokens
+                        total_output += esc_result.output_tokens
+                        element_escalation_cost += esc_result.cost_usd
+                        element_escalation_count += 1
+                except (OSError, ValueError, RuntimeError, TypeError):
+                    # Narrow catch per [SDK Leg 11 #28] — let
+                    # KeyboardInterrupt / SystemExit propagate.
+                    logger.warning(
+                        "Element-level cloud escalation failed for %s, "
+                        "keeping partial skeleton",
+                        fp, exc_info=True,
+                    )
+
         # Mottainai: only delegate files that had escalations to the fallback.
         # Files where all elements were handled locally are kept as-is.
         if escalated_files and self._fallback is not None:
@@ -294,7 +410,7 @@ class MicroPrimeCodeGenerator:
                 generated_files=generated_files,
                 input_tokens=total_input,
                 output_tokens=total_output,
-                cost_usd=fallback_result.cost_usd,
+                cost_usd=fallback_result.cost_usd + element_escalation_cost,
                 model=f"micro-prime+{fallback_result.model}",
                 metadata={
                     "micro_prime_files_written": local_file_count,
@@ -304,8 +420,12 @@ class MicroPrimeCodeGenerator:
                     "micro_prime_template_hits": template_count,
                     "micro_prime_ollama_generations": ollama_count,
                     "fallback_elements": escalated_element_count,
+                    "micro_prime_decomposed_count": decomposed_count,
+                    "micro_prime_decomposition_failures": decomposition_failure_count,
                     "micro_prime_cost_usd": 0.0,
                     "fallback_cost_usd": fallback_result.cost_usd,
+                    "element_escalation_cost_usd": element_escalation_cost,
+                    "element_escalation_count": element_escalation_count,
                     "micro_prime_file_results": [
                         _serialize_file_result(fr) for fr in all_file_results
                     ],
@@ -317,15 +437,19 @@ class MicroPrimeCodeGenerator:
             generated_files=generated_files,
             input_tokens=total_input,
             output_tokens=total_output,
-            cost_usd=0.0,
+            cost_usd=element_escalation_cost,
             model=f"{self._config.provider}:{self._config.model}",
             metadata={
-                "micro_prime_only": True,
+                "micro_prime_only": element_escalation_count == 0,
                 "micro_prime_files_written": local_file_count,
                 "micro_prime_elements": local_element_count,
                 "micro_prime_template_hits": template_count,
                 "micro_prime_ollama_generations": ollama_count,
+                "micro_prime_decomposed_count": decomposed_count,
+                "micro_prime_decomposition_failures": decomposition_failure_count,
                 "micro_prime_cost_usd": 0.0,
+                "element_escalation_cost_usd": element_escalation_cost,
+                "element_escalation_count": element_escalation_count,
                 "micro_prime_file_results": [
                     _serialize_file_result(fr) for fr in all_file_results
                 ],
@@ -624,3 +748,222 @@ class MicroPrimeCodeGenerator:
         # Sanitize: recursively convert Pydantic models to dicts for JSON compatibility
         clean_context = _sanitize_for_json(context)
         return self._fallback.generate(task, clean_context, target_files)
+
+    def _resolve_cloud_agent_spec(self) -> str:
+        """Resolve the cloud agent spec string for element-level escalation.
+
+        Priority: explicit ``cloud_agent_spec`` → fallback's ``drafter_agent``
+        → ``DRAFT_MODEL_CLAUDE_HAIKU.agent_spec``.
+        """
+        if self._cloud_agent_spec is not None:
+            return self._cloud_agent_spec
+        drafter = getattr(self._fallback, "drafter_agent", None)
+        if drafter is not None:
+            # drafter_agent may be a string spec or an agent object with a spec
+            if isinstance(drafter, str):
+                return drafter
+            spec = getattr(drafter, "agent_spec", None)
+            if isinstance(spec, str):
+                return spec
+        return DRAFT_MODEL_CLAUDE_HAIKU.agent_spec
+
+    def _get_cloud_agent(self) -> BaseAgent:
+        """Lazily create a cloud agent for element-level escalation.
+
+        Mirrors ``engine.py:_generate_ollama()`` lazy agent pattern.
+        """
+        if self._cloud_agent is None:
+            from startd8.utils.agent_resolution import resolve_agent_spec
+
+            spec = self._resolve_cloud_agent_spec()
+            self._cloud_agent = resolve_agent_spec(spec, max_tokens=4096)
+            logger.debug("Cloud agent created: %s", spec)
+
+        return self._cloud_agent
+
+    def _direct_cloud_generate(
+        self,
+        element_name: str,
+        element_spec: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        contracts: list[InterfaceContract],
+        skeleton: str,
+        escalation_reason: str = "",
+        last_error: str = "",
+    ) -> Optional[tuple[str, int, int]]:
+        """Single direct LLM call for one escalated element.
+
+        Returns ``(code, input_tokens, output_tokens)`` or ``None`` on failure.
+        """
+        from startd8.micro_prime.prompt_builder import build_body_prompt
+        from startd8.utils.code_extraction import extract_code_from_response
+
+        prompt = build_body_prompt(
+            element_spec, file_spec, contracts,
+            skeleton=skeleton, token_budget=4096,
+        )
+
+        # Append escalation context so cloud model can learn from local failure
+        if escalation_reason:
+            prompt += f"\n\n# Escalation context: {escalation_reason}"
+        if last_error:
+            prompt += f"\n# Previous error: {last_error}"
+
+        agent = self._get_cloud_agent()
+        result_text, _time_ms, token_usage = agent.generate(
+            prompt,
+            system_prompt=_CODE_GEN_SYSTEM_PROMPT,
+            temperature=0.2,
+        )
+
+        code = extract_code_from_response(result_text)
+        if not code or not code.strip():
+            logger.debug(
+                "Cloud agent returned empty code for element %s", element_name,
+            )
+            return None
+
+        input_tokens = 0
+        output_tokens = 0
+        if token_usage:
+            input_tokens = getattr(token_usage, "input", 0) or 0
+            output_tokens = getattr(token_usage, "output", 0) or 0
+
+        return code, input_tokens, output_tokens
+
+    def _escalate_elements_to_cloud(
+        self,
+        file_path: str,
+        file_result: FileResult,
+        task: str,
+        context: Dict[str, Any],
+        manifest: ForwardManifest,
+    ) -> Optional[GenerationResult]:
+        """Delegate escalated elements via direct per-element cloud LLM calls.
+
+        For each escalated element, builds a prompt using the same
+        ``build_body_prompt()`` used by the local engine, makes a single
+        cloud LLM call, and splices the result back into the partial skeleton.
+
+        Returns:
+            A ``GenerationResult`` for cost/token tracking, or ``None`` if
+            there are no elements to escalate or splicing produces no changes.
+        """
+        from startd8.micro_prime.splicer import splice_body_into_skeleton
+
+        if not file_result.filled_skeleton:
+            return None
+
+        file_spec = manifest.file_specs.get(file_path)
+        if file_spec is None:
+            return None
+
+        # Collect escalated element results and their specs
+        escalated_elements = []
+        spec_by_name = {e.name: e for e in file_spec.elements}
+        for er in file_result.element_results:
+            if er.escalation is not None and er.element_name in spec_by_name:
+                escalated_elements.append((er, spec_by_name[er.element_name]))
+
+        if not escalated_elements:
+            return None
+
+        element_names = [er.element_name for er, _ in escalated_elements]
+        names_str = ", ".join(element_names)
+        logger.info(
+            "Element-level direct cloud escalation for %s: %d elements (%s)",
+            file_path, len(element_names), names_str,
+        )
+
+        updated_skeleton = file_result.filled_skeleton
+        total_input = 0
+        total_output = 0
+        spliced_count = 0
+
+        for er, spec in escalated_elements:
+            try:
+                contracts = self._engine._get_element_contracts(
+                    spec, file_spec, manifest,
+                )
+                # er.escalation is guaranteed non-None by the filter on L848-850
+                escalation_reason = er.escalation.reason.value
+                last_error = er.escalation.last_error or ""
+
+                gen_result = self._direct_cloud_generate(
+                    er.element_name, spec, file_spec, contracts,
+                    updated_skeleton,
+                    escalation_reason=escalation_reason,
+                    last_error=last_error or "",
+                )
+                if gen_result is None:
+                    logger.debug(
+                        "Cloud generation returned nothing for %s", er.element_name,
+                    )
+                    continue
+
+                code, inp_tokens, out_tokens = gen_result
+                total_input += inp_tokens
+                total_output += out_tokens
+
+                # Try AST extraction first (in case cloud returned full def)
+                kind_str = spec.kind.value
+                if kind_str in _FUNCTION_LIKE_KINDS:
+                    kind_str = "function"
+                extracted = _extract_element_from_generated(
+                    code, er.element_name, kind_str,
+                )
+                splice_source = extracted if extracted is not None else code
+
+                spliced = splice_body_into_skeleton(
+                    splice_source, spec, updated_skeleton,
+                )
+                if spliced is not None:
+                    updated_skeleton = spliced
+                    spliced_count += 1
+                else:
+                    logger.debug(
+                        "Splice failed for escalated element %s", er.element_name,
+                    )
+            except (OSError, ValueError, RuntimeError, TypeError):
+                logger.warning(
+                    "Cloud escalation failed for element %s in %s, continuing",
+                    er.element_name, file_path, exc_info=True,
+                )
+
+        if spliced_count > 0:
+            output_path = self._output_dir / file_path
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_text(updated_skeleton, encoding="utf-8")
+            logger.info(
+                "Spliced %d/%d escalated elements into %s",
+                spliced_count, len(escalated_elements), file_path,
+            )
+
+        # Compute cost via PricingService
+        cost_usd = 0.0
+        if total_input > 0 or total_output > 0:
+            try:
+                from startd8.costs.pricing import PricingService
+                pricing = PricingService()
+                agent_spec = self._resolve_cloud_agent_spec()
+                # Extract model name from provider:model spec
+                model_name = agent_spec.split(":")[-1] if ":" in agent_spec else agent_spec
+                cost_usd = pricing.calculate_total_cost(
+                    model_name, total_input, total_output,
+                )
+            except ImportError:
+                logger.debug("PricingService not available, skipping cost computation")
+            except (KeyError, ValueError):
+                logger.warning(
+                    "Could not compute cost for cloud model %s — pricing data may be missing",
+                    model_name, exc_info=True,
+                )
+
+        return GenerationResult(
+            success=spliced_count > 0,
+            generated_files=[self._output_dir / file_path] if spliced_count > 0 else [],
+            input_tokens=total_input,
+            output_tokens=total_output,
+            cost_usd=cost_usd,
+            model=self._resolve_cloud_agent_spec(),
+        )

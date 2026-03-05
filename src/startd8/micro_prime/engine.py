@@ -21,6 +21,7 @@ from startd8.forward_manifest import (
 from startd8.logging_config import get_logger
 from startd8.micro_prime.classifier import classify_element
 from startd8.micro_prime.metrics import MetricsCollector
+from startd8.micro_prime.decomposer import ModerateDecomposer
 from startd8.micro_prime.models import (
     ElementResult,
     EscalationReason,
@@ -116,6 +117,10 @@ class MicroPrimeEngine:
         self._circuit_open: bool = False
         # Element fingerprint success cache (R3-S4)
         self._success_cache: set[str] = set()
+        # Decomposer for MODERATE elements (REQ-MP-900)
+        self._decomposer = ModerateDecomposer(config=self._config)
+        # Manifest reference for _handle_moderate (set by process_file, None for process_element)
+        self._current_manifest: Optional[ForwardManifest] = None
         # Cached Ollama agent (C-1: avoid re-creation per element)
         self._ollama_agent: Optional[Any] = None
 
@@ -266,8 +271,14 @@ class MicroPrimeEngine:
                 element, file_spec, skeleton, contracts, file_path, reasoning,
                 design_doc_sections=design_doc_sections,
             )
+        elif tier == TierClassification.MODERATE:
+            result = self._handle_moderate(
+                element, file_spec, self._current_manifest, skeleton, contracts,
+                file_path, reasoning,
+                design_doc_sections=design_doc_sections,
+            )
         else:
-            # MODERATE/COMPLEX — return as needs_cloud
+            # COMPLEX only — immediate escalation
             result = ElementResult(
                 element_name=element.name,
                 file_path=file_path,
@@ -327,6 +338,7 @@ class MicroPrimeEngine:
         """
         file_result = FileResult(file_path=file_spec.file)
         self.reset_circuit_breaker()
+        self._current_manifest = manifest
         current_skeleton = skeleton
 
         # Pre-classify to determine processing order (REQ-MP-704).
@@ -417,7 +429,340 @@ class MicroPrimeEngine:
 
         return seed_result
 
+    def inspect_decomposition(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: Optional[ForwardManifest],
+        reason: str,
+        classification_signals: Optional[set[str]] = None,
+    ) -> dict[str, Any]:
+        """Lightweight decomposition viability check for dry-run reports.
+
+        Returns:
+            {"viable": bool, "strategy": Optional[str], "sub_count": int}
+        """
+        if manifest is None or not self._config.decomposition_enabled:
+            return {"viable": False, "strategy": None, "sub_count": 0}
+
+        viable = self._decomposer.can_decompose(
+            element, file_spec, manifest, reason, classification_signals,
+        )
+        if not viable:
+            return {"viable": False, "strategy": None, "sub_count": 0}
+
+        # Try to get a plan for sub_count and strategy name
+        plan = self._decomposer.decompose(
+            element, file_spec, manifest, reason, classification_signals,
+        )
+        if plan is None:
+            return {"viable": True, "strategy": None, "sub_count": 0}
+
+        return {
+            "viable": True,
+            "strategy": plan.strategy,
+            "sub_count": len(plan.sub_elements),
+        }
+
     # ─── Private handlers ─────────────────────────────────────────────
+
+    def _handle_moderate(
+        self,
+        element: ForwardElementSpec,
+        file_spec: ForwardFileSpec,
+        manifest: Optional[ForwardManifest],
+        skeleton: str,
+        contracts: list[InterfaceContract],
+        file_path: str,
+        reasoning: str = "",
+        design_doc_sections: Optional[list[str]] = None,
+        classification_signals: Optional[set[str]] = None,
+    ) -> ElementResult:
+        """Handle MODERATE tier: attempt decomposition, then escalate."""
+        start_time = time.monotonic()
+
+        # Circuit breaker gate (R1-S1)
+        if self._circuit_open:
+            return ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=TierClassification.MODERATE,
+                classification_reason=reasoning,
+                success=False,
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.MODERATE,
+                    reason=EscalationReason.CIRCUIT_BREAKER,
+                    detail="Circuit breaker open",
+                ),
+            )
+
+        # Null-guard for standalone process_element() path (R1-S5)
+        if manifest is None:
+            return ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=TierClassification.MODERATE,
+                classification_reason=reasoning,
+                success=False,
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.MODERATE,
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Manifest unavailable — cannot decompose",
+                ),
+            )
+
+        if not self._config.decomposition_enabled:
+            return ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=TierClassification.MODERATE,
+                classification_reason=reasoning,
+                success=False,
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.MODERATE,
+                    reason=EscalationReason.TIER_TOO_HIGH,
+                    detail="Decomposition disabled",
+                ),
+            )
+
+        # Single entry point (R3-S2)
+        plan = self._decomposer.decompose(
+            element, file_spec, manifest, reasoning, classification_signals,
+        )
+        if plan is None:
+            return ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=TierClassification.MODERATE,
+                classification_reason=reasoning,
+                success=False,
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.MODERATE,
+                    reason=EscalationReason.NOT_DECOMPOSABLE,
+                    detail="No decomposition strategy applies",
+                ),
+            )
+
+        logger.info(
+            "Decomposing %s (MODERATE) via %s: %d sub-elements",
+            element.name, plan.strategy, len(plan.sub_elements),
+        )
+
+        # Generate each sub-element
+        sub_results: dict[str, str] = {}
+        total_input = 0
+        total_output = 0
+        completed_len = len(self._completed)  # stage few-shot history
+
+        for sub in sorted(plan.sub_elements, key=lambda s: s.assembly_order):
+            if sub.deterministic:
+                # Extract from skeleton — no LLM needed
+                code = self._extract_class_shell(element, skeleton)
+                if code is not None:
+                    sub_results[sub.name] = code
+                    logger.info(
+                        "Sub-element %s: deterministic extraction (0ms)", sub.name,
+                    )
+                    continue
+                else:
+                    # Shell extraction failed — abandon
+                    logger.warning(
+                        "Shell extraction failed for %s, abandoning decomposition",
+                        element.name,
+                    )
+                    self._completed = self._completed[:completed_len]
+                    return ElementResult(
+                        element_name=element.name,
+                        file_path=file_path,
+                        tier=TierClassification.MODERATE,
+                        classification_reason=reasoning,
+                        success=False,
+                        escalation=build_escalation_context(
+                            element_name=element.name,
+                            file_path=file_path,
+                            tier=TierClassification.MODERATE,
+                            reason=EscalationReason.DECOMPOSITION_FAILED,
+                            detail="Shell extraction failed",
+                        ),
+                        generation_time_ms=(time.monotonic() - start_time) * 1000,
+                        input_tokens=total_input,
+                        output_tokens=total_output,
+                    )
+
+            # Generate via _handle_simple
+            if sub.element_spec is None:
+                self._completed = self._completed[:completed_len]
+                return ElementResult(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.MODERATE,
+                    classification_reason=reasoning,
+                    success=False,
+                    escalation=build_escalation_context(
+                        element_name=element.name,
+                        file_path=file_path,
+                        tier=TierClassification.MODERATE,
+                        reason=EscalationReason.DECOMPOSITION_FAILED,
+                        detail=f"Missing element_spec for sub-element {sub.name}",
+                    ),
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                )
+
+            sub_result = self._handle_simple(
+                sub.element_spec, file_spec, skeleton, contracts,
+                file_path, f"sub-element of {element.name}",
+                design_doc_sections=design_doc_sections,
+            )
+            total_input += sub_result.input_tokens
+            total_output += sub_result.output_tokens
+
+            if not sub_result.success or not sub_result.code:
+                logger.warning(
+                    "Sub-element %s failed — abandoning decomposition of %s",
+                    sub.name, element.name,
+                )
+                self._completed = self._completed[:completed_len]
+                return ElementResult(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.MODERATE,
+                    classification_reason=reasoning,
+                    success=False,
+                    escalation=build_escalation_context(
+                        element_name=element.name,
+                        file_path=file_path,
+                        tier=TierClassification.MODERATE,
+                        reason=EscalationReason.DECOMPOSITION_FAILED,
+                        detail=f"Sub-element {sub.name} failed",
+                        last_code=sub_result.code,
+                        last_error=(
+                            sub_result.escalation.detail
+                            if sub_result.escalation else None
+                        ),
+                    ),
+                    generation_time_ms=(time.monotonic() - start_time) * 1000,
+                    input_tokens=total_input,
+                    output_tokens=total_output,
+                )
+
+            sub_results[sub.name] = sub_result.code
+
+        # All sub-elements succeeded — assemble
+        assemble_start = time.monotonic()
+        assembled = self._decomposer.assemble(plan, sub_results, skeleton)
+        assembly_time_ms = (time.monotonic() - assemble_start) * 1000
+        gen_time = (time.monotonic() - start_time) * 1000
+
+        if assembled is None:
+            self._completed = self._completed[:completed_len]
+            return ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=TierClassification.MODERATE,
+                classification_reason=reasoning,
+                success=False,
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.MODERATE,
+                    reason=EscalationReason.DECOMPOSITION_FAILED,
+                    detail="Assembly failed",
+                ),
+                generation_time_ms=gen_time,
+                input_tokens=total_input,
+                output_tokens=total_output,
+            )
+
+        # Structural verification (R3-S4)
+        if not _structural_verify(assembled, element):
+            self._completed = self._completed[:completed_len]
+            return ElementResult(
+                element_name=element.name,
+                file_path=file_path,
+                tier=TierClassification.MODERATE,
+                classification_reason=reasoning,
+                success=False,
+                escalation=build_escalation_context(
+                    element_name=element.name,
+                    file_path=file_path,
+                    tier=TierClassification.MODERATE,
+                    reason=EscalationReason.DECOMPOSITION_FAILED,
+                    detail="Assembled code failed structural verification",
+                    last_code=assembled,
+                ),
+                generation_time_ms=gen_time,
+                input_tokens=total_input,
+                output_tokens=total_output,
+            )
+
+        logger.info(
+            "Decomposition succeeded for %s: %d/%d sub-elements, %.0fms",
+            element.name, len(sub_results), len(plan.sub_elements), gen_time,
+        )
+
+        # Record success for cache (R1-S7)
+        moderate_fingerprint = (
+            f"{element.parent_class or ''}:{element.name}"
+            f":{file_path}:{TierClassification.MODERATE.value}"
+        )
+        self._success_cache.add(moderate_fingerprint)
+
+        return ElementResult(
+            element_name=element.name,
+            file_path=file_path,
+            tier=TierClassification.MODERATE,
+            classification_reason=reasoning,
+            success=True,
+            code=assembled,
+            decomposition_metadata={
+                "strategy": plan.strategy,
+                "sub_elements": len(plan.sub_elements),
+                "sub_element_results": [
+                    {
+                        "name": s.name,
+                        "kind": s.kind,
+                        "success": s.name in sub_results,
+                    }
+                    for s in plan.sub_elements
+                ],
+                "assembly_time_ms": assembly_time_ms,
+                "total_time_ms": gen_time,
+            },
+            generation_time_ms=gen_time,
+            input_tokens=total_input,
+            output_tokens=total_output,
+        )
+
+    def _extract_class_shell(
+        self,
+        element: ForwardElementSpec,
+        skeleton: str,
+    ) -> Optional[str]:
+        """Extract class shell from skeleton — returns 'pass' as body token.
+
+        The class declaration + docstring are already in the skeleton.
+        The methods are separate elements spliced by the normal engine loop.
+        """
+        try:
+            tree = ast.parse(skeleton)
+        except SyntaxError:
+            return None
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == element.name:
+                return "pass"
+
+        return None
 
     def _handle_trivial(
         self,
@@ -671,6 +1016,16 @@ def _structural_verify(code: str, element: ForwardElementSpec) -> bool:
                     return True
         # For constants, the code might just be a value expression
         return True
+
+    # For CLASS elements, verify the class name exists in the AST (R1-S3)
+    if element.kind == ElementKind.CLASS:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and node.name == element.name:
+                return True
+        # "pass" body is valid for class shells — check if it's just a pass statement
+        if code.strip() == "pass":
+            return True
+        return False
 
     # For functions, just AST validity is sufficient
     # (the repair pipeline already ensures the def exists)

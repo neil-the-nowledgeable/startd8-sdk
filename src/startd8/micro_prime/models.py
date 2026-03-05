@@ -32,6 +32,8 @@ class EscalationReason(str, Enum):
     EMPTY_RESPONSE = "empty_response"
     TIMEOUT = "timeout"
     CIRCUIT_BREAKER = "circuit_breaker"
+    DECOMPOSITION_FAILED = "decomposition_failed"
+    NOT_DECOMPOSABLE = "not_decomposable"
 
 
 # Re-export from shared repair package for backward compatibility.
@@ -65,6 +67,7 @@ class ElementResult:
     generation_time_ms: float = 0.0
     input_tokens: int = 0
     output_tokens: int = 0
+    decomposition_metadata: Optional[dict] = None
 
 
 @dataclass
@@ -131,6 +134,13 @@ class MicroPrimeConfig(BaseModel):
     class_score_bonus: int = 1
     simple_threshold: int = 0
     docstring_length_threshold: int = 200
+    # Decomposer settings (REQ-MP-908)
+    decomposition_enabled: bool = True
+    max_sub_elements: int = 5
+    max_helpers_per_function: int = 4
+    decomposition_confidence_threshold: float = 0.6
+    class_decompose_enabled: bool = True
+    function_chain_enabled: bool = True
 
 
 class MicroPrimeElementMetrics(BaseModel):
@@ -166,3 +176,5 @@ class MicroPrimeCostReport(BaseModel):
     estimated_local_cost_usd: float = 0.0
     estimated_cloud_savings_usd: float = 0.0
     success_rate: float = 0.0
+    decomposed_count: int = 0
+    decomposition_failure_count: int = 0
