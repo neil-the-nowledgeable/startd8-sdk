@@ -305,6 +305,60 @@ def _extract_prompt_constraints(task_dict: Dict[str, Any]) -> List[str]:
     return deduped
 
 
+def extract_prompt_characteristics(prompt_dir: Path) -> Dict[str, Any]:
+    """Extract measurable characteristics from a kaizen-prompts feature directory (REQ-KZ-600).
+
+    Reads the spec/draft/review user prompt files and metadata.json from a
+    kaizen-prompts/{run_id}/{feature_id}/ directory (the same format as walkthrough).
+
+    Args:
+        prompt_dir: Path to the feature-level prompt directory containing
+                    {phase}_user_prompt.md files and metadata.json.
+
+    Returns:
+        dict with scalar metrics:
+            {phase}_word_count, {phase}_char_count (for spec, draft, review),
+            context_key_count, has_existing_files, target_file_count,
+            total_prompt_words (composite across all phases).
+        Missing files result in None for their metrics.
+    """
+    chars: Dict[str, Any] = {}
+
+    for phase in ("spec", "draft", "review"):
+        up = prompt_dir / f"{phase}_user_prompt.md"
+        if up.exists():
+            text = up.read_text(encoding="utf-8", errors="replace")
+            chars[f"{phase}_word_count"] = len(text.split())
+            chars[f"{phase}_char_count"] = len(text)
+        else:
+            chars[f"{phase}_word_count"] = None
+            chars[f"{phase}_char_count"] = None
+
+    meta_path = prompt_dir / "metadata.json"
+    if meta_path.exists():
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            chars["context_key_count"] = len(meta.get("context_keys") or [])
+            chars["has_existing_files"] = bool(meta.get("has_existing_files"))
+            chars["target_file_count"] = int(meta.get("target_file_count") or 0)
+            chars["feature_id"] = meta.get("feature_id", prompt_dir.name)
+        except (json.JSONDecodeError, OSError):
+            chars["context_key_count"] = None
+            chars["has_existing_files"] = None
+            chars["target_file_count"] = None
+            chars["feature_id"] = prompt_dir.name
+    else:
+        chars["context_key_count"] = None
+        chars["has_existing_files"] = None
+        chars["target_file_count"] = None
+        chars["feature_id"] = prompt_dir.name
+
+    words = [chars[f"{p}_word_count"] for p in ("spec", "draft", "review") if chars.get(f"{p}_word_count") is not None]
+    chars["total_prompt_words"] = sum(words) if words else None
+
+    return chars
+
+
 # ---------------------------------------------------------------------------
 # PostMortemEvaluator
 # ---------------------------------------------------------------------------
