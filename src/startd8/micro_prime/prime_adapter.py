@@ -55,11 +55,23 @@ _MIN_EXISTING_LINES = 50
 
 def _serialize_file_result(fr: Any) -> dict:
     """Serialize a FileResult dataclass to dict, truncating code to avoid bloat."""
+    from enum import Enum as _Enum
+
     result = dataclasses.asdict(fr)
     for er in result.get("element_results", []):
         code = er.get("code")
         if code and len(code) > 500:
             er["code"] = code[:500] + "... [truncated]"
+        # Normalize enum values (dataclasses.asdict uses str() on str(Enum))
+        for key in ("tier", "reason"):
+            val = er.get(key)
+            if val and isinstance(val, str) and "." in val:
+                er[key] = val.rsplit(".", 1)[-1].lower()
+        esc = er.get("escalation")
+        if isinstance(esc, dict):
+            reason = esc.get("reason", "")
+            if isinstance(reason, str) and "." in reason:
+                esc["reason"] = reason.rsplit(".", 1)[-1].lower()
     # Drop filled_skeleton from serialization — too large for metadata
     result.pop("filled_skeleton", None)
     return result
