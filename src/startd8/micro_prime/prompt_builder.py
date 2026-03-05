@@ -1,12 +1,14 @@
 """Skeleton-First Prompt Construction (REQ-MP-200–205).
 
 Builds focused prompts for local model body generation. The prompt includes
-skeleton context (surrounding methods, class docstring, imports) and instructs
-the model to output ONLY the function body.
+rendered skeleton context and instructs the model to output ONLY the function
+body (no ``def`` line, no class wrapper).
 """
 
 from __future__ import annotations
 
+import ast
+import textwrap
 from typing import Optional
 
 from startd8.forward_manifest import (
@@ -66,21 +68,24 @@ def _build_function_prompt(
 ) -> str:
     """Build prompt for function/method body generation (REQ-MP-200–203)."""
     stub = _build_element_stub(element)
+    skeleton_context, indent_str, skeleton_siblings = _extract_element_context_from_skeleton(
+        skeleton or "", element,
+    )
+    if not indent_str:
+        indent_str = _fallback_indent(element)
+    indent_spaces = len(indent_str or "")
+    if skeleton_context:
+        stub = skeleton_context
     est_lines = _estimate_body_lines(element)
 
     # Render imports for context (REQ-MP-201)
     import_lines = _render_imports(file_spec)
 
     # Render sibling stubs for class context (REQ-MP-201)
-    sibling_stubs = _render_sibling_stubs(element, file_spec)
+    sibling_stubs = skeleton_siblings or _render_sibling_stubs(element, file_spec)
 
     # Render binding constraints
     constraint_lines = _render_constraints(contracts)
-
-    # Determine def keyword for format anchor
-    def_keyword = "async def" if element.kind in (
-        ElementKind.ASYNC_FUNCTION, ElementKind.ASYNC_METHOD,
-    ) else "def"
 
     # ── Build prompt sections ──
 
@@ -89,18 +94,18 @@ def _build_function_prompt(
     # Method context header (REQ-MP-201)
     if element.parent_class:
         sections.append(
-            f"# This is a method of class `{element.parent_class}`. "
-            "Write it at the top level (no class wrapper)."
+            f"# This is a method of class `{element.parent_class}`."
         )
 
     # Core instructions (REQ-MP-202)
     sections.extend([
-        "# Task: Implement the function body below.",
-        "# Replace `raise NotImplementedError` with a working implementation.",
+        "# Task: Implement ONLY the function body shown in the skeleton below.",
+        "# Replace the `raise NotImplementedError` line with a working implementation.",
         f"# The body should be approximately {est_lines} lines.",
-        "# STOP after the function ends. Do NOT write additional functions, classes, or tests.",
+        "# Output ONLY the body lines (no `def`, no class, no docstring).",
+        f"# Indent the body with exactly {indent_spaces} spaces.",
+        "# STOP after the body ends. Do NOT write additional functions, classes, or tests.",
         "# Output ONLY Python code. No markdown fences, no explanations, no comments before or after.",
-        f"# Start directly with `{def_keyword} {element.name}(` on the first line.",
         "",
     ])
 
@@ -134,7 +139,7 @@ def _build_function_prompt(
         for i, ex in enumerate(few_shot_examples[:2]):
             label = "Example (completed)" if i == 0 else "Another example"
             sections.append(f"# {label}:")
-            sections.append(ex)
+            sections.append(_format_example_body(ex, indent_str))
             sections.append("")
 
     # Target element
@@ -299,7 +304,7 @@ def find_few_shot_examples(
     completed_elements: list[dict],
     max_examples: int = 2,
 ) -> list[str]:
-    """Find successfully-generated siblings for few-shot injection (REQ-MP-203).
+    """Find successfully-generated siblings for few-shot injection (REQ-MP-205).
 
     Priority (REQ-MP-205):
         1. Same class (matching parent_class)
@@ -361,6 +366,231 @@ def find_few_shot_examples(
 
     return examples
 
+
+# ── Skeleton context helpers (REQ-MP-200–203) ──────────────────────────────
+
+
+def _fallback_indent(element: ForwardElementSpec) -> str:
+    """Fallback indentation when skeleton context is unavailable."""
+    depth = 2 if element.parent_class else 1
+    return "    " * depth
+
+
+def _node_start_line(node: ast.AST) -> int:
+    """Return the starting line for a node, including decorators."""
+    start = getattr(node, "lineno", 1)
+    decorators = getattr(node, "decorator_list", None) or []
+    for dec in decorators:
+        dec_line = getattr(dec, "lineno", None)
+        if dec_line is not None:
+            start = min(start, dec_line)
+    return start
+
+
+def _is_not_implemented_raise(stmt: ast.stmt) -> bool:
+    """Return True if the statement raises NotImplementedError."""
+    if not isinstance(stmt, ast.Raise):
+        return False
+    exc = stmt.exc
+    if isinstance(exc, ast.Name):
+        return exc.id == "NotImplementedError"
+    if isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name):
+        return exc.func.id == "NotImplementedError"
+    return False
+
+
+def _extract_docstring_lines(node: ast.AST, lines: list[str]) -> list[str]:
+    """Extract docstring source lines for a ClassDef, if present."""
+    body = getattr(node, "body", None)
+    if not body:
+        return []
+    first = body[0]
+    if (
+        isinstance(first, ast.Expr)
+        and isinstance(first.value, ast.Constant)
+        and isinstance(first.value.value, str)
+    ):
+        start = getattr(first, "lineno", None)
+        end = getattr(first, "end_lineno", None) or start
+        if start is not None:
+            return lines[start - 1: end]
+    return []
+
+
+def _extract_signature_lines(
+    lines: list[str], def_lineno: int,
+) -> list[str]:
+    """Extract def signature lines starting at *def_lineno*."""
+    if def_lineno <= 0 or def_lineno > len(lines):
+        return []
+    sig_lines: list[str] = []
+    paren_depth = 0
+    for line in lines[def_lineno - 1:]:
+        sig_lines.append(line.rstrip())
+        paren_depth += line.count("(") - line.count(")")
+        if paren_depth <= 0 and line.rstrip().endswith(":"):
+            break
+    return sig_lines
+
+
+def _signature_lines_to_stub(sig_lines: list[str]) -> Optional[str]:
+    """Convert signature lines to a signature-only stub."""
+    if not sig_lines:
+        return None
+    lines = list(sig_lines)
+    last = lines[-1].rstrip()
+    if last.endswith(":"):
+        lines[-1] = f"{last} ..."
+    else:
+        lines.append(" ...")
+    return textwrap.dedent("\n".join(lines))
+
+
+def _extract_sibling_stubs_from_skeleton(
+    lines: list[str],
+    class_node: Optional[ast.ClassDef],
+    element: ForwardElementSpec,
+) -> list[str]:
+    """Extract sibling method signature stubs from skeleton source."""
+    if class_node is None:
+        return []
+    stubs: list[str] = []
+    for child in class_node.body:
+        if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if child.name == element.name:
+            continue
+        sig_lines = _extract_signature_lines(lines, child.lineno)
+        stub = _signature_lines_to_stub(sig_lines)
+        if stub:
+            stubs.append(stub)
+    return stubs
+
+
+def _extract_element_context_from_skeleton(
+    skeleton: str,
+    element: ForwardElementSpec,
+) -> tuple[Optional[str], Optional[str], list[str]]:
+    """Extract the rendered element and indent level from a skeleton file."""
+    if not skeleton:
+        return None, None, []
+    try:
+        tree = ast.parse(skeleton)
+    except SyntaxError:
+        logger.debug("Skeleton parse failed for %s", element.name)
+        return None, None, []
+
+    lines = skeleton.splitlines()
+    class_node = None
+    target_node = None
+
+    if element.parent_class:
+        for node in tree.body:
+            if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
+                class_node = node
+                break
+        if class_node:
+            for child in class_node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
+                    target_node = child
+                    break
+    else:
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == element.name:
+                target_node = node
+                break
+
+    if target_node is None:
+        return None, None, []
+
+    # Extract the target element source lines (decorators -> end)
+    start_line = _node_start_line(target_node)
+    end_line = getattr(target_node, "end_lineno", None) or getattr(target_node, "lineno", None)
+    if end_line is None:
+        return None, None, []
+    target_lines = lines[start_line - 1: end_line]
+
+    # Determine indentation from the NotImplementedError stub in the skeleton
+    indent_str = None
+    for stmt in target_node.body:
+        if _is_not_implemented_raise(stmt):
+            stub_line = lines[stmt.lineno - 1]
+            indent_str = stub_line[: len(stub_line) - len(stub_line.lstrip())]
+            break
+
+    # Include class header and optional class docstring for methods
+    context_lines: list[str] = []
+    if element.parent_class and class_node is not None:
+        class_start = _node_start_line(class_node)
+        context_lines.extend(lines[class_start - 1: class_node.lineno])
+        context_lines.extend(_extract_docstring_lines(class_node, lines))
+
+    context_lines.extend(target_lines)
+
+    siblings = _extract_sibling_stubs_from_skeleton(lines, class_node, element)
+
+    return "\n".join(context_lines), indent_str, siblings
+
+
+def _strip_def_if_present(code: str) -> str:
+    """Strip a leading def wrapper if the example contains one."""
+    stripped = (code or "").strip()
+    if not stripped:
+        return ""
+
+    lines = stripped.splitlines()
+    first_code_idx = 0
+    for i, line in enumerate(lines):
+        lstripped = line.lstrip()
+        if lstripped and not lstripped.startswith(("import ", "from ")):
+            first_code_idx = i
+            break
+
+    first_line = lines[first_code_idx].lstrip() if first_code_idx < len(lines) else ""
+    has_def = first_line.startswith(("def ", "async def "))
+
+    if not has_def:
+        return stripped
+
+    if first_code_idx > 0:
+        stripped = "\n".join(lines[first_code_idx:]).strip()
+
+    try:
+        tree = ast.parse(stripped)
+    except SyntaxError:
+        rest = stripped.splitlines()[1:]
+        return "\n".join(rest)
+
+    if not tree.body or not isinstance(tree.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return stripped
+
+    func = tree.body[0]
+    all_lines = stripped.splitlines()
+    body_start = func.body[0].lineno - 1 if func.body else 0
+    if (
+        func.body
+        and isinstance(func.body[0], ast.Expr)
+        and isinstance(func.body[0].value, ast.Constant)
+        and isinstance(func.body[0].value.value, str)
+        and len(func.body) > 1
+    ):
+        body_start = func.body[1].lineno - 1
+
+    body_lines = all_lines[body_start:]
+    return "\n".join(body_lines)
+
+
+def _format_example_body(example: str, indent_str: str) -> str:
+    """Normalize a few-shot example to body-only at the target indent."""
+    body = _strip_def_if_present(example)
+    if not body:
+        return ""
+    dedented = textwrap.dedent(body).splitlines()
+    reindented = [
+        indent_str + line if line.strip() else ""
+        for line in dedented
+    ]
+    return "\n".join(reindented)
 
 # ── Token budget enforcement (REQ-MP-205) ──
 

@@ -7,6 +7,7 @@ them with repaired function bodies, then validates the result via AST.
 from __future__ import annotations
 
 import ast
+import textwrap
 from typing import Optional
 
 from startd8.forward_manifest import ForwardElementSpec
@@ -63,6 +64,13 @@ def splice_body_into_skeleton(
     if element.kind in (ElementKind.CONSTANT, ElementKind.VARIABLE):
         return _splice_constant(body, element, skeleton)
 
+    # Class shell elements are no-ops for splicing — the class declaration
+    # and structure are already in the skeleton.  Methods inside the class
+    # are separate elements that get their own splice calls.  Attempting to
+    # splice a class shell would destroy the first method's stub.
+    if element.kind == ElementKind.CLASS:
+        return skeleton
+
     return _splice_function_body(body, element, skeleton)
 
 
@@ -74,19 +82,27 @@ def _splice_function_body(
     """Splice a function/method body into its skeleton stub."""
     lines = skeleton.splitlines()
 
-    # Find the def line for this element
-    def_line_idx = _find_def_line(element.name, element.kind, lines)
-    if def_line_idx is None:
-        logger.warning("Could not find def line for %s in skeleton", element.name)
-        return None
+    # Prefer AST-based stub location (REQ-MP-202)
+    stub_idx = None
+    try:
+        tree = ast.parse(skeleton)
+        stub_idx = _find_stub_line_via_ast(element, tree, lines)
+    except SyntaxError:
+        tree = None
 
-    # Find the raise NotImplementedError stub after the def line
-    stub_idx = _find_stub_after_def(lines, def_line_idx)
+    # Fallback: find def line + scan for stub
     if stub_idx is None:
-        logger.warning(
-            "Could not find NotImplementedError stub for %s", element.name,
-        )
-        return None
+        def_line_idx = _find_def_line(element.name, element.kind, lines, element.parent_class)
+        if def_line_idx is None:
+            logger.warning("Could not find def line for %s in skeleton", element.name)
+            return None
+
+        stub_idx = _find_stub_after_def(lines, def_line_idx)
+        if stub_idx is None:
+            logger.warning(
+                "Could not find NotImplementedError stub for %s", element.name,
+            )
+            return None
 
     # Determine the indentation of the stub
     stub_line = lines[stub_idx]
@@ -97,7 +113,7 @@ def _splice_function_body(
 
     # Re-indent the body to match the stub's indentation while preserving
     # relative indentation (e.g. nested if/else, loops within the body).
-    dedented = _dedent_lines(extracted_body.splitlines())
+    dedented = textwrap.dedent(extracted_body).splitlines()
     reindented = [
         stub_indent + line if line.strip() else ""
         for line in dedented
@@ -113,6 +129,56 @@ def _splice_function_body(
         return None
 
     return result
+
+
+def _is_not_implemented_raise(stmt: ast.stmt) -> bool:
+    """Return True if the statement raises NotImplementedError."""
+    if not isinstance(stmt, ast.Raise):
+        return False
+    exc = stmt.exc
+    if isinstance(exc, ast.Name):
+        return exc.id == "NotImplementedError"
+    if isinstance(exc, ast.Call) and isinstance(exc.func, ast.Name):
+        return exc.func.id == "NotImplementedError"
+    return False
+
+
+def _find_target_node(
+    tree: ast.AST,
+    element: ForwardElementSpec,
+) -> Optional[ast.AST]:
+    """Find the AST node for the target element."""
+    if element.parent_class:
+        for node in getattr(tree, "body", []):
+            if isinstance(node, ast.ClassDef) and node.name == element.parent_class:
+                for child in node.body:
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) and child.name == element.name:
+                        return child
+        return None
+
+    for node in getattr(tree, "body", []):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and node.name == element.name:
+            return node
+    return None
+
+
+def _find_stub_line_via_ast(
+    element: ForwardElementSpec,
+    tree: ast.AST,
+    lines: list[str],
+) -> Optional[int]:
+    """Locate the NotImplementedError stub line via AST (REQ-MP-202)."""
+    target = _find_target_node(tree, element)
+    if target is None:
+        return None
+
+    body = getattr(target, "body", None) or []
+    for stmt in body:
+        if _is_not_implemented_raise(stmt):
+            lineno = getattr(stmt, "lineno", None)
+            if lineno is not None and 0 < lineno <= len(lines):
+                return lineno - 1
+    return None
 
 
 def _is_name_boundary(text: str, name: str) -> bool:
@@ -191,11 +257,16 @@ def _find_def_line(
     name: str,
     kind: ElementKind,
     lines: list[str],
+    parent_class: Optional[str] = None,
 ) -> Optional[int]:
     """Find the line index of the def/class statement for the named element.
 
     Uses ``(`` and ``:``) terminators after the name to avoid false-matching
     longer names that share a prefix (e.g. ``def name_extended``).
+
+    When *parent_class* is provided the search is scoped to the body of that
+    class, preventing false matches against methods with the same name in a
+    different class.
     """
     # Terminators: ``def foo(`` or ``def foo:`` (single-line ``def foo: ...``)
     # and ``class Foo(`` or ``class Foo:``.
@@ -206,10 +277,38 @@ def _find_def_line(
     else:
         prefixes = (f"def {name}(",)
 
-    for i, line in enumerate(lines):
-        stripped = line.lstrip()
+    # Determine search range — scope to parent class if given.
+    search_start = 0
+    search_end = len(lines)
+    if parent_class:
+        class_idx = _find_class_range(parent_class, lines)
+        if class_idx is not None:
+            search_start, search_end = class_idx
+
+    for i in range(search_start, search_end):
+        stripped = lines[i].lstrip()
         if any(stripped.startswith(p) for p in prefixes):
             return i
+    return None
+
+
+def _find_class_range(
+    class_name: str,
+    lines: list[str],
+) -> Optional[tuple[int, int]]:
+    """Return ``(start, end)`` line range for *class_name* in *lines*.
+
+    *start* is the line after the ``class`` header; *end* is exclusive.
+    Returns ``None`` if the class is not found.
+    """
+    class_prefixes = (f"class {class_name}(", f"class {class_name}:")
+    for i, line in enumerate(lines):
+        stripped = line.lstrip()
+        if any(stripped.startswith(p) for p in class_prefixes):
+            # Use AST to find end of class body
+            body_end = _ast_body_end(lines, i)
+            end = body_end if body_end is not None else len(lines)
+            return (i + 1, end)
     return None
 
 
