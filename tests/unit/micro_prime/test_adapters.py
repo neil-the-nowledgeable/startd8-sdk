@@ -885,7 +885,9 @@ class TestElementLevelEscalation:
     def test_partial_success_keeps_skeleton(
         self, tmp_path, sample_manifest, sample_skeleton,
     ):
-        """When some elements succeed locally, the file is NOT sent to fallback."""
+        """When some elements succeed locally, the file is NOT sent to
+        file-level fallback. Element-level escalation uses direct cloud
+        LLM calls per element (REQ-MP-505/512)."""
         from startd8.micro_prime.models import (
             ElementResult,
             EscalationResult,
@@ -894,20 +896,17 @@ class TestElementLevelEscalation:
             TierClassification,
         )
 
-        fallback = MagicMock()
-        fallback.generate.return_value = MagicMock(
-            success=True,
-            generated_files=[],
-            input_tokens=0,
-            output_tokens=0,
-            model="fallback",
-            cost_usd=0.10,
-        )
+        # Mock cloud agent returns body code for get_value
+        mock_agent = MagicMock()
+        mock_token_usage = MagicMock()
+        mock_token_usage.input = 150
+        mock_token_usage.output = 50
+        mock_agent.generate.return_value = ("return len(key)", 100, mock_token_usage)
 
         gen = MicroPrimeCodeGenerator(
             manifest=sample_manifest,
             skeletons={"src/mypackage/utils.py": sample_skeleton},
-            fallback=fallback,
+            cloud_agent_spec="anthropic:claude-haiku-4-5-20251001",
             output_dir=tmp_path,
         )
 
@@ -938,16 +937,23 @@ class TestElementLevelEscalation:
              patch(
                  "startd8.micro_prime.prime_adapter.urlopen",
                  return_value=self._make_ollama_mock(),
+             ), \
+             patch(
+                 "startd8.micro_prime.prime_adapter.MicroPrimeCodeGenerator._get_cloud_agent",
+                 return_value=mock_agent,
              ):
             result = gen.generate(
                 "Implement utils", {}, ["src/mypackage/utils.py"],
             )
 
-        # Fallback should NOT be called — partial success means keep local work
-        fallback.generate.assert_not_called()
+        # Cloud agent called directly for the escalated element
+        mock_agent.generate.assert_called_once()
+        call_prompt = mock_agent.generate.call_args[0][0]
+        assert "get_value" in call_prompt  # targeted element in prompt
+        assert "tier_too_high" in call_prompt  # escalation reason forwarded
         # File was written locally
         assert len(result.generated_files) == 1
-        assert result.cost_usd == 0.0
+        assert result.metadata["element_escalation_count"] == 1
 
     def test_zero_success_delegates_to_fallback(
         self, tmp_path, sample_manifest, sample_skeleton,

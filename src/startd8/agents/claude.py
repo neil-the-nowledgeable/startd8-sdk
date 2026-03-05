@@ -243,6 +243,7 @@ class ClaudeAgent(BaseAgent):
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
     ):
         """
         Make the raw API call to Anthropic.
@@ -258,6 +259,8 @@ class ClaudeAgent(BaseAgent):
                 takes precedence over the instance-level ``self.max_tokens``.
                 This avoids mutating the shared agent object, which is not
                 thread-safe when chunks run concurrently.
+            temperature: Optional sampling temperature (0.0–1.0). When provided,
+                sent as the ``temperature`` parameter to the Anthropic API.
         """
         kwargs = {
             "model": self.model,
@@ -277,6 +280,8 @@ class ClaudeAgent(BaseAgent):
                 ]
             else:
                 kwargs["system"] = system_prompt
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         return await self.async_client.messages.create(**kwargs)
 
     async def agenerate(
@@ -284,6 +289,7 @@ class ClaudeAgent(BaseAgent):
         prompt: str,
         system_prompt: Optional[str] = None,
         max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
     ) -> GenerateResult:
         """
         Generate response using Claude async API.
@@ -299,6 +305,7 @@ class ClaudeAgent(BaseAgent):
             max_tokens: Optional per-call max_tokens override. When provided,
                 takes precedence over the instance-level ``self.max_tokens``.
                 This is thread-safe — it avoids mutating the shared agent.
+            temperature: Optional sampling temperature (0.0–1.0).
 
         Returns:
             GenerateResult(text, time_ms, token_usage)
@@ -319,10 +326,12 @@ class ClaudeAgent(BaseAgent):
                 make_call = with_retry(self.retry_config)(self._make_api_call)
                 response = await make_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    temperature=temperature,
                 )
             else:
                 response = await self._make_api_call(
                     prompt, system_prompt=effective_system_prompt, max_tokens=max_tokens,
+                    temperature=temperature,
                 )
 
         except RetryError as e:
