@@ -239,6 +239,31 @@ def main() -> int:
         "--no-repair", action="store_true",
         help="Disable post-generation repair pipeline",
     )
+    # Kaizen prompt capture (REQ-KZ-200, 201, 204)
+    parser.add_argument(
+        "--kaizen", action="store_true",
+        help=(
+            "Enable Kaizen prompt and response capture. Persists LLM prompts "
+            "and raw responses to --kaizen-dir/{run_id}/{feature_id}/ for "
+            "post-run analysis (REQ-KZ-200, 201)."
+        ),
+    )
+    parser.add_argument(
+        "--kaizen-dir", default=None,
+        help=(
+            "Directory for Kaizen prompt capture output "
+            "(default: <output-dir>/kaizen-prompts). "
+            "Used only when --kaizen is set."
+        ),
+    )
+    parser.add_argument(
+        "--kaizen-redactions", default=None,
+        help=(
+            "Path to a JSON file containing redaction regex patterns (REQ-KZ-204). "
+            "Format: list of regex strings, or {\"patterns\": [...]}. "
+            "Matched text in captured responses is replaced with [REDACTED]."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -499,6 +524,22 @@ def main() -> int:
     elif args.no_validate:
         workflow._validation_override = False
 
+    # Wire Kaizen prompt capture (REQ-KZ-200, 201, 204)
+    if args.kaizen:
+        kaizen_dir = (
+            Path(args.kaizen_dir).resolve()
+            if args.kaizen_dir
+            else output_dir / "kaizen-prompts"
+        )
+        kaizen_dir.mkdir(parents=True, exist_ok=True)
+        workflow._kaizen_enabled = True
+        workflow._kaizen_prompt_dir = kaizen_dir
+        # Expose redaction config path via env so _load_redaction_config() can read it
+        # without requiring an additional constructor argument (consistent with R2-S7).
+        if args.kaizen_redactions:
+            import os as _os
+            _os.environ["KAIZEN_REDACTIONS"] = str(Path(args.kaizen_redactions).resolve())
+
     # Reset failed and blocked features so they are retried.
     # The state file persists FAILED/BLOCKED from prior runs, but the
     # underlying issues may have been fixed in the SDK since then.
@@ -575,6 +616,12 @@ def main() -> int:
         logger.info("Strict validation: enabled (non-zero exit on failures)")
     if args.cost_budget is not None:
         logger.info("Cost budget: $%.2f", args.cost_budget)
+    if args.kaizen:
+        logger.info(
+            "Kaizen: enabled (dir=%s, redactions=%s)",
+            workflow._kaizen_prompt_dir,
+            args.kaizen_redactions or "none",
+        )
 
     # ------------------------------------------------------------------
     # Execute
